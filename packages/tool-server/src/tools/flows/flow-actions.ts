@@ -1005,7 +1005,7 @@ async function runType(
     // field still empty — where two calls type the text and then fail only on
     // the Enter. Android TV is the TV kind that gets this far: `runDirective`
     // gates `type` on Vega alone, and an Apple TV stops at the focus tap above
-    // (every gesture resolves simulator-server, which rejects a tvOS UDID).
+    // (`gesture-tap` resolves simulator-server, which rejects a tvOS UDID).
     await invokeOnDevice(env, "keyboard", { key: "enter" });
   }
   return { ok: true };

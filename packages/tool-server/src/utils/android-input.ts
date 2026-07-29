@@ -153,11 +153,10 @@ export async function injectAndroidKeycode(serial: string, keycode: number): Pro
 }
 
 /**
- * Map a named key (keyboard tool `key` vocabulary) to its android.view.KeyEvent
- * keycode, throwing on an unknown name. Split out from the injection so a caller
- * can validate the name BEFORE it types anything — the key is pressed after the
- * text, so resolving it lazily would reject an unknown name only once the text
- * had already landed on the device. Mirrors `resolveVegaNamedKeycode`.
+ * Resolve a named key (keyboard tool `key` vocabulary) to its
+ * android.view.KeyEvent keycode, or throw. Split out from the injection so a
+ * caller can validate a key name without pressing it. Mirrors
+ * `resolveVegaNamedKeycode`.
  */
 export function resolveAndroidNamedKeycode(name: string): number {
   const lower = name.toLowerCase();

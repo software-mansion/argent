@@ -44,6 +44,7 @@ import {
   assertTypeableAndroidText,
   injectAndroidText,
   injectAndroidNamedKey,
+  resolveAndroidNamedKeycode,
 } from "../src/utils/android-input";
 import { NAMED_KEYS } from "../src/tools/keyboard/key-codes";
 import { InvalidToolInputError } from "../src/utils/capability";
@@ -156,6 +157,16 @@ describe("android-input — injection", () => {
       `input keyevent ${ANDROID_NAMED_KEYCODES.enter}`,
       expect.anything()
     );
+  });
+
+  it("resolves every named key to its own keycode (not one hardcoded value)", () => {
+    // The map's literal values are pinned above; this pins that the resolver
+    // actually READS the map. Without it, every injection assertion in this file
+    // uses `enter`, so a resolver that returned 66 for everything would be green
+    // while `key:"backspace"` silently submitted the field instead of deleting.
+    for (const [name, keycode] of Object.entries(ANDROID_NAMED_KEYCODES)) {
+      expect(resolveAndroidNamedKeycode(name), `wrong keycode for "${name}"`).toBe(keycode);
+    }
   });
 
   it("case-folds the named key so uppercase input works (parity with the sim-server path)", async () => {
@@ -375,6 +386,44 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
       "input keyevent 66",
     ]);
     expect(res).toEqual({ typed: "100%safe", keys: 9 });
+  });
+
+  it("presses the key it was asked for, not a hardcoded Enter, after the text", async () => {
+    // Every other combined-call test here uses `key:"enter"`, so a path that
+    // ignored `params.key` would pass them all. `backspace` (67) is the case the
+    // ordering exists for: it deletes the last character of the text just typed
+    // rather than one from the field's previous value.
+    adbShell.mockClear();
+    const res = await impl.handler(
+      {},
+      { udid: SERIAL, text: "abc", key: "backspace" } as KeyboardParams,
+      phone
+    );
+    expect(adbShell.mock.calls.map((c) => c[1])).toEqual(["input text 'abc'", "input keyevent 67"]);
+    expect(res).toEqual({ typed: "abc", keys: 4 });
+  });
+
+  it("leaves the key unpressed when the text injection fails", async () => {
+    // The key is awaited after the text, so a failed inject must abort the whole
+    // call — pressing Enter anyway would submit a half-typed field.
+    adbShell.mockClear();
+    adbShell.mockRejectedValueOnce(new Error("adb: device offline"));
+    await expect(
+      impl.handler({}, { udid: SERIAL, text: "hi", key: "enter" } as KeyboardParams, phone)
+    ).rejects.toThrow(/device offline/);
+    expect(adbShell.mock.calls.map((c) => c[1])).toEqual(["input text 'hi'"]);
+  });
+
+  it("reports the text error, not the key error, when BOTH halves are invalid", async () => {
+    // Pinning which of the two 400s wins is all the hoisted
+    // `assertTypeableAndroidText` buys — resolving the key up front already
+    // guarantees the no-side-effect property on its own — so dropping that line
+    // becomes a visible change rather than a silent swap of the error message.
+    adbShell.mockClear();
+    await expect(
+      impl.handler({}, { udid: SERIAL, text: "café", key: "bogus" } as KeyboardParams, phone)
+    ).rejects.toThrow(/printable ASCII/);
+    expect(adbShell).not.toHaveBeenCalled();
   });
 
   it("rejects a key + un-typeable text request with NO on-device side effect", async () => {

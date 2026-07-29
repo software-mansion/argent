@@ -21,12 +21,10 @@ async function typeAndroidPhone(
   params: KeyboardParams
 ): Promise<KeyboardResult> {
   let keysPressed = 0;
-  // Validate BOTH inputs up front, before anything reaches the device (both
-  // checks are pure and re-run harmlessly inside their inject helpers). A
-  // combined key+text request that is bad in either half must reject with NO
-  // on-device side effect: un-typeable text must not press the key first, and —
-  // now that the key is pressed AFTER the text — an unknown key name must not
-  // leave the text typed. Same resolve-then-inject shape as the vega backend.
+  // Resolve the named key before injecting text so an unknown name fails fast,
+  // instead of rejecting only once the text has landed on the device. The text
+  // check is re-run inside `injectAndroidText`, so hoisting it alongside only
+  // decides which error a request bad in BOTH halves reports (the text one).
   if (params.text) assertTypeableAndroidText(params.text);
   if (params.key) resolveAndroidNamedKeycode(params.key);
   if (params.text) {
@@ -38,10 +36,9 @@ async function typeAndroidPhone(
     keysPressed += params.text.length;
   }
   // Key after text: a combined call means "type, then submit" (text +
-  // key:"enter"). Pressing the key first submits the still-empty field — and on
-  // key:"backspace" eats a character of whatever was already there instead of
-  // the text just typed. Matches the simulator-server / chromium / vega
-  // backends and the tool's own documented order (see ../index.ts).
+  // key:"enter"). Pressing the key first submits the still-empty field, and on
+  // key:"backspace" eats a character of the field's previous value instead of
+  // the text just typed.
   if (params.key) {
     await injectAndroidNamedKey(device.id, params.key);
     keysPressed++;
