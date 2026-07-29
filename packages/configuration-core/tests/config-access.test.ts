@@ -250,6 +250,21 @@ describe("ios.additionalDeviceSets — additive union across scopes", () => {
     );
     expect(getAdditionalIosDeviceSets(opts())).toEqual([path.join(homeDir, "DeviceSets/ci")]);
   });
+
+  it("strips trailing separators so slash-suffixed spellings dedup too", () => {
+    setConfigValue("ios.additionalDeviceSets", ["~/DeviceSets/ci/"], "global", opts());
+    setConfigValue(
+      "ios.additionalDeviceSets",
+      [path.join(homeDir, "DeviceSets", "ci"), "~"],
+      "project",
+      opts()
+    );
+    expect(getAdditionalIosDeviceSets(opts())).toEqual([
+      path.join(homeDir, "DeviceSets/ci"),
+      // Bare `~` resolves to home without a trailing separator either.
+      homeDir,
+    ]);
+  });
 });
 
 describe("getConfigValue — direct definition + custom-typed default", () => {

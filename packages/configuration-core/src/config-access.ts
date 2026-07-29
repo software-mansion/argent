@@ -253,28 +253,37 @@ const IOS_ADDITIONAL_DEVICE_SETS_KEY = "ios.additionalDeviceSets";
  */
 export function getAdditionalIosDeviceSets(options: ConfigPathOptions = {}): string[] {
   const def = requireDefinition(IOS_ADDITIONAL_DEVICE_SETS_KEY) as ConfigDefinition<string[]>;
+  // Path resolution must happen per scope *before* deduplication, so the union
+  // is re-implemented here instead of going through `applyMergePolicy` — keep
+  // the order in sync with the schema entry's `union` preset.
+  if (def.merge !== "union") {
+    throw new Error(
+      `Expected "${IOS_ADDITIONAL_DEVICE_SETS_KEY}" to use the "union" merge preset; ` +
+        "update getAdditionalIosDeviceSets to match the new policy."
+    );
+  }
   const home = resolveHomeDir(options);
   const global = resolveDeviceSetEntries(readScopeValue(def, "global", options), home, home);
   const project = resolveDeviceSetEntries(
     readScopeValue(def, "project", options),
-    () => resolveProjectRoot(options.cwd ?? process.cwd()),
+    resolveProjectRoot(options.cwd ?? process.cwd()),
     home
   );
   return Array.from(new Set([...global, ...project]));
 }
 
-/** Resolve one scope's entries against its base; `base` is lazy so the
- * project-root walk only runs when the project scope actually has entries. */
+/** Resolve one scope's entries against its base. `path.resolve` (rather than
+ * join/normalize) in every branch so trailing separators are stripped and the
+ * post-resolution dedup actually collapses equivalent spellings. */
 function resolveDeviceSetEntries(
   entries: string[] | undefined,
-  base: string | (() => string),
+  baseDir: string,
   home: string
 ): string[] {
   if (!entries || entries.length === 0) return [];
-  const baseDir = typeof base === "function" ? base() : base;
   return entries.map((entry) => {
-    if (entry === "~") return path.normalize(home);
-    if (entry.startsWith("~/")) return path.join(home, entry.slice(2));
+    if (entry === "~") return path.resolve(home);
+    if (entry.startsWith("~/")) return path.resolve(home, entry.slice(2));
     return path.resolve(baseDir, entry);
   });
 }

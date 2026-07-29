@@ -115,7 +115,9 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     parse: asStringArray,
     // Additive: the scopes extend each other rather than shadow — a repo's
     // committed device sets are appended to the user's global ones (global
-    // baseline first, project extras after, deduplicated).
+    // baseline first, project extras after, deduplicated). Note that
+    // `getAdditionalIosDeviceSets` re-implements this union (path resolution
+    // must precede dedup) and guards on the preset staying "union".
     merge: "union",
     example: '["~/DeviceSets/ci"]',
   },
