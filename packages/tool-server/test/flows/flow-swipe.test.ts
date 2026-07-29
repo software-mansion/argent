@@ -417,6 +417,52 @@ describe("swipe: execution", () => {
     });
   });
 
+  it("fails a to point that lands on the default centre start", async () => {
+    await writeFlow("to-centre", {
+      executionPrerequisite: "",
+      steps: [{ kind: "swipe", to: { x: 0.5, y: 0.5 } }],
+    });
+
+    const result = await run("to-centre");
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]).toMatchObject({
+      kind: "swipe",
+      status: "fail",
+      reason: expect.stringMatching(
+        /swipe\.to resolved to the start point \(0\.5, 0\.5\).*zero travel.*away from the start/i
+      ),
+    });
+    expect(result.calls).toEqual([]);
+  });
+
+  it("fails when from and to resolve to the same element centre", async () => {
+    currentTree = () =>
+      screen([n({ label: "Card", frame: { x: 0.2, y: 0.3, width: 0.4, height: 0.2 } })]);
+    await writeFlow("to-same-element", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "swipe",
+          from: { selector: { text: "Card", loose: true } },
+          to: { selector: { text: "Card", loose: true } },
+        },
+      ],
+    });
+
+    const result = await run("to-same-element");
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]).toMatchObject({
+      kind: "swipe",
+      status: "fail",
+      reason: expect.stringMatching(
+        /swipe\.to resolved to the start point \(0\.4, 0\.4\).*zero travel.*away from the start/i
+      ),
+    });
+    expect(result.calls).toEqual([]);
+  });
+
   it("maps to a mouse drag on chromium (settle dropped — a drag has no momentum)", async () => {
     await writeFlow("desktop", {
       executionPrerequisite: "",
