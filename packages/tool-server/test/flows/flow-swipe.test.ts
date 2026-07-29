@@ -463,6 +463,22 @@ describe("swipe: execution", () => {
     expect(result.calls).toEqual([]);
   });
 
+  it("rejects swipe on vega with the touch-directive message shape", async () => {
+    await writeFlow("swipe-vega", {
+      executionPrerequisite: "",
+      steps: [{ kind: "swipe", direction: "left" }],
+    });
+
+    const result = await run("swipe-vega", "amazon-4a27df03c9777152");
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]).toMatchObject({ kind: "swipe", status: "fail" });
+    expect(result.steps[0].reason).toMatch(
+      /swipe is a touch directive and Vega is remote-driven — move focus with `tool: tv-remote`/
+    );
+    expect(result.calls).toEqual([]);
+  });
+
   it("maps to a mouse drag on chromium (settle dropped — a drag has no momentum)", async () => {
     await writeFlow("desktop", {
       executionPrerequisite: "",
