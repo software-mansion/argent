@@ -161,9 +161,10 @@ describe("android-input — injection", () => {
 
   it("resolves every named key to its own keycode (not one hardcoded value)", () => {
     // The map's literal values are pinned above; this pins that the resolver
-    // actually READS the map. Without it, every injection assertion in this file
-    // uses `enter`, so a resolver that returned 66 for everything would be green
-    // while `key:"backspace"` silently submitted the field instead of deleting.
+    // READS the map, for every entry in it. The injection tests only ever press
+    // `enter` and `backspace`, so a resolver that mistyped one of the other 22
+    // names — the realistic lookup/switch refactor slip — is green everywhere
+    // except here.
     for (const [name, keycode] of Object.entries(ANDROID_NAMED_KEYCODES)) {
       expect(resolveAndroidNamedKeycode(name), `wrong keycode for "${name}"`).toBe(keycode);
     }
@@ -389,10 +390,11 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
   });
 
   it("presses the key it was asked for, not a hardcoded Enter, after the text", async () => {
-    // Every other combined-call test here uses `key:"enter"`, so a path that
-    // ignored `params.key` would pass them all. `backspace` (67) is the case the
-    // ordering exists for: it deletes the last character of the text just typed
-    // rather than one from the field's previous value.
+    // The other combined-call tests that get as far as pressing a key all use
+    // `key:"enter"`, so a path that ignored `params.key` and always pressed
+    // Enter would pass them. `backspace` (67) is the case the ordering exists
+    // for: it deletes the last character of the text just typed rather than one
+    // from the field's previous value.
     adbShell.mockClear();
     const res = await impl.handler(
       {},
@@ -427,9 +429,9 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
   });
 
   it("rejects a key + un-typeable text request with NO on-device side effect", async () => {
-    // The text is validated up front, so a combined request whose text can't be
-    // typed must reject before the key is pressed — not press the key and then
-    // 400 (which would submit a form on `key:"enter"` and double-fire on retry).
+    // A combined request whose text can't be typed must reject with NOTHING on
+    // the device: no partial text, and no key press — a stray `key:"enter"`
+    // would submit a form and double-fire on retry.
     adbShell.mockClear();
     await expect(
       impl.handler({}, { udid: SERIAL, key: "enter", text: "café" } as KeyboardParams, phone)
