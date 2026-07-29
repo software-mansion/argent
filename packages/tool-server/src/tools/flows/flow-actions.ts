@@ -1314,6 +1314,14 @@ async function runSwipe(
     const p = await resolveTargetPoint(env, step.to!);
     if ("fail" in p) return p.fail;
     end = p;
+    // A selector endpoint only resolves here, so the parser cannot see that it
+    // lands on the start and would dispatch a stationary press, not a swipe.
+    if (end.x === start.x && end.y === start.y) {
+      return {
+        ok: false,
+        reason: `swipe.to resolved to the start point (${end.x}, ${end.y}), so the gesture would have zero travel; aim it at a point or element away from the start`,
+      };
+    }
   }
 
   const travel = {
