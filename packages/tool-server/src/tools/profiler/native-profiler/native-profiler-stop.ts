@@ -78,6 +78,11 @@ function registerTrace(store: ArtifactStore, traceFile: string): Promise<Artifac
 
 export const nativeProfilerStopTool: ToolDefinition<z.infer<typeof zodSchema>, StopResult> = {
   id: "native-profiler-stop",
+  interaction: {
+    startedMsg: () => "Stopping native profiler",
+    completedMsg: ({ result }) => `Saved native profile ${result.traceFile.filename}`,
+    failedMsg: ({ failureSignal }) => `Failed to stop native profiler: ${failureSignal.error_code}`,
+  },
   capability,
   // Packaging plus the export passes routinely exceed the 30s fetch timeout.
   longRunning: true,

@@ -56,6 +56,19 @@ export const flowFinishRecordingTool: ToolDefinition<
   }
 > = {
   id: "flow-finish-recording",
+  interaction: {
+    startedMsg: () => "Finishing flow recording",
+    completedMsg: ({ result }) => {
+      const flowName =
+        result.path
+          .split(/[\\/]/)
+          .pop()
+          ?.replace(/\.ya?ml$/, "") ?? "flow";
+      return `Saved recorded flow ${flowName}`;
+    },
+    failedMsg: ({ failureSignal }) =>
+      `Failed to finish flow recording: ${failureSignal.error_code}`,
+  },
   description: `Finish recording the active flow. Returns a summary of all recorded steps and the final YAML content. Use when you have added all desired steps and want to finalize the flow file. Fails if no active flow recording is in progress.
 You can still edit the .yaml file directly afterwards to remove or reorder steps.`,
   zodSchema,

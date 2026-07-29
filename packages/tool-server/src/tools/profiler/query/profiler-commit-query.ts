@@ -329,6 +329,13 @@ function getTopComponents(
 
 export const profilerCommitQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "profiler-commit-query",
+  interaction: {
+    startedMsg: ({ params }) =>
+      `Querying React commits ${params.mode.replace(/^by_/, "by ").replaceAll("_", " ")}`,
+    completedMsg: ({ params }) =>
+      `Queried React commits ${params.mode.replace(/^by_/, "by ").replaceAll("_", " ")}`,
+    failedMsg: ({ failureSignal }) => `Failed to query React commits: ${failureSignal.error_code}`,
+  },
   description: `Query React commit data for iterative investigation of render performance.
 Requires react-profiler-stop to have been called first.
 Modes:

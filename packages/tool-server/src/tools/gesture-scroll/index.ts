@@ -82,6 +82,14 @@ interface Result {
   timestampMs: number;
 }
 
+function scrollDirection(params: Params): string {
+  const horizontal = (params.deltaX ?? 0) > 0 ? "right" : "left";
+  const vertical = (params.deltaY ?? 0) > 0 ? "down" : "up";
+  if ((params.deltaX ?? 0) === 0) return vertical;
+  if ((params.deltaY ?? 0) === 0) return horizontal;
+  return `${vertical} and ${horizontal}`;
+}
+
 // Chromium only. Touch platforms scroll with `gesture-swipe`; a desktop
 // renderer scrolls with wheel events, which is exactly what this dispatches.
 // Keeping the two as separate tools (instead of overloading swipe) means each
@@ -93,6 +101,11 @@ const capability: ToolCapability = {
 
 export const gestureScrollTool: ToolDefinition<Params, Result> = {
   id: "gesture-scroll",
+  interaction: {
+    startedMsg: ({ params }) => `Scrolling ${scrollDirection(params)}`,
+    completedMsg: ({ params }) => `Scrolled ${scrollDirection(params)}`,
+    failedMsg: ({ failureSignal }) => `Failed to scroll: ${failureSignal.error_code}`,
+  },
   description: `Scroll content in a Chromium app by dispatching mouse-wheel events at a point. Anchor x/y are normalized 0.0–1.0 (fractions of the window, not pixels), same coordinate space as gesture-tap and describe. Deltas are fractions of the window too: deltaY 0.5 scrolls down half a window; negative scrolls back up.
 Use when content is below/above the fold (describe shows off-screen elements with zero height) or a list needs scrolling. Chromium only — on iOS/Android use gesture-swipe.
 Returns { scrolled: true, timestampMs }. Fails if the Chromium CDP session is not reachable for the given device.`,

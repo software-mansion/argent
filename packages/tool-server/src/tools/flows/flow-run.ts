@@ -436,6 +436,12 @@ export function createRunFlowTool(
 ): ToolDefinition<Params, FlowRunResult | FlowPrerequisiteNotice> {
   return {
     id: "flow-execute",
+    interaction: {
+      startedMsg: ({ params }) => `Running flow ${params.name}`,
+      completedMsg: ({ params }) => `Ran flow ${params.name}`,
+      failedMsg: ({ params, failureSignal }) =>
+        `Failed to run flow ${params.name}: ${failureSignal.error_code}`,
+    },
     description: `Run a saved flow from the .argent/flows/ directory.
 Steps run in order: \`launch\` starts an app from scratch (terminate + relaunch) and waits until it is
 ready; \`tool\` calls dispatch through the registry; \`tap\`/\`long-press\`/\`type\` resolve a selector to an

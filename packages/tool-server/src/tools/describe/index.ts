@@ -139,6 +139,11 @@ function makeDescribeExecute(
 export function createDescribeTool(registry: Registry): ToolDefinition<Params, DescribeResult> {
   return {
     id: "describe",
+    interaction: {
+      startedMsg: () => "Reading screen",
+      completedMsg: () => "Read screen",
+      failedMsg: ({ failureSignal }) => `Failed to read screen: ${failureSignal.error_code}`,
+    },
     description: `Get the accessibility / DOM element tree for the current screen.
 On iOS, uses the AXRuntime accessibility service to inspect whatever is currently visible — including
 system dialogs, permission prompts, and any foreground app content. On Android, runs \`uiautomator dump\`.

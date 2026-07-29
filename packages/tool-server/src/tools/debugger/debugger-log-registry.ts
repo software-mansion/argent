@@ -25,6 +25,11 @@ export const debuggerLogRegistryTool: ToolDefinition<
   LogRegistryResponse
 > = {
   id: "debugger-log-registry",
+  interaction: {
+    startedMsg: () => "Reading app logs",
+    completedMsg: () => "Read app logs",
+    failedMsg: ({ failureSignal }) => `Failed to read app logs: ${failureSignal.error_code}`,
+  },
   description: `Get a summary of all console logs captured from the app's JS runtime.
 Returns the log file path, entry counts by level, and message clusters (grouped by similarity). Works against Hermes (iOS / Android / Vega) and V8 (Chromium).
 Use when investigating warnings, errors, or unexpected output — call this first for an overview, then read the returned file for details. Returns empty stats if no log data has been captured yet.`,

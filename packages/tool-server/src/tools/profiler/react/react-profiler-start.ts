@@ -103,6 +103,13 @@ export function createReactProfilerStartTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, Record<string, unknown>> {
   return {
     id: "react-profiler-start",
+    interaction: {
+      startedMsg: () => "Starting React profiler",
+      completedMsg: ({ result }) =>
+        result.already_running ? "React profiler was already running" : "Started React profiler",
+      failedMsg: ({ failureSignal }) =>
+        `Failed to start React profiler: ${failureSignal.error_code}`,
+    },
     description: `Start CPU profiling + React commit capture on the connected Hermes runtime.
 Delegates React commit capture to the in-app React DevTools backend (ri.startProfiling).
 If another tool-server already owns the session, returns { already_running: true, owner, stale, how_to_reclaim } without clobbering their data. Pass { force: true } to reclaim a fresh owner's session, but BEFORE OVERTAKING - ask the user for approval first, see relevant skill for guidance.

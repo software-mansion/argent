@@ -111,6 +111,20 @@ const zodSchema = z
 
 type Params = z.infer<typeof zodSchema>;
 
+const conditionDescription = {
+  exists: "appear",
+  visible: "become visible",
+  hidden: "become hidden",
+  text: "match expected text",
+} as const;
+
+const conditionCompleted = {
+  exists: "UI element appeared",
+  visible: "UI element became visible",
+  hidden: "UI element became hidden",
+  text: "UI element matched expected text",
+} as const;
+
 interface WaitResult {
   success: boolean;
   elapsed: number;
@@ -234,6 +248,13 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
 
   return {
     id: AWAIT_UI_ELEMENT_TOOL_ID,
+    interaction: {
+      startedMsg: ({ params }) =>
+        `Waiting for UI element to ${conditionDescription[params.condition]}`,
+      completedMsg: ({ params }) => conditionCompleted[params.condition],
+      failedMsg: ({ failureSignal }) =>
+        `Failed while waiting for UI element: ${failureSignal.error_code}`,
+    },
     description: `Block until a UI element reaches an expected state or a timeout elapses, so you don't have to poll screenshot/describe yourself.
 
 Conditions:

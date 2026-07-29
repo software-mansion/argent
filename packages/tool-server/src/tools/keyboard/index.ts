@@ -78,6 +78,22 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
   });
   return {
     id: "keyboard",
+    interaction: {
+      // Treat both text and key as sensitive. `key` is an unrestricted string at
+      // this boundary, so a value must not reach the event log before execution
+      // validates whether it is a supported named key.
+      startedMsg: ({ params }) => {
+        if (params.text === undefined) return "Pressing a key";
+        if (params.key === undefined) return "Entering text";
+        return "Entering text and pressing a key";
+      },
+      completedMsg: ({ params }) => {
+        if (params.text === undefined) return "Pressed a key";
+        if (params.key === undefined) return "Entered text";
+        return "Entered text and pressed a key";
+      },
+      failedMsg: ({ failureSignal }) => `Failed to use keyboard: ${failureSignal.error_code}`,
+    },
     description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
 Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; use keyboard to type into a focused text field (e.g. a search or login box).
 Returns { typed: string, keys: number }. Fails if an unsupported key name is provided or the device's input backend is not reachable.

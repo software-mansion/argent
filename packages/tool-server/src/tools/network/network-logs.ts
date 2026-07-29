@@ -119,6 +119,12 @@ const zodSchema = z.object({
 
 export const networkLogsTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "view-network-logs",
+  interaction: {
+    startedMsg: () => "Reading network activity",
+    completedMsg: () => "Read network activity",
+    failedMsg: ({ failureSignal }) =>
+      `Failed to read network activity: ${failureSignal.error_code}`,
+  },
   description: `Retrieve captured network (HTTP) requests from the running app.
 Returns a paginated list of requests with method, URL, status, resource type, size, and duration.
 Each entry includes a requestId that can be passed to view-network-request-details for full details.

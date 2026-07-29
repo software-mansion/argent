@@ -482,8 +482,41 @@ async function loadNativeSession(
   return lines.join("\n");
 }
 
-export const profilerLoadTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
+type Params = z.infer<typeof zodSchema>;
+
+const profilerLoadAction = {
+  list: {
+    started: () => "Listing saved profiles",
+    completed: () => "Listed saved profiles",
+    failure: "list",
+  },
+  load_react: {
+    started: (params: Params) => `Loading React profile ${params.session_id}`,
+    completed: (params: Params) => `Loaded React profile ${params.session_id}`,
+    failure: "load",
+  },
+  load_native: {
+    started: (params: Params) => `Loading native profile ${params.session_id}`,
+    completed: (params: Params) => `Loaded native profile ${params.session_id}`,
+    failure: "load",
+  },
+} satisfies Record<
+  Params["mode"],
+  {
+    started: (params: Params) => string;
+    completed: (params: Params) => string;
+    failure: string;
+  }
+>;
+
+export const profilerLoadTool: ToolDefinition<Params, string> = {
   id: "profiler-load",
+  interaction: {
+    startedMsg: ({ params }) => profilerLoadAction[params.mode].started(params),
+    completedMsg: ({ params }) => profilerLoadAction[params.mode].completed(params),
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to ${profilerLoadAction[params.mode].failure} saved profiles: ${failureSignal.error_code}`,
+  },
   description: `Fetch and restore a previously captured profiling session from disk into memory so query tools can operate on it.
 This is the disk-restore counterpart to react-profiler-stop/native-profiler-stop, which write data, and to the query tools (profiler-cpu-query, profiler-commit-query, profiler-stack-query), which read it.
 Use when you need to revisit past session data without capturing a new recording.

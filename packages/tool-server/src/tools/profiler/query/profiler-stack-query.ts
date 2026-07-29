@@ -50,6 +50,15 @@ const zodSchema = z.object({
     .describe("Max results to return (default 15)"),
 });
 
+type Params = z.infer<typeof zodSchema>;
+
+const stackQueryMode = {
+  hang_stacks: "hang stacks",
+  function_callers: "function callers",
+  thread_breakdown: "thread breakdown",
+  leak_stacks: "leak stacks",
+} satisfies Record<Params["mode"], string>;
+
 function getIosParsedData(api: NativeProfilerSessionApi) {
   if (!api.parsedData) {
     throw new FailureError(
@@ -416,8 +425,13 @@ async function executeAndroid(api: NativeProfilerSessionApi, params: z.infer<typ
   });
 }
 
-export const profilerStackQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
+export const profilerStackQueryTool: ToolDefinition<Params, string> = {
   id: "profiler-stack-query",
+  interaction: {
+    startedMsg: ({ params }) => `Querying native stacks by ${stackQueryMode[params.mode]}`,
+    completedMsg: ({ params }) => `Queried native stacks by ${stackQueryMode[params.mode]}`,
+    failedMsg: ({ failureSignal }) => `Failed to query native stacks: ${failureSignal.error_code}`,
+  },
   description: `Query native profiler trace data for iterative investigation of native performance.
 Requires native-profiler-stop → native-profiler-analyze to have been called first.
 Modes:

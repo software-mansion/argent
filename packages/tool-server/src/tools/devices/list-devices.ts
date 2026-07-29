@@ -192,6 +192,15 @@ const zodSchema = z.object({});
 
 export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesResult> = {
   id: "list-devices",
+  interaction: {
+    startedMsg: () => "Listing devices",
+    completedMsg: ({ result }) => {
+      const deviceLabel = result.devices.length === 1 ? "device" : "devices";
+      const avdLabel = result.avds.length === 1 ? "AVD" : "AVDs";
+      return `Listed ${result.devices.length} ${deviceLabel} and ${result.avds.length} ${avdLabel}`;
+    },
+    failedMsg: ({ failureSignal }) => `Failed to list devices: ${failureSignal.error_code}`,
+  },
   description: `List iOS simulators, Android emulators, connected physical Android devices, running Chromium apps, and Vega (Fire TV) devices in one place.
 Use at the start of a session to pick a target id ('udid' for iOS entries, 'serial' for Android/Vega entries, 'id' for Chromium) to pass to interaction tools, and to see which targets are already running.
 Returns { devices, avds } where each device carries a 'platform' discriminator ('ios', 'android', 'chromium', or 'vega'); 'avds' lists Android AVDs bootable via boot-device. A Vega VVD is listed under 'devices' whether running or stopped (state 'running'/'stopped'); start a stopped one with boot-device using its 'vvdImage'.
