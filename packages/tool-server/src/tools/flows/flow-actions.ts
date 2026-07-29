@@ -999,14 +999,13 @@ async function runType(
   await invokeOnDevice(env, "keyboard", { text: step.text });
   if (step.submit !== false) {
     if (env.signal?.aborted) return ABORTED_OUTCOME;
-    // Press Enter as a separate keyboard call. This began as a workaround for
-    // the Android backend dispatching `key` before `text` (a combined
-    // `{ text, key }` submitted before typing); every backend now types the
-    // text first, so that reason is gone. Keep the split anyway: `typeTv`
-    // rejects `key` OUTRIGHT, and does so before typing, so on an Apple TV /
-    // Android TV target a combined call would throw with the field still empty
-    // — where two calls type the text and then fail only on the Enter.
-    // (`runDirective` gates `type` on Vega only, so TV targets do reach here.)
+    // Enter goes in its own keyboard call rather than a combined
+    // `{ text, key }`: `typeTv` rejects `key` OUTRIGHT, and does so before
+    // typing, so on an Android TV target a combined call would throw with the
+    // field still empty — where two calls type the text and then fail only on
+    // the Enter. Android TV is the TV kind that gets this far: `runDirective`
+    // gates `type` on Vega alone, and an Apple TV stops at the focus tap above
+    // (every gesture resolves simulator-server, which rejects a tvOS UDID).
     await invokeOnDevice(env, "keyboard", { key: "enter" });
   }
   return { ok: true };
