@@ -90,7 +90,7 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        "Explicit path to a co-located flow .yaml on the client and tool server's shared filesystem. This must be supplied through the file-input boundary. For remote execution, pass name + project_root instead."
+        "Absolute path to a co-located flow .yaml on the client and tool server's shared filesystem. This must be supplied through the file-input boundary. For remote execution, pass name + project_root instead."
       ),
     device: z
       .string()
@@ -1333,7 +1333,6 @@ export function resolveFlowSource(
     const isVerifiedHostPath =
       flowPathInput?.presentOnHost === true &&
       flowPathInput.statVerified === true &&
-      path.isAbsolute(params.flow_path) &&
       path.resolve(params.flow_path) === path.resolve(flowPathInput.clientPath);
 
     if (!isVerifiedHostPath) {
@@ -1344,6 +1343,31 @@ export function resolveFlowSource(
         {
           error_code: FAILURE_CODES.FLOW_FILE_INVALID,
           failure_stage: "flow_path_boundary",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
+      );
+    }
+
+    // The two rules below are about the shape of the path string itself, not
+    // about how it reached us, so they are reported apart from the boundary
+    // gate above — a caller that did use the boundary must not be told to use
+    // the boundary.
+
+    // Reject a relative path: this string is used verbatim downstream — read
+    // with fs.readFile and turned into flowsDir = path.dirname(filePath) for
+    // the flow's run: siblings, baselines, and baseline write-back — so it must
+    // name the file independently of the tool server's working directory, which
+    // is not the caller's. `argent flow list` prints repo-relative paths, so
+    // this is the spelling an agent is most likely to pass back.
+    if (!path.isAbsolute(params.flow_path)) {
+      throw new FailureError(
+        `Invalid flow_path "${params.flow_path}": flow paths must be absolute — a relative path ` +
+          `is resolved against the tool server's working directory, not the caller's. Pass the ` +
+          `absolute path to the flow's YAML.`,
+        {
+          error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+          failure_stage: "flow_path_absolute",
           failure_area: "tool_server",
           error_kind: "validation",
         }

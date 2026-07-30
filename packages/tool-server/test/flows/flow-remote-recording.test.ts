@@ -250,6 +250,17 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
     });
   });
 
+  it("states the absolute-path requirement in the flow_path description", () => {
+    const runFlow = createRunFlowTool(createMockRegistry());
+
+    // An agent reading only the schema is the caller that gets this wrong —
+    // `argent flow list` hands it a relative path — so the requirement has to
+    // be legible before the call, the way project_root's description states it.
+    expect(runFlow.inputSchema).toMatchObject({
+      properties: { flow_path: { description: expect.stringMatching(/absolute/i) } },
+    });
+  });
+
   it("accepts a co-located path verified by the boundary and derives its logical name", async () => {
     const flowPath = path.join(os.tmpdir(), `external-flow-${Date.now()}.yaml`);
     await fs.writeFile(
@@ -317,6 +328,22 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
         statVerified: true,
       })
     ).toThrow("flow_path file-input boundary");
+  });
+
+  it("rejects a relative flow_path without blaming the boundary it cleared", () => {
+    // The spelling `argent flow list` prints, in a fully legitimate wrapper:
+    // the boundary resolved this path in place and matched the client stat, so
+    // the only thing wrong with it is its shape.
+    const flowPath = path.join(".argent", "flows", "relflow.yaml");
+    const resolve = () =>
+      resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: flowPath }, undefined, {
+        clientPath: flowPath,
+        presentOnHost: true,
+        viaUpload: false,
+        statVerified: true,
+      });
+    expect(resolve).toThrow("flow paths must be absolute");
+    expect(resolve).not.toThrow("file-input boundary");
   });
 
   it('rejects a flow_path carrying ".." segments', () => {

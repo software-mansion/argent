@@ -113,6 +113,34 @@ describe("flow-execute flow_path over HTTP", () => {
     expect(steps.invokeTool).not.toHaveBeenCalled();
   });
 
+  it("rejects a relative flow_path without blaming the boundary it cleared", async () => {
+    // The spelling `argent flow list` prints. Running the server from the
+    // flow's own directory is what makes this wrapper legitimate: it stats the
+    // relative path against this process's cwd, finds the file, and matches the
+    // client-recorded stat — presentOnHost and statVerified both hold, so the
+    // rejection must name the path's shape rather than the boundary.
+    const originalCwd = process.cwd();
+    process.chdir(tmpDir);
+    try {
+      const relPath = path.basename(flowPath);
+      const st = await fs.stat(relPath);
+      const res = await supertest(handle.app)
+        .post("/tools/flow-execute")
+        .send({
+          project_root: projectRoot,
+          device: DEVICE,
+          flow_path: { __argentFileInput: true, path: relPath, size: st.size, mtimeMs: st.mtimeMs },
+        });
+
+      expect(res.status).toBe(500);
+      expect(res.body.error).toMatch(/must be absolute/);
+      expect(res.body.error).not.toMatch(/file-input boundary/);
+      expect(steps.invokeTool).not.toHaveBeenCalled();
+    } finally {
+      process.chdir(originalCwd);
+    }
+  });
+
   it('rejects a ".." flow_path whose kernel and lexical resolutions disagree', async () => {
     // <tmp>/link -> <tmp>/deep/inner, so the kernel reads <tmp>/deep/flow.yaml
     // while path.dirname keeps "<tmp>/link/.." and path.join collapses it to
