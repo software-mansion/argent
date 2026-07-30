@@ -60,6 +60,15 @@ function handle(hostPath?: string): Record<string, unknown> {
   };
 }
 
+/**
+ * Whether a mode-000 file is actually unreadable to this process. `access(R_OK)`
+ * succeeds for root regardless of mode (some CI containers run as root), and
+ * Windows has no POSIX mode bits at all — in both cases the fixture would be
+ * readable and the assertion would pass for the wrong reason. Skip the
+ * unreadable-file cases there rather than let them go green vacuously.
+ */
+const canDenyRead = process.platform !== "win32" && process.getuid?.() !== 0;
+
 function report(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   const steps: StepFixture[] = [{ index: 0, kind: "tap", status: "pass" }];
   return {
@@ -186,6 +195,8 @@ describe("parseRunArgs", () => {
 describe("argent flow run", () => {
   let tempRoot: string;
   let checkoutPath: string;
+  let bundleDirPath: string;
+  let unreadablePath: string;
   let exitSpy: ReturnType<typeof vi.spyOn>;
   let logs: string[];
   let errs: string[];
@@ -198,9 +209,21 @@ describe("argent flow run", () => {
     tempRoot = await fsp.mkdtemp(path.join(tmpdir(), "argent-cli-flow-"));
     checkoutPath = path.join(tempRoot, "checkout.yaml");
     await fsp.writeFile(checkoutPath, "steps: []\n", "utf8");
+    // The two paths `run`'s filesystem acceptance check rejects after the name
+    // checks pass — both need real inodes, so they are built here rather than
+    // faked: a directory that looks like a flow, and an unreadable file.
+    bundleDirPath = path.join(tempRoot, "bundle.yaml");
+    await fsp.mkdir(bundleDirPath, { recursive: true });
+    unreadablePath = path.join(tempRoot, "noperm.yaml");
+    await fsp.writeFile(unreadablePath, "steps: []\n", "utf8");
+    await fsp.chmod(unreadablePath, 0o000);
   });
 
   afterAll(async () => {
+    // Restore the mode before removing the tree: `rm` itself only needs the
+    // parent's write bit, but a stray 0o000 file is a trap for anything that
+    // later walks tmpdir, so never leave one behind if the rm is interrupted.
+    await fsp.chmod(unreadablePath, 0o600).catch(() => {});
     await fsp.rm(tempRoot, { recursive: true, force: true });
   });
 
@@ -362,6 +385,33 @@ describe("argent flow run", () => {
     }
   );
 
+  it("exits 2 on a directory named like a flow instead of handing it to flow-execute", async () => {
+    // `access(R_OK)` succeeds on a readable directory, so only the isFile()
+    // check keeps a `bundle.yaml/` directory out of the runner.
+    await expect(flow(["run", bundleDirPath], opts)).rejects.toThrow("process.exit:2");
+
+    expect(errs.join("\n")).toContain(`Flow path is not a file: ${bundleDirPath}`);
+    expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  // Skipped as root / on Windows, where a mode-000 file is still readable —
+  // see canDenyRead.
+  it.skipIf(!canDenyRead)(
+    "exits 2 on an unreadable flow file rather than letting flow-execute hit EACCES",
+    async () => {
+      // The exit code is the contract, not just the wording: without the
+      // readability probe the EACCES surfaces out of the tool call instead,
+      // which exits 1 — a CI wrapper that tells a usage error (2) from a run
+      // failure (1) would silently reclassify an unreadable file as a failing run.
+      await expect(flow(["run", unreadablePath], opts)).rejects.toThrow("process.exit:2");
+
+      expect(errs.join("\n")).toContain(`Could not read flow file: ${unreadablePath}`);
+      expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
+      expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    }
+  );
+
   it.each([
     ["env", "Unset ARGENT_TOOLS_URL"],
     ["link", "argent unlink"],
@@ -441,6 +491,34 @@ describe("argent flow run", () => {
 
     expect(logs.join("\n")).toBe(".argent/flows/checkout.yaml");
   });
+
+  // Skipped as root / on Windows, where a mode-000 file is still readable —
+  // see canDenyRead.
+  it.skipIf(!canDenyRead)(
+    "omits an unreadable flow file, which `flow run` rejects as unreadable",
+    async () => {
+      const listRoot = path.join(tempRoot, "list-noperm-project");
+      const flowsDir = path.join(listRoot, ".argent", "flows");
+      await fsp.mkdir(flowsDir, { recursive: true });
+      const unreadable = path.join(flowsDir, "noperm.yaml");
+      await fsp.writeFile(path.join(flowsDir, "checkout.yaml"), "steps: []\n");
+      await fsp.writeFile(unreadable, "steps: []\n");
+      await fsp.chmod(unreadable, 0o000);
+      const previousCwd = process.cwd();
+      try {
+        process.chdir(listRoot);
+        await flow(["list"], opts);
+      } finally {
+        process.chdir(previousCwd);
+        // Restore before afterAll's rm walks the tree (see there).
+        await fsp.chmod(unreadable, 0o600);
+      }
+
+      // stat() succeeds on it — only the readability probe keeps `list` from
+      // advertising a path `flow run` then refuses.
+      expect(logs.join("\n")).toBe(".argent/flows/checkout.yaml");
+    }
+  );
 
   it("lists a symlink to a flow file, which `flow run` accepts, but not a broken one", async () => {
     const listRoot = path.join(tempRoot, "list-symlink-project");
