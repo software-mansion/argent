@@ -12,22 +12,28 @@
   // `--max-issues`. `classMembers`, `nsExports` and `nsTypes` sit in knip's
   // own `defaultExcludedIssueTypes`, so the second pass names them explicitly
   // — without that they are gated by neither pass and a new unused class
-  // member costs nothing. Naming `classMembers` also re-attributes some
-  // findings away from `exports`/`types`, which is why the ceiling is lower
-  // than the two counts alone would suggest.
+  // member costs nothing. Naming `classMembers` also turns knip's `isSkipLibs`
+  // off (create-options.js:122), which makes it search declaration files for
+  // external references and suppresses 44 export/type findings the same run
+  // reports without it: 57/181 becomes 44/150. That, not the 12 classMembers
+  // findings it adds, is why the ceiling is lower than the two counts alone
+  // would suggest.
   //
   // The ceiling is one total across those classes, so it bounds the backlog
   // rather than each class: paying off one parked export does licence one new
   // one elsewhere in the same PR. It cannot grow, and it drops as follow-up
   // passes pay it down.
   //
-  // Count it the way CI does, in a tree with no build output. A workspace whose
-  // dist/ exists resolves some declarations through it and reports fewer issues
-  // — 199 against a built tree where CI sees 206 — so `npm run knip` passing
-  // after a local `tsc --build` is not evidence the job will pass. Remove the
-  // dist directories before trusting a number from this ceiling.
+  // Count it the way CI does, in a tree with no build output. Since
+  // `isSkipLibs` is off, the generated .d.ts under a workspace's dist/ are
+  // themselves searched for those external references, so a built tree
+  // suppresses seven findings an unbuilt one reports — 199 against the 206 CI
+  // sees. `npm run knip` passing after a local `tsc --build` is therefore not
+  // evidence the job will pass; remove the dist directories before trusting a
+  // number from this ceiling.
   //
-  // Never reported as unused: build output (git-ignored, so knip skips it),
+  // Never reported as unused: build output (git-ignored, so knip skips it as a
+  // file, even though its .d.ts move the counts above),
   // node_modules (excluded unconditionally), the argent-private submodule
   // (excluded below), and every file that is not JavaScript or TypeScript
   // (knip's DEFAULT_EXTENSIONS) — though workflows and package manifests are
@@ -35,9 +41,13 @@
   "$schema": "https://unpkg.com/knip@5/schema.json",
 
   // Stale exemptions in this file are a failure, not a footnote: this makes
-  // knip's configuration hints exit non-zero like any other finding. They
-  // cover the ignoreDependencies lists below; an ignoreWorkspaces entry whose
-  // directory exists but holds no package.json is not hinted.
+  // knip's configuration hints exit non-zero like any other finding — an
+  // `ignoreDependencies` name that suppresses nothing, an `entry` pattern that
+  // matches nothing or is already reached, an `ignoreWorkspaces` path that does
+  // not exist. The gap is an `ignoreWorkspaces` directory that exists without a
+  // package.json, which is the uninitialized submodule below: it suppresses
+  // nothing and is not hinted. Remove that directory outright, as a
+  // `git clean -ffdx` does, and the hint fires instead.
   "treatConfigHintsAsErrors": true,
 
   // The submodule ships from its own repo and has its own CI. It becomes a
@@ -89,7 +99,7 @@
         // dependencies
         "@fails-components/webtransport",
         // Not bundled-in code reaching it: @fails-components/webtransport
-        // imports this itself at runtime, so nothing first-party names it.
+        // imports this itself at runtime, so nothing first-party imports it.
         "@fails-components/webtransport-transport-http3-quiche",
         "@modelcontextprotocol/sdk",
         "tree-sitter",
@@ -149,18 +159,22 @@
   // production, which is what this check is meant to approximate — and two
   // modules sit in exactly that gap. src/tools/paste/index.ts is imported by
   // two test files and registered by nothing, so it is unreachable over MCP
-  // and HTTP; src/utils/ios-profiler/lifecycle.ts is a re-export barrel kept
-  // "for source compatibility with existing imports" that no longer has any,
-  // its four production consumers having moved to profiler-shared/lifecycle.
+  // and HTTP; src/utils/ios-profiler/lifecycle.ts is a re-export barrel whose
+  // header keeps it "for source compatibility with existing imports", of which
+  // its own test is the only one — all four production consumers import
+  // profiler-shared/lifecycle directly.
   //
   // Those two are the current occupants, not the extent of it: any module that
   // ships with a test is invisible to `files` the same way, which in this repo
   // is most of them. What `files` reliably catches is a module with no test at
   // all. A file orphaned inside test/ is invisible too: root package.json's
   // `test:scripts` runs `node --test`, which turns on knip's node plugin, and
-  // that plugin registers `**/test/**` as an entry in every workspace — so
-  // none of the 380 JS/TS files under packages/*/test/ can be reported, while
-  // the 15 under packages/*/tests/ can.
+  // that plugin registers four entry patterns in every workspace: `**/test/**`
+  // and three matching a *.test.* filename anywhere. So none of the 380 JS/TS
+  // files under packages/*/test/ can be reported, and of the 15 under
+  // packages/*/tests/ only the one that is not itself a test file can —
+  // registry/tests/helpers.ts, which is why it is the lone `tests/` entry in
+  // the --production list below.
   //
   // `knip --production` is the lens that reports the whole class, and the repo
   // is not clean under it: 13 unused files — those two, seven root scripts,
