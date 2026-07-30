@@ -21,6 +21,12 @@
   // one elsewhere in the same PR. It cannot grow, and it drops as follow-up
   // passes pay it down.
   //
+  // Count it the way CI does, in a tree with no build output. A workspace whose
+  // dist/ exists resolves some declarations through it and reports fewer issues
+  // — 199 against a built tree where CI sees 206 — so `npm run knip` passing
+  // after a local `tsc --build` is not evidence the job will pass. Remove the
+  // dist directories before trusting a number from this ceiling.
+  //
   // Out of scope entirely: build output and dependencies (git-ignored, so knip
   // skips them), the argent-private submodule (excluded below), and every file
   // that is not JavaScript or TypeScript (knip's DEFAULT_EXTENSIONS).
