@@ -641,6 +641,78 @@ describe("flow-add-step", () => {
     }
   });
 
+  // The runner resolves a recorded `run:` against the CANONICAL containing
+  // file's directory (scopeFlowDir in flow-run.ts), so when the recording is
+  // itself a symlink the recorder must validate the sibling beside the real
+  // file — the two tests below pin both directions of that anchor. The base
+  // is realpath'd so the only spelling/real divergence is the test's own
+  // symlink: macOS's tmpdir lives behind the /var → /private/var symlink,
+  // which would otherwise make every path here diverge from its canonical
+  // form for reasons unrelated to what's being tested.
+  async function symlinkedRecordingSetup(): Promise<{ base: string; vault: string }> {
+    const base = await fs.realpath(tmpDir);
+    const vault = path.join(base, "vault");
+    const flowsDir = path.join(base, ".argent", "flows");
+    await fs.mkdir(vault, { recursive: true });
+    await fs.mkdir(flowsDir, { recursive: true });
+    // The real file must exist before the recording starts: flow-start-recording
+    // writes THROUGH .argent/flows/rec.yaml, which is a symlink into vault/.
+    await fs.writeFile(path.join(vault, "rec.yaml"), "steps: []\n", "utf8");
+    await fs.symlink(path.join(vault, "rec.yaml"), path.join(flowsDir, "rec.yaml"));
+    return { base, vault };
+  }
+
+  it("validates the run: sibling beside a symlinked recording's real file", async () => {
+    const registry = createMockRegistry({
+      "flow-execute": { result: { ok: true, steps: [] } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    const { base, vault } = await symlinkedRecordingSetup();
+    // The fragment lives ONLY in vault/, beside the real file — exactly where
+    // the runner's canonical anchor will look for it at replay.
+    await fs.writeFile(path.join(vault, "frag.yaml"), "steps:\n  - echo: hi\n", "utf8");
+    await flowStartRecordingTool.execute({}, { name: "rec", project_root: base });
+
+    const result = await tool.execute(
+      {},
+      { command: "flow-execute", args: JSON.stringify({ name: "frag", project_root: base }) }
+    );
+
+    // Anchored beside the symlink's spelling this would miss the fragment and
+    // demote a perfectly replayable composition to a raw tool step.
+    expect(result.message).not.toMatch(/could not resolve/i);
+    expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "run", flow: "frag.yaml" }]);
+  });
+
+  it("keeps the raw step when the sibling exists only beside the symlink's spelling", async () => {
+    const registry = createMockRegistry({
+      "flow-execute": { result: { ok: true, steps: [] } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    const { base } = await symlinkedRecordingSetup();
+    // A decoy beside the symlink's SPELLING only — replay resolves `run:`
+    // beside the real file, where nothing exists, so recording this as `run:`
+    // would report success for a step that cannot replay.
+    await fs.writeFile(
+      path.join(base, ".argent", "flows", "frag.yaml"),
+      "steps:\n  - echo: decoy\n",
+      "utf8"
+    );
+    await flowStartRecordingTool.execute({}, { name: "rec", project_root: base });
+
+    const result = await tool.execute(
+      {},
+      { command: "flow-execute", args: JSON.stringify({ name: "frag", project_root: base }) }
+    );
+
+    expect(result.message).toMatch(/could not resolve/i);
+    expect(parseFlow(result.flowFile).steps).toEqual([
+      { kind: "tool", name: "flow-execute", args: { name: "frag", project_root: base } },
+    ]);
+  });
+
   it("records a flow-execute of a sibling flow_path as a run: directive", async () => {
     const registry = createMockRegistry({
       "flow-execute": { result: { ok: true, steps: [] } },
