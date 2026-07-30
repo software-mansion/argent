@@ -700,6 +700,48 @@ describe("flow composition (run:)", () => {
     ).rejects.toThrow(/co-located/i);
   });
 
+  it("allows run: composition for a co-located flow_file resolved in place", async () => {
+    // The everyday co-located client: the flow_file boundary resolves the
+    // exact ${project_root}/.argent/flows/${name}.yaml path on a shared
+    // filesystem (presentOnHost, NOT an upload). This return is what carries
+    // the whole feature — misclassifying it as an upload would reject every
+    // local run: composition with the co-located contract error, so the
+    // upload-rejection tests above need this inverse pin.
+    await writeFlow("login", {
+      executionPrerequisite: "",
+      steps: [{ kind: "echo", message: "composed fragment ran" }],
+    });
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "login.yaml" }],
+    });
+    const flowFile = path.join(tmpDir, ".argent", "flows", "main.yaml");
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: flowFile, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_file: {
+              clientPath: flowFile,
+              presentOnHost: true,
+              viaUpload: false,
+            },
+          },
+        }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[1]).toMatchObject({
+      kind: "echo",
+      status: "pass",
+      message: "composed fragment ran",
+    });
+  });
+
   it("attributes a hard-stop-skipped run: step to its target stem, like every other path", async () => {
     await writeFlow("login", {
       executionPrerequisite: "",
