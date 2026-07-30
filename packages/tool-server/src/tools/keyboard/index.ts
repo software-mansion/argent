@@ -1,6 +1,8 @@
 import { z } from "zod";
+import { FAILURE_CODES } from "@argent/registry";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
+import { InvalidToolInputError } from "../../utils/capability";
 import { redactSecretsFromError, resolveSecretPlaceholders } from "../../utils/secrets";
 import type { KeyboardParams, KeyboardResult } from "./types";
 import { makeIosImpl, makeIosRemoteImpl } from "./platforms/ios";
@@ -32,7 +34,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1–f12. When combined with `text`, the key is pressed AFTER the text is typed (so text + enter types and submits). Not supported on TV targets — move focus with `tv-remote` (up/down/left/right) instead."
+      "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1–f12. Cannot be combined with `text` in one call — type first, then press the key in a second call. Not supported on TV targets — move focus with `tv-remote` (up/down/left/right) instead."
     ),
   delayMs: z
     .number()
@@ -85,25 +87,25 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
       // Treat both text and key as sensitive. `key` is an unrestricted string at
       // this boundary, so a value must not reach the event log before execution
       // validates whether it is a supported named key.
+      //
+      // `startedMsg` still describes a text+key request because it renders
+      // BEFORE `execute` rejects the combination; `completedMsg` runs only after
+      // a call that succeeded, where exactly one of the two was given.
       startedMsg: ({ params }) => {
         if (params.text === undefined) return "Pressing a key";
         if (params.key === undefined) return "Entering text";
         return "Entering text and pressing a key";
       },
-      completedMsg: ({ params }) => {
-        if (params.text === undefined) return "Pressed a key";
-        if (params.key === undefined) return "Entered text";
-        return "Entered text and pressed a key";
-      },
+      completedMsg: ({ params }) => (params.text === undefined ? "Pressed a key" : "Entered text"),
       failedMsg: ({ failureSignal }) => `Failed to use keyboard: ${failureSignal.error_code}`,
     },
     description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
 Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; use keyboard to type into a focused text field (e.g. a search or login box).
-Returns { typed: string, keys: number }. Fails if an unsupported key name is provided or the device's input backend is not reachable.
+Returns { typed: string, keys: number }. Fails if both text and key are given in one call, if an unsupported key name is provided, or if the device's input backend is not reachable.
 - text: types a string (supports uppercase, digits, common punctuation). To type a credential, use \`{{secret:<NAME>}}\` — resolved server-side from the \`ARGENT_SECRET_<NAME>\` env var or an argent secrets file (\`.argent/secrets.env\` in the project, \`~/.argent/secrets.env\`, or an \`ARGENT_SECRET_\`-prefixed key in the project's \`.env\`/\`.env.local\`), so the plaintext never enters agent context; the result echoes the placeholder, not the value, and the after-typing auto-screenshot is skipped.
 - key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1–f12) — NOT supported on TV targets; move focus with \`tv-remote\` instead.
 On a TV target (runtimeKind 'tv') only \`text\` applies — focus a text field first (with \`tv-remote\`), then type into it (injected HID keyboard on Apple TV, \`adb input text\` on Android TV).
-Provide text, key, or both — when both are given, the text is typed first and the key is pressed after it (text + key:"enter" types and submits).`,
+Provide text OR key — never both in one call; a request carrying both is rejected before anything is typed. To type and then submit, use two calls, or two \`keyboard\` steps in one \`run-sequence\`: { text: "…" } then { key: "enter" }.`,
     zodSchema,
     capability,
     searchHint:
@@ -113,6 +115,30 @@ Provide text, key, or both — when both are given, the text is typed first and 
     // async and a tvOS udid must never resolve simulator-server.
     services: () => ({}),
     execute: async (services, params, options) => {
+      // `text` and `key` are mutually exclusive. A combined call has no meaning a
+      // caller can rely on: `key: "enter"` reads as "type, then submit", while
+      // `key: "backspace"` reads just as naturally as "delete, then type" — and
+      // whichever order a backend picks, the other reading silently corrupts the
+      // field (#579). One call, one action; the sequence is expressed by making
+      // two calls.
+      //
+      // Rejected here, ahead of the secret resolution and the platform dispatch
+      // below, so a combined request never resolves an `ARGENT_SECRET_*` value
+      // and never reaches a device — no backend has to defend against the shape.
+      if (params.text !== undefined && params.key !== undefined) {
+        // `undefined`-based, not truthiness: the rule is about the shape of the
+        // request, so `{ text: "", key: "enter" }` is rejected too rather than
+        // carving out an empty string nobody would have to document.
+        throw new InvalidToolInputError(
+          "keyboard takes `text` or `key`, not both — pass one per call. To type and then press " +
+            'a key, make two calls (or two `keyboard` steps in one `run-sequence`): { text: "…" } ' +
+            'followed by { key: "enter" }.',
+          {
+            error_code: FAILURE_CODES.KEYBOARD_TEXT_AND_KEY_COMBINED,
+            failure_stage: "keyboard_text_and_key_combined",
+          }
+        );
+      }
       // Secret placeholders resolve here — inside execute, after every logging
       // boundary (agent transcript, mcp-calls.log, the event log, recorded
       // flow YAMLs all see only the placeholder) and before the platform

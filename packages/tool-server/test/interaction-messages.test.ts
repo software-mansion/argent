@@ -197,6 +197,8 @@ describe("tool interaction messages", () => {
     const definitions = definitionsById(createRegistry());
     const secret = "INTERACTION_MESSAGE_SECRET";
     const messages = [
+      // A text+key request is rejected by the tool, but `startedMsg` renders
+      // before that check — so it still has to keep both values out of the log.
       definitions.get("keyboard")!.interaction!.startedMsg!({
         params: { udid: "device-1", text: secret, key: secret },
       }),

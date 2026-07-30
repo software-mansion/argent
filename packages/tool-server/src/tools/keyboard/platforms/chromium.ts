@@ -11,8 +11,9 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
   const delay = params.delayMs ?? 50;
   let keysPressed = 0;
 
-  // Resolve the named key before typing anything so an unknown name fails
-  // fast instead of after the text has already been typed.
+  // Resolve the named key up front, so an unknown name is rejected with nothing
+  // dispatched. The tool rejects a request carrying both `text` and `key` (see
+  // ../index.ts), so at most one of the two blocks below runs.
   let named: (typeof CHROMIUM_NAMED_KEYS)[string] | undefined;
   if (params.key) {
     const lower = params.key.toLowerCase();
@@ -67,8 +68,6 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
     }
   }
 
-  // Key after text: a combined call means "type, then submit" (text +
-  // key:"enter"). Pressing the key first submits the still-empty field.
   if (named) {
     await api.dispatchKeyEvent({
       type: "keyDown",

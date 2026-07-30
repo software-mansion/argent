@@ -44,7 +44,6 @@ import {
   assertTypeableAndroidText,
   injectAndroidText,
   injectAndroidNamedKey,
-  resolveAndroidNamedKeycode,
 } from "../src/utils/android-input";
 import { NAMED_KEYS } from "../src/tools/keyboard/key-codes";
 import { InvalidToolInputError } from "../src/utils/capability";
@@ -159,14 +158,18 @@ describe("android-input — injection", () => {
     );
   });
 
-  it("resolves every named key to its own keycode (not one hardcoded value)", () => {
-    // The map's literal values are pinned above; this pins that the resolver
-    // READS the map, for every entry in it. The injection tests only ever press
-    // `enter` and `backspace`, so a resolver that mistyped one of the other 22
-    // names — the realistic lookup/switch refactor slip — is green everywhere
-    // except here.
+  it("presses each named key with its own keycode (not one hardcoded value)", async () => {
+    // The map's literal values are pinned above; this pins that the lookup READS
+    // the map, for every entry in it. The other injection tests only ever press
+    // `enter`, so a lookup that mistyped one of the other 23 names — the
+    // realistic switch/refactor slip — is green everywhere except here.
     for (const [name, keycode] of Object.entries(ANDROID_NAMED_KEYCODES)) {
-      expect(resolveAndroidNamedKeycode(name), `wrong keycode for "${name}"`).toBe(keycode);
+      adbShell.mockClear();
+      await injectAndroidNamedKey(SERIAL, name);
+      expect(
+        adbShell.mock.calls.map((c) => c[1]),
+        `wrong keycode for "${name}"`
+      ).toEqual([`input keyevent ${keycode}`]);
     }
   });
 
@@ -338,11 +341,12 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
   });
 
   it("no-ops on an empty request (neither key nor text): { typed:'', keys:0 }, zero adb", async () => {
-    // The schema leaves both `key` and `text` optional with no refinement, so an
-    // empty request is a silent no-op returning { typed:"", keys:0 } and issuing
-    // no adb call — the same contract every keyboard backend (simulator-server,
-    // tv, vega) follows. Pin it so a future change to that behaviour (e.g. making
-    // it throw) is a deliberate, visible edit rather than an unnoticed drift.
+    // `text` and `key` are mutually exclusive (rejected in the tool's `execute`),
+    // but neither is *required*: an empty request stays a silent no-op returning
+    // { typed:"", keys:0 } and issuing no adb call — the same contract every
+    // keyboard backend (simulator-server, tv, vega) follows. Pin it so a future
+    // change to that behaviour (e.g. making it throw too) is a deliberate,
+    // visible edit rather than an unnoticed drift.
     const res = await impl.handler({}, { udid: SERIAL } as KeyboardParams, phone);
     expect(res).toEqual({ typed: "", keys: 0 });
     expect(adbShell).not.toHaveBeenCalled();
@@ -354,91 +358,9 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     expect(adbShell).toHaveBeenCalledWith(SERIAL, "input keyevent 66", expect.anything());
   });
 
-  it("counts key + text together (1 + codepoints), emits BOTH, returns text as `typed`", async () => {
-    const res = await impl.handler(
-      {},
-      { udid: SERIAL, key: "enter", text: "abc" } as KeyboardParams,
-      phone
-    );
-    expect(res).toEqual({ typed: "abc", keys: 4 });
-    // Assert the exact ordered sequence, not just presence: the text is typed
-    // FIRST and the named key pressed after it — the shared text-then-key rule
-    // every keyboard backend follows (simulator-server / chromium / vega) and
-    // the one the tool's own description documents. `toEqual` catches both a
-    // dropped keyevent when text co-occurs AND a silent reorder back to
-    // key-before-text; a `toContain` pair would miss the reorder.
-    const cmds = adbShell.mock.calls.map((c) => c[1]);
-    expect(cmds).toEqual(["input text 'abc'", "input keyevent 66"]); // text, then KEYCODE_ENTER
-  });
-
-  it("presses a named key after ALL segments of `%`-split text", async () => {
-    // The text-then-key rule has to hold against the multi-call shape too:
-    // `%`-bearing text becomes one `input text` per segment, and an Enter
-    // landing between them would submit `100%` and drop `safe`.
-    adbShell.mockClear();
-    const res = await impl.handler(
-      {},
-      { udid: SERIAL, text: "100%safe", key: "enter" } as KeyboardParams,
-      phone
-    );
-    expect(adbShell.mock.calls.map((c) => c[1])).toEqual([
-      "input text '100%'",
-      "input text 'safe'",
-      "input keyevent 66",
-    ]);
-    expect(res).toEqual({ typed: "100%safe", keys: 9 });
-  });
-
-  it("presses the key it was asked for, not a hardcoded Enter, after the text", async () => {
-    // The other combined-call tests that get as far as pressing a key all use
-    // `key:"enter"`, so a path that ignored `params.key` and always pressed
-    // Enter would pass them. `backspace` (67) is the case the ordering exists
-    // for: it deletes the last character of the text just typed rather than one
-    // from the field's previous value.
-    adbShell.mockClear();
-    const res = await impl.handler(
-      {},
-      { udid: SERIAL, text: "abc", key: "backspace" } as KeyboardParams,
-      phone
-    );
-    expect(adbShell.mock.calls.map((c) => c[1])).toEqual(["input text 'abc'", "input keyevent 67"]);
-    expect(res).toEqual({ typed: "abc", keys: 4 });
-  });
-
-  it("leaves the key unpressed when the text injection fails", async () => {
-    // The key is awaited after the text, so a failed inject must abort the whole
-    // call — pressing Enter anyway would submit a half-typed field.
-    adbShell.mockClear();
-    adbShell.mockRejectedValueOnce(new Error("adb: device offline"));
-    await expect(
-      impl.handler({}, { udid: SERIAL, text: "hi", key: "enter" } as KeyboardParams, phone)
-    ).rejects.toThrow(/device offline/);
-    expect(adbShell.mock.calls.map((c) => c[1])).toEqual(["input text 'hi'"]);
-  });
-
-  it("reports the text error, not the key error, when BOTH halves are invalid", async () => {
-    // Pinning which of the two 400s wins is all the hoisted
-    // `assertTypeableAndroidText` buys — resolving the key up front already
-    // guarantees the no-side-effect property on its own — so dropping that line
-    // becomes a visible change rather than a silent swap of the error message.
-    adbShell.mockClear();
-    await expect(
-      impl.handler({}, { udid: SERIAL, text: "café", key: "bogus" } as KeyboardParams, phone)
-    ).rejects.toThrow(/printable ASCII/);
-    expect(adbShell).not.toHaveBeenCalled();
-  });
-
-  it("rejects a key + un-typeable text request with NO on-device side effect", async () => {
-    // A combined request whose text can't be typed must reject with NOTHING on
-    // the device: no partial text, and no key press — a stray `key:"enter"`
-    // would submit a form and double-fire on retry.
-    adbShell.mockClear();
-    await expect(
-      impl.handler({}, { udid: SERIAL, key: "enter", text: "café" } as KeyboardParams, phone)
-    ).rejects.toBeInstanceOf(InvalidToolInputError);
-    // Neither the keyevent nor any text segment reached the device.
-    expect(adbShell).not.toHaveBeenCalled();
-  });
+  // A combined `{ text, key }` request has no coverage here: the tool rejects
+  // that shape in `execute`, above this backend, so it can't reach the handler.
+  // See keyboard-text-key-exclusive.test.ts.
 
   it("surfaces an adb transport failure as a throw (no silent success — the #449 fix)", async () => {
     // The whole point of moving off the fire-and-forget HID transport: a failed

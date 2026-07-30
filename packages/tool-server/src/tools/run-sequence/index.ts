@@ -114,7 +114,7 @@ Allowed tools and their args (udid is auto-injected, do NOT include it in args):
   gesture-pinch:  { centerX: number, centerY: number, startDistance: number, endDistance: number, endCenterX?: number, endCenterY?: number, angle?: number, durationMs?: number }  [ios/android]
   gesture-rotate: { centerX: number, centerY: number, radius?: number, radiusX?: number, radiusY?: number, startAngle: number, endAngle: number, durationMs?: number }  [ios/android]
   button:         { button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton" }                  [ios/android]
-  keyboard:       { text?: string, key?: string, delayMs?: number }  (key pressed after text; TV: text only)            [ios/android/chromium/vega/tv]
+  keyboard:       { text?: string, key?: string, delayMs?: number }  (text OR key per step, never both; TV: text only)  [ios/android/chromium/vega/tv]
                   text supports {{secret:<NAME>}} placeholders, resolved server-side from ARGENT_SECRET_<NAME> env vars or an argent secrets file — credentials never enter agent context
   rotate:         { orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown" }                     [ios/android]
   shake:          { count?: number }                                                                                    [ios sim/android emu]
@@ -129,9 +129,10 @@ Example — scroll down three times (use gesture-scroll with positive deltaY on 
     { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } }
   ]}
 
-Example — type text and submit (one step: the key is pressed after the text is typed):
+Example — type text and submit (two keyboard steps: one call takes text or key, never both):
   { "udid": "<UDID>", "steps": [
-    { "tool": "keyboard", "args": { "text": "hello world", "key": "enter" } }
+    { "tool": "keyboard", "args": { "text": "hello world" } },
+    { "tool": "keyboard", "args": { "key": "enter" } }
   ]}
 
 Example — TV: move focus right twice then activate (one tv-remote step with a path is cheaper):

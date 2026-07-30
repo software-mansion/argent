@@ -152,13 +152,8 @@ export async function injectAndroidKeycode(serial: string, keycode: number): Pro
   await adbShell(serial, `input keyevent ${keycode}`, { timeoutMs: ADB_INPUT_TIMEOUT_MS });
 }
 
-/**
- * Resolve a named key (keyboard tool `key` vocabulary) to its
- * android.view.KeyEvent keycode, or throw. Split out from the injection so a
- * caller can validate a key name without pressing it. Mirrors
- * `resolveVegaNamedKeycode`.
- */
-export function resolveAndroidNamedKeycode(name: string): number {
+/** Press a named key (keyboard tool `key` vocabulary) on Android. */
+export async function injectAndroidNamedKey(serial: string, name: string): Promise<void> {
   const lower = name.toLowerCase();
   // Own-property check: `key` is a free string, so a prototype key like
   // "constructor" would otherwise pass the nullish guard with a garbage value
@@ -180,10 +175,5 @@ export function resolveAndroidNamedKeycode(name: string): number {
       }
     );
   }
-  return keycode;
-}
-
-/** Press a named key (keyboard tool `key` vocabulary) on Android. */
-export async function injectAndroidNamedKey(serial: string, name: string): Promise<void> {
-  await injectAndroidKeycode(serial, resolveAndroidNamedKeycode(name));
+  await injectAndroidKeycode(serial, keycode);
 }
