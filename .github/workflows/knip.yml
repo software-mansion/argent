@@ -20,9 +20,10 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          # Matches what lint, lockfile and repo-hygiene pin; the repo's other
-          # seven PR workflows are on 20. knip's own floor, engines.node
-          # >=18.18.0, is below both.
+          # Matches what lint, lockfile and repo-hygiene pin; the other eight PR
+          # workflows are on 20, e2e-device-smoke by inheriting the
+          # start-tool-server composite action's default. knip's own floor,
+          # engines.node >=18.18.0, is below both.
           node-version: "24"
 
       # Knip reads package.json and source only, so every install script here is
@@ -41,10 +42,11 @@ jobs:
         id: knip
         run: npm run knip
 
-      # A ceiling breach is the one failure knip does not announce: it exits 1
-      # with no message, under 200+ lines of parked findings that all look the
-      # same. Name the ceiling and where it lives, at the end of the log.
-      - name: Explain a ceiling failure
+      # Three of knip's four failure shapes name what to remove. The fourth — a
+      # breach of the second pass's ceiling — exits 1 with no message at all,
+      # under 200+ parked findings that all look alike. This fires on any knip
+      # failure, so it has to read correctly for both.
+      - name: Explain the failure
         if: failure() && steps.knip.outcome == 'failure'
         run: |
-          echo "::error::Dead Code failed. If the output above is only \"Unused exports\" / \"Unused exported types\" / \"Unused exported class members\", the second knip pass went over the --max-issues ceiling in package.json — a new unused export, exported type or class member. knip.jsonc explains why the ceiling is what it is, and why it must be counted against a tree with no build output."
+          echo "::error::Dead Code failed. A report naming files, dependencies, binaries or configuration hints comes from the first pass and says what to remove. A report of only \"Unused exports\" / \"Unused exported types\" / \"Unused exported class members\" is the second pass exceeding the --max-issues ceiling in package.json, which knip exits on silently; knip.jsonc explains that ceiling and why it must be counted against a tree with no build output."

@@ -176,7 +176,7 @@ npm run test:watch -w @argent/tool-server
    find packages -maxdepth 2 -type d -name dist -exec rm -rf {} +
    npm run knip
    ```
-   Run it this way round, not straight after step 3. The `--max-issues` ceiling is counted against an unbuilt tree, because that is what CI analyses; with `packages/*/dist` present knip finds seven fewer issues, so a built-tree run has that much phantom headroom and can pass locally while the Dead Code job fails.
+   Run it this way round, not straight after step 3. The `--max-issues` ceiling is counted against an unbuilt tree, because that is what CI analyses; with `packages/*/dist` present knip finds seven fewer issues, so a built-tree run has that much phantom headroom and can pass locally while the Dead Code job fails. This leaves the tree unbuilt, so run `npm run build` again before re-running any test suite.
 6. **Write a clear PR title** — it becomes part of the release changelog. Use the same prefix convention as commit messages (`feat:`, `fix:`, etc.).
 7. **Open the PR** against `main` and fill in the description with context on what changed and why.
 8. A maintainer will review and may request changes. Address feedback with new commits (don't force-push after review starts).
