@@ -679,6 +679,98 @@ describe("flow composition (run:)", () => {
     expect(result.steps[1]).toMatchObject({ flow: "helpers/login", target: "helpers/login.yaml" });
   });
 
+  it("attributes a fragment's when marker and skipped block steps to the fragment, not the root", async () => {
+    // A platform guard is static (no tree fetch) and android never matches the
+    // iOS DEVICE, so the block skips with the fragment on the run stack. The
+    // marker line (execWhenStep) and the authored-step skip line
+    // (reportBlockSkipped → stepFlow's non-run branch) each derive attribution
+    // separately — all of them must name the fragment, or the CLI's
+    // `[fragment]` suffix would tag these lines with the wrong flow.
+    await writeFlow("frag", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "echo", message: "inside fragment" },
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "android" },
+          steps: [{ kind: "echo", message: "android only" }],
+        },
+      ],
+    });
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "frag.yaml" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "run:pass",
+      "echo:pass",
+      "when:skip",
+      "echo:skip",
+    ]);
+    // Executed echo, unmet-guard marker, and block-skip line: all "frag".
+    expect(result.steps[1]).toMatchObject({ flow: "frag", message: "inside fragment" });
+    expect(result.steps[2]).toMatchObject({ flow: "frag", depth: 1 });
+    expect(result.steps[3]).toMatchObject({ flow: "frag", depth: 2, message: "android only" });
+    expect(result.ok).toBe(true);
+  });
+
+  it("attributes hard-stop skips inside a fragment to the fragment, and the root's own to the root", async () => {
+    // The fragment's leading launch declares no iOS app id, so it errors and
+    // hard-stops the run with the fragment still on the stack. Every post-stop
+    // skip line inside the fragment — plain step, when marker, and the when
+    // block's expansion — must stay attributed to the fragment, while the
+    // root's trailing step flips back to the root: attribution follows the
+    // run stack, not where the stop happened.
+    await writeFlow("frag", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: { android: "com.acme.app" } }, // DEVICE is iOS → errors
+        { kind: "echo", message: "fragment echo" },
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "ios" },
+          steps: [{ kind: "echo", message: "guarded echo" }],
+        },
+      ],
+    });
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "run", flow: "frag.yaml" },
+        { kind: "echo", message: "root echo" },
+      ],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "run:pass",
+      "launch:error",
+      "echo:skip",
+      "when:skip",
+      "echo:skip",
+      "echo:skip",
+    ]);
+    expect(result.steps[2]).toMatchObject({ flow: "frag", message: "fragment echo" });
+    expect(result.steps[3]).toMatchObject({ flow: "frag", kind: "when" });
+    expect(result.steps[4]).toMatchObject({ flow: "frag", message: "guarded echo" });
+    expect(result.steps[5]).toMatchObject({ flow: "main", message: "root echo" });
+    expect(result.ok).toBe(false);
+  });
+
   it("keys and stores a composed fragment's snapshot with the root flow", async () => {
     const sharedDir = path.join(tmpDir, "shared");
     await fs.mkdir(sharedDir, { recursive: true });
