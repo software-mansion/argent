@@ -14,29 +14,61 @@
   "ignoreWorkspaces": ["packages/argent-private"],
 
   "workspaces": {
-    // Root workspace: build/dev/release/CI scripts. The ones referenced from
-    // package.json are auto-detected; the rest are invoked by GitHub workflows
-    // or by hand (knip can't see those call sites), so treat every standalone
-    // script as an entry.
+    // Root workspace: build/dev/release/CI scripts. Knip reaches these on its
+    // own, both from package.json's `scripts` and from `run:` steps in
+    // .github/workflows (its github-actions plugin reads them). The one
+    // exception is the Windows E2E driver: it is invoked from a multi-line
+    // PowerShell `run:` block, which that plugin does not parse — so it is
+    // declared by hand. Everything else in scripts/ stays covered by the gate.
     ".": {
-      "entry": ["scripts/**/*.{cjs,mjs}"],
+      "entry": ["scripts/ci/windows-chromium-e2e.mjs"],
     },
 
     // @swmansion/argent is a thin dispatcher whose real payload is an esbuild
-    // bundle of the OTHER workspaces (see scripts/bundle-tools.cjs). Every
-    // runtime dep it lists is consumed by that bundled-in code, which knip
-    // can't follow across the esbuild boundary — so dependency checking here
-    // is all false positives. Correctness of those deps is already enforced in
-    // the source workspaces (tool-server, installer, mcp, …). The hand-written
-    // dispatcher copied into bin/ at build time is an entry, not dead.
+    // bundle of the OTHER workspaces (see scripts/bundle-tools.cjs). The
+    // hand-written dispatcher copied into bin/ at build time is an entry, not
+    // dead code.
+    //
+    // Knip cannot follow imports across that esbuild boundary, so every
+    // package consumed only by the bundled-in code reads as unused here. Those
+    // are named one by one rather than waved through with a catch-all pattern:
+    // `ignoreDependencies` also suppresses `unlisted` and `unresolved`, and a
+    // catch-all would take this workspace's own src/ and scripts/ out of those
+    // two checks — where an import with no matching declaration is a real bug,
+    // not a bundler artifact.
+    //
+    // Unchecked in either direction: knip does not inspect
+    // `optionalDependencies` at all, so `electron` and `node-pty` are outside
+    // the gate here, as is argent-cli's runtime `createRequire("node-pty")`.
     "packages/argent": {
       "entry": ["scripts/argent-simulator-server.cjs"],
-      "ignoreDependencies": [".*"],
+      "ignoreDependencies": [
+        // dependencies
+        "@fails-components/webtransport",
+        "@fails-components/webtransport-transport-http3-quiche",
+        "@modelcontextprotocol/sdk",
+        "tree-sitter",
+        "tree-sitter-typescript",
+        // devDependencies
+        "@argent/telemetry",
+        "@clack/prompts",
+        "@types/semver",
+        "picocolors",
+        "posthog-node",
+        "semver",
+        "smol-toml",
+        "yaml",
+      ],
     },
 
-    // tool-server pulls a few deps in ways knip can't trace statically.
+    // tool-server reaches a few packages in ways knip can't trace statically.
+    // `ignoreDependencies` works in both directions, so this one list silences
+    // two different issue classes; they are kept apart below so each entry's
+    // stated reason matches the finding it actually suppresses.
     "packages/tool-server": {
       "ignoreDependencies": [
+        // --- Declared in package.json, loaded too dynamically to detect.
+        //     Without these: "unused dependencies". ---
         // Dynamic `_require("tree-sitter")` / `_require("tree-sitter-typescript")`
         // in react-profiler/pipeline/.../ast-index.ts (pinned + lazy-loaded).
         "tree-sitter",
@@ -44,13 +76,22 @@
         // Runtime companion of the dynamically imported
         // `@fails-components/webtransport`; loaded internally, never imported.
         "@fails-components/webtransport-transport-http3-quiche",
-        // Lazy `require("sharp")` in chromium-server/screenshot.ts (optional —
-        // the caller degrades gracefully when it isn't installed).
+
+        // --- Imported here but deliberately absent from this package.json.
+        //     Without these: "unlisted dependencies". ---
+        // Lazy `require("sharp")` in chromium-server/screenshot.ts. Kept out of
+        // the manifest on purpose so the ~30 MB native binary isn't a cost every
+        // consumer pays; the caller degrades gracefully when it isn't installed.
         "sharp",
-        // Provided by the Electron host at runtime; deliberately externalized
-        // from the tool-server bundle rather than declared as a dependency.
+        // `require("electron")` twice, for two different reasons. In
+        // utils/preview-window.ts it resolves the Electron executable's path
+        // from the install root, where it is an optionalDependency of the
+        // published @swmansion/argent. In test/fixtures/electron-smoke-app it
+        // is the Electron main-process API, supplied by the runtime that
+        // executes the fixture.
         "electron",
-        // Type-only import in a test, pulled in transitively via supertest.
+        // Type-only import in test/http-streaming.test.ts, reached
+        // transitively through supertest.
         "superagent",
       ],
     },
@@ -62,6 +103,14 @@
   // non-failing) to ratchet to "error" in follow-up passes.
   "rules": {
     // --- Enforced (fail CI) ---
+    // Blind spot in `files`: test files are entry points, so a production
+    // module that nothing but its own test imports still counts as reached.
+    // Two modules sit in it today — tools/paste (a tool definition that
+    // setup-registry.ts never registers, so it is unreachable over MCP and
+    // HTTP) and utils/ios-profiler/lifecycle.ts (a re-export shim whose last
+    // real importer is gone). `knip --production` is the lens that reports the
+    // class; the repo isn't clean under it yet (dev-only root scripts leave
+    // the entry set there), so a second production-mode pass is a follow-up.
     "files": "error",
     "dependencies": "error",
     "devDependencies": "error",
