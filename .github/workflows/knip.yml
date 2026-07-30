@@ -30,9 +30,10 @@ jobs:
       # pure cost to it. Seven are native, and fsevents is darwin-only, so six
       # reach this runner: five try a prebuilt binary before compiling, and
       # dtrace-provider always runs node-gyp but ends in
-      # `|| node suppress-error.js`. On this runner only node-pty and
-      # dtrace-provider reach a compiler at all, and both are
-      # optionalDependencies npm lets fail. What skipping the scripts really
+      # `|| node suppress-error.js`. Off mac/solaris/freebsd its binding.gyp
+      # picks a stub target with no sources, so on this runner node-gyp builds
+      # nothing and node-pty is the only one that reaches a compiler at all —
+      # an optionalDependency, whose failure npm tolerates. What skipping the
       # buys is immunity to a bump that leaves a package with no prebuild for
       # the runner — the case dependabot.yml holds tree-sitter's minor and major
       # updates back from, where the compile breaks `npm ci` outright.
@@ -47,11 +48,12 @@ jobs:
         id: knip
         run: npm run knip
 
-      # Every first-pass finding names the file or specifier at fault. A breach
-      # of the second pass's ceiling names nothing — knip just exits 1, under
-      # 200+ parked findings that all look alike. This fires on any knip
-      # failure, so it has to read correctly for both.
+      # A first-pass finding announces its class in a section header. A breach
+      # of the second pass's ceiling announces nothing — knip just exits 1,
+      # under 200+ parked findings that name files and symbols exactly like a
+      # real one. The section headers are the only thing that tells them apart,
+      # so key the message on those; it fires on any knip failure.
       - name: Explain the failure
         if: failure() && steps.knip.outcome == 'failure'
         run: |
-          echo "::error::Dead Code failed. Any report that names a file, specifier or symbol comes from the first pass and points at what to change. A report of only \"Unused exports\" / \"Unused exported types\" / \"Unused exported class members\" is the second pass exceeding the --max-issues ceiling in package.json, which knip exits on silently; knip.jsonc explains that ceiling and why it must be counted against a tree with no build output."
+          echo "::error::Dead Code failed. If the only sections above are \"Unused exports\" / \"Unused exported types\" / \"Unused exported class members\", the second pass exceeded the --max-issues ceiling in package.json and knip exits on that silently; knip.jsonc explains the ceiling and why it must be counted against a tree with no build output. Any other section is a first-pass finding, and names what to change."
