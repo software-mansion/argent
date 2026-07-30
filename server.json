@@ -5,7 +5,8 @@
   "description": "Drive iOS Simulators, Android emulators, TVs and Electron/web apps from your coding agent",
   "repository": {
     "url": "https://github.com/software-mansion/argent",
-    "source": "github"
+    "source": "github",
+    "id": "1164885639"
   },
   "websiteUrl": "https://argent.swmansion.com",
   "version": "0.18.0",
@@ -22,7 +23,6 @@
         {
           "type": "positional",
           "value": "mcp",
-          "valueHint": "mcp",
           "isRequired": true
         }
       ]
