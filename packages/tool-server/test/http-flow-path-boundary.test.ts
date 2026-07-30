@@ -113,6 +113,51 @@ describe("flow-execute flow_path over HTTP", () => {
     expect(steps.invokeTool).not.toHaveBeenCalled();
   });
 
+  it('rejects a ".." flow_path whose kernel and lexical resolutions disagree', async () => {
+    // <tmp>/link -> <tmp>/deep/inner, so the kernel reads <tmp>/deep/flow.yaml
+    // while path.dirname keeps "<tmp>/link/.." and path.join collapses it to
+    // <tmp> — the run: sibling and __baselines__ would come from the wrong
+    // directory. Both siblings exist so the two resolutions are distinguishable.
+    await fs.mkdir(path.join(tmpDir, "deep", "inner"), { recursive: true });
+    await fs.symlink(path.join(tmpDir, "deep", "inner"), path.join(tmpDir, "link"));
+    await fs.writeFile(
+      path.join(tmpDir, "deep", "flow.yaml"),
+      serializeFlow({ executionPrerequisite: "", steps: [{ kind: "run", flow: "sib" }] }),
+      "utf8"
+    );
+    for (const [dir, marker] of [
+      [path.join(tmpDir, "deep"), "true sibling"],
+      [tmpDir, "lexical sibling"],
+    ]) {
+      await fs.writeFile(
+        path.join(dir, "sib.yaml"),
+        serializeFlow({ executionPrerequisite: "", steps: [{ kind: "echo", message: marker }] }),
+        "utf8"
+      );
+    }
+
+    // The wrapper is legitimate: this stat goes through the kernel, so size and
+    // mtime are the real file's and the boundary gate is satisfied.
+    const viaSymlink = [tmpDir, "link", "..", "flow.yaml"].join(path.sep);
+    const st = await fs.stat(viaSymlink);
+    const res = await supertest(handle.app)
+      .post("/tools/flow-execute")
+      .send({
+        project_root: projectRoot,
+        device: DEVICE,
+        flow_path: {
+          __argentFileInput: true,
+          path: viaSymlink,
+          size: st.size,
+          mtimeMs: st.mtimeMs,
+        },
+      });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/must not contain "\.\." segments/);
+    expect(steps.invokeTool).not.toHaveBeenCalled();
+  });
+
   it("accepts the legitimate wrapper carrying the file's real stat and runs the flow", async () => {
     const st = await fs.stat(flowPath);
     const res = await supertest(handle.app)

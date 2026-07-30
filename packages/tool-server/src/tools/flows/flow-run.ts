@@ -1326,6 +1326,10 @@ export function resolveFlowSource(
       );
     }
 
+    // The last conjunct is not containment — over HTTP both sides come from the
+    // same wire path (file-inputs.ts). It ties the string returned below to the
+    // one the extension/name checks read, so no caller can have them validate a
+    // different file than the one that gets opened.
     const isVerifiedHostPath =
       flowPathInput?.presentOnHost === true &&
       flowPathInput.statVerified === true &&
@@ -1340,6 +1344,27 @@ export function resolveFlowSource(
         {
           error_code: FAILURE_CODES.FLOW_FILE_INVALID,
           failure_stage: "flow_path_boundary",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
+      );
+    }
+
+    // Reject ".." segments: this path is opened with fs.readFile, so the kernel
+    // resolves a symlinked directory component before the "..", but
+    // flowsDir = path.dirname(filePath) keeps the raw string and path.join
+    // collapses ".." lexically — the flow's run: siblings and __baselines__
+    // would then resolve against a directory the flow that was read does not
+    // live in. The argent client resolves before sending; only a direct
+    // MCP/HTTP caller can pass an unresolved flow_path.
+    if (params.flow_path.split(/[\\/]+/).includes("..")) {
+      throw new FailureError(
+        `Invalid flow_path "${params.flow_path}": flow paths must not contain ".." segments — ` +
+          `sibling run: files and baselines are resolved lexically from this path. Pass the ` +
+          `fully resolved absolute path to the flow's YAML.`,
+        {
+          error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+          failure_stage: "flow_path_dotdot",
           failure_area: "tool_server",
           error_kind: "validation",
         }

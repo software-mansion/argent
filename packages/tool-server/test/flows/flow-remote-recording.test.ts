@@ -319,6 +319,22 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
     ).toThrow("flow_path file-input boundary");
   });
 
+  it('rejects a flow_path carrying ".." segments', () => {
+    // A fully legitimate wrapper — the host stat succeeds through the kernel,
+    // which resolves any symlinked directory component before the "..". What
+    // the gate has to stop is the lexical half: dirname keeps the raw string,
+    // so run: siblings and __baselines__ would come from another directory.
+    const flowPath = [os.tmpdir(), "link", "..", "selected.yaml"].join(path.sep);
+    expect(() =>
+      resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: flowPath }, undefined, {
+        clientPath: flowPath,
+        presentOnHost: true,
+        viaUpload: false,
+        statVerified: true,
+      })
+    ).toThrow('must not contain ".." segments');
+  });
+
   it("rejects presence-only metadata without the client-stat match (statVerified)", () => {
     // The shape a forged stat-less wrapper produces: the server's own stat
     // succeeded, but nothing tied the caller to the file's client-side stat.
