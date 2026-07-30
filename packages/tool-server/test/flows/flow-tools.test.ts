@@ -539,6 +539,62 @@ describe("flow-add-step", () => {
     expect(parseFlow(await readFlowFile("compose-outside")).steps).toEqual([]);
   });
 
+  // The flows dir already supplies the CLI's "dir/" shape, so these vary the
+  // basename: path.extname reads each as an extensionless dotfile, and the
+  // extension arm would claim ".yaml" is missing from a path that ends in it.
+  it.each([[".yaml"], [".YAML"], [".Yaml"]])(
+    "names the missing stem, not the extension, for a sibling named %s",
+    async (basename) => {
+      const registry = createMockRegistry({
+        "flow-execute": { result: { ok: true, steps: [] } },
+      });
+      const tool = createFlowAddStepTool(registry);
+
+      await flowStartRecordingTool.execute({}, { name: "compose-stemless", project_root: tmpDir });
+      const stemless = path.join(tmpDir, ".argent", "flows", basename);
+
+      const record = () =>
+        tool.execute(
+          {},
+          {
+            command: "flow-execute",
+            args: JSON.stringify({ flow_path: stemless, project_root: tmpDir }),
+          }
+        );
+      await expect(record()).rejects.toThrow('Invalid flow name ""');
+      await expect(record()).rejects.not.toThrow(/must use the (lowercase )?\.yaml extension/);
+
+      expect(registry.invokeTool).not.toHaveBeenCalled();
+      expect(parseFlow(await readFlowFile("compose-stemless")).steps).toEqual([]);
+    }
+  );
+
+  it("still blames the extension when a sibling's stem carries the wrong case", async () => {
+    // The companion to the case above: extname is non-empty here, so this input
+    // must keep reaching the lowercase-extension arm.
+    const registry = createMockRegistry({
+      "flow-execute": { result: { ok: true, steps: [] } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "compose-cased", project_root: tmpDir });
+
+    await expect(
+      tool.execute(
+        {},
+        {
+          command: "flow-execute",
+          args: JSON.stringify({
+            flow_path: path.join(tmpDir, ".argent", "flows", "Login.YAML"),
+            project_root: tmpDir,
+          }),
+        }
+      )
+    ).rejects.toThrow('flow files must use the lowercase .yaml extension, not ".YAML"');
+
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
   it("rejects a sibling flow_path that the call's project_root does not resolve to", async () => {
     const registry = createMockRegistry({
       "flow-execute": { result: { ok: true, steps: [] } },

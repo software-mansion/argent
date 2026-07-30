@@ -362,6 +362,40 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
     ).toThrow('must not contain ".." segments');
   });
 
+  it.each([
+    ["a bare basename", [os.tmpdir(), ".yaml"]],
+    ["a bare basename under a directory", [os.tmpdir(), "nested", ".yaml"]],
+    ["an uppercased bare basename", [os.tmpdir(), ".YAML"]],
+  ])("names the missing stem, not the extension, for %s", (_shape, segments) => {
+    // path.extname calls these extensionless dotfiles, so the extension arm
+    // would claim ".yaml" is missing from a path that ends in it. The CLI
+    // names the empty stem for the same three shapes; so must this path.
+    const flowPath = path.join(...segments);
+    const resolve = () =>
+      resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: flowPath }, undefined, {
+        clientPath: flowPath,
+        presentOnHost: true,
+        viaUpload: false,
+        statVerified: true,
+      });
+    expect(resolve).toThrow('Invalid flow name ""');
+    expect(resolve).not.toThrow(/must use the (lowercase )?\.yaml extension/);
+  });
+
+  it("still blames the extension when a non-empty stem carries the wrong case", () => {
+    // The companion to the case above: extname is non-empty here, so this input
+    // must keep reaching the lowercase-extension arm.
+    const flowPath = path.join(os.tmpdir(), "Checkout.YAML");
+    expect(() =>
+      resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: flowPath }, undefined, {
+        clientPath: flowPath,
+        presentOnHost: true,
+        viaUpload: false,
+        statVerified: true,
+      })
+    ).toThrow('flow files must use the lowercase .yaml extension, not ".YAML"');
+  });
+
   it("rejects presence-only metadata without the client-stat match (statVerified)", () => {
     // The shape a forged stat-less wrapper produces: the server's own stat
     // succeeded, but nothing tied the caller to the file's client-side stat.

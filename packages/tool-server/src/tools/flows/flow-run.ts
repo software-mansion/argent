@@ -1397,7 +1397,13 @@ export function resolveFlowSource(
 
     const clientPath = flowPathInput!.clientPath;
     const clientExt = path.extname(clientPath);
-    if (clientExt !== ".yaml") {
+    // path.extname reads a basename that is only the extension as an
+    // extensionless dotfile, so clientExt is "" for ".yaml" (and ".YAML") and
+    // the arms below would blame the extension of a path that visibly ends in
+    // .yaml. What is actually missing is the filename stem — fall past this
+    // check and let assertSafeFlowName name it, the way the CLI does.
+    const bareExtension = path.basename(clientPath).toLowerCase() === ".yaml";
+    if (!bareExtension && clientExt !== ".yaml") {
       // On case-insensitive filesystems the path looks valid to the user, so name the real problem.
       const detail =
         clientExt.toLowerCase() === ".yaml"
@@ -1410,7 +1416,10 @@ export function resolveFlowSource(
         error_kind: "validation",
       });
     }
-    const flowName = path.basename(clientPath, ".yaml");
+    // basename leaves a suffix in place when stripping it would leave nothing,
+    // and strips only an exact-case one — so both ".yaml" and ".YAML" would
+    // otherwise be reported as a flow *named* that, not as a missing stem.
+    const flowName = bareExtension ? "" : path.basename(clientPath, ".yaml");
     assertSafeFlowName(flowName);
     return { filePath: params.flow_path, flowName };
   }

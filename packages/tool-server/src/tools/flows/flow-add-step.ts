@@ -161,7 +161,12 @@ function rewriteSiblingFlowPath(
     );
   }
   const ext = path.extname(flowPath);
-  if (ext !== ".yaml") {
+  // path.extname reads a basename that is only the extension as an
+  // extensionless dotfile, so ext is "" for ".yaml" (and ".YAML") and the arms
+  // below would blame the extension of a path that visibly ends in .yaml. What
+  // is actually missing is the filename stem, named by assertSafeFlowName below.
+  const bareExtension = path.basename(flowPath).toLowerCase() === ".yaml";
+  if (!bareExtension && ext !== ".yaml") {
     // On case-insensitive filesystems the path looks valid to the user, so name the real problem.
     throw invalid(
       ext.toLowerCase() === ".yaml"
@@ -178,7 +183,10 @@ function rewriteSiblingFlowPath(
         `no boundary to resolve a path through at replay`
     );
   }
-  const stem = path.basename(flowPath, ".yaml");
+  // basename leaves a suffix in place when stripping it would leave nothing,
+  // and strips only an exact-case one — so both ".yaml" and ".YAML" would
+  // otherwise be reported as a flow *named* that, not as a missing stem.
+  const stem = bareExtension ? "" : path.basename(flowPath, ".yaml");
   assertSafeFlowName(stem);
   // Only sound while `name` under the caller's project_root names this very
   // file — otherwise the rewrite would silently run a different flow.
