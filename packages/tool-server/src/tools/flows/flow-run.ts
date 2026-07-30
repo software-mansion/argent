@@ -479,9 +479,10 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
 interface ExecState extends Omit<ActionEnv, "device"> {
   device: DeviceInfo | null;
   /**
-   * The ROOT flow file's directory — the anchor for snapshot baselines and a
-   * chromium launch's relative app path. `run:` targets instead anchor to the
-   * containing flow file's own directory (StepScope.flowDir).
+   * The ROOT flow file's canonical (realpath'd) directory — the anchor for
+   * snapshot baselines and a chromium launch's relative app path, so a
+   * symlinked root flow anchors beside its real file. `run:` targets instead
+   * anchor to the containing flow file's own directory (StepScope.flowDir).
    */
   flowsDir: string;
   topFlowName: string;
@@ -627,8 +628,14 @@ returns a notice with the prerequisite instead of running.`,
         ctx?.fileInputs?.flow_file,
         ctx?.fileInputs?.flow_path
       );
-      const flowsDir = path.dirname(filePath);
-      const flow = parseFlow(await fs.readFile(filePath, "utf8"));
+      // Canonicalize the root path ONCE and derive every root anchor from it:
+      // flowsDir (a relative chromium app path + snapshot baselines) and the
+      // runStack seed (`run:` targets) must agree, or a symlinked root flow
+      // would resolve `run:` beside its real file while the app path and
+      // baselines anchored at the symlink's spelling.
+      const canonicalPath = await canonicalFlowPath(filePath);
+      const flowsDir = path.dirname(canonicalPath);
+      const flow = parseFlow(await fs.readFile(canonicalPath, "utf8"));
       if (viaUpload) assertUploadRunFree(flow);
 
       // LLM-path prerequisite handshake (fragments only; a flow with a leading
@@ -682,7 +689,7 @@ returns a notice with the prerequisite instead of running.`,
       let aborted: boolean;
       try {
         await execSteps(state, flow.steps, {
-          runStack: [{ canonical: await canonicalFlowPath(filePath), display: flowName }],
+          runStack: [{ canonical: canonicalPath, display: flowName }],
           depth: 0,
         });
       } finally {
@@ -712,8 +719,8 @@ returns a notice with the prerequisite instead of running.`,
  * explicit `device` (see {@link chromiumBootSpec}) this boots a fresh Electron
  * instance from the launch's app path and returns it for teardown; otherwise it
  * attaches to an already-booted device. An explicit `device` always attaches —
- * never boots or tears down. `flowDir` is the flow file's directory — the base
- * for a relative chromium app path.
+ * never boots or tears down. `flowDir` is the root flow file's canonical
+ * directory — the base for a relative chromium app path.
  *
  * Returns null when no step in the flow acts on a device: such a run needs none,
  * so demanding one would fail a flow that could have succeeded — and picking
@@ -781,10 +788,11 @@ function launchTargetPlatform(launch: Launch, platform: string | undefined): str
 
 /**
  * Boot the Electron app a chromium launch declares. A relative path resolves
- * against the root flow file's directory (`flowDir`) — the same anchor
- * baselines use — so the target is intrinsic to the flow, not the caller's
- * cwd; an absolute path is taken as-is. Boot failures propagate as-is — the
- * Chromium analog of `resolveFlowDevice` throwing on no booted device.
+ * against the root flow file's canonical directory (`flowDir`) — the same
+ * anchor baselines (and the root file's own `run:` targets) use — so the
+ * target is intrinsic to the flow, not the caller's cwd; an absolute path is
+ * taken as-is. Boot failures propagate as-is — the Chromium analog of
+ * `resolveFlowDevice` throwing on no booted device.
  */
 async function bootChromiumForFlow(
   spec: { path: string; args?: string[] },
@@ -1220,7 +1228,8 @@ async function execWhenStep(
 }
 
 /**
- * Canonicalize a flow path for the cycle guard. Falls back to the resolved
+ * Canonicalize a flow path — the cycle guard's identity key and the root
+ * anchor derivation (flowsDir + runStack seed). Falls back to the resolved
  * path when realpath fails (e.g. the file is gone) — the subsequent read
  * reports the real error with the real path.
  */

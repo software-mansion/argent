@@ -254,8 +254,9 @@ export function clearActiveFlow(): void {
  * string) or a path plus extra CLI args. Unlike iOS/Android/Vega (an OS-installed
  * app id relaunched in place), chromium is booted from this path, so it must
  * exist on the tool-server host; a relative path resolves against the ROOT
- * flow file's directory (the baseline anchor — only the root flow's leading
- * launch ever boots; `run:` targets anchor per containing file instead).
+ * flow file's canonical (symlink-resolved) directory (the baseline anchor —
+ * only the root flow's leading launch ever boots; `run:` targets anchor per
+ * containing file, which for the root file is that same directory).
  */
 export type ChromiumLaunch = string | { path: string; args?: string[] };
 

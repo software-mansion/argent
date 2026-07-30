@@ -45,8 +45,12 @@ function makeRegistry(invoke: (id: string, args: unknown) => Promise<unknown> = 
 
 const writtenFiles: string[] = [];
 async function writeFlow(yaml: string): Promise<string> {
+  // realpath'd so path math on the returned file matches the runner's
+  // canonical root anchor: macOS's tmpdir lives behind the /var → /private/var
+  // symlink, which would otherwise skew the appPath equalities for reasons
+  // unrelated to what a test pins.
   const file = path.join(
-    os.tmpdir(),
+    await fs.realpath(os.tmpdir()),
     `flow-chromium-boot-${writtenFiles.length}-${process.pid}.yaml`
   );
   await fs.writeFile(file, yaml, "utf8");
@@ -103,7 +107,8 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  await Promise.all(writtenFiles.splice(0).map((f) => fs.rm(f, { force: true })));
+  // recursive: the symlink-anchor test tracks a whole temp tree, not one file.
+  await Promise.all(writtenFiles.splice(0).map((f) => fs.rm(f, { force: true, recursive: true })));
 });
 
 describe("flow-execute chromium boot", () => {
@@ -170,6 +175,43 @@ describe("flow-execute chromium boot", () => {
     await runFlow(registry, { name: "abs", project_root: PROJECT_ROOT, flow_file: flowFile });
 
     expect(bootElectronApp.mock.calls[0][0]).toMatchObject({ appPath: "/abs/app" });
+  });
+
+  it("resolves a symlinked root flow's relative app path beside the real file, not the symlink", async () => {
+    // proj/.argent/flows/main.yaml is a symlink to shared/flows/main.yaml, and
+    // the flow references ../app — the app lives beside the REAL file
+    // (shared/app); nothing exists under proj/.argent/. Only the canonical
+    // root anchor — the one `run:` targets already use — finds it; the
+    // as-written dirname would boot a path in a tree the author never wrote.
+    const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "flow-chromium-link-")));
+    writtenFiles.push(base);
+    const sharedFlows = path.join(base, "shared", "flows");
+    const linkDir = path.join(base, "proj", ".argent", "flows");
+    await fs.mkdir(sharedFlows, { recursive: true });
+    await fs.mkdir(linkDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sharedFlows, "main.yaml"),
+      "steps:\n  - launch: { chromium: ../app }\n  - echo: done\n",
+      "utf8"
+    );
+    const linkPath = path.join(linkDir, "main.yaml");
+    await fs.symlink(path.join(sharedFlows, "main.yaml"), linkPath);
+    const registry = makeRegistry();
+
+    const result = await runFlow(registry, {
+      name: "main",
+      project_root: PROJECT_ROOT,
+      flow_file: linkPath,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(bootElectronApp).toHaveBeenCalledTimes(1);
+    expect(bootElectronApp.mock.calls[0][0]).toMatchObject({
+      appPath: path.join(base, "shared", "app"),
+    });
+    expect(bootElectronApp.mock.calls[0][0].appPath).not.toBe(
+      path.join(base, "proj", ".argent", "app")
+    );
   });
 
   it("rejects a relative app path when the flow was uploaded (temp-dir anchor)", async () => {

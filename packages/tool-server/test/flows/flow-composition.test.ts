@@ -77,7 +77,10 @@ function asRun(r: FlowRunResult | { notice: string }): FlowRunResult {
 }
 
 beforeEach(async () => {
-  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-compose-"));
+  // realpath'd so the path math below matches the runner's canonical anchors:
+  // macOS's tmpdir lives behind the /var → /private/var symlink, which would
+  // otherwise skew every equality for reasons unrelated to what a test pins.
+  tmpDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "flow-compose-")));
 });
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
@@ -540,6 +543,40 @@ describe("flow composition (run:)", () => {
         flowsDir: path.join(tmpDir, ".argent", "flows"),
         flowName: "main",
       })
+    );
+  });
+
+  it("anchors a symlinked root flow's snapshot baselines beside the real file", async () => {
+    // .argent/flows/visual.yaml is a symlink to shared/flows/visual.yaml. The
+    // baseline anchor must be the real file's directory — the same canonical
+    // anchor `run:` targets resolve against — not the symlink's spelling, or
+    // one root file reached through two spellings would keep two baseline sets.
+    const sharedFlows = path.join(tmpDir, "shared", "flows");
+    await fs.mkdir(sharedFlows, { recursive: true });
+    await fs.writeFile(
+      path.join(sharedFlows, "visual.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "snapshot", name: "home", maxMismatch: 0.5 }],
+      }),
+      "utf8"
+    );
+    const flowsDir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(flowsDir, { recursive: true });
+    await fs.symlink(path.join(sharedFlows, "visual.yaml"), path.join(flowsDir, "visual.yaml"));
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "visual", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    // The real directory, not the spelling the run was addressed by.
+    expect(vi.mocked(runSnapshot)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ flowsDir: sharedFlows, flowName: "visual" })
     );
   });
 
