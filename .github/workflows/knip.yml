@@ -27,8 +27,9 @@ jobs:
           node-version: "24"
 
       # Knip reads package.json and source only, so every install script here is
-      # pure cost to it. Six are native: five try a prebuilt binary before
-      # compiling, and dtrace-provider always runs node-gyp but ends in
+      # pure cost to it. Seven are native, and fsevents is darwin-only, so six
+      # reach this runner: five try a prebuilt binary before compiling, and
+      # dtrace-provider always runs node-gyp but ends in
       # `|| node suppress-error.js`. On this runner only node-pty and
       # dtrace-provider reach a compiler at all, and both are
       # optionalDependencies npm lets fail. What skipping the scripts really
