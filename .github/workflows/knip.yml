@@ -20,15 +20,16 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          # 24 is what lint, lockfile and repo-hygiene pin; format and
-          # unit-tests are on 20. knip's own floor, engines.node >=18.18.0, is
-          # below either.
+          # Matches what lint, lockfile and repo-hygiene pin; the repo's other
+          # seven PR workflows are on 20. knip's own floor, engines.node
+          # >=18.18.0, is below both.
           node-version: "24"
 
-      # Knip reads package.json and source only, so the six packages here that
-      # compile on install — the three tree-sitter ones, the http3-quiche
-      # transport, node-pty and dtrace-provider — are pure cost and a
-      # compile-failure surface it never touches.
+      # Knip reads package.json and source only, so every install script here is
+      # pure cost to it. Six packages compile on install, and the four that are
+      # not optionalDependencies — the three tree-sitter ones and the
+      # http3-quiche transport — are a compile failure `npm ci` cannot shrug
+      # off, on code this job never touches.
       - name: Install dependencies
         run: npm ci --ignore-scripts
 

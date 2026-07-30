@@ -173,7 +173,8 @@ npm run test:watch -w @argent/tool-server
 4. **Ensure tests pass** for the packages you touched.
 5. **Check for dead code**, in a tree with no build output:
    ```bash
-   rm -rf packages/*/dist && npm run knip
+   find packages -maxdepth 2 -type d -name dist -exec rm -rf {} +
+   npm run knip
    ```
    Run it this way round, not straight after step 3. The `--max-issues` ceiling is counted against an unbuilt tree, because that is what CI analyses; with `packages/*/dist` present knip finds seven fewer issues, so a built-tree run has that much phantom headroom and can pass locally while the Dead Code job fails.
 6. **Write a clear PR title** — it becomes part of the release changelog. Use the same prefix convention as commit messages (`feat:`, `fix:`, etc.).

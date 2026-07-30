@@ -25,16 +25,17 @@
   // passes pay it down.
   //
   // Count it the way CI does, in a tree with no build output. With
-  // `isSkipLibs` off, whether a workspace's `main`/`types` path resolves to an
-  // existing file changes the result, and not by way of anything in that file:
-  // a zero-byte packages/registry/dist/index.js is enough to take the count
-  // from 206 to 199, exactly as a real build does. So `npm run knip` passing
-  // after a local `tsc --build` is not evidence the job will pass — it has
-  // seven slots of headroom CI does not. Remove the dist directories before
-  // trusting a number from this ceiling.
+  // `isSkipLibs` off the whole 206-vs-199 difference hangs on a single path:
+  // whether packages/registry's `main`/`types` resolves to a file that exists.
+  // Not on anything in that file — a zero-byte packages/registry/dist/index.js
+  // takes the count to 199 just as a real build does — and not on any other
+  // workspace's, twelve of which move it by nothing at all. So `npm run knip`
+  // passing after a local `tsc --build` is not evidence the job will pass; it
+  // has seven slots of headroom CI does not. Remove the dist directories
+  // before trusting a number from this ceiling.
   //
   // Never reported as unused: build output (git-ignored, so knip skips it as a
-  // file, though its presence moves the counts above),
+  // file, even where it moves the counts above),
   // node_modules (excluded unconditionally), the argent-private submodule
   // (excluded below), and every file that is not JavaScript or TypeScript
   // (knip's DEFAULT_EXTENSIONS) — though workflows and package manifests are
@@ -95,7 +96,8 @@
     //
     // Unchecked in either direction: knip does not inspect
     // `optionalDependencies` at all, so `electron` and `node-pty` are outside
-    // the gate here, as is argent-cli's runtime `createRequire("node-pty")`.
+    // the gate here, as is argent-cli's runtime `req("node-pty")`, resolved
+    // through a `createRequire(import.meta.url)` in lens-pty.ts.
     "packages/argent": {
       "entry": ["scripts/argent-simulator-server.cjs"],
       "ignoreDependencies": [
@@ -172,13 +174,17 @@
   // is most of them. What `files` reliably catches is a module with no test at
   // all. A file orphaned inside test/ is invisible too: root package.json's
   // `test:scripts` runs `node --test`, which turns on knip's node plugin, and
-  // that plugin registers four entry patterns in every workspace: `**/test/**`,
-  // plus `*{.,-,_}test.<ext>`, `test-*.<ext>` and `test.<ext>` matched anywhere.
-  // So none of the 380 JS/TS files under packages/*/test/ can be reported, and
-  // under packages/*/tests/ only a name none of those three match can — of
-  // today's 15 that is registry/tests/helpers.ts alone, which is why it is the
-  // lone `tests/` entry in the --production list below. A `tests/test-utils.ts`
-  // or `tests/test.ts` would be just as invisible.
+  // that plugin registers four entry patterns in every workspace — `**/test/**`
+  // plus `*{.,-,_}test`, `test-*` and `test` matched anywhere — each limited to
+  // {cjs,mjs,js,cts,mts,ts}. So all 380 files under packages/*/test/ are
+  // entries, and under packages/*/tests/ every name matching one of the three
+  // is too: of today's 15 that leaves registry/tests/helpers.ts as the only
+  // reportable one, which is why it is the lone `tests/` entry in the
+  // --production list below. A `tests/test-utils.ts` or `tests/test.ts` would
+  // be just as invisible. The extension set is the escape hatch: it omits .tsx
+  // and .jsx though DEFAULT_EXTENSIONS covers them, so an orphaned .tsx under
+  // test/ IS reported. The repo has none today, which is what makes those two
+  // counts whole-directory ones.
   //
   // `knip --production` is the lens that reports the whole class, and the repo
   // is not clean under it: 13 unused files — those two, seven root scripts,
