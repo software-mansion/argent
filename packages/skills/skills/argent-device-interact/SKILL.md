@@ -171,7 +171,7 @@ Values: `home`, `back`, `power`, `volumeUp`, `volumeDown`, `appSwitch`, `actionB
 { "udid": "<UDID>", "text": "search query" }
 ```
 
-`text` and `key` are mutually exclusive: one call does one of them, and a call carrying both is rejected. To type and then submit, send `{ "text": "search query" }` followed by `{ "key": "enter" }` — batch them as two `keyboard` steps in one `run-sequence` (§ 8) to keep it to a single round-trip.
+`text` and `key` are mutually exclusive — a call carrying both is rejected. To type and then submit, send `{ "text": "search query" }` then `{ "key": "enter" }`; batch them as two `keyboard` steps in one `run-sequence` (§ 8) to keep it to one round-trip.
 
 Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12`. Optional: `"delayMs": 100` between keystrokes (default 50ms) — applies to the iOS simulator and Chromium; it is ignored on Android phones/tablets (typed via `adb input text`, no per-key cadence), on Vega, and on TV targets.
 
@@ -193,7 +193,7 @@ The placeholder is resolved on the machine running the tool-server, from the fir
 Rules:
 
 - The result echoes the placeholder, never the value. An unknown name fails with the list of available secret _names_ and every source it looked in, with paths — read that list before asking the user anything.
-- The auto-screenshot after the call is skipped so the typed value cannot re-enter your context as pixels. Do **not** `describe` or `screenshot` a non-secure field you just filled with a secret — submit or navigate away first, then verify the resulting screen.
+- The auto-screenshot after the call is skipped so the typed value cannot re-enter your context as pixels. Do **not** `describe` or `screenshot` a non-secure field you just filled with a secret — submit or navigate away first, then verify the resulting screen. To submit, put the text and the Enter in **one `run-sequence`**: the skip covers a whole batch containing the placeholder, but a second bare `keyboard` call gets its own screenshot of the filled field.
 - Nothing outside those sources is reachable; never ask the user to paste a secret value into the conversation. Ask them to put it in a secrets file instead — a file edit applies to the next call, while an exported env var only reaches a tool-server started afterwards.
 - The project sources are found by walking up from the tool-server's working directory. If a project file is not being picked up, the failure's source list shows the paths actually consulted; `~/.argent/secrets.env` needs no project and always applies.
 

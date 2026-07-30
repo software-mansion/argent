@@ -34,7 +34,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1–f12. Cannot be combined with `text` in one call — type first, then press the key in a second call. Not supported on TV targets — move focus with `tv-remote` (up/down/left/right) instead."
+      "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1–f12. Cannot be combined with `text` in one call — one call per action. Not supported on TV targets — move focus with `tv-remote` (up/down/left/right) instead."
     ),
   delayMs: z
     .number()
@@ -101,11 +101,11 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
     },
     description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
 Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; use keyboard to type into a focused text field (e.g. a search or login box).
-Returns { typed: string, keys: number }. Fails if both text and key are given in one call, if an unsupported key name is provided, or if the device's input backend is not reachable.
-- text: types a string (supports uppercase, digits, common punctuation). To type a credential, use \`{{secret:<NAME>}}\` — resolved server-side from the \`ARGENT_SECRET_<NAME>\` env var or an argent secrets file (\`.argent/secrets.env\` in the project, \`~/.argent/secrets.env\`, or an \`ARGENT_SECRET_\`-prefixed key in the project's \`.env\`/\`.env.local\`), so the plaintext never enters agent context; the result echoes the placeholder, not the value, and the after-typing auto-screenshot is skipped.
+Returns { typed: string, keys: number }. Fails if both text and key are given in one call (rejected before anything is typed), if an unsupported key name is provided, or if the device's input backend is not reachable.
+- text: types a string (supports uppercase, digits, common punctuation). To type a credential, use \`{{secret:<NAME>}}\` — resolved server-side from the \`ARGENT_SECRET_<NAME>\` env var or an argent secrets file (\`.argent/secrets.env\` in the project, \`~/.argent/secrets.env\`, or an \`ARGENT_SECRET_\`-prefixed key in the project's \`.env\`/\`.env.local\`), so the plaintext never enters agent context; the result echoes the placeholder, not the value, and the after-typing auto-screenshot is skipped. To submit after typing a secret, put both steps in ONE \`run-sequence\` — that keeps the skip covering the Enter, which a second bare \`keyboard\` call would not.
 - key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1–f12) — NOT supported on TV targets; move focus with \`tv-remote\` instead.
 On a TV target (runtimeKind 'tv') only \`text\` applies — focus a text field first (with \`tv-remote\`), then type into it (injected HID keyboard on Apple TV, \`adb input text\` on Android TV).
-Provide text OR key — never both in one call; a request carrying both is rejected before anything is typed. To type and then submit, use two calls, or two \`keyboard\` steps in one \`run-sequence\`: { text: "…" } then { key: "enter" }.`,
+Provide text OR key, never both. To type and then submit, use two calls, or two \`keyboard\` steps in one \`run-sequence\`: { text: "hello" } then { key: "enter" }.`,
     zodSchema,
     capability,
     searchHint:
@@ -130,8 +130,11 @@ Provide text OR key — never both in one call; a request carrying both is rejec
         // request, so `{ text: "", key: "enter" }` is rejected too rather than
         // carving out an empty string nobody would have to document.
         throw new InvalidToolInputError(
-          "keyboard takes `text` or `key`, not both — pass one per call. To type and then press " +
-            'a key, make two calls (or two `keyboard` steps in one `run-sequence`): { text: "…" } ' +
+          // Says what did NOT happen, so the caller retries instead of first
+          // inspecting the field — and spells the retry out with a literal
+          // example rather than an ellipsis the Android backend can't type.
+          "keyboard takes `text` or `key`, not both — nothing was typed. To type and then press " +
+            'a key, make two calls (or two `keyboard` steps in one `run-sequence`): { text: "hello" } ' +
             'followed by { key: "enter" }.',
           {
             error_code: FAILURE_CODES.KEYBOARD_TEXT_AND_KEY_COMBINED,

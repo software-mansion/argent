@@ -129,7 +129,7 @@ Example — scroll down three times (use gesture-scroll with positive deltaY on 
     { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } }
   ]}
 
-Example — type text and submit (two keyboard steps: one call takes text or key, never both):
+Example — type text and submit (two keyboard steps):
   { "udid": "<UDID>", "steps": [
     { "tool": "keyboard", "args": { "text": "hello world" } },
     { "tool": "keyboard", "args": { "key": "enter" } }
