@@ -482,7 +482,9 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    * The ROOT flow file's canonical (realpath'd) directory — the anchor for
    * snapshot baselines and a chromium launch's relative app path, so a
    * symlinked root flow anchors beside its real file. `run:` targets instead
-   * anchor to the containing flow file's own directory (StepScope.flowDir).
+   * anchor to the containing flow file's own directory, derived from the run
+   * stack's top entry by {@link scopeFlowDir} (not the `flowDir` parameter
+   * threaded through {@link resolveRunDevice}, which is this root directory).
    */
   flowsDir: string;
   topFlowName: string;
