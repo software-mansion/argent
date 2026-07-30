@@ -621,6 +621,47 @@ describe("flow-add-step", () => {
     expect(parseFlow(await readFlowFile("compose-mismatch")).steps).toEqual([]);
   });
 
+  // The two shapes add-step must NOT rewrite: naming both sources, or neither,
+  // is flow-execute's schema to judge. The both-sources case is the dangerous
+  // one — rewriting it would delete flow_path and overwrite the caller's name
+  // with the stem, so a call asking for "checkout" would run and record "login"
+  // with nothing to say the requested name was discarded.
+  it.each([
+    [
+      "names both sources",
+      (sibling: string, root: string) => ({
+        name: "checkout",
+        flow_path: sibling,
+        project_root: root,
+      }),
+    ],
+    ["names neither source", (_sibling: string, root: string) => ({ project_root: root })],
+  ])("hands a flow-execute that %s to flow-execute verbatim", async (_shape, buildArgs) => {
+    // flow-execute refuses both shapes on the source count, so the sub-invoke
+    // fails and nothing is recorded; the throwing mock stands in for that.
+    const registry = createMockRegistry({ "flow-execute": { result: null, throws: true } });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "compose-ambiguous", project_root: tmpDir });
+    // For the both-sources shape, a genuinely rewritable target: every check
+    // downstream of the bail-out accepts this flow_path, so the bail-out is the
+    // only thing standing between the caller's "checkout" and a swap to "login".
+    await writeSiblingFlow("login", "steps:\n  - echo: hi\n");
+    const args = buildArgs(path.join(tmpDir, ".argent", "flows", "login.yaml"), tmpDir);
+
+    await expect(
+      tool.execute({}, { command: "flow-execute", args: JSON.stringify(args) })
+    ).rejects.toThrow();
+
+    // The nested call must reach flow-execute exactly as written — no flow_path
+    // deleted, no name substituted…
+    expect(registry.invokeTool).toHaveBeenCalledWith("flow-execute", args);
+    // …so that a real tool-server is the one that rejects it.
+    const nested = (registry.invokeTool as any).mock.calls[0][1];
+    expect(() => resolveFlowSource(nested)).toThrow("Pass exactly one flow source");
+    expect(parseFlow(await readFlowFile("compose-ambiguous")).steps).toEqual([]);
+  });
+
   it("throws on invalid JSON in args", async () => {
     const registry = createMockRegistry({
       tap: { result: { ok: true } },
