@@ -168,15 +168,17 @@ Values: `home`, `back`, `power`, `volumeUp`, `volumeDown`, `appSwitch`, `actionB
 ### keyboard — Type text or press special keys
 
 ```json
-{ "udid": "<UDID>", "text": "search query", "key": "enter" }
+{ "udid": "<UDID>", "text": "search query" }
 ```
+
+`text` and `key` are mutually exclusive: one call does one of them, and a call carrying both is rejected. To type and then submit, send `{ "text": "search query" }` followed by `{ "key": "enter" }` — batch them as two `keyboard` steps in one `run-sequence` (§ 8) to keep it to a single round-trip.
 
 Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12`. Optional: `"delayMs": 100` between keystrokes (default 50ms) — applies to the iOS simulator and Chromium; it is ignored on Android phones/tablets (typed via `adb input text`, no per-key cadence), on Vega, and on TV targets.
 
 **Typing secrets.** To enter a credential without its plaintext ever entering your context, transcript, or logs, use a secret placeholder in `text` (works in `keyboard`, `paste`, `run-sequence` keyboard steps, and flow `type` steps):
 
 ```json
-{ "udid": "<UDID>", "text": "{{secret:APP_PASSWORD}}", "key": "enter" }
+{ "udid": "<UDID>", "text": "{{secret:APP_PASSWORD}}" }
 ```
 
 The placeholder is resolved on the machine running the tool-server, from the first of these that defines the name:
