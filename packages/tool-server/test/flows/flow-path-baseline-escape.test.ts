@@ -210,9 +210,10 @@ describe("the stem a valid flow_path derives", () => {
     // seeded stack. A stack seeded with anything but the stem would instead
     // re-enter checkout.yaml as a fragment and only trip a hop later, on
     // "helper" — so the step sequence and the cycle spelling are both
-    // load-bearing here.
+    // load-bearing here. The offending target shares the root's stem, so it
+    // renders as "./checkout" (runDisplayName's same-stem disambiguation).
     expect(result.ok).toBe(false);
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:pass", "run:error"]);
-    expect(result.steps[1].reason).toBe("cyclic flow reference: checkout → helper → checkout");
+    expect(result.steps[1].reason).toBe("cyclic flow reference: checkout → helper → ./checkout");
   });
 });

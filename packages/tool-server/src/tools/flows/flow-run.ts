@@ -185,7 +185,16 @@ export interface StepReport {
   args?: unknown;
   /** Echo message. */
   message?: string;
-  /** The fragment a step belongs to (set on `run` and the steps it expands). */
+  /**
+   * The fragment a step belongs to (set on `run` and the steps it expands) —
+   * normally the target's basename stem; when that stem collides with the
+   * top-level flow's name, the target's as-written path minus the `.yaml`
+   * extension (`./<stem>` for a bare spelling). So a fragment-attributed
+   * value never equals the report's `flow`: without the collision the stem
+   * differs from the root's name by definition, and with it the value
+   * contains a `/`, which flow names cannot (FLOW_NAME_PATTERN). Renderers
+   * distinguish fragment steps by exactly that inequality.
+   */
   flow?: string;
   /**
    * Human-readable "what this step acts on" — the selector for directive
@@ -1014,12 +1023,40 @@ function scopeFlow(scope: StepScope): string {
 }
 
 /**
+ * The report attribution for a `run:` target: its basename stem
+ * ({@link runTargetName}), except when that stem equals the ROOT flow's name —
+ * then the as-written path with the `.yaml` extension stripped, or `./<stem>`
+ * when the spelling is bare (stripping would reproduce the stem). Two
+ * different files may legitimately share a stem (e.g. root `login.yaml`
+ * composing `helpers/login.yaml`), and a bare-stem attribution there would
+ * make `StepReport.flow` equal the report's top-level `flow`, so renderers
+ * that mark fragment steps by that inequality (the CLI's `[fragment]` suffix)
+ * would silently read the fragment's failures as the root flow's. The
+ * as-written path keeps the distinguishing directory component. A bare
+ * spelling has none to keep, yet still names a genuine different file when
+ * written in a nested fragment (`run: login.yaml` inside `helpers/steps.yaml`
+ * resolves against the CONTAINING file's dir — `helpers/login.yaml`), so it
+ * gets the equivalent spelling `./<stem>`. Only against the root is the
+ * comparison needed, because that is the one name downstream consumers
+ * compare against — and the inequality is guaranteed: both disambiguated
+ * shapes contain a `/`, which FLOW_NAME_PATTERN forbids in the root's name.
+ */
+function runDisplayName(target: string, scope: StepScope): string {
+  const stem = runTargetName(target);
+  if (stem !== scope.runStack[0]!.display) return stem;
+  // Parse guarantees the target ends in lowercase ".yaml", so slicing the
+  // extension off never truncates a real path segment.
+  const spelled = target.slice(0, -".yaml".length);
+  return spelled === stem ? `./${stem}` : spelled;
+}
+
+/**
  * Attribution for one report line: a `run:` step belongs to the fragment it
- * references — identical across the executed, errored, and every skip path —
- * everything else to the containing flow.
+ * references ({@link runDisplayName}) — identical across the executed,
+ * errored, and every skip path — everything else to the containing flow.
  */
 function stepFlow(step: FlowStep, scope: StepScope): string {
-  return step.kind === "run" ? runTargetName(step.flow) : scopeFlow(scope);
+  return step.kind === "run" ? runDisplayName(step.flow, scope) : scopeFlow(scope);
 }
 
 /**
@@ -1250,7 +1287,10 @@ async function execRunStep(
 ): Promise<void> {
   const index = state.reports.length;
   const target = step.flow;
-  const display = runTargetName(target);
+  // Shared with stepFlow so the marker/error reports here and every skip path
+  // there attribute the same run: step identically; the fragment's expanded
+  // steps inherit it through the runStack entry pushed below.
+  const display = runDisplayName(target, scope);
 
   const fail = (reason: string): void => {
     pushReport(state, {

@@ -1750,7 +1750,10 @@ function parseWhenStep(raw: Record<string, unknown>, depth: number): FlowStep {
  * The report/display name of a `run:` target — its YAML basename stem. Parse
  * guarantees the stem is a safe flow name, so this is also the fragment's
  * attribution in step reports (mirroring how the CLI derives the top-level
- * flow name from the file it runs).
+ * flow name from the file it runs) — except when the stem collides with the
+ * root flow's name, where the runner substitutes the as-written path minus
+ * the extension, or `./<stem>` for a bare spelling (see runDisplayName in
+ * flow-run.ts).
  */
 export function runTargetName(target: string): string {
   return path.posix.basename(target, ".yaml");

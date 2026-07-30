@@ -269,6 +269,134 @@ describe("flow composition (run:)", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("disambiguates a fragment whose stem collides with the root flow's name", async () => {
+    // Root login.yaml composes helpers/login.yaml — two different files, one
+    // stem. A bare-stem attribution would make every fragment step carry
+    // flow === the report's top-level flow, and renderers that mark fragment
+    // steps by that inequality (the CLI's `[fragment]` suffix) would read a
+    // failure inside the fragment as a failure of the root flow itself.
+    const helpersDir = path.join(tmpDir, ".argent", "flows", "helpers");
+    await fs.mkdir(helpersDir, { recursive: true });
+    await fs.writeFile(
+      path.join(helpersDir, "login.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "echo", message: "inside the shared fragment" }],
+      }),
+      "utf8"
+    );
+    await writeFlow("login", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "helpers/login.yaml" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "login", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.flow).toBe("login");
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:pass", "echo:pass"]);
+    // On collision the attribution is the as-written path minus the .yaml
+    // extension — never the bare stem, which would equal result.flow — on the
+    // run marker and every expanded step alike.
+    expect(result.steps[0]).toMatchObject({ flow: "helpers/login", target: "helpers/login.yaml" });
+    expect(result.steps[1]).toMatchObject({
+      flow: "helpers/login",
+      message: "inside the shared fragment",
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("keeps the bare stem attribution when the fragment's stem does not collide with the root's", async () => {
+    // The SAME fragment as the collision test above, composed from a root
+    // with a different name: attribution stays the documented basename stem,
+    // because only a root-stem collision makes the stem ambiguous downstream.
+    const helpersDir = path.join(tmpDir, ".argent", "flows", "helpers");
+    await fs.mkdir(helpersDir, { recursive: true });
+    await fs.writeFile(
+      path.join(helpersDir, "login.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "echo", message: "inside the shared fragment" }],
+      }),
+      "utf8"
+    );
+    await writeFlow("checkout", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "helpers/login.yaml" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "checkout", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.flow).toBe("checkout");
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:pass", "echo:pass"]);
+    expect(result.steps[0]).toMatchObject({ flow: "login", target: "helpers/login.yaml" });
+    expect(result.steps[1]).toMatchObject({ flow: "login", message: "inside the shared fragment" });
+  });
+
+  it("qualifies a nested fragment's bare same-stem spelling as ./<stem>", async () => {
+    // Root login.yaml → helpers/steps.yaml → run: login.yaml. The bare
+    // spelling resolves against the CONTAINING file's directory, so it names
+    // helpers/login.yaml — a genuine fragment, not the root, and no cycle.
+    // Stripping the extension off a bare spelling reproduces the stem, which
+    // would equal result.flow and drop the renderers' fragment marker; the
+    // collision rule qualifies it as ./login — an equivalent spelling of the
+    // as-written reference that keeps the inequality.
+    const helpersDir = path.join(tmpDir, ".argent", "flows", "helpers");
+    await fs.mkdir(helpersDir, { recursive: true });
+    await fs.writeFile(
+      path.join(helpersDir, "steps.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "run", flow: "login.yaml" }],
+      }),
+      "utf8"
+    );
+    await fs.writeFile(
+      path.join(helpersDir, "login.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "echo", message: "inside the nested sibling" }],
+      }),
+      "utf8"
+    );
+    await writeFlow("login", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "helpers/steps.yaml" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "login", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.flow).toBe("login");
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "run:pass",
+      "run:pass",
+      "echo:pass",
+    ]);
+    // The nested run marker and the fragment's expanded step carry ./login —
+    // never the bare "login", which would read as the root flow itself.
+    expect(result.steps[1]).toMatchObject({ flow: "./login", target: "login.yaml" });
+    expect(result.steps[2]).toMatchObject({
+      flow: "./login",
+      message: "inside the nested sibling",
+    });
+    expect(result.steps[1]?.flow).not.toBe(result.flow);
+    expect(result.ok).toBe(true);
+  });
+
   it("detects a cycle reached through a different relative spelling", async () => {
     const subDir = path.join(tmpDir, ".argent", "flows", "sub");
     await fs.mkdir(subDir, { recursive: true });
@@ -293,7 +421,11 @@ describe("flow composition (run:)", () => {
     );
 
     const errored = result.steps.find((s) => s.status === "error");
-    expect(errored?.reason).toMatch(/cyclic flow reference: a → b → a/);
+    // The closing hop shares the root's stem (a cycle back to the root always
+    // does), so the collision disambiguation renders it as-written — which
+    // names the exact edge that closes the loop, rather than the bare "a"
+    // that reads like a self-reference from the root's own directory.
+    expect(errored?.reason).toMatch(/cyclic flow reference: a → b → \.\.\/a/);
   });
 
   it("anchors a symlinked root flow's run: at the real file's directory", async () => {
@@ -379,7 +511,10 @@ describe("flow composition (run:)", () => {
       )
     );
 
-    const chain = ["root", ...Array.from({ length: links }, (_, i) => `n${i + 1}`), "root"];
+    // The closing hop is the bare spelling `root.yaml`, whose stem is the
+    // root's own name — the collision rule qualifies a bare same-stem
+    // spelling as `./<stem>`, so the chain's final entry renders as ./root.
+    const chain = ["root", ...Array.from({ length: links }, (_, i) => `n${i + 1}`), "./root"];
     const errored = result.steps.find((s) => s.status === "error");
     expect(errored?.reason).toBe(`cyclic flow reference: ${chain.join(" → ")}`);
     expect(errored?.reason).not.toContain("max run depth");
@@ -509,6 +644,39 @@ describe("flow composition (run:)", () => {
     // Same attribution as an executed/errored run marker: the target stem,
     // with the as-written path in target — not the enclosing flow.
     expect(result.steps[1]).toMatchObject({ flow: "login", target: "login.yaml" });
+  });
+
+  it("applies the root-stem collision disambiguation on the hard-stop skip path too", async () => {
+    // Same setup as above, but the root shares the fragment's stem — the skip
+    // report must carry the same disambiguated name an executed run marker
+    // would, or attribution would depend on whether the step ever ran.
+    const helpersDir = path.join(tmpDir, ".argent", "flows", "helpers");
+    await fs.mkdir(helpersDir, { recursive: true });
+    await fs.writeFile(
+      path.join(helpersDir, "login.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "echo", message: "never runs" }],
+      }),
+      "utf8"
+    );
+    await writeFlow("login", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: { android: "com.acme.app" } }, // DEVICE is iOS → errors
+        { kind: "run", flow: "helpers/login.yaml" },
+      ],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "login", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:error", "run:skip"]);
+    expect(result.steps[1]).toMatchObject({ flow: "helpers/login", target: "helpers/login.yaml" });
   });
 
   it("keys and stores a composed fragment's snapshot with the root flow", async () => {
