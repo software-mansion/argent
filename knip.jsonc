@@ -27,14 +27,17 @@
   // after a local `tsc --build` is not evidence the job will pass. Remove the
   // dist directories before trusting a number from this ceiling.
   //
-  // Out of scope entirely: build output and dependencies (git-ignored, so knip
-  // skips them), the argent-private submodule (excluded below), and every file
-  // that is not JavaScript or TypeScript (knip's DEFAULT_EXTENSIONS).
+  // Never reported as unused: build output (git-ignored, so knip skips it),
+  // node_modules (excluded unconditionally), the argent-private submodule
+  // (excluded below), and every file that is not JavaScript or TypeScript
+  // (knip's DEFAULT_EXTENSIONS) — though workflows and package manifests are
+  // still read as plugin input.
   "$schema": "https://unpkg.com/knip@5/schema.json",
 
-  // Stale exemptions in this file are a failure, not a footnote: knip's
-  // configuration hints report an entry that no longer suppresses anything,
-  // and this makes them exit non-zero like any other finding.
+  // Stale exemptions in this file are a failure, not a footnote: this makes
+  // knip's configuration hints exit non-zero like any other finding. They
+  // cover the ignoreDependencies lists below; an ignoreWorkspaces entry whose
+  // directory exists but holds no package.json is not hinted.
   "treatConfigHintsAsErrors": true,
 
   // The submodule ships from its own repo and has its own CI. It becomes a
@@ -46,19 +49,19 @@
 
   "workspaces": {
     // Root workspace: build/dev/release/CI scripts. Knip reaches these on its
-    // own, from package.json's `scripts` and from `run:` steps in
-    // .github/workflows — its github-actions plugin reads multi-line `run: |`
-    // blocks too, which is how scripts/next-canary-version.mjs resolves though
-    // it is invoked from nothing else. What the plugin does not parse is a
-    // PowerShell body, so the Windows E2E driver — invoked from the
-    // windows-latest job, where that is the default shell — is declared here
-    // by hand.
+    // own, from package.json's `scripts`, from the scripts/*.test.mjs files
+    // those run, and from `run:` steps in .github/workflows — its
+    // github-actions plugin reads multi-line `run: |` blocks too. What the
+    // plugin does not parse is a PowerShell body, so the Windows E2E driver —
+    // invoked from the windows-latest job, where that is the default shell —
+    // is declared here by hand.
     //
     // Scope limit: only 11 of the 30 files under scripts/ are in the gate at
-    // all, because knip analyzes JS/TS and nothing else. The 15 `.sh` files,
-    // e2e-full/lib/report.py and ci/e2e-chromium-page.html are invisible to it
-    // however they are reached — that covers the whole scripts/e2e-full/
-    // harness, which nothing outside its own directory references.
+    // all, because knip analyzes JS/TS and nothing else. The other 19 — 15
+    // `.sh` files, e2e-full/lib/report.py, ci/e2e-chromium-page.html, and
+    // e2e-full's README and results/.gitignore — are invisible to it however
+    // they are reached, which covers the whole scripts/e2e-full/ harness,
+    // referenced by nothing outside its own directory.
     ".": {
       "entry": ["scripts/ci/windows-chromium-e2e.mjs"],
     },
@@ -115,7 +118,7 @@
         // --- Declared in package.json, loaded too dynamically to detect.
         //     Without these: "unused dependencies". ---
         // Dynamic `_require("tree-sitter")` / `_require("tree-sitter-typescript")`
-        // in react-profiler/pipeline/.../ast-index.ts (pinned + lazy-loaded).
+        // in react-profiler/pipeline/.../ast-index.ts, behind a one-shot flag.
         "tree-sitter",
         "tree-sitter-typescript",
         // Runtime companion of the dynamically imported
@@ -142,19 +145,22 @@
 
   // Blind spot in the `files` check: test files are entry points, so a
   // production module that nothing but its own test imports still counts as
-  // reached. What separates dead from merely test-only is whether a test
-  // exercises the module or just names it — a module whose sole reference is a
-  // catalog roll-call is unreachable in production and gets deleted. Two sit
-  // in the blind spot on the other side of that line and stay:
-  // src/tools/paste/index.ts (keyboard-secrets.test.ts drives it and asserts
-  // the `cmd: "paste"` it sends) and src/utils/ios-profiler/lifecycle.ts
-  // (ios-instruments/lifecycle.test.ts runs the shutdown ladder through it).
+  // reached. Being reached by a test says nothing about being reachable in
+  // production, which is what this check is meant to approximate — and two
+  // modules sit in exactly that gap. src/tools/paste/index.ts is imported by
+  // two test files and registered by nothing, so it is unreachable over MCP
+  // and HTTP; src/utils/ios-profiler/lifecycle.ts is a re-export barrel kept
+  // "for source compatibility with existing imports" that no longer has any,
+  // its four production consumers having moved to profiler-shared/lifecycle.
   //
   // Those two are the current occupants, not the extent of it: any module that
   // ships with a test is invisible to `files` the same way, which in this repo
   // is most of them. What `files` reliably catches is a module with no test at
-  // all. A file orphaned inside test/ is invisible too — knip treats every
-  // path under test/ as an entry.
+  // all. A file orphaned inside test/ is invisible too: root package.json's
+  // `test:scripts` runs `node --test`, which turns on knip's node plugin, and
+  // that plugin registers `**/test/**` as an entry in every workspace — so
+  // none of the 380 JS/TS files under packages/*/test/ can be reported, while
+  // the 15 under packages/*/tests/ can.
   //
   // `knip --production` is the lens that reports the whole class, and the repo
   // is not clean under it: 13 unused files — those two, seven root scripts,

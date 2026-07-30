@@ -20,15 +20,14 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          # knip sets engineStrict with engines.node >=18.18.0, so it refuses to
-          # run below that. 24 is what the other repo-wide checks pin (lint,
-          # lockfile, repo-hygiene).
+          # 24 is what the other repo-wide checks pin (lint, lockfile,
+          # repo-hygiene); knip's own floor, engines.node >=18.18.0, is well
+          # below it.
           node-version: "24"
 
       # Knip reads package.json and source only, so the native postinstalls in
       # this tree (tree-sitter, protobufjs, the http3-quiche transport, esbuild)
-      # are pure cost and a compile-failure surface it never touches — the same
-      # reason lockfile.yml installs script-free for its own analysis.
+      # are pure cost and a compile-failure surface it never touches.
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
