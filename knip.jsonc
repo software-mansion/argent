@@ -21,8 +21,12 @@
   //
   // The ceiling is one total across those classes, so it bounds the backlog
   // rather than each class: paying off one parked export does licence one new
-  // one elsewhere in the same PR. It cannot grow, and it drops as follow-up
-  // passes pay it down.
+  // one elsewhere in the same PR. It drops as follow-up passes pay it down, and
+  // a change that legitimately adds an export nothing imports yet raises it in
+  // the same commit — that bump is the thing review should see. Two such PRs
+  // make the same one-line edit and merge without conflicting, leaving the
+  // number one short of the truth; the push-triggered run on main is what
+  // catches that.
   //
   // Count it the way CI does, in a tree with no build output. With
   // `isSkipLibs` off the whole 206-vs-199 difference hangs on a single path:
@@ -191,6 +195,13 @@
   // and .jsx though DEFAULT_EXTENSIONS covers them, so an orphaned .tsx under
   // test/ IS reported. The repo has no .tsx or .jsx at all today, which is why
   // that whole test/ tree is out of reach rather than most of it.
+  //
+  // Reachability has a wider escape hatch still: whatever a workspace's entry
+  // re-exports is reached. One `export { x } from "./dead-module";` line in a
+  // src/index.ts takes that module out of `files` altogether, and re-exporting
+  // parked exports retires them from the count without deleting anything —
+  // three such lines in tool-server's entry take 206 to 203. So the ceiling
+  // bounds what knip can see, not what is dead.
   //
   // `knip --production` is the lens that reports the whole class, and the repo
   // is not clean under it: 13 unused files — those two, seven root scripts,
