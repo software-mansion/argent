@@ -495,8 +495,16 @@ describe("flow composition (run:)", () => {
       )
     );
 
-    const errored = result.steps.find((s) => s.status === "error");
-    expect(errored?.reason).toMatch(/cyclic flow reference: a → alias/);
+    // Exact-match on the whole report, not a substring: the symlink-aware
+    // guard trips on the FIRST hop (realpath equates alias.yaml with the
+    // running a.yaml), one error step and nothing expanded. Without realpath
+    // the run recurses a level before the resolved-path comparison catches
+    // it — "a → alias → alias" after an expanded pass — which a substring
+    // match on the shorter chain would still accept.
+    expect(result.steps.map((s) => `${s.kind}:${s.status}:${s.depth ?? 0}`)).toEqual([
+      "run:error:0",
+    ]);
+    expect(result.steps[0]?.reason).toBe("cyclic flow reference: a → alias");
   });
 
   it("names a cycle that closes exactly at the run-depth limit as a cycle", async () => {
