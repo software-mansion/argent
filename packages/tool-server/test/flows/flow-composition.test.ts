@@ -753,8 +753,26 @@ describe("flow validation", () => {
     expect(() => parseFlow("steps:\n  - run: login\n")).toThrow(/did you mean `run: login\.yaml`/);
   });
 
+  it("reports a missing target instead of a null.yaml migration hint for a valueless run:", () => {
+    for (const body of ["", " ~", " null"]) {
+      expect(() => parseFlow(`steps:\n  - run:${body}\n`)).toThrow(/`run` has no target/);
+      expect(() => parseFlow(`steps:\n  - run:${body}\n`)).not.toThrow(/null\.yaml/);
+    }
+  });
+
+  it("rejects a non-string run: scalar instead of migrating it to a filename", () => {
+    expect(() => parseFlow("steps:\n  - run: true\n")).toThrow(/must be a YAML path string/);
+    expect(() => parseFlow("steps:\n  - run: true\n")).not.toThrow(/true\.yaml/);
+    expect(() => parseFlow("steps:\n  - run: 123\n")).toThrow(/must be a YAML path string/);
+    expect(() => parseFlow("steps:\n  - run: 123\n")).not.toThrow(/123\.yaml/);
+  });
+
   it("rejects a run: path without the .yaml extension", () => {
     expect(() => parseFlow("steps:\n  - run: flows/login.yml\n")).toThrow(/must end in \.yaml/);
+    // A correctly-typed empty string is a string, so it still reaches the
+    // extension check — this boundary is what keeps the non-string rejection
+    // above targeted at YAML scalars rather than at "no path here" generally.
+    expect(() => parseFlow('steps:\n  - run: ""\n')).toThrow(/must end in \.yaml/);
   });
 
   it("names the lowercase requirement when only the run: extension's case is wrong", () => {

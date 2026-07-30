@@ -1760,7 +1760,21 @@ export function runTargetName(target: string): string {
  * against the containing flow file's directory. `..` is deliberately legal —
  * shared fragments may live outside the flows dir.
  */
-function parseRunTarget(raw: unknown, value: string): string {
+function parseRunTarget(raw: unknown, value: unknown): string {
+  // The body arrives uncoerced because YAML renders a valueless `run:` (and
+  // `run: ~` / `run: null`) as null, and bare scalars as booleans/numbers.
+  // String()-ing those before the checks below would hand FLOW_NAME_PATTERN
+  // the plausible names "null"/"true"/"123", so the bare-name migration branch
+  // would answer a directive that has no target at all with confident advice
+  // to reference a `null.yaml` that was never meant to exist.
+  if (typeof value !== "string") {
+    badEntry(
+      raw,
+      value === null || value === undefined
+        ? "`run` has no target — give it a YAML path relative to this flow's file, e.g. `run: fragments/login.yaml`"
+        : "a `run` target must be a YAML path string relative to this flow's file, e.g. `run: fragments/login.yaml`"
+    );
+  }
   if (value.includes("\\")) {
     badEntry(raw, "a `run` path uses forward slashes, e.g. `run: fragments/login.yaml`");
   }
@@ -1840,7 +1854,7 @@ function fromYamlStep(raw: YamlStep, whenDepth = 0): FlowStep {
 
   if ("echo" in raw) return { kind: "echo", message: String(raw.echo) };
   if ("launch" in raw) return { kind: "launch", app: parseLaunch(raw.launch) };
-  if ("run" in raw) return { kind: "run", flow: parseRunTarget(raw, String(raw.run)) };
+  if ("run" in raw) return { kind: "run", flow: parseRunTarget(raw, raw.run) };
   if ("when" in raw) return parseWhenStep(entry, whenDepth);
 
   if ("tap" in raw) return parseTap((raw as { tap: unknown }).tap, raw);
