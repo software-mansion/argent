@@ -5,6 +5,7 @@ import { queryAndroidFullHierarchy } from "./flow-android-tree";
 import { queryChromiumTree } from "./flow-chromium-tree";
 import { queryVegaTree } from "./flow-vega-tree";
 import type { DescribeTreeData } from "../describe/contract";
+import type { FlowSelectorSource } from "./flow-utils";
 
 /**
  * Fetch the tree a flow resolves selectors against.
@@ -34,8 +35,18 @@ import type { DescribeTreeData } from "../describe/contract";
  */
 export async function fetchFlowTree(
   registry: Registry,
-  device: DeviceInfo
+  device: DeviceInfo,
+  source: FlowSelectorSource = "app"
 ): Promise<DescribeTreeData> {
+  // Screen is an explicit source, never a fallback. It is the same
+  // screen-wide accessibility/DOM tree the agent-facing `describe` reads, so
+  // it can address system UI outside the launched app (iOS keyboard, share
+  // sheet). A failure propagates to the directive's retry/error path; we never
+  // silently switch back to the app hierarchy.
+  if (source === "screen") {
+    return fetchTree(registry, device, { iosNativeFallback: false });
+  }
+
   if (device.platform === "ios") {
     return queryFullHierarchyTree(registry, device);
   }

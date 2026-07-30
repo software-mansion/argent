@@ -70,6 +70,11 @@ export interface DescribeIosOptions {
   // Pre-resolved tvOS verdict, passed by poll/retry callers so the hot path
   // skips re-shelling `xcrun` each iteration. Omitted callers probe once.
   isTvOs?: boolean;
+  // Screen-sourced flows need the accessibility tree specifically: an empty
+  // AX read must stay empty instead of silently switching to the launched
+  // app's native hierarchy. Agent-facing describe keeps the historical
+  // fallback by default.
+  allowNativeFallback?: boolean;
 }
 
 // describe on iOS resolves the ax-service via Registry; the blueprint factory
@@ -113,7 +118,7 @@ export async function describeIos(
     hint = tcpArtifactHint(err) ?? DEGRADED_HINT;
   }
 
-  if (tree.children.length > 0) {
+  if (tree.children.length > 0 || options.allowNativeFallback === false) {
     return { tree, source: "ax-service", hint };
   }
 

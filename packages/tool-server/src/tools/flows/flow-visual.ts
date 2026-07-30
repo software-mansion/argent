@@ -66,13 +66,17 @@ async function pngDimensions(file: string): Promise<{ w: number; h: number }> {
  * (identifier-first fallback).
  */
 function cropIdentity(s: FlowSelector): string {
-  return JSON.stringify([
+  const identity: Array<string | boolean | null> = [
     s.text ?? null,
     s.textMatches ?? null,
     s.identifier ?? null,
     s.role ?? null,
     s.loose ?? false,
-  ]);
+  ];
+  // Keep existing app-sourced baseline keys stable. Only an explicit screen
+  // source changes the identity because it can resolve a different element.
+  if (s.source === "screen") identity.push("screen");
+  return JSON.stringify(identity);
 }
 
 function baselineDir(flowsDir: string, flowName: string): string {

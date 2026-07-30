@@ -5,12 +5,24 @@ import * as path from "node:path";
 import type { DeviceInfo, Registry } from "@argent/registry";
 import type { DescribeTreeData } from "../../src/tools/describe/contract";
 
-// Spy on the trimmed AX describe path: if fetchFlowTree ever fell back to it,
-// the same flow would pass or fail with devtools availability instead of with
-// what's on screen (the trimmed tree lacks testID nodes and hoisted
-// subtreeText). These tests pin the contract that it hard-fails instead.
+// Spy on the screen-wide AX describe path. App-sourced selectors must never
+// fall back to it; screen-sourced selectors must opt into it explicitly.
 const describeIos = vi.fn(async (): Promise<DescribeTreeData> => {
-  throw new Error("describeIos must not be reached by a flow tree fetch");
+  return {
+    tree: {
+      role: "AXWindow",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        {
+          role: "AXButton",
+          identifier: "shift",
+          frame: { x: 0.02, y: 0.8, width: 0.1, height: 0.1 },
+          children: [],
+        },
+      ],
+    },
+    source: "ax-service",
+  };
 });
 vi.mock("../../src/tools/describe/platforms/ios", () => ({
   describeIos: (...args: unknown[]) => describeIos(...(args as [])),
@@ -66,6 +78,26 @@ describe("fetchFlowTree without a full-hierarchy source", () => {
   it("throws on Android instead of degrading to the trimmed uiautomator tree", async () => {
     await expect(fetchFlowTree(deadRegistry(), device("android"))).rejects.toThrow(
       /android devtools helper is unavailable/
+    );
+  });
+
+  it("reads the screen-wide accessibility tree only when screen is explicit", async () => {
+    const fetchWithSource = fetchFlowTree as unknown as (
+      registry: Registry,
+      device: DeviceInfo,
+      source: "screen"
+    ) => Promise<DescribeTreeData>;
+
+    const result = await fetchWithSource(deadRegistry(), device("ios"), "screen");
+
+    expect(result.source).toBe("ax-service");
+    expect(result.tree.children[0]?.identifier).toBe("shift");
+    expect(describeIos).toHaveBeenCalledTimes(1);
+    expect(describeIos).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      { bundleId: undefined },
+      { allowNativeFallback: false }
     );
   });
 

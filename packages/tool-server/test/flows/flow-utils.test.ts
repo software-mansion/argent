@@ -94,6 +94,12 @@ describe("describeSelector", () => {
   it("joins multiple keys with spaces", () => {
     expect(describeSelector({ text: "Login", role: "button" })).toBe('text="Login" role="button"');
   });
+
+  it("includes an explicit screen source in diagnostics", () => {
+    expect(describeSelector({ identifier: "Return", source: "screen" } as never)).toBe(
+      'id="Return" source="screen"'
+    );
+  });
 });
 
 // ── parseFlow ────────────────────────────────────────────────────────
@@ -209,6 +215,73 @@ describe("parseFlow", () => {
   it("keeps an explicit { text } map strict (no loose fallback)", () => {
     const flow = parseFlow("steps:\n  - tap: { text: Settings }\n");
     expect(flow.steps).toEqual([{ kind: "tap", selector: { text: "Settings" } }]);
+  });
+
+  it("parses and serializes explicit selector sources without changing the app default", () => {
+    const flow = parseFlow(
+      [
+        "steps:",
+        "  - tap: { id: shift, source: screen }",
+        "  - await: { hidden: { id: Return, source: screen } }",
+        "  - tap: { id: submit }",
+      ].join("\n")
+    );
+
+    expect(flow.steps).toEqual([
+      { kind: "tap", selector: { identifier: "shift", source: "screen" } },
+      {
+        kind: "await",
+        condition: "hidden",
+        selector: { identifier: "Return", source: "screen" },
+      },
+      { kind: "tap", selector: { identifier: "submit" } },
+    ]);
+
+    const yaml = serializeFlow(flow);
+    expect(yaml).toContain("source: screen");
+    expect(parseFlow(yaml).steps).toEqual(flow.steps);
+    expect(yaml).not.toContain("source: app");
+  });
+
+  it("lets relational selectors inherit their outer source and rejects conflicts", () => {
+    const inherited = parseFlow(
+      "steps:\n  - tap: { text: Delete, source: screen, within: { id: sheet } }\n"
+    );
+    expect(inherited.steps).toEqual([
+      {
+        kind: "tap",
+        selector: {
+          text: "Delete",
+          source: "screen",
+          within: { identifier: "sheet" },
+        },
+      },
+    ]);
+    expect(parseFlow(serializeFlow(inherited)).steps).toEqual(inherited.steps);
+
+    expect(() =>
+      parseFlow(
+        "steps:\n  - tap: { text: Delete, source: screen, within: { id: sheet, source: app } }\n"
+      )
+    ).toThrow(/source.*conflict|conflict.*source/i);
+    expect(() =>
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [
+          {
+            kind: "tap",
+            selector: {
+              text: "Delete",
+              source: "screen",
+              within: { identifier: "sheet", source: "app" },
+            },
+          },
+        ],
+      })
+    ).toThrow(/source.*conflict|conflict.*source/i);
+    expect(() => parseFlow("steps:\n  - tap: { id: shift, source: window }\n")).toThrow(
+      /source.*app.*screen/i
+    );
   });
 
   it.each([

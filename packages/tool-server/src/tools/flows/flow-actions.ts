@@ -40,8 +40,10 @@ import {
 import {
   describeSelector,
   describeTextExpectation,
+  selectorSource,
   SELECTOR_RELATIONS,
   type FlowSelector,
+  type FlowSelectorSource,
   type FlowStep,
   type ScrollDirection,
 } from "./flow-utils";
@@ -259,7 +261,7 @@ export function probeWhenCondition(
  * engine reads as "every element".
  */
 function selectorAlternatives(sel: FlowSelector): Selector[] {
-  const { loose, any: _any, within, after, next, ...own } = sel;
+  const { loose, any: _any, source: _source, within, after, next, ...own } = sel;
   const scopes = { within, after, next };
   let alts: Selector[] =
     loose && own.text !== undefined ? [{ identifier: own.text }, { text: own.text }] : [own];
@@ -314,7 +316,10 @@ function flowSelectorToFrame(tree: DescribeNode, sel: FlowSelector): DescribeFra
  * convert the outage into a misleading "element not found" downstream. The
  * throw lands in the step's structured report via `execLeafStep`'s catch.
  */
-export async function settleTree(env: ActionEnv): Promise<DescribeNode | undefined> {
+export async function settleTree(
+  env: ActionEnv,
+  source: FlowSelectorSource = "app"
+): Promise<DescribeNode | undefined> {
   const deadline = Date.now() + SETTLE_TIMEOUT_MS;
   let prevFp: string | undefined;
   let prevTree: DescribeNode | undefined;
@@ -323,7 +328,7 @@ export async function settleTree(env: ActionEnv): Promise<DescribeNode | undefin
     if (env.signal?.aborted) return undefined;
     let tree: DescribeNode | undefined;
     try {
-      ({ tree } = await fetchFlowTree(env.registry, env.device));
+      ({ tree } = await fetchFlowTree(env.registry, env.device, source));
     } catch (err) {
       // transient describe failure mid-navigation — retry until the deadline
       lastError = err instanceof Error ? err : new Error(String(err));
@@ -366,7 +371,7 @@ export async function waitForFrame(
   const deadline = Date.now() + DEFAULT_ACTION_TIMEOUT_MS;
   for (;;) {
     if (env.signal?.aborted) return "aborted";
-    const tree = await settleTree(env);
+    const tree = await settleTree(env, selectorSource(selector));
     if (tree) {
       const frame = flowSelectorToFrame(tree, selector);
       if (frame) return frame;
@@ -452,8 +457,9 @@ async function waitForFocus(
   for (;;) {
     if (env.signal?.aborted) return;
     try {
-      const { tree, source } = await fetchFlowTree(env.registry, env.device);
-      if (!FOCUS_REPORTING_SOURCES.has(source)) return;
+      const data = await fetchFlowTree(env.registry, env.device, selectorSource(into));
+      if (!FOCUS_REPORTING_SOURCES.has(data.source)) return;
+      const { tree } = data;
       const target = flowSelectorToFrame(tree, into) ?? tappedFrame;
       if (collectFocused(tree, []).some((n) => framesOverlap(n.frame, target))) return;
     } catch {
@@ -564,7 +570,7 @@ async function scrollToVisible(
   for (let i = 0; i < MAX_SCROLL_ITERATIONS; i++) {
     if (env.signal?.aborted) return { aborted: true };
 
-    const tree = await settleTree(env);
+    const tree = await settleTree(env, selectorSource(target));
     if (!tree) return { aborted: true }; // settleTree only returns undefined on abort
 
     // Anchor the gesture inside the container (so the right nested scroller
@@ -831,9 +837,12 @@ async function runPinch(
  * the tree several times per step, so the extra fetch is noise, and the
  * resolution path every other directive shares stays untouched.
  */
-async function fetchScreenAspect(env: ActionEnv): Promise<number | undefined> {
+async function fetchScreenAspect(
+  env: ActionEnv,
+  source: FlowSelectorSource
+): Promise<number | undefined> {
   try {
-    const { screen } = await fetchFlowTree(env.registry, env.device);
+    const { screen } = await fetchFlowTree(env.registry, env.device, source);
     return screen && screen.width > 0 && screen.height > 0
       ? screen.width / screen.height
       : undefined;
@@ -869,7 +878,7 @@ async function runRotate(
   // Unknown aspect (source without dimensions, or a failed read) degrades to
   // aspect 1: the legacy normalized-space orbit — a physical ellipse — rather
   // than a hard error.
-  const aspect = await fetchScreenAspect(env);
+  const aspect = await fetchScreenAspect(env, step.selector ? selectorSource(step.selector) : "app");
 
   // Guards are resolved exactly once per directive; geometry only ever
   // receives them as data (the seam for a future per-device query).
@@ -1010,7 +1019,7 @@ async function waitForCondition(
   for (;;) {
     if (env.signal?.aborted) return ABORTED_OUTCOME;
     try {
-      const data = await fetchFlowTree(env.registry, env.device);
+      const data = await fetchFlowTree(env.registry, env.device, selectorSource(step.selector));
       lastMatches = flowFindAll(data.tree, step.selector);
       fetchError = undefined;
       everMatched ||= lastMatches.length > 0;

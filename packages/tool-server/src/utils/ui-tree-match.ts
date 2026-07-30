@@ -852,10 +852,15 @@ export function deriveSelector(node: DescribeNode): Selector | null {
 export async function fetchTree(
   registry: Registry,
   device: DeviceInfo,
-  opts: { bundleId?: string } = {}
+  opts: { bundleId?: string; iosNativeFallback?: boolean } = {}
 ): Promise<DescribeTreeData> {
   if (device.platform === "ios") {
-    return describeIos(registry, device, { bundleId: opts.bundleId });
+    return describeIos(
+      registry,
+      device,
+      { bundleId: opts.bundleId },
+      { allowNativeFallback: opts.iosNativeFallback ?? true }
+    );
   }
   if (device.platform === "android") {
     return describeAndroid(registry, device.id);

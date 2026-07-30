@@ -720,6 +720,7 @@ function selectorLabel(sel: FlowSelector): string {
   if (sel.textMatches !== undefined) parts.push(`/${sel.textMatches}/`);
   if (sel.identifier) parts.push(`id=${sel.identifier}`);
   if (sel.role) parts.push(`role=${sel.role}`);
+  if (sel.source !== undefined) parts.push(`source=${sel.source}`);
   // Each relational scope renders after the fields, parenthesized and
   // recursive, so two steps that differ only by scope don't collapse to the
   // same target label in the report — mirroring `describeSelector`'s

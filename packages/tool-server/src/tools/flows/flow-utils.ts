@@ -222,6 +222,9 @@ export type Launch =
 /** Axis + sense a `scroll-to` step scrolls in to reveal its target. */
 export type ScrollDirection = "up" | "down" | "left" | "right";
 
+/** The hierarchy a flow selector resolves against. */
+export type FlowSelectorSource = "app" | "screen";
+
 /**
  * A selector as a flow step carries it. Extends the shared {@link Selector} with
  * an internal `loose` flag, set when the selector came from bare-string sugar
@@ -252,6 +255,8 @@ export type ScrollDirection = "up" | "down" | "left" | "right";
 export type FlowSelector = Omit<Selector, "within" | "after" | "next"> & {
   loose?: boolean;
   any?: boolean;
+  /** Defaults to the launched app's full hierarchy. */
+  source?: FlowSelectorSource;
   within?: FlowSelector;
   after?: FlowSelector;
   next?: FlowSelector;
@@ -414,6 +419,7 @@ type YamlSelector =
   | (Omit<Selector, "identifier" | "text" | "textMatches" | "within" | "after" | "next"> & {
       id?: string;
       any?: boolean;
+      source?: FlowSelectorSource;
       text?: string | { matches: string };
       within?: YamlSelector;
       after?: YamlSelector;
@@ -511,6 +517,11 @@ type YamlFlowFile = {
  * `testID="save"` elsewhere on screen.
  */
 export function selectorToYaml(sel: FlowSelector): YamlSelector {
+  assertSelectorSourceTree(sel);
+  return selectorToYamlUnchecked(sel);
+}
+
+function selectorToYamlUnchecked(sel: FlowSelector): YamlSelector {
   // YAML has a single `text` slot: it is either a literal string or a
   // `{ matches }` map. Emitting one would overwrite/drop the other, changing
   // the selector's AND semantics. Reject this internal-only combination at
@@ -590,6 +601,7 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
       sel.identifier !== undefined ||
       sel.role !== undefined ||
       sel.any !== undefined ||
+      sel.source !== undefined ||
       SELECTOR_RELATIONS.some((relation) => sel[relation] !== undefined))
   ) {
     const incompatible = [
@@ -597,6 +609,7 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
       sel.identifier !== undefined ? "identifier" : undefined,
       sel.role !== undefined ? "role" : undefined,
       sel.any !== undefined ? "any" : undefined,
+      sel.source !== undefined ? "source" : undefined,
       ...SELECTOR_RELATIONS.map((relation) => (sel[relation] !== undefined ? relation : undefined)),
     ].filter((field): field is string => field !== undefined);
     throw new Error(
@@ -618,17 +631,52 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
   // YAML spells the identifier field `id` (parseSelector maps it back), and
   // the internal `textMatches` field spells `text: { matches }`. A relational
   // scope recurses — each level keeps its own bare-string/map spelling.
-  const { loose: _loose, any, identifier, textMatches, within, after, next, ...rest } = sel;
+  const {
+    loose: _loose,
+    any,
+    source,
+    identifier,
+    textMatches,
+    within,
+    after,
+    next,
+    ...rest
+  } = sel;
   const scopes = { within, after, next };
   const out: Exclude<YamlSelector, string> = { ...rest };
   if (any) out.any = true;
+  if (source !== undefined) out.source = source;
   if (textMatches !== undefined) out.text = { matches: textMatches };
   if (identifier !== undefined) out.id = identifier;
   for (const relation of SELECTOR_RELATIONS) {
     const scope = scopes[relation];
-    if (scope !== undefined) out[relation] = selectorToYaml(scope);
+    if (scope !== undefined) out[relation] = selectorToYamlUnchecked(scope);
   }
   return out;
+}
+
+/** Resolve a selector's hierarchy source; omission deliberately means app. */
+export function selectorSource(sel: FlowSelector): FlowSelectorSource {
+  return sel.source ?? "app";
+}
+
+function assertSelectorSourceTree(
+  sel: FlowSelector,
+  inherited?: FlowSelectorSource,
+  where = "selector"
+): void {
+  const effective = sel.source ?? inherited ?? "app";
+  if (inherited !== undefined && sel.source !== undefined && sel.source !== inherited) {
+    throw new Error(
+      `Cannot serialize flow selector: ${where} source \`${sel.source}\` conflicts with inherited source \`${inherited}\`.`
+    );
+  }
+  for (const relation of SELECTOR_RELATIONS) {
+    const nested = sel[relation];
+    if (nested !== undefined) {
+      assertSelectorSourceTree(nested, effective, `${where}.${relation}`);
+    }
+  }
 }
 
 /**
@@ -640,7 +688,7 @@ export function describeSelector(s: FlowSelector): string {
   // scopes) before Object.entries so the remaining values are all strings —
   // the scopes render separately below, and stringifying their objects here
   // would be meaningless.
-  const { loose: _loose, any, within, after, next, ...rest } = s;
+  const { loose: _loose, any, source, within, after, next, ...rest } = s;
   const scopes = { within, after, next };
   const fields = Object.entries(rest)
     // `identifier` is spelled `id` in flow YAML — print the spelling the flow
@@ -652,7 +700,11 @@ export function describeSelector(s: FlowSelector): string {
     .join(" ");
   // The universal selector prints as CSS spells it, so a relation-only target
   // never renders as an empty string.
-  const parts = [any ? "*" : undefined, fields || undefined].filter((p) => p !== undefined);
+  const parts = [
+    any ? "*" : undefined,
+    fields || undefined,
+    source !== undefined ? `source="${source}"` : undefined,
+  ].filter((p) => p !== undefined);
   // Each scope renders after the fields, parenthesized so a nested scope's own
   // fields can't be misread as the target's, and labelled with the YAML key so
   // the message reads like the step it refers to.
@@ -989,6 +1041,7 @@ const SELECTOR_KEYS: readonly string[] = [
   "identifier",
   "role",
   "any",
+  "source",
   ...SELECTOR_RELATIONS,
 ];
 
@@ -1009,7 +1062,8 @@ const MAX_SELECTOR_SCOPES = 6;
 function parseSelector(
   raw: unknown,
   where: string,
-  budget: { scopes: number } = { scopes: MAX_SELECTOR_SCOPES }
+  budget: { scopes: number } = { scopes: MAX_SELECTOR_SCOPES },
+  inheritedSource?: FlowSelectorSource
 ): FlowSelector {
   if (budget.scopes < 0) {
     badEntry(
@@ -1039,14 +1093,34 @@ function parseSelector(
   const scopes: { [K in SelectorRelation]?: FlowSelector } = {};
   let universal = false;
   let fieldsRaw = raw;
+  let explicitSource: FlowSelectorSource | undefined;
   if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
     const restRaw = { ...(raw as Record<string, unknown>) };
+    if ("source" in restRaw) {
+      if (restRaw.source !== "app" && restRaw.source !== "screen") {
+        badEntry(raw, `${where}: selector source must be \`app\` or \`screen\``);
+      }
+      explicitSource = restRaw.source;
+      if (inheritedSource !== undefined && explicitSource !== inheritedSource) {
+        badEntry(
+          raw,
+          `${where}: selector source \`${explicitSource}\` conflicts with inherited source \`${inheritedSource}\``
+        );
+      }
+      delete restRaw.source;
+    }
+    const effectiveSource = explicitSource ?? inheritedSource ?? "app";
     const present = SELECTOR_RELATIONS.filter((relation) => relation in restRaw);
     for (const relation of present) {
       // One shared budget across the whole tree, decremented per scope: sibling
       // branches spend from it too, so three-way nesting cannot multiply.
       budget.scopes--;
-      scopes[relation] = parseSelector(restRaw[relation], `${where}.${relation}`, budget);
+      scopes[relation] = parseSelector(
+        restRaw[relation],
+        `${where}.${relation}`,
+        budget,
+        effectiveSource
+      );
       delete restRaw[relation];
     }
     if ("any" in restRaw) {
@@ -1084,7 +1158,11 @@ function parseSelector(
     }
     fieldsRaw = restRaw;
   }
-  const attachScopes = (sel: FlowSelector): FlowSelector => ({ ...sel, ...scopes });
+  const attachScopes = (sel: FlowSelector): FlowSelector => ({
+    ...sel,
+    ...(explicitSource !== undefined ? { source: explicitSource } : {}),
+    ...scopes,
+  });
   if (universal) return attachScopes({ any: true });
   // Map form: `id` is the YAML spelling of the internal `identifier` field —
   // rewrite it before schema validation. `identifier` still parses as an alias
@@ -1381,6 +1459,7 @@ function hasSelectorField(obj: Record<string, unknown>): boolean {
     obj.identifier !== undefined ||
     obj.role !== undefined ||
     obj.any !== undefined ||
+    obj.source !== undefined ||
     SELECTOR_RELATIONS.some((relation) => obj[relation] !== undefined)
   );
 }
@@ -1822,12 +1901,20 @@ function fromYamlStep(raw: YamlStep, whenDepth = 0): FlowStep {
           `scope (${SELECTOR_RELATIONS.join("/")}) goes inside \`target\`.`
       );
     }
+    const target = parseSelector(b.target, "scroll-to.target");
     const step: FlowStep = {
       kind: "scroll-to",
-      target: parseSelector(b.target, "scroll-to.target"),
+      target,
       direction: (b.direction as ScrollDirection | undefined) ?? "down",
     };
-    if (b.within !== undefined) step.within = parseSelector(b.within, "scroll-to.within");
+    if (b.within !== undefined) {
+      step.within = parseSelector(
+        b.within,
+        "scroll-to.within",
+        { scopes: MAX_SELECTOR_SCOPES },
+        selectorSource(target)
+      );
+    }
     return step;
   }
 
