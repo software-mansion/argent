@@ -56,4 +56,4 @@ jobs:
       - name: Explain the failure
         if: failure() && steps.knip.outcome == 'failure'
         run: |
-          echo "::error::Dead Code failed. If the only sections above are \"Unused exports\" / \"Unused exported types\" / \"Unused exported class members\", the second pass exceeded the --max-issues ceiling in package.json and knip exits on that silently; knip.jsonc explains the ceiling and why it must be counted against a tree with no build output. Any other section is a first-pass finding, and names what to change."
+          echo "::error::Dead Code failed. If the only sections above are the parked ones — unused exports, unused exported types, unused exported class members, or either of their in-used-namespace variants — the second pass exceeded the --max-issues ceiling in package.json, and knip exits on that silently; knip.jsonc explains the ceiling and why it must be counted against a tree with no build output. Any other section is a first-pass finding, and names what to change."
