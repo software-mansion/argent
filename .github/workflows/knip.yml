@@ -27,10 +27,13 @@ jobs:
           node-version: "24"
 
       # Knip reads package.json and source only, so every install script here is
-      # pure cost to it. Six packages compile on install, and the four that are
-      # not optionalDependencies — the three tree-sitter ones and the
-      # http3-quiche transport — are a compile failure `npm ci` cannot shrug
-      # off, on code this job never touches.
+      # pure cost to it. Six carry a native one, and each prefers a prebuilt
+      # binary over compiling: on this runner only node-pty and dtrace-provider
+      # fall through to node-gyp, both optionalDependencies whose failure npm
+      # ignores. The risk is a bump that leaves a package with no prebuild
+      # matching the runner — dependabot.yml pins tree-sitter for exactly that,
+      # a compile that breaks `npm ci` outright. Skipping the scripts takes the
+      # whole class out of a job that never runs the code.
       - name: Install dependencies
         run: npm ci --ignore-scripts
 

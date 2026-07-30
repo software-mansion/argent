@@ -91,8 +91,10 @@
     // `ignoreDependencies` also suppresses `unlisted`, so a catch-all would
     // take this workspace's own src/ and scripts/ out of that check — where an
     // import with no matching declaration is a real bug, not a bundler
-    // artifact. (It does not reach `unresolved`, which knip reports without
-    // consulting any ignore list.)
+    // artifact. (It reaches `unresolved` only nominally: knip matches this list
+    // against a package name parsed out of the specifier, and an unresolvable
+    // relative path yields none, so even a catch-all leaves those reported.
+    // `ignoreUnresolved` is the option that does silence them.)
     //
     // Unchecked in either direction: knip does not inspect
     // `optionalDependencies` at all, so `electron` and `node-pty` are outside
@@ -176,15 +178,15 @@
   // `test:scripts` runs `node --test`, which turns on knip's node plugin, and
   // that plugin registers four entry patterns in every workspace — `**/test/**`
   // plus `*{.,-,_}test`, `test-*` and `test` matched anywhere — each limited to
-  // {cjs,mjs,js,cts,mts,ts}. So all 380 files under packages/*/test/ are
+  // {cjs,mjs,js,cts,mts,ts}. So all 380 JS/TS files under packages/*/test/ are
   // entries, and under packages/*/tests/ every name matching one of the three
   // is too: of today's 15 that leaves registry/tests/helpers.ts as the only
   // reportable one, which is why it is the lone `tests/` entry in the
   // --production list below. A `tests/test-utils.ts` or `tests/test.ts` would
   // be just as invisible. The extension set is the escape hatch: it omits .tsx
   // and .jsx though DEFAULT_EXTENSIONS covers them, so an orphaned .tsx under
-  // test/ IS reported. The repo has none today, which is what makes those two
-  // counts whole-directory ones.
+  // test/ IS reported. The repo has no .tsx or .jsx at all today, which is why
+  // that whole test/ tree is out of reach rather than most of it.
   //
   // `knip --production` is the lens that reports the whole class, and the repo
   // is not clean under it: 13 unused files — those two, seven root scripts,
