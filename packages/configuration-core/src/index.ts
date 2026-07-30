@@ -15,6 +15,16 @@ export {
 } from "./flags.js";
 
 export {
+  REMOTE_PREFERENCES_VERSION,
+  RemotePreferencesValidationError,
+  buildRemotePreferencesSnapshot,
+  parseRemotePreferencesSnapshot,
+  applyRemotePreferenceFlags,
+  type RemotePreferencesSnapshot,
+  type AppliedRemotePreferences,
+} from "./remote-preferences.js";
+
+export {
   argentHomeDir,
   resolveHomeDir,
   configDir,

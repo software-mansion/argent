@@ -39,6 +39,8 @@ interface FlagsFile {
 export interface FlagDefinition {
   readonly name: string;
   readonly description: string;
+  /** Whether this live server-consumed flag may sync to a linked tool-server. */
+  readonly remoteSync?: "live";
   // Opt-OUT flag: the feature is ON when the flag has never been set. `argent
   // disable <name>` then persists an explicit `false` (rather than unsetting,
   // which would revert to this ON default), and `argent enable <name>` / no
@@ -58,6 +60,7 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     name: "argent-lens",
     description:
       "Argent Lens — the propose_variant / await_user_selection tools and the Electron preview window for staging UI design variants and letting a human pick among them. Off by default while the feature is in development.",
+    remoteSync: "live",
   },
   {
     name: "artifacts-list-endpoint",
@@ -71,6 +74,7 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     name: "video-watermark",
     description:
       "Overlay the argent corner watermark on recorded screen videos. On by default; turn it off with `argent disable video-watermark`.",
+    remoteSync: "live",
     defaultEnabled: true,
   },
 ];
