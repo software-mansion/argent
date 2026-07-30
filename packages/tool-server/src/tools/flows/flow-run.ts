@@ -235,7 +235,11 @@ export interface FlowPrerequisiteNotice {
   executionPrerequisite: string;
 }
 
-const MAX_RUN_DEPTH = 20;
+/**
+ * Longest `run:` chain a flow may nest. Exported so the boundary tests build
+ * their chains from the real limit rather than a literal that silently drifts.
+ */
+export const MAX_RUN_DEPTH = 20;
 
 /**
  * Grace period to let a freshly (re)launched app settle before the first step
@@ -1250,15 +1254,22 @@ async function execRunStep(
     state.stopped = true;
   };
 
-  if (scope.runStack.length >= MAX_RUN_DEPTH) {
-    return fail("max run depth exceeded");
-  }
-
+  // The cycle guard deliberately runs before the depth guard. A loop that
+  // happens to close on the MAX_RUN_DEPTH-th hop is still a loop, and reporting
+  // it as "max run depth exceeded" would send the author looking for excessive
+  // nesting instead of the repeated reference — and would drop the chain, which
+  // is the one piece of output that identifies the offending edge. The cost is
+  // one extra realpath on the max-depth path; the depth guard immediately below
+  // still stops the recursion, so nothing runs away.
   const canonical = await canonicalFlowPath(path.resolve(scopeFlowDir(scope), target));
   if (scope.runStack.some((entry) => entry.canonical === canonical)) {
     return fail(
       `cyclic flow reference: ${[...scope.runStack.map((entry) => entry.display), display].join(" → ")}`
     );
+  }
+
+  if (scope.runStack.length >= MAX_RUN_DEPTH) {
+    return fail("max run depth exceeded");
   }
 
   let fragment: FlowFile;

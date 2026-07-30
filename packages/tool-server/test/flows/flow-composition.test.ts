@@ -8,7 +8,11 @@ import {
   FLOW_NAME_PATTERN,
   type Registry,
 } from "@argent/registry";
-import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
+import {
+  createRunFlowTool,
+  MAX_RUN_DEPTH,
+  type FlowRunResult,
+} from "../../src/tools/flows/flow-run";
 import { serializeFlow, parseFlow } from "../../src/tools/flows/flow-utils";
 import { bindDeviceArgs, stripDeviceKeys } from "../../src/tools/flows/flow-device";
 import { runSnapshot } from "../../src/tools/flows/flow-visual";
@@ -49,6 +53,22 @@ async function writeFlow(name: string, yaml: Parameters<typeof serializeFlow>[0]
   const dir = path.join(tmpDir, ".argent", "flows");
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, `${name}.yaml`), serializeFlow(yaml), "utf8");
+}
+
+/**
+ * Write a straight `run:` chain root → n1 → … → n{links} → tail, one `run:`
+ * step per flow. The final hop fires with the root plus every link on the run
+ * stack, i.e. a stack of exactly `links + 1` entries — which is what lets the
+ * depth-boundary tests below land on the guard's threshold precisely.
+ */
+async function writeRunChain(links: number, tail: string): Promise<void> {
+  await writeFlow("root", { executionPrerequisite: "", steps: [{ kind: "run", flow: "n1.yaml" }] });
+  for (let i = 1; i <= links; i++) {
+    await writeFlow(`n${i}`, {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: i === links ? tail : `n${i + 1}.yaml` }],
+    });
+  }
 }
 
 function asRun(r: FlowRunResult | { notice: string }): FlowRunResult {
@@ -339,6 +359,50 @@ describe("flow composition (run:)", () => {
 
     const errored = result.steps.find((s) => s.status === "error");
     expect(errored?.reason).toMatch(/cyclic flow reference: a → alias/);
+  });
+
+  it("names a cycle that closes exactly at the run-depth limit as a cycle", async () => {
+    // The closing hop back to root fires with a run stack of exactly
+    // MAX_RUN_DEPTH — the same hop the depth guard would reject. It is still a
+    // loop, and the chain is what tells the author which edge to cut, so the
+    // cycle must win here; ordering the depth guard first swallows both.
+    const links = MAX_RUN_DEPTH - 1;
+    await writeRunChain(links, "root.yaml");
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "root", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    const chain = ["root", ...Array.from({ length: links }, (_, i) => `n${i + 1}`), "root"];
+    const errored = result.steps.find((s) => s.status === "error");
+    expect(errored?.reason).toBe(`cyclic flow reference: ${chain.join(" → ")}`);
+    expect(errored?.reason).not.toContain("max run depth");
+  });
+
+  it("reports a non-cyclic chain past the run-depth limit as excessive depth", async () => {
+    // Same shape and same threshold as the cycle above, but every flow is
+    // distinct — this is the depth guard's remaining reachable case, and it
+    // must keep firing now that the cycle guard precedes it.
+    const links = MAX_RUN_DEPTH - 1;
+    await writeRunChain(links, `n${MAX_RUN_DEPTH}.yaml`);
+    await writeFlow(`n${MAX_RUN_DEPTH}`, {
+      executionPrerequisite: "",
+      steps: [{ kind: "echo", message: "one hop too deep to reach" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "root", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    const errored = result.steps.find((s) => s.status === "error");
+    expect(errored?.reason).toBe("max run depth exceeded");
+    expect(errored?.flow).toBe(`n${MAX_RUN_DEPTH}`);
   });
 
   it("rejects run: composition when the root flow was uploaded (no shared filesystem)", async () => {
