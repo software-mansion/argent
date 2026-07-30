@@ -543,6 +543,72 @@ describe("flow composition (run:)", () => {
     expect(errored?.flow).toBe(`n${MAX_RUN_DEPTH}`);
   });
 
+  it("reports a missing run: target as a step error, not a tool-level rejection", async () => {
+    // A typo'd or moved fragment path is the most common way a run: fails,
+    // and it must land in the per-step report — resolved, ok: false, with the
+    // underlying cause — never reject the whole tool call. The catch around
+    // the fragment read is the only thing between the two.
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "run", flow: "gone.yaml" },
+        { kind: "echo", message: "never reached" },
+      ],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]).toMatchObject({
+      kind: "run",
+      status: "error",
+      flow: "gone",
+      target: "gone.yaml",
+    });
+    expect(result.steps[0]?.reason).toMatch(/^could not load fragment "gone\.yaml": /);
+    expect(result.steps[0]?.reason).toContain("ENOENT");
+    // The failure hard-stops the flow like any other step error.
+    expect(result.steps[1]).toMatchObject({ kind: "echo", status: "skip" });
+  });
+
+  it("reports a malformed run: target as a step error carrying the parse failure", async () => {
+    // The same catch covers parseFlow, so a fragment that exists but does not
+    // parse degrades identically — the parse diagnostic reaches the step
+    // report instead of rejecting the run.
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "broken.yaml" }],
+    });
+    // Written raw — serializeFlow could never produce an invalid step.
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", "broken.yaml"),
+      "steps:\n  - frobnicate: nope\n",
+      "utf8"
+    );
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]).toMatchObject({
+      kind: "run",
+      status: "error",
+      flow: "broken",
+      target: "broken.yaml",
+    });
+    expect(result.steps[0]?.reason).toMatch(/^could not load fragment "broken\.yaml": /);
+    expect(result.steps[0]?.reason).toContain("unrecognized step kind");
+  });
+
   it("rejects run: composition when the root flow was uploaded (no shared filesystem)", async () => {
     // A remote client's flow arrives as content and is materialized to a temp
     // file — the files its run: paths reference stayed on the client, and a
