@@ -6,11 +6,20 @@
   // .github/workflows/knip.yml.
   //
   // Every issue type knip reports is an error — that is its default severity,
-  // so this file sets no `rules`. The pre-existing unused exports/types
-  // backlog is held at its current size instead: `npm run knip` runs knip
-  // twice, once over every other class, then once over `exports,types` under
-  // `--max-issues`. That number is a ceiling, not a licence — it fails the job
-  // the moment the backlog grows, and drops as follow-up passes pay it down.
+  // so this file sets no `rules`. The pre-existing backlog is held at its
+  // current size instead: `npm run knip` runs knip twice, once over the
+  // classes that must be clean, then once over the parked ones under
+  // `--max-issues`. `classMembers`, `nsExports` and `nsTypes` sit in knip's
+  // own `defaultExcludedIssueTypes`, so the second pass names them explicitly
+  // — without that they are gated by neither pass and a new unused class
+  // member costs nothing. Naming `classMembers` also re-attributes some
+  // findings away from `exports`/`types`, which is why the ceiling is lower
+  // than the two counts alone would suggest.
+  //
+  // The ceiling is one total across those classes, so it bounds the backlog
+  // rather than each class: paying off one parked export does licence one new
+  // one elsewhere in the same PR. It cannot grow, and it drops as follow-up
+  // passes pay it down.
   //
   // Out of scope entirely: build output and dependencies (git-ignored, so knip
   // skips them), the argent-private submodule (excluded below), and every file
@@ -56,10 +65,11 @@
     // Knip cannot follow imports across that esbuild boundary, so every
     // package consumed only by the bundled-in code reads as unused here. Those
     // are named one by one rather than waved through with a catch-all pattern:
-    // `ignoreDependencies` also suppresses `unlisted` and `unresolved`, and a
-    // catch-all would take this workspace's own src/ and scripts/ out of those
-    // two checks — where an import with no matching declaration is a real bug,
-    // not a bundler artifact.
+    // `ignoreDependencies` also suppresses `unlisted`, so a catch-all would
+    // take this workspace's own src/ and scripts/ out of that check — where an
+    // import with no matching declaration is a real bug, not a bundler
+    // artifact. (It does not reach `unresolved`, which knip reports without
+    // consulting any ignore list.)
     //
     // Unchecked in either direction: knip does not inspect
     // `optionalDependencies` at all, so `electron` and `node-pty` are outside
@@ -69,14 +79,14 @@
       "ignoreDependencies": [
         // dependencies
         "@fails-components/webtransport",
+        // Not bundled-in code reaching it: @fails-components/webtransport
+        // imports this itself at runtime, so nothing first-party names it.
         "@fails-components/webtransport-transport-http3-quiche",
         "@modelcontextprotocol/sdk",
         "tree-sitter",
         "tree-sitter-typescript",
         // devDependencies
-        "@argent/telemetry",
         "@clack/prompts",
-        "@types/semver",
         "picocolors",
         "posthog-node",
         "semver",
@@ -116,8 +126,9 @@
         // utils/preview-window.ts it resolves the Electron executable's path
         // from the install root, where it is an optionalDependency of the
         // published @swmansion/argent. In test/fixtures/electron-smoke-app it
-        // is the Electron main-process API, supplied by the runtime that
-        // executes the fixture.
+        // is the Electron main-process API; that fixture declares electron in
+        // its own package.json and CI installs it there, but knip attributes
+        // the file to this workspace's manifest and never reads the nested one.
         "electron",
       ],
     },
@@ -132,6 +143,12 @@
   // src/tools/paste/index.ts (keyboard-secrets.test.ts drives it and asserts
   // the `cmd: "paste"` it sends) and src/utils/ios-profiler/lifecycle.ts
   // (ios-instruments/lifecycle.test.ts runs the shutdown ladder through it).
+  //
+  // Those two are the current occupants, not the extent of it: any module that
+  // ships with a test is invisible to `files` the same way, which in this repo
+  // is most of them. What `files` reliably catches is a module with no test at
+  // all. A file orphaned inside test/ is invisible too — knip treats every
+  // path under test/ as an entry.
   //
   // `knip --production` is the lens that reports the whole class, and the repo
   // is not clean under it: 13 unused files — those two, seven root scripts,
