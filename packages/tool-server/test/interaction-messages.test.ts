@@ -32,6 +32,27 @@ describe("tool interaction messages", () => {
       })
     ).toBe("Double-tapped at (50%, 25%)");
 
+    // `keyboard` picks its wording from which of `text` / `key` was given, and
+    // the two formatters do NOT cover the same shapes: `startedMsg` renders
+    // before the tool rejects a text+key request, `completedMsg` only ever runs
+    // after a call that succeeded — where exactly one of the two was given.
+    const keyboard = definitions.get("keyboard")!.interaction!;
+    expect(keyboard.startedMsg!({ params: { udid: "device-1", text: "hi" } })).toBe(
+      "Entering text"
+    );
+    expect(keyboard.startedMsg!({ params: { udid: "device-1", key: "enter" } })).toBe(
+      "Pressing a key"
+    );
+    expect(keyboard.startedMsg!({ params: { udid: "device-1", text: "hi", key: "enter" } })).toBe(
+      "Entering text and pressing a key"
+    );
+    expect(keyboard.completedMsg!({ params: { udid: "device-1", text: "hi" }, result: {} })).toBe(
+      "Entered text"
+    );
+    expect(keyboard.completedMsg!({ params: { udid: "device-1", key: "enter" }, result: {} })).toBe(
+      "Pressed a key"
+    );
+
     expect(
       definitions.get("screenshot")!.interaction!.completedMsg!({
         params: { udid: "device-1" },

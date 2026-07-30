@@ -37,9 +37,12 @@ vi.mock("../src/utils/vega-input", async (importOriginal) => ({
 
 import { injectVegaNamedKey, injectVegaText } from "../src/utils/vega-input";
 import { createKeyboardTool } from "../src/tools/keyboard";
+import { NAMED_KEYS } from "../src/tools/keyboard/key-codes";
 
-const pressKey = vi.fn();
-const dispatchKeyEvent = vi.fn(async () => {});
+const pressKey = vi.fn((_direction: "Down" | "Up", _keyCode: number) => {});
+// Params typed so `mock.calls[n][0]` is the event, not `never` — vitest transforms
+// tests with esbuild, so only `tsc --noEmit` catches an untyped `vi.fn()` here.
+const dispatchKeyEvent = vi.fn(async (_event: { type: string; key?: string }) => {});
 
 /** A registry whose service resolution hands back both HID and CDP fakes. */
 function registry(): Registry {
@@ -49,24 +52,39 @@ function registry(): Registry {
 }
 
 // The tool routes by udid SHAPE (see utils/device-info.ts `classifyDevice`), so
-// these ids are what pick each backend.
+// these ids are what pick each backend. `pressedBackspace` reads the transport
+// for the key that was actually asked for: `typed` echoes `params.key` straight
+// back, so it would pass a backend that ignored `params.key` and pressed a
+// hardcoded Enter.
 const BACKENDS = [
   {
     platform: "ios",
     udid: "809A848B-1671-4A72-B9C9-B1683D95973E",
     injections: () => pressKey.mock.calls.length,
+    // HID usage 42 = Keyboard DELETE/Backspace (key-codes.ts NAMED_KEYS).
+    pressedBackspace: () =>
+      pressKey.mock.calls.some((c) => c[0] === "Down" && c[1] === NAMED_KEYS.backspace),
   },
-  { platform: "android", udid: "emulator-5554", injections: () => adbShell.mock.calls.length },
+  {
+    platform: "android",
+    udid: "emulator-5554",
+    injections: () => adbShell.mock.calls.length,
+    // KEYCODE_DEL = 67.
+    pressedBackspace: () => adbShell.mock.calls.some((c) => c[1] === "input keyevent 67"),
+  },
   {
     platform: "chromium",
     udid: "chromium-cdp-9222",
     injections: () => dispatchKeyEvent.mock.calls.length,
+    pressedBackspace: () => dispatchKeyEvent.mock.calls.some((c) => c[0].key === "Backspace"),
   },
   {
     platform: "vega",
     udid: "amazon-4a27df03c9777152",
     injections: () =>
       vi.mocked(injectVegaText).mock.calls.length + vi.mocked(injectVegaNamedKey).mock.calls.length,
+    pressedBackspace: () =>
+      vi.mocked(injectVegaNamedKey).mock.calls.some((c) => c[0] === "backspace"),
   },
 ];
 
@@ -93,7 +111,7 @@ describe("keyboard — `text` and `key` are mutually exclusive", () => {
     isAndroidTv.mockResolvedValue(false);
   });
 
-  for (const { platform, udid, injections } of BACKENDS) {
+  for (const { platform, udid, injections, pressedBackspace } of BACKENDS) {
     it(`${platform}: rejects a combined text+key call with nothing injected`, async () => {
       const r = registry();
       await expectCombinedRejection(
@@ -117,10 +135,14 @@ describe("keyboard — `text` and `key` are mutually exclusive", () => {
       expect(injections()).toBeGreaterThan(0);
 
       vi.clearAllMocks();
-      await expect(tool.execute({}, { udid, key: "enter", delayMs: 0 })).resolves.toMatchObject({
-        typed: "enter",
-      });
-      expect(injections()).toBeGreaterThan(0);
+      // `backspace`, not `enter`: it is the key every other backend test also
+      // presses, so pressing the one that was ASKED for is what is pinned here.
+      await expect(tool.execute({}, { udid, key: "backspace", delayMs: 0 })).resolves.toMatchObject(
+        {
+          typed: "backspace",
+        }
+      );
+      expect(pressedBackspace(), `${platform} pressed a key other than backspace`).toBe(true);
     });
   }
 

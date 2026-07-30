@@ -90,7 +90,7 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
       //
       // `startedMsg` still describes a text+key request because it renders
       // BEFORE `execute` rejects the combination; `completedMsg` runs only after
-      // a call that succeeded, where exactly one of the two was given.
+      // a call that succeeded, so it never sees both.
       startedMsg: ({ params }) => {
         if (params.text === undefined) return "Pressing a key";
         if (params.key === undefined) return "Entering text";
