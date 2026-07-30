@@ -426,6 +426,9 @@ describe("flow composition (run:)", () => {
     // names the exact edge that closes the loop, rather than the bare "a"
     // that reads like a self-reference from the root's own directory.
     expect(errored?.reason).toMatch(/cyclic flow reference: a → b → \.\.\/a/);
+    // Where the as-written path differs from the stem it is the value that
+    // locates the reference — `run ../a.yaml`, not a stem-derived fallback.
+    expect(errored?.target).toBe("../a.yaml");
   });
 
   it("anchors a symlinked root flow's run: at the real file's directory", async () => {
@@ -541,6 +544,9 @@ describe("flow composition (run:)", () => {
     const errored = result.steps.find((s) => s.status === "error");
     expect(errored?.reason).toBe("max run depth exceeded");
     expect(errored?.flow).toBe(`n${MAX_RUN_DEPTH}`);
+    // The as-written path rides the depth error too — the report line must
+    // name the reference that overflowed, not just the stem.
+    expect(errored?.target).toBe(`n${MAX_RUN_DEPTH}.yaml`);
   });
 
   it("reports a missing run: target as a step error, not a tool-level rejection", async () => {
@@ -1023,6 +1029,10 @@ describe("flow composition (run:)", () => {
     expect(errored?.reason).toMatch(/cyclic/i);
     // The chain renders the human-readable stems, not canonical paths.
     expect(errored?.reason).toContain("main → a → b → a");
+    // The error report carries the as-written path: on a failed resolution it
+    // is what locates the bad reference (`run ../shared/x.yaml`, not a bare
+    // stem), and stepLabel in argent-mcp falls back to the stem without it.
+    expect(errored?.target).toBe("a.yaml");
     // The cycle is detected two fragments down; its error marker keeps that
     // depth (the fail() path stamps depthOf(scope) like the success marker),
     // so the error line renders inside the block that caused it.
