@@ -20,13 +20,21 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          # Match the other tooling jobs (ESLint 10 needs a modern Node).
+          # knip sets engineStrict with engines.node >=18.18.0, so it refuses to
+          # run below that. 24 is what the other repo-wide checks pin (lint,
+          # lockfile, repo-hygiene).
           node-version: "24"
 
+      # Knip reads package.json and source only, so the native postinstalls in
+      # this tree (tree-sitter, protobufjs, the http3-quiche transport, esbuild)
+      # are pure cost and a compile-failure surface it never touches — the same
+      # reason lockfile.yml installs script-free for its own analysis.
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       # Knip analyzes source directly (it maps each package's dist entry back to
-      # src), so no workspace build is required.
+      # src), so no workspace build is required. `npm run knip` reports the
+      # enforced classes on their own and only reaches the parked exports/types
+      # backlog once that pass is clean, so a failure never lands underneath it.
       - name: Knip
         run: npm run knip

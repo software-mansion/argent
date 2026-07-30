@@ -5,21 +5,45 @@
   // imports with no matching dependency). Run with `npm run knip`; enforced by
   // .github/workflows/knip.yml.
   //
-  // Not analyzed: build outputs and deps (git-ignored — knip skips them) and
-  // the argent-private submodule (own repo + CI), excluded below.
+  // Every issue type knip reports is an error — that is its default severity,
+  // so this file sets no `rules`. The pre-existing unused exports/types
+  // backlog is held at its current size instead: `npm run knip` runs knip
+  // twice, once over every other class, then once over `exports,types` under
+  // `--max-issues`. That number is a ceiling, not a licence — it fails the job
+  // the moment the backlog grows, and drops as follow-up passes pay it down.
+  //
+  // Out of scope entirely: build output and dependencies (git-ignored, so knip
+  // skips them), the argent-private submodule (excluded below), and every file
+  // that is not JavaScript or TypeScript (knip's DEFAULT_EXTENSIONS).
   "$schema": "https://unpkg.com/knip@5/schema.json",
 
-  // The submodule ships from its own repo and has no package.json checked out
-  // here; treat it like eslint/prettier do and skip it entirely.
+  // Stale exemptions in this file are a failure, not a footnote: knip's
+  // configuration hints report an entry that no longer suppresses anything,
+  // and this makes them exit non-zero like any other finding.
+  "treatConfigHintsAsErrors": true,
+
+  // The submodule ships from its own repo and has its own CI. It becomes a
+  // workspace only once `git submodule update --init` puts a package.json
+  // under packages/argent-private for the root `packages/*` glob to match —
+  // this entry is what keeps it out of the gate then. eslint and prettier skip
+  // it the same way.
   "ignoreWorkspaces": ["packages/argent-private"],
 
   "workspaces": {
     // Root workspace: build/dev/release/CI scripts. Knip reaches these on its
-    // own, both from package.json's `scripts` and from `run:` steps in
-    // .github/workflows (its github-actions plugin reads them). The one
-    // exception is the Windows E2E driver: it is invoked from a multi-line
-    // PowerShell `run:` block, which that plugin does not parse — so it is
-    // declared by hand. Everything else in scripts/ stays covered by the gate.
+    // own, from package.json's `scripts` and from `run:` steps in
+    // .github/workflows — its github-actions plugin reads multi-line `run: |`
+    // blocks too, which is how scripts/next-canary-version.mjs resolves though
+    // it is invoked from nothing else. What the plugin does not parse is a
+    // PowerShell body, so the Windows E2E driver — invoked from the
+    // windows-latest job, where that is the default shell — is declared here
+    // by hand.
+    //
+    // Scope limit: only 11 of the 30 files under scripts/ are in the gate at
+    // all, because knip analyzes JS/TS and nothing else. The 15 `.sh` files,
+    // e2e-full/lib/report.py and ci/e2e-chromium-page.html are invisible to it
+    // however they are reached — that covers the whole scripts/e2e-full/
+    // harness, which nothing outside its own directory references.
     ".": {
       "entry": ["scripts/ci/windows-chromium-e2e.mjs"],
     },
@@ -65,6 +89,11 @@
     // `ignoreDependencies` works in both directions, so this one list silences
     // two different issue classes; they are kept apart below so each entry's
     // stated reason matches the finding it actually suppresses.
+    //
+    // Each entry exempts the NAME across the whole workspace, not the call
+    // site it documents: while `sharp` is listed, an undeclared import of it
+    // from any file here passes too. Knip offers nothing narrower, so the list
+    // holds only packages this workspace genuinely cannot declare.
     "packages/tool-server": {
       "ignoreDependencies": [
         // --- Declared in package.json, loaded too dynamically to detect.
@@ -90,42 +119,24 @@
         // is the Electron main-process API, supplied by the runtime that
         // executes the fixture.
         "electron",
-        // Type-only import in test/http-streaming.test.ts, reached
-        // transitively through supertest.
-        "superagent",
       ],
     },
   },
 
-  // Severity per issue type. Mirrors the ESLint rollout in eslint.config.mjs:
-  // gate hard on the high-signal, low-noise classes now, and PARK the large
-  // pre-existing backlog of unused exports/types at "warn" (reported but
-  // non-failing) to ratchet to "error" in follow-up passes.
-  "rules": {
-    // --- Enforced (fail CI) ---
-    // Blind spot in `files`: test files are entry points, so a production
-    // module that nothing but its own test imports still counts as reached.
-    // Two modules sit in it today — tools/paste (a tool definition that
-    // setup-registry.ts never registers, so it is unreachable over MCP and
-    // HTTP) and utils/ios-profiler/lifecycle.ts (a re-export shim whose last
-    // real importer is gone). `knip --production` is the lens that reports the
-    // class; the repo isn't clean under it yet (dev-only root scripts leave
-    // the entry set there), so a second production-mode pass is a follow-up.
-    "files": "error",
-    "dependencies": "error",
-    "devDependencies": "error",
-    "optionalPeerDependencies": "error",
-    "unlisted": "error",
-    "unresolved": "error",
-    "binaries": "error",
-    "duplicates": "error",
-
-    // --- Parked: pre-existing debt, out of scope for the initial rollout ---
-    "exports": "warn",
-    "types": "warn",
-    "nsExports": "warn",
-    "nsTypes": "warn",
-    "enumMembers": "warn",
-    "classMembers": "warn",
-  },
+  // Blind spot in the `files` check: test files are entry points, so a
+  // production module that nothing but its own test imports still counts as
+  // reached. What separates dead from merely test-only is whether a test
+  // exercises the module or just names it — a module whose sole reference is a
+  // catalog roll-call is unreachable in production and gets deleted. Two sit
+  // in the blind spot on the other side of that line and stay:
+  // src/tools/paste/index.ts (keyboard-secrets.test.ts drives it and asserts
+  // the `cmd: "paste"` it sends) and src/utils/ios-profiler/lifecycle.ts
+  // (ios-instruments/lifecycle.test.ts runs the shutdown ladder through it).
+  //
+  // `knip --production` is the lens that reports the whole class, and the repo
+  // is not clean under it: 13 unused files — those two, seven root scripts,
+  // packages/argent/scripts/{bundle-tools,observe,sync-readme}.cjs and
+  // packages/registry/tests/helpers.ts — with the export/type backlog rising
+  // to 227/206. So a production-mode pass is a follow-up of its own, not a
+  // flag to flip here.
 }
