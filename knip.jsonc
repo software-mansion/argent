@@ -74,8 +74,9 @@
     // all, because knip analyzes JS/TS and nothing else. The other 19 — 15
     // `.sh` files, e2e-full/lib/report.py, ci/e2e-chromium-page.html, and
     // e2e-full's README and results/.gitignore — are invisible to it however
-    // they are reached, which covers the whole scripts/e2e-full/ harness,
-    // referenced by nothing outside its own directory.
+    // they are reached, which covers the whole scripts/e2e-full/ harness —
+    // invoked from nothing outside its own directory, the only mention of it
+    // elsewhere being a .prettierignore entry.
     ".": {
       "entry": ["scripts/ci/windows-chromium-e2e.mjs"],
     },
@@ -96,10 +97,12 @@
     // relative path yields none, so even a catch-all leaves those reported.
     // `ignoreUnresolved` is the option that does silence them.)
     //
-    // Unchecked in either direction: knip does not inspect
-    // `optionalDependencies` at all, so `electron` and `node-pty` are outside
-    // the gate here, as is argent-cli's runtime `req("node-pty")`, resolved
-    // through a `createRequire(import.meta.url)` in lens-pty.ts.
+    // Half-checked: knip folds `optionalDependencies` into the declared set, so
+    // importing `electron` or `node-pty` here is not `unlisted` — they pass
+    // because it read them. What it never reports is an optionalDependency
+    // nothing uses, so that direction is outside the gate, as is argent-cli's
+    // runtime `req("node-pty")`, resolved through a
+    // `createRequire(import.meta.url)` in lens-pty.ts.
     "packages/argent": {
       "entry": ["scripts/argent-simulator-server.cjs"],
       "ignoreDependencies": [
@@ -175,8 +178,9 @@
   // ships with a test is invisible to `files` the same way, which in this repo
   // is most of them. What `files` reliably catches is a module with no test at
   // all. A file orphaned inside test/ is invisible too: root package.json's
-  // `test:scripts` runs `node --test`, which turns on knip's node plugin, and
-  // that plugin registers four entry patterns in every workspace — `**/test/**`
+  // `test:scripts` runs `node --test`, which is what makes knip's node plugin
+  // contribute its test entries, and those are four patterns in every
+  // workspace — `**/test/**`
   // plus `*{.,-,_}test`, `test-*` and `test` matched anywhere — each limited to
   // {cjs,mjs,js,cts,mts,ts}. So all 380 JS/TS files under packages/*/test/ are
   // entries, and under packages/*/tests/ every name matching one of the three
