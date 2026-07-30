@@ -27,13 +27,14 @@ jobs:
           node-version: "24"
 
       # Knip reads package.json and source only, so every install script here is
-      # pure cost to it. Six carry a native one, and each prefers a prebuilt
-      # binary over compiling: on this runner only node-pty and dtrace-provider
-      # fall through to node-gyp, both optionalDependencies whose failure npm
-      # ignores. The risk is a bump that leaves a package with no prebuild
-      # matching the runner — dependabot.yml pins tree-sitter for exactly that,
-      # a compile that breaks `npm ci` outright. Skipping the scripts takes the
-      # whole class out of a job that never runs the code.
+      # pure cost to it. Six are native: five try a prebuilt binary before
+      # compiling, and dtrace-provider always runs node-gyp but ends in
+      # `|| node suppress-error.js`. On this runner only node-pty and
+      # dtrace-provider reach a compiler at all, and both are
+      # optionalDependencies npm lets fail. What skipping the scripts really
+      # buys is immunity to a bump that leaves a package with no prebuild for
+      # the runner — the case dependabot.yml pins tree-sitter against, where the
+      # compile breaks `npm ci` outright.
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
