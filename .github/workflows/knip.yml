@@ -20,14 +20,15 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          # 24 is what the other repo-wide checks pin (lint, lockfile,
-          # repo-hygiene); knip's own floor, engines.node >=18.18.0, is well
-          # below it.
+          # 24 is what lint, lockfile and repo-hygiene pin; format and
+          # unit-tests are on 20. knip's own floor, engines.node >=18.18.0, is
+          # below either.
           node-version: "24"
 
-      # Knip reads package.json and source only, so the native postinstalls in
-      # this tree (tree-sitter, protobufjs, the http3-quiche transport, esbuild)
-      # are pure cost and a compile-failure surface it never touches.
+      # Knip reads package.json and source only, so the six packages here that
+      # compile on install — the three tree-sitter ones, the http3-quiche
+      # transport, node-pty and dtrace-provider — are pure cost and a
+      # compile-failure surface it never touches.
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
@@ -36,4 +37,13 @@ jobs:
       # enforced classes on their own and only reaches the parked exports/types
       # backlog once that pass is clean, so a failure never lands underneath it.
       - name: Knip
+        id: knip
         run: npm run knip
+
+      # A ceiling breach is the one failure knip does not announce: it exits 1
+      # with no message, under 200+ lines of parked findings that all look the
+      # same. Name the ceiling and where it lives, at the end of the log.
+      - name: Explain a ceiling failure
+        if: failure() && steps.knip.outcome == 'failure'
+        run: |
+          echo "::error::Dead Code failed. If the output above is only \"Unused exports\" / \"Unused exported types\" / \"Unused exported class members\", the second knip pass went over the --max-issues ceiling in package.json — a new unused export, exported type or class member. knip.jsonc explains why the ceiling is what it is, and why it must be counted against a tree with no build output."

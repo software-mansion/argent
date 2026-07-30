@@ -13,27 +13,28 @@
   // own `defaultExcludedIssueTypes`, so the second pass names them explicitly
   // — without that they are gated by neither pass and a new unused class
   // member costs nothing. Naming `classMembers` also turns knip's `isSkipLibs`
-  // off (create-options.js:122), which makes it search declaration files for
-  // external references and suppresses 44 export/type findings the same run
-  // reports without it: 57/181 becomes 44/150. That, not the 12 classMembers
-  // findings it adds, is why the ceiling is lower than the two counts alone
-  // would suggest.
+  // off (see `isSkipLibs` in its create-options), which suppresses 44 of the
+  // export/type findings the same run reports without it: 57/181 becomes
+  // 44/150. That, not the 12 classMembers findings it adds, is why the ceiling
+  // is lower than the two counts alone would suggest — `--include-libs` with no
+  // classMembers at all reproduces 44/150 exactly.
   //
   // The ceiling is one total across those classes, so it bounds the backlog
   // rather than each class: paying off one parked export does licence one new
   // one elsewhere in the same PR. It cannot grow, and it drops as follow-up
   // passes pay it down.
   //
-  // Count it the way CI does, in a tree with no build output. Since
-  // `isSkipLibs` is off, the generated .d.ts under a workspace's dist/ are
-  // themselves searched for those external references, so a built tree
-  // suppresses seven findings an unbuilt one reports — 199 against the 206 CI
-  // sees. `npm run knip` passing after a local `tsc --build` is therefore not
-  // evidence the job will pass; remove the dist directories before trusting a
-  // number from this ceiling.
+  // Count it the way CI does, in a tree with no build output. With
+  // `isSkipLibs` off, whether a workspace's `main`/`types` path resolves to an
+  // existing file changes the result, and not by way of anything in that file:
+  // a zero-byte packages/registry/dist/index.js is enough to take the count
+  // from 206 to 199, exactly as a real build does. So `npm run knip` passing
+  // after a local `tsc --build` is not evidence the job will pass — it has
+  // seven slots of headroom CI does not. Remove the dist directories before
+  // trusting a number from this ceiling.
   //
   // Never reported as unused: build output (git-ignored, so knip skips it as a
-  // file, even though its .d.ts move the counts above),
+  // file, though its presence moves the counts above),
   // node_modules (excluded unconditionally), the argent-private submodule
   // (excluded below), and every file that is not JavaScript or TypeScript
   // (knip's DEFAULT_EXTENSIONS) — though workflows and package manifests are
@@ -46,8 +47,10 @@
   // matches nothing or is already reached, an `ignoreWorkspaces` path that does
   // not exist. The gap is an `ignoreWorkspaces` directory that exists without a
   // package.json, which is the uninitialized submodule below: it suppresses
-  // nothing and is not hinted. Remove that directory outright, as a
-  // `git clean -ffdx` does, and the hint fires instead.
+  // nothing and is not hinted. Should that directory go missing altogether the
+  // hint does fire, advising you to drop the entry — which is the one thing not
+  // to do. Restore the directory instead. (`git clean -ffdx` will not do it:
+  // clean skips a path the index holds as a gitlink.)
   "treatConfigHintsAsErrors": true,
 
   // The submodule ships from its own repo and has its own CI. It becomes a
@@ -169,17 +172,19 @@
   // is most of them. What `files` reliably catches is a module with no test at
   // all. A file orphaned inside test/ is invisible too: root package.json's
   // `test:scripts` runs `node --test`, which turns on knip's node plugin, and
-  // that plugin registers four entry patterns in every workspace: `**/test/**`
-  // and three matching a *.test.* filename anywhere. So none of the 380 JS/TS
-  // files under packages/*/test/ can be reported, and of the 15 under
-  // packages/*/tests/ only the one that is not itself a test file can —
-  // registry/tests/helpers.ts, which is why it is the lone `tests/` entry in
-  // the --production list below.
+  // that plugin registers four entry patterns in every workspace: `**/test/**`,
+  // plus `*{.,-,_}test.<ext>`, `test-*.<ext>` and `test.<ext>` matched anywhere.
+  // So none of the 380 JS/TS files under packages/*/test/ can be reported, and
+  // under packages/*/tests/ only a name none of those three match can — of
+  // today's 15 that is registry/tests/helpers.ts alone, which is why it is the
+  // lone `tests/` entry in the --production list below. A `tests/test-utils.ts`
+  // or `tests/test.ts` would be just as invisible.
   //
   // `knip --production` is the lens that reports the whole class, and the repo
   // is not clean under it: 13 unused files — those two, seven root scripts,
   // packages/argent/scripts/{bundle-tools,observe,sync-readme}.cjs and
-  // packages/registry/tests/helpers.ts — with the export/type backlog rising
-  // to 227/206. So a production-mode pass is a follow-up of its own, not a
-  // flag to flip here.
+  // packages/registry/tests/helpers.ts — with the export/type backlog at
+  // 227/206. That run has classMembers off, so those two compare to the 57/181
+  // above, not to the ceiling's 44/150. Paying it down is a follow-up of its
+  // own.
 }
