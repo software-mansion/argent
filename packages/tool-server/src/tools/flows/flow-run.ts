@@ -513,16 +513,31 @@ interface BootedChromium {
   pid: number;
 }
 
+/**
+ * Flow name for interaction messages: the display half of resolveFlowSource
+ * (basename stem on the flow_path branch) without its validation — these
+ * messages render before validation and must still say something on a call
+ * validation is about to reject. path.basename keeps a bare ".yaml" filename
+ * intact (stripping the suffix would leave nothing), and the raw-path /
+ * placeholder fallbacks keep a pathological source from rendering as "" or
+ * "undefined".
+ */
+function displayFlowName(params: { name?: string; flow_path?: string }): string {
+  const stem =
+    params.flow_path === undefined ? undefined : path.basename(params.flow_path, ".yaml");
+  return params.name || stem || params.flow_path || "(unspecified)";
+}
+
 export function createRunFlowTool(
   registry: Registry
 ): ToolDefinition<Params, FlowRunResult | FlowPrerequisiteNotice> {
   return {
     id: "flow-execute",
     interaction: {
-      startedMsg: ({ params }) => `Running flow ${params.name}`,
-      completedMsg: ({ params }) => `Ran flow ${params.name}`,
+      startedMsg: ({ params }) => `Running flow ${displayFlowName(params)}`,
+      completedMsg: ({ params }) => `Ran flow ${displayFlowName(params)}`,
       failedMsg: ({ params, failureSignal }) =>
-        `Failed to run flow ${params.name}: ${failureSignal.error_code}`,
+        `Failed to run flow ${displayFlowName(params)}: ${failureSignal.error_code}`,
     },
     description: `Run a saved flow from the .argent/flows/ directory, or an explicit boundary-managed flow_path.
 Steps run in order: \`launch\` starts an app from scratch (terminate + relaunch) and waits until it is
