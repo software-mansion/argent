@@ -981,8 +981,11 @@ async function resolveAppPath(specPath: string, flowDir: string): Promise<string
 
 /**
  * Boot the Electron app a chromium launch declares. Boot failures propagate
- * as-is — the Chromium analog of `resolveFlowDevice` throwing on no booted
- * device.
+ * as-is, and the two callers surface them differently: from the
+ * {@link resolveRunDevice} hoist the tool call rejects with no report (the
+ * Chromium analog of `resolveFlowDevice` throwing on no booted device), while
+ * {@link bootChromiumForLaunch} catches and reports a step error inside the
+ * run.
  */
 async function bootChromiumForFlow(
   spec: { path: string; args?: string[] },
