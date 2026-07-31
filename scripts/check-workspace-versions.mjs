@@ -155,7 +155,10 @@ function main() {
     } catch {
       continue; // directory without a package.json
     }
-    if (!manifest.version) continue;
+    // `?.` because JSON.parse succeeds on a file holding `null`, which the catch
+    // above never sees — the same shape readTrackedJson rejects for the two
+    // manifests it reads.
+    if (!manifest?.version) continue;
     const names = byVersion.get(manifest.version) ?? [];
     names.push(manifest.name ?? entry.name);
     byVersion.set(manifest.version, names);
