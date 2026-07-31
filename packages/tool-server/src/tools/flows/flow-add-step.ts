@@ -281,8 +281,6 @@ If a step was recorded by mistake, edit the .yaml file directly to remove it.`,
       const flowName = getActiveFlow();
       const args: Record<string, unknown> = params.args ? JSON.parse(params.args) : {};
 
-      // Read the session before the sub-invoke: a nested flow-execute leaves it
-      // untouched but mutates the active-project-root global this resolves against.
       const session = getRecordingSession();
       // A nested flow-execute must never carry a raw flow_path into the live
       // invoke — it has no boundary metadata there and would be rejected.
