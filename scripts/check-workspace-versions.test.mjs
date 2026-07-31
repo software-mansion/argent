@@ -3,11 +3,29 @@
  * and the npm coordinates it names have to match the workspace, and the ownership
  * proof (mcpName on the published tarball) has to be present on both sides.
  *
+ * Two layers, because the pure function is not what CI runs: unit tests over
+ * serverJsonMismatches(), then spawned runs of the real script against a
+ * miniature repo, which are the only thing that pins main() — its exit codes,
+ * its output and the guard deciding whether it runs at all.
+ *
  * Run: node --test scripts/check-workspace-versions.test.mjs
  */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { serverJsonMismatches } from "./check-workspace-versions.mjs";
 
@@ -30,14 +48,15 @@ test("an in-sync pair reports nothing", () => {
   assert.deepEqual(serverJsonMismatches(VERSION, ARGENT_PKG, SERVER), []);
 });
 
-test("server.json version drifting from the workspace is caught", () => {
+test("server.json version drifting from the workspace names both versions", () => {
   const problems = serverJsonMismatches(
     VERSION,
     ARGENT_PKG,
     server((s) => (s.version = "0.17.0"))
   );
-  assert.equal(problems.length, 1);
-  assert.match(problems[0], /server\.json version is 0\.17\.0, workspace is 0\.18\.0/);
+  assert.deepEqual(problems, [
+    "server.json version is 0.17.0, packages/argent/package.json is 0.18.0",
+  ]);
 });
 
 test("a packages[] version npm has never seen is caught", () => {
@@ -48,6 +67,21 @@ test("a packages[] version npm has never seen is caught", () => {
   );
   assert.equal(problems.length, 1);
   assert.match(problems[0], /packages\[0\]\.version is 9\.9\.9/);
+});
+
+// Only packages[0] exists today, so nothing else here would notice a check that
+// silently stopped after the first entry — which becomes live the moment a
+// second distribution channel is added.
+test("every packages[] entry is validated, not just the first", () => {
+  const problems = serverJsonMismatches(
+    VERSION,
+    ARGENT_PKG,
+    server((s) => s.packages.push({ identifier: "@attacker/pkg", version: "6.6.6" }))
+  );
+  assert.deepEqual(problems, [
+    "server.json packages[1].version is 6.6.6, packages/argent/package.json is 0.18.0",
+    "server.json packages[1].identifier (@attacker/pkg) != published package name (@swmansion/argent)",
+  ]);
 });
 
 test("a packages[] identifier that is not the published package is caught", () => {
@@ -88,11 +122,21 @@ test("dropping mcpName and the server.json name together is still caught", () =>
   assert.match(problems[0], /has no mcpName/);
 });
 
-test("a server.json with no packages at all is caught", () => {
-  for (const emptied of [server((s) => delete s.packages), server((s) => (s.packages = []))]) {
+// The object form is what a hand-edit that drops the brackets produces; it used
+// to escape as a `packages.entries is not a function` TypeError.
+test("a server.json with no usable packages array is caught", () => {
+  const unusable = [
+    server((s) => delete s.packages),
+    server((s) => (s.packages = [])),
+    server(
+      (s) =>
+        (s.packages = /** @type {any} */ ({ identifier: "@swmansion/argent", version: VERSION }))
+    ),
+  ];
+  for (const emptied of unusable) {
     const problems = serverJsonMismatches(VERSION, ARGENT_PKG, emptied);
     assert.equal(problems.length, 1);
-    assert.match(problems[0], /lists no packages/);
+    assert.match(problems[0], /no packages array/);
   }
 });
 
@@ -108,4 +152,126 @@ test("every problem is reported at once, not just the first", () => {
     })
   );
   assert.equal(problems.length, 4);
+});
+
+// --- the real script, spawned -----------------------------------------------
+// main() is what repo-hygiene.yml runs and none of the above touches it, so a
+// fail-open edit there (an exit(0) on the failure path, a guard that skips
+// main() altogether) would pass every other check in the repo. These run the
+// script for real against a throwaway repo and assert on exit codes.
+
+const SCRIPT_PATH = fileURLToPath(new URL("./check-workspace-versions.mjs", import.meta.url));
+
+/**
+ * A miniature repo: a copy of the real script, two packages/* manifests and a
+ * server.json. Realpath'd so the tests below isolate the behaviour they name —
+ * macOS's own tmpdir is behind a /var -> /private/var symlink, which the
+ * symlink test then reintroduces deliberately.
+ * @param {import("node:test").TestContext} t
+ * @param {{ argentVersion?: string, otherVersion?: string, serverJson?: unknown }} [options]
+ *   serverJson: an object to write as JSON, a string to write verbatim, or null
+ *   to leave the file out entirely.
+ * @returns {string} the repo root
+ */
+function fixtureRepo(t, { argentVersion = VERSION, otherVersion = VERSION, serverJson } = {}) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "check-workspace-versions-")));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  mkdirSync(join(root, "scripts"));
+  mkdirSync(join(root, "packages", "argent"), { recursive: true });
+  mkdirSync(join(root, "packages", "registry"), { recursive: true });
+  copyFileSync(SCRIPT_PATH, join(root, "scripts", "check-workspace-versions.mjs"));
+
+  const write = (/** @type {string} */ path, /** @type {unknown} */ value) =>
+    writeFileSync(path, typeof value === "string" ? value : JSON.stringify(value, null, 2));
+
+  write(join(root, "packages", "argent", "package.json"), {
+    ...ARGENT_PKG,
+    version: argentVersion,
+  });
+  write(join(root, "packages", "registry", "package.json"), {
+    name: "@argent/registry",
+    version: otherVersion,
+  });
+  if (serverJson !== null) write(join(root, "server.json"), serverJson ?? SERVER);
+
+  return root;
+}
+
+/** @param {string} root the path to invoke through, which need not be the real one */
+function runScript(root) {
+  return spawnSync(process.execPath, [join(root, "scripts", "check-workspace-versions.mjs")], {
+    encoding: "utf8",
+  });
+}
+
+/** @param {string} stderr */
+function assertNoStackTrace(stderr) {
+  assert.doesNotMatch(stderr, /^\s+at /m, `expected guidance, got a stack trace:\n${stderr}`);
+}
+
+test("[script] an in-sync repo passes quietly", (t) => {
+  const result = runScript(fixtureRepo(t));
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.match(result.stdout, /All workspace packages and server\.json are at 0\.18\.0\./);
+});
+
+test("[script] server.json drift alone exits 1", (t) => {
+  const root = fixtureRepo(t, {
+    serverJson: server((s) => {
+      s.version = "0.17.0";
+      s.packages[0].version = "0.17.0";
+    }),
+  });
+  const result = runScript(root);
+  assert.equal(result.status, 1, `expected a failure, got:\n${result.stdout}${result.stderr}`);
+  assert.match(result.stderr, /server\.json version is 0\.17\.0/);
+  assert.match(result.stderr, /server\.json packages\[0\]\.version is 0\.17\.0/);
+});
+
+test("[script] a half-finished bump reports packages/* and server.json in one run", (t) => {
+  const root = fixtureRepo(t, {
+    otherVersion: "0.17.0",
+    serverJson: server((s) => {
+      s.version = "0.17.0";
+      s.packages[0].version = "0.17.0";
+    }),
+  });
+  const result = runScript(root);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Workspace package versions are out of sync/);
+  assert.match(result.stderr, /@argent\/registry/);
+  assert.match(result.stderr, /server\.json version is 0\.17\.0/);
+});
+
+// node realpaths the main module before setting import.meta.url but leaves
+// process.argv[1] as typed, so a self-invocation guard comparing them raw skips
+// main() here and exits 0 with no output — a drifted repo indistinguishable
+// from a clean one.
+test("[script] a run through a symlinked path still catches drift", (t) => {
+  const root = fixtureRepo(t, { serverJson: server((s) => (s.version = "0.17.0")) });
+  const aliasParent = realpathSync(mkdtempSync(join(tmpdir(), "check-workspace-versions-alias-")));
+  t.after(() => rmSync(aliasParent, { recursive: true, force: true }));
+  const alias = join(aliasParent, "repo");
+  symlinkSync(root, alias, "dir");
+
+  const result = runScript(alias);
+  assert.equal(result.status, 1, `expected a failure, got:\n${result.stdout}${result.stderr}`);
+  assert.match(result.stderr, /server\.json version is 0\.17\.0/);
+});
+
+test("[script] a missing server.json fails on-message", (t) => {
+  const result = runScript(fixtureRepo(t, { serverJson: null }));
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Cannot read server\.json: /);
+  assert.match(result.stderr, /git checkout -- server\.json/);
+  assertNoStackTrace(result.stderr);
+});
+
+test("[script] a malformed server.json fails on-message", (t) => {
+  const result = runScript(fixtureRepo(t, { serverJson: "{ not json" }));
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /server\.json is not valid JSON: /);
+  assertNoStackTrace(result.stderr);
 });

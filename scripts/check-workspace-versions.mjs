@@ -3,34 +3,39 @@
 // version. Keeps the monorepo's lockstep versioning from silently drifting when
 // a release bump misses a package.
 //
-// The root server.json (the MCP registry manifest) is held to that same version
-// and to the npm coordinates in packages/argent/package.json. It is checked here
-// because it is the one such file outside packages/*, so a bump that sweeps the
-// workspace leaves it behind — and the registry then rejects the publish, either
-// because `packages[].version` names a version npm has never seen or because
-// `name` doesn't match the tarball's `mcpName`.
-import { readFileSync, readdirSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+// The root server.json (the MCP registry manifest) is held to the version and
+// the npm coordinates in packages/argent/package.json, the package it points at.
+// It is checked here because it is the one such file outside packages/*, so a
+// bump that sweeps the workspace leaves it behind — and the registry then
+// rejects the publish, either because `packages[].version` names a version npm
+// has never seen or because `name` doesn't match the tarball's `mcpName`.
+import { readFileSync, readdirSync, realpathSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { argv as processArgv } from "node:process";
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+const selfPath = realpathSync(fileURLToPath(import.meta.url));
+const repoRoot = join(dirname(selfPath), "..");
 const packagesDir = join(repoRoot, "packages");
+const argentManifestPath = join(packagesDir, "argent", "package.json");
+const serverJsonPath = join(repoRoot, "server.json");
 
 /**
- * Everything server.json has to keep in step with the workspace, as one
- * human-readable line per problem. Pure, separated from the fs reads so it can
- * be unit-tested.
- * @param {string | undefined} workspaceVersion the single version every packages/* manifest carries
+ * Everything server.json has to keep in step with the npm package it points at,
+ * as one human-readable line per problem. Pure, separated from the fs reads so
+ * it can be unit-tested.
+ * @param {string | undefined} publishedVersion the version packages/argent/package.json carries
  * @param {{ name?: string, mcpName?: string }} argentPkg packages/argent/package.json
  * @param {{ name?: string, version?: string, packages?: { identifier?: string, version?: string }[] }} server server.json
  * @returns {string[]} empty when in sync
  */
-export function serverJsonMismatches(workspaceVersion, argentPkg, server) {
+export function serverJsonMismatches(publishedVersion, argentPkg, server) {
   const mismatches = [];
 
-  if (server.version !== workspaceVersion) {
-    mismatches.push(`server.json version is ${server.version}, workspace is ${workspaceVersion}`);
+  if (server.version !== publishedVersion) {
+    mismatches.push(
+      `server.json version is ${server.version}, packages/argent/package.json is ${publishedVersion}`
+    );
   }
 
   // mcpName on the published npm tarball is what proves to the registry that the
@@ -46,16 +51,20 @@ export function serverJsonMismatches(workspaceVersion, argentPkg, server) {
     );
   }
 
-  const packages = server.packages ?? [];
-  if (packages.length === 0) {
+  // Absent, empty and non-array all leave the registry entry naming nothing to
+  // install, so they get one message rather than a TypeError out of the loop.
+  const packages = server.packages;
+  if (!Array.isArray(packages) || packages.length === 0) {
     mismatches.push(
-      "server.json lists no packages — the registry entry would name nothing to install"
+      "server.json has no packages array — the registry entry would name nothing to install"
     );
+    return mismatches;
   }
+
   for (const [i, pkg] of packages.entries()) {
-    if (pkg.version !== workspaceVersion) {
+    if (pkg.version !== publishedVersion) {
       mismatches.push(
-        `server.json packages[${i}].version is ${pkg.version}, workspace is ${workspaceVersion}`
+        `server.json packages[${i}].version is ${pkg.version}, packages/argent/package.json is ${publishedVersion}`
       );
     }
     if (pkg.identifier !== argentPkg.name) {
@@ -66,6 +75,32 @@ export function serverJsonMismatches(workspaceVersion, argentPkg, server) {
   }
 
   return mismatches;
+}
+
+/**
+ * Reads a tracked JSON file, reporting a missing or malformed one as a sentence
+ * instead of a raw stack trace. Both only happen by hand-corrupting a file git
+ * tracks, and the fix is the same either way.
+ * @param {string} path
+ * @returns {any}
+ */
+function readTrackedJson(path) {
+  const shown = relative(repoRoot, path);
+  let raw;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch (error) {
+    console.error(`Cannot read ${shown}: ${error.message}`);
+    console.error(`\nIt is tracked in git — restore it with \`git checkout -- ${shown}\`.`);
+    process.exit(1);
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    console.error(`${shown} is not valid JSON: ${error.message}`);
+    console.error(`\nIt is tracked in git — restore it with \`git checkout -- ${shown}\`.`);
+    process.exit(1);
+  }
 }
 
 function main() {
@@ -84,39 +119,47 @@ function main() {
     byVersion.set(manifest.version, names);
   }
 
+  // An empty packages/ never gets past this read, so the version below is always
+  // a real one.
+  const argentPkg = readTrackedJson(argentManifestPath);
+  const server = readTrackedJson(serverJsonPath);
+
+  let failed = false;
+
   if (byVersion.size > 1) {
     console.error("Workspace package versions are out of sync:");
     for (const [version, names] of [...byVersion].sort()) {
       console.error(`  ${version}: ${names.sort().join(", ")}`);
     }
     console.error(
-      "\nEvery package under packages/* must share one version. Bump the outliers to match."
+      "\nEvery package under packages/* must share one version. Bump the outliers to match.\n"
     );
-    process.exit(1);
+    failed = true;
   }
 
-  const [workspaceVersion] = byVersion.keys();
-
-  const argentPkg = JSON.parse(readFileSync(join(packagesDir, "argent", "package.json"), "utf8"));
-  const server = JSON.parse(readFileSync(join(repoRoot, "server.json"), "utf8"));
-
-  const mismatches = serverJsonMismatches(workspaceVersion, argentPkg, server);
+  // server.json names the npm coordinates of packages/argent, so that manifest
+  // is what it has to agree with. Reported even when packages/* disagree, so a
+  // half-finished bump surfaces every remaining edit in one run.
+  const mismatches = serverJsonMismatches(argentPkg.version, argentPkg, server);
   if (mismatches.length > 0) {
-    console.error("server.json is out of sync with the workspace:");
+    console.error("server.json is out of sync with packages/argent/package.json:");
     for (const line of mismatches) console.error(`  ${line}`);
     console.error(
       "\nserver.json is not under packages/*, so a workspace bump leaves it behind — edit it\n" +
         "by hand to match packages/argent/package.json."
     );
-    process.exit(1);
+    failed = true;
   }
 
-  // An empty packages/ can't reach here: reading packages/argent/package.json above
-  // throws first, so workspaceVersion is always a real version by this point.
-  console.log(`All workspace packages and server.json are at ${workspaceVersion}.`);
+  if (failed) process.exit(1);
+
+  console.log(`All workspace packages and server.json are at ${argentPkg.version}.`);
 }
 
-// Run only when invoked directly, not when imported by the test.
-if (processArgv[1] && import.meta.url === pathToFileURL(processArgv[1]).href) {
+// Run only when invoked directly, not when imported by the test. Both sides are
+// realpath'd: node realpaths the main module before setting import.meta.url but
+// leaves process.argv[1] as typed, so comparing them raw makes a path through a
+// symlink skip main() and exit 0 with no output — a silent pass.
+if (processArgv[1] && realpathSync(processArgv[1]) === selfPath) {
   main();
 }
