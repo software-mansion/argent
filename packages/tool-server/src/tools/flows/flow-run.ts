@@ -503,8 +503,8 @@ async function bootChromiumForLaunch(state: ExecState, app: Launch): Promise<Dir
   } catch (err) {
     // The one boot failure the underlying error can't explain.
     const foreign =
-      retiring === -1 && !ownedInstance(state)
-        ? ` An instance this run does not own is running on ${device.id}; if it is this same app, its single-instance lock would refuse a second copy.`
+      retiring === -1 && state.attachedDeviceId !== undefined
+        ? ` An instance this run does not own is running on ${state.attachedDeviceId}; if it is this same app, its single-instance lock would refuse a second copy.`
         : "";
     return { ok: false, reason: `could not boot the chromium app: ${errMsg(err)}${foreign}` };
   }
@@ -570,6 +570,12 @@ interface ExecState extends Omit<ActionEnv, "device"> {
   owned: BootedChromium[];
   /** True once a chromium `launch` step has run; every later one boots its own instance. */
   chromiumLaunched: boolean;
+  /**
+   * The un-owned chromium instance the run started attached to, if any — the
+   * one instance the runner never kills, so it stands as the single-instance
+   * lock suspect for every later boot failure, even after the run moves on.
+   */
+  attachedDeviceId?: string;
   /** Live progress hook: receives every report the moment it is appended. */
   onStepReport?: (report: StepReport) => void;
 }
@@ -786,6 +792,9 @@ returns a notice with the prerequisite instead of running.`,
         pinned: statusBarPinned,
         owned: resolved.booted ? [resolved.booted] : [],
         chromiumLaunched: false,
+        ...(!resolved.booted && device?.platform === "chromium"
+          ? { attachedDeviceId: device.id }
+          : {}),
         ...(ctx?.emitProgress ? { onStepReport: ctx.emitProgress } : {}),
       };
 

@@ -732,6 +732,68 @@ describe("flow-execute chromium boot", () => {
     expect(killChromiumByPort).not.toHaveBeenCalled();
   });
 
+  it("still names the foreign instance after the run has moved onto one it owns", async () => {
+    // The foreign instance outlives every launch (the runner never kills it), so
+    // the hint must name IT — not the owned instance the run currently sits on.
+    const flowFile = await writeFlow(
+      "steps:\n  - launch: { chromium: ./app-lock }\n  - launch: { chromium: ./app-b }\n  - launch: { chromium: ./app-lock }\n"
+    );
+    const registry = makeRegistry();
+    (registry.resolveService as any).mockImplementation(async () => ({
+      refreshViewport: vi.fn(async () => ({ width: 800, height: 600 })),
+      cdp: { send: vi.fn(async () => ({})) },
+    }));
+    // app-b's boot succeeds (moving the run onto an owned instance); app-lock's fails.
+    bootElectronApp.mockImplementationOnce(defaultBoot).mockImplementationOnce(async () => {
+      throw new Error("CDP never became reachable on port 12346");
+    });
+
+    const result = await runFlow(registry, {
+      name: "locked-after-move",
+      project_root: PROJECT_ROOT,
+      flow_file: flowFile,
+      device: "chromium-cdp-9999",
+    });
+
+    expect(result.ok).toBe(false);
+    const failed = result.steps[2];
+    expect(failed).toMatchObject({ kind: "launch", status: "error" });
+    expect(failed.reason).toContain("CDP never became reachable");
+    expect(failed.reason).toMatch(/single-instance lock/i);
+    expect(failed.reason).toContain("chromium-cdp-9999");
+    expect(failed.reason).not.toContain("chromium-cdp-12345");
+    // Only the instance the runner booted for app-b is torn down.
+    expect(killChromiumByPort.mock.calls).toEqual([[12345, 4242]]);
+  });
+
+  it("does not blame a foreign instance when the run never attached to one", async () => {
+    // Hoisted boot: the run starts on an instance it owns, so a later boot
+    // failure has no un-owned lock-holder candidate to name.
+    const flowFile = await writeFlow(
+      "steps:\n  - launch: { chromium: ./app-a }\n  - launch: { chromium: ./app-b }\n"
+    );
+    const registry = makeRegistry();
+    // The hoisted boot succeeds; app-b's fails.
+    bootElectronApp.mockImplementationOnce(defaultBoot).mockImplementationOnce(async () => {
+      throw new Error("CDP never became reachable on port 12346");
+    });
+
+    const result = await runFlow(registry, {
+      name: "owned-only",
+      project_root: PROJECT_ROOT,
+      flow_file: flowFile,
+    });
+
+    expect(result.ok).toBe(false);
+    const failed = result.steps[1];
+    expect(failed).toMatchObject({ kind: "launch", status: "error" });
+    expect(failed.reason).toContain("could not boot the chromium app");
+    expect(failed.reason).toContain("CDP never became reachable");
+    expect(failed.reason).not.toContain("An instance this run does not own");
+    // The hoisted instance is still reclaimed at run end.
+    expect(killChromiumByPort.mock.calls).toEqual([[12345, 4242]]);
+  });
+
   it("still honors the first launch when a fragment run:s an e2e flow (the common composition)", async () => {
     // Fragment B (no leading launch) that run:s e2e flow A (launch + setup).
     // A's launch is the run's FIRST, so it attaches to the pinned instance
