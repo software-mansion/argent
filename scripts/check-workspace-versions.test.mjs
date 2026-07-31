@@ -140,6 +140,20 @@ test("a server.json with no usable packages array is caught", () => {
   }
 });
 
+// The name half of the same shape: with neither side naming a package, the
+// identifier comparison is undefined === undefined and server.json passes while
+// pointing at nothing installable.
+test("a packages/argent manifest with no name is caught", () => {
+  const problems = serverJsonMismatches(
+    VERSION,
+    { mcpName: ARGENT_PKG.mcpName },
+    server((s) => delete s.packages[0].identifier)
+  );
+  assert.deepEqual(problems, [
+    "packages/argent/package.json has no name — server.json's identifier has nothing to point at",
+  ]);
+});
+
 // packages/argent/package.json is the sole source of the version everything else
 // is compared against, so losing it turns every comparison below into
 // undefined === undefined and the whole check passes vacuously.

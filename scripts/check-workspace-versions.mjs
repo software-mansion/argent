@@ -58,6 +58,15 @@ export function serverJsonMismatches(publishedVersion, argentPkg, server) {
     );
   }
 
+  // Every packages[].identifier below is compared against this name, so without
+  // it those comparisons pass on undefined === undefined and server.json is free
+  // to name no installable package at all.
+  if (!argentPkg.name) {
+    mismatches.push(
+      "packages/argent/package.json has no name — server.json's identifier has nothing to point at"
+    );
+  }
+
   // Absent, empty and non-array all leave the registry entry naming nothing to
   // install, so they get one message rather than a TypeError out of the loop.
   const packages = server.packages;
