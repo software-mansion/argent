@@ -3,11 +3,12 @@
 // version. Keeps the monorepo's lockstep versioning from silently drifting when
 // a release bump misses a package.
 //
-// The root server.json (the MCP registry manifest) is held to the same version
-// and cross-checked against packages/argent/package.json. It lives outside
-// packages/*, so a release bump does not touch it; the registry rejects a
-// publish whose `packages[].version` names a version npm has never seen, and
-// rejects one whose `name` doesn't match the npm package's `mcpName`.
+// The root server.json (the MCP registry manifest) is held to that same version
+// and to the npm coordinates in packages/argent/package.json. It is checked here
+// because it is the one such file outside packages/*, so a bump that sweeps the
+// workspace leaves it behind — and the registry then rejects the publish, either
+// because `packages[].version` names a version npm has never seen or because
+// `name` doesn't match the tarball's `mcpName`.
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -104,8 +105,8 @@ function main() {
     console.error("server.json is out of sync with the workspace:");
     for (const line of mismatches) console.error(`  ${line}`);
     console.error(
-      "\nserver.json is not under packages/*, so a release bump misses it — keep it in step\n" +
-        "with packages/argent/package.json by hand."
+      "\nserver.json is not under packages/*, so a workspace bump leaves it behind — edit it\n" +
+        "by hand to match packages/argent/package.json."
     );
     process.exit(1);
   }
