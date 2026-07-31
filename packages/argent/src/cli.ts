@@ -79,7 +79,7 @@ argent v${version}
 Usage: argent <command> [options]
 
 Commands:
-  mcp         Start the MCP stdio server (used by editors)
+  mcp         ${installerHelpEntry("mcp")}
   init        ${installerHelpEntry("init")}
   install     ${installerHelpEntry("install")}
   update      ${installerHelpEntry("update")}
@@ -122,11 +122,12 @@ async function loadCli(): Promise<typeof Cli> {
 }
 
 async function main(): Promise<void> {
-  // The installer subcommands (init / install / update / uninstall / remove)
-  // forward their argv straight to the side-effecting installer functions,
-  // which do not short-circuit on `--help` — so `argent uninstall --help`
-  // would run the real (destructive) command. Intercept help for exactly that
-  // set before dispatching. All other subcommands handle `--help` themselves.
+  // Some subcommands never look at their own argv: the installers forward it
+  // to side-effecting functions that ignore `--help` (so `argent uninstall
+  // --help` would run the real, destructive command), and `mcp` is handed no
+  // argv at all, so a help flag there starts the stdio server and blocks
+  // reading JSON-RPC from stdin. Intercept help for that set before
+  // dispatching. Every other subcommand parses `--help` itself.
   if (installerHelpRequested(command, rest)) {
     // installerHelpRequested only returns true for an InstallerCommand.
     printInstallerHelp(command as Parameters<typeof printInstallerHelp>[0]);
