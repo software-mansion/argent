@@ -298,6 +298,21 @@ describe("flow-execute flow_path over HTTP", () => {
     expect(steps.invokeTool).not.toHaveBeenCalled();
   });
 
+  it("diagnoses a source-less call with the exactly-one rule at the validation layer", async () => {
+    // The other half of exactly-one: no name and no flow_path. Nothing on the
+    // wire is a wrapper, so file-input resolution passes through untouched and
+    // the schema's superRefine is the only guard left before execute — it must
+    // classify the miss as a 400 validation failure, not fall through to
+    // resolveFlowSource's in-tool copy and surface as a 500 tool error.
+    const res = await supertest(handle.app)
+      .post("/tools/flow-execute")
+      .send({ project_root: projectRoot, device: DEVICE });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Pass exactly one flow source: name or flow_path\./);
+    expect(steps.invokeTool).not.toHaveBeenCalled();
+  });
+
   it("accepts the legitimate wrapper carrying the file's real stat and runs the flow", async () => {
     const st = await fs.stat(flowPath);
     const res = await supertest(handle.app)
