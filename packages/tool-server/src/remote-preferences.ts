@@ -1,29 +1,51 @@
 import type { RequestHandler } from "express";
 import {
   RemotePreferencesValidationError,
-  applyRemotePreferenceFlags,
+  activateRemotePreferences,
+  clearRemotePreferences,
   parseRemotePreferencesSnapshot,
+  resolveRemotePreferences,
 } from "@argent/configuration-core";
-import { markDisabled as disableTelemetry } from "@argent/telemetry";
+import { clearSessionTelemetryOptOut, disableForSession } from "@argent/telemetry";
+
+let remotePreferencesActive = false;
+
+export interface RemotePreferencesSyncRouteOptions {
+  onActivity?: () => void;
+  disableTelemetry?: () => Promise<boolean>;
+}
 
 /**
  * Authenticated administrative route used by `argent link`. It is deliberately
  * separate from the MCP tool registry so an agent cannot mutate server policy.
  */
-export function makeRemotePreferencesSyncRoute(onActivity?: () => void): RequestHandler {
+export function makeRemotePreferencesSyncRoute(
+  options: RemotePreferencesSyncRouteOptions = {}
+): RequestHandler {
   return async (req, res) => {
-    onActivity?.();
+    options.onActivity?.();
     try {
       const snapshot = parseRemotePreferencesSnapshot(req.body);
-      const { appliedFlags, ignoredFlags } = applyRemotePreferenceFlags(snapshot);
-      const telemetryDisabled = snapshot.telemetry?.enabled === false;
-      if (telemetryDisabled) {
-        await disableTelemetry();
+      const resolved = resolveRemotePreferences(snapshot);
+      const telemetryRequested = resolved.configOverrides["telemetry.enabled"] === false;
+      let telemetryDisabled = false;
+      if (telemetryRequested) {
+        telemetryDisabled = await (options.disableTelemetry ?? disableForSession)();
+        if (!telemetryDisabled) {
+          throw new Error("Telemetry session opt-out did not take effect.");
+        }
       }
+
+      // Activate only after all validation and the privacy-sensitive side
+      // effect have succeeded, so a failed request cannot leave partial flags.
+      activateRemotePreferences(resolved);
+      remotePreferencesActive = true;
       res.json({
         version: snapshot.version,
-        appliedFlags,
-        ignoredFlags,
+        appliedFlags: resolved.appliedFlags,
+        ignoredFlags: resolved.ignoredFlags,
+        appliedConfig: resolved.appliedConfig,
+        ignoredConfig: resolved.ignoredConfig,
         telemetryDisabled,
       });
     } catch (error) {
@@ -36,4 +58,12 @@ export function makeRemotePreferencesSyncRoute(onActivity?: () => void): Request
       });
     }
   };
+}
+
+/** Release every process-scoped preference installed through the sync route. */
+export function clearRemotePreferencesForSession(): void {
+  if (!remotePreferencesActive) return;
+  clearRemotePreferences();
+  clearSessionTelemetryOptOut();
+  remotePreferencesActive = false;
 }

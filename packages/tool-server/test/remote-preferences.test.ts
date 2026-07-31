@@ -2,10 +2,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import express from "express";
 import supertest from "supertest";
-import { readConfigObject, readFlags } from "@argent/configuration-core";
+import {
+  getConfigValueByKey,
+  isFeatureEnabled,
+  readConfigObject,
+  readFlags,
+  setFlag,
+} from "@argent/configuration-core";
+import { isEnabled as isTelemetryEnabled } from "@argent/telemetry";
 import type { Registry } from "@argent/registry";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
+import {
+  clearRemotePreferencesForSession,
+  makeRemotePreferencesSyncRoute,
+} from "../src/remote-preferences";
 
 // This test exercises the top-level auth boundary, but not the unauthenticated
 // preview UI. Keeping that subtree out of the module graph also keeps the test
@@ -50,6 +62,7 @@ beforeEach(() => {
 
 afterEach(() => {
   handle.dispose();
+  clearRemotePreferencesForSession();
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
   if (originalToken === undefined) delete process.env.ARGENT_AUTH_TOKEN;
@@ -65,7 +78,8 @@ describe("PUT /preferences/sync", () => {
     expect(response.status).toBe(401);
   });
 
-  it("applies portable flags and the telemetry opt-out on the server host", async () => {
+  it("overlays portable values for the process without rewriting server files", async () => {
+    setFlag("video-watermark", true, "global", { homeDir: tmpHome });
     const response = await supertest(handle.app)
       .put("/preferences/sync")
       .set("Authorization", `Bearer ${TOKEN}`)
@@ -76,7 +90,7 @@ describe("PUT /preferences/sync", () => {
           "disable-auto-screenshot": true,
           "unknown": true,
         },
-        telemetry: { enabled: false },
+        config: { "telemetry.enabled": false, "future.value": "ignored" },
       });
 
     expect(response.status).toBe(200);
@@ -84,21 +98,47 @@ describe("PUT /preferences/sync", () => {
       version: 1,
       appliedFlags: ["video-watermark"],
       ignoredFlags: ["disable-auto-screenshot", "unknown"],
+      appliedConfig: ["telemetry.enabled"],
+      ignoredConfig: ["future.value"],
       telemetryDisabled: true,
     });
     expect(readFlags("global", { homeDir: tmpHome })).toEqual({
-      "video-watermark": false,
+      "video-watermark": true,
     });
-    expect(readConfigObject()).toMatchObject({ telemetry: { enabled: false } });
+    expect(readConfigObject()).toEqual({});
+    expect(isFeatureEnabled("video-watermark")).toBe(false);
+    expect(getConfigValueByKey("telemetry.enabled")).toBe(false);
+    expect(isTelemetryEnabled()).toBe(false);
   });
 
   it("rejects arbitrary preference values", async () => {
     const response = await supertest(handle.app)
       .put("/preferences/sync")
       .set("Authorization", `Bearer ${TOKEN}`)
-      .send({ version: 1, flags: {}, telemetry: { enabled: true } });
+      .send({ version: 1, flags: {}, config: { "telemetry.enabled": true } });
 
     expect(response.status).toBe(400);
     expect(response.body.error).toMatch(/may only be false/);
+  });
+
+  it("does not activate any overlay when telemetry opt-out cannot be confirmed", async () => {
+    const app = express();
+    app.use(express.json());
+    app.put(
+      "/",
+      makeRemotePreferencesSyncRoute({ disableTelemetry: vi.fn().mockResolvedValue(false) })
+    );
+
+    const response = await supertest(app)
+      .put("/")
+      .send({
+        version: 1,
+        flags: { "video-watermark": false },
+        config: { "telemetry.enabled": false },
+      });
+
+    expect(response.status).toBe(500);
+    expect(response.body.error).toMatch(/did not take effect/);
+    expect(isFeatureEnabled("video-watermark")).toBe(true);
   });
 });

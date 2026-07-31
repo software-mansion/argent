@@ -34,6 +34,11 @@ const cache: { current: CachedConfig | null } = { current: null };
 // override — fall through to the env / config / default precedence below".
 let sessionOverride: boolean | null = null;
 
+// A remote linked client may extend an opt-out to this server process. Keep it
+// separate from the first-run choice above so lifecycle cleanup cannot erase a
+// different caller's session decision, and make it strictly disable-only.
+let sessionOptOut = false;
+
 function readConfigOverride(): boolean | null {
   let stats: fs.Stats;
   try {
@@ -117,6 +122,13 @@ export function getConsentState(env: NodeJS.ProcessEnv = process.env): ConsentSt
     };
   }
 
+  if (sessionOptOut) {
+    return {
+      enabled: false,
+      source: { source: "session_override", detail: "linked_client" },
+    };
+  }
+
   // An in-process first-run choice that hasn't been committed to disk yet. It
   // loses to an explicit environment opt-out (handled above) but beats the
   // config file and the default, so a pending "Disabled" pick suppresses this
@@ -166,8 +178,14 @@ export function setSessionConsentOverride(enabled: boolean | null): void {
   sessionOverride = enabled;
 }
 
+/** Set or clear the process-only, disable-only consent layer. */
+export function setSessionTelemetryOptOut(disabled: boolean): void {
+  sessionOptOut = disabled;
+}
+
 /** Test seam: blow away the in-memory mtime cache and any session override. */
 export function _resetConsentCacheForTest(): void {
   cache.current = null;
   sessionOverride = null;
+  sessionOptOut = false;
 }

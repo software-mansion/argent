@@ -19,9 +19,12 @@ export {
   RemotePreferencesValidationError,
   buildRemotePreferencesSnapshot,
   parseRemotePreferencesSnapshot,
-  applyRemotePreferenceFlags,
+  resolveRemotePreferences,
+  activateRemotePreferences,
+  clearRemotePreferences,
   type RemotePreferencesSnapshot,
-  type AppliedRemotePreferences,
+  type ResolvedRemotePreferences,
+  type RemotePreferencesBuildOptions,
 } from "./remote-preferences.js";
 
 export {

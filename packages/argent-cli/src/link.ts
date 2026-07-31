@@ -187,8 +187,8 @@ Flags:
                     supplied inside the argent:// string instead.
   --no-verify       Skip the pre-flight GET /tools health check.
   --no-sync-preferences
-                    Keep the remote server's flags and preferences unchanged.
-                    By default portable local settings are synced after linking.
+                    Do not overlay portable local preferences on the linked
+                    server process. Sync is enabled by default.
   --yes, -y         Non-interactive. Requires --host (port defaults to 3001).
                     Fails if --host is missing.
   --help, -h        Show this help.
@@ -211,7 +211,8 @@ Security:
 
 Notes:
   - If ARGENT_TOOLS_URL is also set in your environment, it overrides the link.
-  - Portable, live server preferences are synced by default. Server-owned,
+  - Portable, live server preferences are overlaid for the remote process
+    lifetime by default. Remote config files are not changed. Server-owned,
     startup-only, and client-only settings are never copied.
   - To stop using the remote target, run \`argent unlink\`.
   - \`argent server start/stop/status\` manage the local tool-server lifecycle
@@ -511,11 +512,13 @@ export async function link(argv: string[]): Promise<void> {
     if (syncResult.status === "synced") {
       const details = [
         `${syncResult.appliedFlags.length} flag${syncResult.appliedFlags.length === 1 ? "" : "s"}`,
+        `${syncResult.appliedConfig.length} preference${syncResult.appliedConfig.length === 1 ? "" : "s"}`,
         ...(syncResult.telemetryDisabled ? ["telemetry opt-out"] : []),
       ].join(", ");
       console.log(pc.dim(`  preferences: synced ${details}`));
-      if (syncResult.ignoredFlags.length > 0) {
-        console.log(pc.dim(`  preferences: remote ignored ${syncResult.ignoredFlags.join(", ")}`));
+      const ignored = [...syncResult.ignoredFlags, ...syncResult.ignoredConfig];
+      if (ignored.length > 0) {
+        console.log(pc.dim(`  preferences: remote ignored ${ignored.join(", ")}`));
       }
     } else if (syncResult.status === "unsupported") {
       console.log(pc.dim("  preferences: remote server does not support sync; link saved anyway"));

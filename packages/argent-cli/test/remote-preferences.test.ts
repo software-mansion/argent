@@ -4,7 +4,7 @@ import { pushRemotePreferences } from "../src/remote-preferences.js";
 const SNAPSHOT = {
   version: 1 as const,
   flags: { "video-watermark": false },
-  telemetry: { enabled: false as const },
+  config: { "telemetry.enabled": false },
 };
 
 describe("pushRemotePreferences", () => {
@@ -13,8 +13,11 @@ describe("pushRemotePreferences", () => {
       async () =>
         new Response(
           JSON.stringify({
+            version: 1,
             appliedFlags: ["video-watermark"],
             ignoredFlags: [],
+            appliedConfig: ["telemetry.enabled"],
+            ignoredConfig: [],
             telemetryDisabled: true,
           }),
           { status: 200, headers: { "Content-Type": "application/json" } }
@@ -22,11 +25,13 @@ describe("pushRemotePreferences", () => {
     );
 
     await expect(
-      pushRemotePreferences("https://example.test/argent/", "secret", SNAPSHOT, fetchImpl)
+      pushRemotePreferences("https://example.test/argent///", "secret", SNAPSHOT, fetchImpl)
     ).resolves.toEqual({
       status: "synced",
       appliedFlags: ["video-watermark"],
       ignoredFlags: [],
+      appliedConfig: ["telemetry.enabled"],
+      ignoredConfig: [],
       telemetryDisabled: true,
     });
     expect(fetchImpl).toHaveBeenCalledWith(
@@ -55,5 +60,26 @@ describe("pushRemotePreferences", () => {
       fetchImpl
     );
     expect(result).toMatchObject({ status: "failed", error: expect.stringContaining("500") });
+  });
+
+  it("rejects malformed success bodies and unconfirmed telemetry opt-outs", async () => {
+    const malformed = vi.fn(async () => Response.json({ version: 1 }));
+    await expect(
+      pushRemotePreferences("http://127.0.0.1:3001", undefined, SNAPSHOT, malformed)
+    ).resolves.toMatchObject({ status: "failed", error: expect.stringContaining("body") });
+
+    const unconfirmed = vi.fn(async () =>
+      Response.json({
+        version: 1,
+        appliedFlags: ["video-watermark"],
+        ignoredFlags: [],
+        appliedConfig: ["telemetry.enabled"],
+        ignoredConfig: [],
+        telemetryDisabled: false,
+      })
+    );
+    await expect(
+      pushRemotePreferences("http://127.0.0.1:3001", undefined, SNAPSHOT, unconfirmed)
+    ).resolves.toMatchObject({ status: "failed", error: expect.stringContaining("not confirmed") });
   });
 });

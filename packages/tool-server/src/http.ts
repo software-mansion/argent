@@ -460,7 +460,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   // so agents cannot discover or invoke it as an MCP capability.
   app.put(
     "/preferences/sync",
-    makeRemotePreferencesSyncRoute(() => idleTimer.touch())
+    makeRemotePreferencesSyncRoute({ onActivity: () => idleTimer.touch() })
   );
 
   // Artifact retrieval: streams files produced by tools (screenshots, profiler

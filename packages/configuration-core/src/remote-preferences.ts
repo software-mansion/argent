@@ -1,28 +1,39 @@
 import {
   FLAG_REGISTRY,
+  clearRuntimeFlagOverrides,
   isFeatureEnabled,
-  setFlag,
+  replaceRuntimeFlagOverrides,
   type FlagDefinition,
-  type FlagsPathOptions,
 } from "./flags.js";
+import {
+  clearRuntimeConfigOverrides,
+  getConfigValue,
+  replaceRuntimeConfigOverrides,
+} from "./config-access.js";
+import { CONFIG_SCHEMA, type ConfigDefinition } from "./config-schema.js";
+import type { ConfigPathOptions } from "./paths.js";
 
 export const REMOTE_PREFERENCES_VERSION = 1 as const;
 
-/**
- * Portable preferences sent from an Argent client to a linked tool-server.
- * Telemetry is intentionally opt-out-only: linking may extend a user's local
- * privacy choice to the remote process, but must never override a remote
- * operator's existing opt-out by enabling telemetry.
- */
+/** Portable, allowlisted preferences sent to a linked tool-server. */
 export interface RemotePreferencesSnapshot {
   version: typeof REMOTE_PREFERENCES_VERSION;
   flags: Record<string, boolean>;
-  telemetry?: { enabled: false };
+  config: Record<string, unknown>;
 }
 
-export interface AppliedRemotePreferences {
+export interface ResolvedRemotePreferences {
+  flagOverrides: Record<string, boolean>;
+  configOverrides: Record<string, unknown>;
   appliedFlags: string[];
   ignoredFlags: string[];
+  appliedConfig: string[];
+  ignoredConfig: string[];
+}
+
+export interface RemotePreferencesBuildOptions extends ConfigPathOptions {
+  /** Effective values that live outside config storage, such as env consent. */
+  effectiveConfig?: Readonly<Record<string, unknown>>;
 }
 
 export class RemotePreferencesValidationError extends Error {
@@ -32,25 +43,34 @@ export class RemotePreferencesValidationError extends Error {
   }
 }
 
-/** Build the allowlisted, effective flag values that a linked server may use. */
+/** Build effective values from only schema entries explicitly marked portable. */
 export function buildRemotePreferencesSnapshot(
-  options: FlagsPathOptions & { telemetryEnabled?: boolean } = {},
-  registry: readonly FlagDefinition[] = FLAG_REGISTRY
+  options: RemotePreferencesBuildOptions = {},
+  flagRegistry: readonly FlagDefinition[] = FLAG_REGISTRY,
+  configRegistry: readonly ConfigDefinition[] = CONFIG_SCHEMA
 ): RemotePreferencesSnapshot {
   const flags: Record<string, boolean> = {};
-  for (const definition of registry) {
+  for (const definition of flagRegistry) {
     if (definition.remoteSync !== "live") continue;
-    flags[definition.name] = isFeatureEnabled(definition.name, options, registry);
+    flags[definition.name] = isFeatureEnabled(definition.name, options, flagRegistry);
   }
 
-  return {
-    version: REMOTE_PREFERENCES_VERSION,
-    flags,
-    ...(options.telemetryEnabled === false ? { telemetry: { enabled: false as const } } : {}),
-  };
+  const config: Record<string, unknown> = {};
+  for (const definition of configRegistry) {
+    if (!definition.remoteSync) continue;
+    const raw = Object.hasOwn(options.effectiveConfig ?? {}, definition.key)
+      ? options.effectiveConfig![definition.key]
+      : getConfigValue(definition, options);
+    const value = definition.parse(raw);
+    if (value === undefined) continue;
+    if (definition.remoteSync === "opt-out-only" && value !== false) continue;
+    config[definition.key] = value;
+  }
+
+  return { version: REMOTE_PREFERENCES_VERSION, flags, config };
 }
 
-/** Parse the untrusted HTTP payload without accepting arbitrary config data. */
+/** Parse the untrusted envelope; allowlist and per-key validation happen next. */
 export function parseRemotePreferencesSnapshot(raw: unknown): RemotePreferencesSnapshot {
   if (!isRecord(raw)) {
     throw new RemotePreferencesValidationError("Preference snapshot must be a JSON object.");
@@ -60,63 +80,110 @@ export function parseRemotePreferencesSnapshot(raw: unknown): RemotePreferencesS
       `Unsupported preference snapshot version; expected ${REMOTE_PREFERENCES_VERSION}.`
     );
   }
-  if (!isRecord(raw.flags)) {
+
+  const flags = parseBooleanMap(raw.flags, "flags");
+  if (!isRecord(raw.config)) {
     throw new RemotePreferencesValidationError(
-      'Preference snapshot field "flags" must be an object.'
+      'Preference snapshot field "config" must be an object.'
     );
   }
-
-  const flagEntries = Object.entries(raw.flags);
-  if (flagEntries.length > 100) {
-    throw new RemotePreferencesValidationError("Preference snapshot contains too many flags.");
-  }
-  const flags: Record<string, boolean> = {};
-  for (const [name, value] of flagEntries) {
-    if (typeof value !== "boolean") {
-      throw new RemotePreferencesValidationError(`Flag "${name}" must be boolean.`);
-    }
-    flags[name] = value;
-  }
-
-  let telemetry: RemotePreferencesSnapshot["telemetry"];
-  if (raw.telemetry !== undefined) {
-    if (!isRecord(raw.telemetry) || raw.telemetry.enabled !== false) {
-      throw new RemotePreferencesValidationError(
-        'Preference snapshot field "telemetry.enabled" may only be false.'
-      );
-    }
-    telemetry = { enabled: false };
+  const configEntries = Object.entries(raw.config);
+  if (configEntries.length > 100) {
+    throw new RemotePreferencesValidationError(
+      "Preference snapshot contains too many config values."
+    );
   }
 
   return {
     version: REMOTE_PREFERENCES_VERSION,
     flags,
-    ...(telemetry ? { telemetry } : {}),
+    config: Object.fromEntries(configEntries),
   };
 }
 
-/** Apply only flags the receiving server explicitly marks as remotely syncable. */
-export function applyRemotePreferenceFlags(
+/**
+ * Validate and filter a parsed snapshot against the receiver's registries.
+ * Nothing is activated until every recognized value has passed validation.
+ */
+export function resolveRemotePreferences(
   snapshot: RemotePreferencesSnapshot,
-  options: FlagsPathOptions = {},
-  registry: readonly FlagDefinition[] = FLAG_REGISTRY
-): AppliedRemotePreferences {
-  const remotelySyncable = new Set(
-    registry.filter((definition) => definition.remoteSync === "live").map(({ name }) => name)
+  flagRegistry: readonly FlagDefinition[] = FLAG_REGISTRY,
+  configRegistry: readonly ConfigDefinition[] = CONFIG_SCHEMA
+): ResolvedRemotePreferences {
+  const syncableFlags = new Set(
+    flagRegistry.filter(({ remoteSync }) => remoteSync === "live").map(({ name }) => name)
   );
+  const flagOverrides: Record<string, boolean> = {};
   const appliedFlags: string[] = [];
   const ignoredFlags: string[] = [];
-
   for (const [name, value] of Object.entries(snapshot.flags)) {
-    if (!remotelySyncable.has(name)) {
+    if (!syncableFlags.has(name)) {
       ignoredFlags.push(name);
       continue;
     }
-    setFlag(name, value, "global", options);
+    flagOverrides[name] = value;
     appliedFlags.push(name);
   }
 
-  return { appliedFlags, ignoredFlags };
+  const configByKey = new Map(configRegistry.map((definition) => [definition.key, definition]));
+  const configOverrides: Record<string, unknown> = {};
+  const appliedConfig: string[] = [];
+  const ignoredConfig: string[] = [];
+  for (const [key, raw] of Object.entries(snapshot.config)) {
+    const definition = configByKey.get(key);
+    if (!definition?.remoteSync) {
+      ignoredConfig.push(key);
+      continue;
+    }
+    const value = definition.parse(raw);
+    if (value === undefined) {
+      throw new RemotePreferencesValidationError(`Invalid value for config key "${key}".`);
+    }
+    if (definition.remoteSync === "opt-out-only" && value !== false) {
+      throw new RemotePreferencesValidationError(`Config key "${key}" may only be false.`);
+    }
+    configOverrides[key] = value;
+    appliedConfig.push(key);
+  }
+
+  return {
+    flagOverrides,
+    configOverrides,
+    appliedFlags,
+    ignoredFlags,
+    appliedConfig,
+    ignoredConfig,
+  };
+}
+
+/** Activate a fully validated snapshot as a process-scoped replacement overlay. */
+export function activateRemotePreferences(resolved: ResolvedRemotePreferences): void {
+  replaceRuntimeFlagOverrides(resolved.flagOverrides);
+  replaceRuntimeConfigOverrides(resolved.configOverrides);
+}
+
+/** Clear the complete process-scoped overlay. Primarily useful for test hosts. */
+export function clearRemotePreferences(): void {
+  clearRuntimeFlagOverrides();
+  clearRuntimeConfigOverrides();
+}
+
+function parseBooleanMap(raw: unknown, field: string): Record<string, boolean> {
+  if (!isRecord(raw)) {
+    throw new RemotePreferencesValidationError(
+      `Preference snapshot field "${field}" must be an object.`
+    );
+  }
+  const entries = Object.entries(raw);
+  if (entries.length > 100) {
+    throw new RemotePreferencesValidationError("Preference snapshot contains too many flags.");
+  }
+  for (const [name, value] of entries) {
+    if (typeof value !== "boolean") {
+      throw new RemotePreferencesValidationError(`Flag "${name}" must be boolean.`);
+    }
+  }
+  return Object.fromEntries(entries) as Record<string, boolean>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

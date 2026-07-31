@@ -32,6 +32,8 @@ export interface ConfigDefinition<T = unknown> {
   readonly merge: MergePolicy<T>;
   /** Effective value when no scope contributes one. */
   readonly default?: T;
+  /** Whether this value may be overlaid by a linked client for this process. */
+  readonly remoteSync?: "live" | "opt-out-only";
   /**
    * When set, `argent config set/unset` refuses this key and points the user at
    * the given command instead. Used for values that have a dedicated,
@@ -91,6 +93,9 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     // Telemetry is opt-out: with nothing stored, consent.ts treats it as
     // enabled, and the config surface must report the same instead of "(unset)".
     default: true,
+    // A linked client may extend its privacy choice to the remote process, but
+    // it must never remotely enable telemetry.
+    remoteSync: "opt-out-only",
     // Read-only under `argent config`: opt-in/out goes through the dedicated
     // command so the live client is drained/reset, not just the file rewritten.
     manageCommand: "argent telemetry",

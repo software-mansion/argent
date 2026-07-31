@@ -14,6 +14,19 @@ import { readConfigObject, updateConfig, getAtPath, setAtPath, deleteAtPath } fr
 import { applyMergePolicy } from "./merge.js";
 import { CONFIG_SCHEMA, getConfigDefinition, type ConfigDefinition } from "./config-schema.js";
 
+// Linked-client preferences are process-scoped and deliberately separate from
+// operator-owned config files. Replacing the map (rather than mutating it)
+// makes a complete sync visible atomically to other work in this event loop.
+let runtimeConfigOverrides: ReadonlyMap<string, unknown> = new Map();
+
+export function replaceRuntimeConfigOverrides(overrides: Readonly<Record<string, unknown>>): void {
+  runtimeConfigOverrides = new Map(Object.entries(overrides));
+}
+
+export function clearRuntimeConfigOverrides(): void {
+  runtimeConfigOverrides = new Map();
+}
+
 /** Read + parse one scope's value for a definition (no merge, no default). */
 function readScopeValue<T>(
   def: ConfigDefinition<T>,
@@ -26,14 +39,18 @@ function readScopeValue<T>(
 }
 
 /**
- * The effective value of a configuration: the project and global scopes read,
- * validated, merged under the entry's policy, then defaulted. This is what a
- * runtime consumer (e.g. the simctl device-set reader) should call.
+ * The effective value of a configuration: a process-only linked-client overlay
+ * when present, otherwise the project and global scopes validated, merged under
+ * the entry's policy, then defaulted. Runtime consumers should call this.
  */
 export function getConfigValue<T>(
   def: ConfigDefinition<T>,
   options: ConfigPathOptions = {}
 ): T | undefined {
+  if (runtimeConfigOverrides.has(def.key)) {
+    const parsed = def.parse(runtimeConfigOverrides.get(def.key));
+    if (parsed !== undefined) return parsed;
+  }
   const local = readScopeValue(def, "project", options);
   const global = readScopeValue(def, "global", options);
   const merged = applyMergePolicy(def.merge, local, global);

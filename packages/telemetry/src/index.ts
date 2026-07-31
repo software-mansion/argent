@@ -18,7 +18,12 @@ import {
   peekAnonId,
 } from "./identity.js";
 import { resolveHostFingerprint, resolveHostFingerprintAsync } from "./fingerprint.js";
-import { isEnabled, writeConsentFlag, getConsentState } from "./consent.js";
+import {
+  isEnabled,
+  writeConsentFlag,
+  getConsentState,
+  setSessionTelemetryOptOut,
+} from "./consent.js";
 import { emitDebugError, emitDebugPayload, isDebugEnabled } from "./debug.js";
 import type { EventName, EventPropertyMap } from "./events.js";
 
@@ -273,6 +278,39 @@ export async function markDisabled(): Promise<void> {
   } catch (err) {
     emitDebugError("markDisabled failed", err);
   }
+}
+
+/**
+ * Disable telemetry for this process without changing the host's config file.
+ * Returns the observed consent state so administrative callers never report a
+ * privacy change that failed to take effect.
+ */
+export async function disableForSession(): Promise<boolean> {
+  try {
+    const client = getConstructedClient();
+    setSessionTelemetryOptOut(true);
+    if (client) {
+      try {
+        await Promise.race([
+          client.shutdown(SHORT_FLUSH_TIMEOUT_MS),
+          new Promise<void>((resolve) => setTimeout(resolve, SHORT_FLUSH_TIMEOUT_MS).unref()),
+        ]);
+      } catch {
+        /* consent is already disabled; transport shutdown remains best-effort */
+      }
+    }
+    resetClient();
+    state = null;
+    return getConsentState().enabled === false;
+  } catch (err) {
+    emitDebugError("disableForSession failed", err);
+    return getConsentState().enabled === false;
+  }
+}
+
+/** Clear only the disable-only session layer installed by disableForSession. */
+export function clearSessionTelemetryOptOut(): void {
+  setSessionTelemetryOptOut(false);
 }
 
 /** Status payload for `argent telemetry status`; does not create a client. */
