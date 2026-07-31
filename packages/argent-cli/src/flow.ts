@@ -1149,12 +1149,17 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     return exitAfterFlush(2);
   }
 
-  // CLI runs rely on the caller and tool-server sharing a filesystem: sibling
-  // `run:` files and `__baselines__` are resolved beside this YAML. Keep the
-  // flow-execute tool itself remotely callable, but reject CLI routing that
-  // cannot guarantee those local filesystem semantics. This deliberately
-  // rejects even single-file flows that could run remotely — the CLI cannot
-  // tell them apart without parsing the flow.
+  // CLI runs rely on the caller and tool-server sharing a filesystem: the
+  // runner resolves `run:` targets against each containing flow file's
+  // directory (fragments may live across directories, inside the runner's
+  // project-root / containing-dir containment) and reads/writes
+  // `__baselines__` beside the canonicalized root YAML — all on the tool
+  // server's disk, so a remote server would resolve every one of those paths
+  // on its own filesystem, not this one. Keep the flow-execute tool itself
+  // remotely callable, but reject CLI routing that cannot guarantee the
+  // shared filesystem. This deliberately rejects even single-file flows that
+  // could run remotely — the CLI cannot tell them apart without parsing the
+  // flow.
   const routing = await getResolvedToolsUrl();
   if (routing.source !== "none") {
     // With ARGENT_TOOLS_URL set over an existing link file, unsetting only the

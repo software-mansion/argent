@@ -1690,12 +1690,15 @@ export async function resolveFlowSource(
     // gate above — a caller that did use the boundary must not be told to use
     // the boundary.
 
-    // Reject a relative path: this string is used verbatim downstream — read
-    // with fs.readFile and turned into flowsDir = path.dirname(filePath) for
-    // the flow's run: siblings, baselines, and baseline write-back — so it must
-    // name the file independently of the tool server's working directory, which
-    // is not the caller's. `argent flow list` prints repo-relative paths, so
-    // this is the spelling an agent is most likely to pass back.
+    // Reject a relative path: this string seeds canonicalFlowPath in
+    // execute(), which requires an absolute input — its realpath, the read,
+    // and every root anchor derived from the one canonical result (flowsDir
+    // for baselines, baseline write-back, and a relative chromium app path;
+    // the runStack seed for run:
+    // targets) would otherwise resolve against the tool server's working
+    // directory, which is not the caller's. `argent flow list` prints
+    // repo-relative paths, so this is the spelling an agent is most likely to
+    // pass back.
     if (!path.isAbsolute(params.flow_path)) {
       throw new FailureError(
         `Invalid flow_path "${params.flow_path}": flow paths must be absolute — a relative path ` +
@@ -1710,18 +1713,25 @@ export async function resolveFlowSource(
       );
     }
 
-    // Reject ".." segments: this path is opened with fs.readFile, so the kernel
-    // resolves a symlinked directory component before the "..", but
-    // flowsDir = path.dirname(filePath) keeps the raw string and path.join
-    // collapses ".." lexically — the flow's run: siblings and __baselines__
-    // would then resolve against a directory the flow that was read does not
-    // live in. The argent client rejects ".." segments before sending; only a
-    // direct MCP/HTTP caller can pass an unresolved flow_path.
+    // Reject ".." segments: execute() canonicalizes this path ONCE with
+    // kernel semantics (canonicalFlowPath) and derives the read, flowsDir,
+    // and the runStack seed from that one result, so a ".." spelling can no
+    // longer split the read from its anchors. What it still can do is carry
+    // two readings — after a symlinked component, the kernel's ".." and a
+    // lexical collapse name different files, and the runner would silently
+    // follow the kernel's — or, when the directory chain is broken, slip
+    // through canonicalFlowPath's verbatim fallback to fail later as a raw
+    // readFile ENOENT on the unresolved spelling. Rejecting up front means
+    // every admitted flow_path has exactly one reading, and the unresolved
+    // one fails here with a precise validation error instead. The argent
+    // client rejects ".." segments before sending; only a direct MCP/HTTP
+    // caller can pass an unresolved flow_path.
     if (params.flow_path.split(/[\\/]+/).includes("..")) {
       throw new FailureError(
         `Invalid flow_path "${params.flow_path}": flow paths must not contain ".." segments — ` +
-          `sibling run: files and baselines are resolved lexically from this path. Pass the ` +
-          `fully resolved absolute path to the flow's YAML.`,
+          `a ".." after a symlinked directory can name a different file than the spelling ` +
+          `suggests, and the argent client always sends fully resolved paths. Pass the fully ` +
+          `resolved absolute path to the flow's YAML.`,
         {
           error_code: FAILURE_CODES.FLOW_FILE_INVALID,
           failure_stage: "flow_path_dotdot",
