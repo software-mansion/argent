@@ -337,12 +337,20 @@ function axisFullyInside(
 // that edge is a screen edge, under edge-anchored chrome (home indicator,
 // gesture-nav bar, an overlaying tab bar). After acceptance the loop keeps
 // scrolling in the SAME direction in deficit-sized increments until the target
-// sits EDGE_AVOID_PADDING clear of the entry edge. Best-effort by design: it
-// engages only when the clip's entry edge effectively is a screen edge (an
-// inset container already clears screen chrome), and gives up — accepting the
-// flush landing — when the container can't move, the target has no headroom,
-// or the attempts run out. A nudge can therefore delay a step but never fail
-// one that was already visible.
+// sits EDGE_AVOID_PADDING clear of the entry edge. The clip those increments
+// measure against — and the region the gesture anchors in — is the container
+// that actually scrolls the target: the step's `within` container when one is
+// named, otherwise the innermost scroll container the tree shows the target
+// living in (see targetScrollerFrame) — never the whole screen, which would
+// show a permanent deficit for a pinned element no scroll can move and
+// dispatch the gesture into whatever sits under the screen centre.
+// Best-effort by design:
+// it engages only when that container's entry edge effectively is a screen
+// edge (an inset container already clears screen chrome), and gives up —
+// accepting the flush landing — when the target has no scroll container at
+// all, the previous nudge failed to move it, the target has no headroom, or
+// the attempts run out. A nudge can therefore delay a step but never fail one
+// that was already visible.
 const EDGE_AVOID_PADDING = 0.1; // clears the home indicator (~0.04) and a typical tab bar (~0.1)
 const EDGE_AVOID_SCREEN_EPS = 0.05; // clip edge within this of a screen edge = chrome can overlap it
 const MAX_EDGE_NUDGES = 3; // touch slop makes a nudge undershoot — allow a re-measure retry or two
@@ -355,6 +363,29 @@ const MAX_EDGE_NUDGES = 3; // touch slop makes a nudge undershoot — allow a re
 const EDGE_NUDGE_OVERSHOOT = 1.5;
 
 /**
+ * How far the target's entry edge still is from sitting `EDGE_AVOID_PADDING`
+ * clear of the clip's entry edge (<= 0 once padded enough). Split out of
+ * {@link edgeNudgeDistance} because the nudge loop also reads it as its
+ * progress signal: a follow-up nudge is only allowed when the previous one
+ * shrank this deficit (see scrollToVisible).
+ */
+function entryEdgeDeficit(
+  frame: DescribeFrame,
+  direction: ScrollDirection,
+  clip: DescribeFrame
+): number {
+  const vertical = direction === "down" || direction === "up";
+  const clipStart = vertical ? clip.y : clip.x;
+  const clipEnd = clipStart + (vertical ? clip.height : clip.width);
+  const fStart = vertical ? frame.y : frame.x;
+  const fEnd = fStart + (vertical ? frame.height : frame.width);
+  // `down`/`right` reveal from the end edge; `up`/`left` from the start edge.
+  return direction === "down" || direction === "right"
+    ? EDGE_AVOID_PADDING - (clipEnd - fEnd)
+    : EDGE_AVOID_PADDING - (fStart - clipStart);
+}
+
+/**
  * Travel for one edge-avoid nudge, or 0 when none should happen: the accepted
  * `frame` already sits `EDGE_AVOID_PADDING` clear of the clip's entry edge,
  * that edge isn't a screen edge (an inset container's own border already
@@ -363,6 +394,13 @@ const EDGE_NUDGE_OVERSHOOT = 1.5;
  * has none of) must fit at least twice the minimum scroll gesture, since the
  * travel is capped at `headroom / 2` and a shorter swipe would register as a
  * tap (see MIN_SCROLL_INCREMENT).
+ *
+ * `clip` is the container that actually scrolls the target — the step's
+ * `within` region, or the target's own scroll-container ancestor — never the
+ * whole screen: with a FULL_SCREEN clip the screen-edge gate is trivially
+ * true and the deficit measures the target's distance to the SCREEN edge, so
+ * a pinned element (bottom bar, FAB, sticky footer) that no scroll can move
+ * would always demand a nudge, dispatched into some unrelated scroller.
  */
 function edgeNudgeDistance(
   frame: DescribeFrame,
@@ -380,7 +418,7 @@ function edgeNudgeDistance(
     ? clipEnd >= 1 - EDGE_AVOID_SCREEN_EPS
     : clipStart <= EDGE_AVOID_SCREEN_EPS;
   if (!atScreenEdge) return 0;
-  const deficit = EDGE_AVOID_PADDING - (fromEnd ? clipEnd - fEnd : fStart - clipStart);
+  const deficit = entryEdgeDeficit(frame, direction, clip);
   const headroom = fromEnd ? fStart - clipStart : clipEnd - fEnd;
   if (deficit <= 0 || headroom / 2 < MIN_SCROLL_INCREMENT) return 0;
   return Math.min(Math.max(deficit * EDGE_NUDGE_OVERSHOOT, MIN_SCROLL_INCREMENT), headroom / 2);
@@ -702,6 +740,60 @@ function anchorScrollFrames(tree: DescribeNode, anchor: { x: number; y: number }
   return frames;
 }
 
+/**
+ * Frame of the scroll container the accepted target lives in, or undefined
+ * when the tree surfaces none — the edge-avoid nudge's container gate. The
+ * flow tree is flat-leaves-under-one-root (see flow-tree-flatten): a
+ * RecyclerView / UIScrollView and the rows it scrolls arrive as SIBLINGS, so
+ * parent/child ancestry cannot say whose content the target is — geometric
+ * containment over the emitted scroller leaves is the only available "lives
+ * inside" test. Every visible scroll container whose frame contains the
+ * accepted frame — walked at any depth, so a nested shape works too — is a
+ * candidate, with EDGE_EPS slack per edge (adapter clipping and float
+ * rounding can leave a flush row a hair outside its scroller's rect), and
+ * the smallest-area candidate wins: in a nested pair the inner scroller is
+ * the one whose viewport actually clips the target, and reading the outer
+ * page scroller instead would mistake an inset sub-list's own border for
+ * the screen edge. A node whose frame IS the accepted frame is the target
+ * itself (an addressable scroller can be scrolled TO), never its container.
+ *
+ * Two accepted limitations. An overlay pinned OVER a scroller (a FAB, a
+ * floating bar drawn inside the scroller's rect) geometrically passes this
+ * gate even though no scroll moves it — the deficit progress check in
+ * scrollToVisible bounds that case to a single small gesture. And a scroller
+ * the adapters don't emit at all (an ANONYMOUS Chromium overflow scroller —
+ * see isScrollContainer — or an id-less pure-layout container) yields no
+ * candidate, so the nudge silently skips: the safe direction, since a flush
+ * landing is exactly the pre-nudge behavior, while a guessed screen-derived
+ * clip risks scrolling (or pressing) an unrelated element.
+ */
+function targetScrollerFrame(tree: DescribeNode, frame: DescribeFrame): DescribeFrame | undefined {
+  let best: DescribeFrame | undefined;
+  const walk = (node: DescribeNode): void => {
+    const f = node.frame;
+    if (
+      isScrollContainer(node) &&
+      isVisible(node) &&
+      f.x <= frame.x + EDGE_EPS &&
+      f.y <= frame.y + EDGE_EPS &&
+      f.x + f.width >= frame.x + frame.width - EDGE_EPS &&
+      f.y + f.height >= frame.y + frame.height - EDGE_EPS &&
+      !(
+        f.x === frame.x &&
+        f.y === frame.y &&
+        f.width === frame.width &&
+        f.height === frame.height
+      ) &&
+      (best === undefined || f.width * f.height < best.width * best.height)
+    ) {
+      best = f;
+    }
+    for (const child of node.children) walk(child);
+  };
+  walk(tree);
+  return best;
+}
+
 function collectFocused(node: DescribeNode, acc: DescribeNode[]): DescribeNode[] {
   if (node.focused) acc.push(node);
   for (const child of node.children) collectFocused(child, acc);
@@ -835,11 +927,21 @@ async function scrollIncrement(
  * A visible target is not always accepted where it stands: when it sits nearly
  * flush against an entry edge that is also a screen edge, the loop keeps
  * nudging it clear of screen-edge chrome first (see edgeNudgeDistance) — so
- * even an already-on-screen target may get scrolled. The nudge phase reuses
- * the end-of-scroll fingerprint (a nudge that moves nothing accepts the flush
- * landing) and is bounded by MAX_EDGE_NUDGES; once the axis check has accepted
- * a frame the step can only pass, and only nudge-sized gestures are dispatched
- * — a round that loses the target stops at the accepted frame.
+ * even an already-on-screen target may get scrolled. The nudge measures
+ * against — and anchors its gesture in — the container that actually scrolls
+ * the target: the `within` container, or (when none is named) the innermost
+ * scroll container the tree shows the target living in; a target inside no
+ * scroller at all (pinned chrome, a fully static screen) is accepted as it
+ * stands with no gesture (see targetScrollerFrame). The phase is bounded
+ * three ways: the end-of-scroll fingerprint — scoped, like the gesture, to
+ * the scrollers under the round's actual anchor — accepts the flush landing
+ * when a nudge moves nothing; a per-round progress check allows a follow-up
+ * nudge only when the previous one shrank the entry-edge deficit (the
+ * fingerprint alone cannot stop the loop when the gesture's own side effects
+ * keep the tree churning); and MAX_EDGE_NUDGES caps the retries. Once the
+ * axis check has accepted a frame the step can only pass, and only
+ * nudge-sized gestures are dispatched — a round that loses the target stops
+ * at the accepted frame.
  */
 async function scrollToVisible(
   env: ActionEnv,
@@ -853,6 +955,16 @@ async function scrollToVisible(
   // than a failure, so a nudge gone sideways (target transiently unresolved,
   // iterations exhausted) can never fail a step that had its target visible.
   let accepted: DescribeFrame | undefined;
+  // Entry-edge deficit at the moment the previous nudge went out — the nudge
+  // loop's direct progress signal. The region fingerprint cannot stop the
+  // loop when the gesture's own side effects keep the tree changing (a press
+  // counter ticked by a swipe the OS committed as a press, a spinner the
+  // nudge woke): only the target's own frame says whether the nudge worked,
+  // so a follow-up nudge is allowed only when the deficit shrank by at least
+  // EDGE_EPS. Touch-slop undershoot still passes (a floored 0.05 nudge minus
+  // ~0.01 slop moves >= 0.04), so MAX_EDGE_NUDGES keeps its purpose for
+  // genuine partial progress.
+  let prevDeficit: number | undefined;
   for (let i = 0; i < MAX_SCROLL_ITERATIONS; i++) {
     if (env.signal?.aborted) return { aborted: true };
 
@@ -872,10 +984,26 @@ async function scrollToVisible(
 
     const frame = flowSelectorToFrame(tree, target);
     let nudge = 0;
+    // The container this round's nudge measures against and anchors its
+    // gesture in — the `within` region when one is named, otherwise the
+    // scroll container the target lives in. Set only in nudge rounds.
+    let nudgeRegion: DescribeFrame | undefined;
     if (frame && axisFullyInside(frame, direction, region)) {
       accepted = frame;
-      nudge = edgeNudgeDistance(frame, direction, region);
-      if (nudge === 0 || nudges >= MAX_EDGE_NUDGES) return { frame };
+      // Never the FULL_SCREEN fallback: against the screen a pinned target
+      // outside every scroller shows a permanent deficit and the gesture goes
+      // to whatever sits under the screen centre — no containing scroller
+      // means no nudge, and the step passes exactly as if the nudge phase
+      // didn't exist.
+      const clip = within ? region : targetScrollerFrame(tree, frame);
+      if (clip !== undefined) nudge = edgeNudgeDistance(frame, direction, clip);
+      if (nudge === 0 || clip === undefined || nudges >= MAX_EDGE_NUDGES) return { frame };
+      // Progress check (see prevDeficit): a nudge that didn't move the target
+      // closer to padding will not be repeated — accept the flush landing.
+      const deficit = entryEdgeDeficit(frame, direction, clip);
+      if (prevDeficit !== undefined && prevDeficit - deficit < EDGE_EPS) return { frame };
+      prevDeficit = deficit;
+      nudgeRegion = clip;
     }
     // Post-acceptance, a round that no longer re-accepts the target (transient
     // re-render, a snap list paging in response to the nudge) must stop at the
@@ -888,18 +1016,22 @@ async function scrollToVisible(
     // outside it (a spinner, a ticking clock) would keep a wider fingerprint
     // changing on every read, so a container that stopped moving would never
     // read as "end of scroll" and the loop would burn all its iterations. The
-    // scope is the `within` container's region when one is named; otherwise the
-    // gesture anchors at the screen centre and the OS routes it to a scroller
-    // hit-tested there, so the scope is every visible scroll container under
-    // that anchor (their union — not the innermost; see anchorScrollFrames).
-    // Only when the tree surfaces no scroll container at the anchor does the
-    // scope stay the whole screen — a screen-level animator can then still mask
-    // end-of-scroll, and the loop falls back to the iteration cap. Text stays
-    // in the fingerprint for in-scope nodes — a snapping list recycles
-    // identical frames with new content, so structure alone would misread real
-    // progress as a stuck scroll — which also means an animating node INSIDE
-    // the scrolled content remains a known limitation.
-    const scope = within ? [region] : anchorScrollFrames(tree, getDescribeTapPoint(region));
+    // scope is the `within` container's region when one is named; otherwise it
+    // follows this round's actual gesture anchor — the screen centre in the
+    // search phase, the target's scroller centre in a nudge round (the
+    // scroller need not sit under the screen centre at all) — and the OS
+    // routes the gesture to a scroller hit-tested there, so the scope is
+    // every visible scroll container under that anchor (their union — not the
+    // innermost; see anchorScrollFrames). Only when the tree surfaces no
+    // scroll container at the anchor does the scope stay the whole screen — a
+    // screen-level animator can then still mask end-of-scroll, and the loop
+    // falls back to the iteration cap. Text stays in the fingerprint for
+    // in-scope nodes — a snapping list recycles identical frames with new
+    // content, so structure alone would misread real progress as a stuck
+    // scroll — which also means an animating node INSIDE the scrolled content
+    // remains a known limitation.
+    const anchorRegion = nudgeRegion ?? region;
+    const scope = within ? [region] : anchorScrollFrames(tree, getDescribeTapPoint(anchorRegion));
     if (scope.length === 0) scope.push(FULL_SCREEN);
     const fp = treeFingerprint(tree, (node) => scope.some((r) => framesOverlap(node.frame, r)));
     if (prevFp !== undefined && fp === prevFp) {
@@ -911,8 +1043,11 @@ async function scrollToVisible(
     }
     prevFp = fp;
 
+    // A nudge anchors in the container that owns the target (latching the
+    // gesture to the scroller that can actually move it); a search increment
+    // keeps the plain region anchor.
     if (nudge > 0) nudges++;
-    await scrollIncrement(env, direction, region, nudge > 0 ? nudge : undefined);
+    await scrollIncrement(env, direction, anchorRegion, nudge > 0 ? nudge : undefined);
   }
   if (accepted) return { frame: accepted }; // iterations ran out mid-nudge
   return {
