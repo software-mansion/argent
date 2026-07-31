@@ -510,16 +510,8 @@ export async function link(argv: string[]): Promise<void> {
   if (flags.syncPreferences) {
     const syncResult = await syncLinkedServerPreferences(url, token);
     if (syncResult.status === "synced") {
-      const details = [
-        `${syncResult.appliedFlags.length} flag${syncResult.appliedFlags.length === 1 ? "" : "s"}`,
-        `${syncResult.appliedConfig.length} preference${syncResult.appliedConfig.length === 1 ? "" : "s"}`,
-        ...(syncResult.telemetryDisabled ? ["telemetry opt-out"] : []),
-      ].join(", ");
-      console.log(pc.dim(`  preferences: synced ${details}`));
-      const ignored = [...syncResult.ignoredFlags, ...syncResult.ignoredConfig];
-      if (ignored.length > 0) {
-        console.log(pc.dim(`  preferences: remote ignored ${ignored.join(", ")}`));
-      }
+      const detail = syncResult.telemetryDisabled ? " (including telemetry opt-out)" : "";
+      console.log(pc.dim(`  preferences: synced${detail}`));
     } else if (syncResult.status === "unsupported") {
       console.log(pc.dim("  preferences: remote server does not support sync; link saved anyway"));
     } else {

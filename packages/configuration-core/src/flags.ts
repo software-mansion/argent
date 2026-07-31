@@ -59,8 +59,8 @@ export function clearRuntimeFlagOverrides(): void {
 export interface FlagDefinition {
   readonly name: string;
   readonly description: string;
-  /** Whether this live server-consumed flag may sync to a linked tool-server. */
-  readonly remoteSync?: "live";
+  /** Whether `argent link` should copy this live flag to the remote process. */
+  readonly syncToRemote?: true;
   // Opt-OUT flag: the feature is ON when the flag has never been set. `argent
   // disable <name>` then persists an explicit `false` (rather than unsetting,
   // which would revert to this ON default), and `argent enable <name>` / no
@@ -80,7 +80,7 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     name: "argent-lens",
     description:
       "Argent Lens — the propose_variant / await_user_selection tools and the Electron preview window for staging UI design variants and letting a human pick among them. Off by default while the feature is in development.",
-    remoteSync: "live",
+    syncToRemote: true,
   },
   {
     name: "artifacts-list-endpoint",
@@ -94,7 +94,7 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     name: "video-watermark",
     description:
       "Overlay the argent corner watermark on recorded screen videos. On by default; turn it off with `argent disable video-watermark`.",
-    remoteSync: "live",
+    syncToRemote: true,
     defaultEnabled: true,
   },
 ];
@@ -252,7 +252,8 @@ export function isFlagEnabled(
 
 // Registry-aware read: resolves an unset flag to its declared `defaultEnabled`
 // (so an opt-out feature reads as on until disabled). This is the check runtime
-// features should use; `isFlagEnabled` stays the low-level storage primitive.
+// features should use; `isFlagEnabled` stays the low-level registry-agnostic
+// primitive.
 export function isFeatureEnabled(
   name: string,
   options: FlagsPathOptions = {},

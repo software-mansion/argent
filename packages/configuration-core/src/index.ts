@@ -9,6 +9,7 @@ export {
   unsetFlag,
   isFlagEnabled,
   isFeatureEnabled,
+  clearRuntimeFlagOverrides,
   type FlagScope,
   type FlagDefinition,
   type FlagsPathOptions,
@@ -19,12 +20,8 @@ export {
   RemotePreferencesValidationError,
   buildRemotePreferencesSnapshot,
   parseRemotePreferencesSnapshot,
-  resolveRemotePreferences,
-  activateRemotePreferences,
-  clearRemotePreferences,
+  applyRemotePreferenceFlags,
   type RemotePreferencesSnapshot,
-  type ResolvedRemotePreferences,
-  type RemotePreferencesBuildOptions,
 } from "./remote-preferences.js";
 
 export {

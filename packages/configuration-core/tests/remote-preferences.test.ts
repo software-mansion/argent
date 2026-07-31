@@ -3,175 +3,102 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  activateRemotePreferences,
-  asBoolean,
+  applyRemotePreferenceFlags,
   buildRemotePreferencesSnapshot,
-  clearRemotePreferences,
-  getConfigValue,
+  clearRuntimeFlagOverrides,
   isFeatureEnabled,
   parseRemotePreferencesSnapshot,
-  readConfigObject,
   readFlags,
-  resolveRemotePreferences,
-  setConfigValue,
   setFlag,
-  type ConfigDefinition,
   type FlagDefinition,
 } from "../src/index.js";
 
-const TEST_FLAGS: readonly FlagDefinition[] = [
+const TEST_REGISTRY: readonly FlagDefinition[] = [
   { name: "client-only", description: "client" },
-  { name: "remote-opt-in", description: "remote", remoteSync: "live" },
+  { name: "remote-opt-in", description: "remote", syncToRemote: true },
   {
     name: "remote-opt-out",
     description: "remote default",
-    remoteSync: "live",
+    syncToRemote: true,
     defaultEnabled: true,
   },
 ];
-
-const REMOTE_CONFIG: ConfigDefinition = {
-  key: "privacy.enabled",
-  description: "privacy",
-  scopes: ["global"],
-  parse: asBoolean,
-  merge: "prioritize-local",
-  default: true,
-  remoteSync: "opt-out-only",
-};
-const CLIENT_CONFIG: ConfigDefinition = {
-  key: "client.enabled",
-  description: "client",
-  scopes: ["global"],
-  parse: asBoolean,
-  merge: "prioritize-local",
-};
-const TEST_CONFIG: readonly ConfigDefinition[] = [REMOTE_CONFIG, CLIENT_CONFIG];
 
 let tmpHome: string;
 let tmpProject: string;
 
 beforeEach(() => {
-  clearRemotePreferences();
+  clearRuntimeFlagOverrides();
   tmpHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-sync-home-")));
   tmpProject = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-sync-project-")));
   fs.writeFileSync(path.join(tmpProject, "package.json"), "{}");
 });
 
 afterEach(() => {
-  clearRemotePreferences();
+  clearRuntimeFlagOverrides();
   fs.rmSync(tmpHome, { recursive: true, force: true });
   fs.rmSync(tmpProject, { recursive: true, force: true });
 });
 
 describe("remote preference snapshots", () => {
-  it("contains only schema-allowlisted effective values and opt-outs", () => {
+  it("contains only effective live flags and the telemetry opt-out", () => {
     setFlag("client-only", true, "global", { homeDir: tmpHome });
     setFlag("remote-opt-in", true, "global", { homeDir: tmpHome });
     setFlag("remote-opt-out", false, "project", { cwd: tmpProject });
 
     expect(
       buildRemotePreferencesSnapshot(
-        {
-          homeDir: tmpHome,
-          cwd: tmpProject,
-          effectiveConfig: { "privacy.enabled": false, "client.enabled": true },
-        },
-        TEST_FLAGS,
-        TEST_CONFIG
+        { homeDir: tmpHome, cwd: tmpProject, telemetryEnabled: false },
+        TEST_REGISTRY
       )
     ).toEqual({
       version: 1,
       flags: { "remote-opt-in": true, "remote-opt-out": false },
-      config: { "privacy.enabled": false },
+      telemetryDisabled: true,
     });
   });
 
-  it("does not propagate opt-out-only enablement", () => {
+  it("never asks the remote server to enable telemetry", () => {
     expect(
       buildRemotePreferencesSnapshot(
-        {
-          homeDir: tmpHome,
-          cwd: tmpProject,
-          effectiveConfig: { "privacy.enabled": true },
-        },
-        TEST_FLAGS,
-        TEST_CONFIG
+        { homeDir: tmpHome, cwd: tmpProject, telemetryEnabled: true },
+        TEST_REGISTRY
       )
-    ).toEqual({
-      version: 1,
-      flags: { "remote-opt-in": false, "remote-opt-out": true },
-      config: {},
-    });
+    ).toMatchObject({ telemetryDisabled: false });
   });
 
-  it("uses a process overlay above remote project values without writing files", () => {
+  it("replaces a process overlay above project flags without writing files", () => {
     setFlag("remote-opt-in", false, "project", { cwd: tmpProject });
-    setConfigValue("privacy.enabled", true, "global", { homeDir: tmpHome }, TEST_CONFIG);
-
-    const resolved = resolveRemotePreferences(
+    applyRemotePreferenceFlags(
       {
         version: 1,
         flags: { "remote-opt-in": true, "client-only": true, "unknown": true },
-        config: { "privacy.enabled": false, "client.enabled": true, "unknown": "value" },
+        telemetryDisabled: false,
       },
-      TEST_FLAGS,
-      TEST_CONFIG
+      TEST_REGISTRY
     );
-    activateRemotePreferences(resolved);
 
-    expect(resolved).toMatchObject({
-      appliedFlags: ["remote-opt-in"],
-      ignoredFlags: ["client-only", "unknown"],
-      appliedConfig: ["privacy.enabled"],
-      ignoredConfig: ["client.enabled", "unknown"],
-    });
-    expect(isFeatureEnabled("remote-opt-in", { cwd: tmpProject }, TEST_FLAGS)).toBe(true);
-    expect(getConfigValue(REMOTE_CONFIG, { homeDir: tmpHome })).toBe(false);
+    expect(isFeatureEnabled("remote-opt-in", { cwd: tmpProject }, TEST_REGISTRY)).toBe(true);
     expect(readFlags("project", { cwd: tmpProject })).toEqual({ "remote-opt-in": false });
     expect(readFlags("global", { homeDir: tmpHome })).toEqual({});
-    expect(readConfigObject("global", { homeDir: tmpHome })).toEqual({
-      privacy: { enabled: true },
-    });
 
-    activateRemotePreferences(
-      resolveRemotePreferences({ version: 1, flags: {}, config: {} }, TEST_FLAGS, TEST_CONFIG)
-    );
-    expect(isFeatureEnabled("remote-opt-in", { cwd: tmpProject }, TEST_FLAGS)).toBe(false);
-    expect(getConfigValue(REMOTE_CONFIG, { homeDir: tmpHome })).toBe(true);
+    applyRemotePreferenceFlags({ version: 1, flags: {}, telemetryDisabled: false }, TEST_REGISTRY);
+    expect(isFeatureEnabled("remote-opt-in", { cwd: tmpProject }, TEST_REGISTRY)).toBe(false);
   });
 
-  it("validates the full snapshot before anything can be activated", () => {
+  it("rejects malformed payloads before application", () => {
     expect(() =>
-      resolveRemotePreferences(
-        {
-          version: 1,
-          flags: { "remote-opt-in": true },
-          config: { "privacy.enabled": true },
-        },
-        TEST_FLAGS,
-        TEST_CONFIG
-      )
-    ).toThrow(/may only be false/);
-    expect(isFeatureEnabled("remote-opt-in", { cwd: tmpProject }, TEST_FLAGS)).toBe(false);
-  });
-
-  it("rejects malformed envelopes while tolerating unknown config keys", () => {
-    expect(() => parseRemotePreferencesSnapshot({ version: 2, flags: {}, config: {} })).toThrow(
-      /Unsupported preference snapshot version/
-    );
+      parseRemotePreferencesSnapshot({ version: 2, flags: {}, telemetryDisabled: false })
+    ).toThrow(/Unsupported preference snapshot version/);
     expect(() =>
-      parseRemotePreferencesSnapshot({ version: 1, flags: { bad: "true" }, config: {} })
-    ).toThrow(/must be boolean/);
-    expect(() => parseRemotePreferencesSnapshot({ version: 1, flags: {} })).toThrow(
-      /field "config" must be an object/
-    );
-    expect(
       parseRemotePreferencesSnapshot({
         version: 1,
-        flags: {},
-        config: { "future.value": { shape: "unknown" } },
+        flags: { bad: "true" },
+        telemetryDisabled: false,
       })
-    ).toMatchObject({ config: { "future.value": { shape: "unknown" } } });
+    ).toThrow(/must be boolean/);
+    expect(() =>
+      parseRemotePreferencesSnapshot({ version: 1, flags: {}, telemetryDisabled: "yes" })
+    ).toThrow(/telemetryDisabled.*boolean/);
   });
 });

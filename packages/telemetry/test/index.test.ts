@@ -3,7 +3,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import {
   _resetConsentCacheForTest,
-  clearSessionTelemetryOptOut,
   disableForSession,
   getConsentState,
   markDisabled,
@@ -129,13 +128,13 @@ describe("telemetry public surface", () => {
     expect(client.shutdown).toHaveBeenCalledTimes(1);
     expect(getConsentState()).toEqual({
       enabled: false,
-      source: { source: "session_override", detail: "linked_client" },
+      source: { source: "session_override" },
     });
     expect(JSON.parse(fs.readFileSync(configFilePath(), "utf8"))).toMatchObject({
       telemetry: { enabled: true },
     });
 
-    clearSessionTelemetryOptOut();
+    _resetConsentCacheForTest();
     expect(isEnabled()).toBe(true);
   });
 

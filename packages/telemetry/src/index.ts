@@ -22,7 +22,7 @@ import {
   isEnabled,
   writeConsentFlag,
   getConsentState,
-  setSessionTelemetryOptOut,
+  setSessionConsentOverride,
 } from "./consent.js";
 import { emitDebugError, emitDebugPayload, isDebugEnabled } from "./debug.js";
 import type { EventName, EventPropertyMap } from "./events.js";
@@ -287,30 +287,13 @@ export async function markDisabled(): Promise<void> {
  */
 export async function disableForSession(): Promise<boolean> {
   try {
-    const client = getConstructedClient();
-    setSessionTelemetryOptOut(true);
-    if (client) {
-      try {
-        await Promise.race([
-          client.shutdown(SHORT_FLUSH_TIMEOUT_MS),
-          new Promise<void>((resolve) => setTimeout(resolve, SHORT_FLUSH_TIMEOUT_MS).unref()),
-        ]);
-      } catch {
-        /* consent is already disabled; transport shutdown remains best-effort */
-      }
-    }
-    resetClient();
-    state = null;
+    setSessionConsentOverride(false);
+    await shutdown();
     return getConsentState().enabled === false;
   } catch (err) {
     emitDebugError("disableForSession failed", err);
-    return getConsentState().enabled === false;
+    return false;
   }
-}
-
-/** Clear only the disable-only session layer installed by disableForSession. */
-export function clearSessionTelemetryOptOut(): void {
-  setSessionTelemetryOptOut(false);
 }
 
 /** Status payload for `argent telemetry status`; does not create a client. */

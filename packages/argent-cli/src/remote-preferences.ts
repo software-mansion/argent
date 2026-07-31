@@ -9,10 +9,6 @@ const SYNC_TIMEOUT_MS = 3_000;
 export type RemotePreferencesSyncResult =
   | {
       status: "synced";
-      appliedFlags: string[];
-      ignoredFlags: string[];
-      appliedConfig: string[];
-      ignoredConfig: string[];
       telemetryDisabled: boolean;
     }
   | { status: "unsupported" }
@@ -20,26 +16,24 @@ export type RemotePreferencesSyncResult =
 
 export async function syncLinkedServerPreferences(
   url: string,
-  token?: string,
-  fetchImpl: typeof fetch = fetch
+  token?: string
 ): Promise<RemotePreferencesSyncResult> {
   const snapshot = buildRemotePreferencesSnapshot({
-    effectiveConfig: { "telemetry.enabled": getConsentState().enabled },
+    telemetryEnabled: getConsentState().enabled,
   });
-  return pushRemotePreferences(url, token, snapshot, fetchImpl);
+  return pushRemotePreferences(url, token, snapshot);
 }
 
 /** Exported separately so the HTTP compatibility behavior stays unit-testable. */
 export async function pushRemotePreferences(
   url: string,
   token: string | undefined,
-  snapshot: RemotePreferencesSnapshot,
-  fetchImpl: typeof fetch = fetch
+  snapshot: RemotePreferencesSnapshot
 ): Promise<RemotePreferencesSyncResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SYNC_TIMEOUT_MS);
   try {
-    const response = await fetchImpl(`${url.replace(/\/+$/, "")}/preferences/sync`, {
+    const response = await fetch(`${url.replace(/\/+$/, "")}/preferences/sync`, {
       method: "PUT",
       signal: controller.signal,
       headers: {
@@ -65,28 +59,14 @@ export async function pushRemotePreferences(
     if (!isRecord(body) || body.version !== snapshot.version) {
       return { status: "failed", error: "Invalid preference sync response version." };
     }
-    const appliedFlags = parseStringArray(body.appliedFlags);
-    const ignoredFlags = parseStringArray(body.ignoredFlags);
-    const appliedConfig = parseStringArray(body.appliedConfig);
-    const ignoredConfig = parseStringArray(body.ignoredConfig);
-    if (
-      !appliedFlags ||
-      !ignoredFlags ||
-      !appliedConfig ||
-      !ignoredConfig ||
-      typeof body.telemetryDisabled !== "boolean"
-    ) {
+    if (typeof body.telemetryDisabled !== "boolean") {
       return { status: "failed", error: "Invalid preference sync response body." };
     }
-    if (snapshot.config["telemetry.enabled"] === false && !body.telemetryDisabled) {
+    if (snapshot.telemetryDisabled && !body.telemetryDisabled) {
       return { status: "failed", error: "Remote telemetry opt-out was not confirmed." };
     }
     return {
       status: "synced",
-      appliedFlags,
-      ignoredFlags,
-      appliedConfig,
-      ignoredConfig,
       telemetryDisabled: body.telemetryDisabled,
     };
   } catch (error) {
@@ -94,10 +74,6 @@ export async function pushRemotePreferences(
   } finally {
     clearTimeout(timer);
   }
-}
-
-function parseStringArray(value: unknown): string[] | null {
-  return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
