@@ -618,6 +618,29 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     );
     return exitAfterFlush(2);
   }
+  // A trailing separator asserts the path names a directory: the kernel
+  // refuses to open "ok.yaml/" as a file (ENOTDIR), yet path.resolve drops
+  // the separator lexically, so without this guard the CLI would stat and
+  // run a file its own argument does not name — the same dishonest-path
+  // class as the ".." guard above, and like it ordered before the
+  // extension/stem arms so the dishonesty wins over a shape complaint.
+  // Ordered after the ".." guard: when a path carries both flaws, that
+  // guard's recovery (a fully resolved path) also cures the trailing
+  // separator, while stripping the separator here would leave the ".."
+  // standing and demand a second correction. Stripping is always the right
+  // hint (unlike realpath, nothing needs to exist on disk). A path that is
+  // nothing but separators names the filesystem root honestly, so it falls
+  // through to the extension complaint instead of an empty hint.
+  const separatorTrimmedPath = suppliedPath.replace(/[\\/]+$/, "");
+  if (separatorTrimmedPath !== suppliedPath && separatorTrimmedPath !== "") {
+    console.error(
+      `Flow path must not end in a path separator — the separator claims a directory, ` +
+        `which the kernel would refuse to open as a file, so the CLI would run a file ` +
+        `this string does not name: ${suppliedPath}\n` +
+        `Did you mean: argent flow run ${separatorTrimmedPath}`
+    );
+    return exitAfterFlush(2);
+  }
   if (path.extname(suppliedPath) !== ".yaml") {
     const isBareSavedName =
       !suppliedPath.includes("/") &&

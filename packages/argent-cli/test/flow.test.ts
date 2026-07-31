@@ -431,6 +431,44 @@ describe("argent flow run", () => {
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
 
+  it.each([["/"], ["\\"], ["//"]])(
+    "rejects a flow path with trailing separator %j before resolve drops it",
+    async (trailer) => {
+      // checkout.yaml exists, and path.resolve drops the trailing separator
+      // lexically — so without the guard the CLI would stat the real file and
+      // run it, even though the kernel refuses to open "checkout.yaml/"
+      // (ENOTDIR). The hint is the same string minus the separators.
+      await expect(flow(["run", checkoutPath + trailer], opts)).rejects.toThrow("process.exit:2");
+
+      const out = errs.join("\n");
+      expect(out).toContain("Flow path must not end in a path separator");
+      expect(out).toContain(`Did you mean: argent flow run ${checkoutPath}`);
+      expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
+      expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    }
+  );
+
+  it("lets the .. guard win when a path has both a .. segment and a trailing separator", async () => {
+    // Both dishonest-path predicates match. The ".." recovery (a fully
+    // resolved path) also cures the trailing separator, while the
+    // separator-stripped hint would leave the ".." standing — so the ".."
+    // complaint must be the one printed.
+    const supplied = [tempRoot, "nope", "..", "checkout.yaml", ""].join(path.sep);
+    await expect(flow(["run", supplied], opts)).rejects.toThrow("process.exit:2");
+
+    const out = errs.join("\n");
+    expect(out).toContain('Flow path must not contain ".." segments');
+    expect(out).not.toContain("Flow path must not end in a path separator");
+  });
+
+  it("complains about the extension, not the separator, for a path that is only separators", async () => {
+    // "/" names the root directory honestly — there is no separator-stripped
+    // spelling to hint at — so the shape complaint is the accurate one.
+    await expect(flow(["run", "/"], opts)).rejects.toThrow("process.exit:2");
+
+    expect(errs.join("\n")).toContain("Flow path must end in .yaml: /");
+  });
+
   it("exits 2 on a directory named like a flow instead of handing it to flow-execute", async () => {
     // `access(R_OK)` succeeds on a readable directory, so only the isFile()
     // check keeps a `bundle.yaml/` directory out of the runner.
