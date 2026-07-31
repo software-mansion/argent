@@ -136,11 +136,22 @@ const inputSchema: Record<string, unknown> = {
   oneOf: [{ required: ["name"] }, { required: ["flow_path"] }],
 };
 
+// A dual-source call (name + flow_path) must be diagnosed by the schema's
+// exactly-one rule, not by whether either unused file happens to exist — in
+// each direction the boundary keeps its hands off the wrapper:
+// - unwrapWhenSet: flow_path is caller-authored, so alongside name it is
+//   handed to zod as its plain client path (dropping it would legitimize the
+//   call and silently run the saved flow the caller did not ask for).
+// - skipWhenSet: flow_file is client-derived from name, so alongside flow_path
+//   it is dropped — the caller never authored it, there is nothing to surface.
 const fileInputs: FileInputSpec[] = [
-  { target: "flow_path", path: "${flow_path}", kind: "file", optional: true },
-  // skipWhenSet: a dual-source call (name + flow_path) must be diagnosed by the
-  // schema's exactly-one rule, not by whether the unused saved flow's file
-  // happens to exist — so flow_file is never derived alongside flow_path.
+  {
+    target: "flow_path",
+    path: "${flow_path}",
+    kind: "file",
+    optional: true,
+    unwrapWhenSet: "name",
+  },
   {
     target: "flow_file",
     path: "${project_root}/.argent/flows/${name}.yaml",

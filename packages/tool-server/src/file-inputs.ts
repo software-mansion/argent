@@ -104,7 +104,7 @@ async function probeHostPath(
 }
 
 /**
- * `skipWhenSet` gate: a param counts as set whenever the caller provided it —
+ * `skipWhenSet` / `unwrapWhenSet` gate: a param counts as set whenever the caller provided it —
  * matching the `=== undefined` presence checks a tool's own dual-source
  * validation uses, so a degenerate value ("", null) still routes the call to
  * that validation instead of having the boundary vouch for a file the call is
@@ -292,6 +292,18 @@ export async function resolveFileInputs(
     for (const spec of specs) {
       const value = args[spec.target];
       if (!isFileInputWire(value)) continue;
+      if (spec.unwrapWhenSet !== undefined && isParamSet(args[spec.unwrapWhenSet])) {
+        // Caller-authored dual-source: the superseding source param is also
+        // set, so the tool's own exactly-one validation must diagnose the
+        // call — not this wrapper's resolution (whose outcome hinges on
+        // whether the unused file exists), and not a drop (which would
+        // rewrite the mistake into a valid single-source call and silently
+        // run the other source). Hand zod the plain client path; no
+        // resolution metadata is recorded because nothing was probed or
+        // vouched for.
+        args[spec.target] = value.path;
+        continue;
+      }
       if (spec.skipWhenSet !== undefined && isParamSet(args[spec.skipWhenSet])) {
         // Old-client skew: the client derived and wrapped this target even
         // though the superseding source param is set. Drop the derived wrapper

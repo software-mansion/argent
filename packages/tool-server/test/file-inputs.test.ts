@@ -374,4 +374,67 @@ describe("resolveFileInputs", () => {
 
     expect(args.derived).toBe(derivedPath);
   });
+
+  const UNWRAP_SPEC: FileInputSpec[] = [
+    { target: "source", path: "${source}", kind: "file", optional: true, unwrapWhenSet: "name" },
+  ];
+
+  it("unwraps a caller-authored wrapper to its client path when the unwrapWhenSet param is set", async () => {
+    // Dual-source misuse on the CALLER-authored target: dropping it (the
+    // skipWhenSet remedy) would rewrite the call as valid single-source, and
+    // resolving it would make the error hinge on file existence — so the
+    // wrapper is handed on as the plain path string for the tool's own
+    // exactly-one validation to reject. The path is a ghost on purpose:
+    // resolution would throw here, unwrapping must not.
+    const ghost = path.join(tmpDir, "ghost.yaml");
+
+    const { args, fileInputs } = await resolveFileInputs(
+      { fileInputs: UNWRAP_SPEC },
+      { name: "saved", source: wire({ path: ghost }) }
+    );
+
+    expect(args.source).toBe(ghost);
+    // Nothing was probed — no metadata may vouch for a file never looked at.
+    expect(fileInputs).toBeUndefined();
+  });
+
+  it("unwraps even when the unwrapWhenSet param is an empty string", async () => {
+    // Same presence semantics as skipWhenSet: "" is a provided source to the
+    // tool's `=== undefined` dual-source check, so the check must see both.
+    const ghost = path.join(tmpDir, "ghost.yaml");
+
+    const { args } = await resolveFileInputs(
+      { fileInputs: UNWRAP_SPEC },
+      { name: "", source: wire({ path: ghost }) }
+    );
+
+    expect(args.source).toBe(ghost);
+  });
+
+  it("resolves a caller-authored wrapper normally when the unwrapWhenSet param is absent", async () => {
+    const sourcePath = path.join(tmpDir, "explicit.yaml");
+    await fs.writeFile(sourcePath, "steps: []\n");
+    const st = await fs.stat(sourcePath);
+
+    const { args, fileInputs } = await resolveFileInputs(
+      { fileInputs: UNWRAP_SPEC },
+      { source: wire({ path: sourcePath, size: st.size, mtimeMs: st.mtimeMs }) }
+    );
+
+    expect(args.source).toBe(sourcePath);
+    expect(fileInputs).toEqual({
+      source: { clientPath: sourcePath, presentOnHost: true, viaUpload: false, statVerified: true },
+    });
+  });
+
+  it("still throws for an unresolvable wrapper when the unwrapWhenSet param is absent", async () => {
+    // Single-source call, file genuinely missing: the boundary's own error is
+    // the right diagnosis, and unwrapWhenSet must not soften it.
+    await expect(
+      resolveFileInputs(
+        { fileInputs: UNWRAP_SPEC },
+        { source: wire({ path: path.join(tmpDir, "ghost.yaml") }) }
+      )
+    ).rejects.toThrow(FileInputError);
+  });
 });

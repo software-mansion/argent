@@ -298,6 +298,69 @@ describe("flow-execute flow_path over HTTP", () => {
     expect(steps.invokeTool).not.toHaveBeenCalled();
   });
 
+  it("diagnoses name + flow_path with the exactly-one rule when the flow_path file does not resolve", async () => {
+    // The reciprocal of the missing-saved-flow case: this time the
+    // CALLER-authored source is the one that cannot resolve. The wrapper is
+    // path-only — the client cannot stat (let alone inline) a file that never
+    // existed. Without the flow_path spec's unwrap the boundary would 422 on
+    // it before zod's exactly-one rule runs, telling the agent to re-create a
+    // file the call never needed.
+    const res = await supertest(handle.app)
+      .post("/tools/flow-execute")
+      .send({
+        name: "checkout",
+        project_root: projectRoot,
+        device: DEVICE,
+        flow_path: { __argentFileInput: true, path: path.join(tmpDir, "nope.yaml") },
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Pass exactly one flow source: name or flow_path\./);
+    expect(res.body.error).not.toMatch(/was not found on the tool-server host/);
+    expect(steps.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("diagnoses an old-client dual-source wire where neither wrapper resolves", async () => {
+    // Worst case of the skew: a pre-skipWhenSet client derived flow_file for
+    // an unsaved name AND the caller mistyped flow_path, so both wrappers are
+    // path-only. Whichever spec ran first used to pick the error; the
+    // diagnosis must not consult either file.
+    const res = await supertest(handle.app)
+      .post("/tools/flow-execute")
+      .send({
+        name: "checkout",
+        project_root: projectRoot,
+        device: DEVICE,
+        flow_path: { __argentFileInput: true, path: path.join(tmpDir, "nope.yaml") },
+        flow_file: {
+          __argentFileInput: true,
+          path: path.join(projectRoot, ".argent", "flows", "checkout.yaml"),
+        },
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Pass exactly one flow source: name or flow_path\./);
+    expect(res.body.error).not.toMatch(/was not found on the tool-server host/);
+    expect(steps.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("still fails the boundary when a lone flow_path does not resolve", async () => {
+    // No name on the wire, so the unwrap must not fire: a flow_path-only call
+    // whose file resolves nowhere is a genuine boundary failure, and the 422
+    // guidance about the missing file is the right diagnosis.
+    const res = await supertest(handle.app)
+      .post("/tools/flow-execute")
+      .send({
+        project_root: projectRoot,
+        device: DEVICE,
+        flow_path: { __argentFileInput: true, path: path.join(tmpDir, "nope.yaml") },
+      });
+
+    expect(res.status).toBe(422);
+    expect(res.body.error).toMatch(/was not found on the tool-server host/);
+    expect(steps.invokeTool).not.toHaveBeenCalled();
+  });
+
   it("diagnoses a source-less call with the exactly-one rule at the validation layer", async () => {
     // The other half of exactly-one: no name and no flow_path. Nothing on the
     // wire is a wrapper, so file-input resolution passes through untouched and

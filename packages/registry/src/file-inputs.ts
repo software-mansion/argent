@@ -121,9 +121,24 @@ export interface FileInputSpec {
    * sent, so a dual-source misuse is diagnosed by the tool's own validation
    * instead of by this spec's file resolution. "Set" means a non-empty string
    * (or, server-side, a not-yet-resolved wrapper); explicit string values on
-   * `target` are caller-authored and pass through regardless.
+   * `target` are caller-authored and pass through regardless. Only for
+   * client-DERIVED targets — a caller-authored one needs {@link unwrapWhenSet}.
    */
   skipWhenSet?: string;
+  /**
+   * Server-side: unwrap this spec's wrapper back to its client path string —
+   * neither resolved nor dropped — whenever the named param is set. The
+   * complement of {@link skipWhenSet} for a CALLER-authored target with an
+   * alternate source param (e.g. flow-execute's flow_path vs name): both on
+   * the wire is a dual-source misuse the tool's own exactly-one validation
+   * must diagnose, so the boundary must not resolve the wrapper (the error
+   * would hinge on whether an unused file exists) and must not drop it
+   * (skipWhenSet's remedy — right for a derived param, but here it would
+   * erase the caller's mistake and silently run the other source). Unwrapping
+   * hands zod both params as plain strings. Clients ignore this field: they
+   * still wrap `target` whenever it is set, which is the wire this handles.
+   */
+  unwrapWhenSet?: string;
 }
 
 /** Per-target resolution outcome, passed to the tool via `ctx.fileInputs`. */
