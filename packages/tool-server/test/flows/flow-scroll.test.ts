@@ -34,6 +34,18 @@ function screen(children: DescribeNode[]): DescribeNode {
   return n({ role: "AXWindow", frame: { x: 0, y: 0, width: 1, height: 1 }, children });
 }
 
+// A full-bleed scroll-container LEAF, emitted as a SIBLING of the rows it
+// scrolls — the flat-leaves-under-one-root shape the flow tree adapters
+// actually produce (see flow-tree-flatten): the edge-avoid nudge matches a
+// target to its scroller by geometric containment over these leaves, since
+// the flat shape has no ancestry to consult (see targetScrollerFrame) — a
+// target no emitted scroller contains never gets nudged. Full-bleed (0..1)
+// keeps each nudge test's pinned arithmetic identical to measuring against
+// the screen: clip end 1.0, gesture anchor (0.5, 0.5).
+function fullScreenScroller(): DescribeNode {
+  return n({ role: "AXScrollArea", frame: { x: 0, y: 0, width: 1, height: 1 } });
+}
+
 interface SwipeCall {
   fromX: number;
   fromY: number;
@@ -623,14 +635,17 @@ describe("scroll-to directive", () => {
   });
 
   it("nudges an already-visible target clear of a flush screen-edge landing", async () => {
-    // Fully inside the viewport at 0.87..0.97 — accepted by the axis check —
-    // but only 0.03 from the screen bottom, i.e. under home-indicator / tab-bar
-    // territory. One same-direction nudge sized to 1.5× the 0.07 deficit moves
-    // it clear; the second round sees enough clearance and stops.
+    // Fully inside its full-bleed scroller at 0.87..0.97 — accepted by the
+    // axis check — but only 0.03 from the scroller's bottom, which IS the
+    // screen bottom: home-indicator / tab-bar territory. One same-direction
+    // nudge sized to 1.5× the 0.07 deficit moves it clear; the second round
+    // sees enough clearance and stops.
     const flush = screen([
+      fullScreenScroller(),
       n({ label: "Order #1234", frame: { x: 0.1, y: 0.87, width: 0.8, height: 0.1 } }),
     ]);
     const padded = screen([
+      fullScreenScroller(),
       n({ label: "Order #1234", frame: { x: 0.1, y: 0.75, width: 0.8, height: 0.1 } }),
     ]);
     let nudged = false;
@@ -661,15 +676,18 @@ describe("scroll-to directive", () => {
   });
 
   it("floors a tiny nudge at the minimum scroll increment so it cannot read as a tap", async () => {
-    // A near-padding landing at 0.82..0.92 leaves 0.08 of clearance: the 0.02
-    // deficit's 1.5× ask is only 0.03, below the 0.05 tap-vs-scroll floor, so
-    // the dispatched nudge must be raised to exactly MIN_SCROLL_INCREMENT —
-    // a 0.03 swipe could register as a tap on the target. Headroom above the
-    // row (0.82) is ample, so its half-cap (0.41) does not mask the floor.
+    // A near-padding landing at 0.82..0.92 in a full-bleed scroller leaves
+    // 0.08 of clearance: the 0.02 deficit's 1.5× ask is only 0.03, below the
+    // 0.05 tap-vs-scroll floor, so the dispatched nudge must be raised to
+    // exactly MIN_SCROLL_INCREMENT — a 0.03 swipe could register as a tap on
+    // the target. Headroom above the row (0.82) is ample, so its half-cap
+    // (0.41) does not mask the floor.
     const nearPadding = screen([
+      fullScreenScroller(),
       n({ label: "Order #1234", frame: { x: 0.1, y: 0.82, width: 0.8, height: 0.1 } }),
     ]);
     const padded = screen([
+      fullScreenScroller(),
       n({ label: "Order #1234", frame: { x: 0.1, y: 0.75, width: 0.8, height: 0.1 } }),
     ]);
     let nudged = false;
@@ -706,12 +724,17 @@ describe("scroll-to directive", () => {
     let phase = 0;
     currentTree = () =>
       phase === 0
-        ? screen([n({ label: "Top", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 } })])
+        ? screen([
+            fullScreenScroller(),
+            n({ label: "Top", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 } }),
+          ])
         : phase === 1
           ? screen([
+              fullScreenScroller(),
               n({ label: "Order #1234", frame: { x: 0.1, y: 0.88, width: 0.8, height: 0.1 } }),
             ])
           : screen([
+              fullScreenScroller(),
               n({ label: "Order #1234", frame: { x: 0.1, y: 0.7, width: 0.8, height: 0.1 } }),
             ]);
 
@@ -739,11 +762,16 @@ describe("scroll-to directive", () => {
 
   it("accepts the flush landing when the nudge reveals nothing (end of scroll)", async () => {
     // The target is the last element: it sits 0.02 from the screen bottom and
-    // the container can't move. The nudge is attempted once, the settled tree
-    // repeats, and the end-of-scroll fingerprint accepts the flush landing —
-    // best effort, never a failure.
+    // the container can't move. The nudge is attempted once and the tree
+    // doesn't budge — the deficit progress check (the target's own frame is
+    // the direct signal a nudge worked) accepts the flush landing before the
+    // end-of-scroll fingerprint even gets to repeat — best effort, never a
+    // failure.
     currentTree = () =>
-      screen([n({ label: "Last row", frame: { x: 0.1, y: 0.88, width: 0.8, height: 0.1 } })]);
+      screen([
+        fullScreenScroller(),
+        n({ label: "Last row", frame: { x: 0.1, y: 0.88, width: 0.8, height: 0.1 } }),
+      ]);
 
     const swipes: SwipeCall[] = [];
     const registry = mockRegistry(swipes);
@@ -859,14 +887,17 @@ describe("scroll-to directive", () => {
   });
 
   it("caps the nudge at half the target's headroom, then stops when none is left", async () => {
-    // A 0.85-tall card 0.03 off the screen bottom has only 0.12 of headroom
-    // above it: the 1.5×-deficit ask (0.105) is capped at headroom/2 (0.06).
-    // After that move the remaining headroom's half (0.03) is below the tap-vs-
-    // scroll floor, so the loop accepts rather than risk a mis-read gesture.
+    // A 0.85-tall card 0.03 off its full-bleed scroller's bottom has only
+    // 0.12 of headroom above it: the 1.5×-deficit ask (0.105) is capped at
+    // headroom/2 (0.06). After that move the remaining headroom's half (0.03)
+    // is below the tap-vs-scroll floor, so the loop accepts rather than risk
+    // a mis-read gesture.
     const before = screen([
+      fullScreenScroller(),
       n({ label: "Tall card", frame: { x: 0.1, y: 0.12, width: 0.8, height: 0.85 } }),
     ]);
     const after = screen([
+      fullScreenScroller(),
       n({ label: "Tall card", frame: { x: 0.1, y: 0.06, width: 0.8, height: 0.85 } }),
     ]);
     let nudged = false;
@@ -894,12 +925,18 @@ describe("scroll-to directive", () => {
   });
 
   it("gives up after MAX_EDGE_NUDGES and accepts the under-padded landing", async () => {
-    // A snapping list keeps re-settling short of padding, with a distinct tree
-    // each round (so end-of-scroll never fires). The nudge budget (3) bounds
+    // A snapping list absorbs most of each nudge but does creep: every round
+    // shows genuine progress (the deficit shrinks 0.02 ≥ EDGE_EPS: 0.08 →
+    // 0.06 → 0.04, so the progress check keeps allowing retries) yet stays
+    // short of padding, with a distinct tree each round (so end-of-scroll
+    // never fires either). The nudge budget (3) is then the bound that stops
     // the chase, and the step still passes — acceptance is never revoked.
     const at = (y: number) =>
-      screen([n({ label: "Snappy row", frame: { x: 0.1, y, width: 0.8, height: 0.08 } })]);
-    const positions = [0.9, 0.895, 0.905, 0.9];
+      screen([
+        fullScreenScroller(),
+        n({ label: "Snappy row", frame: { x: 0.1, y, width: 0.8, height: 0.08 } }),
+      ]);
+    const positions = [0.9, 0.88, 0.86, 0.85];
     let round = 0;
     currentTree = () => at(positions[Math.min(round, positions.length - 1)]);
 
@@ -932,9 +969,11 @@ describe("scroll-to directive", () => {
     // back to full-size plain-search increments carrying the viewport further
     // past the target.
     const flush = screen([
+      fullScreenScroller(),
       n({ label: "Order #1234", frame: { x: 0.1, y: 0.88, width: 0.8, height: 0.1 } }),
     ]);
     const paged = screen([
+      fullScreenScroller(),
       n({ label: "Order #5678", frame: { x: 0.1, y: 0.4, width: 0.8, height: 0.1 } }),
     ]);
     let nudged = false;
@@ -1005,15 +1044,269 @@ describe("scroll-to directive", () => {
     expect(swipes).toHaveLength(1);
   });
 
+  it("never nudges a pinned target that sits outside every scroll container", async () => {
+    // Reviewer repro 1, in the flat-leaves shape the adapters emit: a list
+    // leaf and, below it, a pinned bottom bar holding the checkout button —
+    // all SIBLINGS. The button is flush at the screen bottom (0.9..0.98 —
+    // the raw screen-edge arithmetic reads a 0.08 deficit) but no scroll can
+    // ever move it: the list's rect (ending at 0.96, inside the near-edge
+    // band, so it WOULD pass the screen-edge gate as a clip) merely overlaps
+    // the button's top sliver — it does not CONTAIN it, and overlap is not
+    // containment. The gate must skip the nudge outright — pass with ZERO
+    // gestures — where the screen-derived clip dispatched a swipe into the
+    // list and scrolled unrelated rows away.
+    currentTree = () =>
+      screen([
+        n({ role: "AXScrollArea", frame: { x: 0, y: 0, width: 1, height: 0.96 } }),
+        n({ label: "Row 1", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 } }),
+        n({ identifier: "bottom-bar", frame: { x: 0, y: 0.9, width: 1, height: 0.1 } }),
+        n({
+          identifier: "checkout-button",
+          label: "Checkout",
+          frame: { x: 0.1, y: 0.9, width: 0.8, height: 0.08 },
+        }),
+      ]);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes);
+
+    await writeFlow("pinned-bar", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "scroll-to", target: { identifier: "checkout-button" }, direction: "down" },
+      ],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "pinned-bar", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(0);
+  });
+
+  it("never nudges on a screen with no scroll container at all", async () => {
+    // Reviewer repro 2: nothing scrollable anywhere; a large pressable card
+    // centred on screen and the cta inset near the bottom (0.92..0.98 — the
+    // raw screen-edge arithmetic reads a 0.04 deficit). gesture-swipe emits a
+    // genuine Down/Moves/Up train, and with no scroller to claim the touch
+    // responder the card under the (0.5, 0.5) anchor keeps it — a nudge-sized
+    // travel stays inside a large control's press-retention rect, so each
+    // "nudge" COMMITS a press. With no scroll container in the tree at all
+    // the gate finds no containing candidate and skips the phase entirely: a
+    // defensive scroll-to on a static screen dispatches nothing and passes
+    // as it did before the nudge existed.
+    currentTree = () =>
+      screen([
+        n({
+          label: "Promo card",
+          clickable: true,
+          frame: { x: 0.1, y: 0.2, width: 0.8, height: 0.55 },
+        }),
+        n({
+          identifier: "cta",
+          label: "Continue",
+          frame: { x: 0.1, y: 0.92, width: 0.8, height: 0.06 },
+        }),
+      ]);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes);
+
+    await writeFlow("static-screen", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { identifier: "cta" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "static-screen", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(0);
+  });
+
+  it("measures the nudge clip against the target's scroller, not the screen", async () => {
+    // The scroller leaf's bottom sits at 0.93 — outside EDGE_AVOID_SCREEN_EPS
+    // (0.05) of the screen edge, so its own border already clears screen
+    // chrome. The row (a flat sibling the scroller's rect contains) lands at
+    // 0.84..0.92: measured against the SCREEN it is within EDGE_AVOID_PADDING
+    // of the bottom (0.02 deficit — the old FULL_SCREEN clip would have
+    // dispatched a floored 0.05 nudge); measured against its scroller the
+    // entry edge isn't a screen edge at all, so nothing may fire. Pins that
+    // the clip is the target's container, not the screen, even when no
+    // `within` is named.
+    currentTree = () =>
+      screen([
+        n({ role: "AXScrollArea", frame: { x: 0, y: 0.1, width: 1, height: 0.83 } }),
+        n({ label: "Row 9", frame: { x: 0.1, y: 0.84, width: 0.8, height: 0.08 } }),
+      ]);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes);
+
+    await writeFlow("inset-scroller", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Row 9" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "inset-scroller", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(0);
+  });
+
+  it("anchors the nudge at the target's scroller centre, not the screen centre", async () => {
+    // A full-bleed-ish scroller offset under a header: y 0.04..1.0, so its
+    // centre is 0.52 — not the screen's 0.5. The row (its flat sibling)
+    // lands flush at 0.87..0.97 (clip end 1.0 → clearance 0.03, deficit 0.07
+    // → travel 0.105). The nudge must anchor at the SCROLLER's centre — the
+    // screen-centre anchor belonged to the FULL_SCREEN clip the container
+    // gate replaced — latching the gesture to the container that actually
+    // owns the target.
+    const offsetScroller = () =>
+      n({ role: "AXScrollArea", frame: { x: 0, y: 0.04, width: 1, height: 0.96 } });
+    const flush = screen([
+      offsetScroller(),
+      n({ label: "Order #1234", frame: { x: 0.1, y: 0.87, width: 0.8, height: 0.1 } }),
+    ]);
+    const padded = screen([
+      offsetScroller(),
+      n({ label: "Order #1234", frame: { x: 0.1, y: 0.75, width: 0.8, height: 0.1 } }),
+    ]);
+    let nudged = false;
+    currentTree = () => (nudged ? padded : flush);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      nudged = true;
+    });
+
+    await writeFlow("offset-scroller", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "offset-scroller", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].settle).toBe(true);
+    expect(swipes[0].fromY).toBeCloseTo(0.52, 5);
+    expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.105, 5);
+  });
+
+  it("nudges in the smallest containing scroller when several contain the target", async () => {
+    // Nested scrollers in the flat shape: a full-bleed page scroller (area
+    // 1.0, centre 0.5) and an inner list at y 0.3..1.0 (area 0.7, centre
+    // 0.65) both contain the row flush at 0.87..0.97. The smallest-area
+    // candidate — the innermost, whose viewport actually clips the row —
+    // must win: its end sits on the screen edge too, so a 0.07-deficit nudge
+    // (travel 0.105, headroom 0.57 — the 0.285 half-cap doesn't bite) goes
+    // out anchored at the INNER list's centre (fromY 0.65), not the page
+    // scroller's 0.5.
+    const scrollers = () => [
+      fullScreenScroller(),
+      n({ role: "AXScrollArea", identifier: "inner-list", frame: { x: 0, y: 0.3, width: 1, height: 0.7 } }),
+    ];
+    const flush = screen([
+      ...scrollers(),
+      n({ label: "Order #1234", frame: { x: 0.1, y: 0.87, width: 0.8, height: 0.1 } }),
+    ]);
+    const padded = screen([
+      ...scrollers(),
+      n({ label: "Order #1234", frame: { x: 0.1, y: 0.75, width: 0.8, height: 0.1 } }),
+    ]);
+    let nudged = false;
+    currentTree = () => (nudged ? padded : flush);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      nudged = true;
+    });
+
+    await writeFlow("innermost-scroller", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "innermost-scroller", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].settle).toBe(true);
+    expect(swipes[0].fromY).toBeCloseTo(0.65, 5);
+    expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.105, 5);
+  });
+
+  it("stops after one nudge when the target does not move, despite tree churn", async () => {
+    // The reviewer's three-press repro distilled: the target sits in a
+    // scroller flush at the screen bottom and CANNOT move (deficit 0.08 every
+    // round), while the gesture's own side effects — a press counter the
+    // swipe committed as a press — keep OTHER text in the region churning, so
+    // the end-of-scroll fingerprint never repeats and cannot stop the loop.
+    // The deficit progress check must: after one dispatched nudge the deficit
+    // has not shrunk by EDGE_EPS, so the flush landing is accepted with
+    // exactly ONE gesture. (Before the check, this shape burned the whole
+    // MAX_EDGE_NUDGES budget — three real presses on the app.)
+    let presses = 0;
+    currentTree = () =>
+      screen([
+        fullScreenScroller(),
+        n({
+          label: `IN:${presses} OUT:${presses} PRESS:${presses}`,
+          frame: { x: 0.1, y: 0.3, width: 0.8, height: 0.3 },
+        }),
+        n({ label: "Last row", frame: { x: 0.1, y: 0.88, width: 0.8, height: 0.1 } }),
+      ]);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      presses++;
+    });
+
+    await writeFlow("churning-stuck-nudge", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Last row" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "churning-stuck-nudge", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(1);
+  });
+
   it("nudges an up-scrolled target clear of a flush top-edge landing", async () => {
     // Mirror of the down case: scrolling `up`, the entry edge is the TOP of
     // the screen (status bar / notch territory). Target at 0.03..0.13 →
     // clearance 0.03, deficit 0.07, nudge 0.105 — and for an up-scroll the
     // finger travels DOWN (toY > fromY).
     const flush = screen([
+      fullScreenScroller(),
       n({ label: "Header row", frame: { x: 0.1, y: 0.03, width: 0.8, height: 0.1 } }),
     ]);
     const padded = screen([
+      fullScreenScroller(),
       n({ label: "Header row", frame: { x: 0.1, y: 0.15, width: 0.8, height: 0.1 } }),
     ]);
     let nudged = false;
@@ -1047,9 +1340,11 @@ describe("scroll-to directive", () => {
     // 0.07, nudge 0.105 — and to reveal content on the right the finger
     // travels LEFT (toX < fromX), the vertical anchor unmoved.
     const flush = screen([
+      fullScreenScroller(),
       n({ label: "Card 9", frame: { x: 0.87, y: 0.45, width: 0.1, height: 0.1 } }),
     ]);
     const padded = screen([
+      fullScreenScroller(),
       n({ label: "Card 9", frame: { x: 0.75, y: 0.45, width: 0.1, height: 0.1 } }),
     ]);
     let nudged = false;
@@ -1084,9 +1379,11 @@ describe("scroll-to directive", () => {
     // → clearance 0.03, deficit 0.07, nudge 0.105 — and for a left-scroll the
     // finger travels RIGHT (toX > fromX).
     const flush = screen([
+      fullScreenScroller(),
       n({ label: "Back chip", frame: { x: 0.03, y: 0.45, width: 0.1, height: 0.1 } }),
     ]);
     const padded = screen([
+      fullScreenScroller(),
       n({ label: "Back chip", frame: { x: 0.15, y: 0.45, width: 0.1, height: 0.1 } }),
     ]);
     let nudged = false;
@@ -1120,11 +1417,17 @@ describe("scroll-to directive", () => {
     // The device id shape selects the platform (chromium-cdp-<port> →
     // chromium), so the same flush landing goes out as a gesture-scroll wheel
     // burst whose deltaY is the exact nudge distance (0.08 deficit × 1.5), not
-    // the half-viewport default — and no touch swipe is dispatched.
+    // the half-viewport default — and no touch swipe is dispatched. The
+    // scroller leaf carries the `scrollable` flag (the CDP DOM walker's
+    // shape, no AX role) — the container gate must detect it through the
+    // flag too.
+    const domScroller = () => n({ scrollable: true, frame: { x: 0, y: 0, width: 1, height: 1 } });
     const flush = screen([
+      domScroller(),
       n({ label: "Order #1234", frame: { x: 0.1, y: 0.88, width: 0.8, height: 0.1 } }),
     ]);
     const padded = screen([
+      domScroller(),
       n({ label: "Order #1234", frame: { x: 0.1, y: 0.7, width: 0.8, height: 0.1 } }),
     ]);
     let nudged = false;
@@ -1165,11 +1468,15 @@ describe("scroll-to directive", () => {
     // Horizontal wheel mirror: a right-scroll landing flush at 0.88..0.98
     // (clearance 0.02, deficit 0.08) goes out as one gesture-scroll whose
     // deltaX is +0.12 — positive reveals content to the right — with no
-    // deltaY and no touch swipe.
+    // deltaY and no touch swipe. Flag-marked scroller leaf, as the DOM
+    // walker emits it.
+    const domScroller = () => n({ scrollable: true, frame: { x: 0, y: 0, width: 1, height: 1 } });
     const flush = screen([
+      domScroller(),
       n({ label: "Card 9", frame: { x: 0.88, y: 0.45, width: 0.1, height: 0.1 } }),
     ]);
     const padded = screen([
+      domScroller(),
       n({ label: "Card 9", frame: { x: 0.7, y: 0.45, width: 0.1, height: 0.1 } }),
     ]);
     let nudged = false;
