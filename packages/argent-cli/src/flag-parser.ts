@@ -47,6 +47,22 @@ function isScalarType(type: string | undefined): boolean {
   return type === "string" || type === "number" || type === "integer" || type === "boolean";
 }
 
+/** Fields that can only be passed as JSON, because a flag value cannot express their shape. */
+function isJsonField(prop: JsonSchema | undefined): boolean {
+  return prop?.type === "object" || (prop?.type === "array" && !isScalarType(prop.items?.type));
+}
+
+/**
+ * The flag a field is named by, with no value placeholder — for use in prose.
+ *
+ * The single source of truth for the `-json` suffix, so a message about a field and the help line
+ * for that same field can never disagree. Tolerates an unknown field, which a malformed schema can
+ * produce by listing a name it has no property for.
+ */
+export function flagNameFor(name: string, prop: JsonSchema | undefined): string {
+  return isJsonField(prop) ? `--${name}-json` : `--${name}`;
+}
+
 function coerceScalar(raw: string, type: string | undefined, field: string): unknown {
   if (type === "number") {
     // Number("") and Number("   ") are 0, so reject empty/whitespace explicitly.
@@ -87,7 +103,9 @@ function parseJsonOrThrow(raw: string, label: string): unknown {
 /**
  * Parses argv against the given schema. Throws FlagParseException on bad input.
  * Returned `args` contains parsed fields; the caller is responsible for merging
- * `--args` JSON (if given) and validating required fields server-side.
+ * `--args` JSON (if given). Whether the required fields are present is checked
+ * against the merged payload in `run-validation`; their types and constraints
+ * are validated server-side.
  */
 export function parseFlags(argv: string[], schema: JsonSchema | undefined): FlagParseResult {
   const properties = schema?.properties ?? {};
@@ -293,11 +311,10 @@ export function formatSchemaUsage(schema: JsonSchema | undefined): string {
 }
 
 function renderFlagName(name: string, prop: JsonSchema): string {
-  if (prop.type === "object" || (prop.type === "array" && !isScalarType(prop.items?.type))) {
-    return `--${name}-json <json>`;
-  }
-  if (prop.type === "boolean") return `--${name}`;
-  return `--${name} <value>`;
+  const flag = flagNameFor(name, prop);
+  if (isJsonField(prop)) return `${flag} <json>`;
+  if (prop.type === "boolean") return flag;
+  return `${flag} <value>`;
 }
 
 function renderType(prop: JsonSchema): string {
