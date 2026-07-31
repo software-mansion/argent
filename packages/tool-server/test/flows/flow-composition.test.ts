@@ -982,6 +982,55 @@ describe("flow composition (run:)", () => {
     ).rejects.toThrow(/co-located/i);
   });
 
+  it("rejects an uploaded flow whose run: sits two when: blocks deep", async () => {
+    // Pins walkSteps' recursion DEPTH, which the single-level test above
+    // cannot: a one-level peek (`yield* step.steps` in place of
+    // `yield* walkSteps(step.steps)`) still passes that neighbor but never
+    // reaches this run:, so the flow reports ok: true with the run line inside
+    // a block skip — the silent-green CI outcome the preflight exists to
+    // prevent. The parser nests when: to MAX_WHEN_DEPTH (20), so two levels is
+    // ordinary authorable YAML, not an edge case.
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(
+      uploadedPath,
+      "steps:\n" +
+        "  - when:\n" +
+        "      platform: android\n" +
+        "    steps:\n" +
+        "      - when:\n" +
+        "          platform: android\n" +
+        "        steps:\n" +
+        "          - run: login.yaml\n",
+      "utf8"
+    );
+
+    const registry = mockRegistry();
+    const err = await createRunFlowTool(registry)
+      .execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_file: {
+              clientPath: "/client/.argent/flows/main.yaml",
+              presentOnHost: false,
+              viaUpload: true,
+            },
+          },
+        }
+      )
+      .then(
+        () => null,
+        (e: unknown) => e
+      );
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain('run: composition ("run: login.yaml")');
+    expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_run_composition");
+    // Preflight, not mid-run: nothing was dispatched to the device.
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
   it("rejects an uploaded chromium e2e flow's run: before booting the launch's Electron app", async () => {
     // The guard's docstring promises the rejection fires "before anything
     // executes" — a POSITIONAL contract its mere existence doesn't keep. For
