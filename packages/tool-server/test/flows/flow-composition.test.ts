@@ -25,6 +25,23 @@ vi.mock("../../src/tools/flows/flow-visual", () => ({
   runSnapshot: vi.fn(async () => ({ status: "pass", reason: "snapshot stubbed" })),
 }));
 
+// Mock the Electron launcher: no test here may legitimately reach it — the
+// chromium-ordering test below pins exactly that — so a misplaced upload guard
+// records a boot attempt instead of spawning a real process.
+const bootElectronApp = vi.fn(async () => ({
+  platform: "chromium" as const,
+  id: "chromium-cdp-12345",
+  port: 12345,
+  pid: 4242,
+  appPath: "/abs/e2e-app",
+  booted: true as const,
+}));
+vi.mock("../../src/tools/devices/boot-electron", () => ({
+  bootElectronApp: (...args: unknown[]) =>
+    (bootElectronApp as (...a: unknown[]) => unknown)(...args),
+  killChromiumByPort: vi.fn(),
+}));
+
 const DEVICE = "00000000-0000-0000-0000-0000000000ab";
 let tmpDir: string;
 
@@ -963,6 +980,91 @@ describe("flow composition (run:)", () => {
         }
       )
     ).rejects.toThrow(/co-located/i);
+  });
+
+  it("rejects an uploaded chromium e2e flow's run: before booting the launch's Electron app", async () => {
+    // The guard's docstring promises the rejection fires "before anything
+    // executes" — a POSITIONAL contract its mere existence doesn't keep. For
+    // an uploaded chromium e2e flow that also carries a run:, the guard
+    // sitting above resolveRunDevice is what decides whether an Electron
+    // instance is booted (and orphaned by the throw, which lands before the
+    // teardown finally) just to deliver a contract error. The absolute app
+    // path is deliberate — legal for an upload — so nothing else stands
+    // between the boot and the error: move the guard call below
+    // `const device = resolved.device;` and the boot fires first.
+    bootElectronApp.mockClear();
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(
+      uploadedPath,
+      "steps:\n  - launch: { chromium: /abs/e2e-app }\n  - run: login.yaml\n",
+      "utf8"
+    );
+
+    const registry = mockRegistry();
+    await expect(
+      createRunFlowTool(registry).execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: uploadedPath },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_file: {
+              clientPath: "/client/.argent/flows/main.yaml",
+              presentOnHost: false,
+              viaUpload: true,
+            },
+          },
+        }
+      )
+    ).rejects.toThrow(/run: composition/);
+    // Preflight, not post-boot: no Electron instance was spawned and no
+    // device was resolved before the rejection.
+    expect(bootElectronApp).not.toHaveBeenCalled();
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("rejects an uploaded fragment's run: instead of answering the prerequisite handshake", async () => {
+    // The other half of the guard's "before anything executes" position: it
+    // sits above the executionPrerequisite early return. A prerequisite is
+    // fragments-only (no leading launch) and fragments can carry run:, so an
+    // uploaded fragment can declare both. With the blocks
+    // swapped, the un-acknowledged call gets the prerequisite notice back —
+    // sending the agent off to do manual device setup for a flow the very
+    // next call rejects. The contract error must win.
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(
+      uploadedPath,
+      serializeFlow({
+        executionPrerequisite: "Signed into the demo account",
+        steps: [{ kind: "run", flow: "login.yaml" }],
+      }),
+      "utf8"
+    );
+
+    const outcome = await createRunFlowTool(mockRegistry())
+      .execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_file: {
+              clientPath: "/client/.argent/flows/main.yaml",
+              presentOnHost: false,
+              viaUpload: true,
+            },
+          },
+        }
+      )
+      .then(
+        (r) => r,
+        (e: unknown) => e
+      );
+    // A rejection — not a { notice, executionPrerequisite } return: on a
+    // failure this prints the notice that leaked through instead.
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toContain('run: composition ("run: login.yaml")');
+    expect(getFailureSignal(outcome)?.failure_stage).toBe("flow_upload_run_composition");
   });
 
   it("allows run: composition for a co-located flow_file resolved in place", async () => {
