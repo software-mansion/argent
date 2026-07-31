@@ -734,11 +734,14 @@ than an installed app id it relaunches. With no explicit \`device\`, a run whose
 unambiguously chromium (\`platform: chromium\`, or a lone \`{ chromium: … }\` target) boots that app and
 starts there — following a leading \`run:\`, so a fragment that composes a chromium e2e flow boots too;
 otherwise the first launch attaches to an already-running instance and never kills it. Every later
-launch — a nested e2e flow's own, or a mid-flow relaunch — boots a fresh instance the run moves onto,
-replacing the one it already owns for that app. Instances the runner booted are torn down when the run
-ends. A launch declaring no id for the run's platform is an error, not a cue to switch platforms.
-Every step hard-stops the flow on failure;
-later steps are reported as skipped. Returns a structured report ({ ok, passed, failed, skipped, errored, steps }).
+launch — a nested e2e flow's own, or a mid-flow relaunch — boots a fresh instance the run moves onto;
+an instance the run already owns for that same app is killed first (its exit awaited) so the
+replacement can't lose the race against its single-instance lock. Instances the runner still owns at
+run end are torn down then. A launch declaring no id for the run's platform is an error, not a cue to
+switch platforms. Every step hard-stops the flow on failure; later steps are reported as skipped.
+Returns a structured report ({ flow, device, executionPrerequisite, ok, aborted?, passed, failed,
+skipped, errored, steps }) — \`device\` is the device the run STARTED on; when launches moved it onto
+runner-booted instances, each names its instance in that step's reason.
 
 If a fragment has an execution prerequisite and prerequisiteAcknowledged is not set to true, the tool
 returns a notice with the prerequisite instead of running.`,
