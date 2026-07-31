@@ -1800,9 +1800,11 @@ function parseRunTarget(raw: unknown, value: unknown): string {
   if (value.includes("\\")) {
     badEntry(raw, "a `run` path uses forward slashes, e.g. `run: fragments/login.yaml`");
   }
-  // The drive-letter test also catches win32 drive-RELATIVE paths ("C:foo"),
-  // which isAbsolute passes but which resolve against the drive's cwd.
-  if (path.posix.isAbsolute(value) || path.win32.isAbsolute(value) || /^[A-Za-z]:/.test(value)) {
+  // posix.isAbsolute catches `/...`; the drive-letter test catches every win32
+  // device form — absolute ("C:/") and drive-RELATIVE ("C:foo", which even
+  // win32.isAbsolute passes but which resolves against the drive's cwd). No
+  // `\`-separated absolute survives the backslash rejection above.
+  if (path.posix.isAbsolute(value) || /^[A-Za-z]:/.test(value)) {
     badEntry(raw, "a `run` path must be relative to the flow file that references it");
   }
   if (!value.endsWith(".yaml")) {
