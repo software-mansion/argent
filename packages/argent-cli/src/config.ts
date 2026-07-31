@@ -13,6 +13,7 @@ import {
   CONFIG_SCHEMA,
   configDir,
   findProjectRoot,
+  getConfigDefinition,
   getConfigValueByKey,
   getConfigValueAtScope,
   setConfigValue,
@@ -84,6 +85,9 @@ the raw value stored at each scope.`);
 
 function scopeDetail(e: ConfigEntryView): string {
   const parts: string[] = [`scopes: ${e.scopes.join(", ")}`];
+  // What the key accepts, which the description alone does not say — a list-valued
+  // key reads exactly like a string-valued one otherwise.
+  if (e.expected) parts.push(`value: ${e.expected}${e.example ? `, e.g. ${e.example}` : ""}`);
   if (e.project !== undefined) parts.push(`project=${formatValuePlain(e.project)}`);
   if (e.global !== undefined) parts.push(`global=${formatValuePlain(e.global)}`);
   return parts.join("  ·  ");
@@ -158,7 +162,10 @@ parsed (e.g. \`true\`, \`42\`, \`["a","b"]\`); anything else is stored as a stri
     if (warning) console.error(pc.yellow(warning));
     console.log(`Set ${pc.bold(key)} = ${formatValuePlain(stored)} (${scopeLabel(targetScope)}).`);
   } catch (err) {
-    reportError(err);
+    // Built here rather than in reportError because the correction is worth
+    // more when it carries what the user actually typed, and only this frame
+    // knows the value and the scope they chose.
+    reportError(err, () => suggestCorrectedSet(err, key, rawValue, scope));
   }
 }
 
@@ -296,7 +303,41 @@ function formatValue(value: unknown): string {
   return formatValuePlain(value);
 }
 
-function reportError(err: unknown): never {
+/**
+ * Shell-quote a value for a suggested command, so pasting it stores exactly
+ * what it shows. A `~` or a bracket left bare would be expanded or eaten by the
+ * shell, which is how the user got here in the first place.
+ */
+function quoteForShell(value: string): string {
+  if (/^[A-Za-z0-9._/@:+-]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * The command the user probably meant, or null when there is nothing confident
+ * to suggest.
+ *
+ * Only offered where the correction is mechanical — a value for a list-valued
+ * key that was written as a single item. Nothing is stored on the user's behalf;
+ * the corrected command is shown for them to run.
+ */
+function suggestCorrectedSet(
+  err: unknown,
+  key: string,
+  rawValue: string,
+  scope: FlagScope | null
+): string | null {
+  if (!(err instanceof ConfigValidationError)) return null;
+  const def = getConfigDefinition(key);
+  if (!def) return null;
+  // A single item offered to a list — the mistake this suggestion exists for.
+  const wrapped = def.parse([rawValue]);
+  if (wrapped === undefined) return null;
+  const scopeFlag = scope ? ` --scope ${scope}` : "";
+  return `argent config set ${key} ${quoteForShell(JSON.stringify([rawValue]))}${scopeFlag}`;
+}
+
+function reportError(err: unknown, suggest?: () => string | null): never {
   if (err instanceof ConfigManagedElsewhereError) {
     console.error(`Error: ${err.message} Use \`${err.command}\` instead.`);
   } else if (
@@ -307,6 +348,15 @@ function reportError(err: unknown): never {
     console.error(`Error: ${err.message}`);
     if (err instanceof UnknownConfigKeyError) {
       console.error(`Run \`argent config list\` to see available keys.`);
+    }
+    if (err instanceof ConfigValidationError) {
+      const corrected = suggest?.() ?? null;
+      if (corrected) {
+        console.error(`Did you mean: ${corrected}`);
+      } else if (err.example) {
+        console.error(`Example: argent config set ${err.key} ${quoteForShell(err.example)}`);
+      }
+      console.error(`Run \`argent config list\` to see each key's expected value.`);
     }
   } else {
     console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);

@@ -37,6 +37,7 @@ export {
 // The configuration schema: the registry of recognized values + parse helpers.
 export {
   CONFIG_SCHEMA,
+  describeExpectedValue,
   getConfigDefinition,
   asBoolean,
   asString,
