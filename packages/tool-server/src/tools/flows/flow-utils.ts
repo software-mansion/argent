@@ -1762,7 +1762,11 @@ export function runTargetName(target: string): string {
 /**
  * Shape-check a `run:` value: a relative YAML path resolved at run time
  * against the containing flow file's directory. `..` is deliberately legal —
- * shared fragments may live outside the flows dir.
+ * shared fragments may live outside the flows dir — but only the SHAPE is
+ * checked here: at run time the resolved (canonical) target must still fall
+ * inside the project root, or beside/below the flow file that references it
+ * (execRunStep's containment check in flow-run.ts) — outside the flows dir is
+ * fine, outside those boundaries is not.
  */
 function parseRunTarget(raw: unknown, value: unknown): string {
   // The body arrives uncoerced because YAML renders a valueless `run:` (and

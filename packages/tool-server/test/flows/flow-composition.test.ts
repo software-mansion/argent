@@ -553,6 +553,164 @@ describe("flow composition (run:)", () => {
     expect(result.steps.map((s) => s.message)).not.toContain("lexical decoy");
   });
 
+  it("errors on a run: target that escapes the project root instead of executing it", async () => {
+    // The containment boundary: parseRunTarget admits `..` (shared fragments
+    // may live outside the flows dir), so the runner must stop a target whose
+    // canonical path lands outside BOTH the project root and the containing
+    // file's directory — otherwise a flow admitted through the
+    // containment-checked front door could execute any YAML the tool-server
+    // user can read. Project root is proj/, the target resolves to the test
+    // area above it, and its steps must never run.
+    const proj = path.join(tmpDir, "proj");
+    const flowsDir = path.join(proj, ".argent", "flows");
+    await fs.mkdir(flowsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, "outside.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "echo", message: "executed from outside project root" }],
+      }),
+      "utf8"
+    );
+    await fs.writeFile(
+      path.join(flowsDir, "main.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "run", flow: "../../../outside.yaml" }],
+      }),
+      "utf8"
+    );
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: proj, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:error"]);
+    expect(result.steps[0]?.reason).toBe(
+      'run: target "../../../outside.yaml" resolves outside the project root and outside ' +
+        "its containing flow file's directory — a run: target must stay inside one of those boundaries"
+    );
+    expect(result.steps.map((s) => s.message)).not.toContain("executed from outside project root");
+  });
+
+  it("reports a MISSING out-of-boundary target as a boundary error, not ENOENT", async () => {
+    // Pins the guard's placement before the read: an out-of-boundary target
+    // gets the containment error whether or not anything exists there, so the
+    // report never discloses existence beyond the boundary. (An in-boundary
+    // missing target still gets the clearer per-file ENOENT — pinned above.)
+    const proj = path.join(tmpDir, "proj");
+    const flowsDir = path.join(proj, ".argent", "flows");
+    await fs.mkdir(flowsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(flowsDir, "main.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "run", flow: "../../../nothing-here.yaml" }],
+      }),
+      "utf8"
+    );
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: proj, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:error"]);
+    expect(result.steps[0]?.reason).toContain("resolves outside the project root");
+    expect(result.steps[0]?.reason).not.toContain("ENOENT");
+  });
+
+  it("runs a symlinked-out vendored tree's own subtree fragments (containing-dir zone)", async () => {
+    // The vault/vendored layout with the real tree OUTSIDE the project root:
+    // proj/.argent/flows/main.yaml is a symlink to vendor/flows/main.yaml,
+    // which composes helpers/x.yaml below its own real directory. The project
+    // root cannot admit this — only the containing file's canonical directory
+    // does, which is exactly what keeps the SKILL-recommended shared-tree
+    // layout working under containment.
+    const proj = path.join(tmpDir, "proj");
+    const projFlows = path.join(proj, ".argent", "flows");
+    const vendorFlows = path.join(tmpDir, "vendor", "flows");
+    await fs.mkdir(projFlows, { recursive: true });
+    await fs.mkdir(path.join(vendorFlows, "helpers"), { recursive: true });
+    await fs.writeFile(
+      path.join(vendorFlows, "helpers", "x.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "echo", message: "vendored helper" }],
+      }),
+      "utf8"
+    );
+    await fs.writeFile(
+      path.join(vendorFlows, "main.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "run", flow: "helpers/x.yaml" }],
+      }),
+      "utf8"
+    );
+    await fs.symlink(path.join(vendorFlows, "main.yaml"), path.join(projFlows, "main.yaml"));
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: proj, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:pass", "echo:pass"]);
+    expect(result.steps[1]).toMatchObject({ kind: "echo", message: "vendored helper" });
+  });
+
+  it("errors when a symlinked-out tree's run: climbs above its own directory too", async () => {
+    // Same vendored layout, but the real main.yaml reaches ../../secrets.yaml —
+    // above the vendor tree AND outside the project root. The containing-dir
+    // zone only extends downward from files already admitted, so the symlink
+    // cannot be used as a ratchet to walk the host: the target fails both
+    // zones and its steps never run.
+    const proj = path.join(tmpDir, "proj");
+    const projFlows = path.join(proj, ".argent", "flows");
+    const vendorFlows = path.join(tmpDir, "vendor", "flows");
+    await fs.mkdir(projFlows, { recursive: true });
+    await fs.mkdir(vendorFlows, { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, "secrets.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "echo", message: "leaked secrets flow" }],
+      }),
+      "utf8"
+    );
+    await fs.writeFile(
+      path.join(vendorFlows, "main.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "run", flow: "../../secrets.yaml" }],
+      }),
+      "utf8"
+    );
+    await fs.symlink(path.join(vendorFlows, "main.yaml"), path.join(projFlows, "main.yaml"));
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: proj, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:error"]);
+    expect(result.steps[0]?.reason).toContain('run: target "../../secrets.yaml" resolves outside');
+    expect(result.steps.map((s) => s.message)).not.toContain("leaked secrets flow");
+  });
+
   it("detects a cycle through a symlinked spelling", async () => {
     const flowsDir = path.join(tmpDir, ".argent", "flows");
     await writeFlow("a", {
