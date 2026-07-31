@@ -1,7 +1,9 @@
 import { WebSocketServer, WebSocket } from "ws";
 import * as http from "node:http";
 import {
+  FAILURE_CODES,
   TypedEventEmitter,
+  getFailureSignal,
   type DeviceInfo,
   type ServiceBlueprint,
   type ServiceEvents,
@@ -139,6 +141,26 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
     // rather than passing through options — means the registry can compute
     // dependency URNs without needing the resolved DeviceInfo.
     return { chromium: `${CHROMIUM_CDP_NAMESPACE}:${_payload}` };
+  },
+
+  // Consulted by the registry's dispose-and-retry-once self-heal (RUNNING nodes
+  // only). The one production window where a call fails on this blueprint while
+  // both it and the ChromiumCdp dependency stay RUNNING is a tab switch:
+  // CDPClient.reconnect() rejects in-flight requests with CONNECTION_CLOSED (and
+  // late sends with NOT_CONNECTED) while suppressing the `disconnected` event,
+  // and the same client object comes back alive on the new tab. Retrying re-runs
+  // the tool against the (re)opening socket — side effects on the discarded tab
+  // are moot. Best-effort: an immediate retry can still land before the new
+  // handshake completes and re-fail with a classified NOT_CONNECTED. A genuinely
+  // dead Chromium socket instead fires ChromiumCdp's own terminated event, whose
+  // teardown cascades into this dependent — the node leaves RUNNING and the next
+  // call re-resolves fresh, no recovery involved.
+  recoverable(error: unknown): boolean {
+    const code = getFailureSignal(error)?.error_code;
+    return (
+      code === FAILURE_CODES.DEBUGGER_CDP_NOT_CONNECTED ||
+      code === FAILURE_CODES.DEBUGGER_CDP_CONNECTION_CLOSED
+    );
   },
 
   async factory(deps, payload, options) {
