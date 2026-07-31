@@ -33,6 +33,17 @@ interface BootElectronOptions {
 
 const DEFAULT_READY_TIMEOUT_MS = 30_000;
 
+/**
+ * How long a successful readiness probe must hold before boot reports success.
+ * A second instance losing Electron's single-instance lock opens its CDP
+ * listener during startup and only then quits, so the probe can answer a beat
+ * before the child's exit event lands — without the hold, boot would name an
+ * already-dead instance. A lock-quitting app closes the listener and exits
+ * well within this window; every successful boot pays exactly this much
+ * extra latency.
+ */
+const BOOT_CONFIRM_WINDOW_MS = 300;
+
 /** Pick a free localhost port the kernel hands out. */
 async function pickFreePort(): Promise<number> {
   return new Promise<number>((resolve, reject) => {
@@ -484,6 +495,14 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
       earlyExit,
       spawnError,
     ]);
+    // The probe winning the race does not prove the app is staying up — see
+    // BOOT_CONFIRM_WINDOW_MS. Confirm with the boot listeners still attached:
+    // an exit that already landed has rejected earlyExit (so the race rejects
+    // at once), and one still in flight gets the window to land; either way
+    // the catch below cleans up as an early exit. On a clean window the
+    // unsettled earlyExit is inert — detachBootListeners() nulls its reject
+    // before anything can fire it.
+    await Promise.race([earlyExit, sleepUnref(BOOT_CONFIRM_WINDOW_MS)]);
   } catch (err) {
     // CDP didn't come up — terminate the orphan so we don't leak a process.
     // Detach the boot listeners first so the impending kill→exit doesn't
@@ -497,9 +516,10 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
     killChildEscalating(child);
     throw err;
   }
-  // Happy path: detach the boot-time listeners now that race has resolved.
-  // The child is intentionally long-lived; any later exit / error belongs
-  // to whatever code subsequently manages the session, not to this boot fn.
+  // Happy path: detach the boot-time listeners now that the race and the
+  // confirmation window have both resolved. The child is intentionally
+  // long-lived; any later exit / error belongs to whatever code subsequently
+  // manages the session, not to this boot fn.
   detachBootListeners();
 
   // Retain the handle so a later teardown (killChromiumByPort) can kill via
