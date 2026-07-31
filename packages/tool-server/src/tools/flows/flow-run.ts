@@ -176,8 +176,9 @@ export interface StepReport {
    * Machine-readable explanation of the outcome. Always set when the step did
    * not pass; also set on some passing reports whose result is self-narrating —
    * the `when:` guard marker (`condition met (…)`), snapshot passes (diff
-   * percentage, baseline written/updated), and a chromium `launch` that booted
-   * an instance (naming the device the run moved onto).
+   * percentage, baseline written/updated), and a chromium `launch` whose
+   * instance the runner booted and owns (naming it) — an attach to an instance
+   * the runner does not own reports no reason.
    */
   reason?: string;
   /** Underlying tool id for `tool` steps. */
@@ -450,9 +451,11 @@ async function runChromiumLaunch(state: ExecState, app: Launch): Promise<Directi
   state.chromiumLaunched = true;
 
   if (ownedInstance(state)) {
-    // Seconds old and already fronted; just settle.
+    // Seconds old and already fronted; just settle. Reported as a boot all the
+    // same — a reason's presence is how a consumer tells an instance the run
+    // owns (and will kill) from one it merely attached to.
     if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
-    return { ok: true };
+    return { ok: true, reason: `booted chromium instance ${device.id}` };
   }
   if (!appIdForPlatform(app, "chromium")) {
     return { ok: false, reason: noChromiumAppReason(device) };

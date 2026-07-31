@@ -147,10 +147,15 @@ describe("flow-execute chromium boot", () => {
     expect(bootElectronApp.mock.calls[0][0].appPath).not.toBe(path.join(PROJECT_ROOT, "app"));
 
     // The run targets the freshly-booted device; the launch step passes without
-    // relaunching through a tool (it just settles the fresh window).
+    // relaunching through a tool (it just settles the fresh window), and names
+    // the boot — reason presence is the owned-vs-attached signal.
     expect(result.device).toBe("chromium-cdp-12345");
     expect(result.ok).toBe(true);
-    expect(result.steps[0]).toMatchObject({ kind: "launch", status: "pass" });
+    expect(result.steps[0]).toMatchObject({
+      kind: "launch",
+      status: "pass",
+      reason: "booted chromium instance chromium-cdp-12345",
+    });
     const invokedTools = (registry.invokeTool as any).mock.calls.map((c: unknown[]) => c[0]);
     expect(invokedTools).not.toContain("launch-app");
     expect(invokedTools).not.toContain("restart-app");
@@ -306,6 +311,9 @@ describe("flow-execute chromium boot", () => {
     expect(invokedTools).not.toContain("launch-app");
     expect(refreshViewport).toHaveBeenCalled();
     expect(result.ok).toBe(true);
+    // No reason on an attach — its presence would misreport the instance as
+    // runner-owned (and about to be killed at run end).
+    expect(result.steps[0]!.reason).toBeUndefined();
     expect(result.steps[0]).toMatchObject({ kind: "launch", status: "pass" });
   });
 
