@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Registry } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type Registry } from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 
 // The runner boots a Chromium e2e flow's app itself. Mock the Electron
@@ -34,6 +34,37 @@ vi.mock("../../src/tools/devices/boot-electron", () => ({
     (killChromiumByPortAndWait as (...a: unknown[]) => unknown)(...args),
 }));
 vi.mock("../../src/utils/chromium-discovery", () => ({ untrackChromiumPort: vi.fn() }));
+
+// The single-instance-lock hint re-probes the attached instance's CDP endpoint
+// before naming it. Mock only that probe (live by default) so no test does a
+// real HTTP fetch; everything else in the blueprint stays real.
+const ensureCdpReachable = vi.fn(async () => ({ Browser: "TestApp/1.0" }));
+vi.mock("../../src/blueprints/chromium-cdp", async () => {
+  const actual = await vi.importActual<typeof import("../../src/blueprints/chromium-cdp")>(
+    "../../src/blueprints/chromium-cdp"
+  );
+  return {
+    ...actual,
+    ensureCdpReachable: (...args: unknown[]) =>
+      (ensureCdpReachable as (...a: unknown[]) => unknown)(...args),
+  };
+});
+
+// The exact failure shape a second copy losing to a single-instance lock
+// produces: early exit, clean code 0 (see bootElectronApp's onExit).
+function lockShapedBootError(port: number): FailureError {
+  return new FailureError(
+    `Electron boot: child process exited with code 0 before CDP was ready. Inspect [chromium-cdp-${port}] stderr above for the cause.`,
+    {
+      error_code: FAILURE_CODES.CHROMIUM_ELECTRON_EXITED_BEFORE_READY,
+      failure_stage: "electron_early_exit",
+      failure_area: "tool_server",
+      error_kind: "subprocess",
+      failure_command: "electron",
+      failure_exit_code: 0,
+    }
+  );
+}
 
 // Passthrough counter on fs.readFile: the cyclic-chain test asserts how many
 // files the leading-run: walk read, which an ESM namespace spy can't observe.
@@ -139,6 +170,7 @@ beforeEach(() => {
   bootElectronApp.mockReset().mockImplementation(defaultBoot);
   killChromiumByPort.mockReset();
   killChromiumByPortAndWait.mockReset();
+  ensureCdpReachable.mockReset().mockImplementation(async () => ({ Browser: "TestApp/1.0" }));
 });
 
 afterEach(async () => {
@@ -831,7 +863,7 @@ describe("flow-execute chromium boot", () => {
     expect(result.steps[0].reason).toContain('no app id declared for platform "android"');
   });
 
-  it("names the single-instance lock when a boot fails against an instance it does not own", async () => {
+  it("names the single-instance lock when a lock-shaped boot failure has a live un-owned instance", async () => {
     // The one boot failure the underlying error can't explain — and the runner
     // may not kill the foreign instance to make room.
     const flowFile = await writeFlow(
@@ -843,7 +875,7 @@ describe("flow-execute chromium boot", () => {
       cdp: { send: vi.fn(async () => ({})) },
     }));
     bootElectronApp.mockImplementationOnce(async () => {
-      throw new Error("CDP never became reachable on port 12345");
+      throw lockShapedBootError(12345);
     });
 
     const result = await runFlow(registry, {
@@ -856,12 +888,48 @@ describe("flow-execute chromium boot", () => {
     expect(result.ok).toBe(false);
     const failed = result.steps[1];
     expect(failed).toMatchObject({ kind: "launch", status: "error" });
-    expect(failed.reason).toContain("CDP never became reachable");
+    expect(failed.reason).toContain("exited with code 0 before CDP was ready");
     expect(failed.reason).toMatch(/single-instance lock/i);
     expect(failed.reason).toContain("chromium-cdp-9999");
+    // The hint joins as its own sentence — never run into the base error's tail.
+    expect(failed.reason).toMatch(/for the cause\. A clean exit/);
+    // "is running" was verified, not assumed: the attached port got re-probed.
+    expect(ensureCdpReachable).toHaveBeenCalledWith(9999, expect.anything());
     // Nothing was booted, so nothing is torn down — least of all the pinned one.
     expect(killChromiumByPort).not.toHaveBeenCalled();
     expect(killChromiumByPortAndWait).not.toHaveBeenCalled();
+  });
+
+  it("does not claim the attached instance is running when its CDP endpoint is gone", async () => {
+    // The suspect may have exited since the run attached — asserting "is
+    // running" then would send the agent chasing a ghost, so the hint falls
+    // back to the generalized cause.
+    const flowFile = await writeFlow(
+      "steps:\n  - launch: { chromium: ./app }\n  - launch: { chromium: ./app }\n"
+    );
+    const registry = makeRegistry();
+    (registry.resolveService as any).mockImplementation(async () => ({
+      refreshViewport: vi.fn(async () => ({ width: 800, height: 600 })),
+      cdp: { send: vi.fn(async () => ({})) },
+    }));
+    bootElectronApp.mockImplementationOnce(async () => {
+      throw lockShapedBootError(12345);
+    });
+    ensureCdpReachable.mockImplementationOnce(async () => {
+      throw new Error("connect ECONNREFUSED 127.0.0.1:9999");
+    });
+
+    const result = await runFlow(registry, {
+      name: "locked-dead-suspect",
+      project_root: PROJECT_ROOT,
+      flow_file: flowFile,
+      device: "chromium-cdp-9999",
+    });
+
+    expect(result.ok).toBe(false);
+    const failed = result.steps[1];
+    expect(failed.reason).toMatch(/single-instance lock/i);
+    expect(failed.reason).not.toContain("chromium-cdp-9999 is running");
   });
 
   it("still names the foreign instance after the run has moved onto one it owns", async () => {
@@ -877,7 +945,7 @@ describe("flow-execute chromium boot", () => {
     }));
     // app-b's boot succeeds (moving the run onto an owned instance); app-lock's fails.
     bootElectronApp.mockImplementationOnce(defaultBoot).mockImplementationOnce(async () => {
-      throw new Error("CDP never became reachable on port 12346");
+      throw lockShapedBootError(12346);
     });
 
     const result = await runFlow(registry, {
@@ -890,7 +958,6 @@ describe("flow-execute chromium boot", () => {
     expect(result.ok).toBe(false);
     const failed = result.steps[2];
     expect(failed).toMatchObject({ kind: "launch", status: "error" });
-    expect(failed.reason).toContain("CDP never became reachable");
     expect(failed.reason).toMatch(/single-instance lock/i);
     expect(failed.reason).toContain("chromium-cdp-9999");
     expect(failed.reason).not.toContain("chromium-cdp-12345");
@@ -898,20 +965,21 @@ describe("flow-execute chromium boot", () => {
     expect(killChromiumByPortAndWait.mock.calls).toEqual([[12345, 4242]]);
   });
 
-  it("does not blame a foreign instance when the run never attached to one", async () => {
-    // Hoisted boot: the run starts on an instance it owns, so a later boot
-    // failure has no un-owned lock-holder candidate to name.
+  it("hints the single-instance lock on a hoisted run even with no attached instance to name", async () => {
+    // Hoist-booted run: it never attached, so the runner knows of no foreign
+    // instance — but a lock-shaped failure still means one likely exists, and
+    // the diagnosis must land in-band rather than only in the tool-server log.
     const flowFile = await writeFlow(
       "steps:\n  - launch: { chromium: ./app-a }\n  - launch: { chromium: ./app-b }\n"
     );
     const registry = makeRegistry();
-    // The hoisted boot succeeds; app-b's fails.
+    // The hoisted boot succeeds; app-b's fails lock-shaped.
     bootElectronApp.mockImplementationOnce(defaultBoot).mockImplementationOnce(async () => {
-      throw new Error("CDP never became reachable on port 12346");
+      throw lockShapedBootError(12346);
     });
 
     const result = await runFlow(registry, {
-      name: "owned-only",
+      name: "hoisted-locked",
       project_root: PROJECT_ROOT,
       flow_file: flowFile,
     });
@@ -920,10 +988,82 @@ describe("flow-execute chromium boot", () => {
     const failed = result.steps[1];
     expect(failed).toMatchObject({ kind: "launch", status: "error" });
     expect(failed.reason).toContain("could not boot the chromium app");
-    expect(failed.reason).toContain("CDP never became reachable");
-    expect(failed.reason).not.toContain("An instance this run does not own");
+    expect(failed.reason).toMatch(/single-instance lock/i);
+    // Generalized: no instance is named (and none is probed).
+    expect(failed.reason).not.toContain("is running and this run does not own it");
+    expect(ensureCdpReachable).not.toHaveBeenCalled();
     // The hoisted instance is still reclaimed at run end.
     expect(killChromiumByPortAndWait.mock.calls).toEqual([[12345, 4242]]);
+  });
+
+  it("keeps the bare error when a boot failure is not lock-shaped, even with an attached instance", async () => {
+    // A missing app path has nothing to do with any lock — blaming the pinned
+    // instance would point the agent at the wrong app entirely.
+    const flowFile = await writeFlow(
+      "steps:\n  - launch: { chromium: ./app }\n  - launch: { chromium: ./nope }\n"
+    );
+    const registry = makeRegistry();
+    (registry.resolveService as any).mockImplementation(async () => ({
+      refreshViewport: vi.fn(async () => ({ width: 800, height: 600 })),
+      cdp: { send: vi.fn(async () => ({})) },
+    }));
+    bootElectronApp.mockImplementationOnce(async () => {
+      throw new Error("Electron boot: path does not exist: /apps/nope");
+    });
+
+    const result = await runFlow(registry, {
+      name: "not-lock-shaped",
+      project_root: PROJECT_ROOT,
+      flow_file: flowFile,
+      device: "chromium-cdp-9999",
+    });
+
+    expect(result.ok).toBe(false);
+    const failed = result.steps[1];
+    expect(failed).toMatchObject({ kind: "launch", status: "error" });
+    expect(failed.reason).toBe(
+      "could not boot the chromium app: Electron boot: path does not exist: /apps/nope"
+    );
+    expect(ensureCdpReachable).not.toHaveBeenCalled();
+  });
+
+  it("treats an early exit with a non-zero code as a crash, not a lock", async () => {
+    // Same failure code, but the process died with code 1 — that is the app
+    // crashing at startup, which the base error already explains.
+    const flowFile = await writeFlow(
+      "steps:\n  - launch: { chromium: ./app }\n  - launch: { chromium: ./app }\n"
+    );
+    const registry = makeRegistry();
+    (registry.resolveService as any).mockImplementation(async () => ({
+      refreshViewport: vi.fn(async () => ({ width: 800, height: 600 })),
+      cdp: { send: vi.fn(async () => ({})) },
+    }));
+    bootElectronApp.mockImplementationOnce(async () => {
+      throw new FailureError(
+        "Electron boot: child process exited with code 1 before CDP was ready. Inspect [chromium-cdp-12345] stderr above for the cause.",
+        {
+          error_code: FAILURE_CODES.CHROMIUM_ELECTRON_EXITED_BEFORE_READY,
+          failure_stage: "electron_early_exit",
+          failure_area: "tool_server",
+          error_kind: "subprocess",
+          failure_command: "electron",
+          failure_exit_code: 1,
+        }
+      );
+    });
+
+    const result = await runFlow(registry, {
+      name: "crash-not-lock",
+      project_root: PROJECT_ROOT,
+      flow_file: flowFile,
+      device: "chromium-cdp-9999",
+    });
+
+    expect(result.ok).toBe(false);
+    const failed = result.steps[1];
+    expect(failed.reason).toContain("exited with code 1 before CDP was ready");
+    expect(failed.reason).not.toMatch(/single-instance lock/i);
+    expect(ensureCdpReachable).not.toHaveBeenCalled();
   });
 
   it("still honors the first launch when a fragment run:s an e2e flow (the common composition)", async () => {

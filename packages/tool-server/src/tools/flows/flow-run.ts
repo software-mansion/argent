@@ -5,6 +5,7 @@ import {
   FAILURE_CODES,
   FailureError,
   FLOW_NAME_PATTERN,
+  getFailureSignal,
   isLiveServiceState,
   zodObjectToJsonSchema,
 } from "@argent/registry";
@@ -59,12 +60,13 @@ import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/nati
 import { androidDevtoolsRef, type AndroidDevtoolsApi } from "../../blueprints/android-devtools";
 import {
   chromiumCdpRef,
+  ensureCdpReachable,
   CHROMIUM_CDP_NAMESPACE,
   type ChromiumCdpApi,
 } from "../../blueprints/chromium-cdp";
 import { bootElectronApp, killChromiumByPortAndWait } from "../devices/boot-electron";
 import { untrackChromiumPort } from "../../utils/chromium-discovery";
-import { resolveDevice } from "../../utils/device-info";
+import { parseChromiumCdpPort, resolveDevice } from "../../utils/device-info";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
 import { describeVega } from "../describe/platforms/vega";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
@@ -506,12 +508,7 @@ async function bootChromiumForLaunch(state: ExecState, app: Launch): Promise<Dir
   try {
     booted = await bootChromiumForFlow(spec, state.flowsDir, state.viaUpload);
   } catch (err) {
-    // The one boot failure the underlying error can't explain.
-    const foreign =
-      retiring === -1 && state.attachedDeviceId !== undefined
-        ? ` An instance this run does not own is running on ${state.attachedDeviceId}; if it is this same app, its single-instance lock would refuse a second copy.`
-        : "";
-    return { ok: false, reason: `could not boot the chromium app: ${errMsg(err)}${foreign}` };
+    return { ok: false, reason: await chromiumBootFailureReason(state, err) };
   }
   // Recorded before the next await so a cancelled run still reclaims it.
   state.owned.push(booted);
@@ -520,6 +517,54 @@ async function bootChromiumForLaunch(state: ExecState, app: Launch): Promise<Dir
   await frontChromiumPage(registry, state.device);
   if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
   return { ok: true, reason: `booted chromium instance ${booted.deviceId}` };
+}
+
+/** Bound on the lock-hint liveness re-probe — an already-failing step must stay quick. */
+const LOCK_SUSPECT_PROBE_TIMEOUT_MS = 800;
+
+/**
+ * Reason for a failed mid-run chromium boot. The underlying error explains
+ * every failure but one: an Electron process that exits CLEANLY (code 0)
+ * before its CDP endpoint comes up — the signature of a second copy quitting
+ * against an already-running instance's single-instance lock. Only that shape
+ * gets the lock hint (a crash, missing path, or spawn failure speaks for
+ * itself). The attached un-owned instance is named as the suspect only while
+ * a re-probe shows it still live; otherwise — including hoist-booted runs
+ * that never attached — the hint stays general, so the likely cause is still
+ * in-band for a lock-holder the runner never knew about.
+ */
+async function chromiumBootFailureReason(state: ExecState, err: unknown): Promise<string> {
+  const base = `could not boot the chromium app: ${errMsg(err)}`;
+  const signal = getFailureSignal(err);
+  if (
+    signal?.error_code !== FAILURE_CODES.CHROMIUM_ELECTRON_EXITED_BEFORE_READY ||
+    signal.failure_exit_code !== 0
+  ) {
+    return base;
+  }
+  const suspect = await liveAttachedInstance(state);
+  const holder = suspect
+    ? `${suspect} is running and this run does not own it; if it is this same app, it holds that lock.`
+    : `If a copy of this app is already running, close it and rerun.`;
+  return `${base} A clean exit before CDP comes up is the signature of a single-instance lock — an already-running copy of the app quits the new one at startup. ${holder}`;
+}
+
+/**
+ * The attached (un-owned) chromium instance re-probed for liveness — the hint
+ * must not assert an instance "is running" that has since exited. Null when
+ * the run never attached or the instance's CDP endpoint no longer answers.
+ */
+async function liveAttachedInstance(state: ExecState): Promise<string | null> {
+  const id = state.attachedDeviceId;
+  if (id === undefined) return null;
+  const port = parseChromiumCdpPort(id);
+  if (port === null) return null;
+  try {
+    await ensureCdpReachable(port, AbortSignal.timeout(LOCK_SUSPECT_PROBE_TIMEOUT_MS));
+    return id;
+  } catch {
+    return null;
+  }
 }
 
 /** The instance the runner booted for the current device, when it owns it. */
@@ -604,7 +649,8 @@ interface ExecState extends Omit<ActionEnv, "device"> {
   /**
    * The un-owned chromium instance the run started attached to, if any — the
    * one instance the runner never kills, so it stands as the single-instance
-   * lock suspect for every later boot failure, even after the run moves on.
+   * lock suspect for every later lock-shaped boot failure
+   * ({@link chromiumBootFailureReason}), even after the run moves on.
    */
   attachedDeviceId?: string;
   /**
