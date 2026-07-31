@@ -37,11 +37,14 @@ describe("hidden-window guard on chromium mouse tools", () => {
   it("gesture-tap refuses before dispatching any mouse event", async () => {
     const api = fakeChromiumApi("hidden");
     const err = await captureFailure(
-      gestureTapTool.execute({ chromium: api } as never, {
-        udid: "chromium-cdp-19222",
-        x: 0.5,
-        y: 0.5,
-      } as never)
+      gestureTapTool.execute(
+        { chromium: api } as never,
+        {
+          udid: "chromium-cdp-19222",
+          x: 0.5,
+          y: 0.5,
+        } as never
+      )
     );
     expect(err.message).toMatch(/hidden/);
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_WINDOW_HIDDEN);
@@ -52,13 +55,16 @@ describe("hidden-window guard on chromium mouse tools", () => {
   it("gesture-drag refuses before pressing the mouse button", async () => {
     const api = fakeChromiumApi("hidden");
     const err = await captureFailure(
-      gestureDragTool.execute({ chromium: api } as never, {
-        udid: "chromium-cdp-19222",
-        fromX: 0.2,
-        fromY: 0.5,
-        toX: 0.8,
-        toY: 0.5,
-      } as never)
+      gestureDragTool.execute(
+        { chromium: api } as never,
+        {
+          udid: "chromium-cdp-19222",
+          fromX: 0.2,
+          fromY: 0.5,
+          toX: 0.8,
+          toY: 0.5,
+        } as never
+      )
     );
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_WINDOW_HIDDEN);
     expect(getFailureSignal(err)?.failure_stage).toBe("chromium_drag_window_hidden");
@@ -68,12 +74,15 @@ describe("hidden-window guard on chromium mouse tools", () => {
   it("gesture-scroll reports the dedicated failure code (migrated off CHROMIUM_INPUT_INVALID)", async () => {
     const api = fakeChromiumApi("hidden");
     const err = await captureFailure(
-      gestureScrollTool.execute({ chromium: api } as never, {
-        udid: "chromium-cdp-19222",
-        x: 0.5,
-        y: 0.5,
-        deltaY: 0.25,
-      } as never)
+      gestureScrollTool.execute(
+        { chromium: api } as never,
+        {
+          udid: "chromium-cdp-19222",
+          x: 0.5,
+          y: 0.5,
+          deltaY: 0.25,
+        } as never
+      )
     );
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_WINDOW_HIDDEN);
     // The stage string is unchanged so old and new telemetry stay joinable.
@@ -85,11 +94,14 @@ describe("hidden-window guard on chromium mouse tools", () => {
     // "hidden" refuses. This also covers api objects with no `cdp` at all.
     const api = fakeChromiumApi();
     api.cdp.send = vi.fn().mockRejectedValue(new Error("Execution context was destroyed"));
-    const result = (await gestureTapTool.execute({ chromium: api } as never, {
-      udid: "chromium-cdp-19222",
-      x: 0.5,
-      y: 0.5,
-    } as never)) as { tapped: boolean };
+    const result = (await gestureTapTool.execute(
+      { chromium: api } as never,
+      {
+        udid: "chromium-cdp-19222",
+        x: 0.5,
+        y: 0.5,
+      } as never
+    )) as { tapped: boolean };
     expect(result.tapped).toBe(true);
     expect(api.dispatchMouseEvent).toHaveBeenCalled();
   });
