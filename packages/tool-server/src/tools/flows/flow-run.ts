@@ -776,7 +776,8 @@ returns a notice with the prerequisite instead of running.`,
         };
       }
 
-      // Resolve the run device (a Chromium e2e flow boots + owns its own app; see
+      // Resolve the run device (a run whose leading launch — direct, or reached
+      // through a leading run: chain — is chromium boots + owns its own app; see
       // resolveRunDevice). Any instance it booted is torn down in the finally.
       const resolved = await resolveRunDevice(registry, ctx, flow, params, flowsDir, viaUpload);
       // The device the run STARTS on — `state.device` moves when a chromium
@@ -855,14 +856,16 @@ returns a notice with the prerequisite instead of running.`,
 }
 
 /**
- * Resolve the device a flow *starts* on. For a Chromium e2e flow with no
- * explicit `device` (see {@link chromiumBootSpec}) this boots a fresh Electron
- * instance from the launch's app path and returns it for teardown; otherwise it
- * attaches to an already-booted device. An explicit `device` never boots here —
- * the run starts attached to it, and only a launch step beyond the first moves
- * off it onto an instance the runner owns ({@link bootChromiumForLaunch}).
- * `flowDir` is the root flow file's canonical directory — the base for a
- * relative chromium app path.
+ * Resolve the device a flow *starts* on. When the run's leading launch is
+ * unambiguously chromium (see {@link chromiumBootSpec}) and no explicit
+ * `device` is given, this boots a fresh Electron instance from the launch's
+ * app path and returns it for teardown — a fragment whose leading `run:` chain
+ * reaches a chromium e2e flow boots just the same ({@link leadingLaunch}).
+ * Otherwise it attaches to an already-booted device. An explicit `device`
+ * never boots here — the run starts attached to it, and only a launch step
+ * beyond the first moves off it onto an instance the runner owns
+ * ({@link bootChromiumForLaunch}). `flowDir` is the root flow file's canonical
+ * directory — the base for a relative chromium app path.
  *
  * Returns null when no step in the flow acts on a device: such a run needs none,
  * so demanding one would fail a flow that could have succeeded — and picking
