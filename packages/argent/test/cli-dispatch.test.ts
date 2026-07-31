@@ -279,6 +279,11 @@ describe("cli dispatcher: non-installer commands and top-level arms", () => {
     );
     expect(stdout).toContain("(--global [default] installs on PATH; --local commits a");
     expect(stdout).toContain("Alias for init");
+    // Pin the flow row to the current interface: `argent flow` runs a YAML
+    // flow file by path (flow run <path>.yaml), not a saved flow by name.
+    expect(stdout).toContain(
+      "flow        Run a YAML flow file (use `argent flow --help` for options)"
+    );
     expect(fs.existsSync(marker)).toBe(false);
   });
 
