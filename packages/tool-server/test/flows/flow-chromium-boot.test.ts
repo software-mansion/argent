@@ -95,11 +95,11 @@ function asRun(r: FlowRunResult | { notice: string }): FlowRunResult {
   return r;
 }
 
-async function runFlow(
+async function runFlowRaw(
   registry: Registry,
   params: Record<string, unknown>,
   signal?: AbortSignal
-): Promise<FlowRunResult> {
+): Promise<FlowRunResult | { notice: string }> {
   // The flow file deliberately lives outside project_root (it pins the
   // flow-relative app-path anchor). Run it as a co-located explicit flow_path
   // verified by the file-input boundary — an uploaded flow would reject the
@@ -117,13 +117,19 @@ async function runFlow(
     },
     ...(signal ? { signal } : {}),
   };
-  return asRun(
-    await createRunFlowTool(registry).execute(
-      {},
-      { ...rest, flow_path: flowPath } as never,
-      ctx as never
-    )
-  );
+  return (await createRunFlowTool(registry).execute(
+    {},
+    { ...rest, flow_path: flowPath } as never,
+    ctx as never
+  )) as FlowRunResult | { notice: string };
+}
+
+async function runFlow(
+  registry: Registry,
+  params: Record<string, unknown>,
+  signal?: AbortSignal
+): Promise<FlowRunResult> {
+  return asRun(await runFlowRaw(registry, params, signal));
 }
 
 beforeEach(() => {
@@ -978,5 +984,125 @@ describe("flow-execute chromium boot", () => {
       'could not attach to chromium instance "chromium-cdp-9999"'
     );
     expect(result.steps[1]).toMatchObject({ kind: "echo", status: "skip" });
+  });
+});
+
+describe("flow-execute prerequisite vs leading launch chain", () => {
+  // The run-time analog of the parse rule: parse validates one file, so a
+  // prerequisite fragment whose leading run: chain reaches a launch slips past
+  // it — but that launch (re)starts the app at step 1, destroying the very
+  // state the prerequisite demands. The runner must refuse such a run outright,
+  // before anything boots.
+  it("rejects a prerequisite fragment whose leading run: reaches a launch, before any boot", async () => {
+    const fragment = await writeFlow(
+      'executionPrerequisite: "the counter must already read taps: 1"\n' +
+        "steps:\n  - run: e2e-a\n  - echo: after\n"
+    );
+    await writeSiblingFlow(fragment, "e2e-a", "steps:\n  - launch: { chromium: ./app }\n");
+    const registry = makeRegistry();
+
+    await expect(
+      runFlow(registry, {
+        name: "indirect-prereq",
+        project_root: PROJECT_ROOT,
+        flow_file: fragment,
+        prerequisiteAcknowledged: true,
+      })
+    ).rejects.toThrow(/must not declare executionPrerequisite/i);
+    // Refused before the hoist — the state the prerequisite demands survives.
+    expect(bootElectronApp).not.toHaveBeenCalled();
+    expect((registry.invokeTool as any).mock.calls).toEqual([]);
+  });
+
+  it("names the flow that carries the launch, not the top-level fragment", async () => {
+    const fragment = await writeFlow(
+      'executionPrerequisite: "logged in"\nsteps:\n  - run: middle-frag\n'
+    );
+    await writeSiblingFlow(fragment, "middle-frag", "steps:\n  - run: e2e-inner\n");
+    await writeSiblingFlow(fragment, "e2e-inner", "steps:\n  - launch: { chromium: ./app }\n");
+    const registry = makeRegistry();
+
+    await expect(
+      runFlow(registry, {
+        name: "top-frag",
+        project_root: PROJECT_ROOT,
+        flow_file: fragment,
+        prerequisiteAcknowledged: true,
+      })
+    ).rejects.toThrow(/"e2e-inner"/);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+  });
+
+  it("rejects on the unacknowledged path too, instead of returning the notice", async () => {
+    // Without the check, the LLM handshake would echo the prerequisite back and
+    // tell the caller to establish state the run would then throw away.
+    const fragment = await writeFlow(
+      'executionPrerequisite: "the counter must already read taps: 1"\n' +
+        "steps:\n  - run: e2e-a\n  - echo: after\n"
+    );
+    await writeSiblingFlow(fragment, "e2e-a", "steps:\n  - launch: { chromium: ./app }\n");
+    const registry = makeRegistry();
+
+    await expect(
+      runFlowRaw(registry, {
+        name: "indirect-prereq-notice",
+        project_root: PROJECT_ROOT,
+        flow_file: fragment,
+      })
+    ).rejects.toThrow(/must not declare executionPrerequisite/i);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+  });
+
+  it("still notices a prerequisite fragment whose leading run: reaches no launch", async () => {
+    // A plain fragment composition keeps the ordinary handshake: notice first,
+    // run on acknowledgement — no launch anywhere in the leading chain.
+    const fragment = await writeFlow(
+      'executionPrerequisite: "logged in"\nsteps:\n  - run: helper\n'
+    );
+    await writeSiblingFlow(fragment, "helper", "steps:\n  - echo: nothing to launch\n");
+    const registry = makeRegistry();
+
+    const result = await runFlowRaw(registry, {
+      name: "plain-prereq",
+      project_root: PROJECT_ROOT,
+      flow_file: fragment,
+    });
+
+    expect(result).toMatchObject({
+      notice: expect.stringContaining("prerequisite"),
+      executionPrerequisite: "logged in",
+    });
+    expect(result).not.toHaveProperty("steps");
+    expect(bootElectronApp).not.toHaveBeenCalled();
+  });
+
+  it("keeps best-effort behavior when the leading run: chain is broken", async () => {
+    // A missing sibling makes the chain unreadable: leadingLaunch yields null,
+    // so no new rejection fires — the notice comes back as before, and an
+    // acknowledged run proceeds to device resolution (the broken run: target is
+    // reported at step time, exactly as on main).
+    const fragment = await writeFlow(
+      'executionPrerequisite: "logged in"\nsteps:\n  - run: missing-sibling\n'
+    );
+    const registry = makeRegistry(async (id: string) =>
+      id === "list-devices" ? { devices: [] } : {}
+    );
+
+    const noticed = await runFlowRaw(registry, {
+      name: "broken-chain",
+      project_root: PROJECT_ROOT,
+      flow_file: fragment,
+    });
+    expect(noticed).toMatchObject({ notice: expect.stringContaining("prerequisite") });
+
+    await expect(
+      runFlow(registry, {
+        name: "broken-chain",
+        project_root: PROJECT_ROOT,
+        flow_file: fragment,
+        prerequisiteAcknowledged: true,
+      })
+    ).rejects.toThrow(/No booted device found/);
+    expect(bootElectronApp).not.toHaveBeenCalled();
   });
 });

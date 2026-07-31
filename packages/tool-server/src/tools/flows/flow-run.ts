@@ -784,8 +784,30 @@ returns a notice with the prerequisite instead of running.`,
       const flow = parseFlow(await fs.readFile(canonicalPath, "utf8"));
       if (viaUpload) assertUploadSelfContained(flow);
 
+      // Run-time analog of validateFlow's e2e-has-prerequisite rule: parse sees
+      // one file, but a leading `run:` chain crosses files — a fragment whose
+      // chain reaches a launch still (re)starts the app at step 1, destroying
+      // the very state the prerequisite demands. Checked before the notice
+      // handshake (and regardless of device/platform params) so a caller is
+      // never asked to establish state the run would then throw away.
+      if (flow.executionPrerequisite) {
+        const leading = await leadingLaunch(flow, flowsDir, [params.name]);
+        if (leading) {
+          throw new FailureError(
+            `A flow whose leading run: chain reaches a launch step must not declare executionPrerequisite — it launches its own app and controls its start state. Drop the leading launch in "${leading.flow}" to make it a fragment, or drop executionPrerequisite from "${params.name}".`,
+            {
+              error_code: FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE,
+              failure_stage: "flow_run_validate",
+              failure_area: "tool_server",
+              error_kind: "validation",
+            }
+          );
+        }
+      }
+
       // LLM-path prerequisite handshake (fragments only; a flow with a leading
-      // launch step cannot declare one — validated at parse).
+      // launch step cannot declare one — validated at parse, and a leading
+      // run: chain into a launch is rejected just above).
       if (flow.executionPrerequisite && !params.prerequisiteAcknowledged) {
         return {
           flow: flowName,
@@ -905,7 +927,7 @@ async function resolveRunDevice(
     // must accept the same chains, or a boot could precede a run the executor
     // then refuses for depth.
     const leading = await leadingLaunch(flow, flowDir, [params.name]);
-    const spec = leading && chromiumBootSpec(leading, params.platform);
+    const spec = leading && chromiumBootSpec(leading.app, params.platform);
     if (spec) {
       const booted = await bootChromiumForFlow(spec, flowDir, viaUpload);
       return { device: resolveDevice(booted.deviceId), booted };
@@ -926,7 +948,9 @@ async function resolveRunDevice(
 /**
  * The launch the RUN begins with, following a leading `run:` — a fragment whose
  * first step composes an e2e flow starts with that flow's launch, and the runner
- * has to know that before step 1 to boot a chromium app for it. Null when the
+ * has to know that before step 1 to boot a chromium app for it (and to refuse a
+ * prerequisite that launch would invalidate). `flow` names the flow whose first
+ * step IS the launch, so a rejection can point at the right file. Null when the
  * run doesn't begin with a launch, or when the chain can't be read (a broken
  * `run:` target is reported properly by {@link execRunStep} when it executes).
  */
@@ -934,10 +958,10 @@ async function leadingLaunch(
   flow: FlowFile,
   flowsDir: string,
   seen: string[]
-): Promise<Launch | null> {
+): Promise<{ app: Launch; flow: string } | null> {
   const first = flow.steps.find((s) => s.kind !== "echo");
   if (!first) return null;
-  if (first.kind === "launch") return first.app;
+  if (first.kind === "launch") return { app: first.app, flow: seen[seen.length - 1]! };
   if (first.kind !== "run") return null;
   if (seen.includes(first.flow) || seen.length >= MAX_RUN_DEPTH) return null;
   try {
