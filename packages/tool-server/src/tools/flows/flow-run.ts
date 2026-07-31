@@ -62,11 +62,7 @@ import {
   CHROMIUM_CDP_NAMESPACE,
   type ChromiumCdpApi,
 } from "../../blueprints/chromium-cdp";
-import {
-  bootElectronApp,
-  killChromiumByPort,
-  killChromiumByPortAndWait,
-} from "../devices/boot-electron";
+import { bootElectronApp, killChromiumByPortAndWait } from "../devices/boot-electron";
 import { untrackChromiumPort } from "../../utils/chromium-discovery";
 import { resolveDevice } from "../../utils/device-info";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
@@ -494,10 +490,8 @@ async function bootChromiumForLaunch(state: ExecState, app: Launch): Promise<Dir
 
   const retiring = state.owned.findIndex((o) => o.appPath === appPath);
   if (retiring !== -1) {
-    // Awaited to the process's actual exit, not just the signal: the
-    // replacement would otherwise race the dying instance's lock.
     const [prev] = state.owned.splice(retiring, 1);
-    await teardownBootedChromium(registry, prev!, { awaitExit: true });
+    await teardownBootedChromium(registry, prev!);
   }
 
   let booted: BootedChromium;
@@ -1016,15 +1010,12 @@ async function bootChromiumForFlow(
 /**
  * Tear down a Chromium instance the runner booted. Best-effort — never fail a
  * run here: dispose the CDP session (if a tool opened one), kill the process,
- * and forget its port so `list-devices` stops probing it. `awaitExit` waits for
- * the process to actually go (bounded — see {@link killChromiumByPortAndWait}),
- * which a same-app relaunch needs and run-end teardown does not.
+ * and forget its port so `list-devices` stops probing it. The kill is awaited
+ * to the process's actual exit (bounded — see {@link killChromiumByPortAndWait})
+ * because every next boot of the same app — an in-run relaunch or a
+ * back-to-back run — would otherwise race the dying instance's lock.
  */
-async function teardownBootedChromium(
-  registry: Registry,
-  booted: BootedChromium,
-  opts: { awaitExit?: boolean } = {}
-): Promise<void> {
+async function teardownBootedChromium(registry: Registry, booted: BootedChromium): Promise<void> {
   const urn = `${CHROMIUM_CDP_NAMESPACE}:${booted.deviceId}`;
   try {
     const entry = registry.getSnapshot().services.get(urn);
@@ -1032,8 +1023,7 @@ async function teardownBootedChromium(
   } catch {
     /* the kill below frees the real resource regardless */
   }
-  if (opts.awaitExit) await killChromiumByPortAndWait(booted.port, booted.pid);
-  else killChromiumByPort(booted.port, booted.pid);
+  await killChromiumByPortAndWait(booted.port, booted.pid);
   untrackChromiumPort(booted.port);
 }
 

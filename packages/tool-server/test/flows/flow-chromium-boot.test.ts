@@ -175,8 +175,11 @@ describe("flow-execute chromium boot", () => {
     expect(invokedTools).not.toContain("restart-app");
 
     // Teardown kills the instance the runner booted — port first (the handle
-    // registry key), pid as the raw fallback.
-    expect(killChromiumByPort).toHaveBeenCalledWith(12345, 4242);
+    // registry key), pid as the raw fallback — through the awaiting kill: a
+    // back-to-back run of the same app must not race the dying instance's
+    // single-instance lock.
+    expect(killChromiumByPortAndWait).toHaveBeenCalledWith(12345, 4242);
+    expect(killChromiumByPort).not.toHaveBeenCalled();
   });
 
   it("forwards extra CLI args and boots when --platform chromium disambiguates a multi-platform launch", async () => {
@@ -198,7 +201,7 @@ describe("flow-execute chromium boot", () => {
       extraArgs: ["--e2e"],
     });
     expect(result.ok).toBe(true);
-    expect(killChromiumByPort).toHaveBeenCalledWith(12345, 4242);
+    expect(killChromiumByPortAndWait).toHaveBeenCalledWith(12345, 4242);
   });
 
   it("takes an absolute launch path as-is", async () => {
@@ -315,6 +318,7 @@ describe("flow-execute chromium boot", () => {
     // Explicit device: attach, never boot/teardown.
     expect(bootElectronApp).not.toHaveBeenCalled();
     expect(killChromiumByPort).not.toHaveBeenCalled();
+    expect(killChromiumByPortAndWait).not.toHaveBeenCalled();
     expect(result.device).toBe("chromium-cdp-9999");
 
     // The launch step attaches in place over CDP (viewport refresh). It must
@@ -370,11 +374,13 @@ describe("flow-execute chromium boot", () => {
     // The report names the device the run STARTED on; the switch is on the step.
     expect(result.device).toBe("chromium-cdp-12345");
 
-    // Both are torn down, nested first — a parent instance outlives its child.
-    expect(killChromiumByPort.mock.calls).toEqual([
+    // Both are torn down, nested first — a parent instance outlives its child —
+    // each awaited to its exit.
+    expect(killChromiumByPortAndWait.mock.calls).toEqual([
       [12346, 4243],
       [12345, 4242],
     ]);
+    expect(killChromiumByPort).not.toHaveBeenCalled();
   });
 
   it("binds the newly booted device into the steps after a nested launch", async () => {
@@ -429,13 +435,16 @@ describe("flow-execute chromium boot", () => {
     expect(result.ok).toBe(true);
     expect(bootElectronApp).toHaveBeenCalledTimes(2);
     // The retire goes through the awaiting kill — the replacement must not race
-    // the dying process's lock — and lands before the second boot.
-    expect(killChromiumByPortAndWait.mock.calls).toEqual([[12345, 4242]]);
+    // the dying process's lock — and lands before the second boot; only the
+    // replacement is left for run-end teardown (awaited too).
+    expect(killChromiumByPortAndWait.mock.calls).toEqual([
+      [12345, 4242],
+      [12346, 4243],
+    ]);
     expect(killChromiumByPortAndWait.mock.invocationCallOrder[0]).toBeLessThan(
       bootElectronApp.mock.invocationCallOrder[1]!
     );
-    // Only the replacement is left for run-end teardown.
-    expect(killChromiumByPort.mock.calls).toEqual([[12346, 4243]]);
+    expect(killChromiumByPort).not.toHaveBeenCalled();
   });
 
   it("recognises a symlink alias of the app it owns and retires it before the relaunch", async () => {
@@ -464,13 +473,16 @@ describe("flow-execute chromium boot", () => {
     // compare (and the stored appPath) carries.
     expect(bootElectronApp.mock.calls.map((c) => c[0].appPath)).toEqual([canonical, canonical]);
     // The alias is the same app: its owned instance is retired (awaited)
-    // before the replacement boots.
-    expect(killChromiumByPortAndWait.mock.calls).toEqual([[12345, 4242]]);
+    // before the replacement boots; only the replacement is left for run-end
+    // teardown (awaited too).
+    expect(killChromiumByPortAndWait.mock.calls).toEqual([
+      [12345, 4242],
+      [12346, 4243],
+    ]);
     expect(killChromiumByPortAndWait.mock.invocationCallOrder[0]).toBeLessThan(
       bootElectronApp.mock.invocationCallOrder[1]!
     );
-    // Only the replacement is left for run-end teardown.
-    expect(killChromiumByPort.mock.calls).toEqual([[12346, 4243]]);
+    expect(killChromiumByPort).not.toHaveBeenCalled();
   });
 
   it("boots an instance of its own for a second launch against a pinned device", async () => {
@@ -500,7 +512,7 @@ describe("flow-execute chromium boot", () => {
       appPath: path.join(path.dirname(flowFile), "app-b"),
     });
     // Only the instance the runner booted is torn down — never the pinned one.
-    expect(killChromiumByPort.mock.calls).toEqual([[12345, 4242]]);
+    expect(killChromiumByPortAndWait.mock.calls).toEqual([[12345, 4242]]);
   });
 
   it("tears down an instance booted just as the run was cancelled", async () => {
@@ -548,7 +560,7 @@ describe("flow-execute chromium boot", () => {
     // A cancelled launch is a skip, never a step failure — the app did nothing wrong.
     expect(result.steps[2]).toMatchObject({ kind: "launch", status: "skip" });
     // Both instances reclaimed, nested first.
-    expect(killChromiumByPort.mock.calls).toEqual([
+    expect(killChromiumByPortAndWait.mock.calls).toEqual([
       [12346, 4243],
       [12345, 4242],
     ]);
@@ -591,7 +603,7 @@ describe("flow-execute chromium boot", () => {
       "launch:pass",
       "tool:pass",
     ]);
-    expect(killChromiumByPort).toHaveBeenCalledWith(12345, 4242);
+    expect(killChromiumByPortAndWait).toHaveBeenCalledWith(12345, 4242);
   });
 
   it("follows the leading run: chain through several fragments", async () => {
@@ -737,7 +749,7 @@ describe("flow-execute chromium boot", () => {
 
   it("reclaims every instance it booted when a step fails mid-run", async () => {
     // A failing run stops executing steps, but run-end teardown must still
-    // sweep state.owned — otherwise every failure leaks the booted apps.
+    // sweep state.owned (awaited) — otherwise every failure leaks the booted apps.
     const parent = await writeFlow(
       "steps:\n  - launch: { chromium: ./app-a }\n  - run: nested\n  - launch: { ios: com.acme.app }\n  - echo: never reached\n"
     );
@@ -752,11 +764,12 @@ describe("flow-execute chromium boot", () => {
 
     expect(result.ok).toBe(false);
     expect(bootElectronApp).toHaveBeenCalledTimes(2); // hoisted app-a + nested app-b
-    // Both owned instances go down despite the failure, newest first.
-    expect(killChromiumByPort.mock.calls).toEqual([
+    // Both owned instances go down despite the failure, newest first, awaited.
+    expect(killChromiumByPortAndWait.mock.calls).toEqual([
       [12346, 4243],
       [12345, 4242],
     ]);
+    expect(killChromiumByPort).not.toHaveBeenCalled();
   });
 
   it("errors the first launch when it declares no chromium app on a pinned instance", async () => {
@@ -842,6 +855,7 @@ describe("flow-execute chromium boot", () => {
     expect(failed.reason).toContain("chromium-cdp-9999");
     // Nothing was booted, so nothing is torn down — least of all the pinned one.
     expect(killChromiumByPort).not.toHaveBeenCalled();
+    expect(killChromiumByPortAndWait).not.toHaveBeenCalled();
   });
 
   it("still names the foreign instance after the run has moved onto one it owns", async () => {
@@ -875,7 +889,7 @@ describe("flow-execute chromium boot", () => {
     expect(failed.reason).toContain("chromium-cdp-9999");
     expect(failed.reason).not.toContain("chromium-cdp-12345");
     // Only the instance the runner booted for app-b is torn down.
-    expect(killChromiumByPort.mock.calls).toEqual([[12345, 4242]]);
+    expect(killChromiumByPortAndWait.mock.calls).toEqual([[12345, 4242]]);
   });
 
   it("does not blame a foreign instance when the run never attached to one", async () => {
@@ -903,7 +917,7 @@ describe("flow-execute chromium boot", () => {
     expect(failed.reason).toContain("CDP never became reachable");
     expect(failed.reason).not.toContain("An instance this run does not own");
     // The hoisted instance is still reclaimed at run end.
-    expect(killChromiumByPort.mock.calls).toEqual([[12345, 4242]]);
+    expect(killChromiumByPortAndWait.mock.calls).toEqual([[12345, 4242]]);
   });
 
   it("still honors the first launch when a fragment run:s an e2e flow (the common composition)", async () => {
@@ -935,6 +949,7 @@ describe("flow-execute chromium boot", () => {
     // A's launch attaches to the pinned one instead.
     expect(bootElectronApp).not.toHaveBeenCalled();
     expect(killChromiumByPort).not.toHaveBeenCalled();
+    expect(killChromiumByPortAndWait).not.toHaveBeenCalled();
     expect(refreshViewport).toHaveBeenCalledTimes(1);
     expect(result.ok).toBe(true);
     // run marker, then A's launch (honored) + echo, then B's trailing echo.
