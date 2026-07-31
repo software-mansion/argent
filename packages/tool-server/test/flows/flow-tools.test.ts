@@ -514,8 +514,14 @@ describe("flow-add-step", () => {
     expect(registry.invokeTool).toHaveBeenCalledWith("flow-execute", args);
     // …so the recorded step must be the raw call that reproduces it — naming
     // both files, since either one alone reads as the flow the author meant.
-    expect(result.message).toContain(otherTwin);
-    expect(result.message).toContain(path.join(tmpDir, ".argent", "flows", "twin.yaml"));
+    // Both anchors are canonicalized before the comparison (the recording's
+    // real file on one side, the executed path on the other), so the message
+    // quotes the realpath'd spellings — on macOS tmpdir lives behind the
+    // /var → /private/var symlink, which these paths carry as written.
+    expect(result.message).toContain(await fs.realpath(otherTwin));
+    expect(result.message).toContain(
+      await fs.realpath(path.join(tmpDir, ".argent", "flows", "twin.yaml"))
+    );
     expect(result.message).toMatch(/would replay a different flow/);
     expect(parseFlow(result.flowFile).steps).toEqual([
       { kind: "tool", name: "flow-execute", args },
@@ -644,7 +650,9 @@ describe("flow-add-step", () => {
   // The runner resolves a recorded `run:` against the CANONICAL containing
   // file's directory (scopeFlowDir in flow-run.ts), so when the recording is
   // itself a symlink the recorder must validate the sibling beside the real
-  // file — the two tests below pin both directions of that anchor. The base
+  // file — AND confirm it is the same file the live sub-invoke executed from
+  // the flows-dir spelling. The three tests below pin the accept, reject, and
+  // divergence directions of those anchors. The base
   // is realpath'd so the only spelling/real divergence is the test's own
   // symlink: macOS's tmpdir lives behind the /var → /private/var symlink,
   // which would otherwise make every path here diverge from its canonical
@@ -669,9 +677,19 @@ describe("flow-add-step", () => {
     const tool = createFlowAddStepTool(registry);
 
     const { base, vault } = await symlinkedRecordingSetup();
-    // The fragment lives ONLY in vault/, beside the real file — exactly where
-    // the runner's canonical anchor will look for it at replay.
+    // The fragment's real file lives in vault/, beside the recording's real
+    // file, with the flows dir carrying a symlink to it — the same vault
+    // layout the recording itself models. The live sub-invoke resolves the
+    // flows-dir spelling (getFlowPath under project_root) and the runner's
+    // canonical anchor (scopeFlowDir in flow-run.ts) resolves the vault file;
+    // both canonicalize to this one file, so the composition is sound. Vault
+    // only would leave the flows-dir path — the one the live sub-invoke reads
+    // — nonexistent, a layout the shipped path cannot produce.
     await fs.writeFile(path.join(vault, "frag.yaml"), "steps:\n  - echo: hi\n", "utf8");
+    await fs.symlink(
+      path.join(vault, "frag.yaml"),
+      path.join(base, ".argent", "flows", "frag.yaml")
+    );
     await flowStartRecordingTool.execute({}, { name: "rec", project_root: base });
 
     const result = await tool.execute(
@@ -708,6 +726,38 @@ describe("flow-add-step", () => {
     );
 
     expect(result.message).toMatch(/could not resolve/i);
+    expect(parseFlow(result.flowFile).steps).toEqual([
+      { kind: "tool", name: "flow-execute", args: { name: "frag", project_root: base } },
+    ]);
+  });
+
+  it("keeps the raw step when the flows-dir file and the real-file sibling diverge", async () => {
+    const registry = createMockRegistry({
+      "flow-execute": { result: { ok: true, steps: [] } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    const { base, vault } = await symlinkedRecordingSetup();
+    // frag.yaml exists at BOTH spellings as two DIFFERENT real files. The live
+    // sub-invoke runs the flows-dir one (getFlowPath under project_root); a
+    // recorded `run:` would replay the vault one (scopeFlowDir in flow-run.ts
+    // anchors at the canonical containing dir). Recording `run:` here would
+    // report success for a step naming a flow that never ran — the raw step,
+    // which replays via name + project_root, is the only honest record.
+    await fs.writeFile(
+      path.join(base, ".argent", "flows", "frag.yaml"),
+      "steps:\n  - echo: decoy\n",
+      "utf8"
+    );
+    await fs.writeFile(path.join(vault, "frag.yaml"), "steps:\n  - echo: real\n", "utf8");
+    await flowStartRecordingTool.execute({}, { name: "rec", project_root: base });
+
+    const result = await tool.execute(
+      {},
+      { command: "flow-execute", args: JSON.stringify({ name: "frag", project_root: base }) }
+    );
+
+    expect(result.message).toMatch(/not the file the live flow-execute ran/i);
     expect(parseFlow(result.flowFile).steps).toEqual([
       { kind: "tool", name: "flow-execute", args: { name: "frag", project_root: base } },
     ]);

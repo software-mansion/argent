@@ -276,20 +276,22 @@ async function rewriteSiblingFlowPath(
  * made through a symlink validates its sibling in the canonical directory,
  * not beside the symlink's spelling. An e2e target's `launch` simply runs
  * inline. So we keep the raw step only when the target can't be resolved as
- * a sibling, or the recording is remote (the host can't read the client's
- * sibling files to validate). A `flow_path` target reaches here as its
- * sibling `name` or not at all — see {@link rewriteSiblingFlowPath}.
+ * a sibling, the sibling is not the same file the live sub-invoke executed
+ * (the recorded step must name the flow that actually ran), or the recording
+ * is remote (the host can't read the client's sibling files to validate). A
+ * `flow_path` target reaches here as its sibling `name` or not at all — see
+ * {@link rewriteSiblingFlowPath}.
  *
  * "Resolved as a sibling" is the same two-part identity {@link
  * rewriteSiblingFlowPath} demands of a flow_path, asked of the name route: the
- * call's own `project_root` must resolve `name` to this very file (the live
- * invoke resolved it there, `run:` will resolve it beside the recording's real
- * file), and that directory must list `<name>.yaml` byte-for-byte. Every
- * refusal keeps the raw step rather than throwing — unlike the rewrite, this
- * runs AFTER the nested flow ran on the device, so a throw would discard the
- * record of a step that already happened. The raw `tool: flow-execute` step it
- * keeps still replays the flow that actually ran, carrying the caller's own
- * project_root.
+ * call's own `project_root` must resolve `name` to the very file `run:` will
+ * resolve beside the recording's real file — compared canonically, since those
+ * two anchors reach it by different spellings — and that directory must list
+ * `<name>.yaml` byte-for-byte. Every refusal keeps the raw step rather than
+ * throwing — unlike the rewrite, this runs AFTER the nested flow ran on the
+ * device, so a throw would discard the record of a step that already happened.
+ * The raw `tool: flow-execute` step it keeps still replays the flow that
+ * actually ran, carrying the caller's own project_root.
  */
 async function captureRunTarget(
   session: RecordingSession | null,
@@ -325,13 +327,13 @@ async function captureRunTarget(
     // while that root's flows dir is this one — a nested call naming another
     // project's `<name>.yaml` runs that copy live and would record a step
     // running this one: same name, different flow, both green, nothing said.
-    // Same identity the flow_path arm demands ("does not resolve <stem> to
-    // it"), and the root must be absolute before the comparison means anything
-    // — path.resolve anchors a relative root at the tool SERVER's cwd, which
-    // bears no relation to the calling agent's. flow-execute's schema requires
-    // project_root and its resolver demands an absolute one, so any call that
-    // got past the live invoke above has one; the guard covers direct execute()
-    // callers, which bypass that schema.
+    // The comparison itself is below, once the sibling has been read; what
+    // this guard settles is that the root can be compared at all — it must be
+    // absolute, since path.resolve anchors a relative root at the tool
+    // SERVER's cwd, which bears no relation to the calling agent's.
+    // flow-execute's schema requires project_root and its resolver demands an
+    // absolute one, so any call that got past the live invoke above has one;
+    // the guard covers direct execute() callers, which bypass that schema.
     const projectRoot = args.project_root;
     if (typeof projectRoot !== "string" || !path.isAbsolute(projectRoot)) {
       return {
@@ -339,15 +341,6 @@ async function captureRunTarget(
           `kept the raw flow-execute step — project_root must be an absolute path ` +
           `(got ${typeof projectRoot === "string" ? `"${projectRoot}"` : "none"}) to confirm ` +
           `"${name}" names the recording's own sibling`,
-      };
-    }
-    const invoked = path.resolve(flowsDirFor(projectRoot), `${name}.yaml`);
-    if (invoked !== path.resolve(fragPath)) {
-      return {
-        warning:
-          `kept the raw flow-execute step — project_root "${projectRoot}" resolves "${name}" to ` +
-          `"${invoked}", not the recording's sibling "${fragPath}", so a run: ${name} step would ` +
-          `replay a different flow than the one that just ran`,
       };
     }
 
@@ -358,7 +351,7 @@ async function captureRunTarget(
     // the read below would too, baking `run: Frag` into a flow no
     // case-sensitive checkout (Linux CI) can resolve. flow-execute's own name
     // gate refuses that spelling one layer down — against this very directory,
-    // now that the check above forced the two to coincide — but it skips on a
+    // since the identity check below forces the two to coincide — but it skips on a
     // listing that momentarily refused to be read (EMFILE under load), and the
     // recorder forwards these args opaquely: it does not take the spelling of a
     // reference it commits on the word of the tool it dispatched. Same gate the
@@ -387,6 +380,36 @@ async function captureRunTarget(
     // Parsing validates the sibling exists and is a well-formed flow; a failure
     // falls through to keeping the raw step.
     parseFlow(await fs.readFile(fragPath, "utf8"));
+    // The sibling validated above is the file the runner will replay — but the
+    // live sub-invoke that just ran resolved `name` through getFlowPath, the
+    // as-written flows dir under the caller's project_root. When the recording
+    // is a symlink out of the flows dir the two anchors can name different
+    // files, so require them to canonicalize to the same one, matching the
+    // runner's own canonicalization on both sides (canonicalFlowPath in
+    // flow-run.ts realpaths before reading). An executed path that cannot be
+    // canonicalized (e.g. ENOENT) means nothing verifiable ran from the flows
+    // dir, and the raw step is then the honest record: it replays via name +
+    // project_root, i.e. the file that actually ran.
+    let executedPath: string | undefined;
+    try {
+      executedPath = await fs.realpath(path.join(flowsDirFor(projectRoot), `${name}.yaml`));
+    } catch {
+      executedPath = undefined;
+    }
+    if (executedPath === undefined) {
+      return {
+        warning: `kept the raw flow-execute step — could not verify which file the live flow-execute ran ("${name}" has no canonical file in project_root's flows dir to compare the sibling against)`,
+      };
+    }
+    if (executedPath !== (await fs.realpath(fragPath))) {
+      return {
+        warning:
+          `kept the raw flow-execute step — project_root "${projectRoot}" resolves "${name}" to ` +
+          `"${executedPath}", not the recording's sibling "${fragPath}", so "${name}.yaml" beside ` +
+          `the recording's real file is not the file the live flow-execute ran and a run: ${name} ` +
+          `step would replay a different flow than the one that just ran`,
+      };
+    }
     return { flow: `${name}.yaml` };
   } catch (err) {
     return {
