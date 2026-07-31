@@ -291,6 +291,25 @@ const SAFE_ARTIFACT_NAME = FLOW_NAME_PATTERN;
 const SAFE_FLOW_NAME = FLOW_NAME_PATTERN;
 
 /**
+ * Charset every POSIX shell passes through unquoted (shlex.quote's set).
+ * Anything outside it — a space above all — would be word-split or
+ * interpreted if pasted into a terminal.
+ */
+const SHELL_SAFE_ARG = /^[A-Za-z0-9_@%+=:,./-]+$/;
+
+/**
+ * Quote a path for splicing into a "Did you mean: argent flow run …" hint.
+ * The hint's whole value is being copy-pasteable, so a path a shell would
+ * mangle is wrapped in single quotes — the one POSIX quoting form with no
+ * further escapes inside (embedded single quotes are spliced as '\''). The
+ * common all-safe path stays bare so the hint reads like what the user typed.
+ */
+function shellQuoteArg(arg: string): string {
+  if (SHELL_SAFE_ARG.test(arg)) return arg;
+  return `'${arg.replaceAll("'", "'\\''")}'`;
+}
+
+/**
  * Marker dropped inside each per-flow export directory, recording the
  * resolved YAML path whose run produced it. Flow paths may live anywhere, so
  * two different files can share a filename stem (`suiteA/checks.yaml`,
@@ -641,14 +660,28 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
   // flow_path_dotdot guard, and ordered before the extension/stem arms the
   // way the server orders it, so the dishonest-path cause wins over a
   // basename complaint. The hint names the file the shell would actually
-  // open (realpath, which resolves against cwd the way the kernel does),
-  // when one exists.
+  // open, when one exists: the parent directory is realpath'd (that is where
+  // ".." and symlinks interact, resolving against cwd the way the kernel
+  // does) but the supplied basename is kept — realpath'ing the final
+  // component would rewrite a symlinked flow to its target's name, and the
+  // basename is the flow's identity (report name, __baselines__/ key,
+  // --output dir), so the hint would quietly rename the run. A basename of
+  // ".." or "." names no flow file, so no per-component split is needed —
+  // such a path gets the generic recovery.
   if (suppliedPath.split(/[\\/]+/).includes("..")) {
     let recovery = "Pass the fully resolved path to the flow's YAML.";
-    try {
-      recovery = `Did you mean: argent flow run ${await fsp.realpath(suppliedPath)}`;
-    } catch {
-      // Nothing kernel-reachable at that path — the generic recovery stands.
+    const suppliedBase = path.basename(suppliedPath);
+    if (suppliedBase !== ".." && suppliedBase !== ".") {
+      try {
+        const resolved = path.join(await fsp.realpath(path.dirname(suppliedPath)), suppliedBase);
+        // The reassembled path must itself be kernel-reachable — a hint
+        // naming nothing on disk is worse than the generic line.
+        await fsp.stat(resolved);
+        recovery = `Did you mean: argent flow run ${shellQuoteArg(resolved)}`;
+      } catch {
+        // Parent unresolvable, or nothing at the reassembled path — the
+        // generic recovery stands.
+      }
     }
     console.error(
       `Flow path must not contain ".." segments — they are collapsed without following symlinks, ` +
@@ -676,7 +709,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
       `Flow path must not end in a path separator — the separator claims a directory, ` +
         `which the kernel would refuse to open as a file, so the CLI would run a file ` +
         `this string does not name: ${suppliedPath}\n` +
-        `Did you mean: argent flow run ${separatorTrimmedPath}`
+        `Did you mean: argent flow run ${shellQuoteArg(separatorTrimmedPath)}`
     );
     return exitAfterFlush(2);
   }
@@ -755,7 +788,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
       path.extname(actual) === ".yaml" &&
       SAFE_FLOW_NAME.test(path.basename(actual, ".yaml"));
     const recovery = actualRunnable
-      ? `Did you mean: argent flow run ${path.join(path.dirname(suppliedPath), actual!)}`
+      ? `Did you mean: argent flow run ${shellQuoteArg(path.join(path.dirname(suppliedPath), actual!))}`
       : actual !== undefined
         ? `Rename ${actual} to ${suppliedBase} to run it — flow files must be lowercase .yaml.`
         : "Pass the flow file's name exactly as it appears on disk.";

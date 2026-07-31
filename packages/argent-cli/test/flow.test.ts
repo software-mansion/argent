@@ -508,8 +508,72 @@ describe("argent flow run", () => {
     const out = errs.join("\n");
     expect(out).toContain('Flow path must not contain ".." segments');
     expect(out).toContain(`Did you mean: argent flow run ${kernelTarget}`);
+    // Readability pin: a path a shell passes through verbatim stays bare —
+    // quoting is reserved for paths that need it.
+    expect(out).not.toContain("argent flow run '");
     expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it("shell-quotes the .. hint when the resolved path would be mangled by a shell", async () => {
+    // The hint is a command to paste into a terminal — unquoted, the space in
+    // the resolved path would word-split into a truncated path plus a stray
+    // argument the CLI then rejects. The dir name also embeds a single quote
+    // to pin the '\'' splice, the one escape the single-quote wrapping needs.
+    const quoteRoot = path.join(tempRoot, "o'brien lab");
+    const flowsDir = path.join(quoteRoot, "flows");
+    await fsp.mkdir(flowsDir, { recursive: true });
+    await fsp.writeFile(path.join(quoteRoot, "login.yaml"), "steps: []\n");
+    const supplied = [flowsDir, "..", "login.yaml"].join(path.sep);
+
+    await expect(flow(["run", supplied], opts)).rejects.toThrow("process.exit:2");
+
+    // realpath'd prefix: macOS tmpdir sits behind /var -> /private/var. The
+    // expectation is written out literally rather than derived through any
+    // quoting helper, so the test cannot inherit a helper bug.
+    const realRoot = await fsp.realpath(tempRoot);
+    expect(errs.join("\n")).toContain(
+      `Did you mean: argent flow run '${realRoot}/o'\\''brien lab/login.yaml'`
+    );
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it("keeps the supplied basename in the .. hint for a symlinked flow", async () => {
+    // realpath of the whole path would rewrite linked.yaml to its target's
+    // name — a hint that silently renames the flow (report name,
+    // __baselines__/ key, --output dir) out from under the user. Only the
+    // directories are dishonest under "..", so only they get resolved.
+    const linkRoot = path.join(tempRoot, "dotdot-symlink-project");
+    const flowsDir = path.join(linkRoot, "flows");
+    await fsp.mkdir(path.join(flowsDir, "extra"), { recursive: true });
+    await fsp.writeFile(path.join(flowsDir, "target-flow.yaml"), "steps: []\n");
+    await fsp.symlink(path.join(flowsDir, "target-flow.yaml"), path.join(flowsDir, "linked.yaml"));
+    const supplied = [flowsDir, "extra", "..", "linked.yaml"].join(path.sep);
+
+    await expect(flow(["run", supplied], opts)).rejects.toThrow("process.exit:2");
+
+    const hinted = path.join(await fsp.realpath(flowsDir), "linked.yaml");
+    expect(errs.join("\n")).toContain(`Did you mean: argent flow run ${hinted}`);
+    // Pasting the hint back must actually work: the path exists, keeps the
+    // link's own name, and passes run's exact-basename guard.
+    await expect(flow(["run", hinted], opts)).rejects.toThrow("process.exit:0");
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the generic .. recovery when the reassembled path does not exist", async () => {
+    // The parent realpath alone is not enough for a hint: reassembled with
+    // the supplied basename it must name something kernel-reachable, or the
+    // hint would be a command that cannot work.
+    const ghostRoot = path.join(tempRoot, "dotdot-ghost-project");
+    await fsp.mkdir(path.join(ghostRoot, "present"), { recursive: true });
+    const supplied = [ghostRoot, "present", "..", "ghost.yaml"].join(path.sep);
+
+    await expect(flow(["run", supplied], opts)).rejects.toThrow("process.exit:2");
+
+    const out = errs.join("\n");
+    expect(out).toContain('Flow path must not contain ".." segments');
+    expect(out).toContain("Pass the fully resolved path to the flow's YAML.");
+    expect(out).not.toContain("Did you mean");
   });
 
   it.each([["/"], ["\\"], ["//"]])(
@@ -528,6 +592,19 @@ describe("argent flow run", () => {
       expect(toolsClientMock.callTool).not.toHaveBeenCalled();
     }
   );
+
+  it("shell-quotes the trailing-separator hint when the trimmed path contains a space", async () => {
+    // Same defect class as the .. hint: the echoed path is pasted into a
+    // shell command, and a space would word-split it. Nothing needs to exist
+    // on disk for this guard, so the fixture is just a string.
+    const trimmed = path.join(tempRoot, "low space", "lab.yaml");
+
+    await expect(flow(["run", trimmed + path.sep], opts)).rejects.toThrow("process.exit:2");
+
+    const out = errs.join("\n");
+    expect(out).toContain("Flow path must not end in a path separator");
+    expect(out).toContain(`Did you mean: argent flow run '${trimmed}'`);
+  });
 
   it("lets the .. guard win when a path has both a .. segment and a trailing separator", async () => {
     // Both dishonest-path predicates match. The ".." recovery (a fully
