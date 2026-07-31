@@ -115,7 +115,6 @@ describe("TabsManager", () => {
     // Electron answers Target.createTarget with a bare "Not supported", which
     // reads as though the whole tool were unavailable.
     browserSend.mockRejectedValueOnce(new Error("Not supported"));
-    const mgr = createTabsManager(9222, cdp as never);
 
     const err = await mgr.open({ url: "https://x.test" }).catch((e: Error) => e);
 
