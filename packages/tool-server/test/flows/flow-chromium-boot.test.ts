@@ -416,6 +416,41 @@ describe("flow-execute chromium boot", () => {
     expect(killChromiumByPort.mock.calls).toEqual([[12346, 4243]]);
   });
 
+  it("recognises a symlink alias of the app it owns and retires it before the relaunch", async () => {
+    // A lexical path.resolve leaves two spellings of one app unequal — the
+    // retire would be skipped and the replacement would trip the original's
+    // single-instance lock.
+    const flowFile = await writeFlow(
+      "steps:\n  - launch: { chromium: ./real-app }\n  - launch: { chromium: ./alias }\n"
+    );
+    const dir = path.dirname(flowFile);
+    await fs.mkdir(path.join(dir, "real-app"));
+    await fs.symlink(path.join(dir, "real-app"), path.join(dir, "alias"));
+    // os.tmpdir() sits behind a symlink on macOS, so derive the canonical
+    // spelling instead of assuming the lexical join is it.
+    const canonical = await fs.realpath(path.join(dir, "real-app"));
+    const registry = makeRegistry();
+
+    const result = await runFlow(registry, {
+      name: "aliased-relaunch",
+      project_root: PROJECT_ROOT,
+      flow_file: flowFile,
+    });
+
+    expect(result.ok).toBe(true);
+    // Both spellings boot from the one canonical path — the key the retire
+    // compare (and the stored appPath) carries.
+    expect(bootElectronApp.mock.calls.map((c) => c[0].appPath)).toEqual([canonical, canonical]);
+    // The alias is the same app: its owned instance is retired (awaited)
+    // before the replacement boots.
+    expect(killChromiumByPortAndWait.mock.calls).toEqual([[12345, 4242]]);
+    expect(killChromiumByPortAndWait.mock.invocationCallOrder[0]).toBeLessThan(
+      bootElectronApp.mock.invocationCallOrder[1]!
+    );
+    // Only the replacement is left for run-end teardown.
+    expect(killChromiumByPort.mock.calls).toEqual([[12346, 4243]]);
+  });
+
   it("boots an instance of its own for a second launch against a pinned device", async () => {
     // The runner never kills a process it didn't start, which is what makes the
     // first launch an attach; a later one still means "from scratch".

@@ -487,7 +487,7 @@ async function bootChromiumForLaunch(state: ExecState, app: Launch): Promise<Dir
 
   const spec = chromiumLaunchSpec(app);
   if (!spec) return { ok: false, reason: noChromiumAppReason(device) };
-  const appPath = resolveAppPath(spec.path, state.flowsDir);
+  const appPath = await resolveAppPath(spec.path, state.flowsDir);
 
   const retiring = state.owned.findIndex((o) => o.appPath === appPath);
   if (retiring !== -1) {
@@ -928,11 +928,18 @@ function launchTargetPlatform(launch: Launch, platform: string | undefined): str
  * The absolute app path a chromium launch names — relative resolves against the
  * root flow file's canonical directory, the same anchor baselines (and the root
  * file's own `run:` targets) use, so the target is intrinsic to the flow, not
- * the caller's cwd; absolute passes through. Normalized either way, so two
- * spellings of one app compare equal.
+ * the caller's cwd; absolute passes through. Canonicalized through the OS
+ * realpath (symlinks and on-disk casing fold), so two spellings of one app
+ * compare equal; a path not on disk keeps the lexical resolution and lets the
+ * boot report the missing app itself.
  */
-function resolveAppPath(specPath: string, flowDir: string): string {
-  return path.resolve(flowDir, specPath);
+async function resolveAppPath(specPath: string, flowDir: string): Promise<string> {
+  const lexical = path.resolve(flowDir, specPath);
+  try {
+    return await fs.realpath(lexical);
+  } catch {
+    return lexical;
+  }
 }
 
 /**
@@ -961,7 +968,7 @@ async function bootChromiumForFlow(
       }
     );
   }
-  const appPath = resolveAppPath(spec.path, flowDir);
+  const appPath = await resolveAppPath(spec.path, flowDir);
   const res = await bootElectronApp({ appPath, extraArgs: spec.args });
   return { deviceId: res.id, port: res.port, pid: res.pid, appPath: res.appPath };
 }
