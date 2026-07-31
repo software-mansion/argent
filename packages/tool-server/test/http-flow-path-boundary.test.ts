@@ -186,6 +186,83 @@ describe("flow-execute flow_path over HTTP", () => {
     expect(steps.invokeTool).not.toHaveBeenCalled();
   });
 
+  it("diagnoses name + flow_path with the exactly-one rule when the saved flow does not exist", async () => {
+    // The old-client wire for the dual-source misuse: pre-skipWhenSet clients
+    // interpolate ${project_root}/.argent/flows/${name}.yaml whenever name is
+    // set — even alongside flow_path — and since "checkout" is not saved, the
+    // flow_file wrapper is path-only. Without the skip, the boundary 422s on
+    // that missing file before zod's exactly-one rule can run, telling the
+    // agent to re-create a flow it never asked for.
+    const st = await fs.stat(flowPath);
+    const res = await supertest(handle.app)
+      .post("/tools/flow-execute")
+      .send({
+        name: "checkout",
+        project_root: projectRoot,
+        device: DEVICE,
+        flow_path: { __argentFileInput: true, path: flowPath, size: st.size, mtimeMs: st.mtimeMs },
+        flow_file: {
+          __argentFileInput: true,
+          path: path.join(projectRoot, ".argent", "flows", "checkout.yaml"),
+        },
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Pass exactly one flow source: name or flow_path\./);
+    expect(res.body.error).not.toMatch(/was not found on the tool-server host/);
+    expect(steps.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("diagnoses name + flow_path with the exactly-one rule when the saved flow exists", async () => {
+    // Same misuse, but the unused saved flow resolves cleanly — the diagnosis
+    // must be identical to the nonexistent-name case above.
+    const savedPath = path.join(projectRoot, ".argent", "flows", "good.yaml");
+    await fs.mkdir(path.dirname(savedPath), { recursive: true });
+    await fs.writeFile(
+      savedPath,
+      serializeFlow({ executionPrerequisite: "", steps: [{ kind: "echo", message: "saved" }] }),
+      "utf8"
+    );
+    const savedSt = await fs.stat(savedPath);
+    const st = await fs.stat(flowPath);
+    const res = await supertest(handle.app)
+      .post("/tools/flow-execute")
+      .send({
+        name: "good",
+        project_root: projectRoot,
+        device: DEVICE,
+        flow_path: { __argentFileInput: true, path: flowPath, size: st.size, mtimeMs: st.mtimeMs },
+        flow_file: {
+          __argentFileInput: true,
+          path: savedPath,
+          size: savedSt.size,
+          mtimeMs: savedSt.mtimeMs,
+        },
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Pass exactly one flow source: name or flow_path\./);
+    expect(steps.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("diagnoses a dual-source call from a skipWhenSet-aware client the same way", async () => {
+    // A current client never derives flow_file alongside flow_path, so the
+    // wire carries both sources and no flow_file wrapper at all.
+    const st = await fs.stat(flowPath);
+    const res = await supertest(handle.app)
+      .post("/tools/flow-execute")
+      .send({
+        name: "checkout",
+        project_root: projectRoot,
+        device: DEVICE,
+        flow_path: { __argentFileInput: true, path: flowPath, size: st.size, mtimeMs: st.mtimeMs },
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Pass exactly one flow source: name or flow_path\./);
+    expect(steps.invokeTool).not.toHaveBeenCalled();
+  });
+
   it("accepts the legitimate wrapper carrying the file's real stat and runs the flow", async () => {
     const st = await fs.stat(flowPath);
     const res = await supertest(handle.app)

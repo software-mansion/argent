@@ -113,6 +113,17 @@ export interface FileInputSpec {
    * validation owns required-param errors.
    */
   optional?: boolean;
+  /**
+   * Skip this spec whenever the named param is set — it is an alternate source
+   * that supersedes this template (e.g. flow-execute's flow_file spec is
+   * skipped when flow_path is set). The client then does not derive/wrap
+   * `target`, and the server drops a derived wrapper an older client still
+   * sent, so a dual-source misuse is diagnosed by the tool's own validation
+   * instead of by this spec's file resolution. "Set" means a non-empty string
+   * (or, server-side, a not-yet-resolved wrapper); explicit string values on
+   * `target` are caller-authored and pass through regardless.
+   */
+  skipWhenSet?: string;
 }
 
 /** Per-target resolution outcome, passed to the tool via `ctx.fileInputs`. */

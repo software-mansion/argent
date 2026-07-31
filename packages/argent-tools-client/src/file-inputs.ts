@@ -40,6 +40,13 @@ export interface FileInputSpec {
   path: string;
   kind: FileInputKind;
   optional?: boolean;
+  /**
+   * Skip this spec whenever the named param is set (non-empty string) — it is
+   * an alternate source that supersedes this template, so `target` must not be
+   * derived alongside it (the tool's own validation diagnoses dual-source
+   * calls). Mirrors `@argent/registry`'s FileInputSpec.
+   */
+  skipWhenSet?: string;
 }
 
 export interface FileInputWire {
@@ -159,6 +166,13 @@ export async function prepareFileInputs(
   let out: Record<string, unknown> | null = null;
 
   for (const spec of specs) {
+    // A set skipWhenSet param names the alternate source the caller chose —
+    // deriving this target too would have the boundary vouch for a file the
+    // call is not using, letting its existence (or absence) preempt the
+    // tool's own dual-source validation. Any provided value counts, matching
+    // the `=== undefined` presence checks that validation uses, so a
+    // degenerate value ("") is still diagnosed by the tool, not the boundary.
+    if (spec.skipWhenSet && record[spec.skipWhenSet] !== undefined) continue;
     // A target the agent already filled in (e.g. an explicit server-side
     // flow_file override) is respected — wrapping it would second-guess the
     // caller with a client-side path that may not exist.

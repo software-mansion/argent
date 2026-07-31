@@ -103,6 +103,18 @@ async function probeHostPath(
   }
 }
 
+/**
+ * `skipWhenSet` gate: a param counts as set whenever the caller provided it —
+ * matching the `=== undefined` presence checks a tool's own dual-source
+ * validation uses, so a degenerate value ("", null) still routes the call to
+ * that validation instead of having the boundary vouch for a file the call is
+ * not using. A wrapper also counts: a wrapped source param may not be resolved
+ * yet when a later spec reads it.
+ */
+function isParamSet(value: unknown): boolean {
+  return value !== undefined;
+}
+
 function formatBytes(bytes: number | undefined): string {
   if (bytes == null) return "unknown size";
   return bytesUtil(bytes, { decimalPlaces: 1, unitSeparator: " " }) ?? `${bytes} B`;
@@ -280,6 +292,16 @@ export async function resolveFileInputs(
     for (const spec of specs) {
       const value = args[spec.target];
       if (!isFileInputWire(value)) continue;
+      if (spec.skipWhenSet !== undefined && isParamSet(args[spec.skipWhenSet])) {
+        // Old-client skew: the client derived and wrapped this target even
+        // though the superseding source param is set. Drop the derived wrapper
+        // instead of resolving it, so zod sees the call the agent actually
+        // made and the tool's own dual-source rule — not this file's
+        // existence — diagnoses it. Explicit string values on the target are
+        // caller-authored, never wrappers, and pass through above.
+        delete args[spec.target];
+        continue;
+      }
       const { value: path, meta } = await resolveOne(spec, value, tempDirs, lookupUpload);
       args[spec.target] = path;
       resolved = { ...(resolved ?? {}), [spec.target]: meta };

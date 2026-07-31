@@ -138,7 +138,15 @@ const inputSchema: Record<string, unknown> = {
 
 const fileInputs: FileInputSpec[] = [
   { target: "flow_path", path: "${flow_path}", kind: "file", optional: true },
-  { target: "flow_file", path: "${project_root}/.argent/flows/${name}.yaml", kind: "file" },
+  // skipWhenSet: a dual-source call (name + flow_path) must be diagnosed by the
+  // schema's exactly-one rule, not by whether the unused saved flow's file
+  // happens to exist — so flow_file is never derived alongside flow_path.
+  {
+    target: "flow_file",
+    path: "${project_root}/.argent/flows/${name}.yaml",
+    kind: "file",
+    skipWhenSet: "flow_path",
+  },
 ];
 
 export type StepStatus = "pass" | "fail" | "skip" | "error";

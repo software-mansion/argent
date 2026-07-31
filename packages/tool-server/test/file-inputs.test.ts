@@ -263,4 +263,80 @@ describe("resolveFileInputs", () => {
     expect(args.smuggled).toEqual(body.smuggled);
     expect(fileInputs).toBeUndefined();
   });
+
+  it("drops a derived wrapper whose skipWhenSet param is set instead of resolving it", async () => {
+    // Old-client skew: the client wrapped the derived target even though the
+    // superseding source param is also on the wire. The wrapper's path does
+    // not exist, which without the skip would fail resolution here — masking
+    // the tool's own dual-source validation.
+    const sourcePath = path.join(tmpDir, "explicit.yaml");
+    await fs.writeFile(sourcePath, "steps: []\n");
+    const st = await fs.stat(sourcePath);
+    const specs: FileInputSpec[] = [
+      { target: "source", path: "${source}", kind: "file", optional: true },
+      { target: "derived", path: "${root}/${name}.yaml", kind: "file", skipWhenSet: "source" },
+    ];
+
+    const { args, fileInputs } = await resolveFileInputs(
+      { fileInputs: specs },
+      {
+        name: "ghost",
+        root: tmpDir,
+        source: wire({ path: sourcePath, size: st.size, mtimeMs: st.mtimeMs }),
+        derived: wire({ path: path.join(tmpDir, "ghost.yaml") }),
+      }
+    );
+
+    // The derived wrapper is gone (not a dangling object that would fail the
+    // tool's string schema); the source resolved normally.
+    expect("derived" in args).toBe(false);
+    expect(args.source).toBe(sourcePath);
+    expect(fileInputs).toEqual({
+      source: { clientPath: sourcePath, presentOnHost: true, viaUpload: false, statVerified: true },
+    });
+  });
+
+  it("drops a derived wrapper even when the skipWhenSet param is an empty string", async () => {
+    // "" is a provided source to the tool's `=== undefined` dual-source check,
+    // so the wrapper must be dropped here too — resolving it would let a
+    // missing saved flow 422 before that check can name the real misuse.
+    const specs: FileInputSpec[] = [
+      { target: "source", path: "${source}", kind: "file", optional: true },
+      { target: "derived", path: "${root}/${name}.yaml", kind: "file", skipWhenSet: "source" },
+    ];
+
+    const { args } = await resolveFileInputs(
+      { fileInputs: specs },
+      {
+        name: "ghost",
+        root: tmpDir,
+        source: "",
+        derived: wire({ path: path.join(tmpDir, "ghost.yaml") }),
+      }
+    );
+
+    expect("derived" in args).toBe(false);
+    expect(args.source).toBe("");
+  });
+
+  it("resolves a derived wrapper normally when the skipWhenSet param is absent", async () => {
+    const derivedPath = path.join(tmpDir, "saved.yaml");
+    await fs.writeFile(derivedPath, "steps: []\n");
+    const st = await fs.stat(derivedPath);
+    const specs: FileInputSpec[] = [
+      { target: "source", path: "${source}", kind: "file", optional: true },
+      { target: "derived", path: "${root}/${name}.yaml", kind: "file", skipWhenSet: "source" },
+    ];
+
+    const { args } = await resolveFileInputs(
+      { fileInputs: specs },
+      {
+        name: "saved",
+        root: tmpDir,
+        derived: wire({ path: derivedPath, size: st.size, mtimeMs: st.mtimeMs }),
+      }
+    );
+
+    expect(args.derived).toBe(derivedPath);
+  });
 });
