@@ -140,6 +140,17 @@ test("a server.json with no usable packages array is caught", () => {
   }
 });
 
+// packages/argent/package.json is the sole source of the version everything else
+// is compared against, so losing it turns every comparison below into
+// undefined === undefined and the whole check passes vacuously.
+test("a packages/argent manifest with no version is caught", () => {
+  const problems = serverJsonMismatches(undefined, ARGENT_PKG, SERVER);
+  assert.deepEqual(problems, [
+    "packages/argent/package.json has no version — nothing for server.json to be checked against",
+    "server.json packages[0].version is 0.18.0, packages/argent/package.json is undefined",
+  ]);
+});
+
 // A hand-edit that empties an entry rather than the array leaves the array shape
 // intact, so the check above passes it through to the loop that reads .version
 // off it.
@@ -187,9 +198,9 @@ const SCRIPT_PATH = fileURLToPath(new URL("./check-workspace-versions.mjs", impo
  * macOS's own tmpdir is behind a /var -> /private/var symlink, which the
  * symlink test then reintroduces deliberately.
  * @param {import("node:test").TestContext} t
- * @param {{ argentVersion?: string, otherVersion?: string, serverJson?: unknown }} [options]
+ * @param {{ argentVersion?: string | null, otherVersion?: string, serverJson?: unknown }} [options]
  *   serverJson: an object to write as JSON, a string to write verbatim, or null
- *   to leave the file out entirely.
+ *   to leave the file out entirely. argentVersion: null omits the version key.
  * @returns {string} the repo root
  */
 function fixtureRepo(t, { argentVersion = VERSION, otherVersion = VERSION, serverJson } = {}) {
@@ -206,7 +217,7 @@ function fixtureRepo(t, { argentVersion = VERSION, otherVersion = VERSION, serve
 
   write(join(root, "packages", "argent", "package.json"), {
     ...ARGENT_PKG,
-    version: argentVersion,
+    ...(argentVersion === null ? {} : { version: argentVersion }),
   });
   write(join(root, "packages", "registry", "package.json"), {
     name: "@argent/registry",
@@ -247,6 +258,23 @@ test("[script] server.json drift alone exits 1", (t) => {
   assert.equal(result.status, 1, `expected a failure, got:\n${result.stdout}${result.stderr}`);
   assert.match(result.stderr, /server\.json version is 0\.17\.0/);
   assert.match(result.stderr, /server\.json packages\[0\]\.version is 0\.17\.0/);
+});
+
+// The one shape where every comparison the script makes is vacuously satisfied:
+// with no version on the manifest and none in server.json, each `!==` compares
+// undefined against undefined and the repo passes with nothing checked.
+test("[script] a version-less manifest fails instead of passing vacuously", (t) => {
+  const root = fixtureRepo(t, {
+    argentVersion: null,
+    serverJson: server((s) => {
+      delete s.version;
+      delete s.packages[0].version;
+    }),
+  });
+  const result = runScript(root);
+  assert.equal(result.status, 1, `expected a failure, got:\n${result.stdout}${result.stderr}`);
+  assert.match(result.stderr, /packages\/argent\/package\.json has no version/);
+  assert.doesNotMatch(result.stdout, /at undefined/);
 });
 
 test("[script] a half-finished bump reports packages/* and server.json in one run", (t) => {

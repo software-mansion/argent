@@ -32,7 +32,14 @@ const serverJsonPath = join(repoRoot, "server.json");
 export function serverJsonMismatches(publishedVersion, argentPkg, server) {
   const mismatches = [];
 
-  if (server.version !== publishedVersion) {
+  // Without a version on the manifest there is no target to compare against, and
+  // every comparison below would pass by matching undefined against undefined —
+  // so its absence is a mismatch in its own right, exactly like mcpName's.
+  if (!publishedVersion) {
+    mismatches.push(
+      "packages/argent/package.json has no version — nothing for server.json to be checked against"
+    );
+  } else if (server.version !== publishedVersion) {
     mismatches.push(
       `server.json version is ${server.version}, packages/argent/package.json is ${publishedVersion}`
     );
@@ -141,8 +148,8 @@ function main() {
     failed = true;
   }
 
-  // An empty packages/ never gets past this read, so the version below is always
-  // a real one.
+  // An empty packages/ never gets past this read. It only proves the file parses,
+  // though — a manifest missing its version is caught as a mismatch below.
   const argentPkg = readTrackedJson(argentManifestPath);
   const server = readTrackedJson(serverJsonPath);
 
