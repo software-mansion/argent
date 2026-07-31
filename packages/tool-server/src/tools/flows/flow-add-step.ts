@@ -440,7 +440,7 @@ export function createFlowAddStepTool(
       failedMsg: ({ params, failureSignal }) =>
         `Failed to add ${params.command} step to recorded flow: ${failureSignal.error_code}`,
     },
-    description: `Execute a tool call and record it as a step in the active flow. Use when recording a flow with flow-start-recording and you want to run and capture each action. A coordinate \`gesture-tap\` is recorded as a portable \`tap: { selector }\` step when the tapped element has stable text/identifier (otherwise coordinates are kept with a warning); a \`restart-app\` is recorded as a \`launch\` step (record one FIRST to make the flow a self-contained e2e flow). Returns { message, toolResult, flowFile } on success. If it fails an error is returned and nothing is recorded.
+    description: `Execute a tool call and record it as a step in the active flow. Use when recording a flow with flow-start-recording and you want to run and capture each action. A coordinate \`gesture-tap\` is recorded as a portable \`tap: { selector }\` step when the tapped element has stable text/identifier (otherwise coordinates are kept with a warning); a \`restart-app\` is recorded as a \`launch\` step (record one FIRST to make the flow a self-contained e2e flow; restart-app has no chromium support, so a chromium flow records as a fragment — add the \`launch: { chromium: <app path> }\` line to the YAML afterward). Returns { message, toolResult, flowFile } on success. If it fails an error is returned and nothing is recorded.
 If a step was recorded by mistake, edit the .yaml file directly to remove it.`,
     zodSchema,
     services: () => ({}),
