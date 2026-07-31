@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -642,6 +643,75 @@ describe("flow-execute chromium boot", () => {
       "tool:pass",
     ]);
     expect(killChromiumByPortAndWait).toHaveBeenCalledWith(12345, 4242);
+  });
+
+  it("fails the settling launch when the hoisted instance is not the app the step names", async () => {
+    // The hoist and the launch step read a leading run: chain's flow file
+    // independently, so the instance the settle inherits can be another app's
+    // (the file rewritten between the reads). Simulate that end state directly:
+    // the boot reports a canonical appPath differing from what the step resolves.
+    const fragment = await writeFlow("steps:\n  - run: setup\n");
+    await writeSiblingFlow(
+      fragment,
+      "setup",
+      "steps:\n  - launch: { chromium: ./app }\n  - echo: after\n"
+    );
+    bootElectronApp.mockImplementationOnce(async (opts) => ({
+      ...(await defaultBoot(opts)),
+      appPath: "/elsewhere/other-app",
+    }));
+    const registry = makeRegistry();
+
+    const result = await runFlow(registry, {
+      name: "hoist-mismatch",
+      project_root: PROJECT_ROOT,
+      flow_file: fragment,
+    });
+
+    // Fails loudly, naming both apps — never a green "boot" of the wrong app —
+    // and no second boot papers over the mismatch.
+    expect(result.ok).toBe(false);
+    expect(bootElectronApp).toHaveBeenCalledTimes(1);
+    const launch = result.steps.find((s) => s.kind === "launch")!;
+    expect(launch.status).toBe("error");
+    expect(launch.reason).toContain(path.join(path.dirname(fragment), "app"));
+    expect(launch.reason).toContain("/elsewhere/other-app");
+    expect(result.steps.at(-1)).toMatchObject({ kind: "echo", status: "skip" });
+    // The wrong-app instance is still the run's to reclaim at teardown.
+    expect(killChromiumByPortAndWait).toHaveBeenCalledWith(12345, 4242);
+  });
+
+  it("fails the settling launch when the flow was rewritten mid-run to declare no chromium app", async () => {
+    // The real trigger, end to end: setup.yaml changes between the hoist's read
+    // and execRunStep's re-read. The passthrough observer runs synchronously
+    // before each read, so a rewrite on the second read hands the executor the
+    // new file while the hoist booted from the old one.
+    const fragment = await writeFlow("steps:\n  - run: setup\n");
+    await writeSiblingFlow(fragment, "setup", "steps:\n  - launch: { chromium: ./app }\n");
+    const setupPath = path.join(path.dirname(fragment), "setup.yaml");
+    let setupReads = 0;
+    readFileCalls.mockImplementation((p: unknown) => {
+      if (String(p) === setupPath && ++setupReads === 2) {
+        writeFileSync(setupPath, "steps:\n  - launch: { ios: com.acme.app }\n", "utf8");
+      }
+    });
+    try {
+      const registry = makeRegistry();
+
+      const result = await runFlow(registry, {
+        name: "rewritten-mid-run",
+        project_root: PROJECT_ROOT,
+        flow_file: fragment,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(bootElectronApp).toHaveBeenCalledTimes(1); // the hoisted boot only
+      const launch = result.steps.find((s) => s.kind === "launch")!;
+      expect(launch.status).toBe("error");
+      expect(launch.reason).toContain("no chromium app declared");
+    } finally {
+      readFileCalls.mockReset();
+    }
   });
 
   it("follows the leading run: chain through several fragments", async () => {

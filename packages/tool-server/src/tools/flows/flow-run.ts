@@ -448,15 +448,28 @@ async function runChromiumLaunch(state: ExecState, app: Launch): Promise<Directi
   if (state.chromiumLaunched) return bootChromiumForLaunch(state, app);
   state.chromiumLaunched = true;
 
-  if (ownedInstance(state)) {
+  const spec = chromiumLaunchSpec(app);
+  if (!spec) return { ok: false, reason: noChromiumAppReason(device) };
+
+  const owned = ownedInstance(state);
+  if (owned) {
+    // The hoist booted what an EARLIER read of the flow declared, and a leading
+    // run: chain re-reads the file at execution — so settling is only valid
+    // while this step still names the booted app; on mismatch fail loudly
+    // rather than report a boot of an app that never started.
+    const declared = await resolveAppPath(spec.path, state.flowsDir);
+    if (declared !== owned.appPath) {
+      return {
+        ok: false,
+        reason: `launch declares "${declared}" but the instance booted for this run is "${owned.appPath}" — the flow file changed after the run started`,
+      };
+    }
     // Seconds old and already fronted; just settle. Reported as a boot all the
     // same — a reason's presence is how a consumer tells an instance the run
     // owns (and will kill) from one it merely attached to.
     if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
     return { ok: true, reason: `booted chromium instance ${device.id}` };
   }
-  const spec = chromiumLaunchSpec(app);
-  if (!spec) return { ok: false, reason: noChromiumAppReason(device) };
   // Attach over CDP, not via `launch-app`: a chromium launch value is an app
   // path, which launch-app's bundleId grammar rejects.
   try {
