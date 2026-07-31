@@ -536,6 +536,64 @@ describe("flow composition (run:)", () => {
     expect(result.steps[1]).toMatchObject({ kind: "echo", message: "shared helper" });
   });
 
+  it("collides a fragment's stem against a symlinked root's SPELLED name, not its real file's", async () => {
+    // .argent/flows/smoke.yaml is a symlink to shared/flows/main.yaml —
+    // renaming on the link side is the ordinary reason to symlink a saved
+    // flow — whose only step is run: helpers/smoke.yaml. The fragment's stem
+    // "smoke" collides with the SPELLED root name (what result.flow carries),
+    // not the real file's stem "main", so the disambiguation must fire.
+    // Seeding the runStack with the canonical stem instead — `display:
+    // path.basename(canonicalPath, ".yaml")` in execute()'s seed — survives
+    // every other fixture, because each one points its symlink at a real file
+    // with the SAME basename (the two candidate values are equal); here it
+    // collapses the fragment's flow to "smoke" === result.flow, and renderers
+    // that mark fragment steps by that inequality (the CLI's `[fragment]`
+    // suffix) would print the fragment's steps as the root flow's own.
+    const sharedFlows = path.join(tmpDir, "shared", "flows");
+    const sharedHelpers = path.join(sharedFlows, "helpers");
+    await fs.mkdir(sharedHelpers, { recursive: true });
+    await fs.writeFile(
+      path.join(sharedFlows, "main.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "run", flow: "helpers/smoke.yaml" }],
+      }),
+      "utf8"
+    );
+    await fs.writeFile(
+      path.join(sharedHelpers, "smoke.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "echo", message: "inside the shared fragment" }],
+      }),
+      "utf8"
+    );
+    const flowsDir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(flowsDir, { recursive: true });
+    await fs.symlink(path.join(sharedFlows, "main.yaml"), path.join(flowsDir, "smoke.yaml"));
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "smoke", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.flow).toBe("smoke");
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:pass", "echo:pass"]);
+    // The run marker and the fragment's expanded step both carry the
+    // as-written path minus the extension — never the bare stem.
+    expect(result.steps[0]).toMatchObject({ flow: "helpers/smoke", target: "helpers/smoke.yaml" });
+    expect(result.steps[1]).toMatchObject({
+      flow: "helpers/smoke",
+      message: "inside the shared fragment",
+    });
+    // The exact inequality renderers key on to mark fragment lines.
+    expect(result.steps[0]?.flow).not.toBe(result.flow);
+    expect(result.steps[1]?.flow).not.toBe(result.flow);
+  });
+
   it("resolves a run: `..` after a symlinked component with kernel semantics", async () => {
     // .argent/flows/link is a symlink to lex/other, so on disk
     // `link/../frag.yaml` means lex/frag.yaml — `..` names the parent of the
