@@ -1281,7 +1281,7 @@ function errMsg(err: unknown): string {
  * exists, so callers cannot bypass the boundary and read arbitrary server
  * files.
  *
- * With no `flow_path` or `flow_file`, derive the legacy saved-flow path from
+ * With no `flow_path` or `flow_file`, derive the saved-flow path from
  * project_root + name. When `flow_file` is set it must be one of the two shapes
  * its existing file-input boundary legitimately produces: the exact
  * `${project_root}/.argent/flows/${name}.yaml` path (co-located client,
@@ -1460,9 +1460,9 @@ export function resolveFlowSource(
 }
 
 /**
- * Backwards-compatible path-only resolver used by flow-read-prerequisite and
- * existing tests/callers. flow-execute uses {@link resolveFlowSource} so it can
- * also obtain the basename-derived logical name for explicit paths.
+ * Path-only resolver used by flow-read-prerequisite. flow-execute uses
+ * {@link resolveFlowSource} so it can also obtain the basename-derived logical
+ * name for explicit paths.
  */
 export function resolveFlowFilePath(
   params: {
