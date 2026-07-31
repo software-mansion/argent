@@ -119,13 +119,9 @@ function main() {
     byVersion.set(manifest.version, names);
   }
 
-  // An empty packages/ never gets past this read, so the version below is always
-  // a real one.
-  const argentPkg = readTrackedJson(argentManifestPath);
-  const server = readTrackedJson(serverJsonPath);
-
   let failed = false;
 
+  // Reported before the reads below, so a corrupt server.json can't swallow it.
   if (byVersion.size > 1) {
     console.error("Workspace package versions are out of sync:");
     for (const [version, names] of [...byVersion].sort()) {
@@ -136,6 +132,11 @@ function main() {
     );
     failed = true;
   }
+
+  // An empty packages/ never gets past this read, so the version below is always
+  // a real one.
+  const argentPkg = readTrackedJson(argentManifestPath);
+  const server = readTrackedJson(serverJsonPath);
 
   // server.json names the npm coordinates of packages/argent, so that manifest
   // is what it has to agree with. Reported even when packages/* disagree, so a

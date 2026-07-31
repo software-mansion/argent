@@ -269,6 +269,13 @@ test("[script] a missing server.json fails on-message", (t) => {
   assertNoStackTrace(result.stderr);
 });
 
+test("[script] a corrupt server.json does not swallow the packages/* drift", (t) => {
+  const result = runScript(fixtureRepo(t, { otherVersion: "0.17.0", serverJson: null }));
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Workspace package versions are out of sync/);
+  assert.match(result.stderr, /Cannot read server\.json/);
+});
+
 test("[script] a malformed server.json fails on-message", (t) => {
   const result = runScript(fixtureRepo(t, { serverJson: "{ not json" }));
   assert.equal(result.status, 1);
