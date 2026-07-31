@@ -299,9 +299,12 @@ export function renderSummary(report: FlowReport, opts: { withDevice?: boolean }
   const warnings = report.steps.filter((s) => s.warning).length;
   const warningsNote = warnings ? `, ${warnings} warning${warnings === 1 ? "" : "s"}` : "";
   // The live renderer prints its header before the runner has resolved a
-  // device, so its summary carries the device instead. Empty when the flow
-  // needed none.
-  const where = opts.withDevice && report.device ? ` on ${report.device}` : "";
+  // device, so its summary carries the device instead — the one the run
+  // STARTED on: a chromium run can move onto runner-booted instances, each
+  // move marked on its launch step's reason, so "on <id>" would blame the
+  // wrong instance for any step that ran after a move. Empty when the flow
+  // needed no device.
+  const where = opts.withDevice && report.device ? ` (started on ${report.device})` : "";
   // Four zeros on a passing run read as though nothing happened. Say why:
   // narration is not counted, so a flow of only narration counts nothing.
   // Only on a pass — on a failure the counts are not what needs explaining.

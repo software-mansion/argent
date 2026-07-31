@@ -247,8 +247,10 @@ describe("flow report rendering", () => {
   it("renderSummary carries the device only when asked (live tail)", () => {
     const report = mkReport(STEPS);
     expect(renderSummary(report)).toBe("FAIL — 2 passed, 1 failed, 0 errored, 1 skipped");
+    // "started on": a chromium run can move onto runner-booted instances, so
+    // the summary must not claim the whole run happened on the starting device.
     expect(renderSummary(report, { withDevice: true })).toBe(
-      "FAIL on UDID-1 — 2 passed, 1 failed, 0 errored, 1 skipped"
+      "FAIL (started on UDID-1) — 2 passed, 1 failed, 0 errored, 1 skipped"
     );
   });
 
