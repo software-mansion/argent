@@ -24,7 +24,7 @@ Call `react-profiler-fiber-tree`. Inspect `useMemoCache` presence to confirm Rea
 { "port": 8081, "device_id": "<UDID>" }
 ```
 
-Call `debugger-log-registry`. Returns a summary with entry counts by level, message clusters, and the log file path. Use `Grep`/`Read` on the log file to filter by level or search for specific messages.
+Call `debugger-log-registry`. When connected (`status: "connected"`) it returns a summary with entry counts by level, message clusters, and the log file path. Use `Grep`/`Read` on the log file to filter by level or search for specific messages. When the debugger is unreachable it does not fail — it returns `{ status: "not_connected", reason, detail, guidance }` with no log file; follow the `guidance` (do not retry in a loop, and do not try to grep a file in this state).
 
 ---
 

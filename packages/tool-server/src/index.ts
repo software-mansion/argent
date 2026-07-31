@@ -441,6 +441,7 @@ export function start(): void {
       telemetryTrack("tool:fail", {
         tool: toolId,
         ...(meta.platform ? { platform: meta.platform } : {}),
+        ...(meta.invalid_params?.length ? { invalid_params: meta.invalid_params } : {}),
         duration_ms: durationMs,
         ...signal,
         ...aiTelemetryFromMeta(meta),

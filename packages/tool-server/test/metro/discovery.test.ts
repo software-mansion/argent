@@ -76,4 +76,55 @@ describe("discoverMetro", () => {
       .mockResolvedValueOnce(targetsResponse([]));
     await expect(discoverMetro(8081)).rejects.toThrow("no CDP targets");
   });
+
+  // Anti-retry-storm guidance: the original first sentences are contract
+  // (agents and skills match on them) and the appended guidance must tell the
+  // agent explicitly not to loop.
+  describe("guidance sentences", () => {
+    async function rejection(p: Promise<unknown>): Promise<Error> {
+      try {
+        await p;
+      } catch (err) {
+        return err as Error;
+      }
+      throw new Error("expected discoverMetro to reject");
+    }
+
+    it("nothing listening: keeps the first sentence and appends the no-retry-loop guidance", async () => {
+      mockFetch.mockRejectedValueOnce(new TypeError("fetch failed"));
+      const err = await rejection(discoverMetro(8081));
+      expect(err.message).toMatch(/^Metro at port 8081 is not running \(got: fetch failed\)\./);
+      expect(err.message).toContain(
+        "Do not retry in a loop — the result will not change until Metro is started."
+      );
+      expect(err.message).toContain("`npx react-native start` or `npx expo start`");
+      expect(err.message).toContain("wait for it to report ready, then retry once");
+    });
+
+    it("non-Metro responder: appends the find-the-right-port guidance", async () => {
+      mockFetch.mockResolvedValueOnce(new Response("<html>hello</html>"));
+      const err = await rejection(discoverMetro(8081));
+      expect(err.message).toMatch(/^Metro at port 8081 is not running \(got: /);
+      expect(err.message).toContain("Something else is listening on this port");
+      expect(err.message).toContain("Do not retry in a loop");
+      expect(err.message).toContain("find the port Metro actually runs on");
+    });
+
+    it("no targets: keeps the first sentence and appends launch-app + Android reverse-proxy guidance", async () => {
+      mockFetch
+        .mockResolvedValueOnce(statusResponse("/Users/dev/myapp"))
+        .mockResolvedValueOnce(targetsResponse([]));
+      const err = await rejection(discoverMetro(8081));
+      expect(err.message).toMatch(
+        /^Metro at port 8081 has no CDP targets — is a React Native app connected\?/
+      );
+      expect(err.message).toContain(
+        "Do not retry immediately — this will not change until an app attaches."
+      );
+      expect(err.message).toContain("launch-app / restart-app");
+      expect(err.message).toContain("wait a few seconds for the bundle to load, then retry once");
+      expect(err.message).toContain("a missing port reverse-proxy is the most common cause");
+      expect(err.message).toContain("metro-debugger skill's Android prerequisites");
+    });
+  });
 });

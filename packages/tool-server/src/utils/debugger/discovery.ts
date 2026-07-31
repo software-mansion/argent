@@ -43,7 +43,10 @@ export async function discoverMetro(port: number): Promise<MetroInfo> {
     // surface as an opaque 500. Report the same "not running" failure the caller
     // (and the metro-debugger skill) already knows how to act on.
     throw new FailureError(
-      `Metro at port ${port} is not running (got: ${err instanceof Error ? err.message : String(err)})`,
+      `Metro at port ${port} is not running (got: ${err instanceof Error ? err.message : String(err)}). ` +
+        `Do not retry in a loop — the result will not change until Metro is started. ` +
+        `Start Metro (e.g. \`npx react-native start\` or \`npx expo start\`) or ask the user, ` +
+        `wait for it to report ready, then retry once.`,
       {
         error_code: FAILURE_CODES.DEBUGGER_METRO_NOT_RUNNING,
         failure_stage: "debugger_discover_metro_status",
@@ -55,7 +58,9 @@ export async function discoverMetro(port: number): Promise<MetroInfo> {
   const statusText = await statusRes.text();
   if (!statusText.includes("packager-status:running")) {
     throw new FailureError(
-      `Metro at port ${port} is not running (got: ${statusText.slice(0, 100)})`,
+      `Metro at port ${port} is not running (got: ${statusText.slice(0, 100)}). ` +
+        `Something else is listening on this port — it did not answer like Metro. ` +
+        `Do not retry in a loop; find the port Metro actually runs on (or start it), then retry once.`,
       {
         error_code: FAILURE_CODES.DEBUGGER_METRO_NOT_RUNNING,
         failure_stage: "debugger_discover_metro_status",
@@ -86,7 +91,11 @@ export async function discoverMetro(port: number): Promise<MetroInfo> {
 
   if (!targets.length) {
     throw new FailureError(
-      `Metro at port ${port} has no CDP targets — is a React Native app connected?`,
+      `Metro at port ${port} has no CDP targets — is a React Native app connected? ` +
+        `Do not retry immediately — this will not change until an app attaches. ` +
+        `Launch or restart the RN app on the target device (launch-app / restart-app), ` +
+        `wait a few seconds for the bundle to load, then retry once. On Android, a missing ` +
+        `port reverse-proxy is the most common cause (see the metro-debugger skill's Android prerequisites).`,
       {
         error_code: FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS,
         failure_stage: "debugger_discover_metro_targets",
