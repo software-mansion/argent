@@ -170,6 +170,27 @@ test("a packages[] entry that is not an object is caught", () => {
   }
 });
 
+// Reporting the bad entry must not cost the entries after it, or one stray null
+// would quietly shrink the report the sibling test above relies on being complete.
+test("a non-object packages[] entry does not stop the entries after it", () => {
+  const problems = serverJsonMismatches(
+    VERSION,
+    ARGENT_PKG,
+    server(
+      (s) =>
+        (s.packages = [
+          /** @type {any} */ (null),
+          { identifier: "@attacker/pkg", version: "6.6.6" },
+        ])
+    )
+  );
+  assert.deepEqual(problems, [
+    "server.json packages[0] is null, not an object naming a registry and identifier",
+    "server.json packages[1].version is 6.6.6, packages/argent/package.json is 0.18.0",
+    "server.json packages[1].identifier (@attacker/pkg) != published package name (@swmansion/argent)",
+  ]);
+});
+
 test("every problem is reported at once, not just the first", () => {
   const problems = serverJsonMismatches(
     VERSION,
@@ -198,12 +219,18 @@ const SCRIPT_PATH = fileURLToPath(new URL("./check-workspace-versions.mjs", impo
  * macOS's own tmpdir is behind a /var -> /private/var symlink, which the
  * symlink test then reintroduces deliberately.
  * @param {import("node:test").TestContext} t
- * @param {{ argentVersion?: string | null, otherVersion?: string, serverJson?: unknown }} [options]
+ * @param {{ argentVersion?: string | null, otherVersion?: string, serverJson?: unknown,
+ *   extraPackages?: Record<string, unknown> }} [options]
  *   serverJson: an object to write as JSON, a string to write verbatim, or null
  *   to leave the file out entirely. argentVersion: null omits the version key.
+ *   extraPackages: further packages/<dir> entries, a null value creating the
+ *   directory with no package.json in it.
  * @returns {string} the repo root
  */
-function fixtureRepo(t, { argentVersion = VERSION, otherVersion = VERSION, serverJson } = {}) {
+function fixtureRepo(
+  t,
+  { argentVersion = VERSION, otherVersion = VERSION, serverJson, extraPackages = {} } = {}
+) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "check-workspace-versions-")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
 
@@ -223,6 +250,10 @@ function fixtureRepo(t, { argentVersion = VERSION, otherVersion = VERSION, serve
     name: "@argent/registry",
     version: otherVersion,
   });
+  for (const [dir, manifest] of Object.entries(extraPackages)) {
+    mkdirSync(join(root, "packages", dir), { recursive: true });
+    if (manifest !== null) write(join(root, "packages", dir, "package.json"), manifest);
+  }
   if (serverJson !== null) write(join(root, "server.json"), serverJson ?? SERVER);
 
   return root;
@@ -258,6 +289,44 @@ test("[script] server.json drift alone exits 1", (t) => {
   assert.equal(result.status, 1, `expected a failure, got:\n${result.stdout}${result.stderr}`);
   assert.match(result.stderr, /server\.json version is 0\.17\.0/);
   assert.match(result.stderr, /server\.json packages\[0\]\.version is 0\.17\.0/);
+});
+
+// The check the script existed for before this PR. Every other failing [script]
+// test here reaches its exit 1 through a server.json problem, so this is the only
+// one that pins the exit code to workspace drift on its own.
+test("[script] packages/* drift alone exits 1", (t) => {
+  const root = fixtureRepo(t, { otherVersion: "0.17.0" });
+  const result = runScript(root);
+  assert.equal(result.status, 1, `expected a failure, got:\n${result.stdout}${result.stderr}`);
+  assert.match(result.stderr, /Workspace package versions are out of sync/);
+  assert.match(result.stderr, /0\.17\.0: @argent\/registry/);
+  // server.json agrees with packages/argent, so nothing else could have failed it.
+  assert.doesNotMatch(result.stderr, /server\.json is out of sync/);
+});
+
+// packages/argent-private is exactly this in the real repo: a submodule directory
+// carrying no package.json. The scan has to step over an unusable directory and
+// keep going, or every package sorting after it silently leaves the comparison.
+test("[script] an unusable packages/* directory does not stop the scan", (t) => {
+  const root = fixtureRepo(t, {
+    otherVersion: "0.17.0",
+    extraPackages: { nomanifest: null, noversion: { name: "@argent/noversion" } },
+  });
+  const result = runScript(root);
+  assert.equal(result.status, 1, `expected a failure, got:\n${result.stdout}${result.stderr}`);
+  assert.match(result.stderr, /0\.17\.0: @argent\/registry/);
+});
+
+// The report groups every package sharing a version onto one line, which is what
+// makes a drift report readable at 17 packages.
+test("[script] the drift report lists every package sharing a version", (t) => {
+  const root = fixtureRepo(t, {
+    otherVersion: "0.17.0",
+    extraPackages: { alpha: { name: "@argent/alpha", version: VERSION } },
+  });
+  const result = runScript(root);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /0\.18\.0: @argent\/alpha, @swmansion\/argent\n/);
 });
 
 // The one shape where every comparison the script makes is vacuously satisfied:
@@ -327,5 +396,22 @@ test("[script] a malformed server.json fails on-message", (t) => {
   const result = runScript(fixtureRepo(t, { serverJson: "{ not json" }));
   assert.equal(result.status, 1);
   assert.match(result.stderr, /server\.json is not valid JSON: /);
+  assert.match(result.stderr, /git checkout -- server\.json/);
   assertNoStackTrace(result.stderr);
+});
+
+// `null`, a bare scalar and an array all parse cleanly, so the read has to reject
+// them itself — every field lookup after it would either throw or quietly match
+// undefined.
+test("[script] a server.json that parses but is not an object fails on-message", (t) => {
+  for (const [content, shape] of [
+    ["null", "null"],
+    ['"0.18.0"', "string"],
+    ["[]", "an array"],
+  ]) {
+    const result = runScript(fixtureRepo(t, { serverJson: content }));
+    assert.equal(result.status, 1, `expected a failure for ${content}, got:\n${result.stdout}`);
+    assert.equal(result.stderr.split("\n")[0], `server.json is ${shape}, not a JSON object`);
+    assertNoStackTrace(result.stderr);
+  }
 });

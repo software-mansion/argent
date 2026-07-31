@@ -109,18 +109,36 @@ function readTrackedJson(path) {
     console.error(`\nIt is tracked in git — restore it with \`git checkout -- ${shown}\`.`);
     process.exit(1);
   }
+  let parsed;
   try {
-    return JSON.parse(raw);
+    parsed = JSON.parse(raw);
   } catch (error) {
     console.error(`${shown} is not valid JSON: ${error.message}`);
     console.error(`\nIt is tracked in git — restore it with \`git checkout -- ${shown}\`.`);
     process.exit(1);
   }
+
+  // JSON.parse returns whatever the file holds, so a scalar, null or an array
+  // parses cleanly and then either throws or compares equal to undefined on
+  // every field read below. Both callers want an object or nothing.
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    const shape = parsed === null ? "null" : Array.isArray(parsed) ? "an array" : typeof parsed;
+    console.error(`${shown} is ${shape}, not a JSON object`);
+    console.error(`\nIt is tracked in git — restore it with \`git checkout -- ${shown}\`.`);
+    process.exit(1);
+  }
+  return parsed;
 }
 
 function main() {
   const byVersion = new Map(); // version -> package names
-  for (const entry of readdirSync(packagesDir, { withFileTypes: true })) {
+  // Sorted so the scan visits packages/* in the same order on every machine —
+  // readdir order is filesystem-dependent, and a scan that stops early would
+  // otherwise drop a different set of packages each run.
+  const entries = readdirSync(packagesDir, { withFileTypes: true }).sort((a, b) =>
+    a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+  );
+  for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     let manifest;
     try {
