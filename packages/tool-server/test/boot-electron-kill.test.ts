@@ -1,10 +1,10 @@
 /**
  * Teardown-path tests for runner-booted Chromium: `killChromiumByPort` must
  * prefer the ChildProcess handle retained at boot — whose exitCode/signalCode
- * guard lets killChildEscalating skip the delayed SIGKILL once the child has
- * exited, so it can never land on a recycled pid — and only fall back to
- * raw-pid signalling (with a signal-0 liveness re-probe before the SIGKILL)
- * once the child has left the registry.
+ * guard skips the delayed leader SIGKILL once the child has exited, while the
+ * group sweep escalates on a signal-0 liveness probe of the group — and only
+ * fall back to raw-pid signalling (with the same liveness re-probe before the
+ * SIGKILL) once the child has left the registry.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from "vitest";

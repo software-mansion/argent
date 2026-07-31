@@ -210,7 +210,8 @@ function killChildEscalating(child: ChildProcess): void {
       }
     }
     // The group's own liveness decides this escalation, not the leader's exit
-    // status: the leader routinely exits while a helper lives on.
+    // status: the leader routinely exits while a helper lives on. Probe-then-
+    // kill leaves the same recycled-pgid window the raw-pid fallback documents.
     if (child.pid !== undefined && signalGroup(child.pid, 0)) {
       signalGroup(child.pid, "SIGKILL");
     }
@@ -221,21 +222,24 @@ function killChildEscalating(child: ChildProcess): void {
  * ChildProcess handles for the Electron apps this tool-server booted, keyed by
  * CDP port. Retained so teardown can kill through the handle: its
  * exitCode/signalCode guard lets {@link killChildEscalating} skip the delayed
- * SIGKILL once the child has exited, so the kill can never land on a recycled
- * pid — a raw pid offers no such guard. Entries are dropped when the child
- * exits or a kill consumes them. Holding the handle does not re-ref the
- * unref'd child, so the tool-server's event loop still isn't kept alive by it.
+ * SIGKILL on the leader once the child has exited, so that kill can never land
+ * on a recycled pid. The group SIGKILL is gated only by a group-liveness probe
+ * — see killChildEscalating — so it carries the same residual probe-to-kill
+ * window as any raw-pid signal. Entries are dropped when the child exits or a
+ * kill consumes them. Holding the handle does not re-ref the unref'd child, so
+ * the tool-server's event loop still isn't kept alive by it.
  */
 const liveChildren = new Map<number, ChildProcess>();
 
 /**
  * Terminate a Chromium/Electron app this tool-server booted on `port`.
  * Prefers the retained ChildProcess handle ({@link liveChildren}) and kills it
- * with {@link killChildEscalating}, whose exit-status guard makes the delayed
- * SIGKILL safe against pid recycling. Only when no handle is held (the child
- * already exited, or it was booted by an earlier tool-server process) does it
- * fall back to best-effort raw-pid signalling. An already-exited process is a
- * no-op, not an error.
+ * with {@link killChildEscalating}: its exit-status guard keeps the delayed
+ * leader SIGKILL off recycled pids, while the group sweep relies on a
+ * liveness probe. Only when no handle is held (the child already exited, or
+ * it was booted by an earlier tool-server process) does it fall back to
+ * best-effort raw-pid signalling. An already-exited process is a no-op, not
+ * an error.
  */
 export function killChromiumByPort(port: number, pid?: number): void {
   const child = liveChildren.get(port);
