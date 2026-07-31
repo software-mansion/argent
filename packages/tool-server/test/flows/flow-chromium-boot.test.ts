@@ -909,8 +909,8 @@ describe("flow-execute chromium boot", () => {
   it("still honors the first launch when a fragment run:s an e2e flow (the common composition)", async () => {
     // Fragment B (no leading launch) that run:s e2e flow A (launch + setup).
     // A's launch is the run's FIRST, so it attaches to the pinned instance
-    // rather than booting. Uses a pinned device: a fragment top-level means the
-    // runner boots nothing itself, so an already-running instance is required.
+    // rather than booting. The pinned device is what suppresses the boot —
+    // without one this same shape hoist-boots A's app before step 1.
     const fragmentB = await writeFlow("steps:\n  - run: setup-a.yaml\n  - echo: B after A\n");
     await writeSiblingFlow(
       fragmentB,
@@ -931,7 +931,7 @@ describe("flow-execute chromium boot", () => {
       device: "chromium-cdp-9999",
     });
 
-    // Fragment top-level: the runner never boots (nor tears down) an instance;
+    // Pinned device: the runner never boots (nor tears down) an instance;
     // A's launch attaches to the pinned one instead.
     expect(bootElectronApp).not.toHaveBeenCalled();
     expect(killChromiumByPort).not.toHaveBeenCalled();
