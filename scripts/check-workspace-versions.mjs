@@ -62,6 +62,14 @@ export function serverJsonMismatches(publishedVersion, argentPkg, server) {
   }
 
   for (const [i, pkg] of packages.entries()) {
+    // Same reason as the array check above: an entry that is not an object has
+    // no coordinates to read, and reading through it would throw out of the loop.
+    if (typeof pkg !== "object" || pkg === null) {
+      mismatches.push(
+        `server.json packages[${i}] is ${pkg === null ? "null" : typeof pkg}, not an object naming a registry and identifier`
+      );
+      continue;
+    }
     if (pkg.version !== publishedVersion) {
       mismatches.push(
         `server.json packages[${i}].version is ${pkg.version}, packages/argent/package.json is ${publishedVersion}`

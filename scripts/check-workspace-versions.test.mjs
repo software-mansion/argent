@@ -122,8 +122,8 @@ test("dropping mcpName and the server.json name together is still caught", () =>
   assert.match(problems[0], /has no mcpName/);
 });
 
-// The object form is what a hand-edit that drops the brackets produces; it used
-// to escape as a `packages.entries is not a function` TypeError.
+// The object form is what a hand-edit that drops the brackets produces. It has no
+// .entries(), so catching it here is what keeps the loop below from throwing.
 test("a server.json with no usable packages array is caught", () => {
   const unusable = [
     server((s) => delete s.packages),
@@ -137,6 +137,25 @@ test("a server.json with no usable packages array is caught", () => {
     const problems = serverJsonMismatches(VERSION, ARGENT_PKG, emptied);
     assert.equal(problems.length, 1);
     assert.match(problems[0], /no packages array/);
+  }
+});
+
+// A hand-edit that empties an entry rather than the array leaves the array shape
+// intact, so the check above passes it through to the loop that reads .version
+// off it.
+test("a packages[] entry that is not an object is caught", () => {
+  for (const [entry, shown] of [
+    [null, "null"],
+    ["@swmansion/argent", "string"],
+  ]) {
+    const problems = serverJsonMismatches(
+      VERSION,
+      ARGENT_PKG,
+      server((s) => (s.packages = [/** @type {any} */ (entry)]))
+    );
+    assert.deepEqual(problems, [
+      `server.json packages[0] is ${shown}, not an object naming a registry and identifier`,
+    ]);
   }
 });
 
