@@ -415,6 +415,44 @@ describe("flow composition (run:)", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("applies the root-stem collision disambiguation to a failed run: report too", async () => {
+    // Root login.yaml references helpers/login.yaml, which is MISSING — a
+    // moved or deleted fragment is the most common way a run: fails, and the
+    // errored marker (execRunStep's fail(), which stamps `flow: display`) is
+    // the line that names the missing file. Every other test reaching fail()
+    // uses a non-colliding root, so weakening just that line to the bare stem
+    // (`flow: runTargetName(target)`) would slip through the rest of the
+    // suite — here it would collapse flow to "login" === result.flow, and
+    // renderers that mark fragment lines by that inequality (the CLI's
+    // `[fragment]` suffix) would read the load failure as the root flow's own.
+    const helpersDir = path.join(tmpDir, ".argent", "flows", "helpers");
+    await fs.mkdir(helpersDir, { recursive: true });
+    await writeFlow("login", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "helpers/login.yaml" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "login", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.flow).toBe("login");
+    expect(result.steps[0]).toMatchObject({
+      kind: "run",
+      status: "error",
+      flow: "helpers/login",
+      target: "helpers/login.yaml",
+    });
+    expect(result.steps[0]?.reason).toMatch(/^could not load fragment "helpers\/login\.yaml": /);
+    expect(result.steps[0]?.reason).toContain("ENOENT");
+    // The exact inequality renderers key on to mark fragment lines.
+    expect(result.steps[0]?.flow).not.toBe(result.flow);
+  });
+
   it("detects a cycle reached through a different relative spelling", async () => {
     const subDir = path.join(tmpDir, ".argent", "flows", "sub");
     await fs.mkdir(subDir, { recursive: true });
