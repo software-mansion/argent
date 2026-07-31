@@ -141,7 +141,6 @@ interface Setup {
   invoke: (params: Record<string, unknown>) => Promise<unknown>;
 }
 
- 
 function makeSetup(...blueprints: ServiceBlueprint<any, any>[]): Setup {
   const registry = new Registry();
   for (const bp of blueprints) registry.registerBlueprint(bp);
