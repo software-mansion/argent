@@ -534,6 +534,49 @@ async function isRunnableFlowFile(filePath: string): Promise<boolean> {
   }
 }
 
+/**
+ * Every runnable flow path under `dir`, relative to it. `flow run` binds its
+ * name contract to the filename alone — intermediate directory names are
+ * unconstrained — so a YAML at any depth is runnable and a non-recursive
+ * listing would hide paths `run` accepts. Two deliberate exclusions:
+ *
+ * - `__baselines__` directories (at any depth: nested flows keep their
+ *   baselines beside themselves) are machine-managed snapshot storage, not a
+ *   place flows live. `run` would technically execute a YAML dropped in one,
+ *   but advertising the inside of an output directory invites keying
+ *   baselines of baselines — the one spot where "list what run accepts"
+ *   yields to "list what is a flow".
+ * - Symlinked directories are not entered: a link cycle would walk forever
+ *   (Node's own recursive readdir refuses to follow them for the same
+ *   reason). A symlinked flow FILE is still listed — the runnability probe
+ *   stats through it, exactly as `flow run` does.
+ *
+ * An unreadable subdirectory omits its subtree like any other per-entry
+ * failure; only the top-level readdir's error propagates, so a missing
+ * `.argent/flows` still gets its own message.
+ */
+async function collectRunnableFlowPaths(dir: string, relDir = ""): Promise<string[]> {
+  const found: string[] = [];
+  const entries = await fsp.readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const rel = relDir ? path.join(relDir, entry.name) : entry.name;
+    if (entry.isDirectory()) {
+      if (entry.name === "__baselines__") continue;
+      found.push(
+        ...(await collectRunnableFlowPaths(path.join(dir, entry.name), rel).catch(() => []))
+      );
+      continue;
+    }
+    // Same name gates as `run`: exact lowercase .yaml, stem in the safe
+    // charset. readdir returns on-disk names, so what passes here is the
+    // spelling `run`'s exact-basename check accepts.
+    if (!entry.name.endsWith(".yaml")) continue;
+    if (!SAFE_FLOW_NAME.test(path.basename(entry.name, ".yaml"))) continue;
+    if (await isRunnableFlowFile(path.join(dir, entry.name))) found.push(rel);
+  }
+  return found;
+}
+
 export async function flow(argv: string[], options: FlowCommandOptions): Promise<void> {
   const [sub, ...rest] = argv;
 
@@ -545,16 +588,12 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
   if (sub === "list") {
     const dir = path.join(process.cwd(), ".argent", "flows");
     try {
-      const entries = await fsp.readdir(dir);
-      // Only paths `flow run` accepts: it also rejects stems failing
-      // SAFE_FLOW_NAME, and anything that is not a readable file.
-      const named = entries
-        .filter((f) => f.endsWith(".yaml") && SAFE_FLOW_NAME.test(path.basename(f, ".yaml")))
-        .sort();
-      const runnable = await Promise.all(named.map((f) => isRunnableFlowFile(path.join(dir, f))));
-      const paths = named
-        .filter((_, i) => runnable[i])
-        .map((f) => path.join(".argent", "flows", f));
+      // One final sort over full relative paths, not per-directory: the
+      // ordering must be a pure function of the set of paths, never of the
+      // walk order.
+      const paths = (await collectRunnableFlowPaths(dir))
+        .sort()
+        .map((rel) => path.join(".argent", "flows", rel));
       if (paths.length === 0) console.log("No flows found in .argent/flows");
       else console.log(paths.join("\n"));
     } catch {
@@ -688,6 +727,45 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     const code = (err as NodeJS.ErrnoException).code;
     const detail = code === "ENOENT" ? "Flow file not found" : "Could not read flow file";
     console.error(`${detail}: ${flowPath}`);
+    return exitAfterFlush(2);
+  }
+
+  // The stat above matched the basename by the filesystem's rules, which on a
+  // case-insensitive filesystem (APFS, NTFS) finds a file really named
+  // "Upper.YAML" for "upper.yaml" — every name guard above would then have
+  // validated a spelling that exists nowhere on disk, and the flow name that
+  // keys the report, __baselines__/, and --output would be one no file
+  // carries. Require the supplied basename to appear in the parent directory
+  // byte-for-byte. readdir, not realpath: realpath rewrites a symlinked flow
+  // to its target's name, and `run` deliberately accepts a symlink under the
+  // link's own name. The basename is pure ASCII by this point (stem charset +
+  // ".yaml"), so Unicode-normalizing filesystems cannot make the comparison
+  // lie. A readdir failure (an execute-only parent directory lets stat
+  // through while refusing the listing) skips the check rather than refusing
+  // a file the exact-named contract may well be honoring.
+  const suppliedBase = path.basename(flowPath);
+  const siblings = await fsp.readdir(path.dirname(flowPath)).catch(() => null);
+  if (siblings !== null && !siblings.includes(suppliedBase)) {
+    const actual = siblings.find((name) => name.toLowerCase() === suppliedBase.toLowerCase());
+    // Hint the real name only when `run` would accept it (a stem-case slip
+    // like Checkout.yaml); an invalid real name (Upper.YAML) needs a rename,
+    // and suggesting a command that will itself be refused helps no one.
+    const actualRunnable =
+      actual !== undefined &&
+      path.extname(actual) === ".yaml" &&
+      SAFE_FLOW_NAME.test(path.basename(actual, ".yaml"));
+    const recovery = actualRunnable
+      ? `Did you mean: argent flow run ${path.join(path.dirname(suppliedPath), actual!)}`
+      : actual !== undefined
+        ? `Rename ${actual} to ${suppliedBase} to run it — flow files must be lowercase .yaml.`
+        : "Pass the flow file's name exactly as it appears on disk.";
+    console.error(
+      `Flow path must name the file as it appears on disk — this filesystem matched ` +
+        `${JSON.stringify(suppliedBase)} case-insensitively` +
+        `${actual !== undefined ? ` to ${JSON.stringify(actual)}` : ""}, so the flow name ` +
+        `(which keys the report, __baselines__/, and --output) would be one no file carries: ` +
+        `${suppliedPath}\n${recovery}`
+    );
     return exitAfterFlush(2);
   }
 

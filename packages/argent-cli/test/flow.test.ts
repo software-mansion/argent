@@ -377,6 +377,87 @@ describe("argent flow run", () => {
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
 
+  // The lowercase-.yaml guard checks the SUPPLIED spelling, but stat matches
+  // by the filesystem's rules — on APFS/NTFS a lowercase retyping of
+  // "Upper.YAML" finds the file, and without the exact-basename check the run
+  // would proceed under a flow name ("upper") no file on disk carries, mis-
+  // keying __baselines__/ and --output. These fixtures probe the filesystem
+  // rather than assume it: on a case-sensitive one (ext4 CI) the lowercase
+  // spelling is simply ENOENT. Both branches assert the contract that
+  // matters — rejected either way, flow-execute never invoked — and the
+  // case-insensitive branch additionally pins the message, since there the
+  // supplied path looks perfectly valid to the operator.
+  it("refuses a case-insensitive extension match, telling the operator to rename the file", async () => {
+    const caseRoot = path.join(tempRoot, "case-ext-project");
+    await fsp.mkdir(caseRoot, { recursive: true });
+    await fsp.writeFile(path.join(caseRoot, "Upper.YAML"), "steps: []\n");
+    const lowercase = path.join(caseRoot, "upper.yaml");
+    const caseInsensitiveFs = await fsp.stat(lowercase).then(
+      () => true,
+      () => false
+    );
+
+    await expect(flow(["run", lowercase], opts)).rejects.toThrow("process.exit:2");
+
+    const out = errs.join("\n");
+    if (caseInsensitiveFs) {
+      // The real name is itself unrunnable (uppercase extension), so the
+      // recovery must be a rename — not a Did-you-mean that would be refused.
+      expect(out).toContain("Flow path must name the file as it appears on disk");
+      expect(out).toContain('"Upper.YAML"');
+      expect(out).toContain("Rename Upper.YAML to upper.yaml");
+    } else {
+      expect(out).toContain("Flow file not found");
+    }
+    expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it("refuses a case-insensitive stem match, hinting the file's real (runnable) name", async () => {
+    const caseRoot = path.join(tempRoot, "case-stem-project");
+    await fsp.mkdir(caseRoot, { recursive: true });
+    await fsp.writeFile(path.join(caseRoot, "Checkout.yaml"), "steps: []\n");
+    const lowercase = path.join(caseRoot, "checkout.yaml");
+    const caseInsensitiveFs = await fsp.stat(lowercase).then(
+      () => true,
+      () => false
+    );
+
+    await expect(flow(["run", lowercase], opts)).rejects.toThrow("process.exit:2");
+
+    const out = errs.join("\n");
+    if (caseInsensitiveFs) {
+      // "Checkout.yaml" passes every name guard, so here the hint can be the
+      // command that actually works.
+      expect(out).toContain("Flow path must name the file as it appears on disk");
+      expect(out).toContain(
+        `Did you mean: argent flow run ${path.join(caseRoot, "Checkout.yaml")}`
+      );
+    } else {
+      expect(out).toContain("Flow file not found");
+    }
+    expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it("still runs a symlinked flow under the link's own name", async () => {
+    // Pins the exact-basename check to the directory listing rather than
+    // realpath: realpath would rewrite the link to its target's name and
+    // refuse a spelling `flow run` has always accepted (and `flow list`
+    // advertises).
+    const linkRoot = path.join(tempRoot, "run-symlink-project");
+    await fsp.mkdir(linkRoot, { recursive: true });
+    await fsp.writeFile(path.join(linkRoot, "target-flow.yaml"), "steps: []\n");
+    await fsp.symlink(path.join(linkRoot, "target-flow.yaml"), path.join(linkRoot, "linked.yaml"));
+
+    await expect(flow(["run", path.join(linkRoot, "linked.yaml")], opts)).rejects.toThrow(
+      "process.exit:0"
+    );
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
+    expect(errs).toEqual([]);
+  });
+
   it.each([[".yaml"], ["dir/.yaml"], [".YAML"]])(
     "names the missing stem when the path %s is only the extension",
     async (supplied) => {
@@ -564,13 +645,58 @@ describe("argent flow run", () => {
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
 
-  it("omits .yaml files whose names `flow run` would reject", async () => {
-    const listRoot = path.join(tempRoot, "list-unsafe-project");
+  it("lists nested flows at any depth — paths `flow run` accepts", async () => {
+    // run's name contract binds the filename only, so a YAML under an
+    // intermediate directory is just as runnable as a top-level one — a
+    // non-recursive listing would hide it.
+    const listRoot = path.join(tempRoot, "list-nested-project");
     const flowsDir = path.join(listRoot, ".argent", "flows");
-    await fsp.mkdir(flowsDir, { recursive: true });
+    await fsp.mkdir(path.join(flowsDir, "suite", "deep"), { recursive: true });
     await Promise.all([
-      fsp.writeFile(path.join(flowsDir, "sign.in.yaml"), "steps: []\n"),
-      fsp.writeFile(path.join(flowsDir, "sign-in.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "top.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "suite", "checkout.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "suite", "deep", "login.yaml"), "steps: []\n"),
+    ]);
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(listRoot);
+      await flow(["list"], opts);
+
+      // Deterministic: sorted over the full relative paths, not walk order.
+      expect(logs.join("\n")).toBe(
+        [
+          ".argent/flows/suite/checkout.yaml",
+          ".argent/flows/suite/deep/login.yaml",
+          ".argent/flows/top.yaml",
+        ].join("\n")
+      );
+
+      // The other half of the agreement: the deepest advertised path runs.
+      await expect(flow(["run", ".argent/flows/suite/deep/login.yaml"], opts)).rejects.toThrow(
+        "process.exit:0"
+      );
+      expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+
+  it("never lists the inside of a __baselines__ directory, at any depth", async () => {
+    // Baselines are machine-managed snapshot storage living beside the flows
+    // that own them (nested flows keep theirs beside themselves) — a YAML
+    // dropped inside one is not a flow to advertise.
+    const listRoot = path.join(tempRoot, "list-baselines-project");
+    const flowsDir = path.join(listRoot, ".argent", "flows");
+    await fsp.mkdir(path.join(flowsDir, "__baselines__", "checkout"), { recursive: true });
+    await fsp.mkdir(path.join(flowsDir, "suite", "__baselines__", "login"), { recursive: true });
+    await Promise.all([
+      fsp.writeFile(path.join(flowsDir, "checkout.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "suite", "login.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "__baselines__", "checkout", "sneaky.yaml"), "steps: []\n"),
+      fsp.writeFile(
+        path.join(flowsDir, "suite", "__baselines__", "login", "sneaky.yaml"),
+        "steps: []\n"
+      ),
     ]);
     const previousCwd = process.cwd();
     try {
@@ -580,8 +706,42 @@ describe("argent flow run", () => {
       process.chdir(previousCwd);
     }
 
-    // Silently omitted, like non-.yaml entries — every printed path is runnable.
-    expect(logs.join("\n")).toBe(".argent/flows/sign-in.yaml");
+    expect(logs.join("\n")).toBe(
+      [".argent/flows/checkout.yaml", ".argent/flows/suite/login.yaml"].join("\n")
+    );
+  });
+
+  it("omits .yaml files whose names `flow run` would reject — and `run` does reject them", async () => {
+    const listRoot = path.join(tempRoot, "list-unsafe-project");
+    const flowsDir = path.join(listRoot, ".argent", "flows");
+    await fsp.mkdir(flowsDir, { recursive: true });
+    await Promise.all([
+      fsp.writeFile(path.join(flowsDir, "sign.in.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "ok (copy).yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "sign-in.yaml"), "steps: []\n"),
+    ]);
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(listRoot);
+      await flow(["list"], opts);
+
+      // Silently omitted, like non-.yaml entries — every printed path is runnable.
+      expect(logs.join("\n")).toBe(".argent/flows/sign-in.yaml");
+
+      // The omissions are agreements, not gaps: the very fixtures `list`
+      // hides must be ones `run` refuses, or the omission would be hiding
+      // runnable paths. Pin both halves against the same files.
+      for (const unsafe of ["sign.in.yaml", "ok (copy).yaml"]) {
+        errs.length = 0;
+        await expect(flow(["run", `.argent/flows/${unsafe}`], opts)).rejects.toThrow(
+          "process.exit:2"
+        );
+        expect(errs.join("\n")).toContain("Flow filename must have a non-empty name");
+      }
+      expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    } finally {
+      process.chdir(previousCwd);
+    }
   });
 
   it("omits a directory named like a flow, which `flow run` rejects as not a file", async () => {
