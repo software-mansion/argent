@@ -168,11 +168,13 @@ function sanitizeExtraArgs(extra: string[]): string[] {
 /**
  * Signal the whole process group led by `pid`, reporting whether anything was
  * there. The Electron child is spawned detached, so it leads its own group and
- * every descendant inherits it — and signalling the leader alone does NOT bring
- * the app down: the npm `electron` launcher is a node wrapper whose SIGTERM
- * handler forwards to the real binary without exiting itself, and Chromium's
- * helper processes are separate children that never see the signal. They
- * survive, get reparented to launchd, and keep the app in the dock.
+ * every descendant inherits it. A SIGTERM to the leader handle normally
+ * suffices: the npm `electron` launcher forwards it to the real binary and
+ * exits once that child does, so the whole app quits cleanly. The group sweep
+ * covers what that leaves behind — an app that traps SIGTERM or blocks quit
+ * from its `before-quit` handler, and helpers outliving a wedged browser.
+ * Survivors reparent (to launchd on macOS, init/systemd on Linux) but keep
+ * their pgid, which is what lets a group signal still reach them.
  */
 function signalGroup(pid: number, signal: NodeJS.Signals | 0): boolean {
   try {
@@ -185,16 +187,20 @@ function signalGroup(pid: number, signal: NodeJS.Signals | 0): boolean {
 }
 
 function killChildEscalating(child: ChildProcess): void {
-  // SIGTERM lets Electron flush the renderer's GPU buffers and write a clean
-  // exit code; SIGKILL after 2s catches stuck processes (hardware-accelerated
-  // GPU shutdown can deadlock on some Intel drivers). Both go to the process
-  // group as well as the handle — see signalGroup.
+  // SIGTERM through the handle lets Electron run its quit sequence and take
+  // its helpers down with it; a group SIGTERM would hit every helper directly
+  // and defeat that, so it is sent only when the handle is already dead and
+  // child.kill reaches nothing — orphaned survivors still get a graceful-quit
+  // request. SIGKILL after 2s catches stuck processes (hardware-accelerated
+  // GPU shutdown can deadlock on some Intel drivers) and sweeps the group.
   try {
     child.kill("SIGTERM");
   } catch {
     /* already gone */
   }
-  if (child.pid !== undefined) signalGroup(child.pid, "SIGTERM");
+  if (child.pid !== undefined && (child.exitCode !== null || child.signalCode !== null)) {
+    signalGroup(child.pid, "SIGTERM");
+  }
   setTimeout(() => {
     if (child.exitCode === null && child.signalCode === null) {
       try {

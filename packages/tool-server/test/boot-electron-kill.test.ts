@@ -147,6 +147,87 @@ describe("killChromiumByPort — handle path", () => {
       close();
     }
   });
+
+  it("sends no group SIGTERM while the handle is live — the wrapper forwards it for a clean quit", async () => {
+    // A group SIGTERM here would hit the browser and every Chromium helper
+    // directly, bypassing Electron's quit sequence (before-quit/will-quit
+    // never run). The handle SIGTERM alone must carry the graceful request.
+    const { child, port, close } = await bootFakeChild();
+    try {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      vi.useFakeTimers();
+
+      killChromiumByPort(port, FAKE_PID);
+
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(-FAKE_PID, "SIGTERM");
+    } finally {
+      close();
+    }
+  });
+
+  it("sends the group SIGTERM when the child already exited, so orphaned survivors get a graceful request", async () => {
+    // The boot-failure path's shape: the child died (or was never viable)
+    // before the kill, so child.kill reaches nothing and the group SIGTERM
+    // must carry the graceful request to any surviving helpers.
+    const { child, port, close } = await bootFakeChild();
+    try {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      vi.useFakeTimers();
+      child.exitCode = 0;
+
+      killChromiumByPort(port, FAKE_PID);
+
+      expect(killSpy).toHaveBeenCalledWith(-FAKE_PID, "SIGTERM");
+    } finally {
+      close();
+    }
+  });
+
+  it("escalates the group to SIGKILL when anything in it outlives the grace period", async () => {
+    const { child, port, close } = await bootFakeChild();
+    try {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      vi.useFakeTimers();
+      killChromiumByPort(port, FAKE_PID);
+      // The leader exits promptly; a helper does not. The old exit-status guard
+      // alone would skip the escalation and strand it.
+      child.exitCode = 0;
+      vi.advanceTimersByTime(2000);
+
+      expect(child.kill).toHaveBeenCalledTimes(1); // no SIGKILL on the leader
+      expect(killSpy).toHaveBeenCalledWith(-FAKE_PID, 0); // group liveness probe
+      expect(killSpy).toHaveBeenCalledWith(-FAKE_PID, "SIGKILL");
+    } finally {
+      close();
+    }
+  });
+
+  it("does not escalate a group that already emptied", async () => {
+    const { child, port, close } = await bootFakeChild();
+    try {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(((
+        _pid: number,
+        signal: NodeJS.Signals | 0
+      ) => {
+        if (signal === 0) {
+          const err: NodeJS.ErrnoException = new Error("no such process");
+          err.code = "ESRCH";
+          throw err;
+        }
+        return true;
+      }) as typeof process.kill);
+      vi.useFakeTimers();
+      killChromiumByPort(port, FAKE_PID);
+      child.exitCode = 0;
+      vi.advanceTimersByTime(2000);
+
+      const signals = killSpy.mock.calls.map((c) => c[1]);
+      expect(signals).not.toContain("SIGKILL");
+    } finally {
+      close();
+    }
+  });
 });
 
 describe("killChromiumByPort — raw-pid fallback", () => {
@@ -205,68 +286,6 @@ describe("killChromiumByPort — raw-pid fallback", () => {
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
     killChromiumByPort(58888);
     expect(killSpy).not.toHaveBeenCalled();
-  });
-
-  it("sweeps the child's whole process group, not just the leader", async () => {
-    // The leader is the npm `electron` wrapper: its own SIGTERM handler forwards
-    // to the real binary without exiting, and Chromium's helpers are separate
-    // processes. Signalling only the leader leaves the app running and its
-    // helpers reparented to launchd — still in the dock after the flow ends.
-    const { port, close } = await bootFakeChild();
-    try {
-      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-
-      killChromiumByPort(port, FAKE_PID);
-
-      expect(killSpy).toHaveBeenCalledWith(-FAKE_PID, "SIGTERM");
-    } finally {
-      close();
-    }
-  });
-
-  it("escalates the group to SIGKILL when anything in it outlives the grace period", async () => {
-    const { child, port, close } = await bootFakeChild();
-    try {
-      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-      vi.useFakeTimers();
-      killChromiumByPort(port, FAKE_PID);
-      // The leader exits promptly; a helper does not. The old exit-status guard
-      // alone would skip the escalation and strand it.
-      child.exitCode = 0;
-      vi.advanceTimersByTime(2000);
-
-      expect(child.kill).toHaveBeenCalledTimes(1); // no SIGKILL on the leader
-      expect(killSpy).toHaveBeenCalledWith(-FAKE_PID, 0); // group liveness probe
-      expect(killSpy).toHaveBeenCalledWith(-FAKE_PID, "SIGKILL");
-    } finally {
-      close();
-    }
-  });
-
-  it("does not escalate a group that already emptied", async () => {
-    const { child, port, close } = await bootFakeChild();
-    try {
-      const killSpy = vi.spyOn(process, "kill").mockImplementation(((
-        _pid: number,
-        signal: NodeJS.Signals | 0
-      ) => {
-        if (signal === 0) {
-          const err: NodeJS.ErrnoException = new Error("no such process");
-          err.code = "ESRCH";
-          throw err;
-        }
-        return true;
-      }) as typeof process.kill);
-      vi.useFakeTimers();
-      killChromiumByPort(port, FAKE_PID);
-      child.exitCode = 0;
-      vi.advanceTimersByTime(2000);
-
-      const signals = killSpy.mock.calls.map((c) => c[1]);
-      expect(signals).not.toContain("SIGKILL");
-    } finally {
-      close();
-    }
   });
 });
 
