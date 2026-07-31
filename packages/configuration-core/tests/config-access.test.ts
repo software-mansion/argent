@@ -81,6 +81,33 @@ describe("getConfigValue — scope merge (lens.agent = prioritize-local)", () =>
   });
 });
 
+describe("recordings.directory — schema entry", () => {
+  it("is unset by default (the client then uses its built-in .argent/recordings)", () => {
+    expect(getConfigValueByKey("recordings.directory", opts())).toBeUndefined();
+  });
+
+  it("accepts a path at either scope and trims it", () => {
+    expect(setConfigValue("recordings.directory", "  ~/Movies/argent  ", "global", opts())).toBe(
+      "~/Movies/argent"
+    );
+    expect(setConfigValue("recordings.directory", "clips", "project", opts())).toBe("clips");
+  });
+
+  it("project scope wins over global (prioritize-local)", () => {
+    setConfigValue("recordings.directory", "/global/recordings", "global", opts());
+    setConfigValue("recordings.directory", "/project/recordings", "project", opts());
+    expect(getConfigValueByKey("recordings.directory", opts())).toBe("/project/recordings");
+    unsetConfigValue("recordings.directory", "project", opts());
+    expect(getConfigValueByKey("recordings.directory", opts())).toBe("/global/recordings");
+  });
+
+  it("rejects a non-string value", () => {
+    expect(() => setConfigValue("recordings.directory", 42, "global", opts())).toThrow(
+      ConfigValidationError
+    );
+  });
+});
+
 describe("setConfigValue — validation", () => {
   it("rejects an unknown key", () => {
     expect(() => setConfigValue("nope.nope", "x", "global", opts())).toThrow(UnknownConfigKeyError);
