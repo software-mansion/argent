@@ -261,6 +261,22 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
     });
   });
 
+  it("documents both flow sources in the project_root description", () => {
+    const runFlow = createRunFlowTool(createMockRegistry());
+
+    // On the flow_path branch the flow, its run: siblings, and baselines all
+    // resolve beside the YAML — project_root locates nothing there — so the
+    // description must not promise `.argent/flows/<name>.yaml` lives under it
+    // (`name` is exactly what that branch forbids).
+    expect(runFlow.inputSchema).toMatchObject({
+      properties: {
+        project_root: {
+          description: expect.stringMatching(/with flow_path.*beside the YAML/i),
+        },
+      },
+    });
+  });
+
   it("accepts a co-located path verified by the boundary and derives its logical name", async () => {
     const flowPath = path.join(os.tmpdir(), `external-flow-${Date.now()}.yaml`);
     await fs.writeFile(

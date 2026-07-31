@@ -78,7 +78,7 @@ const zodSchema = z
     project_root: z
       .string()
       .describe(
-        "Absolute path to the project root directory that contains `.argent/flows/<name>.yaml`."
+        "Absolute path to the calling agent's project root — the cwd it is working in. With name, the saved flow is read from `.argent/flows/<name>.yaml` under this root; with flow_path, the flow, its run: siblings, and baselines all resolve beside the YAML instead, so pass the agent's cwd."
       ),
     flow_file: z
       .string()
