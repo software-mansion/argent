@@ -111,7 +111,9 @@ filename (minus .yaml) names the run's report and artifacts, so it must
 contain only letters, numbers, "_", or "-" — the same charset a name must
 match. A flow that begins with a \`launch\` step runs its app from scratch; any
 other flow (a fragment) runs against the device's current state — handy while
-authoring one.
+authoring one. Exception: a fragment whose first step \`run:\`s a chromium e2e
+flow boots that flow's app before step 1 (pass --device to attach to a running
+instance).
 
 A directory run prints only failing steps plus a final flow summary;
 --recursive walks subdirectories too (dot-directories and node_modules are
@@ -781,8 +783,7 @@ export function exitAfterFlush(
 export function renderReport(report: FlowReport): string {
   const lines: string[] = [];
   lines.push(`Flow "${report.flow}"${report.device ? ` on ${report.device}` : ""}`);
-  // A fragment runs against the device's current state — remind the operator
-  // what it assumes was already set up.
+  // Remind the operator what the flow assumes was already set up.
   if (report.executionPrerequisite) {
     lines.push(`  assumes: ${report.executionPrerequisite}`);
   }
