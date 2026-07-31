@@ -5,7 +5,7 @@ import * as path from "node:path";
 import type { Registry, ToolContext } from "@argent/registry";
 import { ArtifactStore } from "@argent/registry";
 
-import { createRunFlowTool } from "../../src/tools/flows/flow-run";
+import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 
 /**
  * The flow_path branch derives its logical flow name from the YAML basename,
@@ -118,5 +118,101 @@ describe("flow_path stems that would collapse the baseline directory", () => {
     // leaves the PNG in the collapsed location. Nothing may have been written.
     expect((await fs.readdir(flowDir, { recursive: true })).sort()).toEqual([basename]);
     expect(failure?.message).toContain(`Invalid flow name "${stem}"`);
+  });
+});
+
+function asRun(result: FlowRunResult | { notice: string }): FlowRunResult {
+  if (!("steps" in result)) throw new Error(`expected a run result, got notice: ${result.notice}`);
+  return result;
+}
+
+/**
+ * The happy-path complement: a valid stem has to ARRIVE, not just an invalid
+ * one be refused. The derived name is threaded three separate ways —
+ * state.topFlowName into runSnapshot's baseline directory, the step scope's
+ * flow into every report, and runStack[0] into run: cycle detection — and only
+ * a flow_path run can tell any of them apart from params.name (undefined
+ * here), so each thread is pinned end-to-end through the same boundary the
+ * escapes use.
+ */
+describe("the stem a valid flow_path derives", () => {
+  it("keys the adopted baseline under __baselines__/<stem> and attributes the report to it", async () => {
+    const flowPath = path.join(flowDir, "checkout.yaml");
+    await fs.writeFile(
+      flowPath,
+      ["executionPrerequisite: ''", "steps:", "  - snapshot: shot", ""].join("\n"),
+      "utf8"
+    );
+
+    const runFlow = createRunFlowTool(mockRegistry());
+    const result = asRun(
+      await runFlow.execute(
+        {},
+        {
+          project_root: flowDir,
+          flow_path: flowPath,
+          device: IOS_DEVICE,
+          updateBaselines: true,
+        },
+        boundaryCtx(flowPath)
+      )
+    );
+
+    // The stem lands on both report levels: summarize's top `flow`, and —
+    // seeded separately, through the step scope — each step's own.
+    expect(result.ok).toBe(true);
+    expect(result.flow).toBe("checkout");
+    expect(result.steps).toEqual([
+      expect.objectContaining({
+        kind: "snapshot",
+        status: "pass",
+        flow: "checkout",
+        reason: "baseline written (shot__ios-390x844.png)",
+      }),
+    ]);
+
+    // The write landed at exactly <dirname(flow_path)>/__baselines__/<stem>/
+    // <name>__<platform>-WxH.png, byte-for-byte the capture; the full listing
+    // proves nothing landed anywhere else beside the flow.
+    const baseline = path.join(flowDir, "__baselines__", "checkout", "shot__ios-390x844.png");
+    expect(await fs.readFile(baseline)).toEqual(await fs.readFile(capture));
+    expect((await fs.readdir(flowDir, { recursive: true })).sort()).toEqual([
+      "__baselines__",
+      path.join("__baselines__", "checkout"),
+      path.join("__baselines__", "checkout", "shot__ios-390x844.png"),
+      "checkout.yaml",
+    ]);
+  });
+
+  it("seeds run: cycle detection, so a sibling cycling back to the top flow is caught", async () => {
+    const flowPath = path.join(flowDir, "checkout.yaml");
+    await fs.writeFile(
+      flowPath,
+      ["executionPrerequisite: ''", "steps:", "  - run: helper", ""].join("\n"),
+      "utf8"
+    );
+    await fs.writeFile(
+      path.join(flowDir, "helper.yaml"),
+      ["executionPrerequisite: ''", "steps:", "  - run: checkout", ""].join("\n"),
+      "utf8"
+    );
+
+    const runFlow = createRunFlowTool(mockRegistry());
+    const result = asRun(
+      await runFlow.execute(
+        {},
+        { project_root: flowDir, flow_path: flowPath, device: IOS_DEVICE },
+        boundaryCtx(flowPath)
+      )
+    );
+
+    // Exactly one hop: helper's reference back to "checkout" is already on the
+    // seeded stack. A stack seeded with anything but the stem would instead
+    // re-enter checkout.yaml as a fragment and only trip a hop later, on
+    // "helper" — so the step sequence and the cycle spelling are both
+    // load-bearing here.
+    expect(result.ok).toBe(false);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:pass", "run:error"]);
+    expect(result.steps[1].reason).toBe("cyclic flow reference: checkout → helper → checkout");
   });
 });
