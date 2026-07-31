@@ -164,4 +164,48 @@ describe("type directive focus wait", () => {
     // The fixed settle still applies even without a focus-reporting source.
     expect(keys[0]!.t - tap!.t).toBeGreaterThanOrEqual(500);
   });
+
+  it("still clears on a source that can't report focus", async () => {
+    // The source gate must map to "unobservable", not "unconfirmed": a tree
+    // that cannot report focus is no evidence the tap missed, and treating it
+    // as such would refuse `clear` on every target behind such a source
+    // (ax-service here; `tv-focus` and `vega-automation` are equally outside
+    // FOCUS_REPORTING_SOURCES). The same conflation, on native-devtools builds
+    // that omit `firstResponder`, refused every clear on iOS.
+    currentTree = () => ({
+      role: "AXWindow",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        {
+          role: "AXTextField",
+          label: "Email",
+          frame: { x: 0.1, y: 0.2, width: 0.8, height: 0.06 },
+          children: [],
+        },
+      ],
+    });
+    currentFetch = () => ({ tree: currentTree(), source: "ax-service" });
+    const calls: Call[] = [];
+    const registry = mockRegistry(calls, () => ({ xml: emailXml(false) }));
+
+    await writeFlow("ax-clear", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "type", into: { text: "Email" }, text: "a@b.com", clear: true, submit: false },
+      ],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "ax-clear", project_root: tmpDir, device: IOS_DEVICE }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["type:pass"]);
+    const keys = calls.filter((c) => c.id === "keyboard");
+    expect(keys.map((c) => c.args)).toEqual([
+      expect.objectContaining({ clear: true, text: "a@b.com" }),
+    ]);
+  });
 });

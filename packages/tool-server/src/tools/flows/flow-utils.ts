@@ -307,7 +307,7 @@ export type FlowStep =
   | { kind: "when"; condition: WhenCondition; steps: FlowStep[] }
   | { kind: "tap"; selector?: FlowSelector; x?: number; y?: number; times?: number }
   | { kind: "long-press"; selector?: FlowSelector; x?: number; y?: number; duration?: number }
-  | { kind: "type"; into: FlowSelector; text: string; submit?: boolean }
+  | { kind: "type"; into: FlowSelector; text?: string; clear?: boolean; submit?: boolean }
   | {
       kind: "await";
       condition: WaitCondition;
@@ -483,7 +483,7 @@ type YamlStep =
   | { tool: string; args?: Record<string, unknown>; delayMs?: number }
   | { tap: TapBody }
   | { "long-press": YamlTarget | { on: YamlTarget; duration?: number } }
-  | { type: { into: YamlSelector; text: string; submit?: boolean } }
+  | { type: { into: YamlSelector; text?: string; clear?: boolean; submit?: boolean } }
   | { await: YamlWaitCondition & { timeout?: number } }
   | { assert: YamlWaitCondition }
   | { wait: number }
@@ -803,12 +803,18 @@ function toYamlStep(step: FlowStep): YamlStep {
       };
     }
     case "type": {
-      const body: { into: YamlSelector; text: string; submit?: boolean } = {
+      const body: { into: YamlSelector; text?: string; clear?: boolean; submit?: boolean } = {
         into: selectorToYaml(step.into),
-        text: step.text,
       };
-      // `submit` defaults to true; only serialize the explicit opt-out.
-      if (step.submit === false) body.submit = false;
+      if (step.text !== undefined) body.text = step.text;
+      // `clear` defaults to false, so only the opt-in is ever worth writing.
+      // `submit` below is NOT the same shape — its default depends on `text`,
+      // so either value can be the one that differs from it.
+      if (step.clear === true) body.clear = true;
+      // `submit` defaults to true when there is text and false without it, so
+      // only serialize a value that differs from the step's own default.
+      if (step.submit === false && step.text !== undefined) body.submit = false;
+      else if (step.submit === true && step.text === undefined) body.submit = true;
       return { type: body };
     }
     case "await":
@@ -1746,12 +1752,37 @@ function fromYamlStep(raw: YamlStep, whenDepth = 0): FlowStep {
   }
 
   if ("type" in raw) {
-    const body = (raw as { type: { into?: unknown; text?: unknown; submit?: unknown } }).type;
-    if (!body || typeof body !== "object") badEntry(raw, "type needs { into, text }");
-    // A misspelled `sumbit` would silently drop the submit opt-out.
-    rejectUnknownKeys(raw, body as Record<string, unknown>, ["into", "text", "submit"], "type");
-    if (typeof body.text !== "string" || body.text.length === 0) {
-      badEntry(raw, "type needs a non-empty text");
+    const body = (
+      raw as { type: { into?: unknown; text?: unknown; clear?: unknown; submit?: unknown } }
+    ).type;
+    // Reached by extrapolating the bare-scalar form `tap`, `long-press`,
+    // `scroll-to` and `snapshot` accept, so it has to name BOTH shapes the body
+    // can take: `text` stopped being required the moment `clear` arrived, and
+    // pointing an author at one of two valid shapes is its own dead end.
+    if (!body || typeof body !== "object") {
+      badEntry(raw, "type needs { into, text } or { into, clear: true }");
+    }
+    // A misspelled `sumbit` or `claer` would silently drop the opt-out / the
+    // clear, so the new value lands on top of the old one instead of replacing
+    // it — fail loudly instead.
+    rejectUnknownKeys(
+      raw,
+      body as Record<string, unknown>,
+      ["into", "text", "clear", "submit"],
+      "type"
+    );
+    if (body.clear !== undefined && typeof body.clear !== "boolean") {
+      badEntry(raw, "type.clear must be a boolean");
+    }
+    // `text` is required UNLESS the step is a clear: `type: { into: search,
+    // clear: true }` — empty the box, then assert the empty state — is a
+    // legitimate step with nothing to type.
+    if (body.clear === true) {
+      if (body.text !== undefined && (typeof body.text !== "string" || body.text.length === 0)) {
+        badEntry(raw, "type.text must be a non-empty string when given");
+      }
+    } else if (typeof body.text !== "string" || body.text.length === 0) {
+      badEntry(raw, "type needs a non-empty text (or clear: true)");
     }
     if (body.submit !== undefined && typeof body.submit !== "boolean") {
       badEntry(raw, "type.submit must be a boolean");
@@ -1759,9 +1790,16 @@ function fromYamlStep(raw: YamlStep, whenDepth = 0): FlowStep {
     const step: Extract<FlowStep, { kind: "type" }> = {
       kind: "type",
       into: parseSelector(body.into, "type.into"),
-      text: body.text,
     };
-    if (body.submit === false) step.submit = false;
+    if (typeof body.text === "string") step.text = body.text;
+    if (body.clear === true) step.clear = true;
+    // `submit` defaults to true when there is text to commit, and to false for a
+    // clear-only step — firing Enter into a field the step just emptied is never
+    // what the author meant, and requiring `submit: false` on every such step
+    // would be a footgun. Store it only when it differs from that default, so
+    // the serializer can drop it again and the YAML round-trips unchanged.
+    const submitDefault = step.text !== undefined;
+    if (body.submit !== undefined && body.submit !== submitDefault) step.submit = body.submit;
     return step;
   }
 

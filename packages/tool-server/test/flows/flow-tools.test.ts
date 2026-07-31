@@ -528,6 +528,40 @@ describe("flow-finish-recording", () => {
     await expect(flowFinishRecordingTool.execute({}, {})).rejects.toThrow("No active flow");
   });
 
+  it("renders `type` steps with clear, including a clear-only step", async () => {
+    // `text` is optional once `clear` is set, so the summary must not
+    // interpolate it blindly — a clear-only step would read `← "undefined"`.
+    // `⇐` (replace) vs `←` (append) makes a cleared field visible at a glance.
+    //
+    // The steps are written to the file rather than recorded because that is
+    // the ONLY way a `type` step reaches a summary: nothing in `src/` builds
+    // one except the YAML parser, so every `type` here arrived by a hand edit
+    // and did not run live. Hence `(clear only)`, not a past-tense `(cleared)`.
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "clear-summary", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    const dir = path.join(tmpDir, ".argent", "flows");
+    await fs.writeFile(
+      path.join(dir, "clear-summary.yaml"),
+      [
+        "steps:",
+        "  - type: { into: email, text: 'a@b.com' }",
+        "  - type: { into: email, text: 'a@b.com', clear: true }",
+        "  - type: { into: search, clear: true }",
+      ].join("\n"),
+      "utf8"
+    );
+
+    const result = await flowFinishRecordingTool.execute({}, {});
+
+    expect(result.summary).toEqual([
+      '1. type: "email" ← "a@b.com"',
+      '2. type: "email" ⇐ "a@b.com"',
+      '3. type: "search" ⇐ (clear only)',
+    ]);
+  });
+
   it("handles empty flow", async () => {
     await flowStartRecordingTool.execute(
       {},

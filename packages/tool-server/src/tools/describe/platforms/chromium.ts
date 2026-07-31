@@ -369,7 +369,14 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     // and treat it as box-less so it contributes no box of its own: it survives only
     // through, and is framed by, whatever visible descendants it has.
     const invisibleSelf = style.visibility === "hidden";
-    const text = invisibleSelf ? "" : ownText(el);
+    // A <textarea>'s child text is its markup DEFAULT, not its value, and it
+    // never tracks el.value — so once typing (or a keyboard clear) changes the
+    // field, ownText still returns the authored content. The accessible name
+    // already carries the live value; emitting the stale default as the node's
+    // value too makes the node read as holding both, so an equals-assert on
+    // what the field really contains fails against text the field lost. Every
+    // other element's own text IS what it shows.
+    const text = invisibleSelf || getTagName.call(el) === "TEXTAREA" ? "" : ownText(el);
     const name = invisibleSelf ? null : accessibleName(el);
     const clickable = invisibleSelf ? false : isInteractive(el);
     const role = nodeRole(el);
@@ -457,9 +464,18 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     if (isChecked(el)) node.checked = true;
     if (isPassword(el)) node.password = true;
     if (scrollable) node.scrollable = true;
-    // Input focus: el is its document's activeElement. Deliberately emitted to
-    // EVERY describe consumer (the agent-facing tool as much as the flow type
+    // Input focus: el is the activeElement of its OWN root. Deliberately emitted
+    // to EVERY describe consumer (the agent-facing tool as much as the flow type
     // directive's focus wait) — where the caret is is useful targeting info.
+    //
+    // The root, not the document, because an open shadow root has an
+    // activeElement of its own while the outer document reports only the HOST.
+    // Reading the document alone flagged the host and never the element holding
+    // the keys, which for a host that lays out a screen is a focus flag covering
+    // every field on it. Only the innermost element is flagged: a host that
+    // delegates into its shadow root is excluded for the same
+    // no-double-reporting reason as the iframe below.
+    //
     // The body is excluded — it's the default holder when nothing is focused,
     // and its screen-spanning frame would satisfy any overlap check. A host
     // <iframe>/<frame> is excluded too: it is the outer document's
@@ -468,9 +484,18 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     // is the one that carries the flag — flagging both would double-report.
     if (!invisibleSelf) {
       const tag = getTagName.call(el);
-      if (tag !== "IFRAME" && tag !== "FRAME") {
+      const shadow = el.shadowRoot;
+      const delegates = !!(shadow && shadow.activeElement);
+      if (tag !== "IFRAME" && tag !== "FRAME" && !delegates) {
         const doc = getOwnerDocument.call(el);
-        if (doc && getActiveElement.call(doc) === el && getDocBody.call(doc) !== el) {
+        let root = null;
+        try {
+          root = el.getRootNode ? el.getRootNode() : doc;
+        } catch (e) {
+          root = doc;
+        }
+        const active = root ? root.activeElement : null;
+        if (active === el && doc && getDocBody.call(doc) !== el) {
           node.focused = true;
         }
       }

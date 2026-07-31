@@ -104,8 +104,26 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
         case "tap":
         case "long-press":
           return `${n}. ${step.kind}: ${step.selector ? selectorLabel(step.selector) : `(${step.x}, ${step.y})`}`;
-        case "type":
-          return `${n}. type: ${selectorLabel(step.into)} ← "${step.text}"`;
+        case "type": {
+          // `⇐` (replaces the value) vs `←` (types into whatever is already
+          // there — NOT necessarily appending; see the `type` notes in the
+          // argent-create-flow skill) so a cleared field is visible at a
+          // glance; a clear-only step has nothing on the right-hand side.
+          //
+          // Present tense, like the run report's `(clear first)`. The recorder
+          // never produces a `type` step — `flow-add-step` emits only
+          // `tap`/`launch`/`run`/`tool`, `flow-insert-echo` only `echo`, and the
+          // sole `kind: "type"` construction in `src/` is the YAML parser — so
+          // every `type` in this summary arrived by a hand edit to the file that
+          // the host-mode re-read picked up, and did NOT run live. A past-tense
+          // `(cleared)` would report a destructive action on a field nothing has
+          // touched yet; `stepTarget` declines the same tense for the same
+          // reason.
+          const arrow = step.clear ? "⇐" : "←";
+          if (step.text === undefined)
+            return `${n}. type: ${selectorLabel(step.into)} ⇐ (clear only)`;
+          return `${n}. type: ${selectorLabel(step.into)} ${arrow} "${step.text}"`;
+        }
         case "await":
         case "assert": {
           const tail =

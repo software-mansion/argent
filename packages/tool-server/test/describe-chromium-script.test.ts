@@ -335,6 +335,27 @@ afterEach(() => {
   // run() restores globals in its finally, nothing else to clean up.
 });
 
+describe("DESCRIBE_DOM_SCRIPT — a <textarea>'s own text is not its value", () => {
+  it("does not emit a textarea's markup default as the node's value", () => {
+    // `ownText` reads child text nodes, which for a <textarea> is its authored
+    // DEFAULT and never tracks `el.value`. Once typing (or a keyboard clear)
+    // makes them diverge, emitting the default alongside the live value in the
+    // name makes the node read as holding both — and on Chrome 150 an
+    // `equals` assert on what the field really contains then failed with
+    // `its text was "final textarea-value"` on a clear that had worked.
+    const { tree } = run([
+      el({ tag: "textarea", text: "textarea-value", attrs: { "aria-label": "Notes" } }),
+    ]);
+    expect(JSON.stringify(tree)).not.toContain("textarea-value");
+  });
+
+  it("still emits an ordinary element's own text as its value", () => {
+    // The control: only <textarea> has this split between markup text and value.
+    const { tree } = run([el({ tag: "p", text: "paragraph-text" })]);
+    expect(JSON.stringify(tree)).toContain("paragraph-text");
+  });
+});
+
 describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
   it("surfaces content nested under a display:contents wrapper (the RNW bug)", () => {
     const { tree } = run([
