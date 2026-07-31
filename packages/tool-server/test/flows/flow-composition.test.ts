@@ -854,6 +854,39 @@ describe("flow composition (run:)", () => {
     expect(result.steps[0]?.reason).toContain("unrecognized step kind");
   });
 
+  it("bounds the reason when a run: target is in-project YAML but not a flow", async () => {
+    // A mistyped run: path can select any YAML file inside the project root —
+    // here a CI config whose sole top-level key happens to be `steps`. Its
+    // first entry lands in the parse diagnostic, and the reason ships verbatim
+    // to `argent flow run` stdout and into the MCP content block, so badEntry's
+    // cap must keep the file's values from surviving to those surfaces in full.
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "../../ci/deploy.yaml" }],
+    });
+    await fs.mkdir(path.join(tmpDir, "ci"), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, "ci", "deploy.yaml"),
+      `steps:\n  - db_password: "hunter2-${"x".repeat(4000)}-PROD-TAIL"\n`,
+      "utf8"
+    );
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]).toMatchObject({ kind: "run", status: "error" });
+    const reason = result.steps[0]?.reason ?? "";
+    expect(reason).toMatch(/^could not load fragment "\.\.\/\.\.\/ci\/deploy\.yaml": /);
+    expect(reason).toContain("…(+");
+    expect(reason).not.toContain("PROD-TAIL");
+    expect(reason.length).toBeLessThan(500);
+  });
+
   it("rejects run: composition when the root flow was uploaded (no shared filesystem)", async () => {
     // A remote client's flow arrives as content and is materialized to a temp
     // file — the files its run: paths reference stayed on the client, and a

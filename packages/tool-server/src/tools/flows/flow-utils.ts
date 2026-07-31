@@ -945,6 +945,16 @@ function toYamlStep(step: FlowStep): YamlStep {
   }
 }
 
+// Ceiling on how much of the offending entry a diagnostic echoes. The entry
+// is not always a hand-authored flow step: a mistyped `run:` path can select
+// any in-project YAML file (a CI config, a partial flow), and this message
+// travels verbatim into StepReport.reason — which `argent flow run` prints to
+// stdout and flowRunToMcpContent emits into the agent's context — so an
+// unbounded render would ship that file's values (multi-KB payloads, secrets)
+// to both surfaces. 200 chars still shows a genuine flow entry, the common
+// authoring-error case, in full.
+const MAX_ENTRY_RENDER_CHARS = 200;
+
 function badEntry(raw: unknown, detail: string): never {
   // A cyclic YAML alias materializes as a cyclic object — JSON.stringify
   // would throw and mask the validation message, so fall back to a marker.
@@ -953,6 +963,10 @@ function badEntry(raw: unknown, detail: string): never {
     rendered = JSON.stringify(raw);
   } catch {
     rendered = "[cyclic entry]";
+  }
+  if (rendered.length > MAX_ENTRY_RENDER_CHARS) {
+    const elided = rendered.length - MAX_ENTRY_RENDER_CHARS;
+    rendered = `${rendered.slice(0, MAX_ENTRY_RENDER_CHARS)}…(+${elided} chars)`;
   }
   throw new FailureError(`Unrecognized flow entry (${detail}): ${rendered}`, {
     error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,

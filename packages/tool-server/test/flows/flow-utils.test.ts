@@ -161,6 +161,30 @@ describe("parseFlow", () => {
     expect(() => parseFlow(content)).toThrow("Unrecognized flow entry");
   });
 
+  it("renders a small unrecognized entry in full", () => {
+    // The common authoring error: a short mistyped step. The echo cap must
+    // leave it untouched — seeing the whole entry is what makes it fixable.
+    const content = 'executionPrerequisite: ""\nsteps:\n  - bogus: line\n';
+    expect(() => parseFlow(content)).toThrow(': {"bogus":"line"}');
+  });
+
+  it("caps the echoed entry so an oversized value cannot ride the diagnostic", () => {
+    // A mistyped run: path can point parseFlow at any in-project YAML file,
+    // and this message flows verbatim to stdout and into agent context — so
+    // the render must be bounded, and the tail of the value must not appear.
+    const content = `steps:\n  - db_password: "hunter2-${"x".repeat(5000)}-SECRET-TAIL"\n`;
+    let message = "";
+    try {
+      parseFlow(content);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("Unrecognized flow entry");
+    expect(message).toContain("…(+");
+    expect(message).not.toContain("SECRET-TAIL");
+    expect(message.length).toBeLessThan(400);
+  });
+
   it("throws when content is not an object with steps", () => {
     expect(() => parseFlow("- echo: Hello\n")).toThrow("expected an object with a steps array");
   });
