@@ -32,7 +32,13 @@ import type { TextMatchMode, WaitCondition } from "../../utils/ui-tree-match";
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { isUnmetUiWaitResult } from "../await-ui-element";
-import { resolveFlowDevice, bindDeviceArgs, type FlowPlatform } from "./flow-device";
+import {
+  resolveFlowDevice,
+  bindDeviceArgs,
+  flowRequiresDevice,
+  stepRequiresDevice,
+  type FlowPlatform,
+} from "./flow-device";
 import {
   runDirective,
   invokeOnDevice,
@@ -338,7 +344,8 @@ async function treeSourceGate(
  * already-launched app (see `state.chromiumLaunched`).
  */
 async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcome> {
-  const { registry, device, signal } = state;
+  const env = deviceEnv(state);
+  const { registry, device, signal } = env;
 
   if (device.platform === "chromium") {
     // Only the top-level flow's leading launch is honored: the runner boots that
@@ -388,7 +395,7 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
     };
   }
   try {
-    await invokeOnDevice(state, "restart-app", { bundleId });
+    await invokeOnDevice(env, "restart-app", { bundleId });
   } catch (err) {
     // A cancellation makes the sub-tool itself reject; that rejection is the
     // abort, not an app failure, so it must not be attributed to restart-app.
@@ -404,7 +411,11 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   return { ok: true };
 }
 
-interface ExecState extends ActionEnv {
+// `device` is null for a run whose flow touches none. Narrowed rather than
+// inherited from ActionEnv so every site that acts on the device has to say so
+// (via `deviceEnv`) and the compiler can find the ones that don't.
+interface ExecState extends Omit<ActionEnv, "device"> {
+  device: DeviceInfo | null;
   flowsDir: string;
   topFlowName: string;
   updateBaselines: boolean;
@@ -422,6 +433,21 @@ interface ExecState extends ActionEnv {
   chromiumLaunched: boolean;
   /** Live progress hook: receives every report the moment it is appended. */
   onStepReport?: (report: StepReport) => void;
+}
+
+/**
+ * The run state as an environment that acts on a device.
+ *
+ * Only reached from a step classified as needing one, which is why the device is
+ * resolved at all. The throw is a contradiction guard, not an expected path: it
+ * fires only if the classification and the executor ever disagree, and says so
+ * rather than dereferencing null somewhere further in.
+ */
+function deviceEnv(state: ExecState): ActionEnv {
+  if (!state.device) {
+    throw new Error("internal: a step that acts on a device ran in a flow resolved as device-free");
+  }
+  return { ...state, device: state.device };
 }
 
 /** A chromium instance the runner booted and must tear down after the run. */
@@ -500,7 +526,6 @@ returns a notice with the prerequisite instead of running.`,
       // resolveRunDevice). Any instance it booted is torn down in the finally.
       const resolved = await resolveRunDevice(registry, ctx, flow, params, flowsDir);
       const device = resolved.device;
-      const env: ActionEnv = { registry, ctx, device, signal };
 
       // Normalize the status bar (clock/battery/signal) for the whole run so it
       // never drives a snapshot diff and every screenshot is consistent. Pinned
@@ -508,17 +533,20 @@ returns a notice with the prerequisite instead of running.`,
       // an e2e flow's leading launch step (relaunch + settle) doubles as
       // propagation headroom before anything is captured. No-op (returns false)
       // on chromium/vega; restored on teardown.
-      const statusBarPinned = await pinStatusBar(device);
+      const statusBarPinned = device !== null && (await pinStatusBar(device));
 
       // The chromium equivalent of that normalization: front the page once so
       // a backgrounded window doesn't throttle rendering for the whole run —
       // wheel-event acks (scroll steps) stall on a throttled compositor.
       // Best-effort: bringToFront can focus a page but cannot unhide a
       // minimized window (gesture-scroll fails fast on that case itself).
-      if (device.platform === "chromium") await frontChromiumPage(registry, device);
+      if (device?.platform === "chromium") await frontChromiumPage(registry, device);
 
       const state: ExecState = {
-        ...env,
+        registry,
+        ctx,
+        device,
+        signal,
         flowsDir,
         topFlowName: params.name,
         updateBaselines: Boolean(params.updateBaselines),
@@ -542,11 +570,19 @@ returns a notice with the prerequisite instead of running.`,
         // status-bar restore / chromium teardown lands after every step
         // already ran, and must not flip a finished run to FAIL.
         aborted = state.signal?.aborted === true;
-        if (state.pinned) await restoreStatusBar(device);
+        if (state.pinned && device) await restoreStatusBar(device);
         if (resolved.booted) await teardownBootedChromium(registry, resolved.booted);
       }
 
-      return summarize(params.name, device.id, flow.executionPrerequisite, state.reports, aborted);
+      // Empty when the flow needed no device — the run is not attributed to one
+      // it never touched.
+      return summarize(
+        params.name,
+        device?.id ?? "",
+        flow.executionPrerequisite,
+        state.reports,
+        aborted
+      );
     },
   };
 }
@@ -558,6 +594,11 @@ returns a notice with the prerequisite instead of running.`,
  * attaches to an already-booted device. An explicit `device` always attaches —
  * never boots or tears down. `flowDir` is the flow file's directory — the base
  * for a relative chromium app path.
+ *
+ * Returns null when no step in the flow acts on a device: such a run needs none,
+ * so demanding one would fail a flow that could have succeeded — and picking
+ * whichever device happens to be booted would make the report depend on what
+ * else is running on the machine.
  */
 async function resolveRunDevice(
   registry: Registry,
@@ -565,12 +606,17 @@ async function resolveRunDevice(
   flow: FlowFile,
   params: Params,
   flowDir: string
-): Promise<{ device: DeviceInfo; booted: BootedChromium | null }> {
+): Promise<{ device: DeviceInfo | null; booted: BootedChromium | null }> {
   if (!params.device) {
     const spec = chromiumBootSpec(flow, params.platform);
     if (spec) {
       const booted = await bootChromiumForFlow(spec, flowDir);
       return { device: resolveDevice(booted.deviceId), booted };
+    }
+    // Checked after the chromium boot path, which only applies to a flow led by
+    // a `launch` step — and a launch needs a device, so the two never compete.
+    if (!flowRequiresDevice(registry, flow.steps)) {
+      return { device: null, booted: null };
     }
   }
   const device = await resolveFlowDevice(registry, ctx, {
@@ -842,6 +888,23 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
       if (step.kind === "when") reportBlockSkipped(state, step.steps, childScope(scope));
       continue;
     }
+    // The flow was resolved as needing no device, yet a step that acts on one
+    // reached execution — the two decisions disagree. Report it as this step's
+    // error and stop, rather than letting it fail obscurely further in.
+    if (!state.device && stepRequiresDevice(state.registry, step)) {
+      state.stopped = true;
+      pushReport(state, {
+        index,
+        kind: step.kind,
+        status: "error",
+        flow: scope.flow,
+        target: stepTarget(step),
+        ...depthOf(scope),
+        reason: `step needs a device but the flow was resolved as device-free — pass an explicit device`,
+      });
+      if (step.kind === "when") reportBlockSkipped(state, step.steps, childScope(scope));
+      continue;
+    }
     if (state.signal?.aborted) {
       state.stopped = true;
       pushReport(state, {
@@ -943,10 +1006,11 @@ async function execWhenStep(
     // platform guard it IS ios. The parser deliberately rejects "ios-remote"
     // as a guard spelling, so without this fold no guard could ever match on
     // a remote sim and iOS-only blocks would silently skip there.
-    const platform = state.device.platform === "ios-remote" ? "ios" : state.device.platform;
+    const guardEnv = deviceEnv(state);
+    const platform = guardEnv.device.platform === "ios-remote" ? "ios" : guardEnv.device.platform;
     met = platform === step.condition.platform;
   } else {
-    const probe = await probeWhenCondition(state, step.condition);
+    const probe = await probeWhenCondition(deviceEnv(state), step.condition);
     if (probe.aborted) {
       pushReport(state, { ...marker, status: "skip", reason: "run aborted" });
       reportBlockSkipped(state, step.steps, inner, "run aborted");
@@ -1067,7 +1131,7 @@ async function execLeafStep(
       // touch gesture on a focus-driven TV target — must still land in the
       // structured report rather than abort the whole run unreported.
       try {
-        const r = await runDirective(state, step);
+        const r = await runDirective(deviceEnv(state), step);
         // A run cancelled mid-directive is a skip (matching the pre-step guard
         // and `wait`), never a step failure — the app did nothing wrong.
         if (r.aborted) return { ...base, status: "skip", reason: r.reason };
@@ -1086,7 +1150,7 @@ async function execLeafStep(
 
     case "snapshot": {
       try {
-        const r = await runSnapshot(state, {
+        const r = await runSnapshot(deviceEnv(state), {
           flowsDir: state.flowsDir,
           flowName: state.topFlowName,
           name: step.name,
@@ -1107,7 +1171,10 @@ async function execLeafStep(
     }
 
     case "tool": {
-      const args = bindDeviceArgs(registry, step.name, device.id, step.args);
+      // With no device, the step reached here only because its tool declares no
+      // device argument, so there is nothing to inject — binding still strips
+      // any device key the recorded args carried.
+      const args = bindDeviceArgs(registry, step.name, device?.id ?? "", step.args);
       const outputHint = registry.getTool(step.name)?.outputHint;
       if (step.delayMs && !(await sleepOrAbort(step.delayMs, signal))) {
         return { ...base, status: "skip", tool: step.name, reason: "run aborted during delay" };

@@ -334,9 +334,14 @@ export async function flowRunToMcpContent(
   }
 
   if (result.ok !== undefined) {
+    // Narration steps are not counted, so a flow of only narration counts
+    // nothing — say so rather than reporting four zeros on a passing run.
+    const counted =
+      (result.passed ?? 0) + (result.failed ?? 0) + (result.errored ?? 0) + (result.skipped ?? 0);
+    const note = result.ok && counted === 0 ? " (no test steps)" : "";
     blocks.push({
       type: "text",
-      text: `${result.ok ? "PASS" : "FAIL"} — ${result.passed ?? 0} passed, ${result.failed ?? 0} failed, ${result.errored ?? 0} errored, ${result.skipped ?? 0} skipped`,
+      text: `${result.ok ? "PASS" : "FAIL"} — ${result.passed ?? 0} passed, ${result.failed ?? 0} failed, ${result.errored ?? 0} errored, ${result.skipped ?? 0} skipped${note}`,
     });
   } else {
     blocks.push({ type: "text", text: `Flow "${result.flow}" complete.` });
