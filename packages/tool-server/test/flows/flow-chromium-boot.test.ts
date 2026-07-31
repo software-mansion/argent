@@ -406,10 +406,13 @@ describe("flow-execute chromium boot", () => {
       "launch:pass",
       "echo:pass",
     ]);
-    // The nested launch says it moved the run onto a new device.
+    // The nested launch says it moved the run onto a new device — and marks the
+    // move off the parent's instance, so a green report shows the switch.
     const nestedLaunch = result.steps[2];
     expect(nestedLaunch.flow).toBe("nested-chromium");
-    expect(nestedLaunch.reason).toContain("chromium-cdp-12346");
+    expect(nestedLaunch.reason).toBe(
+      "booted chromium instance chromium-cdp-12346 — run moved off chromium-cdp-12345"
+    );
     // The report names the device the run STARTED on; the switch is on the step.
     expect(result.device).toBe("chromium-cdp-12345");
 
@@ -473,6 +476,10 @@ describe("flow-execute chromium boot", () => {
 
     expect(result.ok).toBe(true);
     expect(bootElectronApp).toHaveBeenCalledTimes(2);
+    // The relaunch step marks the retire: the run's own instance was killed.
+    expect(result.steps[2]!.reason).toBe(
+      "booted chromium instance chromium-cdp-12346 — retired chromium-cdp-12345 (same app relaunched)"
+    );
     // The retire goes through the awaiting kill — the replacement must not race
     // the dying process's lock — and lands before the second boot; only the
     // replacement is left for run-end teardown (awaited too).
@@ -524,6 +531,36 @@ describe("flow-execute chromium boot", () => {
     expect(killChromiumByPort).not.toHaveBeenCalled();
   });
 
+  it("marks the instance the run left, not the older one it retired, on a cross-app relaunch", async () => {
+    // Relaunching app-a while the run sits on app-b's instance retires app-a's
+    // OLD instance but moves the run off app-b's — the marker must name the
+    // instance the run left, and "retired" would be false for it (it stays
+    // alive until run end).
+    const flowFile = await writeFlow(
+      "steps:\n  - launch: { chromium: ./app-a }\n  - launch: { chromium: ./app-b }\n  - launch: { chromium: ./app-a }\n"
+    );
+    const registry = makeRegistry();
+
+    const result = await runFlow(registry, {
+      name: "cross-app-relaunch",
+      project_root: PROJECT_ROOT,
+      flow_file: flowFile,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(bootElectronApp).toHaveBeenCalledTimes(3);
+    expect(result.steps[2]!.reason).toBe(
+      "booted chromium instance chromium-cdp-12347 — run moved off chromium-cdp-12346"
+    );
+    // app-a's old instance was retired before the third boot; the two the run
+    // still owns go down at run end, newest first.
+    expect(killChromiumByPortAndWait.mock.calls).toEqual([
+      [12345, 4242],
+      [12347, 4244],
+      [12346, 4243],
+    ]);
+  });
+
   it("boots an instance of its own for a second launch against a pinned device", async () => {
     // The runner never kills a process it didn't start, which is what makes the
     // first launch an attach; a later one still means "from scratch".
@@ -550,6 +587,11 @@ describe("flow-execute chromium boot", () => {
     expect(bootElectronApp.mock.calls[0][0]).toMatchObject({
       appPath: path.join(path.dirname(flowFile), "app-b"),
     });
+    // The boot marks the move off the attached instance — "moved off", never
+    // "retired": the pinned instance stays alive.
+    expect(result.steps[1]!.reason).toBe(
+      "booted chromium instance chromium-cdp-12345 — run moved off chromium-cdp-9999"
+    );
     // Only the instance the runner booted is torn down — never the pinned one.
     expect(killChromiumByPortAndWait.mock.calls).toEqual([[12345, 4242]]);
   });
