@@ -160,6 +160,19 @@ function rewriteSiblingFlowPath(
       "the recording is not persisted on this host, so its siblings cannot be resolved here"
     );
   }
+  // Reject ".." segments: the sibling checks below compare path.resolve
+  // results, which collapse ".." lexically, but the kernel resolves a
+  // symlinked directory component first — "<flowsDir>/link/../<stem>.yaml"
+  // can open a file outside flowsDir yet pass every check, so the rewrite
+  // would silently run the flows-dir <stem> instead of the file the path
+  // opens. Same constraint as flow_path_dotdot in flow-run.ts.
+  if (flowPath.split(/[\\/]+/).includes("..")) {
+    throw invalid(
+      'flow paths must not contain ".." segments — sibling identity is decided lexically ' +
+        "from this path, and a symlinked directory component would make the rewrite run a " +
+        "different file than the path opens"
+    );
+  }
   const ext = path.extname(flowPath);
   // path.extname reads a basename that is only the extension as an
   // extensionless dotfile, so ext is "" for ".yaml" (and ".YAML") and the arms

@@ -539,6 +539,34 @@ describe("flow-add-step", () => {
     expect(parseFlow(await readFlowFile("compose-outside")).steps).toEqual([]);
   });
 
+  it('rejects a sibling flow_path containing a ".." segment without running it', async () => {
+    const registry = createMockRegistry({
+      "flow-execute": { result: { ok: true, steps: [] } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "compose-dotdot", project_root: tmpDir });
+    await writeSiblingFlow("login", "steps:\n  - echo: hi\n");
+    // Assembled by hand — path.join would collapse the "..". Every resolve-based
+    // check downstream accepts this string: it folds back to the sibling
+    // login.yaml lexically, but a symlinked "sub" would make the kernel open a
+    // different file than the rewritten name runs.
+    const dotdot = [tmpDir, ".argent", "flows", "sub", "..", "login.yaml"].join(path.sep);
+
+    await expect(
+      tool.execute(
+        {},
+        {
+          command: "flow-execute",
+          args: JSON.stringify({ flow_path: dotdot, project_root: tmpDir }),
+        }
+      )
+    ).rejects.toThrow(/must not contain "\.\." segments/);
+
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(parseFlow(await readFlowFile("compose-dotdot")).steps).toEqual([]);
+  });
+
   // The flows dir already supplies the CLI's "dir/" shape, so these vary the
   // basename: path.extname reads each as an extensionless dotfile, and the
   // extension arm would claim ".yaml" is missing from a path that ends in it.
