@@ -1,5 +1,6 @@
 import * as fsp from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
+import { createHash } from "node:crypto";
 import * as path from "node:path";
 import { FLOW_NAME_PATTERN } from "@argent/registry";
 import {
@@ -112,7 +113,10 @@ Options (run):
   --platform <p>         ios | android | chromium | vega — narrow auto-detection
   --update-baselines     Write/refresh screenshot baselines instead of diffing
   --output <dir>         Also write failed snapshot images (baseline/current/diff)
-                         under <dir>/<flow>/ — a stable path for CI artifact upload
+                         under <dir>/<flow>/ — a stable path for CI artifact
+                         upload. A different flow file with the same filename
+                         sharing <dir> exports to <flow>-<pathhash>/ instead
+                         (with a warning), so no flow's evidence is overwritten
   --json                 Print the raw JSON report
   --help, -h             Show this help
 
@@ -272,11 +276,14 @@ export function renderArtifactLines(report: FlowReport): string[] {
 
 /**
  * Names spliced into artifact-export destinations. The shared
- * FLOW_NAME_PATTERN, which every legitimate `report.flow` and `snapshotKey`
- * already satisfies (`assertSafeFlowName`'d flow name; `<name>__<platform>-WxH`
- * key). Re-checked here because the destination root is an operator-chosen
- * filesystem path (`--output`) and the values arrive over the wire — a
- * malicious or buggy server must not steer the copy outside that directory.
+ * FLOW_NAME_PATTERN, which every legitimate flow filename stem and
+ * `snapshotKey` (`<name>__<platform>-WxH`) already satisfies. Re-checked here
+ * because the destination root is an operator-chosen filesystem path
+ * (`--output`): the snapshot key still arrives over the wire — a malicious or
+ * buggy server must not steer the copy outside that directory — while the
+ * flow stem is derived CLI-side from the resolved YAML path (never from the
+ * wire report's `flow` field) and re-validated so the export stays contained
+ * even when called outside the CLI's own pre-validated path.
  */
 const SAFE_ARTIFACT_NAME = FLOW_NAME_PATTERN;
 
@@ -284,32 +291,102 @@ const SAFE_ARTIFACT_NAME = FLOW_NAME_PATTERN;
 const SAFE_FLOW_NAME = FLOW_NAME_PATTERN;
 
 /**
+ * Marker dropped inside each per-flow export directory, recording the
+ * resolved YAML path whose run produced it. Flow paths may live anywhere, so
+ * two different files can share a filename stem (`suiteA/checks.yaml`,
+ * `suiteB/checks.yaml`) while a CI suite funnels every run into one
+ * `--output` dir — the marker is how a later invocation (a separate process
+ * with no memory of earlier runs) tells "my own previous run, overwrite in
+ * place" apart from "a different flow's evidence, keep out".
+ */
+const EXPORT_SOURCE_MARKER = ".argent-flow-source";
+
+/**
+ * Pick the subdirectory name under `--output` for this flow's artifacts.
+ * The filename stem when it is free or already claimed by this same YAML
+ * file; otherwise `<stem>-<hash8>` where the hash is of the resolved flow
+ * path — a pure function of the path, so the fallback stays deterministic
+ * across invocations (CI references survive re-runs) while never colliding
+ * with the other file's directory. A stem directory without a readable
+ * marker (operator files, or an export from a pre-marker CLI) is treated as
+ * foreign: redirecting is the safe direction, silently overwriting is not.
+ * Both name forms are single FLOW_NAME_PATTERN-charset segments (validated
+ * stem + hex), so containment under outputDir is preserved. Read-only — the
+ * marker itself is written only once artifacts actually land.
+ */
+async function resolveExportDirName(
+  outputDir: string,
+  flowPath: string,
+  stem: string
+): Promise<string> {
+  let owner: string | null; // null = directory exists but proves no owner
+  try {
+    owner = (await fsp.readFile(path.join(outputDir, stem, EXPORT_SOURCE_MARKER), "utf8")).trim();
+  } catch {
+    try {
+      await fsp.access(path.join(outputDir, stem));
+      owner = null;
+    } catch {
+      return stem; // no directory yet — claim the documented pretty path
+    }
+  }
+  // Identity is the resolved path string: the CLI resolved it against cwd, so
+  // one file always maps to one spelling within a checkout. (Two symlink
+  // spellings of one file would split into two directories — a redirect, not
+  // a loss.)
+  if (owner === flowPath) return stem;
+  const dirName = `${stem}-${createHash("sha256").update(flowPath).digest("hex").slice(0, 8)}`;
+  console.error(
+    `warning: ${path.join(outputDir, stem)} already holds artifacts from ` +
+      `${owner ?? "an unknown source"}; writing this flow's artifacts to ` +
+      `${path.join(outputDir, dirName)} so neither set is overwritten`
+  );
+  return dirName;
+}
+
+/**
  * Copy each failed snapshot's artifacts into a durable, globbable location —
- * `<outputDir>/<flow>/<key>-<role>.png`, where `<key>` is the snapshot's
- * baseline key (`name__platform-WxH`), so a run that hits several
- * flows/snapshots can't clobber itself. This is the only place the CLI needs
- * artifact bytes, so materialization happens here, scoped to each failed
- * snapshot's artifacts — a co-located tool-server resolves them in place, a
- * remote one downloads just these files. Rewrites each copied role's path in
- * the report so the renderers and `--json` print the durable location instead
- * of a temp path. Failure-only: a clean pass carries no artifacts, and a
- * seeded baseline is already durable under `__baselines__/`. Best-effort per
- * file — a copy error warns on stderr and leaves the source path in place;
- * artifact export must never change a run's verdict. Server-supplied names
- * that fail `SAFE_ARTIFACT_NAME` are skipped the same way — before any
+ * `<outputDir>/<flow>/<key>-<role>.png`, where `<flow>` is the YAML filename
+ * stem (derived from the CLI-resolved `flowPath`, never from the wire
+ * report) and `<key>` is the snapshot's baseline key (`name__platform-WxH`),
+ * so a run that hits several flows/snapshots can't clobber itself. Stems are
+ * unique only per directory, not globally, so when a different flow file
+ * already owns `<flow>/` (see EXPORT_SOURCE_MARKER) this run lands in the
+ * deterministic `<flow>-<pathhash>/` instead — one suite's CI evidence must
+ * never silently replace another's, while a re-run of the same file still
+ * overwrites in place. This is the only place the CLI needs artifact bytes,
+ * so materialization happens here, scoped to each failed snapshot's
+ * artifacts — a co-located tool-server resolves them in place, a remote one
+ * downloads just these files. Rewrites each copied role's path in the report
+ * so the renderers and `--json` print the durable location instead of a temp
+ * path. Failure-only: a clean pass carries no artifacts, and a seeded
+ * baseline is already durable under `__baselines__/`. Best-effort per file —
+ * a copy error warns on stderr and leaves the source path in place; artifact
+ * export must never change a run's verdict. Server-supplied names that fail
+ * `SAFE_ARTIFACT_NAME` are skipped the same way — before any
  * materialization, so nothing is downloaded for a step that won't be written.
  */
 export async function exportFailureArtifacts(
   report: FlowReport,
   outputDir: string,
+  flowPath: string,
   ctx: MaterializeContext
 ): Promise<void> {
-  if (!SAFE_ARTIFACT_NAME.test(report.flow)) {
+  const stem = path.basename(flowPath, ".yaml");
+  if (!SAFE_ARTIFACT_NAME.test(stem)) {
     console.error(
-      `warning: skipping artifact export for unsafe flow name ${JSON.stringify(report.flow)}`
+      `warning: skipping artifact export for unsafe flow filename ${JSON.stringify(stem)}`
     );
     return;
   }
+  // Nothing to export → decide nothing, touch nothing: a clean pass must
+  // leave --output exactly as it was (no directory, no marker, no collision
+  // warning about a write that will never happen).
+  if (!report.steps.some((s) => s.kind === "snapshot" && s.status === "fail" && s.artifacts)) {
+    return;
+  }
+  const dir = path.join(outputDir, await resolveExportDirName(outputDir, flowPath, stem));
+  let markerWritten = false;
   for (const s of report.steps) {
     if (s.kind !== "snapshot" || s.status !== "fail" || !s.artifacts) continue;
     // Key first: a legacy tool-server sends plain path strings, and
@@ -322,17 +399,26 @@ export async function exportFailureArtifacts(
     // download) — never the whole report.
     const { result } = await materializeArtifacts(s.artifacts, ctx);
     s.artifacts = result as Record<string, unknown>;
-    const dir = path.join(outputDir, report.flow);
     for (const [role, value] of Object.entries(s.artifacts)) {
       if (typeof value !== "string") continue; // null = failed materialization
       const dest = path.join(dir, `${key}-${role}.png`);
       // Same resolved-path check as the server's getFlowPath: even if the
       // pattern above is ever weakened, the copy stays inside --output. Also
-      // covers `role`, the third server-supplied piece of the destination.
+      // covers `role`, the remaining server-supplied piece of the destination.
       const rel = path.relative(outputDir, dest);
       if (rel.startsWith("..") || path.isAbsolute(rel)) continue;
       try {
         await fsp.mkdir(dir, { recursive: true });
+        if (!markerWritten) {
+          // Claim the directory for this YAML path, once, alongside the first
+          // real artifact. Best-effort with no warning: a marker failure must
+          // not block the copies, and its absence only makes a later run treat
+          // the directory as foreign and redirect away — the safe direction.
+          await fsp
+            .writeFile(path.join(dir, EXPORT_SOURCE_MARKER), `${flowPath}\n`)
+            .catch(() => {});
+          markerWritten = true;
+        }
         await fsp.copyFile(value, dest);
         s.artifacts[role] = dest;
       } catch (err) {
@@ -668,7 +754,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
   // resolved lazily so a run without --output makes no extra round-trip.
   if (args.output) {
     const { url, token } = await baseUrl();
-    await exportFailureArtifacts(report, path.resolve(args.output), {
+    await exportFailureArtifacts(report, path.resolve(args.output), flowPath, {
       toolsUrl: url,
       authToken: token,
     });

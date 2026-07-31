@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -7,6 +8,13 @@ import { exportFailureArtifacts, type FlowReport, type StepReport } from "../src
 
 let tmpDir: string;
 let outDir: string;
+/** The CLI-resolved YAML path the export derives its subdirectory from. */
+let flowFile: string;
+
+/** The deterministic disambiguation suffix for a flow path — mirrors the export's derivation. */
+function pathHash(p: string): string {
+  return createHash("sha256").update(p).digest("hex").slice(0, 8);
+}
 
 // Legacy string-path artifacts contain no handles, so materialization walks
 // them without touching the network — the URL never resolves.
@@ -52,6 +60,8 @@ function mkReport(steps: StepReport[]): FlowReport {
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-output-"));
   outDir = path.join(tmpDir, "out");
+  // Only the path string matters to the export — the YAML is never read here.
+  flowFile = path.join(tmpDir, "checkout.yaml");
 });
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
@@ -70,7 +80,7 @@ describe("exportFailureArtifacts", () => {
       artifacts: { baseline, current, diff },
     };
 
-    await exportFailureArtifacts(mkReport([step]), outDir, ctx);
+    await exportFailureArtifacts(mkReport([step]), outDir, flowFile, ctx);
 
     const dir = path.join(outDir, "checkout");
     for (const [role, content] of [
@@ -95,7 +105,7 @@ describe("exportFailureArtifacts", () => {
       artifacts: { baseline },
     };
 
-    await exportFailureArtifacts(mkReport([seeded]), outDir, ctx);
+    await exportFailureArtifacts(mkReport([seeded]), outDir, flowFile, ctx);
 
     expect(seeded.artifacts?.baseline).toBe(baseline);
     await expect(fs.access(outDir)).rejects.toThrow();
@@ -110,7 +120,7 @@ describe("exportFailureArtifacts", () => {
       artifacts: { baseline },
     };
 
-    await exportFailureArtifacts(mkReport([step]), outDir, ctx);
+    await exportFailureArtifacts(mkReport([step]), outDir, flowFile, ctx);
 
     expect(step.artifacts?.baseline).toBe(
       path.join(outDir, "checkout", "home__android-1080x2400-baseline.png")
@@ -133,7 +143,7 @@ describe("exportFailureArtifacts", () => {
       artifacts: { current },
     };
 
-    await exportFailureArtifacts(mkReport([withNull, keyless]), outDir, ctx);
+    await exportFailureArtifacts(mkReport([withNull, keyless]), outDir, flowFile, ctx);
 
     expect(withNull.artifacts?.baseline).toBeNull();
     expect(withNull.artifacts?.current).toBe(
@@ -159,7 +169,7 @@ describe("exportFailureArtifacts", () => {
       throw new Error("unexpected network fetch");
     });
 
-    await exportFailureArtifacts(mkReport([step]), outDir, {
+    await exportFailureArtifacts(mkReport([step]), outDir, flowFile, {
       toolsUrl: "http://tools.invalid",
       fetchImpl: fetchSpy as unknown as typeof fetch,
     });
@@ -198,7 +208,7 @@ describe("exportFailureArtifacts", () => {
       };
       const fetchSpy = vi.fn(async () => new Response("diff-bytes"));
 
-      await exportFailureArtifacts(mkReport([step]), outDir, {
+      await exportFailureArtifacts(mkReport([step]), outDir, flowFile, {
         toolsUrl: "http://tools.invalid",
         authToken: "tok",
         fetchImpl: fetchSpy as unknown as typeof fetch,
@@ -217,7 +227,7 @@ describe("exportFailureArtifacts", () => {
     }
   });
 
-  it("refuses a flow name with path traversal: warns, writes nothing, downloads nothing", async () => {
+  it("refuses a flow path whose stem is traversal: warns, writes nothing, downloads nothing", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       // A remote handle (no hostPath) would force a download — proving the
@@ -238,20 +248,41 @@ describe("exportFailureArtifacts", () => {
       };
       const fetchSpy = vi.fn(async () => new Response("diff-bytes"));
 
-      await exportFailureArtifacts({ ...mkReport([step]), flow: "../escape" }, outDir, {
+      // The CLI validates the stem before ever calling the export, but the
+      // function must stay safe in isolation: a path ending in "/.." has the
+      // basename "..", which would resolve the subdirectory to outDir's parent.
+      await exportFailureArtifacts(mkReport([step]), outDir, `${tmpDir}${path.sep}..`, {
         toolsUrl: "http://tools.invalid",
         fetchImpl: fetchSpy as unknown as typeof fetch,
       });
 
       expect(fetchSpy).not.toHaveBeenCalled();
       expect(step.artifacts?.diff).toBe(handle);
-      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("unsafe flow name"));
-      // The would-be destination outside --output must not exist.
-      await expect(fs.access(path.join(tmpDir, "escape"))).rejects.toThrow();
+      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("unsafe flow filename"));
       await expect(fs.access(outDir)).rejects.toThrow();
     } finally {
       errSpy.mockRestore();
     }
+  });
+
+  it("ignores the wire report's flow field when picking the destination", async () => {
+    // The export dir comes from the CLI-resolved path only — a server-sent
+    // report.flow (even a hostile one) must not steer the copy anywhere else.
+    const current = await writeFile("c.png", "current-bytes");
+    const step: StepReport = {
+      index: 0,
+      kind: "snapshot",
+      status: "fail",
+      snapshotKey: "home__ios-390x844",
+      artifacts: { current },
+    };
+
+    await exportFailureArtifacts({ ...mkReport([step]), flow: "../escape" }, outDir, flowFile, ctx);
+
+    expect(step.artifacts?.current).toBe(
+      path.join(outDir, "checkout", "home__ios-390x844-current.png")
+    );
+    await expect(fs.access(path.join(tmpDir, "escape"))).rejects.toThrow();
   });
 
   it("skips a step whose snapshotKey contains path traversal, still exporting safe steps", async () => {
@@ -272,7 +303,7 @@ describe("exportFailureArtifacts", () => {
       artifacts: { current: good },
     };
 
-    await exportFailureArtifacts(mkReport([badStep, goodStep]), outDir, ctx);
+    await exportFailureArtifacts(mkReport([badStep, goodStep]), outDir, flowFile, ctx);
 
     // Untouched — the join would have resolved to <tmpDir>/pwned-current.png.
     expect(badStep.artifacts?.current).toBe(evil);
@@ -291,7 +322,7 @@ describe("exportFailureArtifacts", () => {
       artifacts: { baseline: `${tmpDir}${path.sep}..` },
     };
 
-    await exportFailureArtifacts(mkReport([step]), outDir, ctx);
+    await exportFailureArtifacts(mkReport([step]), outDir, flowFile, ctx);
 
     expect(step.artifacts?.baseline).toBe(`${tmpDir}${path.sep}..`);
     await expect(fs.access(outDir)).rejects.toThrow();
@@ -309,10 +340,139 @@ describe("exportFailureArtifacts", () => {
         artifacts: { diff: gone },
       };
 
-      await exportFailureArtifacts(mkReport([step]), outDir, ctx);
+      await exportFailureArtifacts(mkReport([step]), outDir, flowFile, ctx);
 
       expect(step.artifacts?.diff).toBe(gone);
       expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("warning: could not write"));
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("keeps both flows' evidence when two different files share a filename stem", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // "Paths anywhere" makes suiteA/checks.yaml + suiteB/checks.yaml the
+      // natural CI layout, both exporting into one --output dir.
+      const flowA = path.join(tmpDir, "suiteA", "checks.yaml");
+      const flowB = path.join(tmpDir, "suiteB", "checks.yaml");
+      const stepA: StepReport = {
+        index: 0,
+        kind: "snapshot",
+        status: "fail",
+        snapshotKey: "shot__ios-390x844",
+        artifacts: { current: await writeFile("a.png", "suiteA-bytes") },
+      };
+      const stepB: StepReport = {
+        index: 0,
+        kind: "snapshot",
+        status: "fail",
+        snapshotKey: "shot__ios-390x844",
+        artifacts: { current: await writeFile("b.png", "suiteB-bytes") },
+      };
+
+      await exportFailureArtifacts(mkReport([stepA]), outDir, flowA, ctx);
+      await exportFailureArtifacts(mkReport([stepB]), outDir, flowB, ctx);
+
+      // The first file keeps the documented <output>/<stem>/ path…
+      const aDest = path.join(outDir, "checks", "shot__ios-390x844-current.png");
+      expect(stepA.artifacts?.current).toBe(aDest);
+      expect(await fs.readFile(aDest, "utf8")).toBe("suiteA-bytes");
+      // …and the second lands in the deterministic hash-suffixed sibling, so
+      // neither run's evidence replaced the other's — with a warning saying so.
+      const bDest = path.join(outDir, `checks-${pathHash(flowB)}`, "shot__ios-390x844-current.png");
+      expect(stepB.artifacts?.current).toBe(bDest);
+      expect(await fs.readFile(bDest, "utf8")).toBe("suiteB-bytes");
+      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining(`checks-${pathHash(flowB)}`));
+      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining(flowA));
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("re-exports the same flow file in place: same paths, fresh bytes, no extra directories", async () => {
+    const mkStep = async (content: string): Promise<StepReport> => ({
+      index: 0,
+      kind: "snapshot",
+      status: "fail",
+      snapshotKey: "home__ios-390x844",
+      artifacts: { current: await writeFile("c.png", content) },
+    });
+    const dest = path.join(outDir, "checkout", "home__ios-390x844-current.png");
+
+    // A CI re-run of one flow into a reused --output dir must keep the stable
+    // documented path and overwrite, never accumulate hash-suffixed siblings.
+    const first = await mkStep("run1-bytes");
+    await exportFailureArtifacts(mkReport([first]), outDir, flowFile, ctx);
+    expect(first.artifacts?.current).toBe(dest);
+
+    const second = await mkStep("run2-bytes");
+    await exportFailureArtifacts(mkReport([second]), outDir, flowFile, ctx);
+
+    expect(second.artifacts?.current).toBe(dest);
+    expect(await fs.readFile(dest, "utf8")).toBe("run2-bytes");
+    expect(await fs.readdir(outDir)).toEqual(["checkout"]);
+    // The claim marker names the producing YAML so uploaded artifacts stay
+    // auditable and the next run can recognize its own directory.
+    expect(await fs.readFile(path.join(outDir, "checkout", ".argent-flow-source"), "utf8")).toBe(
+      `${flowFile}\n`
+    );
+  });
+
+  it("redirects away from a same-named directory it cannot prove it owns", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // No marker → operator files or a pre-marker export; either way the
+      // export cannot tell it is its own, so it must not overwrite into it.
+      await fs.mkdir(path.join(outDir, "checkout"), { recursive: true });
+      await fs.writeFile(path.join(outDir, "checkout", "keep.txt"), "operator data");
+      const step: StepReport = {
+        index: 0,
+        kind: "snapshot",
+        status: "fail",
+        snapshotKey: "home__ios-390x844",
+        artifacts: { current: await writeFile("c.png", "current-bytes") },
+      };
+
+      await exportFailureArtifacts(mkReport([step]), outDir, flowFile, ctx);
+
+      expect(await fs.readFile(path.join(outDir, "checkout", "keep.txt"), "utf8")).toBe(
+        "operator data"
+      );
+      expect(step.artifacts?.current).toBe(
+        path.join(outDir, `checkout-${pathHash(flowFile)}`, "home__ios-390x844-current.png")
+      );
+      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("an unknown source"));
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("leaves --output untouched when a colliding flow has nothing to export", async () => {
+    // A clean pass must neither warn about a collision nor create directories
+    // or markers — the no-write invariant holds even when the stem is taken.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const owned: StepReport = {
+        index: 0,
+        kind: "snapshot",
+        status: "fail",
+        snapshotKey: "home__ios-390x844",
+        artifacts: { current: await writeFile("c.png", "current-bytes") },
+      };
+      await exportFailureArtifacts(mkReport([owned]), outDir, flowFile, ctx);
+      errSpy.mockClear();
+
+      const passing: StepReport = { index: 0, kind: "snapshot", status: "pass" };
+      await exportFailureArtifacts(
+        mkReport([passing]),
+        outDir,
+        path.join(tmpDir, "other", "checkout.yaml"),
+        ctx
+      );
+
+      expect(errSpy).not.toHaveBeenCalled();
+      expect(await fs.readdir(outDir)).toEqual(["checkout"]);
     } finally {
       errSpy.mockRestore();
     }
