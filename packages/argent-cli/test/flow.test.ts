@@ -247,27 +247,29 @@ describe("argent flow run", () => {
   });
 
   it("resolves the YAML path and forwards flags to flow-execute", async () => {
-    const relativeCheckoutPath = path.relative(process.cwd(), checkoutPath);
-    await expect(
-      flow(
-        [
-          "run",
-          relativeCheckoutPath,
-          "--device",
-          "SIM-1",
-          "--platform",
-          "ios",
-          "--update-baselines",
-        ],
-        opts
-      )
-    ).rejects.toThrow("process.exit:0");
+    // Downward-relative from the flow's own directory: a relative spelling
+    // that climbs out of cwd would contain ".." segments, which the CLI now
+    // rejects. process.cwd() after chdir is fully symlink-resolved (macOS
+    // tmpdir sits behind /var -> /private/var), so expectations use realpath.
+    const runRoot = await fsp.realpath(tempRoot);
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(
+        flow(
+          ["run", "checkout.yaml", "--device", "SIM-1", "--platform", "ios", "--update-baselines"],
+          opts
+        )
+      ).rejects.toThrow("process.exit:0");
+    } finally {
+      process.chdir(previousCwd);
+    }
 
     expect(toolsClientMock.callTool).toHaveBeenCalledWith(
       "flow-execute",
       {
-        flow_path: checkoutPath,
-        project_root: process.cwd(),
+        flow_path: path.join(runRoot, "checkout.yaml"),
+        project_root: runRoot,
         prerequisiteAcknowledged: true,
         device: "SIM-1",
         platform: "ios",
@@ -384,6 +386,49 @@ describe("argent flow run", () => {
       expect(toolsClientMock.callTool).not.toHaveBeenCalled();
     }
   );
+
+  it("rejects a path with a .. segment before resolving, routing, or tool invocation", async () => {
+    // Assembled with the separator directly — path.join would collapse the
+    // ".." lexically before the CLI ever saw it, which is the exact behavior
+    // under test. Nothing named "nope" exists, so realpath fails and the
+    // generic recovery line is printed instead of a Did-you-mean hint.
+    const supplied = [tempRoot, "nope", "..", "checkout.yaml"].join(path.sep);
+    await expect(flow(["run", supplied], opts)).rejects.toThrow("process.exit:2");
+
+    const out = errs.join("\n");
+    expect(out).toContain('Flow path must not contain ".." segments');
+    expect(out).toContain("Pass the fully resolved path to the flow's YAML.");
+    expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it("hints the kernel-resolved target when .. follows a symlinked directory", async () => {
+    // The reviewer's repro shape: flows/link -> decoy/inner, so the kernel
+    // opens decoy/login.yaml for "flows/link/../login.yaml" while path.resolve
+    // would have collapsed it to flows/login.yaml — a different file. Both
+    // files exist to prove the hint names the kernel's target, not the
+    // lexical one.
+    const dotdotRoot = path.join(tempRoot, "dotdot-project");
+    const flowsDir = path.join(dotdotRoot, "flows");
+    const decoyDir = path.join(dotdotRoot, "decoy");
+    await fsp.mkdir(path.join(decoyDir, "inner"), { recursive: true });
+    await fsp.mkdir(flowsDir, { recursive: true });
+    await fsp.writeFile(path.join(decoyDir, "login.yaml"), "steps: []\n");
+    await fsp.writeFile(path.join(flowsDir, "login.yaml"), "steps: []\n");
+    await fsp.symlink(path.join(decoyDir, "inner"), path.join(flowsDir, "link"), "dir");
+    const supplied = [flowsDir, "link", "..", "login.yaml"].join(path.sep);
+
+    await expect(flow(["run", supplied], opts)).rejects.toThrow("process.exit:2");
+
+    // realpath'd expectation: on macOS tmpdir itself sits behind a symlink
+    // (/var -> /private/var), so the hint's path differs from the joined one.
+    const kernelTarget = await fsp.realpath(path.join(decoyDir, "login.yaml"));
+    const out = errs.join("\n");
+    expect(out).toContain('Flow path must not contain ".." segments');
+    expect(out).toContain(`Did you mean: argent flow run ${kernelTarget}`);
+    expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
 
   it("exits 2 on a directory named like a flow instead of handing it to flow-execute", async () => {
     // `access(R_OK)` succeeds on a readable directory, so only the isFile()

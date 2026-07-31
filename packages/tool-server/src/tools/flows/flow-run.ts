@@ -1379,8 +1379,8 @@ export function resolveFlowSource(
     // flowsDir = path.dirname(filePath) keeps the raw string and path.join
     // collapses ".." lexically — the flow's run: siblings and __baselines__
     // would then resolve against a directory the flow that was read does not
-    // live in. The argent client resolves before sending; only a direct
-    // MCP/HTTP caller can pass an unresolved flow_path.
+    // live in. The argent client rejects ".." segments before sending; only a
+    // direct MCP/HTTP caller can pass an unresolved flow_path.
     if (params.flow_path.split(/[\\/]+/).includes("..")) {
       throw new FailureError(
         `Invalid flow_path "${params.flow_path}": flow paths must not contain ".." segments — ` +

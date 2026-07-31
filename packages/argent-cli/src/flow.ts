@@ -94,7 +94,8 @@ function printHelp(): void {
   console.log(`Usage: argent flow <subcommand> [options]
 
 Run a YAML flow file without an LLM in the loop. Paths are resolved from the
-current working directory and may point anywhere on the local filesystem; the
+current working directory and may point anywhere on the local filesystem, but
+must not contain ".." segments (pass the resolved path instead); the
 filename (minus .yaml) names the run's report and artifacts, so it must
 contain only letters, numbers, "_", or "-". A flow that begins with a \`launch\`
 step runs its app from scratch; any other flow (a fragment) runs against the
@@ -117,7 +118,7 @@ Options (run):
 
 Examples:
   argent flow run .argent/flows/checkout.yaml --platform ios
-  argent flow run ../shared-flows/checkout.yaml --device <UDID> --update-baselines
+  argent flow run ~/shared-flows/checkout.yaml --device <UDID> --update-baselines
   argent flow run /tmp/checkout.yaml --output flow-artifacts --json
 `);
 }
@@ -508,6 +509,29 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
 
   const projectRoot = process.cwd();
   const suppliedPath = args.flowPath;
+  // path.resolve collapses ".." lexically, without consulting symlinks, so a
+  // ".." following a symlinked directory would make the CLI stat and run a
+  // different file than the one the kernel opens for this string. Rejected
+  // before path.resolve — same predicate as the tool-server's
+  // flow_path_dotdot guard, and ordered before the extension/stem arms the
+  // way the server orders it, so the dishonest-path cause wins over a
+  // basename complaint. The hint names the file the shell would actually
+  // open (realpath, which resolves against cwd the way the kernel does),
+  // when one exists.
+  if (suppliedPath.split(/[\\/]+/).includes("..")) {
+    let recovery = "Pass the fully resolved path to the flow's YAML.";
+    try {
+      recovery = `Did you mean: argent flow run ${await fsp.realpath(suppliedPath)}`;
+    } catch {
+      // Nothing kernel-reachable at that path — the generic recovery stands.
+    }
+    console.error(
+      `Flow path must not contain ".." segments — they are collapsed without following symlinks, ` +
+        `so the path can name a different file than the one your shell opens: ${suppliedPath}\n` +
+        recovery
+    );
+    return exitAfterFlush(2);
+  }
   if (path.extname(suppliedPath) !== ".yaml") {
     const isBareSavedName =
       !suppliedPath.includes("/") &&
