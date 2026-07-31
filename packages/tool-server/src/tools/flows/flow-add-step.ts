@@ -147,7 +147,8 @@ async function rewriteSiblingFlowPath(
     new FailureError(
       `Cannot record a flow-execute of flow_path "${flowPath}": ${detail}. flow_path carries no ` +
         `file-input resolution through flow-add-step's opaque args — pass name + project_root ` +
-        `for a flow saved beside the recording.`,
+        `for a flow saved beside the recording, or add a \`run: <relative path>.yaml\` step to ` +
+        `the flow YAML by hand for a cross-directory target.`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
         failure_stage: "flow_add_step_flow_path",
@@ -265,22 +266,29 @@ async function rewriteSiblingFlowPath(
 
 /**
  * For a recorded `flow-execute` call, decide whether to record it as a
- * `run: <name>.yaml` directive — the sibling-relative path form the runner
- * resolves against the canonical containing flow file's directory. Returns
- * the path to compose, or a warning explaining why the raw `flow-execute`
- * step was kept.
+ * `run: <name>.yaml` directive — a sibling-relative path the runner resolves
+ * against the canonical containing flow file's directory. Returns the path
+ * to compose, or a warning explaining why the raw `flow-execute` step was
+ * kept.
  *
- * `run:` composes any sibling flow — fragment or e2e — resolved beside the
- * recording flow's REAL file (host-resolved composition, design §12): the
- * runner anchors `run:` at the realpath'd containing-file dir, so a recording
- * made through a symlink validates its sibling in the canonical directory,
- * not beside the symlink's spelling. An e2e target's `launch` simply runs
- * inline. So we keep the raw step only when the target can't be resolved as
- * a sibling, the sibling is not the same file the live sub-invoke executed
- * (the recorded step must name the flow that actually ran), or the recording
- * is remote (the host can't read the client's sibling files to validate). A
- * `flow_path` target reaches here as its sibling `name` or not at all — see
- * {@link rewriteSiblingFlowPath}.
+ * The `run:` directive itself is not sibling-scoped: it composes any
+ * relative YAML path — fragment or e2e, cross-directory included, e.g.
+ * `run: ../shared/login.yaml` — resolved by the runner per containing file
+ * and contained to the project root or the containing file's subtree
+ * (host-resolved composition, design §12). The RECORDER deliberately emits
+ * only the sibling subset: `<name>.yaml` beside the recording's REAL file is
+ * the one target shape it can validate here and identity-check against the
+ * file the live sub-invoke executed; a cross-directory composition is
+ * authored by editing the flow YAML directly, not recorded. The anchor is
+ * the realpath'd containing-file dir because the runner's is (scopeFlowDir
+ * in flow-run.ts), so a recording made through a symlink validates its
+ * sibling in the canonical directory, not beside the symlink's spelling. An
+ * e2e target's `launch` simply runs inline. So we keep the raw step only
+ * when the target can't be resolved as a sibling, the sibling is not the
+ * same file the live sub-invoke executed (the recorded step must name the
+ * flow that actually ran), or the recording is remote (the host can't read
+ * the client's sibling files to validate). A `flow_path` target reaches here
+ * as its sibling `name` or not at all — see {@link rewriteSiblingFlowPath}.
  *
  * "Resolved as a sibling" is the same two-part identity {@link
  * rewriteSiblingFlowPath} demands of a flow_path, asked of the name route: the
