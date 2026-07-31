@@ -238,8 +238,8 @@ const liveChildren = new Map<number, ChildProcess>();
  * leader SIGKILL off recycled pids, while the group sweep relies on a
  * liveness probe. Only when no handle is held (the child already exited, or
  * it was booted by an earlier tool-server process) does it fall back to
- * best-effort raw-pid signalling. An already-exited process is a no-op, not
- * an error.
+ * best-effort group signalling on the raw pid. An already-exited process is a
+ * no-op, not an error.
  */
 export function killChromiumByPort(port: number, pid?: number): void {
   const child = liveChildren.get(port);
@@ -277,10 +277,13 @@ export async function killChromiumByPortAndWait(
 
   if (exited) return Promise.race([exited, sleepUnref(timeoutMs)]);
   if (!child && pid !== undefined) {
-    // Booted by an earlier tool-server process: no handle to await, so poll.
+    // A child this process booted that already exited and was evicted from the
+    // handle registry: no exit event to await, so poll. The probe targets the
+    // group, not the leader — the single-instance lock this wait guards is
+    // held by the browser process, a group member that can outlive the leader.
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      if (signalPid(pid, 0) === "gone") return;
+      if (!signalGroup(pid, 0)) return;
       await sleepUnref(EXIT_POLL_MS);
     }
   }
@@ -294,30 +297,22 @@ function sleepUnref(ms: number): Promise<void> {
 }
 
 /**
- * Raw-pid fallback: SIGTERM, then SIGKILL after a grace period. Unlike
- * {@link killChildEscalating} there is no exit-status guard here — only a
- * liveness re-probe (signal 0) right before the SIGKILL, which skips it when
- * the process already exited during the grace window. A process exiting
- * between that probe and the kill could still hand its pid to a newcomer
- * (an inherent raw-pid TOCTOU); that residual window is why the handle path in
- * {@link killChromiumByPort} is preferred whenever a handle exists.
+ * Raw-pid fallback: group SIGTERM, then group SIGKILL after a grace period.
+ * Group signalling is safe here because the pid is always a detached-spawn
+ * group leader — every producer ({@link bootElectronApp}) spawns detached, so
+ * pgid=pid names the app's own group, never the caller's — and necessary
+ * because helpers routinely outlive the leader: a leader-only signal would
+ * report "gone" while the rest of the app lives on. The SIGKILL is gated only
+ * on a group-liveness re-probe (signal 0); a group emptying between that probe
+ * and the kill could still hand its pgid to a newcomer — the residual
+ * recycled-pgid window inherent to any raw-pid signal, shared by the group
+ * sweep in {@link killChildEscalating}.
  */
 function killChromiumByPidFallback(pid: number): void {
-  if (signalPid(pid, "SIGTERM") === "gone") return; // already exited, nothing to escalate
+  if (!signalGroup(pid, "SIGTERM")) return; // group already empty, nothing to escalate
   setTimeout(() => {
-    if (signalPid(pid, 0) === "gone") return; // exited during the grace period — don't SIGKILL a recycled pid
-    signalPid(pid, "SIGKILL");
+    if (signalGroup(pid, 0)) signalGroup(pid, "SIGKILL");
   }, 2000).unref();
-}
-
-/** Send a signal (or the 0 liveness probe) to a pid, reporting "gone" on ESRCH (no such process). */
-function signalPid(pid: number, signal: NodeJS.Signals | 0): "sent" | "gone" {
-  try {
-    process.kill(pid, signal);
-    return "sent";
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "ESRCH" ? "gone" : "sent";
-  }
 }
 
 /**

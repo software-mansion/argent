@@ -3,8 +3,8 @@
  * prefer the ChildProcess handle retained at boot — whose exitCode/signalCode
  * guard skips the delayed leader SIGKILL once the child has exited, while the
  * group sweep escalates on a signal-0 liveness probe of the group — and only
- * fall back to raw-pid signalling (with the same liveness re-probe before the
- * SIGKILL) once the child has left the registry.
+ * fall back to group signalling on the raw pid (group SIGTERM, then a
+ * probe-gated group SIGKILL) once the child has left the registry.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from "vitest";
@@ -231,7 +231,7 @@ describe("killChromiumByPort — handle path", () => {
 });
 
 describe("killChromiumByPort — raw-pid fallback", () => {
-  it("falls back to pid signalling after the child's exit evicted the handle, and the liveness probe suppresses the SIGKILL", async () => {
+  it("falls back to group signalling after the child's exit evicted the handle, and the liveness probe suppresses the SIGKILL", async () => {
     const { child, port, close } = await bootFakeChild();
     try {
       // Natural exit (e.g. the user closed the window): the cleanup listener
@@ -242,7 +242,7 @@ describe("killChromiumByPort — raw-pid fallback", () => {
         .spyOn(process, "kill")
         .mockImplementation((_pid: number, signal?: string | number) => {
           if (signal === 0) {
-            // By probe time the process is gone.
+            // By probe time the group is empty.
             const err = new Error("kill ESRCH") as NodeJS.ErrnoException;
             err.code = "ESRCH";
             throw err;
@@ -255,13 +255,13 @@ describe("killChromiumByPort — raw-pid fallback", () => {
 
       // Handle gone → raw-pid fallback, never the stale ChildProcess.
       expect(child.kill).not.toHaveBeenCalled();
-      expect(killSpy).toHaveBeenCalledWith(FAKE_PID, "SIGTERM");
+      expect(killSpy).toHaveBeenCalledWith(-FAKE_PID, "SIGTERM");
 
       vi.advanceTimersByTime(2000);
 
       // The 0-probe reported ESRCH → the SIGKILL must be suppressed so it
-      // cannot land on a recycled pid.
-      expect(killSpy).toHaveBeenCalledWith(FAKE_PID, 0);
+      // cannot land on a recycled pgid.
+      expect(killSpy).toHaveBeenCalledWith(-FAKE_PID, 0);
       const signals = killSpy.mock.calls.map((c) => c[1]);
       expect(signals).not.toContain("SIGKILL");
     } finally {
@@ -269,17 +269,52 @@ describe("killChromiumByPort — raw-pid fallback", () => {
     }
   });
 
-  it("escalates the fallback to SIGKILL when the pid is still alive at probe time", () => {
+  it("escalates the fallback to a group SIGKILL when the group is still alive at probe time", () => {
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
     vi.useFakeTimers();
 
     // Port never registered → straight to the pid fallback.
     killChromiumByPort(59999, FAKE_PID);
-    expect(killSpy).toHaveBeenCalledWith(FAKE_PID, "SIGTERM");
+    expect(killSpy).toHaveBeenCalledWith(-FAKE_PID, "SIGTERM");
 
     vi.advanceTimersByTime(2000);
-    expect(killSpy).toHaveBeenCalledWith(FAKE_PID, 0);
-    expect(killSpy).toHaveBeenCalledWith(FAKE_PID, "SIGKILL");
+    expect(killSpy).toHaveBeenCalledWith(-FAKE_PID, 0);
+    expect(killSpy).toHaveBeenCalledWith(-FAKE_PID, "SIGKILL");
+  });
+
+  it("still arms the group escalation when the leader pid is already gone but the group is not", async () => {
+    // The asymmetric leak: the wrapper died independently (external kill -9,
+    // OOM kill), evicting the handle, and its bare pid reports ESRCH — while
+    // the browser and helpers keep the group alive. A leader-only fallback
+    // would return early here and never signal any of them.
+    const { child, port, close } = await bootFakeChild();
+    try {
+      child.emit("exit", null, "SIGKILL");
+
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(((
+        pid: number,
+        _signal: NodeJS.Signals | 0
+      ) => {
+        if (pid === FAKE_PID) {
+          const err: NodeJS.ErrnoException = new Error("no such process");
+          err.code = "ESRCH";
+          throw err; // the leader is gone; only group members survive
+        }
+        return true;
+      }) as typeof process.kill);
+
+      vi.useFakeTimers();
+      killChromiumByPort(port, FAKE_PID);
+
+      expect(child.kill).not.toHaveBeenCalled();
+      expect(killSpy).toHaveBeenCalledWith(-FAKE_PID, "SIGTERM");
+
+      vi.advanceTimersByTime(2000);
+      expect(killSpy).toHaveBeenCalledWith(-FAKE_PID, 0);
+      expect(killSpy).toHaveBeenCalledWith(-FAKE_PID, "SIGKILL");
+    } finally {
+      close();
+    }
   });
 
   it("is a no-op when no handle is registered and no pid is provided", () => {
@@ -289,7 +324,7 @@ describe("killChromiumByPort — raw-pid fallback", () => {
   });
 });
 
-/** When the faked pid starts reporting ESRCH, in the raw-pid poll test. */
+/** When the faked process group starts reporting ESRCH, in the raw-pid poll tests. */
 const GONE_AFTER_MS = 40;
 
 describe("killChromiumByPortAndWait", () => {
@@ -341,7 +376,7 @@ describe("killChromiumByPortAndWait", () => {
     }
   });
 
-  it("polls the pid when no handle is held, and stops once it reports ESRCH", async () => {
+  it("polls the group when no handle is held, and stops once it reports ESRCH", async () => {
     let alive = true;
     const killSpy = vi.spyOn(process, "kill").mockImplementation(((
       _pid: number,
@@ -363,11 +398,39 @@ describe("killChromiumByPortAndWait", () => {
     await killChromiumByPortAndWait(59998, FAKE_PID, 2000);
     const elapsed = Date.now() - started;
 
-    expect(killSpy).toHaveBeenCalledWith(FAKE_PID, "SIGTERM");
-    expect(killSpy).toHaveBeenCalledWith(FAKE_PID, 0);
-    // Two-sided: it must not return while the pid is still alive (the whole
+    expect(killSpy).toHaveBeenCalledWith(-FAKE_PID, "SIGTERM");
+    expect(killSpy).toHaveBeenCalledWith(-FAKE_PID, 0);
+    // Two-sided: it must not return while the group is still alive (the whole
     // point — the replacement would race the lock), and must not burn the whole
     // budget once it is gone (every handle-less retire would stall the flow).
+    expect(elapsed).toBeGreaterThanOrEqual(GONE_AFTER_MS);
+    expect(elapsed).toBeLessThan(1000);
+  });
+
+  it("does not return while the group is still alive, even though the leader itself is gone", async () => {
+    // The single-instance lock the wait guards is held by the browser — a
+    // group member — so leader liveness is the wrong signal: here the bare pid
+    // reports ESRCH from the start while the group lives on for a while.
+    let groupAlive = true;
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(((
+      pid: number,
+      signal: NodeJS.Signals | 0
+    ) => {
+      const err: NodeJS.ErrnoException = new Error("no such process");
+      err.code = "ESRCH";
+      if (pid === FAKE_PID) throw err; // the leader is already dead
+      if (signal === 0 && !groupAlive) throw err;
+      return true;
+    }) as typeof process.kill);
+    setTimeout(() => {
+      groupAlive = false;
+    }, GONE_AFTER_MS).unref();
+
+    const started = Date.now();
+    await killChromiumByPortAndWait(59997, FAKE_PID, 2000);
+    const elapsed = Date.now() - started;
+
+    expect(killSpy).toHaveBeenCalledWith(-FAKE_PID, 0);
     expect(elapsed).toBeGreaterThanOrEqual(GONE_AFTER_MS);
     expect(elapsed).toBeLessThan(1000);
   });
