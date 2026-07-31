@@ -590,9 +590,15 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
   // tell them apart without parsing the flow.
   const routing = await getResolvedToolsUrl();
   if (routing.source !== "none") {
+    // With ARGENT_TOOLS_URL set over an existing link file, unsetting only the
+    // env var re-routes through the shadowed link — the same refusal with the
+    // other source. Name both steps up front.
     const recovery =
       routing.source === "env"
-        ? "Unset ARGENT_TOOLS_URL and try again."
+        ? routing.shadowedLink
+          ? "Unset ARGENT_TOOLS_URL and run `argent unlink`, then try again — " +
+            `a link to ${routing.shadowedLink.url} is also configured and takes over once the env var is unset.`
+          : "Unset ARGENT_TOOLS_URL and try again."
         : "Run `argent unlink` and try again.";
     console.error(
       `argent flow run requires the auto-started local tool server; ${routing.source} routing is configured.\n${recovery}`

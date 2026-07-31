@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { Writable } from "node:stream";
 import { exitAfterFlush, flow, parseRunArgs } from "../src/flow.js";
 import { FlagParseException } from "../src/flag-parser.js";
+import type { ResolvedToolsUrl } from "@argent/tools-client";
 
 const toolsClientMock = vi.hoisted(() => ({
   callTool: vi.fn(),
@@ -17,7 +18,7 @@ const materializeArtifactsMock = vi.hoisted(() =>
 );
 const getResolvedToolsUrlMock = vi.hoisted(() =>
   vi.fn(
-    async (): Promise<{ url: string | null; source: "none" | "env" | "link" }> => ({
+    async (): Promise<ResolvedToolsUrl> => ({
       url: null,
       source: "none",
     })
@@ -470,6 +471,30 @@ describe("argent flow run", () => {
 
     expect(errs.join("\n")).toContain("requires the auto-started local tool server");
     expect(errs.join("\n")).toContain(recovery);
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it("names both recoveries when env routing shadows an existing link", async () => {
+    // Unsetting only ARGENT_TOOLS_URL would re-route through the shadowed link
+    // and produce a second refusal — the message must instruct both steps.
+    getResolvedToolsUrlMock.mockResolvedValue({
+      url: "http://example.test:4141",
+      source: "env",
+      shadowedLink: {
+        url: "http://linked.test:5252",
+        host: "linked.test",
+        port: 5252,
+        createdAt: "2026-07-31T00:00:00.000Z",
+      },
+    });
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:2");
+
+    const out = errs.join("\n");
+    expect(out).toContain("requires the auto-started local tool server; env routing is configured");
+    expect(out).toContain("Unset ARGENT_TOOLS_URL");
+    expect(out).toContain("argent unlink");
+    expect(out).toContain("http://linked.test:5252");
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
 
