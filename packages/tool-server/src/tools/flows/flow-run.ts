@@ -567,25 +567,45 @@ function* walkSteps(steps: FlowStep[]): Generator<FlowStep> {
 }
 
 /**
- * Reject an uploaded root flow that contains a `run:` step (even inside a
- * `when:` block) before anything executes: its referenced files stayed on the
- * client, and a mid-run or guard-gated error could execute half the flow
- * first — or first surface in CI.
+ * Reject an uploaded root flow that is not self-contained — one with a `run:`
+ * or `snapshot` step (even inside a `when:` block) — before anything executes:
+ * a mid-run or guard-gated error could execute half the flow first, or first
+ * surface in CI. Both step kinds anchor at the flow file's real directory,
+ * which an uploaded flow does not have: a run: step's referenced files stayed
+ * on the client, and snapshot baselines live beside the flow's file — against
+ * a per-call temp materialization a plain snapshot can only fail (no baseline)
+ * and updateBaselines writes PNGs no later run can find.
  */
-function assertUploadRunFree(flow: FlowFile): void {
+function assertUploadSelfContained(flow: FlowFile): void {
   for (const step of walkSteps(flow.steps)) {
-    if (step.kind !== "run") continue;
-    throw new FailureError(
-      `This flow uses run: composition ("run: ${step.flow}"), which requires a co-located ` +
-        `client and tool server — an uploaded flow's referenced files are not available on ` +
-        `this host.`,
-      {
-        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
-        failure_stage: "flow_upload_run_composition",
-        failure_area: "tool_server",
-        error_kind: "validation",
-      }
-    );
+    if (step.kind === "run") {
+      throw new FailureError(
+        `This flow uses run: composition ("run: ${step.flow}"), which requires a co-located ` +
+          `client and tool server — an uploaded flow's referenced files are not available on ` +
+          `this host.`,
+        {
+          error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+          failure_stage: "flow_upload_run_composition",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
+      );
+    }
+    if (step.kind === "snapshot") {
+      throw new FailureError(
+        `This flow uses a snapshot step ("snapshot: ${step.name}"), whose baselines live ` +
+          `beside the flow's file — an uploaded flow materializes to a fresh temp directory ` +
+          `each call, so a plain snapshot can never find a baseline and updateBaselines ` +
+          `(--update-baselines) writes PNGs no later run can read. Use name + project_root ` +
+          `with a co-located client and tool server for snapshot flows.`,
+        {
+          error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+          failure_stage: "flow_upload_snapshot_baseline",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
+      );
+    }
   }
 }
 
@@ -663,7 +683,7 @@ returns a notice with the prerequisite instead of running.`,
       // containing-dir zone (b) still applies.
       const projectRoot = await fs.realpath(params.project_root).catch(() => params.project_root);
       const flow = parseFlow(await fs.readFile(canonicalPath, "utf8"));
-      if (viaUpload) assertUploadRunFree(flow);
+      if (viaUpload) assertUploadSelfContained(flow);
 
       // LLM-path prerequisite handshake (fragments only; a flow with a leading
       // launch step cannot declare one — validated at parse).

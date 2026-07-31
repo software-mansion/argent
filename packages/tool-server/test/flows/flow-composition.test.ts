@@ -6,6 +6,7 @@ import {
   ArtifactStore,
   FLOW_FILE_NAME_PATTERN,
   FLOW_NAME_PATTERN,
+  getFailureSignal,
   type Registry,
 } from "@argent/registry";
 import {
@@ -1004,6 +1005,125 @@ describe("flow composition (run:)", () => {
       status: "pass",
       message: "composed fragment ran",
     });
+  });
+
+  it("rejects a snapshot step when the root flow was uploaded (no durable baseline dir)", async () => {
+    // Baselines anchor beside the flow's file, and an uploaded flow
+    // materializes to a fresh temp directory each call — a plain snapshot can
+    // only fail on a missing baseline, and updateBaselines would write PNGs no
+    // later run can find. Rejected preflight, like uploaded run: composition.
+    vi.mocked(runSnapshot).mockClear();
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(
+      uploadedPath,
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [
+          { kind: "echo", message: "before" },
+          { kind: "snapshot", name: "home", maxMismatch: 0.5 },
+        ],
+      }),
+      "utf8"
+    );
+
+    const registry = mockRegistry();
+    const err = await createRunFlowTool(registry)
+      .execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_file: {
+              clientPath: "/client/.argent/flows/main.yaml",
+              presentOnHost: false,
+              viaUpload: true,
+            },
+          },
+        }
+      )
+      .then(
+        () => null,
+        (e: unknown) => e
+      );
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain('snapshot step ("snapshot: home")');
+    expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_snapshot_baseline");
+    // Preflight, not mid-run: nothing was dispatched to the device and the
+    // differ was never pointed at the temp materialization dir.
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(vi.mocked(runSnapshot)).not.toHaveBeenCalled();
+  });
+
+  it("rejects an uploaded flow whose snapshot hides behind a when: block that would not fire", async () => {
+    // Same preflight walk as run: — a guard-gated snapshot must not report
+    // green on one platform and only surface the contract error where the
+    // guard first fires (e.g. in CI).
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(
+      uploadedPath,
+      "steps:\n  - when:\n      platform: android\n    steps:\n      - snapshot:\n          name: home\n",
+      "utf8"
+    );
+
+    const err = await createRunFlowTool(mockRegistry())
+      .execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_file: {
+              clientPath: "/client/.argent/flows/main.yaml",
+              presentOnHost: false,
+              viaUpload: true,
+            },
+          },
+        }
+      )
+      .then(
+        () => null,
+        (e: unknown) => e
+      );
+    expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_snapshot_baseline");
+  });
+
+  it("allows a snapshot step for a co-located flow_file resolved in place", async () => {
+    // The inverse pin for the snapshot upload rejection above: the everyday
+    // co-located client (presentOnHost, NOT an upload) keeps its durable
+    // baseline directory beside the flow file, so the snapshot path still runs.
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "snapshot", name: "home", maxMismatch: 0.5 }],
+    });
+    const flowFile = path.join(tmpDir, ".argent", "flows", "main.yaml");
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: flowFile, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_file: {
+              clientPath: flowFile,
+              presentOnHost: true,
+              viaUpload: false,
+            },
+          },
+        }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0]).toMatchObject({ kind: "snapshot", status: "pass" });
+    expect(vi.mocked(runSnapshot)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        flowsDir: path.join(tmpDir, ".argent", "flows"),
+        flowName: "main",
+      })
+    );
   });
 
   it("attributes a hard-stop-skipped run: step to its target stem, like every other path", async () => {
