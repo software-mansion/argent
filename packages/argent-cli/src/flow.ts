@@ -112,8 +112,10 @@ contain only letters, numbers, "_", or "-" — the same charset a name must
 match. A flow that begins with a \`launch\` step runs its app from scratch; any
 other flow (a fragment) runs against the device's current state — handy while
 authoring one. Exception: a fragment whose first step \`run:\`s a chromium e2e
-flow boots that flow's app before step 1 (pass --device to attach to a running
-instance).
+flow boots that flow's app before step 1 — when that launch is unambiguously
+chromium (a lone \`{ chromium: ... }\` target, or --platform chromium); a
+multi-platform launch auto-detects a device instead. Pass --device to attach to
+a running instance.
 
 A directory run prints only failing steps plus a final flow summary;
 --recursive walks subdirectories too (dot-directories and node_modules are
