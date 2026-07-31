@@ -480,6 +480,79 @@ describe("flow composition (run:)", () => {
     expect(result.steps[1]).toMatchObject({ kind: "echo", message: "shared helper" });
   });
 
+  it("resolves a run: `..` after a symlinked component with kernel semantics", async () => {
+    // .argent/flows/link is a symlink to lex/other, so on disk
+    // `link/../frag.yaml` means lex/frag.yaml — `..` names the parent of the
+    // link's TARGET. A lexical collapse of the spelling (path.resolve before
+    // realpath) instead names the flows-dir sibling frag.yaml; with a decoy
+    // planted there, only kernel-faithful resolution runs the file the
+    // written path denotes.
+    const lexDir = path.join(tmpDir, "lex");
+    await fs.mkdir(path.join(lexDir, "other"), { recursive: true });
+    await fs.writeFile(
+      path.join(lexDir, "frag.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "echo", message: "kernel-resolved fragment" }],
+      }),
+      "utf8"
+    );
+    await writeFlow("frag", {
+      executionPrerequisite: "",
+      steps: [{ kind: "echo", message: "lexical decoy" }],
+    });
+    await writeFlow("root", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "link/../frag.yaml" }],
+    });
+    const flowsDir = path.join(tmpDir, ".argent", "flows");
+    await fs.symlink(path.join(lexDir, "other"), path.join(flowsDir, "link"));
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "root", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:pass", "echo:pass"]);
+    expect(result.steps[1]).toMatchObject({ kind: "echo", message: "kernel-resolved fragment" });
+    expect(result.steps.map((s) => s.message)).not.toContain("lexical decoy");
+  });
+
+  it("errors on a run: `..` through a dangling symlink instead of executing a lexical impostor", async () => {
+    // .argent/flows/dangling points at a missing target, so the kernel refuses
+    // the spelling `dangling/../frag.yaml` with ENOENT — realpath fails on both
+    // the full path and its dirname. A lexical collapse of the spelling would
+    // name the flows-dir sibling frag.yaml (planted as a decoy) and run it with
+    // run:pass; the fallback must instead surface the kernel's ENOENT for the
+    // spelling itself and never execute the decoy.
+    await writeFlow("frag", {
+      executionPrerequisite: "",
+      steps: [{ kind: "echo", message: "lexical decoy" }],
+    });
+    await writeFlow("root", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "dangling/../frag.yaml" }],
+    });
+    const flowsDir = path.join(tmpDir, ".argent", "flows");
+    await fs.symlink(path.join(tmpDir, "gone"), path.join(flowsDir, "dangling"));
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "root", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:error"]);
+    expect(result.steps[0]?.reason).toMatch(/could not load fragment "dangling\/\.\.\/frag\.yaml"/);
+    expect(result.steps[0]?.reason).toMatch(/ENOENT/);
+    expect(result.steps.map((s) => s.message)).not.toContain("lexical decoy");
+  });
+
   it("detects a cycle through a symlinked spelling", async () => {
     const flowsDir = path.join(tmpDir, ".argent", "flows");
     await writeFlow("a", {

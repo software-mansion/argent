@@ -1268,15 +1268,39 @@ async function execWhenStep(
 
 /**
  * Canonicalize a flow path — the cycle guard's identity key and the root
- * anchor derivation (flowsDir + runStack seed). Falls back to the resolved
- * path when realpath fails (e.g. the file is gone) — the subsequent read
- * reports the real error with the real path.
+ * anchor derivation (flowsDir + runStack seed). The input must arrive with
+ * any `..` segments intact (no path.resolve/path.join over the string): a
+ * `..` that follows a symlinked directory component names the parent of the
+ * link's TARGET, which only the kernel can know — a lexical collapse first
+ * silently picks a different file than the spelling denotes on disk.
+ * fs/promises' realpath keeps kernel semantics (realpath(3), like callback
+ * fs.realpath.native — unlike callback fs.realpath, which path.resolve()s
+ * first), so handing it the un-collapsed string is sufficient. When realpath
+ * fails (the file is gone), the containing directory is still kernel-resolved
+ * before the basename is re-appended, so the subsequent read opens — and its
+ * ENOENT names — the file the spelling denotes rather than a lexical collapse
+ * that could name an existing impostor; when the directory chain itself is
+ * broken (an intermediate component missing, or a dangling link followed by
+ * `..`), the spelling is returned verbatim, so the read fails with the
+ * kernel's ENOENT for the spelling itself instead of succeeding on a collapse
+ * that happens to name an existing file. That failed read hard-stops the flow
+ * before any runStack entry is pushed, so the verbatim key never reaches the
+ * cycle guard (a genuine cycle needs a readable target, for which realpath
+ * succeeds). Callers must pass an absolute path — every return value,
+ * including the verbatim fallback, is consumed as absolute (readFile,
+ * dirname-derived anchors) with no resolve step after this point; both call
+ * sites satisfy this (the root path is validated absolute, and `run:` targets
+ * are concatenated onto an absolute anchor).
  */
 async function canonicalFlowPath(p: string): Promise<string> {
   try {
     return await fs.realpath(p);
   } catch {
-    return path.resolve(p);
+    try {
+      return path.join(await fs.realpath(path.dirname(p)), path.basename(p));
+    } catch {
+      return p;
+    }
   }
 }
 
@@ -1312,7 +1336,14 @@ async function execRunStep(
   // is the one piece of output that identifies the offending edge. The cost is
   // one extra realpath on the max-depth path; the depth guard immediately below
   // still stops the recursion, so nothing runs away.
-  const canonical = await canonicalFlowPath(path.resolve(scopeFlowDir(scope), target));
+  //
+  // Joined by concatenation, NOT path.resolve/path.join: those collapse a `..`
+  // lexically before the kernel ever sees the spelling, and parseRunTarget
+  // deliberately admits `..` (shared fragments may live outside the flows
+  // dir) — after a symlinked directory component the collapse names a
+  // different file than the one on disk (see canonicalFlowPath). The anchor
+  // is absolute and the target relative, so the concatenation is well-formed.
+  const canonical = await canonicalFlowPath(scopeFlowDir(scope) + path.sep + target);
   if (scope.runStack.some((entry) => entry.canonical === canonical)) {
     return fail(
       `cyclic flow reference: ${[...scope.runStack.map((entry) => entry.display), display].join(" → ")}`
