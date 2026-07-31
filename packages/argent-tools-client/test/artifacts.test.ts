@@ -556,9 +556,7 @@ describe("durableSaveTarget", () => {
 
   it("a blank configured value reads as unset — default location kept", async () => {
     await writeScopedConfig(projectRoot, "   ");
-    expect(durableSaveTarget(recordingHandle())!.dir).toBe(
-      join(projectRoot, ".argent/recordings")
-    );
+    expect(durableSaveTarget(recordingHandle())!.dir).toBe(join(projectRoot, ".argent/recordings"));
   });
 
   it("config never resurrects a hostile wire saveDir — the allowlist still gates first", async () => {
