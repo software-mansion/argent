@@ -184,6 +184,108 @@ describe("flow-execute cross-app snapshot collision", () => {
     await expect(baselineMarker(path.join(dir, "shot__chromium-600x372.png"))).resolves.toBe(2);
   });
 
+  it("does not fire when a pinned-device attach precedes a boot of the same app", async () => {
+    // The reviewer's repro: pinned to a hand-started instance, the first launch
+    // ATTACHES (no boot); the relaunch boots. Both captures are the same app,
+    // so the attach-declared path must equal the booted instance's identity.
+    const flowFile = await writeFlow(
+      "steps:\n" +
+        "  - launch: { chromium: ./app }\n" +
+        "  - snapshot: shot\n" +
+        "  - launch: { chromium: ./app }\n" +
+        "  - snapshot: shot\n"
+    );
+    const registry = makeRegistry();
+    (registry.resolveService as ReturnType<typeof vi.fn>).mockImplementation(async () => ({
+      refreshViewport: vi.fn(async () => ({ width: 800, height: 600 })),
+      cdp: { send: vi.fn(async () => ({})) },
+    }));
+
+    const result = await runFlow(registry, {
+      name: "pinned-same-app",
+      project_root: PROJECT_ROOT,
+      flow_file: flowFile,
+      device: "chromium-cdp-21456",
+      updateBaselines: true,
+    });
+
+    expect(bootElectronApp).toHaveBeenCalledTimes(1);
+    expect(result.steps[3]!.reason).toContain("baseline updated");
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "launch:pass",
+      "snapshot:pass",
+      "launch:pass",
+      "snapshot:pass",
+    ]);
+    expect(result.ok).toBe(true);
+    const dir = baselineDir(flowFile, "pinned-same-app");
+    await expect(baselineMarker(path.join(dir, "shot__chromium-600x372.png"))).resolves.toBe(2);
+  });
+
+  it("still fires when a pinned-device attach to one app precedes a boot of another", async () => {
+    // The true-positive twin of the pinned repro above: the attach declares
+    // app-a, so a later boot of app-b recapturing the key is a real collision
+    // and must name the attach-declared app, not the anonymous device id.
+    const flowFile = await writeFlow(
+      "steps:\n" +
+        "  - launch: { chromium: ./app-a }\n" +
+        "  - snapshot: shot\n" +
+        "  - launch: { chromium: ./app-b }\n" +
+        "  - snapshot: shot\n"
+    );
+    const registry = makeRegistry();
+    (registry.resolveService as ReturnType<typeof vi.fn>).mockImplementation(async () => ({
+      refreshViewport: vi.fn(async () => ({ width: 800, height: 600 })),
+      cdp: { send: vi.fn(async () => ({})) },
+    }));
+
+    const result = await runFlow(registry, {
+      name: "pinned-cross-app",
+      project_root: PROJECT_ROOT,
+      flow_file: flowFile,
+      device: "chromium-cdp-21456",
+      updateBaselines: true,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(bootElectronApp).toHaveBeenCalledTimes(1);
+    const collided = result.steps[3]!;
+    expect(collided.status).toBe("fail");
+    expect(collided.reason).toContain(
+      'snapshot "shot" was already captured in this run from a different app'
+    );
+    expect(collided.reason).toContain(path.join(path.dirname(flowFile), "app-a"));
+  });
+
+  it("re-attributes a pre-launch capture on the attached instance to the declared app", async () => {
+    // A snapshot BEFORE the first launch is recorded under the anonymous
+    // attached identity; the attach then names the app. Attaching restarts
+    // nothing — same process, same app — so the recapture must stay legal.
+    const flowFile = await writeFlow(
+      "steps:\n" +
+        "  - snapshot: shot\n" +
+        "  - launch: { chromium: ./app }\n" +
+        "  - snapshot: shot\n"
+    );
+    const registry = makeRegistry();
+    (registry.resolveService as ReturnType<typeof vi.fn>).mockImplementation(async () => ({
+      refreshViewport: vi.fn(async () => ({ width: 800, height: 600 })),
+      cdp: { send: vi.fn(async () => ({})) },
+    }));
+
+    const result = await runFlow(registry, {
+      name: "pre-launch",
+      project_root: PROJECT_ROOT,
+      flow_file: flowFile,
+      device: "chromium-cdp-21456",
+      updateBaselines: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+    expect(result.steps[2]!.reason).toContain("baseline updated");
+  });
+
   it("does not fire for the same key captured twice without moving", async () => {
     const flowFile = await writeFlow(
       "steps:\n" +

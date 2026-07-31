@@ -453,9 +453,8 @@ async function runChromiumLaunch(state: ExecState, app: Launch): Promise<Directi
     if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
     return { ok: true, reason: `booted chromium instance ${device.id}` };
   }
-  if (!appIdForPlatform(app, "chromium")) {
-    return { ok: false, reason: noChromiumAppReason(device) };
-  }
+  const spec = chromiumLaunchSpec(app);
+  if (!spec) return { ok: false, reason: noChromiumAppReason(device) };
   // Attach over CDP, not via `launch-app`: a chromium launch value is an app
   // path, which launch-app's bundleId grammar rejects.
   try {
@@ -467,6 +466,15 @@ async function runChromiumLaunch(state: ExecState, app: Launch): Promise<Directi
       ok: false,
       reason: `could not attach to chromium instance "${device.id}": ${errMsg(err)}`,
     };
+  }
+  // The launch just named what the attached instance runs. Record the
+  // canonical path as its capture identity — a later boot of this same app
+  // must compare equal in the snapshot guard — and fold captures already
+  // attributed to the anonymous attached identity into it: attaching restarts
+  // nothing, so those captures came from this same app.
+  state.attachedAppPath = await resolveAppPath(spec.path, state.flowsDir);
+  for (const [key, appId] of state.snapshotApps) {
+    if (appId === `attached:${device.id}`) state.snapshotApps.set(key, state.attachedAppPath);
   }
   if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
   return { ok: true };
@@ -521,14 +529,22 @@ function ownedInstance(state: ExecState): BootedChromium | undefined {
 
 /**
  * App identity a snapshot capture is attributed to: the canonical app path of
- * the owned instance the run sits on, else the attached instance's device id.
+ * the owned instance the run sits on, else the path the attaching launch
+ * declared for the un-owned instance, else that instance's device id. The
+ * declared path is trusted — the author pinned the device and named the app,
+ * and the guard is best-effort collision detection, not attestation — so an
+ * attach and a later boot of the same app spell one identity, not two.
  * On ios/android the device never moves mid-run, so the identity is constant
  * there and the baseline-collision guard stays chromium-scoped in effect.
  */
 function snapshotAppIdentity(state: ExecState): string {
   // Only reached from a `snapshot` step, which acts on a device — `deviceEnv`
   // is the contradiction guard, not an expected path.
-  return ownedInstance(state)?.appPath ?? `attached:${deviceEnv(state).device.id}`;
+  return (
+    ownedInstance(state)?.appPath ??
+    state.attachedAppPath ??
+    `attached:${deviceEnv(state).device.id}`
+  );
 }
 
 /**
@@ -591,6 +607,13 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    * lock suspect for every later boot failure, even after the run moves on.
    */
   attachedDeviceId?: string;
+  /**
+   * Canonical app path the attaching launch declared for that instance — the
+   * capture identity for snapshots taken on it ({@link snapshotAppIdentity}).
+   * Unset until a launch attaches; a launch-free run keeps the anonymous
+   * `attached:` identity, having never been told what the instance runs.
+   */
+  attachedAppPath?: string;
   /** Live progress hook: receives every report the moment it is appended. */
   onStepReport?: (report: StepReport) => void;
 }
