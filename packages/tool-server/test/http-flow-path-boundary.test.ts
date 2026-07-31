@@ -113,6 +113,41 @@ describe("flow-execute flow_path over HTTP", () => {
     expect(steps.invokeTool).not.toHaveBeenCalled();
   });
 
+  it("rejects a size-only wrapper without executing the YAML", async () => {
+    const st = await fs.stat(flowPath);
+    const res = await supertest(handle.app)
+      .post("/tools/flow-execute")
+      .send({
+        project_root: projectRoot,
+        device: DEVICE,
+        flow_path: { __argentFileInput: true, path: flowPath, size: st.size },
+      });
+
+    // The size is the real file's, so the wrapper resolves in place — but a
+    // size is knowable without ever having statted the file, so half the
+    // client stat must not clear the boundary the stat-less wrapper cannot.
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/flow_path file-input boundary/);
+    expect(steps.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("rejects an mtime-only wrapper without executing the YAML", async () => {
+    const st = await fs.stat(flowPath);
+    const res = await supertest(handle.app)
+      .post("/tools/flow-execute")
+      .send({
+        project_root: projectRoot,
+        device: DEVICE,
+        flow_path: { __argentFileInput: true, path: flowPath, mtimeMs: st.mtimeMs },
+      });
+
+    // The mirror-image half: a matching mtime with no size on the wire is
+    // still not the both-fields evidence statVerified stands for.
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/flow_path file-input boundary/);
+    expect(steps.invokeTool).not.toHaveBeenCalled();
+  });
+
   it("rejects a relative flow_path without blaming the boundary it cleared", async () => {
     // The spelling `argent flow list` prints. Running the server from the
     // flow's own directory is what makes this wrapper legitimate: it stats the

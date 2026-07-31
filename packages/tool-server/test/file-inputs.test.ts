@@ -62,6 +62,41 @@ describe("resolveFileInputs", () => {
     expect(fileInputs!.input.statVerified).toBeUndefined();
   });
 
+  it("resolves a size-only wrapper in place but without statVerified", async () => {
+    const filePath = path.join(tmpDir, "size-only.yaml");
+    await fs.writeFile(filePath, "steps: []\n");
+    const st = await fs.stat(filePath);
+
+    const { args, fileInputs } = await resolveFileInputs(
+      { fileInputs: FILE_SPEC },
+      { input: wire({ path: filePath, size: st.size }) }
+    );
+
+    // The size matches the host file, but statVerified means BOTH stat fields
+    // were carried and matched — a size alone is far easier for a caller to
+    // know than the ms-rounded mtime and must not count as the strong form.
+    expect(args.input).toBe(filePath);
+    expect(fileInputs!.input).toMatchObject({ presentOnHost: true, viaUpload: false });
+    expect(fileInputs!.input.statVerified).toBeUndefined();
+  });
+
+  it("resolves an mtime-only wrapper in place but without statVerified", async () => {
+    const filePath = path.join(tmpDir, "mtime-only.yaml");
+    await fs.writeFile(filePath, "steps: []\n");
+    const st = await fs.stat(filePath);
+
+    const { args, fileInputs } = await resolveFileInputs(
+      { fileInputs: FILE_SPEC },
+      { input: wire({ path: filePath, mtimeMs: st.mtimeMs }) }
+    );
+
+    // Same conjunction from the other side: a matching mtime with no size on
+    // the wire is only half the client stat, so the strong form stays off.
+    expect(args.input).toBe(filePath);
+    expect(fileInputs!.input).toMatchObject({ presentOnHost: true, viaUpload: false });
+    expect(fileInputs!.input.statVerified).toBeUndefined();
+  });
+
   it("falls back to uploaded content when the stat does not match", async () => {
     const filePath = path.join(tmpDir, "input.png");
     await fs.writeFile(filePath, "stale");
