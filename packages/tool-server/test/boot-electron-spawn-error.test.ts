@@ -124,6 +124,34 @@ describe("bootElectronApp — spawn error handling", () => {
     }
   });
 
+  it("passes anti-throttling switches so a backgrounded window stays testable", async () => {
+    // Without these, Chromium throttles an unfocused/occluded/minimized
+    // window's compositor: mouse-input acks stall ~5s per event, wheel scrolls
+    // hang, and visibilityState flips to "hidden". Booted apps must stay
+    // drivable wherever the human puts the window.
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child);
+
+    const promise = bootElectronApp({
+      appPath: appDir,
+      port: 1,
+      readyTimeoutMs: 50,
+      extraArgs: ["--user-flag"],
+    });
+    promise.catch(() => {});
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const args = spawnMock.mock.calls[0]![1] as string[];
+    expect(args).toContain("--disable-background-timer-throttling");
+    expect(args).toContain("--disable-backgrounding-occluded-windows");
+    expect(args).toContain("--disable-renderer-backgrounding");
+    // User extras survive alongside the defaults.
+    expect(args).toContain("--user-flag");
+    expect(args).toContain("--remote-debugging-port=1");
+
+    await promise.catch(() => {});
+  });
+
   it("rejects with a clear, actionable message when spawn emits ENOENT", async () => {
     const child = makeFakeChild();
     spawnMock.mockReturnValue(child);

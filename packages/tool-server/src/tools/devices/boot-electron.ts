@@ -242,12 +242,39 @@ function signalPid(pid: number, signal: NodeJS.Signals | 0): "sent" | "gone" {
   }
 }
 
+/**
+ * Chromium switches that keep an argent-booted app fully responsive while its
+ * window is unfocused, occluded, or minimized. Without them the compositor
+ * throttles a hidden window: mouse-input acks stall for seconds per event
+ * (they wait on hit-testing), wheel scrolls hang, and `document.visibilityState`
+ * flips to "hidden".
+ *
+ * Division of labor with primePageSession's focus emulation: emulation keeps
+ * the renderer responsive while a CDP session is attached, but sessions are
+ * created lazily on first tool use and die with the tool-server (which
+ * idle-exits by design while the app outlives it) — these flags cover that
+ * detached lifecycle, plus runtimes where emulation is unavailable. An
+ * agent-driven app must stay testable regardless of where the human puts the
+ * window, so they are unconditional for apps we spawn; externally launched
+ * CDP targets are unaffected.
+ */
+const ANTI_THROTTLING_ARGS = [
+  "--disable-background-timer-throttling",
+  "--disable-backgrounding-occluded-windows",
+  "--disable-renderer-backgrounding",
+];
+
 export async function bootElectronApp(options: BootElectronOptions): Promise<ElectronBootResult> {
   const port = options.port ?? (await pickFreePort());
   const launcher = resolveLauncher(options.appPath);
   const extra = sanitizeExtraArgs(options.extraArgs ?? []);
 
-  const args = [...launcher.args, `--remote-debugging-port=${port}`, ...extra];
+  const args = [
+    ...launcher.args,
+    `--remote-debugging-port=${port}`,
+    ...ANTI_THROTTLING_ARGS,
+    ...extra,
+  ];
 
   let child: ChildProcess;
   try {
