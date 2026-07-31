@@ -33,7 +33,7 @@ jobs:
       # `|| node suppress-error.js`. Off mac/solaris/freebsd its binding.gyp
       # picks a stub target with no sources, so on this runner node-gyp builds
       # nothing and node-pty is the only one that reaches a compiler at all —
-      # an optionalDependency, whose failure npm tolerates. What skipping the
+      # an optionalDependency, whose failure npm tolerates. What skipping them
       # buys is immunity to a bump that leaves a package with no prebuild for
       # the runner — the case dependabot.yml holds tree-sitter's minor and major
       # updates back from, where the compile breaks `npm ci` outright.
