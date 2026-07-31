@@ -526,6 +526,18 @@ function ownedInstance(state: ExecState): BootedChromium | undefined {
 }
 
 /**
+ * App identity a snapshot capture is attributed to: the canonical app path of
+ * the owned instance the run sits on, else the attached instance's device id.
+ * On ios/android the device never moves mid-run, so the identity is constant
+ * there and the baseline-collision guard stays chromium-scoped in effect.
+ */
+function snapshotAppIdentity(state: ExecState): string {
+  // Only reached from a `snapshot` step, which acts on a device — `deviceEnv`
+  // is the contradiction guard, not an expected path.
+  return ownedInstance(state)?.appPath ?? `attached:${deviceEnv(state).device.id}`;
+}
+
+/**
  * Reason for a launch naming no chromium app while the run is on chromium —
  * names the device, since a run can move onto one mid-flight.
  */
@@ -573,6 +585,12 @@ interface ExecState extends Omit<ActionEnv, "device"> {
   owned: BootedChromium[];
   /** True once a chromium `launch` step has run; every later one boots its own instance. */
   chromiumLaunched: boolean;
+  /**
+   * App identity ({@link snapshotAppIdentity}) each snapshot key in this run was
+   * first captured from — run-scoped memory for runSnapshot's cross-app
+   * baseline-collision guard, never persisted and never part of the key.
+   */
+  snapshotApps: Map<string, string>;
   /**
    * The un-owned chromium instance the run started attached to, if any — the
    * one instance the runner never kills, so it stands as the single-instance
@@ -795,6 +813,7 @@ returns a notice with the prerequisite instead of running.`,
         pinned: statusBarPinned,
         owned: resolved.booted ? [resolved.booted] : [],
         chromiumLaunched: false,
+        snapshotApps: new Map(),
         ...(!resolved.booted && device?.platform === "chromium"
           ? { attachedDeviceId: device.id }
           : {}),
@@ -1704,6 +1723,8 @@ async function execLeafStep(
           maxMismatch: step.maxMismatch ?? DEFAULT_MAX_MISMATCH,
           updateBaselines: state.updateBaselines,
           cropOn: step.cropOn,
+          appIdentity: snapshotAppIdentity(state),
+          seenKeys: state.snapshotApps,
         });
         return {
           ...base,
