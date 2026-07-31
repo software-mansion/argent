@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Registry, ToolContext } from "@argent/registry";
+import { ArtifactStore } from "@argent/registry";
 
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
@@ -1424,5 +1425,102 @@ describe("flow-read-prerequisite", () => {
     await expect(
       flowReadPrerequisiteTool.execute({}, { name: "nonexistent", project_root: tmpDir })
     ).rejects.toThrow();
+  });
+
+  it("advertises exactly one of name and flow_path as the flow source", () => {
+    // The pre-flight must offer the same source contract as the run it
+    // precedes — a schema still requiring `name` would leave flow_path flows
+    // unaddressable and silently answer for a saved flow of the same stem.
+    expect(flowReadPrerequisiteTool.inputSchema).toMatchObject({
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        flow_path: { type: "string" },
+      },
+      oneOf: [{ required: ["name"] }, { required: ["flow_path"] }],
+    });
+  });
+
+  it("reads a boundary-verified flow_path's prerequisite, not the saved flow of the same stem", async () => {
+    // Two flows share the stem "gate": the saved copy under .argent/flows and
+    // an explicit file elsewhere. The flow_path call must answer with the
+    // explicit file's contract and the basename-derived name — exactly what
+    // flow-execute would run for the same params — never the saved copy's.
+    const savedDir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(savedDir, { recursive: true });
+    await fs.writeFile(
+      path.join(savedDir, "gate.yaml"),
+      serializeFlow({ executionPrerequisite: "SAVED-COPY: HOME screen", steps: [] })
+    );
+    const elsewhere = path.join(tmpDir, "elsewhere");
+    await fs.mkdir(elsewhere, { recursive: true });
+    const explicitPath = path.join(elsewhere, "gate.yaml");
+    await fs.writeFile(
+      explicitPath,
+      serializeFlow({ executionPrerequisite: "SHARED-COPY: DETAIL screen", steps: [] })
+    );
+
+    const result = await flowReadPrerequisiteTool.execute(
+      {},
+      { project_root: tmpDir, flow_path: explicitPath },
+      {
+        artifacts: new ArtifactStore(),
+        fileInputs: {
+          flow_path: {
+            clientPath: explicitPath,
+            presentOnHost: true,
+            viaUpload: false,
+            statVerified: true,
+          },
+        },
+      }
+    );
+
+    expect(result.flow).toBe("gate");
+    expect(result.executionPrerequisite).toBe("SHARED-COPY: DETAIL screen");
+  });
+
+  it("rejects a raw flow_path that skipped the boundary even when the file exists", async () => {
+    // Same gate as flow-execute: without boundary evidence an explicit path
+    // must not be read — otherwise this tool would hand out prerequisites for
+    // arbitrary server files the run tool itself refuses to touch.
+    const rawPath = path.join(tmpDir, "raw.yaml");
+    await fs.writeFile(rawPath, serializeFlow({ executionPrerequisite: "raw", steps: [] }));
+
+    await expect(
+      flowReadPrerequisiteTool.execute({}, { project_root: tmpDir, flow_path: rawPath })
+    ).rejects.toThrow("flow_path file-input boundary");
+  });
+
+  it("rejects a presence-only flow_path without the client-stat match", async () => {
+    // presentOnHost alone is satisfiable by a hand-crafted stat-less wrapper;
+    // the read must require the same statVerified evidence flow-execute does,
+    // not a weaker copy of the gate.
+    const presentPath = path.join(tmpDir, "present.yaml");
+    await fs.writeFile(presentPath, serializeFlow({ executionPrerequisite: "p", steps: [] }));
+
+    await expect(
+      flowReadPrerequisiteTool.execute(
+        {},
+        { project_root: tmpDir, flow_path: presentPath },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_path: { clientPath: presentPath, presentOnHost: true, viaUpload: false },
+          },
+        }
+      )
+    ).rejects.toThrow("flow_path file-input boundary");
+  });
+
+  it("rejects direct callers that provide both flow sources", async () => {
+    // Direct execute() bypasses zod, so resolveFlowSource's own exactly-one
+    // copy must refuse before either file is consulted.
+    await expect(
+      flowReadPrerequisiteTool.execute(
+        {},
+        { name: "gate", project_root: tmpDir, flow_path: path.join(tmpDir, "gate.yaml") }
+      )
+    ).rejects.toThrow("exactly one flow source");
   });
 });

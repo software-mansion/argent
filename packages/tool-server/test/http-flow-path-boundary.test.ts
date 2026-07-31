@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { ArtifactStore, type Registry, type ToolContext } from "@argent/registry";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
 import { createRunFlowTool } from "../src/tools/flows/flow-run";
+import { flowReadPrerequisiteTool } from "../src/tools/flows/flow-read-prerequisite";
 import {
   clearActiveFlow,
   clearActiveProjectRoot,
@@ -36,18 +37,32 @@ function stepRegistry(): Registry {
 }
 
 /**
- * A registry exposing the REAL flow-execute tool, so a POST exercises the whole
- * chain a forged wrapper must traverse: HTTP file-input resolution →
- * resolveFlowSource's boundary gate → step dispatch.
+ * A registry exposing the REAL flow-execute and flow-read-prerequisite tools,
+ * so a POST exercises the whole chain a forged wrapper must traverse: HTTP
+ * file-input resolution → resolveFlowSource's boundary gate → step dispatch /
+ * prerequisite read. Both tools are here because they share the pre-flight
+ * contract: the file this suite proves flow-execute runs must be the one
+ * flow-read-prerequisite answers about.
  */
 function httpRegistry(steps: Registry): Registry {
-  const runFlow = createRunFlowTool(steps);
+  const tools: Record<
+    string,
+    ReturnType<typeof createRunFlowTool> | typeof flowReadPrerequisiteTool
+  > = {
+    "flow-execute": createRunFlowTool(steps),
+    "flow-read-prerequisite": flowReadPrerequisiteTool,
+  };
   return {
-    getSnapshot: vi.fn(() => ({ services: new Map(), namespaces: [], tools: ["flow-execute"] })),
-    getTool: vi.fn((id: string) => (id === "flow-execute" ? runFlow : undefined)),
+    getSnapshot: vi.fn(() => ({
+      services: new Map(),
+      namespaces: [],
+      tools: Object.keys(tools),
+    })),
+    getTool: vi.fn((id: string) => tools[id]),
     invokeTool: vi.fn(async (id: string, args: unknown, opts?: Partial<ToolContext>) => {
-      if (id !== "flow-execute") throw new Error(`unexpected tool "${id}"`);
-      return runFlow.execute({}, args as Parameters<typeof runFlow.execute>[1], {
+      const tool = tools[id];
+      if (!tool) throw new Error(`unexpected tool "${id}"`);
+      return tool.execute({}, args as never, {
         artifacts: new ArtifactStore(),
         ...opts,
       });
@@ -401,5 +416,104 @@ describe("flow-execute flow_path over HTTP", () => {
     });
     const dispatched = (steps.invokeTool as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
     expect(dispatched).toContain("tap");
+  });
+});
+
+describe("flow-read-prerequisite flow_path over HTTP", () => {
+  it("answers about the boundary-verified flow_path, not the saved flow of the same stem", async () => {
+    // Two flows share the stem "gate": the saved copy under the project root
+    // and the explicit file flow-execute would run for the same params. The
+    // documented pre-flight (read the prerequisite, then run) is only sound if
+    // this tool addresses the explicit file — answering with the saved copy's
+    // contract would have the agent satisfy the wrong prerequisite.
+    const savedPath = path.join(projectRoot, ".argent", "flows", "gate.yaml");
+    await fs.mkdir(path.dirname(savedPath), { recursive: true });
+    await fs.writeFile(
+      savedPath,
+      serializeFlow({ executionPrerequisite: "SAVED-COPY: HOME screen", steps: [] }),
+      "utf8"
+    );
+    const sharedPath = path.join(tmpDir, "elsewhere", "gate.yaml");
+    await fs.mkdir(path.dirname(sharedPath), { recursive: true });
+    await fs.writeFile(
+      sharedPath,
+      serializeFlow({ executionPrerequisite: "SHARED-COPY: DETAIL screen", steps: [] }),
+      "utf8"
+    );
+
+    const st = await fs.stat(sharedPath);
+    const res = await supertest(handle.app)
+      .post("/tools/flow-read-prerequisite")
+      .send({
+        project_root: projectRoot,
+        flow_path: {
+          __argentFileInput: true,
+          path: sharedPath,
+          size: st.size,
+          mtimeMs: st.mtimeMs,
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({
+      flow: "gate",
+      executionPrerequisite: "SHARED-COPY: DETAIL screen",
+    });
+  });
+
+  it("rejects a hand-crafted stat-less wrapper without reading the YAML", async () => {
+    // The same gate flow-execute's suite pins above: presence on the host is
+    // not boundary evidence, and a read must not be softer than the run — a
+    // prerequisite handed out here would vouch for a file the run refuses.
+    const res = await supertest(handle.app)
+      .post("/tools/flow-read-prerequisite")
+      .send({
+        project_root: projectRoot,
+        flow_path: { __argentFileInput: true, path: flowPath },
+      });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/flow_path file-input boundary/);
+  });
+
+  it("diagnoses name + flow_path with the exactly-one rule when the flow_path file does not resolve", async () => {
+    // flow-execute's unwrap case, mirrored: the caller-authored flow_path must
+    // reach zod as a plain string so the dual-source misuse is diagnosed by
+    // the schema — not by a 422 about a file the call never needed, and not by
+    // silently answering for the saved flow.
+    const res = await supertest(handle.app)
+      .post("/tools/flow-read-prerequisite")
+      .send({
+        name: "checkout",
+        project_root: projectRoot,
+        flow_path: { __argentFileInput: true, path: path.join(tmpDir, "nope.yaml") },
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Pass exactly one flow source: name or flow_path\./);
+    expect(res.body.error).not.toMatch(/was not found on the tool-server host/);
+  });
+
+  it("still reads a saved flow by name alone", async () => {
+    // name became optional to admit flow_path; a name-only wire (no wrapper at
+    // all — the shape a direct HTTP caller sends) must keep resolving to
+    // ${project_root}/.argent/flows/${name}.yaml exactly as before.
+    const savedPath = path.join(projectRoot, ".argent", "flows", "saved-only.yaml");
+    await fs.mkdir(path.dirname(savedPath), { recursive: true });
+    await fs.writeFile(
+      savedPath,
+      serializeFlow({ executionPrerequisite: "App on home screen", steps: [] }),
+      "utf8"
+    );
+
+    const res = await supertest(handle.app)
+      .post("/tools/flow-read-prerequisite")
+      .send({ name: "saved-only", project_root: projectRoot });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({
+      flow: "saved-only",
+      executionPrerequisite: "App on home screen",
+    });
   });
 });

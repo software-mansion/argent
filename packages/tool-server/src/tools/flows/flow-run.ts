@@ -1315,9 +1315,9 @@ export function resolveFlowSource(
   fileInput?: ResolvedFileInput,
   flowPathInput?: ResolvedFileInput
 ): { filePath: string; flowName: string } {
-  // The schema's superRefine already enforces this for flow-execute; this copy
-  // covers direct callers (flow-read-prerequisite, tests) and keeps the
-  // params.name! below sound.
+  // The schemas' superRefine already enforces this for flow-execute and
+  // flow-read-prerequisite; this copy covers direct execute() callers (tests,
+  // in-process invocations) and keeps the params.name! below sound.
   if ((params.name === undefined) === (params.flow_path === undefined)) {
     throw new FailureError("Pass exactly one flow source: name or flow_path.", {
       error_code: FAILURE_CODES.FLOW_FILE_INVALID,
@@ -1471,9 +1471,11 @@ export function resolveFlowSource(
 }
 
 /**
- * Path-only resolver used by flow-read-prerequisite. flow-execute uses
- * {@link resolveFlowSource} so it can also obtain the basename-derived logical
- * name for explicit paths.
+ * Path-only convenience over {@link resolveFlowSource} for callers that do not
+ * need the basename-derived logical name. flow-execute and
+ * flow-read-prerequisite both use resolveFlowSource directly — they report the
+ * logical name, and it must be the same one on both sides of the
+ * read-prerequisite → execute handshake.
  */
 export function resolveFlowFilePath(
   params: {
