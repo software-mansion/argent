@@ -35,6 +35,20 @@ vi.mock("../../src/tools/devices/boot-electron", () => ({
 }));
 vi.mock("../../src/utils/chromium-discovery", () => ({ untrackChromiumPort: vi.fn() }));
 
+// Passthrough counter on fs.readFile: the cyclic-chain test asserts how many
+// files the leading-run: walk read, which an ESM namespace spy can't observe.
+const { readFileCalls } = vi.hoisted(() => ({ readFileCalls: vi.fn() }));
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  return {
+    ...actual,
+    readFile: (...args: Parameters<typeof actual.readFile>) => {
+      readFileCalls(...args);
+      return actual.readFile(...args);
+    },
+  };
+});
+
 const PROJECT_ROOT = "/proj";
 
 // Mock registry: invokeTool returns a canned result; the CDP resolveService
@@ -605,9 +619,52 @@ describe("flow-execute chromium boot", () => {
     const registry = makeRegistry(async (id: string) =>
       id === "list-devices" ? { devices: [] } : {}
     );
+    readFileCalls.mockClear();
 
     await expect(
       runFlow(registry, { name: "cyclic", project_root: PROJECT_ROOT, flow_file: top })
+    ).rejects.toThrow(/No booted device found/);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+    // One read each for the top flow and the two loop files — a walk that only
+    // the depth bound stops would re-read the loop many times over.
+    expect(readFileCalls).toHaveBeenCalledTimes(3);
+  });
+
+  // The hoist must accept exactly the chains execRunStep accepts (both walk
+  // MAX_RUN_DEPTH deep, cycle-checked), or a boot could precede a run the
+  // executor then refuses for depth. The two tests pin the bound from both
+  // sides: 19 run-hops is the deepest chain the executor runs, 20 is refused.
+  async function writeRunChain(hops: number): Promise<string> {
+    const top = await writeFlow("steps:\n  - run: chain-1\n");
+    for (let i = 1; i < hops; i++) {
+      await writeSiblingFlow(top, `chain-${i}`, `steps:\n  - run: chain-${i + 1}\n`);
+    }
+    await writeSiblingFlow(top, `chain-${hops}`, "steps:\n  - launch: { chromium: ./app }\n");
+    return top;
+  }
+
+  it("boots for the deepest leading run: chain the executor accepts", async () => {
+    const top = await writeRunChain(19);
+    const registry = makeRegistry();
+
+    const result = await runFlow(registry, {
+      name: "deep-ok",
+      project_root: PROJECT_ROOT,
+      flow_file: top,
+    });
+
+    expect(bootElectronApp).toHaveBeenCalledTimes(1);
+    expect(result.ok).toBe(true);
+  });
+
+  it("does not boot for a leading run: chain the executor refuses for depth", async () => {
+    const top = await writeRunChain(20);
+    const registry = makeRegistry(async (id: string) =>
+      id === "list-devices" ? { devices: [] } : {}
+    );
+
+    await expect(
+      runFlow(registry, { name: "deep-refused", project_root: PROJECT_ROOT, flow_file: top })
     ).rejects.toThrow(/No booted device found/);
     expect(bootElectronApp).not.toHaveBeenCalled();
   });
