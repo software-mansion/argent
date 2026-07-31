@@ -655,6 +655,30 @@ describe("flow-execute chromium boot", () => {
     expect(result.steps.slice(3).every((s) => s.status === "skip")).toBe(true);
   });
 
+  it("reclaims every instance it booted when a step fails mid-run", async () => {
+    // A failing run stops executing steps, but run-end teardown must still
+    // sweep state.owned — otherwise every failure leaks the booted apps.
+    const parent = await writeFlow(
+      "steps:\n  - launch: { chromium: ./app-a }\n  - run: nested\n  - launch: { ios: com.acme.app }\n  - echo: never reached\n"
+    );
+    await writeSiblingFlow(parent, "nested", "steps:\n  - launch: { chromium: ./app-b }\n");
+    const registry = makeRegistry();
+
+    const result = await runFlow(registry, {
+      name: "failing-reclaim",
+      project_root: PROJECT_ROOT,
+      flow_file: parent,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(bootElectronApp).toHaveBeenCalledTimes(2); // hoisted app-a + nested app-b
+    // Both owned instances go down despite the failure, newest first.
+    expect(killChromiumByPort.mock.calls).toEqual([
+      [12346, 4243],
+      [12345, 4242],
+    ]);
+  });
+
   it("errors the first launch when it declares no chromium app on a pinned instance", async () => {
     const flowFile = await writeFlow(
       "steps:\n  - launch: { ios: com.acme.app }\n  - echo: after\n"
