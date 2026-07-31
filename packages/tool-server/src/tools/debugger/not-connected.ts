@@ -1,0 +1,149 @@
+import { FAILURE_CODES, getFailureSignal, type Registry, type ToolContext } from "@argent/registry";
+import {
+  track,
+  type DebuggerNotConnectedReason,
+  type DebuggerToolOutcome,
+} from "@argent/telemetry";
+import { CHROMIUM_ID_PREFIX } from "../../utils/device-info";
+import { classifyDeviceForTelemetry } from "../../utils/telemetry-platform";
+import { debuggerServiceRef } from "./debugger-service-ref";
+import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
+
+/**
+ * Structured result debugger-status and debugger-log-registry return instead of
+ * failing when the JS debugger cannot be reached. Precondition failures (Metro
+ * down, no app attached, wrong device id, CDP unreachable) are expected states
+ * an agent must handle, not tool malfunctions — reporting them as errors is what
+ * drove these tools' 37%/24% telemetry failure rates and agent retry storms.
+ */
+export interface DebuggerNotConnectedResult {
+  status: "not_connected";
+  connected: false;
+  /** Omitted for Chromium ids — their CDP port lives in the device id and the `port` param is ignored. */
+  port?: number;
+  reason: DebuggerNotConnectedReason;
+  /** Original error message, preserved for agents that match on its text. */
+  detail: string;
+  guidance: string;
+}
+
+const GUIDANCE: Record<DebuggerNotConnectedReason, string> = {
+  metro_not_running:
+    "Metro is not running on this port. Do not retry in a loop — the result will not change " +
+    "until Metro is started. Start Metro (e.g. `npx react-native start` or `npx expo start`) " +
+    "or ask the user, wait for it to report ready, then retry once.",
+  no_app_connected:
+    "Metro is running but no app is attached. Do not retry immediately — launch or restart " +
+    "the RN app on the target device (launch-app / restart-app), wait a few seconds for the " +
+    "bundle to load, then retry once.",
+  device_mismatch:
+    "The device_id does not match any debugger target on this Metro. Re-target with the " +
+    "logicalDeviceId listed in the detail message, or give the device its own Metro port.",
+  cdp_unreachable:
+    "The runtime's CDP endpoint could not be reached. Verify the app is running " +
+    "(launch-app), then call debugger-connect and retry once.",
+  stale_connection:
+    "The cached debugger connection went stale; it has been discarded. Restart the app " +
+    "(restart-app) if it is not running, then call debugger-connect — the next call " +
+    "reconnects fresh.",
+  reconnecting:
+    "The debugger connection is being re-established (the previous one was torn down or a " +
+    "tab switch is in progress). Wait a moment and retry once.",
+};
+
+const NOT_CONNECTED_CODE_MAP: Record<string, DebuggerNotConnectedReason> = {
+  [FAILURE_CODES.DEBUGGER_METRO_NOT_RUNNING]: "metro_not_running",
+  [FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS]: "no_app_connected",
+  [FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH]: "device_mismatch",
+  [FAILURE_CODES.DEBUGGER_CDP_CONNECT_FAILED]: "cdp_unreachable",
+  [FAILURE_CODES.DEBUGGER_CDP_SOCKET_CLOSED_BEFORE_OPEN]: "cdp_unreachable",
+  [FAILURE_CODES.DEBUGGER_CDP_NOT_CONNECTED]: "cdp_unreachable",
+  [FAILURE_CODES.DEBUGGER_CDP_CONNECTION_CLOSED]: "cdp_unreachable",
+  [FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE]: "cdp_unreachable",
+  [FAILURE_CODES.CHROMIUM_CDP_NO_PAGE_TARGET]: "cdp_unreachable",
+  [FAILURE_CODES.REGISTRY_SERVICE_TERMINATING]: "reconnecting",
+};
+
+/**
+ * Map an error thrown while resolving the debugger service to a not-connected
+ * reason, or undefined when the fault is unexpected and must keep failing
+ * loudly (payload bugs, console-server binds, plain Errors, ...).
+ */
+export function classifyNotConnected(err: unknown): DebuggerNotConnectedReason | undefined {
+  const code = getFailureSignal(err)?.error_code;
+  return code ? NOT_CONNECTED_CODE_MAP[code] : undefined;
+}
+
+export function buildNotConnected(
+  reason: DebuggerNotConnectedReason,
+  err: unknown,
+  params: { port: number; device_id?: string }
+): DebuggerNotConnectedResult {
+  const isChromium = params.device_id?.startsWith(CHROMIUM_ID_PREFIX) ?? false;
+  return {
+    status: "not_connected",
+    connected: false,
+    ...(isChromium ? {} : { port: params.port }),
+    reason,
+    detail: err instanceof Error ? err.message : String(err),
+    guidance: GUIDANCE[reason],
+  };
+}
+
+/**
+ * Emit the debugger:tool_outcome event — exactly once per invocation, from the
+ * connected return, the socket-state-gate branch, and the classified catch
+ * alike. Coded values only; joins tool:invoke/tool:complete via
+ * tool_invocation_id.
+ */
+export function trackDebuggerOutcome(
+  tool: "debugger-status" | "debugger-log-registry",
+  outcome: DebuggerToolOutcome,
+  params: { device_id?: string },
+  ctx: ToolContext | undefined
+): void {
+  let platform;
+  try {
+    platform = params.device_id ? classifyDeviceForTelemetry(params.device_id) : undefined;
+  } catch {
+    platform = undefined;
+  }
+  track("debugger:tool_outcome", {
+    tool,
+    outcome,
+    ...(platform ? { platform } : {}),
+    ...(ctx?.toolInvocationId ? { tool_invocation_id: ctx.toolInvocationId } : {}),
+  });
+}
+
+/**
+ * Resolve the shared debugger service for a status-style tool, preserving the
+ * connect-on-first-call contract. Passes ref.options through — the Chromium
+ * wrapper factory requires the resolved DeviceInfo and hard-fails without it.
+ */
+export async function resolveDebuggerService(
+  registry: Registry,
+  params: { port: number; device_id?: string }
+): Promise<JsRuntimeDebuggerApi> {
+  const ref = debuggerServiceRef(params);
+  return typeof ref === "string"
+    ? registry.resolveService<JsRuntimeDebuggerApi>(ref)
+    : registry.resolveService<JsRuntimeDebuggerApi>(ref.urn, ref.options);
+}
+
+/**
+ * Flow integration: a not_connected result is a successful tool return, but a
+ * recorded flow step that used these tools as a connectivity gate must not
+ * silently green-pass on it. Mirrors isUnmetUiWaitResult for await-ui-element.
+ */
+export function isDebuggerNotConnectedResult(
+  toolId: string,
+  result: unknown
+): result is DebuggerNotConnectedResult {
+  return (
+    (toolId === "debugger-status" || toolId === "debugger-log-registry") &&
+    typeof result === "object" &&
+    result !== null &&
+    (result as { status?: unknown }).status === "not_connected"
+  );
+}

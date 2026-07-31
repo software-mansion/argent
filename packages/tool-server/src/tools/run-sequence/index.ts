@@ -5,6 +5,7 @@ import { assertSupported, UnsupportedOperationError } from "../../utils/capabili
 import { sleepOrAbort, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { AWAIT_UI_ELEMENT_TOOL_ID, isUnmetUiWaitResult } from "../await-ui-element";
+import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
 
 const ALLOWED_TOOLS = new Set([
   "gesture-tap",
@@ -208,6 +209,13 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
             results.push({
               tool: step.tool,
               error: `await-ui-element condition not met${note ? `: ${note}` : ""}`,
+            });
+            break;
+          }
+          if (isDebuggerNotConnectedResult(step.tool, result)) {
+            results.push({
+              tool: step.tool,
+              error: `debugger not connected (${result.reason}): ${result.guidance}`,
             });
             break;
           }

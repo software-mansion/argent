@@ -42,6 +42,7 @@ import type { TextMatchMode, WaitCondition } from "../../utils/ui-tree-match";
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { isUnmetUiWaitResult } from "../await-ui-element";
+import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
 import {
   resolveFlowDevice,
   bindDeviceArgs,
@@ -2191,6 +2192,14 @@ async function execLeafStep(
             result,
             outputHint,
             args,
+          };
+        }
+        if (isDebuggerNotConnectedResult(step.name, result)) {
+          return {
+            ...base,
+            status: "fail",
+            tool: step.name,
+            reason: `debugger not connected (${result.reason}): ${result.guidance}`,
           };
         }
         return { ...base, status: "pass", tool: step.name, result, outputHint, args };
