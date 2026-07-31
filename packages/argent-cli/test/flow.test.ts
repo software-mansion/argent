@@ -880,12 +880,14 @@ describe("argent flow run", () => {
     expect(out).not.toContain("Flow path must not end in a path separator");
   });
 
-  it("exits 2 on a directory named like a flow instead of handing it to flow-execute", async () => {
-    // `access(R_OK)` succeeds on a readable directory, so only the isFile()
-    // check keeps a `bundle.yaml/` directory out of the runner.
+  it("exits 2 on an empty directory named like a flow instead of handing it to flow-execute", async () => {
+    // A directory — even one named `bundle.yaml` — dispatches to directory
+    // mode (the isDirectory() branch runs before any file check), so it is
+    // never handed to flow-execute as a file; empty, it fails discovery
+    // before routing is consulted or a client is built.
     await expect(flow(["run", bundleDirPath], opts)).rejects.toThrow("process.exit:2");
 
-    expect(errs.join("\n")).toContain(`Flow path is not a file: ${bundleDirPath}`);
+    expect(errs.join("\n")).toContain(`No flows found in ${bundleDirPath}`);
     expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
