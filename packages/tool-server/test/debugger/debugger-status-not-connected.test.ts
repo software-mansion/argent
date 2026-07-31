@@ -141,7 +141,7 @@ interface Setup {
   invoke: (params: Record<string, unknown>) => Promise<unknown>;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+ 
 function makeSetup(...blueprints: ServiceBlueprint<any, any>[]): Setup {
   const registry = new Registry();
   for (const bp of blueprints) registry.registerBlueprint(bp);
