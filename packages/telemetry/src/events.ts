@@ -192,7 +192,9 @@ export const DEBUGGER_TOOL_OUTCOMES = ["connected", ...DEBUGGER_NOT_CONNECTED_RE
 export type DebuggerToolOutcome = (typeof DEBUGGER_TOOL_OUTCOMES)[number];
 
 /**
- * Emitted exactly once per debugger-status / debugger-log-registry invocation.
+ * Emitted by debugger-status / debugger-log-registry: exactly once whenever the
+ * tool returns a result, never on a thrown failure (unclassified faults, zod
+ * rejects, and capability gates still emit tool:fail only).
  * Compensates for those tools no longer emitting tool:fail on not-connected
  * preconditions: outcome carries the coded reason (never error text), and
  * tool_invocation_id joins 1:1 against the tool:invoke / tool:complete pair
