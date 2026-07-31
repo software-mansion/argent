@@ -612,6 +612,29 @@ describe("flow-execute chromium boot", () => {
     expect(bootElectronApp).not.toHaveBeenCalled();
   });
 
+  it("refuses a leading run: that escapes the flows directory, before anything boots", async () => {
+    // Defence-in-depth on the hoist: the name check must run before the chain
+    // walk reads the file, or `run: ../evil` would boot the caller-chosen app
+    // path that file names — execRunStep's own check runs only after the boot.
+    const top = await writeFlow("steps:\n  - run: ../evil\n");
+    const evil = path.join(path.dirname(top), "..", "evil.yaml");
+    await fs.writeFile(evil, "steps:\n  - launch: { chromium: /abs/evil-app }\n", "utf8");
+    try {
+      const registry = makeRegistry(async (id: string) =>
+        id === "list-devices" ? { devices: [] } : {}
+      );
+
+      // The hoist yields nothing, so device resolution proceeds and finds no
+      // device — the escaped file's launch must never have entered the picture.
+      await expect(
+        runFlow(registry, { name: "escape", project_root: PROJECT_ROOT, flow_file: top })
+      ).rejects.toThrow(/No booted device found/);
+      expect(bootElectronApp).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(evil, { force: true });
+    }
+  });
+
   it("does not boot when a leading run: chain reaches no launch", async () => {
     // A plain fragment composition: nothing to boot, so device resolution
     // proceeds normally (and reports no booted device here).
