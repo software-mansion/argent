@@ -6,6 +6,7 @@ import {
 } from "@argent/telemetry";
 import { CHROMIUM_ID_PREFIX } from "../../utils/device-info";
 import { classifyDeviceForTelemetry } from "../../utils/telemetry-platform";
+import { canonicalDeviceId } from "../../utils/debugger/device-alias";
 import { debuggerServiceRef } from "./debugger-service-ref";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 
@@ -104,7 +105,13 @@ export function trackDebuggerOutcome(
 ): void {
   let platform;
   try {
-    platform = params.device_id ? classifyDeviceForTelemetry(params.device_id) : undefined;
+    // Classify the id the caller CONNECTED with, not the raw param: a forwarded
+    // Metro logicalDeviceId (an opaque hex handle) fails the iOS-UDID shape
+    // test and would misreport every iOS Metro session as "android". The alias
+    // map (learned at connect) rewrites it back to the UDID/serial; ids with no
+    // learned alias pass through unchanged, keeping the old behavior.
+    const deviceId = canonicalDeviceId(params.device_id);
+    platform = deviceId ? classifyDeviceForTelemetry(deviceId) : undefined;
   } catch {
     platform = undefined;
   }
