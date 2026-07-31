@@ -1212,6 +1212,55 @@ describe("flow composition (run:)", () => {
     expect(getFailureSignal(outcome)?.failure_stage).toBe("flow_upload_run_composition");
   });
 
+  it("rejects an uploaded flow quoting the first run:'s as-written directory-qualified path", async () => {
+    // The guard's quote is the author's remediation pointer: with two
+    // same-stem steps (`run: ios/login.yaml`, then `run: android/login.yaml`)
+    // the throw fires on the FIRST offender, and only the as-written
+    // directory says which of the two lines it means. Reducing the target to
+    // its basename stem (runTargetName — what the report attribution sites
+    // use, and what `step.flow` carried before targets kept their spelling)
+    // would print `run: login`, a string appearing nowhere in the flow and
+    // ambiguous between the two steps. The bare-spelling rejections above
+    // pin only the `.yaml` suffix (there the as-written path and the stem
+    // differ by nothing else), so this test is what holds the directory
+    // component — the contract content.ts pins for the MCP renderer
+    // ("`run ios/login.yaml` and `run android/login.yaml` must render
+    // distinctly, not as one stem"); this error path is that same reasoning
+    // on the tool-server surface.
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(
+      uploadedPath,
+      "steps:\n  - run: ios/login.yaml\n  - run: android/login.yaml\n",
+      "utf8"
+    );
+
+    const registry = mockRegistry();
+    const err = await createRunFlowTool(registry)
+      .execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_file: {
+              clientPath: "/client/.argent/flows/main.yaml",
+              presentOnHost: false,
+              viaUpload: true,
+            },
+          },
+        }
+      )
+      .then(
+        () => null,
+        (e: unknown) => e
+      );
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain('run: composition ("run: ios/login.yaml")');
+    expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_run_composition");
+    // Preflight, not mid-run: nothing was dispatched to the device.
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
   it("allows run: composition for a co-located flow_file resolved in place", async () => {
     // The everyday co-located client: the flow_file boundary resolves the
     // exact ${project_root}/.argent/flows/${name}.yaml path on a shared
