@@ -351,6 +351,21 @@ function axisFullyInside(
 // all, the previous nudge failed to move it, the target has no headroom, or
 // the attempts run out. A nudge can therefore delay a step but never fail one
 // that was already visible.
+//
+// On touch platforms only END-edge landings (`down`/`right`) are nudged.
+// A start-edge (`up`/`left`) nudge continues the scroll by dragging the
+// finger down/right, and at the container's start limit that drag IS the
+// pull-to-refresh gesture — the at-limit case is exactly where an up-scroll-to
+// typically lands (the first rows), and it is undetectable in the tree, since
+// every adapter clamps frames to the viewport: a list resting at offset 0 and
+// one mid-scroll both show their first row flush at the clip edge. With no
+// pre-gesture signal and the first gesture already the harm, every touch
+// start-edge nudge is a refresh gamble, so those landings stay flush (the
+// pre-nudge behavior, never harmful). At the END limit the same swipe only
+// produces a harmless overscroll bounce, so end-edge nudges stay. Chromium
+// keeps all four directions: its increments are wheel events, and a wheel
+// event at the scroll limit is a plain no-op — it cannot trigger a refresh
+// or press anything (see scrollToVisible for the gate).
 const EDGE_AVOID_PADDING = 0.1; // clears the home indicator (~0.04) and a typical tab bar (~0.1)
 const EDGE_AVOID_SCREEN_EPS = 0.05; // clip edge within this of a screen edge = chrome can overlap it
 const MAX_EDGE_NUDGES = 3; // touch slop makes a nudge undershoot — allow a re-measure retry or two
@@ -401,6 +416,12 @@ function entryEdgeDeficit(
  * true and the deficit measures the target's distance to the SCREEN edge, so
  * a pinned element (bottom bar, FAB, sticky footer) that no scroll can move
  * would always demand a nudge, dispatched into some unrelated scroller.
+ *
+ * Geometry only — direction- and platform-agnostic. The `headroom` here is
+ * viewport room, NOT scrollability: it cannot see whether the container is
+ * already at its scroll limit. The caller (scrollToVisible) therefore vetoes
+ * start-edge (`up`/`left`) nudges on touch platforms, where an at-limit
+ * continuation drag is pull-to-refresh (see the nudge overview above).
  */
 function edgeNudgeDistance(
   frame: DescribeFrame,
@@ -927,7 +948,12 @@ async function scrollIncrement(
  * A visible target is not always accepted where it stands: when it sits nearly
  * flush against an entry edge that is also a screen edge, the loop keeps
  * nudging it clear of screen-edge chrome first (see edgeNudgeDistance) — so
- * even an already-on-screen target may get scrolled. The nudge measures
+ * even an already-on-screen target may get scrolled. On touch platforms only
+ * end-edge (`down`/`right`) landings nudge; a start-edge (`up`/`left`)
+ * landing is accepted flush, because at the container's start limit — where
+ * an up-scroll-to typically lands, undetectably so — the continuation drag
+ * is pull-to-refresh (see the nudge overview). Chromium's wheel increments
+ * carry no such hazard, so it nudges all four directions. The nudge measures
  * against — and anchors its gesture in — the container that actually scrolls
  * the target: the `within` container, or (when none is named) the innermost
  * scroll container the tree shows the target living in; a target inside no
@@ -996,7 +1022,19 @@ async function scrollToVisible(
       // means no nudge, and the step passes exactly as if the nudge phase
       // didn't exist.
       const clip = within ? region : targetScrollerFrame(tree, frame);
-      if (clip !== undefined) nudge = edgeNudgeDistance(frame, direction, clip);
+      // Start-edge landings (`up`/`left`) stay flush on touch: at the
+      // container's start limit — undetectable in the tree, and exactly
+      // where an up-scroll-to typically lands — the continuation drag IS
+      // pull-to-refresh (see the nudge overview above the constants). The
+      // gate must sit BEFORE the gesture: the progress check below only
+      // stops repeats, and the first refresh is already the harm. End-edge
+      // touch nudges at their limit merely bounce; Chromium's wheel
+      // increments no-op at any limit, so it keeps all four directions.
+      const touchStartEdge =
+        (direction === "up" || direction === "left") && env.device.platform !== "chromium";
+      if (clip !== undefined && !touchStartEdge) {
+        nudge = edgeNudgeDistance(frame, direction, clip);
+      }
       if (nudge === 0 || clip === undefined || nudges >= MAX_EDGE_NUDGES) return { frame };
       // Progress check (see prevDeficit): a nudge that didn't move the target
       // closer to padding will not be repeated — accept the flush landing.
