@@ -202,15 +202,20 @@ function rewriteSiblingFlowPath(
   const stem = bareExtension ? "" : path.basename(flowPath, ".yaml");
   assertSafeFlowName(stem);
   // Only sound while `name` under the caller's project_root names this very
-  // file — otherwise the rewrite would silently run a different flow.
+  // file — otherwise the rewrite would silently run a different flow. The root
+  // must be absolute before that comparison means anything: path.resolve
+  // anchors a relative root at the tool SERVER's cwd, which bears no relation
+  // to the calling agent's, so a relative root would pass or fail by accident
+  // of where the server was started. flow-execute itself demands an absolute
+  // root (setActiveProjectRoot), so this refuses nothing that could have run.
   const projectRoot = args.project_root;
-  if (
-    typeof projectRoot !== "string" ||
-    path.resolve(flowsDirFor(projectRoot), `${stem}.yaml`) !== path.resolve(flowPath)
-  ) {
+  if (typeof projectRoot !== "string" || !path.isAbsolute(projectRoot)) {
     throw invalid(
-      `project_root ${typeof projectRoot === "string" ? `"${projectRoot}"` : "(missing)"} does not resolve "${stem}" to it`
+      `project_root must be an absolute path (got ${typeof projectRoot === "string" ? `"${projectRoot}"` : "none"}) — a relative root would be resolved against the tool server's cwd, not the calling agent's`
     );
+  }
+  if (path.resolve(flowsDirFor(projectRoot), `${stem}.yaml`) !== path.resolve(flowPath)) {
+    throw invalid(`project_root "${projectRoot}" does not resolve "${stem}" to it`);
   }
 
   delete args.flow_path;

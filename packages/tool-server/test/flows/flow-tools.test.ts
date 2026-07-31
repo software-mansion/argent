@@ -20,6 +20,7 @@ import {
   clearActiveFlow,
   setActiveProjectRoot,
   clearActiveProjectRoot,
+  flowsDirFor,
   parseFlow,
   serializeFlow,
   type FlowStep,
@@ -648,6 +649,83 @@ describe("flow-add-step", () => {
 
     expect(registry.invokeTool).not.toHaveBeenCalled();
     expect(parseFlow(await readFlowFile("compose-mismatch")).steps).toEqual([]);
+  });
+
+  // path.resolve anchors a relative project_root at the tool SERVER's cwd — a
+  // directory with no relationship to the calling agent's — so a resolve-based
+  // comparison would accept or reject the same call depending on where the
+  // server was started. Pin the deterministic contract: a relative root is
+  // refused outright, EVEN when it would resolve the sibling correctly against
+  // this very process's cwd (the one shape a cwd-anchored comparison would let
+  // through). Each case mocks the cwd to make the root line up with tmpDir.
+  it.each([
+    ['"."', (dir: string) => ({ root: ".", cwd: dir })],
+    [
+      "a bare directory name",
+      (dir: string) => ({ root: path.basename(dir), cwd: path.dirname(dir) }),
+    ],
+  ])(
+    "rejects a relative project_root (%s) even when it resolves against the server's cwd",
+    async (_shape, build) => {
+      const registry = createMockRegistry({
+        "flow-execute": { result: { ok: true, steps: [] } },
+      });
+      const tool = createFlowAddStepTool(registry);
+
+      await flowStartRecordingTool.execute({}, { name: "compose-relative", project_root: tmpDir });
+      await writeSiblingFlow("login", "steps:\n  - echo: hi\n");
+      const sibling = path.join(tmpDir, ".argent", "flows", "login.yaml");
+
+      const { root, cwd } = build(tmpDir);
+      const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
+      try {
+        // Sanity: under this cwd the relative root DOES name the sibling, so a
+        // cwd-anchored comparison would have accepted the call.
+        expect(path.resolve(flowsDirFor(root), "login.yaml")).toBe(sibling);
+
+        await expect(
+          tool.execute(
+            {},
+            {
+              command: "flow-execute",
+              args: JSON.stringify({ flow_path: sibling, project_root: root }),
+            }
+          )
+        ).rejects.toThrow(/project_root must be an absolute path/);
+      } finally {
+        cwdSpy.mockRestore();
+      }
+
+      // Rejected before the rewrite and the live sub-invoke: the args were
+      // never forwarded (mutated or otherwise) and nothing was recorded.
+      expect(registry.invokeTool).not.toHaveBeenCalled();
+      expect(parseFlow(await readFlowFile("compose-relative")).steps).toEqual([]);
+    }
+  );
+
+  it("names the absolute-path requirement when project_root is missing", async () => {
+    const registry = createMockRegistry({
+      "flow-execute": { result: { ok: true, steps: [] } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "compose-rootless", project_root: tmpDir });
+    await writeSiblingFlow("login", "steps:\n  - echo: hi\n");
+
+    await expect(
+      tool.execute(
+        {},
+        {
+          command: "flow-execute",
+          args: JSON.stringify({
+            flow_path: path.join(tmpDir, ".argent", "flows", "login.yaml"),
+          }),
+        }
+      )
+    ).rejects.toThrow(/project_root must be an absolute path \(got none\)/);
+
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(parseFlow(await readFlowFile("compose-rootless")).steps).toEqual([]);
   });
 
   // The two shapes add-step must NOT rewrite: naming both sources, or neither,
