@@ -17,9 +17,10 @@ import {
 import { normalizeThreadName } from "../../../utils/profiler-shared/thread";
 import { formatBytes, escapeMarkdownTableCell } from "../../../utils/profiler-shared/format";
 import { demangleSymbol } from "../../../utils/profiler-shared/demangle";
+import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
 const zodSchema = z.object({
-  device_id: z.string().describe("iOS Simulator UDID or Android serial."),
+  device_id: metroDeviceIdParam("iOS Simulator UDID or Android serial."),
   mode: z
     .enum(["hang_stacks", "function_callers", "thread_breakdown", "leak_stacks"])
     .describe(
@@ -455,6 +456,29 @@ Fails if native-profiler-analyze has not been run or no parsed trace data is in 
   }),
   async execute(services, params) {
     const api = services.session as NativeProfilerSessionApi;
+    // A session with no capture state at all was minted by THIS call: the
+    // device_id matched no existing session, so nothing is known about the
+    // device. Say so without naming a platform — classification is shape-based
+    // and falls back to "android" for any opaque id (utils/device-info.ts:52),
+    // so an id this tool cannot place would otherwise be reported as an Android
+    // device (#618). That happens routinely: a forwarded Metro logicalDeviceId
+    // resolves only while a debugger connection is live, and the alias is
+    // dropped when it disposes.
+    if (!api.traceFile && !api.exportedFiles && !api.parsedData) {
+      throw new FailureError(
+        `No native profiler capture is loaded for device \`${params.device_id}\`. Run ` +
+          "native-profiler-start → native-profiler-stop → native-profiler-analyze on this device " +
+          "first. (If that id came from debugger-connect, pass the id from list-devices instead — " +
+          "the simulator UDID or adb serial — since profiler sessions are keyed by that one.)",
+        {
+          error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
+          failure_stage: "profiler_stack_query_load_native_data",
+          failure_area: "tool_server",
+          error_kind: "not_found",
+        }
+      );
+    }
+
     if (api.platform === "android") {
       return executeAndroid(api, params);
     }

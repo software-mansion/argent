@@ -20,6 +20,7 @@ import {
   describeResolution,
 } from "../../../utils/react-profiler/component-names";
 import { promises as fs } from "fs";
+import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
 const timeWindowSchema = z.object({
   start: z.coerce.number().describe("Start of window in ms (performance.now clock)"),
@@ -28,11 +29,9 @@ const timeWindowSchema = z.object({
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z
-    .string()
-    .describe(
-      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
-    ),
+  device_id: metroDeviceIdParam(
+    "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
+  ),
   mode: z
     .enum(["top_functions", "time_window", "call_tree", "component_cpu"])
     .describe(
