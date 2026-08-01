@@ -2,9 +2,10 @@
 // in @argent/registry) plus argv into the JSON args object the tool-server expects.
 //
 // Supported flag forms:
-//   --name value          (string / number / integer / boolean-with-value)
+//   --name value          (string / number / integer)
 //   --name=value
 //   --name                (boolean: true)
+//   --name true|false     (boolean: explicit value — only these two words are consumed)
 //   --no-name             (boolean: false)
 //   --name a --name b     (array of scalars)
 //   --name-json '<json>'  (arbitrary nested object/array — escape hatch)
@@ -63,6 +64,18 @@ export function flagNameFor(name: string, prop: JsonSchema | undefined): string 
   return isJsonField(prop) ? `--${name}-json` : `--${name}`;
 }
 
+/**
+ * `true`/`false` as a standalone word, case-insensitive and whitespace-tolerant.
+ * `undefined` for anything else, including `1`/`0` — a bare number following a
+ * switch is far more likely to be an unrelated argument than a value.
+ */
+function booleanWord(raw: string): boolean | undefined {
+  const value = raw.trim().toLowerCase();
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return undefined;
+}
+
 function coerceScalar(raw: string, type: string | undefined, field: string): unknown {
   if (type === "number") {
     // Number("") and Number("   ") are 0, so reject empty/whitespace explicitly.
@@ -82,8 +95,15 @@ function coerceScalar(raw: string, type: string | undefined, field: string): unk
     return n;
   }
   if (type === "boolean") {
-    if (raw === "true" || raw === "1") return true;
-    if (raw === "false" || raw === "0") return false;
+    // Shares booleanWord with the bare-token lookahead, so `--flag=True` and
+    // `--flag True` cannot disagree about the same word.
+    const word = booleanWord(raw);
+    if (word !== undefined) return word;
+    // 1/0 only where the value is unambiguously attached (`--flag=1`, array
+    // items); the lookahead stays narrower on purpose.
+    const value = raw.trim();
+    if (value === "1") return true;
+    if (value === "0") return false;
     throw new FlagParseException(`--${field} expected true/false, got "${raw}"`);
   }
   // string or unknown: pass through
@@ -207,6 +227,16 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
         if (inlineValue !== undefined) {
           throw new FlagParseException(`--no-${fieldName} does not take a value`);
         }
+        // Now that a boolean word after a flag is consumed as its value,
+        // `--no-flag false` would read as a double negative and `--no-flag true`
+        // would contradict itself. Neither can be a typo for anything but the
+        // positive form, so name that form rather than silently picking one.
+        const following = i + 1 < argv.length ? booleanWord(argv[i + 1]!) : undefined;
+        if (following !== undefined) {
+          throw new FlagParseException(
+            `--no-${fieldName} does not take a value; use --${fieldName} ${following}`
+          );
+        }
         args[fieldName] = false;
         continue;
       }
@@ -220,9 +250,19 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
     if (propSchema?.type === "boolean") {
       if (inlineValue !== undefined) {
         args[flag] = coerceScalar(inlineValue, "boolean", flag);
+        continue;
+      }
+      // A bare boolean flag is true — unless the next token is the WORD
+      // `true`/`false`, which can only have been meant as this flag's value.
+      // An earlier comment here declined to look ahead, to avoid stealing a
+      // following positional; `argent run` is the sole caller and never reads
+      // `positional`, so there is nothing to steal. Only the two words are
+      // taken, and `--flag -- false` still keeps `false` positional.
+      const next = i + 1 < argv.length ? booleanWord(argv[i + 1]!) : undefined;
+      if (next !== undefined) {
+        args[flag] = next;
+        i += 1;
       } else {
-        // Bare boolean flag: true. Don't consume next argv to avoid surprising
-        // behavior when a positional follows.
         args[flag] = true;
       }
       continue;
@@ -306,6 +346,22 @@ export function formatSchemaUsage(schema: JsonSchema | undefined): string {
     const req = required.has(name) ? " (required)" : "";
     const desc = prop.description ? `  ${prop.description}` : "";
     lines.push(`  ${flag}  ${typeLabel}${req}${desc}`);
+  }
+
+  // One legend rather than widening every flag row: the value syntax is the
+  // same for all of them, and the flag column is padded across every field of
+  // every tool.
+  //
+  // It must NOT start with `--` after the indent. scripts/e2e-full/lib/
+  // discover-tools.sh treats any line in the Flags: section matching
+  // /^[[:space:]]*--/ as a flag row and takes the first --token as its name, so
+  // a legend beginning with a flag would inject a phantom flag into every
+  // tool model it builds.
+  if (entries.some(([, prop]) => prop.type === "boolean")) {
+    lines.push(
+      "",
+      "  Booleans: --flag or --flag true sets true; --flag false, --flag=false, or --no-flag sets false."
+    );
   }
   return lines.join("\n");
 }

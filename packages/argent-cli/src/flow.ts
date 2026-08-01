@@ -155,6 +155,17 @@ export function parseRunArgs(argv: string[]): {
     };
     const noValue = (name: string): void => {
       if (inline !== undefined) throw new FlagParseException(`${name} does not take a value`);
+      // `argent run` consumes a `true`/`false` word after a boolean flag, so a
+      // user who learned that syntax there will try it here. This parser has no
+      // per-flag values to give, and staying silent would leave the switch on
+      // while `false` was quietly taken as the flow name (the first bare token)
+      // — worse than the #586 case it echoes. Say so instead.
+      const next = argv[i + 1]?.trim().toLowerCase();
+      if (next === "true" || next === "false") {
+        throw new FlagParseException(
+          `${name} does not take a value — it is a switch; omit it to leave the option off`
+        );
+      }
     };
     if (flag === "--update-baselines") {
       noValue("--update-baselines");

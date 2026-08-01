@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { parseFlags, FlagParseException, type JsonSchema } from "../src/flag-parser.js";
+import {
+  parseFlags,
+  formatSchemaUsage,
+  FlagParseException,
+  type JsonSchema,
+} from "../src/flag-parser.js";
 
 const numSchema: JsonSchema = {
   type: "object",
@@ -268,5 +273,177 @@ describe("parseFlags — whole-payload --args (no own `args` field)", () => {
     const result = parseFlags(["--args", '{"udid":"X"}'], undefined);
     expect(result.rawArgs).toBe('{"udid":"X"}');
     expect("args" in result.args).toBe(false);
+  });
+});
+
+/**
+ * Issue #586: `--flag false` on a boolean left the flag TRUE and dropped the
+ * word. Reported after chasing a filter bug that did not exist — the tool had
+ * simply been asked for the opposite of what was typed. The `=` form worked, and
+ * `--help` gave no hint that it was required.
+ *
+ * The parser had declined to look ahead so it would not steal a following
+ * positional. `argent run` is the sole caller and never reads `positional`, so
+ * there was nothing to steal — and the module header already documented the
+ * space form as legal.
+ */
+const boolSchema: JsonSchema = {
+  type: "object",
+  properties: {
+    capture: { type: "boolean" },
+    name: { type: "string" },
+    flags: { type: "array", items: { type: "boolean" } },
+  },
+};
+
+describe("boolean flags take a following true/false word", () => {
+  it("reads --capture false as false", () => {
+    const r = parseFlags(["--capture", "false"], boolSchema);
+    expect(r.args.capture).toBe(false);
+    // The word must be consumed, not left behind as a stray argument.
+    expect(r.positional).toEqual([]);
+  });
+
+  it("reads --capture true as true, consuming the word", () => {
+    const r = parseFlags(["--capture", "true"], boolSchema);
+    expect(r.args.capture).toBe(true);
+    expect(r.positional).toEqual([]);
+  });
+
+  it("accepts the words in any case, and padded", () => {
+    expect(parseFlags(["--capture", "False"], boolSchema).args.capture).toBe(false);
+    expect(parseFlags(["--capture", "TRUE"], boolSchema).args.capture).toBe(true);
+    expect(parseFlags(["--capture", " false "], boolSchema).args.capture).toBe(false);
+  });
+
+  it("accepts the same words in the = form, which used to be case-sensitive", () => {
+    // Otherwise `--capture True` and `--capture=True` would disagree about the
+    // same word, one function apart.
+    expect(parseFlags(["--capture=False"], boolSchema).args.capture).toBe(false);
+    expect(parseFlags(["--capture=TRUE"], boolSchema).args.capture).toBe(true);
+  });
+
+  it("reproduces the reported invocation", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        baselinePath: { type: "string" },
+        currentPath: { type: "string" },
+        captureCurrent: { type: "boolean" },
+      },
+    };
+    const r = parseFlags(
+      ["--baselinePath", "a.png", "--currentPath", "b.png", "--captureCurrent", "false"],
+      schema
+    );
+    expect(r.args.captureCurrent).toBe(false);
+    expect(r.positional).toEqual([]);
+  });
+});
+
+describe("what the lookahead deliberately does NOT take", () => {
+  it("still treats a bare flag as true", () => {
+    const r = parseFlags(["--capture"], boolSchema);
+    expect(r.args.capture).toBe(true);
+  });
+
+  it("still treats a bare flag as true when it is the last token", () => {
+    expect(parseFlags(["--name", "x", "--capture"], boolSchema).args.capture).toBe(true);
+  });
+
+  it("leaves a following flag alone", () => {
+    const r = parseFlags(["--capture", "--name", "x"], boolSchema);
+    expect(r.args.capture).toBe(true);
+    expect(r.args.name).toBe("x");
+  });
+
+  it("leaves a non-boolean word alone rather than guessing", () => {
+    // Guessing at an ambiguous token is what produced #586 in the first place.
+    // `argent run` warns about the leftover instead.
+    const r = parseFlags(["--capture", "notabool"], boolSchema);
+    expect(r.args.capture).toBe(true);
+    expect(r.positional).toEqual(["notabool"]);
+  });
+
+  it("leaves 1 and 0 alone in the space form", () => {
+    // A bare number after a switch is far more likely to be an unrelated
+    // argument than a value. They still work attached: --capture=1.
+    expect(parseFlags(["--capture", "1"], boolSchema).positional).toEqual(["1"]);
+    expect(parseFlags(["--capture=1"], boolSchema).args.capture).toBe(true);
+    expect(parseFlags(["--capture=0"], boolSchema).args.capture).toBe(false);
+  });
+
+  it("still lets -- force a literal true/false positional", () => {
+    const r = parseFlags(["--capture", "--", "false"], boolSchema);
+    expect(r.args.capture).toBe(true);
+    expect(r.positional).toEqual(["false"]);
+  });
+
+  it("does not touch a string field's value", () => {
+    expect(parseFlags(["--name", "false"], boolSchema).args.name).toBe("false");
+  });
+
+  it("does not extend the lookahead to flags with no schema", () => {
+    // An unknown flag takes its value the ordinary way; treating it as a
+    // boolean would guess at a shape the CLI cannot know.
+    expect(parseFlags(["--unknown", "false"], boolSchema).args.unknown).toBe("false");
+  });
+
+  it("leaves boolean arrays and last-write-wins alone", () => {
+    expect(parseFlags(["--flags", "false", "--flags", "true"], boolSchema).args.flags).toEqual([
+      false,
+      true,
+    ]);
+    expect(parseFlags(["--capture", "true", "--capture", "false"], boolSchema).args.capture).toBe(
+      false
+    );
+  });
+
+  it("rejects a value it cannot read", () => {
+    expect(() => parseFlags(["--capture=maybe"], boolSchema)).toThrow(FlagParseException);
+  });
+});
+
+describe("--no-flag", () => {
+  it("still sets false", () => {
+    expect(parseFlags(["--no-capture"], boolSchema).args.capture).toBe(false);
+  });
+
+  it("still rejects an attached value", () => {
+    expect(() => parseFlags(["--no-capture=false"], boolSchema)).toThrow(FlagParseException);
+  });
+
+  it("names the positive form instead of resolving a contradiction", () => {
+    // `--no-capture true` contradicts itself and `--no-capture false` is a
+    // double negative; before the lookahead existed both silently meant false.
+    expect(() => parseFlags(["--no-capture", "true"], boolSchema)).toThrow(
+      /does not take a value; use --capture true/
+    );
+    expect(() => parseFlags(["--no-capture", "false"], boolSchema)).toThrow(/use --capture false/);
+  });
+});
+
+describe("boolean value syntax is discoverable from --help", () => {
+  it("adds a legend when the tool has a boolean field", () => {
+    const usage = formatSchemaUsage(boolSchema);
+    expect(usage).toMatch(/Booleans:/);
+    expect(usage).toMatch(/--flag false/);
+    expect(usage).toMatch(/--no-flag/);
+  });
+
+  it("adds nothing when the tool has no boolean field", () => {
+    // Otherwise every tool carries a lesson that does not apply to it.
+    expect(formatSchemaUsage(numSchema)).not.toMatch(/Booleans:/);
+  });
+
+  it("keeps the legend from starting with -- so the e2e harness can parse help", () => {
+    // scripts/e2e-full/lib/discover-tools.sh treats any line in the Flags:
+    // section matching /^[[:space:]]*--/ as a flag row and takes the first
+    // --token as the flag name. A legend starting with a flag would inject a
+    // phantom flag into every tool model it builds. This pins the shape so a
+    // well-meaning reflow cannot quietly break that harness.
+    for (const line of formatSchemaUsage(boolSchema).split("\n")) {
+      if (line.includes("Booleans:")) expect(line.trimStart().startsWith("--")).toBe(false);
+    }
   });
 });
