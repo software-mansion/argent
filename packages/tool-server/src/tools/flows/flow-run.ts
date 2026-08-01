@@ -39,6 +39,7 @@ import {
   stepRequiresDevice,
   type FlowPlatform,
 } from "./flow-device";
+import { nestedOrchestratorOutcome } from "./flow-nested-outcome";
 import {
   runDirective,
   invokeOnDevice,
@@ -1188,6 +1189,21 @@ async function execLeafStep(
             status: "fail",
             tool: step.name,
             reason: `await-ui-element condition not met${note ? `: ${note}` : ""}`,
+          };
+        }
+        // `flow-execute` and `run-sequence` run other tools and report what
+        // happened in their result instead of throwing, so without this a
+        // composition that failed everything counted as a passing step (#606).
+        const nested = nestedOrchestratorOutcome(step.name, result);
+        if (nested) {
+          return {
+            ...base,
+            status: nested.status,
+            tool: step.name,
+            reason: nested.reason,
+            result,
+            outputHint,
+            args,
           };
         }
         return { ...base, status: "pass", tool: step.name, result, outputHint, args };
