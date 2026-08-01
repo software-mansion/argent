@@ -108,6 +108,36 @@ describe("flow recording with a remote client (probe miss)", () => {
     await expect(fs.stat(CLIENT_ROOT)).rejects.toThrow();
   });
 
+  it("does not bake a device id into a remotely recorded flow-execute step (issue #607)", async () => {
+    // A remote recording ALWAYS keeps the raw `tool: flow-execute` step —
+    // `run:` composition is host-resolved, so captureRunTarget bails before it
+    // can rewrite. That makes this path the main real-world producer of a flow
+    // with a record-time device id baked in, which then pinned every replay.
+    const registry = createMockRegistry({
+      "flow-execute": { result: { ok: true, steps: [] } },
+    });
+    const addStep = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "remote-flow", project_root: CLIENT_ROOT, executionPrerequisite: "Home" },
+      remoteCtx()
+    );
+
+    const stepResult = await addStep.execute(
+      {},
+      {
+        command: "flow-execute",
+        args: JSON.stringify({ name: "sub", project_root: CLIENT_ROOT, device: "RECORD-TIME-ID" }),
+      }
+    );
+
+    const directive = stepResult.savedTo as { content: string };
+    expect(parseFlow(directive.content).steps).toEqual([
+      { kind: "tool", name: "flow-execute", args: { name: "sub", project_root: CLIENT_ROOT } },
+    ]);
+  });
+
   it("finish-recording summarizes the in-memory flow and clears the session", async () => {
     await flowStartRecordingTool.execute(
       {},

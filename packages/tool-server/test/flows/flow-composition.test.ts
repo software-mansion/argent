@@ -10,13 +10,18 @@ import { bindDeviceArgs, stripDeviceKeys } from "../../src/tools/flows/flow-devi
 const DEVICE = "00000000-0000-0000-0000-0000000000ab";
 let tmpDir: string;
 
-function mockRegistry(): Registry {
+/**
+ * `props`, when given, makes `getTool` report that schema for EVERY tool id —
+ * so a fixture using it must be a single step and must pass an explicit device,
+ * otherwise unrelated dispatches (list-devices) would be handed a bogus schema.
+ */
+function mockRegistry(props?: Record<string, unknown>): Registry {
   return {
     invokeTool: vi.fn(async (id: string) => {
       if (id === "list-devices") return { devices: [] };
       return { ok: true };
     }),
-    getTool: vi.fn(() => undefined),
+    getTool: vi.fn(() => (props ? { inputSchema: { properties: props } } : undefined)),
     // iOS launch steps gate on a native-devtools connection: report connected
     // so the run proceeds. No selector directives run in these tests, so the
     // flow tree is never fetched.
@@ -145,6 +150,43 @@ describe("flow composition (run:)", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("runs a nested flow-execute against the run device, not the recorded one (issue #607)", async () => {
+    // The raw `tool: flow-execute` form is what the recorder falls back to when
+    // the target is not a resolvable sibling — and what a remote recording always
+    // produces. Its device parameter is named `device`, which was not a bind key,
+    // so the sub-run drove the id baked in at record time. Here the flow carries
+    // a device that does not exist while the run is given a real one.
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "tool",
+          name: "flow-execute",
+          args: { name: "b-only", project_root: "/elsewhere", device: "STALE-ID" },
+        },
+      ],
+    });
+
+    // Single step + explicit device, per mockRegistry's contract.
+    const registry = mockRegistry({ name: {}, project_root: {}, device: {} });
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(registry.invokeTool).toHaveBeenCalledWith(
+      "flow-execute",
+      expect.objectContaining({ device: DEVICE })
+    );
+    expect(registry.invokeTool).not.toHaveBeenCalledWith(
+      "flow-execute",
+      expect.objectContaining({ device: "STALE-ID" })
+    );
+    expect(result.ok).toBe(true);
+  });
+
   it("detects a cyclic run reference", async () => {
     await writeFlow("a", { executionPrerequisite: "", steps: [{ kind: "run", flow: "b" }] });
     await writeFlow("b", { executionPrerequisite: "", steps: [{ kind: "run", flow: "a" }] });
@@ -263,8 +305,30 @@ describe("device binding (portability)", () => {
     expect(out).toEqual({ foo: 1 });
   });
 
-  it("stripDeviceKeys removes udid / device_id", () => {
-    expect(stripDeviceKeys({ udid: "A", device_id: "B", x: 1 })).toEqual({ x: 1 });
+  it("stripDeviceKeys removes udid / device_id / device", () => {
+    expect(stripDeviceKeys({ udid: "A", device_id: "B", device: "C", x: 1 })).toEqual({ x: 1 });
+  });
+
+  it("rebinds a nested flow-execute onto the run device (issue #607)", () => {
+    // `flow-execute`'s own device parameter is named `device`, so before it was
+    // a bind key a recorded nested step kept the id it was recorded on and the
+    // sub-run drove that device instead of the one the replay was given.
+    const out = bindDeviceArgs(
+      reg({ name: {}, project_root: {}, device: {} }),
+      "flow-execute",
+      "RESOLVED",
+      { name: "b", project_root: "/p", device: "STALE" }
+    );
+    expect(out).toEqual({ name: "b", project_root: "/p", device: "RESOLVED" });
+  });
+
+  it("leaves `platform` alone", () => {
+    // Deliberate, and pinned here so a later "symmetry" edit fails loudly. The
+    // strip is schema-blind, and `platform` is not device-specific on every tool
+    // — react-profiler-analyze declares its own — so stripping it would silently
+    // retarget an unrelated recorded step. It is also inert once `device` is
+    // bound, because device resolution returns before it is ever read.
+    expect(stripDeviceKeys({ platform: "android", x: 1 })).toEqual({ platform: "android", x: 1 });
   });
 });
 

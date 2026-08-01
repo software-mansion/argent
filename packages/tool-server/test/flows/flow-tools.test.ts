@@ -462,6 +462,31 @@ describe("flow-add-step", () => {
     ]);
   });
 
+  it("strips the device id from a raw flow-execute step (issue #607)", async () => {
+    // Deliberately a target that is NOT a resolvable sibling: a resolvable one
+    // records as `run:`, which carries no args at all and so could never show
+    // this. The raw fallback is the form that kept the record-time device id and
+    // pinned every replay to it.
+    const registry = createMockRegistry({
+      "flow-execute": { result: { ok: true, steps: [] } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "compose-pinned", project_root: tmpDir });
+
+    const result = await tool.execute(
+      {},
+      {
+        command: "flow-execute",
+        args: JSON.stringify({ name: "elsewhere", project_root: tmpDir, device: "ABC" }),
+      }
+    );
+
+    expect(parseFlow(result.flowFile).steps).toEqual([
+      { kind: "tool", name: "flow-execute", args: { name: "elsewhere", project_root: tmpDir } },
+    ]);
+  });
+
   it("throws on invalid JSON in args", async () => {
     const registry = createMockRegistry({
       tap: { result: { ok: true } },
