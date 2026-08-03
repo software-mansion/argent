@@ -88,6 +88,20 @@ describe("long-press: parse/serialize", () => {
     expect(parseFlow(serializeFlow(flow)).steps).toEqual(flow.steps);
   });
 
+  it.each([
+    ["zero", 0],
+    ["NaN", Number.NaN],
+  ])("rejects a programmatic long-press duration that is %s", (_description, duration) => {
+    // A FlowStep built in code bypasses the YAML parser, so the serializer must
+    // apply the same positive-milliseconds guard the parser enforces.
+    expect(() =>
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "long-press", selector: { text: "Row 3", loose: true }, duration }],
+      })
+    ).toThrow("Cannot serialize flow long-press.duration: needs a positive number of milliseconds");
+  });
+
   it("parses the options form with the usual selector sugar", () => {
     const steps = parseFlow(
       "steps:\n" +
