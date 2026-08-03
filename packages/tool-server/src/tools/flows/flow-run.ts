@@ -54,6 +54,13 @@ import { resolveDevice } from "../../utils/device-info";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
 import { describeVega } from "../describe/platforms/vega";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
+import { isTreeSourceError, type FlowFailureCode, type FlowStepFailure } from "./flow-failure";
+import {
+  attachFailureDiagnostics,
+  causeOf,
+  evidenceFromThrow,
+  type LeafOutcome,
+} from "./flow-failure-report";
 
 const zodSchema = z.object({
   name: z.string().describe('Name of the flow to run (e.g. "settings-explore")'),
@@ -146,6 +153,22 @@ export interface StepReport {
    * be reconstructed downstream.
    */
   depth?: number;
+  /**
+   * Structured diagnostics for a step that did not pass: the classified cause,
+   * what was on screen, the closest matching elements, and handles to a
+   * screenshot and element dump captured at the moment of failure. Present on
+   * at most ONE step per run (the runner hard-stops at the first non-passing
+   * leaf) and absent from every passing or skipped report, so an unchanged run
+   * stays byte-identical. `failure.message` duplicates {@link reason}
+   * verbatim, so a renderer that ignores this field prints exactly what it
+   * printed before.
+   */
+  failure?: FlowStepFailure;
+  /**
+   * Wall-clock duration of the step. Omitted on skips (which did no work), so
+   * a skipped report stays byte-identical to the pre-timing shape.
+   */
+  durationMs?: number;
 }
 
 export interface FlowRunResult {
@@ -163,6 +186,10 @@ export interface FlowRunResult {
   skipped: number;
   errored: number;
   steps: StepReport[];
+  /** `Date.now()` when step 1 began — the JUnit `timestamp` attribute's source. */
+  startedAt: number;
+  /** Wall-clock duration of the whole run, including teardown. */
+  durationMs: number;
 }
 
 export interface FlowPrerequisiteNotice {
@@ -280,32 +307,38 @@ async function treeSourceGate(
   device: DeviceInfo,
   bundleId: string,
   signal?: AbortSignal
-): Promise<string | null> {
+): Promise<{ reason: string; source: string } | null> {
   if (device.platform === "ios" && !signal?.aborted) {
     const connected = await waitForNativeDevtools(registry, device, bundleId, signal);
     if (!connected && !signal?.aborted) {
-      return (
-        `could not connect to native devtools for ${bundleId}. Re-run to relaunch the app and retry. ` +
-        `If it keeps failing, a stale or duplicate argent server may be holding the devtools connection — restart the argent server and try again.`
-      );
+      return {
+        source: "native-devtools",
+        reason:
+          `could not connect to native devtools for ${bundleId}. Re-run to relaunch the app and retry. ` +
+          `If it keeps failing, a stale or duplicate argent server may be holding the devtools connection — restart the argent server and try again.`,
+      };
     }
   }
   if (device.platform === "android" && !signal?.aborted) {
     const ready = await androidDevtoolsReady(registry, device);
     if (!ready && !signal?.aborted) {
-      return (
-        `could not reach the Android devtools helper (full-hierarchy source for testID selectors). ` +
-        `Confirm the device is unlocked and the argent helper can be installed (\`adb install -t\`); a locked device or a blocked install is the usual cause. Re-run once resolved.`
-      );
+      return {
+        source: "android-devtools",
+        reason:
+          `could not reach the Android devtools helper (full-hierarchy source for testID selectors). ` +
+          `Confirm the device is unlocked and the argent helper can be installed (\`adb install -t\`); a locked device or a blocked install is the usual cause. Re-run once resolved.`,
+      };
     }
   }
   if (device.platform === "vega" && !signal?.aborted) {
     const ready = await waitForVegaAutomation(device, signal);
     if (!ready && !signal?.aborted) {
-      return (
-        `the Vega automation toolkit never served a page source for ${bundleId} (the flow tree source). ` +
-        `The toolkit attaches at app launch — re-run to relaunch; if it keeps failing, confirm the app was built with automation support and the VVD is reachable over adb.`
-      );
+      return {
+        source: "vega-automation",
+        reason:
+          `the Vega automation toolkit never served a page source for ${bundleId} (the flow tree source). ` +
+          `The toolkit attaches at app launch — re-run to relaunch; if it keeps failing, confirm the app was built with automation support and the VVD is reachable over adb.`,
+      };
     }
   }
   return null;
@@ -355,6 +388,7 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
           `boot its own instance and would run against the already-launched app. Nested chromium ` +
           `e2e flows aren't supported: run this flow at the top level, or drop its launch step to ` +
           `make it a fragment.`,
+        evidence: { code: "launch-failed" },
       };
     }
     state.chromiumLaunched = true;
@@ -364,7 +398,11 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
       return { ok: true };
     }
     if (!appIdForPlatform(app, "chromium")) {
-      return { ok: false, reason: `no chromium app declared — add a chromium launch entry` };
+      return {
+        ok: false,
+        reason: `no chromium app declared — add a chromium launch entry`,
+        evidence: { code: "launch-failed" },
+      };
     }
     try {
       const ref = chromiumCdpRef(device);
@@ -374,6 +412,7 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
       return {
         ok: false,
         reason: `could not attach to chromium instance "${device.id}": ${errMsg(err)}`,
+        evidence: { code: "launch-failed", ...causeOf(err) },
       };
     }
     if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
@@ -385,6 +424,7 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
     return {
       ok: false,
       reason: `no app id declared for platform "${device.platform}" — add a launch entry for it`,
+      evidence: { code: "launch-failed" },
     };
   }
   try {
@@ -393,14 +433,30 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
     // A cancellation makes the sub-tool itself reject; that rejection is the
     // abort, not an app failure, so it must not be attributed to restart-app.
     if (signal?.aborted) return ABORTED_OUTCOME;
-    return { ok: false, reason: `restart-app failed: ${errMsg(err)}` };
+    return {
+      ok: false,
+      reason: `restart-app failed: ${errMsg(err)}`,
+      evidence: { code: "launch-failed", ...causeOf(err) },
+    };
   }
   if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
   const gate = await treeSourceGate(registry, device, bundleId, signal);
   // The gate returns null (ready) on abort — check the signal before trusting
   // it, or a cancelled gate would read as a launch that verified readiness.
   if (signal?.aborted) return ABORTED_OUTCOME;
-  if (gate) return { ok: false, reason: gate };
+  if (gate) {
+    return {
+      ok: false,
+      reason: gate.reason,
+      // The tree source never came up: an environment problem, not a broken
+      // flow. Classified as indeterminate so CI can tell retry from fix.
+      evidence: {
+        code: "tree-source-not-ready",
+        treeError: gate.reason,
+        hint: `the ${gate.source} tree source never became ready — re-run; do not edit the flow`,
+      },
+    };
+  }
   return { ok: true };
 }
 
@@ -530,6 +586,7 @@ returns a notice with the prerequisite instead of running.`,
         ...(ctx?.emitProgress ? { onStepReport: ctx.emitProgress } : {}),
       };
 
+      const runStartedAt = Date.now();
       let aborted: boolean;
       try {
         await execSteps(state, flow.steps, {
@@ -546,7 +603,10 @@ returns a notice with the prerequisite instead of running.`,
         if (resolved.booted) await teardownBootedChromium(registry, resolved.booted);
       }
 
-      return summarize(params.name, device.id, flow.executionPrerequisite, state.reports, aborted);
+      return summarize(params.name, device.id, flow.executionPrerequisite, state.reports, aborted, {
+        startedAt: runStartedAt,
+        durationMs: Date.now() - runStartedAt,
+      });
     },
   };
 }
@@ -667,7 +727,8 @@ function summarize(
   deviceId: string,
   executionPrerequisite: string,
   steps: StepReport[],
-  aborted: boolean
+  aborted: boolean,
+  timing: { startedAt: number; durationMs: number }
 ): FlowRunResult {
   let passed = 0;
   let failed = 0;
@@ -698,6 +759,8 @@ function summarize(
     skipped,
     errored,
     steps,
+    startedAt: timing.startedAt,
+    durationMs: timing.durationMs,
   };
 }
 
@@ -709,6 +772,19 @@ function summarize(
 function pushReport(state: ExecState, report: StepReport): void {
   state.reports.push(report);
   state.onStepReport?.(report);
+}
+
+/**
+ * The step number a renderer will print for the report about to be pushed.
+ * Echo narration is not numbered (the CLI, the MCP renderer and `summarize`
+ * all skip it), so the ordinal counts only real steps — a failure block whose
+ * heading said "3)" while the step list showed the failure at 4 would be worse
+ * than no heading at all.
+ */
+function displayOrdinal(state: ExecState): number {
+  let n = 0;
+  for (const r of state.reports) if (r.kind !== "echo") n++;
+  return n + 1;
 }
 
 function selectorLabel(sel: FlowSelector): string {
@@ -869,9 +945,21 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
       continue;
     }
 
+    const startedAt = Date.now();
+    const ordinal = displayOrdinal(state);
     const report = await execLeafStep(state, step, index, scope);
+    // Skips did no work, so they stay byte-identical to the pre-timing shape.
+    if (report.status !== "skip") report.durationMs = Date.now() - startedAt;
+    if (report.status === "fail" || report.status === "error") {
+      // Set BEFORE the capture: the run is unambiguously over, and a capture
+      // that outlived a racing step must not find `stopped` still false.
+      state.stopped = true;
+      await attachFailureDiagnostics(state, report, { startedAt, ordinal });
+    }
+    // pushReport is the single choke point feeding ctx.emitProgress, so the
+    // diagnostics must already be attached: otherwise the live NDJSON stream
+    // ships the failing step without its failure object.
     pushReport(state, report);
-    if (report.status === "fail" || report.status === "error") state.stopped = true;
   }
 }
 
@@ -937,6 +1025,7 @@ async function execWhenStep(
   const marker = { index, kind: "when", flow: scope.flow, target, ...depthOf(scope) } as const;
   const inner = childScope(scope);
 
+  const guardStartedAt = Date.now();
   let met: boolean;
   if (step.condition.kind === "platform") {
     // "ios-remote" is an iOS simulator driven through sim-remote — for a
@@ -953,12 +1042,20 @@ async function execWhenStep(
       return;
     }
     if (!probe.ok && probe.indeterminate) {
-      pushReport(state, {
+      const ordinal = displayOrdinal(state);
+      const report: LeafOutcome = {
         ...marker,
         status: "error",
         reason: `could not evaluate when guard (${label}): ${probe.reason}`,
-      });
+        durationMs: Date.now() - guardStartedAt,
+        // The guard's own evidence, re-coded: "could not evaluate the guard"
+        // is a distinct failure from the same probe failing as a bare assert,
+        // and CI must be able to tell a broken tree source from a bad flow.
+        evidence: { ...probe.evidence, code: "when-guard-indeterminate" },
+      };
       state.stopped = true;
+      await attachFailureDiagnostics(state, report, { startedAt: guardStartedAt, ordinal });
+      pushReport(state, report);
       reportBlockSkipped(state, step.steps, inner, "when guard errored");
       return;
     }
@@ -989,24 +1086,30 @@ async function execRunStep(
 ): Promise<void> {
   const index = state.reports.length;
   const target = step.flow;
+  const startedAt = Date.now();
 
-  const fail = (reason: string): void => {
-    pushReport(state, {
+  const fail = async (reason: string, code: FlowFailureCode): Promise<void> => {
+    const ordinal = displayOrdinal(state);
+    const report: LeafOutcome = {
       index,
       kind: "run",
       status: "error",
       flow: target,
       reason,
       ...depthOf(scope),
-    });
+      durationMs: Date.now() - startedAt,
+      evidence: { code },
+    };
     state.stopped = true;
+    await attachFailureDiagnostics(state, report, { startedAt, ordinal });
+    pushReport(state, report);
   };
 
   if (scope.runStack.includes(target)) {
-    return fail(`cyclic flow reference: ${[...scope.runStack, target].join(" → ")}`);
+    return fail(`cyclic flow reference: ${[...scope.runStack, target].join(" → ")}`, "run-cyclic");
   }
   if (scope.runStack.length >= MAX_RUN_DEPTH) {
-    return fail("max run depth exceeded");
+    return fail("max run depth exceeded", "run-depth-exceeded");
   }
 
   let fragment: FlowFile;
@@ -1015,7 +1118,7 @@ async function execRunStep(
     const fragPath = path.join(state.flowsDir, `${target}.yaml`);
     fragment = parseFlow(await fs.readFile(fragPath, "utf8"));
   } catch (err) {
-    return fail(`could not load fragment "${target}": ${errMsg(err)}`);
+    return fail(`could not load fragment "${target}": ${errMsg(err)}`, "run-fragment-load-failed");
   }
 
   // Marker for the composition point, then expand the fragment's steps inline,
@@ -1033,7 +1136,7 @@ async function execLeafStep(
   step: FlowStep,
   index: number,
   scope: StepScope
-): Promise<StepReport> {
+): Promise<LeafOutcome> {
   const base = {
     index,
     kind: step.kind,
@@ -1052,7 +1155,12 @@ async function execLeafStep(
       // A run cancelled mid-launch is a skip (matching the pre-step guard and
       // the directives), never a step failure — the app did nothing wrong.
       if (r.aborted) return { ...base, status: "skip", reason: r.reason };
-      return { ...base, status: r.ok ? "pass" : "error", reason: r.reason };
+      return {
+        ...base,
+        status: r.ok ? "pass" : "error",
+        reason: r.reason,
+        ...(r.evidence ? { evidence: r.evidence } : {}),
+      };
     }
 
     case "tap":
@@ -1071,9 +1179,19 @@ async function execLeafStep(
         // A run cancelled mid-directive is a skip (matching the pre-step guard
         // and `wait`), never a step failure — the app did nothing wrong.
         if (r.aborted) return { ...base, status: "skip", reason: r.reason };
-        return { ...base, status: r.ok ? "pass" : "fail", reason: r.reason };
+        return {
+          ...base,
+          status: r.ok ? "pass" : "fail",
+          reason: r.reason,
+          ...(r.evidence ? { evidence: r.evidence } : {}),
+        };
       } catch (err) {
-        return { ...base, status: "error", reason: errMsg(err) };
+        return {
+          ...base,
+          status: "error",
+          reason: errMsg(err),
+          evidence: evidenceFromThrow(err),
+        };
       }
     }
 
@@ -1100,9 +1218,15 @@ async function execLeafStep(
           reason: r.reason,
           snapshotKey: r.snapshotKey,
           artifacts: r.artifacts,
+          ...(r.evidence ? { evidence: r.evidence } : {}),
         };
       } catch (err) {
-        return { ...base, status: "error", reason: errMsg(err) };
+        return {
+          ...base,
+          status: "error",
+          reason: errMsg(err),
+          evidence: evidenceFromThrow(err),
+        };
       }
     }
 
@@ -1121,16 +1245,33 @@ async function execLeafStep(
             status: "fail",
             tool: step.name,
             reason: `await-ui-element condition not met${note ? `: ${note}` : ""}`,
+            evidence: { code: "tool-ui-wait-unmet" },
           };
         }
         return { ...base, status: "pass", tool: step.name, result, outputHint, args };
       } catch (err) {
-        return { ...base, status: "error", tool: step.name, reason: errMsg(err) };
+        return {
+          ...base,
+          status: "error",
+          tool: step.name,
+          reason: errMsg(err),
+          // Same classification a directive gets: a tool that failed because
+          // the tree source was unreachable is an environment fault, and CI
+          // must be able to tell that from a tool that genuinely rejected.
+          evidence: isTreeSourceError(err)
+            ? evidenceFromThrow(err)
+            : { code: "tool-step-failed", ...causeOf(err) },
+        };
       }
     }
 
     default:
-      return { ...base, status: "error", reason: `unsupported step kind` };
+      return {
+        ...base,
+        status: "error",
+        reason: `unsupported step kind`,
+        evidence: { code: "step-kind-unsupported" },
+      };
   }
 }
 

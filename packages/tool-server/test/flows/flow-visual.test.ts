@@ -43,10 +43,11 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock("../../src/tools/flows/flow-actions", async (importOriginal) => ({
-  // The real offscreenHint: cropOn failures must surface the directives'
-  // standard not-found reason, so the tests assert against the real text.
-  offscreenHint: (await importOriginal<typeof import("../../src/tools/flows/flow-actions")>())
-    .offscreenHint,
+  // The real offscreenHint, evidence builder, sink factory and timeout
+  // constant: cropOn failures must surface the directives' standard
+  // not-found reason AND their standard classified evidence, so the tests
+  // assert against the real implementations.
+  ...(await importOriginal<typeof import("../../src/tools/flows/flow-actions")>()),
   settleTree: vi.fn(async () => ({})),
   invokeOnDevice: vi.fn(async () => ({ image: { hostPath: h.shotPath } })),
   waitForFrame: vi.fn(async () => {
@@ -388,7 +389,8 @@ describe("runSnapshot cropOn", () => {
     const r = await runSnapshot(env, opts({ updateBaselines: true, cropOn }));
 
     expect(r.status).toBe("pass");
-    expect(vi.mocked(waitForFrame)).toHaveBeenCalledWith(env, cropOn);
+    // The third argument is the evidence sink the failure report reads from.
+    expect(vi.mocked(waitForFrame)).toHaveBeenCalledWith(env, cropOn, expect.anything());
     // waitForFrame settles internally — the plain settle must not run too.
     expect(vi.mocked(settleTree)).not.toHaveBeenCalled();
     // Key: the FULL capture's dimensions (device-class identity) plus the
