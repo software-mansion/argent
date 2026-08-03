@@ -1,19 +1,14 @@
 import { z } from "zod";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import {
-  FAILURE_CODES,
-  FailureError,
-  FLOW_FILE_NAME_PATTERN,
-  type Registry,
-  type ToolDefinition,
-} from "@argent/registry";
+import { FAILURE_CODES, FailureError, type Registry, type ToolDefinition } from "@argent/registry";
 import {
   getActiveFlow,
   getRecordingSession,
   appendStepToActiveFlow,
   parseFlow,
   assertSafeFlowName,
+  classifyOnDiskSpelling,
   describeSelector,
   flowsDirFor,
   type FlowSavedTo,
@@ -232,33 +227,32 @@ async function rewriteSiblingFlowPath(
   // is the one output that is committed and replayed elsewhere, so the step
   // replays green here and fails on every case-sensitive checkout (Linux CI).
   // Require the supplied basename to appear in the flows dir byte-for-byte.
-  // readdir, not realpath: realpath rewrites a symlinked sibling to its
-  // target's name, and a symlink composes under the link's own name. The
-  // basename is pure ASCII by this point (stem charset + ".yaml"), so
-  // Unicode-normalizing filesystems cannot make the comparison lie. This dir
-  // is the recording's own host-persisted one — the recording file itself
-  // lives in it — so an unreadable listing is far less plausible than in the
-  // flow-run/CLI twins, but a readdir failure skips the check all the same
-  // rather than refusing a file the exact-named contract may well be honoring.
+  // This dir is the recording's own host-persisted one — the recording file
+  // itself lives in it — so an unreadable listing is far less plausible than
+  // in the flow-run/CLI twins, but classifyOnDiskSpelling's readdir failure
+  // skips the check all the same rather than refusing a file the exact-named
+  // contract may well be honoring. Both verdicts refuse here: unlike a bare
+  // `name`, this path names a file the caller says exists, so a listing
+  // lacking it entirely is the same phantom spelling, just with no neighbour
+  // to name.
   const suppliedBase = path.basename(flowPath);
-  const siblings = await fs.readdir(flowsDir).catch(() => null);
-  if (siblings !== null && !siblings.includes(suppliedBase)) {
-    const actual = siblings.find((name) => name.toLowerCase() === suppliedBase.toLowerCase());
+  const spelling = await classifyOnDiskSpelling(flowsDir, suppliedBase);
+  if (spelling.state !== "listed") {
     // Hint the real spelling only when this same ladder would accept it (a
     // stem-case slip like Sibling.yaml); an invalid real name (sibling.YAML)
     // needs a rename, and pointing at a flow_path the extension arm will
     // refuse helps no one.
     const recovery =
-      actual !== undefined && FLOW_FILE_NAME_PATTERN.test(actual)
-        ? `pass flow_path with the on-disk basename "${actual}"`
-        : actual !== undefined
-          ? `rename "${actual}" to "${suppliedBase}" to record it — flow files must be lowercase .yaml`
-          : `pass the basename exactly as it appears on disk`;
+      spelling.state === "absent"
+        ? `pass the basename exactly as it appears on disk`
+        : spelling.addressable
+          ? `pass flow_path with the on-disk basename "${spelling.actual}"`
+          : `rename "${spelling.actual}" to "${suppliedBase}" to record it — flow files must be lowercase .yaml`;
     throw invalid(
       `the file must be named as it appears on disk — no directory entry is named ` +
         `"${suppliedBase}"` +
-        (actual !== undefined
-          ? ` (this filesystem matched it case-insensitively to "${actual}")`
+        (spelling.state === "case_folded"
+          ? ` (this filesystem matched it case-insensitively to "${spelling.actual}")`
           : "") +
         `, so the recorded run: step would name a flow no case-sensitive checkout can find — ` +
         recovery
@@ -281,6 +275,16 @@ async function rewriteSiblingFlowPath(
  * host can't read the client's sibling files to validate). A `flow_path`
  * target reaches here as its sibling `name` or not at all — see
  * {@link rewriteSiblingFlowPath}.
+ *
+ * "Resolved as a sibling" is the same two-part identity {@link
+ * rewriteSiblingFlowPath} demands of a flow_path, asked of the name route: the
+ * call's own `project_root` must resolve `name` to this very file (the live
+ * invoke resolved it there, `run:` will resolve it beside the recording), and
+ * the flows dir must list `<name>.yaml` byte-for-byte. Every refusal keeps the
+ * raw step rather than throwing — unlike the rewrite, this runs AFTER the
+ * nested flow ran on the device, so a throw would discard the record of a step
+ * that already happened. The raw `tool: flow-execute` step it keeps still
+ * replays the flow that actually ran, carrying the caller's own project_root.
  */
 async function captureRunTarget(
   session: RecordingSession | null,
@@ -299,9 +303,75 @@ async function captureRunTarget(
     assertSafeFlowName(name);
     // Resolve against the recording's own flows dir (the running flow-execute
     // may have mutated the active-project-root global), not getFlowsDir().
+    const flowsDir = path.dirname(session.filePath);
+    const fragPath = path.join(flowsDir, `${name}.yaml`);
+
+    // The live invoke resolved `name` under the CALL's project_root; a recorded
+    // `run:` resolves it beside the recording. Those are the same file only
+    // while that root's flows dir is this one — a nested call naming another
+    // project's `<name>.yaml` runs that copy live and would record a step
+    // running this one: same name, different flow, both green, nothing said.
+    // Same identity the flow_path arm demands ("does not resolve <stem> to
+    // it"), and the root must be absolute before the comparison means anything
+    // — path.resolve anchors a relative root at the tool SERVER's cwd, which
+    // bears no relation to the calling agent's. flow-execute's schema requires
+    // project_root and its resolver demands an absolute one, so any call that
+    // got past the live invoke above has one; the guard covers direct execute()
+    // callers, which bypass that schema.
+    const projectRoot = args.project_root;
+    if (typeof projectRoot !== "string" || !path.isAbsolute(projectRoot)) {
+      return {
+        warning:
+          `kept the raw flow-execute step — project_root must be an absolute path ` +
+          `(got ${typeof projectRoot === "string" ? `"${projectRoot}"` : "none"}) to confirm ` +
+          `"${name}" names the recording's own sibling`,
+      };
+    }
+    const invoked = path.resolve(flowsDirFor(projectRoot), `${name}.yaml`);
+    if (invoked !== path.resolve(fragPath)) {
+      return {
+        warning:
+          `kept the raw flow-execute step — project_root "${projectRoot}" resolves "${name}" to ` +
+          `"${invoked}", not the recording's sibling "${fragPath}", so a run: ${name} step would ` +
+          `replay a different flow than the one that just ran`,
+      };
+    }
+
+    // Nothing above consulted the directory, and a composed `run:` name is not
+    // just a lookup — it is written into the recorded YAML, the one output that
+    // gets committed and replayed elsewhere. On a case-insensitive filesystem
+    // (APFS, NTFS) `name: "Frag"` opens a sibling really named "frag.yaml", and
+    // the read below would too, baking `run: Frag` into a flow no
+    // case-sensitive checkout (Linux CI) can resolve. flow-execute's own name
+    // gate refuses that spelling one layer down — against this very directory,
+    // now that the check above forced the two to coincide — but it skips on a
+    // listing that momentarily refused to be read (EMFILE under load), and the
+    // recorder forwards these args opaquely: it does not take the spelling of a
+    // reference it commits on the word of the tool it dispatched. Same gate the
+    // flow_path arm applies to its basename, on the route that reaches the same
+    // file by name. Only a case-folded verdict keeps the raw step: a name
+    // matching nothing at all is an ordinary missing sibling, which the read
+    // below reports far better than a casing complaint could.
+    const spelling = await classifyOnDiskSpelling(flowsDir, `${name}.yaml`);
+    if (spelling.state === "case_folded") {
+      // Hint a name only when one can reach the file: an on-disk .YAML is
+      // addressable by no name at all (this route always builds "<name>.yaml"),
+      // and the flow_path arm refuses it too — so that fork asks for the rename
+      // it really needs.
+      const recovery = spelling.addressable
+        ? `re-run it as name "${path.basename(spelling.actual, ".yaml")}" to record it`
+        : `rename "${spelling.actual}" to "${name}.yaml" to record it — flow files must be ` +
+          `lowercase .yaml`;
+      return {
+        warning:
+          `kept the raw flow-execute step — no sibling is named "${name}.yaml" (this filesystem ` +
+          `matched it case-insensitively to "${spelling.actual}"), so a run: ${name} step would ` +
+          `name a flow no case-sensitive checkout can find — ${recovery}`,
+      };
+    }
+
     // Parsing validates the sibling exists and is a well-formed flow; a failure
     // falls through to keeping the raw step.
-    const fragPath = path.join(path.dirname(session.filePath), `${name}.yaml`);
     parseFlow(await fs.readFile(fragPath, "utf8"));
     return { flow: name };
   } catch (err) {

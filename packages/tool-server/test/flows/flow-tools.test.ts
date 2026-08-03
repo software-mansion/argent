@@ -490,6 +490,157 @@ describe("flow-add-step", () => {
     ]);
   });
 
+  it("keeps the raw flow-execute step when another project_root resolves the name", async () => {
+    const registry = createMockRegistry({
+      "flow-execute": { result: { ok: true, steps: [] } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "compose-twin", project_root: tmpDir });
+    // Two projects, each holding a different flow named "twin". The nested call
+    // named the OTHER project's root, so that is the copy that ran live — while
+    // a `run: twin` step resolves beside the recording at replay. Recording one
+    // would swap the flow under the same name, both runs green and nothing said.
+    await writeSiblingFlow("twin", "steps:\n  - echo: mine\n");
+    const otherRoot = path.join(tmpDir, "other-project");
+    const otherTwin = path.join(otherRoot, ".argent", "flows", "twin.yaml");
+    await fs.mkdir(path.dirname(otherTwin), { recursive: true });
+    await fs.writeFile(otherTwin, "steps:\n  - echo: theirs\n", "utf8");
+
+    const args = { name: "twin", project_root: otherRoot };
+    const result = await tool.execute({}, { command: "flow-execute", args: JSON.stringify(args) });
+
+    // The live invoke ran the other project's copy…
+    expect(registry.invokeTool).toHaveBeenCalledWith("flow-execute", args);
+    // …so the recorded step must be the raw call that reproduces it — naming
+    // both files, since either one alone reads as the flow the author meant.
+    expect(result.message).toContain(otherTwin);
+    expect(result.message).toContain(path.join(tmpDir, ".argent", "flows", "twin.yaml"));
+    expect(result.message).toMatch(/would replay a different flow/);
+    expect(parseFlow(result.flowFile).steps).toEqual([
+      { kind: "tool", name: "flow-execute", args },
+    ]);
+  });
+
+  // The two casing cases below decide off the flows dir LISTING, which returns
+  // stored bytes on every platform, so they hold identically on case-sensitive
+  // (Linux CI) and case-insensitive (APFS, NTFS) filesystems — where before the
+  // gate the recorder read the case-folded file and baked its phantom spelling
+  // into the committed YAML. The mock registry stands in for a flow-execute
+  // that accepted the name; the real one refuses this spelling itself (see
+  // "saved-flow name spelling"), so these pin the recorder's own guarantee
+  // about the YAML it writes rather than borrowing that tool's.
+  it("keeps the raw flow-execute step for a name the flows dir would case-fold", async () => {
+    const registry = createMockRegistry({
+      "flow-execute": { result: { ok: true, steps: [] } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "compose-name-casing", project_root: tmpDir });
+    await writeSiblingFlow("frag", "steps:\n  - echo: hi\n");
+
+    const args = { name: "Frag", project_root: tmpDir };
+    const result = await tool.execute({}, { command: "flow-execute", args: JSON.stringify(args) });
+
+    // `run: Frag` names a flow no case-sensitive checkout can find, so the raw
+    // step is kept and the warning hands back the recordable spelling.
+    expect(result.message).toContain('case-insensitively to "frag.yaml"');
+    expect(result.message).toContain('re-run it as name "frag" to record it');
+    expect(parseFlow(result.flowFile).steps).toEqual([
+      { kind: "tool", name: "flow-execute", args },
+    ]);
+  });
+
+  it("suggests a rename when the on-disk sibling's own extension case is unnameable", async () => {
+    const registry = createMockRegistry({
+      "flow-execute": { result: { ok: true, steps: [] } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "compose-name-rename", project_root: tmpDir });
+    // frag.YAML is reachable by no name at all — this route always builds
+    // "<name>.yaml" — so the only honest recovery is the rename.
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", "frag.YAML"),
+      "steps:\n  - echo: hi\n",
+      "utf8"
+    );
+
+    const args = { name: "frag", project_root: tmpDir };
+    const result = await tool.execute({}, { command: "flow-execute", args: JSON.stringify(args) });
+
+    expect(result.message).toContain('case-insensitively to "frag.YAML"');
+    expect(result.message).toContain(
+      'rename "frag.YAML" to "frag.yaml" to record it — flow files must be lowercase .yaml'
+    );
+    expect(result.message).not.toContain("re-run it as name");
+    expect(parseFlow(result.flowFile).steps).toEqual([
+      { kind: "tool", name: "flow-execute", args },
+    ]);
+  });
+
+  it("composes a sibling saved under a mixed-case name under that exact name", async () => {
+    // Byte-for-byte is the contract — not lowercasing: a sibling really saved
+    // as MixedCase.yaml composes as `run: MixedCase`.
+    const registry = createMockRegistry({
+      "flow-execute": { result: { ok: true, steps: [] } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "compose-name-mixed", project_root: tmpDir });
+    await writeSiblingFlow("MixedCase", "steps:\n  - echo: hi\n");
+
+    const result = await tool.execute(
+      {},
+      {
+        command: "flow-execute",
+        args: JSON.stringify({ name: "MixedCase", project_root: tmpDir }),
+      }
+    );
+
+    expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "run", flow: "MixedCase" }]);
+  });
+
+  // A root the recorder cannot anchor is not a root it can check the name
+  // against, so it declines to compose rather than compose on an unverified
+  // identity. flow-execute's schema requires project_root and its resolver
+  // demands an absolute one, so only a direct execute() caller reaches this —
+  // and the relative case mocks the server's cwd to make the root name the
+  // sibling, the one shape a cwd-anchored comparison would let through.
+  it.each<[string, string | undefined, string]>([
+    ["is missing", undefined, "(got none)"],
+    ["is relative", ".", '(got ".")'],
+  ])("keeps the raw flow-execute step when project_root %s", async (_shape, root, detail) => {
+    const registry = createMockRegistry({
+      "flow-execute": { result: { ok: true, steps: [] } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "compose-unanchored", project_root: tmpDir });
+    await writeSiblingFlow("login", "steps:\n  - echo: hi\n");
+
+    const args = root === undefined ? { name: "login" } : { name: "login", project_root: root };
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(tmpDir);
+    try {
+      if (root !== undefined) {
+        expect(path.resolve(flowsDirFor(root), "login.yaml")).toBe(
+          path.join(tmpDir, ".argent", "flows", "login.yaml")
+        );
+      }
+      const result = await tool.execute(
+        {},
+        { command: "flow-execute", args: JSON.stringify(args) }
+      );
+
+      expect(result.message).toContain(`project_root must be an absolute path ${detail}`);
+      expect(parseFlow(result.flowFile).steps).toEqual([
+        { kind: "tool", name: "flow-execute", args },
+      ]);
+    } finally {
+      cwdSpy.mockRestore();
+    }
+  });
+
   it("records a flow-execute of a sibling flow_path as a run: directive", async () => {
     const registry = createMockRegistry({
       "flow-execute": { result: { ok: true, steps: [] } },

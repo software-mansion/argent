@@ -4,7 +4,6 @@ import * as path from "node:path";
 import {
   FAILURE_CODES,
   FailureError,
-  FLOW_FILE_NAME_PATTERN,
   isLiveServiceState,
   zodObjectToJsonSchema,
 } from "@argent/registry";
@@ -20,6 +19,7 @@ import {
   appIdForPlatform,
   assertSafeFlowName,
   chromiumLaunchSpec,
+  classifyOnDiskSpelling,
   describeSelector,
   describeTextExpectation,
   getFlowPath,
@@ -1295,51 +1295,6 @@ async function execLeafStep(
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
-}
-
-/**
- * How the flow file a caller addressed is spelled in its own directory.
- * `listed`: the directory carries that basename byte-for-byte — or its listing
- * could not be read at all, which vouches for nothing and so must refuse
- * nothing (an execute-only parent directory lets stat through while refusing
- * readdir, and the exact-named contract may well be honored there).
- * `case_folded`: no entry carries it, but one differs from it only by case —
- * exactly what a case-insensitive filesystem (APFS, NTFS) opens for a reader
- * that asked for a spelling nothing on disk has, and the whole point of the
- * check. `absent`: nothing matches even case-insensitively, i.e. the file is
- * simply not there. `addressable` says whether the on-disk spelling is one
- * this module's own ladders accept, so a caller can be pointed at it instead
- * of at a rename.
- */
-type OnDiskSpelling =
-  | { state: "listed" }
-  | { state: "case_folded"; actual: string; addressable: boolean }
-  | { state: "absent" };
-
-/**
- * Classify the supplied basename against `dir`'s listing. One classifier
- * serves both flow sources — `flow_path`'s caller-visible basename and
- * `name`'s `${name}.yaml` under the project's flows dir — so the two can never
- * drift apart in which spellings they accept, which is precisely what let a
- * `name` key a report and `__baselines__/` under a spelling `flow_path`
- * refused two arms earlier. readdir, not realpath: realpath rewrites a
- * symlinked flow to its target's name, and a flow deliberately runs under the
- * link's own name. Both call sites hand a pure-ASCII basename (flow-name
- * charset + ".yaml"), so Unicode-normalizing filesystems cannot make the
- * comparison lie.
- *
- * What an `absent` verdict means is the caller's to decide, and the two
- * differ: `flow_path` arrives with the boundary's stat already vouching for
- * the file, so a listing that lacks it is itself the phantom-spelling bug,
- * while a `name` may simply not name a saved flow — an ordinary missing-flow
- * error the later read reports far better than a casing complaint could.
- */
-async function classifyOnDiskSpelling(dir: string, base: string): Promise<OnDiskSpelling> {
-  const entries = await fs.readdir(dir).catch(() => null);
-  if (entries === null || entries.includes(base)) return { state: "listed" };
-  const actual = entries.find((entry) => entry.toLowerCase() === base.toLowerCase());
-  if (actual === undefined) return { state: "absent" };
-  return { state: "case_folded", actual, addressable: FLOW_FILE_NAME_PATTERN.test(actual) };
 }
 
 /**
