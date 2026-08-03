@@ -260,10 +260,11 @@ describe("swipe: execution", () => {
     const result = await run("dismiss");
 
     expect(result.ok).toBe(true);
-    // Card centre is (0.6, 0.3): travel to the end line x=0.1, y stays 0.3.
+    // Card centre is (0.6, 0.3): left travels the preset's -0.8 magnitude to
+    // x = clamp01(0.6 - 0.8) = 0, and the anchor's y stays 0.3.
     expect(result.calls[0]).toMatchObject({
       tool: "gesture-swipe",
-      args: { fromX: expect.closeTo(0.6, 10), fromY: 0.3, toX: 0.1, toY: 0.3 },
+      args: { fromX: expect.closeTo(0.6, 10), fromY: 0.3, toX: 0, toY: 0.3 },
     });
   });
 
@@ -280,117 +281,85 @@ describe("swipe: execution", () => {
     const result = await run("edge-anchor");
 
     expect(result.ok).toBe(true);
+    // The anchor is used verbatim (0.6, 0.97) and left travels the preset's
+    // -0.8 magnitude on to x = clamp01(0.6 - 0.8) = 0, y kept at 0.97.
     expect(result.calls[0]).toMatchObject({
       tool: "gesture-swipe",
       args: {
         fromX: expect.closeTo(0.6, 10),
         fromY: expect.closeTo(0.97, 10),
-        toX: 0.1,
+        toX: 0,
         toY: expect.closeTo(0.97, 10),
       },
     });
   });
 
   it.each([
-    ["left", { x: 0.05, y: 0.5 }, "right", "x=0.05", "x=0.1"],
-    ["right", { x: 0.95, y: 0.5 }, "left", "x=0.95", "x=0.9"],
-    ["up", { x: 0.5, y: 0.05 }, "down", "y=0.05", "y=0.1"],
-    ["down", { x: 0.5, y: 0.95 }, "up", "y=0.95", "y=0.9"],
+    // Near the far edge — the old model rejected these as travelling the
+    // "opposite direction" because it pinned the endpoint to the preset line.
+    ["left near the edge", "left", { x: 0.05, y: 0.5 }, { toX: 0, toY: 0.5 }],
+    ["right near the edge", "right", { x: 0.95, y: 0.5 }, { toX: 1, toY: 0.5 }],
+    ["up near the edge", "up", { x: 0.5, y: 0.05 }, { toX: 0.5, toY: 0 }],
+    ["down near the edge", "down", { x: 0.5, y: 0.95 }, { toX: 0.5, toY: 1 }],
+    // On the old preset end line — the old model collapsed these to zero travel.
+    ["left on the old preset line", "left", { x: 0.1, y: 0.5 }, { toX: 0, toY: 0.5 }],
+    ["right on the old preset line", "right", { x: 0.9, y: 0.5 }, { toX: 1, toY: 0.5 }],
+    ["up on the old preset line", "up", { x: 0.5, y: 0.1 }, { toX: 0.5, toY: 0 }],
+    ["down on the old preset line", "down", { x: 0.5, y: 0.9 }, { toX: 0.5, toY: 1 }],
   ] as const)(
-    "fails an anchored %s swipe that would travel in the opposite direction",
-    async (direction, from, actualDirection, startCoordinate, endCoordinate) => {
-      await writeFlow(`reversed-${direction}`, {
+    "travels an anchored direction toward the target edge, clamped on-screen (%s)",
+    async (_name, direction, from, expected) => {
+      await writeFlow("edge-travel", {
         executionPrerequisite: "",
         steps: [{ kind: "swipe", from, direction }],
       });
 
-      const result = await run(`reversed-${direction}`);
+      const result = await run("edge-travel");
 
-      expect(result.ok).toBe(false);
-      expect(result.steps[0]).toMatchObject({ kind: "swipe", status: "fail" });
-      expect(result.steps[0].reason).toContain(`cannot swipe ${direction}`);
-      expect(result.steps[0].reason).toContain(startCoordinate);
-      expect(result.steps[0].reason).toContain(`preset endpoint is ${endCoordinate}`);
-      expect(result.steps[0].reason).toContain(`would travel ${actualDirection}`);
-      expect(result.calls).toEqual([]);
+      expect(result.ok).toBe(true);
+      // The preset's signed magnitude carries the anchor on to the screen edge,
+      // keeping the requested sign — clamping only shortens travel, never flips
+      // it — so a drawer handle in the last band of the axis still swipes.
+      expect(result.calls[0]).toMatchObject({
+        tool: "gesture-swipe",
+        args: { fromX: from.x, fromY: from.y, toX: expected.toX, toY: expected.toY },
+      });
     }
   );
 
   it.each([
-    ["left", { x: 0.1, y: 0.5 }],
-    ["right", { x: 0.9, y: 0.5 }],
-    ["up", { x: 0.5, y: 0.1 }],
-    ["down", { x: 0.5, y: 0.9 }],
-  ] as const)("fails an anchored %s swipe with zero travel", async (direction, from) => {
-    await writeFlow(`collapsed-${direction}`, {
-      executionPrerequisite: "",
-      steps: [{ kind: "swipe", from, direction }],
-    });
+    // Anchor tap-close to the TARGET edge: the clamped travel is real but
+    // sub-floor, a movement the recognizers read as a tap, not a swipe.
+    ["right", "x=0.98", { x: 0.98, y: 0.5 }],
+    ["left", "x=0.02", { x: 0.02, y: 0.5 }],
+    ["down", "y=0.98", { x: 0.5, y: 0.98 }],
+    ["up", "y=0.02", { x: 0.5, y: 0.02 }],
+    // Dust from the edge: near-zero travel, still failed on distance-to-edge.
+    ["right", "x=0.999", { x: 0.999, y: 0.5 }],
+  ] as const)(
+    "fails an anchored %s swipe from %s, too near the target edge",
+    async (direction, startCoordinate, from) => {
+      await writeFlow("no-room-direction", {
+        executionPrerequisite: "",
+        steps: [{ kind: "swipe", from, direction }],
+      });
 
-    const result = await run(`collapsed-${direction}`);
+      const result = await run("no-room-direction");
 
-    expect(result.ok).toBe(false);
-    expect(result.steps[0]).toMatchObject({
-      kind: "swipe",
-      status: "fail",
-      reason: expect.stringContaining(
-        "leaving less than the minimum swipe travel of 0.03 — a tap, not a swipe"
-      ),
-    });
-    expect(result.calls).toEqual([]);
-  });
+      expect(result.ok).toBe(false);
+      expect(result.steps[0]).toMatchObject({ kind: "swipe", status: "fail" });
+      expect(result.steps[0].reason).toContain(`cannot swipe ${direction} from ${startCoordinate}`);
+      expect(result.steps[0].reason).toContain("of travel to the screen edge");
+      expect(result.steps[0].reason).toContain(
+        "less than the minimum swipe travel of 0.03 — a tap, not a swipe"
+      );
+      expect(result.calls).toEqual([]);
+    }
+  );
 
-  it("fails an anchored direction swipe whose centre lands dust-close to the preset line", async () => {
-    // Centre x computes to 0.8999999999999999 — bit-distinct from the right
-    // preset's end line x=0.9, so `===` would dispatch a stationary press.
-    currentTree = () =>
-      screen([n({ label: "Card", frame: { x: 0.84, y: 0.4, width: 0.12, height: 0.2 } })]);
-    await writeFlow("dust-direction", {
-      executionPrerequisite: "",
-      steps: [
-        { kind: "swipe", from: { selector: { text: "Card", loose: true } }, direction: "right" },
-      ],
-    });
-
-    const result = await run("dust-direction");
-
-    expect(result.ok).toBe(false);
-    expect(result.steps[0]).toMatchObject({
-      kind: "swipe",
-      status: "fail",
-      reason: expect.stringContaining("less than the minimum swipe travel"),
-    });
-    expect(result.calls).toEqual([]);
-  });
-
-  it("fails an anchored direction swipe whose centre sits tap-close to the preset line", async () => {
-    // Centre x is 0.88 — 0.02 from the right preset's end line x=0.9, a
-    // finger movement the platform recognizers read as a tap, so a floor that
-    // only filtered float dust would dispatch it as a swipe in name only.
-    currentTree = () =>
-      screen([n({ label: "Card", frame: { x: 0.78, y: 0.4, width: 0.2, height: 0.2 } })]);
-    await writeFlow("tap-scale-direction", {
-      executionPrerequisite: "",
-      steps: [
-        { kind: "swipe", from: { selector: { text: "Card", loose: true } }, direction: "right" },
-      ],
-    });
-
-    const result = await run("tap-scale-direction");
-
-    expect(result.ok).toBe(false);
-    expect(result.steps[0]).toMatchObject({
-      kind: "swipe",
-      status: "fail",
-      reason: expect.stringMatching(
-        /cannot swipe right from x=0\.88.*preset endpoint is x=0\.9.*less than the minimum swipe travel of 0\.03.*a tap, not a swipe/i
-      ),
-    });
-    expect(result.calls).toEqual([]);
-  });
-
-  it("allows short anchored direction travel when it still has the requested sign", async () => {
-    // 0.04 of travel: short, but above the tap/swipe floor.
+  it("travels short anchored direction gestures on to the edge, above the tap/swipe floor", async () => {
+    // ~0.14 to the edge: short, but above the 0.03 floor — the preset's signed
+    // magnitude carries each anchor to the screen edge, clamped on-screen.
     await writeFlow("short-direction-travel", {
       executionPrerequisite: "",
       steps: [
@@ -404,7 +373,12 @@ describe("swipe: execution", () => {
     const result = await run("short-direction-travel");
 
     expect(result.ok).toBe(true);
-    expect(result.calls).toHaveLength(4);
+    expect(result.calls.map((c) => c.args)).toEqual([
+      { udid: DEVICE, fromX: 0.14, fromY: 0.5, toX: 0, toY: 0.5 },
+      { udid: DEVICE, fromX: 0.86, fromY: 0.5, toX: 1, toY: 0.5 },
+      { udid: DEVICE, fromX: 0.5, fromY: 0.14, toX: 0.5, toY: 0 },
+      { udid: DEVICE, fromX: 0.5, fromY: 0.86, toX: 0.5, toY: 1 },
+    ]);
   });
 
   it("rejects a selector-derived start whose direction cross-axis is off-screen", async () => {
