@@ -104,6 +104,37 @@ describe("gesture-drag", () => {
     expect(controlMoves[2].x as number).toBeCloseTo(startPx + deltaPx * 0.75, 5);
   });
 
+  it("clamps a normalized 1.0 endpoint to the last addressable pixel so the release stays in the viewport", async () => {
+    // The flow swipe directive saturates `by` deltas to [0, 1], so a 1.0
+    // endpoint is routine — unclamped it maps to pixel == width/height, one
+    // past the viewport, and Chromium delivers no pointerup to the page.
+    const api = fakeChromiumApi();
+    const result = await gestureDragTool.execute(
+      { chromium: api } as never,
+      {
+        udid: "chromium-cdp-19222",
+        fromX: 0.5,
+        fromY: 0.5,
+        toX: 1.0,
+        toY: 1.0,
+        durationMs: 64,
+      } as never
+    );
+    expect(result.dragged).toBe(true);
+
+    const calls = api.dispatchMouseEvent.mock.calls.map((c) => c[0] as Record<string, unknown>);
+    // Press, every interpolated move, and the release all stay addressable.
+    for (const call of calls) {
+      expect(call.x as number).toBeLessThanOrEqual(800 - 1);
+      expect(call.y as number).toBeLessThanOrEqual(600 - 1);
+    }
+    expect(calls[calls.length - 1]).toMatchObject({
+      type: "mouseReleased",
+      x: 800 - 1,
+      y: 600 - 1,
+    });
+  });
+
   it("is chromium-only: capability gate rejects iOS and Android targets", () => {
     expect(() =>
       assertSupported("gesture-drag", gestureDragTool.capability!, chromiumDevice)

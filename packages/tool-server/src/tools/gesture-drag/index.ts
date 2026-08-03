@@ -69,8 +69,18 @@ Pass settle:true for a momentum-free drag that releases at ~0 pointer velocity, 
     // hidden window services at ~5s per event — minutes per drag.
     await assertChromiumWindowVisible(chromium, "drag", "chromium_drag_window_hidden");
     const vp = chromium.getViewport();
-    const startPx = { x: params.fromX * vp.width, y: params.fromY * vp.height };
-    const endPx = { x: params.toX * vp.width, y: params.toY * vp.height };
+    // Normalized 1.0 would land one past the last viewport pixel, where
+    // Chromium delivers no pointerup — clamp both endpoints onto the
+    // addressable range (interpolated moves between them stay in bounds).
+    const clampPx = (px: number, size: number) => Math.min(Math.max(px, 0), size - 1);
+    const startPx = {
+      x: clampPx(params.fromX * vp.width, vp.width),
+      y: clampPx(params.fromY * vp.height, vp.height),
+    };
+    const endPx = {
+      x: clampPx(params.toX * vp.width, vp.width),
+      y: clampPx(params.toY * vp.height, vp.height),
+    };
     const durationMs = params.durationMs ?? 300;
     const settle = params.settle ?? false;
     const steps = Math.max(2, Math.round(durationMs / 16));
