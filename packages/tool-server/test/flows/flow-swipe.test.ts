@@ -43,6 +43,8 @@ describe("swipe: parse/serialize", () => {
         },
         { kind: "swipe" as const, from: { x: 0.5, y: 0.8 }, by: { y: -0.4 } },
         { kind: "swipe" as const, by: { x: 0.2, y: -0.3 }, settle: true },
+        // 0.03 is the exact tap/swipe floor — must round-trip clean.
+        { kind: "swipe" as const, by: { x: 0.03 } },
         {
           kind: "swipe" as const,
           from: { selector: { identifier: "card" } },
@@ -84,12 +86,13 @@ describe("swipe: parse/serialize", () => {
   });
 
   it.each([
+    ["a tap-scale delta", 0.02],
     ["a sub-threshold delta", 0.0005],
     ["float dust", 1e-17],
-  ])("rejects programmatic by travel with %s as undeliverable", (_description, x) => {
+  ])("rejects programmatic by travel with %s as a tap, not a swipe", (_description, x) => {
     expect(() =>
       serializeFlow({ executionPrerequisite: "", steps: [{ kind: "swipe", by: { x } }] })
-    ).toThrow(/cannot serialize flow swipe\.by\.x: .*below the minimum deliverable travel/i);
+    ).toThrow(/cannot serialize flow swipe\.by\.x: .*below the minimum swipe travel/i);
   });
 
   it.each([
@@ -167,11 +170,12 @@ describe("swipe: parse/serialize", () => {
   });
 
   it.each([
+    ["a tap-scale delta", "0.02"],
     ["a sub-threshold delta", "0.0005"],
     ["float dust", "0.00000000000000001"],
-  ])("rejects a by axis of %s as undeliverable travel", (_description, value) => {
+  ])("rejects a by axis of %s as a tap, not a swipe", (_description, value) => {
     expect(() => parseFlow(`steps:\n  - swipe: { by: { x: ${value} } }\n`)).toThrow(
-      /swipe\.by\.x .*below the minimum deliverable travel.*too small to move a finger/i
+      /swipe\.by\.x .*below the minimum swipe travel.*a tap, not a swipe/i
     );
   });
 
@@ -329,7 +333,9 @@ describe("swipe: execution", () => {
     expect(result.steps[0]).toMatchObject({
       kind: "swipe",
       status: "fail",
-      reason: expect.stringContaining("would have zero travel"),
+      reason: expect.stringContaining(
+        "leaving less than the minimum swipe travel of 0.03 — a tap, not a swipe"
+      ),
     });
     expect(result.calls).toEqual([]);
   });
@@ -352,20 +358,46 @@ describe("swipe: execution", () => {
     expect(result.steps[0]).toMatchObject({
       kind: "swipe",
       status: "fail",
-      reason: expect.stringContaining("would have zero travel"),
+      reason: expect.stringContaining("less than the minimum swipe travel"),
+    });
+    expect(result.calls).toEqual([]);
+  });
+
+  it("fails an anchored direction swipe whose centre sits tap-close to the preset line", async () => {
+    // Centre x is 0.88 — 0.02 from the right preset's end line x=0.9, a
+    // finger movement the platform recognizers read as a tap, so a floor that
+    // only filtered float dust would dispatch it as a swipe in name only.
+    currentTree = () =>
+      screen([n({ label: "Card", frame: { x: 0.78, y: 0.4, width: 0.2, height: 0.2 } })]);
+    await writeFlow("tap-scale-direction", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "swipe", from: { selector: { text: "Card", loose: true } }, direction: "right" },
+      ],
+    });
+
+    const result = await run("tap-scale-direction");
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]).toMatchObject({
+      kind: "swipe",
+      status: "fail",
+      reason: expect.stringMatching(
+        /cannot swipe right from x=0\.88.*preset endpoint is x=0\.9.*less than the minimum swipe travel of 0\.03.*a tap, not a swipe/i
+      ),
     });
     expect(result.calls).toEqual([]);
   });
 
   it("allows short anchored direction travel when it still has the requested sign", async () => {
-    // 0.002 of travel: short, but above the deliverable-travel floor.
+    // 0.04 of travel: short, but above the tap/swipe floor.
     await writeFlow("short-direction-travel", {
       executionPrerequisite: "",
       steps: [
-        { kind: "swipe", from: { x: 0.102, y: 0.5 }, direction: "left" },
-        { kind: "swipe", from: { x: 0.898, y: 0.5 }, direction: "right" },
-        { kind: "swipe", from: { x: 0.5, y: 0.102 }, direction: "up" },
-        { kind: "swipe", from: { x: 0.5, y: 0.898 }, direction: "down" },
+        { kind: "swipe", from: { x: 0.14, y: 0.5 }, direction: "left" },
+        { kind: "swipe", from: { x: 0.86, y: 0.5 }, direction: "right" },
+        { kind: "swipe", from: { x: 0.5, y: 0.14 }, direction: "up" },
+        { kind: "swipe", from: { x: 0.5, y: 0.86 }, direction: "down" },
       ],
     });
 
@@ -471,13 +503,13 @@ describe("swipe: execution", () => {
   });
 
   it("dispatches a floor-magnitude by delta whose unclamped travel rounds one ulp short", async () => {
-    // 0.01 + 0.001 stays inside [0, 1] (clamp is the identity), yet the
-    // effective travel computes to 0.0009999999999999992 — one ulp under
+    // 0.029 + 0.03 stays inside [0, 1] (clamp is the identity), yet the
+    // effective travel computes to 0.029999999999999995 — one ulp under
     // SWIPE_MIN_TRAVEL — so a bare magnitude gate would fail this
     // documented-legal boundary delta blaming clamping that never happened.
     await writeFlow("boundary-by", {
       executionPrerequisite: "",
-      steps: [{ kind: "swipe", from: { x: 0.01, y: 0.5 }, by: { x: 0.001 } }],
+      steps: [{ kind: "swipe", from: { x: 0.029, y: 0.5 }, by: { x: 0.03 } }],
     });
 
     const result = await run("boundary-by");
@@ -486,7 +518,7 @@ describe("swipe: execution", () => {
     expect(result.calls).toEqual([
       {
         tool: "gesture-swipe",
-        args: { udid: DEVICE, fromX: 0.01, fromY: 0.5, toX: 0.011, toY: 0.5 },
+        args: { udid: DEVICE, fromX: 0.029, fromY: 0.5, toX: 0.059, toY: 0.5 },
       },
     ]);
   });
@@ -504,7 +536,29 @@ describe("swipe: execution", () => {
       kind: "swipe",
       status: "fail",
       reason: expect.stringMatching(
-        /swipe\.by\.x requests positive travel from x=1.*\[0, 1\].*no travel.*choose a start point/i
+        /swipe\.by\.x requests positive travel from x=1.*\[0, 1\].*less than the minimum swipe travel.*choose a start point/i
+      ),
+    });
+    expect(result.calls).toEqual([]);
+  });
+
+  it("fails by travel when clamping leaves only a tap-scale residue", async () => {
+    // Clamping 0.98 + 0.5 to x=1 leaves 0.02 of travel — nonzero, but under
+    // recognizer slop, so dispatching it would deliver a tap in a swipe's
+    // clothing rather than the half-screen drag the author asked for.
+    await writeFlow("tap-scale-residue", {
+      executionPrerequisite: "",
+      steps: [{ kind: "swipe", from: { x: 0.98, y: 0.5 }, by: { x: 0.5 } }],
+    });
+
+    const result = await run("tap-scale-residue");
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]).toMatchObject({
+      kind: "swipe",
+      status: "fail",
+      reason: expect.stringMatching(
+        /swipe\.by\.x requests positive travel from x=0\.98.*\[0, 1\].*less than the minimum swipe travel.*choose a start point/i
       ),
     });
     expect(result.calls).toEqual([]);
@@ -523,7 +577,7 @@ describe("swipe: execution", () => {
       kind: "swipe",
       status: "fail",
       reason: expect.stringMatching(
-        /swipe\.by\.y requests positive travel from y=1.*\[0, 1\].*no travel.*choose a start point/i
+        /swipe\.by\.y requests positive travel from y=1.*\[0, 1\].*less than the minimum swipe travel.*choose a start point/i
       ),
     });
     expect(result.calls).toEqual([]);
@@ -614,7 +668,7 @@ describe("swipe: execution", () => {
       kind: "swipe",
       status: "fail",
       reason: expect.stringMatching(
-        /swipe\.to resolved onto the start point \(0\.5, 0\.5\).*zero travel.*away from the start/i
+        /swipe\.to \(0\.5, 0\.5\) resolved within the minimum swipe travel of the start point \(0\.5, 0\.5\).*farther from the start/i
       ),
     });
     expect(result.calls).toEqual([]);
@@ -641,7 +695,7 @@ describe("swipe: execution", () => {
       kind: "swipe",
       status: "fail",
       reason: expect.stringMatching(
-        /swipe\.to resolved onto the start point \(0\.4, 0\.4\).*zero travel.*away from the start/i
+        /swipe\.to \(0\.4, 0\.4\) resolved within the minimum swipe travel of the start point \(0\.4, 0\.4\).*farther from the start/i
       ),
     });
     expect(result.calls).toEqual([]);
@@ -669,7 +723,31 @@ describe("swipe: execution", () => {
       kind: "swipe",
       status: "fail",
       reason: expect.stringMatching(
-        /swipe\.to resolved onto the start point.*zero travel.*away from the start/i
+        /swipe\.to .*resolved within the minimum swipe travel of the start point.*farther from the start/i
+      ),
+    });
+    expect(result.calls).toEqual([]);
+  });
+
+  it("fails a to selector that resolves a tap-scale distance from the start", async () => {
+    // Centre (0.52, 0.52) sits 0.02 from the default centre start on both
+    // axes — real travel, but under recognizer slop, so the gesture would be
+    // read as a tap on the element instead of a drag toward it.
+    currentTree = () =>
+      screen([n({ label: "Drop", frame: { x: 0.42, y: 0.42, width: 0.2, height: 0.2 } })]);
+    await writeFlow("to-tap-scale", {
+      executionPrerequisite: "",
+      steps: [{ kind: "swipe", to: { selector: { text: "Drop", loose: true } } }],
+    });
+
+    const result = await run("to-tap-scale");
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]).toMatchObject({
+      kind: "swipe",
+      status: "fail",
+      reason: expect.stringMatching(
+        /swipe\.to \(0\.52, 0\.52\) resolved within the minimum swipe travel of the start point \(0\.5, 0\.5\).*farther from the start/i
       ),
     });
     expect(result.calls).toEqual([]);
