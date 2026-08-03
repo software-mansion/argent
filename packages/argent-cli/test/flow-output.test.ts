@@ -12,8 +12,8 @@ let outDir: string;
 let flowFile: string;
 
 /** The deterministic disambiguation suffix for a flow path — mirrors the export's derivation. */
-function pathHash(p: string): string {
-  return createHash("sha256").update(p).digest("hex").slice(0, 8);
+function pathHash(p: string, len = 8): string {
+  return createHash("sha256").update(p).digest("hex").slice(0, len);
 }
 
 // Legacy string-path artifacts contain no handles, so materialization walks
@@ -446,6 +446,209 @@ describe("exportFailureArtifacts", () => {
       // directory's contents are, only that they exist.
       expect(errSpy).toHaveBeenCalledWith(
         expect.stringContaining("already holds files from an unknown source")
+      );
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("escalates past an occupied redirect target instead of overwriting its evidence", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // The reviewer's collision: <stem>/ is taken by suiteA, and the hash8
+      // redirect target is ALREADY claimed by another flow (in the wild, one
+      // whose stem is literally "checks-<hash8>"). Reproduced deterministically
+      // by pre-creating <stem>-<hash8> — computed from the real flow path the
+      // same way the source does — with a marker naming that other owner.
+      const flowA = path.join(tmpDir, "suiteA", "checks.yaml");
+      const flowB = path.join(tmpDir, "suiteB", "checks.yaml");
+      const h8 = pathHash(flowB);
+      const suiteD = path.join(tmpDir, "suiteD", `checks-${h8}.yaml`);
+      await fs.mkdir(path.join(outDir, "checks"), { recursive: true });
+      await fs.writeFile(path.join(outDir, "checks", ".argent-flow-source"), `${flowA}\n`);
+      const occupied = path.join(outDir, `checks-${h8}`);
+      await fs.mkdir(occupied, { recursive: true });
+      await fs.writeFile(path.join(occupied, ".argent-flow-source"), `${suiteD}\n`);
+      await fs.writeFile(path.join(occupied, "shot__ios-390x844-current.png"), "suiteD-bytes");
+      const stepB: StepReport = {
+        index: 0,
+        kind: "snapshot",
+        status: "fail",
+        snapshotKey: "shot__ios-390x844",
+        artifacts: { current: await writeFile("b.png", "suiteB-bytes") },
+      };
+
+      await exportFailureArtifacts(mkReport([stepB]), outDir, flowB, ctx);
+
+      // suiteD's evidence survives byte-for-byte, marker included.
+      expect(await fs.readFile(path.join(occupied, ".argent-flow-source"), "utf8")).toBe(
+        `${suiteD}\n`
+      );
+      expect(await fs.readFile(path.join(occupied, "shot__ios-390x844-current.png"), "utf8")).toBe(
+        "suiteD-bytes"
+      );
+      // suiteB lands one rung up the deterministic ladder: the 16-char prefix.
+      const dest = path.join(outDir, `checks-${pathHash(flowB, 16)}`);
+      expect(stepB.artifacts?.current).toBe(path.join(dest, "shot__ios-390x844-current.png"));
+      expect(await fs.readFile(stepB.artifacts?.current as string, "utf8")).toBe("suiteB-bytes");
+      // One warning per avoided directory, each naming its owner — and every
+      // warning names the directory the artifacts actually land in.
+      expect(errSpy).toHaveBeenCalledTimes(2);
+      expect(errSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `${path.join(outDir, "checks")} already holds artifacts from ${flowA}`
+        )
+      );
+      expect(errSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`${occupied} already holds artifacts from ${suiteD}`)
+      );
+      for (const call of errSpy.mock.calls) {
+        expect(call[0]).toContain(`writing this flow's artifacts to ${dest}`);
+      }
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("escalates past a markerless non-empty redirect target the same as a markerless stem", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // Both the stem and the hash8 fallback hold unowned files — the export
+      // can prove neither is its own, so it must step past both.
+      await fs.mkdir(path.join(outDir, "checkout"), { recursive: true });
+      await fs.writeFile(path.join(outDir, "checkout", "keep.txt"), "operator data");
+      const occupied = path.join(outDir, `checkout-${pathHash(flowFile)}`);
+      await fs.mkdir(occupied, { recursive: true });
+      await fs.writeFile(path.join(occupied, "keep.txt"), "more operator data");
+      const step: StepReport = {
+        index: 0,
+        kind: "snapshot",
+        status: "fail",
+        snapshotKey: "home__ios-390x844",
+        artifacts: { current: await writeFile("c.png", "current-bytes") },
+      };
+
+      await exportFailureArtifacts(mkReport([step]), outDir, flowFile, ctx);
+
+      expect(await fs.readFile(path.join(occupied, "keep.txt"), "utf8")).toBe("more operator data");
+      expect(step.artifacts?.current).toBe(
+        path.join(outDir, `checkout-${pathHash(flowFile, 16)}`, "home__ios-390x844-current.png")
+      );
+      expect(errSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`${occupied} already holds files from an unknown source`)
+      );
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("claims a pre-created empty redirect target, consistent with the stem-dir rule", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await fs.mkdir(path.join(outDir, "checkout"), { recursive: true });
+      await fs.writeFile(path.join(outDir, "checkout", "keep.txt"), "operator data");
+      const target = path.join(outDir, `checkout-${pathHash(flowFile)}`);
+      await fs.mkdir(target, { recursive: true }); // empty — nothing to protect
+      const step: StepReport = {
+        index: 0,
+        kind: "snapshot",
+        status: "fail",
+        snapshotKey: "home__ios-390x844",
+        artifacts: { current: await writeFile("c.png", "current-bytes") },
+      };
+
+      await exportFailureArtifacts(mkReport([step]), outDir, flowFile, ctx);
+
+      const dest = path.join(target, "home__ios-390x844-current.png");
+      expect(step.artifacts?.current).toBe(dest);
+      expect(await fs.readFile(dest, "utf8")).toBe("current-bytes");
+      // Claimed with the usual marker — no escalation to a longer prefix.
+      expect(await fs.readFile(path.join(target, ".argent-flow-source"), "utf8")).toBe(
+        `${flowFile}\n`
+      );
+      expect((await fs.readdir(outDir)).sort()).toEqual([
+        "checkout",
+        `checkout-${pathHash(flowFile)}`,
+      ]);
+      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining(target));
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("re-runs a redirected flow into its established hash directory, overwriting in place", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // The stem stays foreign across runs; the flow's own marker in the
+      // hash8 directory is what lets a later invocation overwrite in place —
+      // the stable redirect name CI references depend on.
+      await fs.mkdir(path.join(outDir, "checkout"), { recursive: true });
+      await fs.writeFile(path.join(outDir, "checkout", "keep.txt"), "operator data");
+      const mkStep = async (content: string): Promise<StepReport> => ({
+        index: 0,
+        kind: "snapshot",
+        status: "fail",
+        snapshotKey: "home__ios-390x844",
+        artifacts: { current: await writeFile("c.png", content) },
+      });
+      const dest = path.join(
+        outDir,
+        `checkout-${pathHash(flowFile)}`,
+        "home__ios-390x844-current.png"
+      );
+
+      const first = await mkStep("run1-bytes");
+      await exportFailureArtifacts(mkReport([first]), outDir, flowFile, ctx);
+      expect(first.artifacts?.current).toBe(dest);
+
+      const second = await mkStep("run2-bytes");
+      await exportFailureArtifacts(mkReport([second]), outDir, flowFile, ctx);
+
+      expect(second.artifacts?.current).toBe(dest);
+      expect(await fs.readFile(dest, "utf8")).toBe("run2-bytes");
+      // No longer-prefix siblings accumulate across re-runs.
+      expect((await fs.readdir(outDir)).sort()).toEqual([
+        "checkout",
+        `checkout-${pathHash(flowFile)}`,
+      ]);
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("skips the export entirely when every candidate directory is foreign", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // Squat on the stem and the whole prefix ladder, full hash included —
+      // only then may the export give up, and it must warn instead of write.
+      const fullHash = pathHash(flowFile, 64);
+      const names = ["checkout"];
+      for (let len = 8; len <= 64; len += 8) names.push(`checkout-${fullHash.slice(0, len)}`);
+      for (const name of names) {
+        await fs.mkdir(path.join(outDir, name), { recursive: true });
+        await fs.writeFile(path.join(outDir, name, "keep.txt"), `squatting ${name}`);
+      }
+      const source = await writeFile("c.png", "current-bytes");
+      const step: StepReport = {
+        index: 0,
+        kind: "snapshot",
+        status: "fail",
+        snapshotKey: "home__ios-390x844",
+        artifacts: { current: source },
+      };
+
+      await exportFailureArtifacts(mkReport([step]), outDir, flowFile, ctx);
+
+      // Source path left in place, nothing created, every squatter untouched.
+      expect(step.artifacts?.current).toBe(source);
+      expect((await fs.readdir(outDir)).sort()).toEqual([...names].sort());
+      for (const name of names) {
+        expect(await fs.readFile(path.join(outDir, name, "keep.txt"), "utf8")).toBe(
+          `squatting ${name}`
+        );
+      }
+      expect(errSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`not exporting artifacts for ${flowFile}`)
       );
     } finally {
       errSpy.mockRestore();

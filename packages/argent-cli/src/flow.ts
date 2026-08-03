@@ -321,37 +321,34 @@ function shellQuoteArg(arg: string): string {
 const EXPORT_SOURCE_MARKER = ".argent-flow-source";
 
 /**
- * Pick the subdirectory name under `--output` for this flow's artifacts.
- * The filename stem when it is free or already claimed by this same YAML
- * file; otherwise `<stem>-<hash8>` where the hash is of the resolved flow
- * path — a pure function of the path, so the fallback stays deterministic
- * across invocations (CI references survive re-runs) while never colliding
- * with the other file's directory. A stem directory without a readable
- * marker is claimed while it is empty — pre-creating the artifact dir
- * (`mkdir -p`) is an ordinary CI step, and an empty directory holds nothing
- * to protect. Once it has any content (operator files, or an export from a
- * pre-marker CLI) it is treated as foreign, as is one that cannot even be
- * listed: redirecting is the safe direction, silently overwriting is not.
- * Both name forms are single FLOW_NAME_PATTERN-charset segments (validated
- * stem + hex), so containment under outputDir is preserved. Read-only — the
- * marker itself is written only once artifacts actually land.
+ * How a candidate export directory relates to this flow: free to claim
+ * (absent, or pre-created but empty — `mkdir -p` before the run is an
+ * ordinary CI step, and an empty directory holds nothing to protect),
+ * already this flow's own (the marker names `flowPath`), or foreign — owned
+ * by a different YAML path (`owner` is that path) or holding content that
+ * proves no owner (`owner` is null: operator files, an export from a
+ * pre-marker CLI, or a directory that cannot even be listed — emptiness
+ * can't be proven, and redirecting is the safe direction). One classifier
+ * serves the pretty stem directory and every hash-suffixed fallback alike,
+ * so the two can never drift apart in what they refuse to overwrite.
  */
-async function resolveExportDirName(
-  outputDir: string,
-  flowPath: string,
-  stem: string
-): Promise<string> {
+type ExportDirClaim =
+  | { state: "free" }
+  | { state: "mine" }
+  | { state: "foreign"; owner: string | null };
+
+async function classifyExportDir(dir: string, flowPath: string): Promise<ExportDirClaim> {
   let owner: string | null; // null = directory has content but proves no owner
   try {
-    owner = (await fsp.readFile(path.join(outputDir, stem, EXPORT_SOURCE_MARKER), "utf8")).trim();
+    owner = (await fsp.readFile(path.join(dir, EXPORT_SOURCE_MARKER), "utf8")).trim();
   } catch {
     try {
-      if ((await fsp.readdir(path.join(outputDir, stem))).length === 0) {
-        return stem; // pre-created but empty — nothing to protect, claim it
+      if ((await fsp.readdir(dir)).length === 0) {
+        return { state: "free" }; // pre-created but empty — nothing to protect
       }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        return stem; // no directory yet — claim the documented pretty path
+        return { state: "free" }; // no directory yet — free to claim
       }
       // Unlistable (permissions, or a plain file squatting on the name):
       // emptiness can't be proven, so fall through to the foreign path.
@@ -362,15 +359,68 @@ async function resolveExportDirName(
   // one file always maps to one spelling within a checkout. (Two symlink
   // spellings of one file would split into two directories — a redirect, not
   // a loss.)
-  if (owner === flowPath) return stem;
-  const dirName = `${stem}-${createHash("sha256").update(flowPath).digest("hex").slice(0, 8)}`;
+  return owner === flowPath ? { state: "mine" } : { state: "foreign", owner };
+}
+
+/**
+ * Pick the subdirectory name under `--output` for this flow's artifacts, or
+ * null when nothing can be claimed without destroying someone else's. The
+ * filename stem when it is free or already claimed by this same YAML file;
+ * otherwise `<stem>-<prefix>` where the prefix is a growing slice (8, then
+ * 16, … up to all 64 hex chars) of the sha256 of the resolved flow path.
+ * Every candidate — fallbacks included — passes the same occupancy check as
+ * the stem (see classifyExportDir): a foreign directory is stepped past to
+ * the next longer prefix, never written into. The ladder is a pure function
+ * of the flow path, so a re-run walks the same rungs and lands back in the
+ * directory its previous run claimed (CI references survive) — unless an
+ * earlier rung's foreign occupant was deleted in between, in which case the
+ * re-run claims that now-free earlier rung and its old directory goes stale
+ * (a redirect, never an overwrite). Two distinct paths can never share the
+ * full 64-char hash, so escalation terminates without randomness. If even the full-hash directory is foreign
+ * (only possible when something else squats on it), returns null after a
+ * warning: the caller skips this flow's export, because losing one export
+ * beats destroying another flow's evidence. Each warning names the
+ * directory actually being avoided and the directory the artifacts actually
+ * land in (or that nothing is written at all). Both name forms are single
+ * FLOW_NAME_PATTERN-charset segments (validated stem + hex), so containment
+ * under outputDir is preserved for every candidate. Read-only — the marker
+ * itself is written only once artifacts actually land.
+ */
+async function resolveExportDirName(
+  outputDir: string,
+  flowPath: string,
+  stem: string
+): Promise<string | null> {
+  const hash = createHash("sha256").update(flowPath).digest("hex");
+  const candidates = [stem];
+  for (let len = 8; len <= hash.length; len += 8) {
+    candidates.push(`${stem}-${hash.slice(0, len)}`);
+  }
+  const avoided: { dir: string; owner: string | null }[] = [];
+  for (const name of candidates) {
+    const claim = await classifyExportDir(path.join(outputDir, name), flowPath);
+    if (claim.state === "foreign") {
+      avoided.push({ dir: path.join(outputDir, name), owner: claim.owner });
+      continue;
+    }
+    // Warn only once the real destination is known, so every line names both
+    // the directory being avoided and where the artifacts actually land.
+    for (const { dir, owner } of avoided) {
+      console.error(
+        `warning: ${dir} already holds ` +
+          `${owner === null ? "files from an unknown source" : `artifacts from ${owner}`}; ` +
+          `writing this flow's artifacts to ` +
+          `${path.join(outputDir, name)} so neither set is overwritten`
+      );
+    }
+    return name;
+  }
   console.error(
-    `warning: ${path.join(outputDir, stem)} already holds ` +
-      `${owner === null ? "files from an unknown source" : `artifacts from ${owner}`}; ` +
-      `writing this flow's artifacts to ` +
-      `${path.join(outputDir, dirName)} so neither set is overwritten`
+    `warning: not exporting artifacts for ${flowPath}: every candidate directory from ` +
+      `${avoided[0].dir} through ${avoided[avoided.length - 1].dir} already holds other ` +
+      `files; leaving this run's artifact paths in place so nothing is overwritten`
   );
-  return dirName;
+  return null;
 }
 
 /**
@@ -383,7 +433,10 @@ async function resolveExportDirName(
  * already owns `<flow>/` (see EXPORT_SOURCE_MARKER) this run lands in the
  * deterministic `<flow>-<pathhash>/` instead — one suite's CI evidence must
  * never silently replace another's, while a re-run of the same file still
- * overwrites in place. This is the only place the CLI needs artifact bytes,
+ * overwrites in place. The fallback gets the same occupancy check as the
+ * stem, escalating to longer hash prefixes when it too is taken — and when
+ * nothing at all can be claimed, this flow's export is skipped with a
+ * warning rather than ever overwriting. This is the only place the CLI needs artifact bytes,
  * so materialization happens here, scoped to each failed snapshot's
  * artifacts — a co-located tool-server resolves them in place, a remote one
  * downloads just these files. Rewrites each copied role's path in the report
@@ -414,7 +467,9 @@ export async function exportFailureArtifacts(
   if (!report.steps.some((s) => s.kind === "snapshot" && s.status === "fail" && s.artifacts)) {
     return;
   }
-  const dir = path.join(outputDir, await resolveExportDirName(outputDir, flowPath, stem));
+  const dirName = await resolveExportDirName(outputDir, flowPath, stem);
+  if (dirName === null) return; // warned already; sources stay in place, verdict unchanged
+  const dir = path.join(outputDir, dirName);
   let markerWritten = false;
   for (const s of report.steps) {
     if (s.kind !== "snapshot" || s.status !== "fail" || !s.artifacts) continue;
