@@ -1360,9 +1360,12 @@ async function runSwipe(
 
   // Selector frames come from the platform's layout tree rather than the
   // parser, so their centres are not covered by parseTarget's [0, 1] point
-  // validation. Never dispatch an off-screen touch-down (including a
-  // direction swipe whose unchanged cross-axis coordinate is off-screen), and
-  // don't silently move an element anchor to make the gesture valid.
+  // validation. describeFrameSchema bounds each frame field to [0, 1]
+  // independently, so a schema-conformant frame can still centre off-screen —
+  // this guard is the last defense when an adapter's viewport clipping
+  // regresses. Never dispatch an off-screen touch-down (including a direction
+  // swipe whose unchanged cross-axis coordinate is off-screen), and don't
+  // silently move an element anchor to make the gesture valid.
   if (
     !Number.isFinite(start.x) ||
     start.x < 0 ||
