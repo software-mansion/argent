@@ -68,13 +68,24 @@ interface Result {
   image: ArtifactHandle;
 }
 
-const capability: ToolCapability = {
+/**
+ * Every target argent can capture a screenshot from.
+ *
+ * Shared with `screenshot-diff`, whose only device interaction is a screenshot —
+ * so anything that can be captured can be diffed, and a diff between two saved
+ * files touches no device at all. Kept as one object rather than two matching
+ * literals: they drifted apart once already, which is what made a file-to-file
+ * diff impossible on Chromium.
+ */
+export const SCREENSHOT_CAPTURE_CAPABILITY: ToolCapability = {
   apple: { simulator: true, device: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
   vega: { vvd: true },
 };
+
+const capability = SCREENSHOT_CAPTURE_CAPABILITY;
 
 /**
  * tvOS screenshot path. The simulator-server backend does not support tvOS, so

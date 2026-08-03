@@ -9,7 +9,6 @@ import type {
   FileInputSpec,
   ServiceRef,
   ToolContext,
-  ToolCapability,
   ToolDefinition,
 } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
@@ -18,6 +17,7 @@ import { httpScreenshot } from "../../utils/simulator-client";
 import { captureScreenshotUpright } from "../../utils/rotation-aware-capture";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 import { diffPngFiles } from "./screenshot-diff";
+import { SCREENSHOT_CAPTURE_CAPABILITY } from "../screenshot";
 
 const zodSchema = z
   .object({
@@ -34,7 +34,9 @@ const zodSchema = z
     udid: z
       .string()
       .min(1)
-      .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+      .describe(
+        "Target device id from `list-devices` (iOS UDID, Android serial, Apple TV UDID, Vega serial, or Chromium id). Required even when comparing two saved files, though no device is touched in that case."
+      ),
     captureBaseline: z.coerce
       .boolean()
       .optional()
@@ -80,10 +82,18 @@ export interface ScreenshotDiffResult {
 
 type CaptureScreenshot = typeof httpScreenshot;
 
-const capability: ToolCapability = {
-  apple: { simulator: true, device: true },
-  android: { emulator: true, device: true, unknown: true },
-};
+// A diff between two saved PNGs touches no device, and a live capture works
+// wherever `screenshot` works — so the platforms are the same set, held once.
+// Live capture is restricted further, per platform, in `validateInputSources`.
+const capability = SCREENSHOT_CAPTURE_CAPABILITY;
+
+/**
+ * Platforms this tool can diff but not yet capture from. Their screenshots come
+ * from backends it does not drive (CDP for Chromium, the Vega console, `simctl
+ * io` for tvOS), so a live capture is refused with a message naming screenshots
+ * — while a diff between two saved files keeps working everywhere.
+ */
+const CAPTURE_UNSUPPORTED = new Set<string>(["chromium", "vega"]);
 
 /**
  * The saved PNGs live on the AGENT's machine (typically materialized there by
@@ -106,7 +116,7 @@ export const screenshotDiffTool: ToolDefinition<Params, ScreenshotDiffResult> = 
     failedMsg: ({ failureSignal }) => `Failed to compare screenshots: ${failureSignal.error_code}`,
   },
   description: `Compare two PNG screenshots and return a compact visual-diff summary.
-Accepts saved baseline/current PNG paths, or one saved PNG plus one live full-resolution capture from a device. Always provide udid so the simulator-server dependency can be resolved.
+Accepts saved baseline/current PNG paths, or one saved PNG plus one live full-resolution capture from a device. Comparing two saved PNGs touches no device and works on every platform; live capture (captureBaseline/captureCurrent) is currently iOS and Android only. Always provide udid.
 Use when stable before/after screenshots exist and the expected result is pixel-visible: layout, spacing, color, typography, image/icon rendering, clipping, overflow, or text rendering.
 For live captures, set exactly one of captureBaseline or captureCurrent; use baselinePath + captureCurrent for the common visual-regression flow.
 Returns { summary, diffPath, contextDiffPath }. The summary uses normalized [0,1] screen locations matching describe coordinates; diffPath is the full-size diff image and contextDiffPath is a downscaled image for MCP/agent display.
@@ -122,10 +132,15 @@ Fails if the input sources are invalid, PNG files cannot be read, outputDir cann
     // Requesting it unconditionally causes it to be resolved (and started) even
     // for pure static-PNG diffs, which fails on tvOS simulators that have no
     // SimulatorServer backend.
-    if (params.captureBaseline || params.captureCurrent) {
-      return { simulatorServer: simulatorServerRef(resolveDevice(params.udid)) };
-    }
-    return {};
+    if (!params.captureBaseline && !params.captureCurrent) return {};
+    // Platforms whose screenshots come from somewhere other than the
+    // SimulatorServer. Asking for one here would fail while resolving the
+    // service — before `execute` runs — so the caller would get the blueprint's
+    // "unsupported platform" error instead of one naming screenshots. The
+    // live-capture restriction is stated in `validateInputSources` instead.
+    const device = resolveDevice(params.udid);
+    if (device.platform === "chromium" || device.platform === "vega") return {};
+    return { simulatorServer: simulatorServerRef(device) };
   },
   async execute(services, params, options) {
     return executeScreenshotDiffTool(services, params, options);
@@ -228,6 +243,7 @@ async function resolveInputPaths(
 }
 
 function validateInputSources(params: Params): void {
+  const platform = resolveDevice(params.udid).platform;
   const invalid = (message: string, stage: string): FailureError =>
     new FailureError(message, {
       error_code: FAILURE_CODES.SCREENSHOT_DIFF_INPUT_INVALID,
@@ -235,6 +251,17 @@ function validateInputSources(params: Params): void {
       failure_area: "tool_server",
       error_kind: "validation",
     });
+  // Live capture on these goes through a backend this tool does not drive yet.
+  // Comparing two saved PNGs is unaffected — it touches no device — so say which
+  // half is unavailable rather than refusing the whole tool.
+  if ((params.captureBaseline || params.captureCurrent) && CAPTURE_UNSUPPORTED.has(platform)) {
+    throw invalid(
+      `Cannot capture a screenshot for a diff on ${platform}. Capture it separately with the ` +
+        `\`screenshot\` tool, then pass both files as baselinePath and currentPath — comparing ` +
+        `saved images works on every platform.`,
+      "screenshot_diff_capture_unsupported"
+    );
+  }
   if (params.captureBaseline && params.captureCurrent) {
     throw invalid(
       "captureBaseline and captureCurrent cannot both be true; provide one saved image path and capture the other side live.",
