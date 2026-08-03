@@ -499,6 +499,46 @@ describe("swipe: execution", () => {
     });
   });
 
+  it("resolves the anchor AFTER the endpoint's auto-wait, so a moved anchor stays fresh", async () => {
+    // The endpoint appears only on later polls, and the anchor moves while
+    // that auto-wait runs. The finger must go down on the anchor's current
+    // centre (0.7, 0.3) — resolving it before the endpoint wait would dispatch
+    // from the stale pre-wait centre (0.2, 0.3) onto empty background.
+    let fetches = 0;
+    currentTree = () => {
+      fetches += 1;
+      return fetches <= 2
+        ? screen([n({ label: "Card", frame: { x: 0.1, y: 0.25, width: 0.2, height: 0.1 } })])
+        : screen([
+            n({ label: "Card", frame: { x: 0.6, y: 0.25, width: 0.2, height: 0.1 } }),
+            n({ label: "Archive", frame: { x: 0.0, y: 0.9, width: 0.2, height: 0.1 } }),
+          ]);
+    };
+    await writeFlow("moved-anchor", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "swipe",
+          from: { selector: { text: "Card", loose: true } },
+          to: { selector: { text: "Archive", loose: true } },
+        },
+      ],
+    });
+
+    const result = await run("moved-anchor");
+
+    expect(result.ok).toBe(true);
+    expect(result.calls[0]).toMatchObject({
+      tool: "gesture-swipe",
+      args: {
+        fromX: expect.closeTo(0.7, 10),
+        fromY: expect.closeTo(0.3, 10),
+        toX: expect.closeTo(0.1, 10),
+        toY: expect.closeTo(0.95, 10),
+      },
+    });
+  });
+
   it("fails a to point that lands on the default centre start", async () => {
     await writeFlow("to-centre", {
       executionPrerequisite: "",
