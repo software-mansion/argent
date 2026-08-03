@@ -1828,6 +1828,41 @@ describe("flow-finish-recording", () => {
     ]);
   });
 
+  it("renders swipe options and by-deltas so distinct gestures stay distinguishable", async () => {
+    const name = "swipe-options-summary";
+    await flowStartRecordingTool.execute(
+      {},
+      { name, project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    // Raw YAML on purpose: `settle: false` is normalized to absent by the
+    // parser, so step 2 IS a plain `swipe: left` and must render without noise.
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", `${name}.yaml`),
+      [
+        `executionPrerequisite: ${PREREQ}`,
+        "steps:",
+        "  - swipe: { direction: left, settle: true }",
+        "  - swipe: { direction: left, settle: false }",
+        "  - swipe: { direction: left, duration: 800 }",
+        "  - swipe: { by: { x: -0.31 } }",
+        "  - swipe: { direction: left, settle: true, duration: 800 }",
+        "",
+      ].join("\n")
+    );
+
+    const result = await flowFinishRecordingTool.execute({}, { name, project_root: tmpDir });
+
+    // `by` spelled exactly as the run report's stepTarget spells it.
+    expect(result.summary).toEqual([
+      "1. swipe: left (settle)",
+      "2. swipe: left",
+      "3. swipe: left (800ms)",
+      "4. swipe: by x=-0.31",
+      "5. swipe: left (settle, 800ms)",
+    ]);
+  });
+
   it("distinguishes contains, equals, and regex text comparisons in the summary", async () => {
     const name = "text-comparison-summary";
     await flowStartRecordingTool.execute(

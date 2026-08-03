@@ -1265,6 +1265,16 @@ function swipeByToYaml(by: { x?: number; y?: number }): { x?: number; y?: number
   return result;
 }
 
+/** Display spelling of a relative swipe delta (`x=-0.31, y=0.2`, absent axes
+ * dropped) — shared by the run report's stepTarget and the recording summary
+ * so the two surfaces agree. */
+export function swipeByLabel(by: { x?: number; y?: number }): string {
+  return (["x", "y"] as const)
+    .filter((axis) => by[axis] !== undefined)
+    .map((axis) => `${axis}=${by[axis]}`)
+    .join(", ");
+}
+
 function isPositiveMs(raw: unknown): raw is number {
   return typeof raw === "number" && Number.isFinite(raw) && raw > 0;
 }
