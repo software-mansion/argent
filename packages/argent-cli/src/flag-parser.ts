@@ -5,7 +5,7 @@
 //   --name value          (string / number / integer)
 //   --name=value
 //   --name                (boolean: true)
-//   --name true|false     (boolean: explicit value — only these two words are consumed)
+//   --name true|false     (boolean: explicit value — also 1|0; only these are consumed)
 //   --no-name             (boolean: false)
 //   --name a --name b     (array of scalars)
 //   --name-json '<json>'  (arbitrary nested object/array — escape hatch)
@@ -65,14 +65,18 @@ export function flagNameFor(name: string, prop: JsonSchema | undefined): string 
 }
 
 /**
- * `true`/`false` as a standalone word, case-insensitive and whitespace-tolerant.
- * `undefined` for anything else, including `1`/`0` — a bare number following a
- * switch is far more likely to be an unrelated argument than a value.
+ * A token that can only have been meant as a boolean value: `true`/`false` or
+ * `1`/`0`, case-insensitive and whitespace-tolerant. `undefined` for anything
+ * else, so an ambiguous token is left alone rather than guessed at.
+ *
+ * The single source of truth for every form — the `--flag <value>` lookahead,
+ * `--flag=<value>`, boolean array items, and the `--no-flag` contradiction
+ * guard — so the same word cannot mean different things one call site apart.
  */
-function booleanWord(raw: string): boolean | undefined {
+function booleanLiteral(raw: string): boolean | undefined {
   const value = raw.trim().toLowerCase();
-  if (value === "true") return true;
-  if (value === "false") return false;
+  if (value === "true" || value === "1") return true;
+  if (value === "false" || value === "0") return false;
   return undefined;
 }
 
@@ -95,16 +99,11 @@ function coerceScalar(raw: string, type: string | undefined, field: string): unk
     return n;
   }
   if (type === "boolean") {
-    // Shares booleanWord with the bare-token lookahead, so `--flag=True` and
+    // Shares booleanLiteral with the bare-token lookahead, so `--flag=True` and
     // `--flag True` cannot disagree about the same word.
-    const word = booleanWord(raw);
-    if (word !== undefined) return word;
-    // 1/0 only where the value is unambiguously attached (`--flag=1`, array
-    // items); the lookahead stays narrower on purpose.
-    const value = raw.trim();
-    if (value === "1") return true;
-    if (value === "0") return false;
-    throw new FlagParseException(`--${field} expected true/false, got "${raw}"`);
+    const value = booleanLiteral(raw);
+    if (value !== undefined) return value;
+    throw new FlagParseException(`--${field} expected true/false (or 1/0), got "${raw}"`);
   }
   // string or unknown: pass through
   return raw;
@@ -227,11 +226,11 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
         if (inlineValue !== undefined) {
           throw new FlagParseException(`--no-${fieldName} does not take a value`);
         }
-        // Now that a boolean word after a flag is consumed as its value,
+        // Now that a boolean value after a flag is consumed as its value,
         // `--no-flag false` would read as a double negative and `--no-flag true`
         // would contradict itself. Neither can be a typo for anything but the
         // positive form, so name that form rather than silently picking one.
-        const following = i + 1 < argv.length ? booleanWord(argv[i + 1]!) : undefined;
+        const following = i + 1 < argv.length ? booleanLiteral(argv[i + 1]!) : undefined;
         if (following !== undefined) {
           throw new FlagParseException(
             `--no-${fieldName} does not take a value; use --${fieldName} ${following}`
@@ -252,13 +251,13 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
         args[flag] = coerceScalar(inlineValue, "boolean", flag);
         continue;
       }
-      // A bare boolean flag is true — unless the next token is the WORD
-      // `true`/`false`, which can only have been meant as this flag's value.
+      // A bare boolean flag is true — unless the next token is `true`/`false`
+      // or `1`/`0`, which can only have been meant as this flag's value.
       // An earlier comment here declined to look ahead, to avoid stealing a
       // following positional; `argent run` is the sole caller and never reads
-      // `positional`, so there is nothing to steal. Only the two words are
+      // `positional`, so there is nothing to steal. Only those four tokens are
       // taken, and `--flag -- false` still keeps `false` positional.
-      const next = i + 1 < argv.length ? booleanWord(argv[i + 1]!) : undefined;
+      const next = i + 1 < argv.length ? booleanLiteral(argv[i + 1]!) : undefined;
       if (next !== undefined) {
         args[flag] = next;
         i += 1;
@@ -360,7 +359,8 @@ export function formatSchemaUsage(schema: JsonSchema | undefined): string {
   if (entries.some(([, prop]) => prop.type === "boolean")) {
     lines.push(
       "",
-      "  Booleans: --flag or --flag true sets true; --flag false, --flag=false, or --no-flag sets false."
+      "  Booleans: --flag, --flag true, or --flag 1 sets true; --flag false, --flag 0, " +
+        "--flag=false, or --no-flag sets false."
     );
   }
   return lines.join("\n");

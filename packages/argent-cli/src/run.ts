@@ -279,8 +279,8 @@ Examples:
 
   // `argent run` takes no positional arguments beyond the tool name, so anything
   // left here was typed and then ignored. Saying so is the point: a boolean flag
-  // now consumes a following `true`/`false`, but not `--flag 0` or `--flag yes`,
-  // and silently dropping those is the exact failure this warning exists to stop
+  // now consumes a following `true`/`false`/`1`/`0`, but not `--flag yes`, and
+  // silently dropping those is the exact failure this warning exists to stop
   // (#586). Written to stderr so `--json` output stays parseable.
   if (parsed.positional.length > 0) {
     console.error(

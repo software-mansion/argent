@@ -365,12 +365,32 @@ describe("what the lookahead deliberately does NOT take", () => {
     expect(r.positional).toEqual(["notabool"]);
   });
 
-  it("leaves 1 and 0 alone in the space form", () => {
-    // A bare number after a switch is far more likely to be an unrelated
-    // argument than a value. They still work attached: --capture=1.
-    expect(parseFlags(["--capture", "1"], boolSchema).positional).toEqual(["1"]);
+  it("takes 1 and 0 in the space form too", () => {
+    // `--flag 0` previously set the flag TRUE and dropped the 0 — the same
+    // silent inversion as `--flag false`, and the reason 1/0 is not left as an
+    // ambiguous token: nothing else a bare 1/0 after a boolean switch can mean.
+    const one = parseFlags(["--capture", "1"], boolSchema);
+    expect(one.args.capture).toBe(true);
+    expect(one.positional).toEqual([]);
+
+    const zero = parseFlags(["--capture", "0"], boolSchema);
+    expect(zero.args.capture).toBe(false);
+    expect(zero.positional).toEqual([]);
+  });
+
+  it("reads 1 and 0 the same way in every form", () => {
+    // One helper behind the lookahead, the inline form and array items, so the
+    // same token cannot mean different things one call site apart.
     expect(parseFlags(["--capture=1"], boolSchema).args.capture).toBe(true);
     expect(parseFlags(["--capture=0"], boolSchema).args.capture).toBe(false);
+    expect(parseFlags(["--flags", "1", "--flags", "0"], boolSchema).args.flags).toEqual([
+      true,
+      false,
+    ]);
+    // `--no-flag 0` is a double negative; it names the positive form rather
+    // than silently picking one, exactly as `--no-flag false` does.
+    expect(() => parseFlags(["--no-capture", "0"], boolSchema)).toThrow(/use --capture false/);
+    expect(() => parseFlags(["--no-capture", "1"], boolSchema)).toThrow(/use --capture true/);
   });
 
   it("still lets -- force a literal true/false positional", () => {
