@@ -405,13 +405,13 @@ function entryEdgeDeficit(
 
 /**
  * Travel for one edge-avoid nudge, or 0 when none should happen: the accepted
- * `frame` already sits `EDGE_AVOID_PADDING` clear of the clip's entry edge,
- * that edge isn't a screen edge (an inset container's own border already
- * clears screen chrome), or there is no room to move — the headroom (the
- * target's distance to the opposite clip edge, which a spanning shape-2 target
- * has none of) must fit at least twice the minimum scroll gesture, since the
- * travel is capped at `headroom / 2` and a shorter swipe would register as a
- * tap (see MIN_SCROLL_INCREMENT).
+ * `frame` already sits (to within `EDGE_EPS`) `EDGE_AVOID_PADDING` clear of the
+ * clip's entry edge, that edge isn't a screen edge (an inset container's own
+ * border already clears screen chrome), or there is no room to move — the
+ * headroom (the target's distance to the opposite clip edge, which a spanning
+ * shape-2 target has none of) must fit at least twice the minimum scroll
+ * gesture, since the travel is capped at `headroom / 2` and a shorter swipe
+ * would register as a tap (see MIN_SCROLL_INCREMENT).
  *
  * `clip` is the container that actually scrolls the target — the step's
  * `within` region, or the target's own scroll-container ancestor — never the
@@ -447,7 +447,10 @@ function edgeNudgeDistance(
   if (!atScreenEdge) return 0;
   const deficit = entryEdgeDeficit(frame, direction, clip);
   const headroom = fromEnd ? fStart - clipStart : clipEnd - fEnd;
-  if (deficit <= 0 || headroom / 2 < MIN_SCROLL_INCREMENT) return 0;
+  // EDGE_EPS, not 0: the floor below turns any deficit at all into a full
+  // MIN_SCROLL_INCREMENT of travel, so without a tolerance a target a hair
+  // short of the padding pays a whole gesture and settle to gain nothing.
+  if (deficit <= EDGE_EPS || headroom / 2 < MIN_SCROLL_INCREMENT) return 0;
   return Math.min(Math.max(deficit * EDGE_NUDGE_OVERSHOOT, MIN_SCROLL_INCREMENT), headroom / 2);
 }
 
