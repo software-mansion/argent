@@ -663,7 +663,12 @@ describe("parseFlow", () => {
       serializeFlow({
         executionPrerequisite: "",
         steps: [
-          { kind: "await", condition: "visible", selector: { text: "Account", loose: true }, timeout },
+          {
+            kind: "await",
+            condition: "visible",
+            selector: { text: "Account", loose: true },
+            timeout,
+          },
         ],
       })
     ).toThrow("Cannot serialize flow await.timeout: needs a positive number of milliseconds");
