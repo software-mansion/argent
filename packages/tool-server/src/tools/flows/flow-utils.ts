@@ -1256,12 +1256,15 @@ function swipeByToYaml(by: { x?: number; y?: number }): { x?: number; y?: number
         `Cannot serialize flow swipe.by.${axis}: must be a non-zero fraction of the screen between -1 and 1`
       );
     }
-    if (Math.abs(value) < SWIPE_MIN_TRAVEL) {
-      throw new Error(
-        `Cannot serialize flow swipe.by.${axis}: ${value} is below the minimum swipe travel of ${SWIPE_MIN_TRAVEL} — a travel that small is a tap, not a swipe`
-      );
-    }
     result[axis] = value;
+  }
+  // Gate the COMBINED travel on its vector magnitude (matching parseSwipeBy), so
+  // serialize accepts exactly what parse accepts and the round-trip stays exact.
+  const magnitude = Math.hypot(result.x ?? 0, result.y ?? 0);
+  if (magnitude < SWIPE_MIN_TRAVEL) {
+    throw new Error(
+      `Cannot serialize flow swipe.by: travels only ${magnitude} — below the minimum swipe travel of ${SWIPE_MIN_TRAVEL} — a travel that small is a tap, not a swipe`
+    );
   }
   return result;
 }
@@ -2717,11 +2720,12 @@ const SWIPE_OPTION_KEYS = ["from", "direction", "to", "by", "settle", "duration"
 /**
  * Parse a swipe's `by:` delta: signed normalized fractions of the screen,
  * `{ x }` (horizontal), `{ y }` (vertical), or `{ x, y }` (diagonal). Each
- * present axis must be a number in [-1, 1] with at least
- * {@link SWIPE_MIN_TRAVEL} of magnitude — an explicit zero is a spelled-out
- * no-travel axis, so it's rejected with "omit it instead" rather than stored,
- * and sub-floor travel is rejected as a tap in disguise; junk keys are
- * rejected like a point target's.
+ * present axis must be a number in [-1, 1] — an explicit zero is a spelled-out
+ * no-travel axis, so it's rejected with "omit it instead" rather than stored;
+ * junk keys are rejected like a point target's. The combined travel VECTOR must
+ * then clear {@link SWIPE_MIN_TRAVEL} of magnitude, or it's rejected as a tap in
+ * disguise — gated on the magnitude, not per axis, so a diagonal whose
+ * components are each sub-floor still passes when its length does.
  */
 function parseSwipeBy(raw: unknown, entry: unknown): { x?: number; y?: number } {
   if (raw === null || typeof raw !== "object") {
@@ -2742,13 +2746,21 @@ function parseSwipeBy(raw: unknown, entry: unknown): { x?: number; y?: number } 
         `swipe.by.${axis} must be a non-zero fraction of the screen between -1 and 1 (omit the axis instead of 0)`
       );
     }
-    if (Math.abs(v) < SWIPE_MIN_TRAVEL) {
-      badEntry(
-        entry,
-        `swipe.by.${axis} of ${v} is below the minimum swipe travel of ${SWIPE_MIN_TRAVEL} — a travel that small is a tap, not a swipe`
-      );
-    }
     by[axis] = v;
+  }
+  // Gate the COMBINED travel on its vector magnitude, not each axis: a diagonal
+  // whose per-axis components are each sub-floor can still clear the floor and
+  // must be accepted, so the tap/swipe boundary matches `to`/`direction` and
+  // stays monotonic in distance. `by`'s delta is static, so this device-less
+  // magnitude is the whole check — the runtime `by` branch adds no second guard
+  // (re-checking there would spuriously reject a delta that lands one ulp under
+  // the floor after an in-bounds passthrough).
+  const magnitude = Math.hypot(by.x ?? 0, by.y ?? 0);
+  if (magnitude < SWIPE_MIN_TRAVEL) {
+    badEntry(
+      entry,
+      `swipe.by travels only ${magnitude} — below the minimum swipe travel of ${SWIPE_MIN_TRAVEL}; a travel that small is a tap, not a swipe`
+    );
   }
   return by;
 }

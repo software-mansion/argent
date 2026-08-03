@@ -1456,11 +1456,11 @@ async function runSwipe(
     end = toPoint!;
     // A selector endpoint only resolves at run time, so the parser cannot see
     // that it lands within tap range of the start and would dispatch a tap,
-    // not a swipe.
-    if (
-      Math.abs(end.x - start.x) < SWIPE_MIN_TRAVEL &&
-      Math.abs(end.y - start.y) < SWIPE_MIN_TRAVEL
-    ) {
+    // not a swipe. Gate on the travel VECTOR's magnitude (straight-line
+    // distance start→end), so the tap/swipe boundary matches `by`/`direction`
+    // and stays monotonic in distance: a longer diagonal never fails where a
+    // shorter straight-line swipe passes.
+    if (Math.hypot(end.x - start.x, end.y - start.y) < SWIPE_MIN_TRAVEL) {
       return {
         ok: false,
         reason: `swipe.to (${end.x}, ${end.y}) resolved within the minimum swipe travel of the start point (${start.x}, ${start.y}); aim it at a point or element farther from the start`,
