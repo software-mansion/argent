@@ -859,13 +859,32 @@ returns a notice with the prerequisite instead of running.`,
       // one file, but a leading `run:` chain crosses files — a fragment whose
       // chain reaches a launch still (re)starts the app at step 1, destroying
       // the very state the prerequisite demands. Checked before the notice
-      // handshake (and regardless of device/platform params) so a caller is
-      // never asked to establish state the run would then throw away.
-      if (flow.executionPrerequisite) {
+      // handshake so a caller is never asked to establish state the run would
+      // then throw away — and, resolving the pin by shape alone, before any
+      // device listing or boot.
+      //
+      // Exempt: a run pinned to a chromium instance, whose leading launch
+      // provably restarts nothing. An explicit `device` skips resolveRunDevice's
+      // hoist, so the runner owns no instance at step 1 and the run's FIRST
+      // chromium launch can only attach (a viewport refresh — see
+      // runChromiumLaunch) or, declaring no chromium app, error; either way the
+      // prerequisite state survives. That is the documented escape hatch for
+      // running such a fragment against an instance you brought to the required
+      // state yourself. Pinning buys nothing on ios/android/vega: `launch` there
+      // is restart-app, which terminates and relaunches whatever device it is
+      // handed, so those stay refused.
+      if (flow.executionPrerequisite && !pinnedToChromium(params.device)) {
         const leading = await leadingLaunch(flow, flowsDir, [params.name]);
         if (leading) {
+          // Offer the pin only where it is a real way out (see
+          // chromiumPinnable): the guard also fires for unpinned runs of every
+          // platform and for pinned native ones, and sending the caller of an
+          // android flow after a chromium id would only misdirect.
+          const pinRemedy = chromiumPinnable(leading.app, params.platform)
+            ? ` Or pin the run to a chromium instance you have already brought to that state (--device chromium-cdp-<port>), where the leading launch only attaches.`
+            : "";
           throw new FailureError(
-            `A flow whose leading run: chain reaches a launch step must not declare executionPrerequisite — it launches its own app and controls its start state. Drop the leading launch in "${leading.flow}" to make it a fragment, or drop executionPrerequisite from "${params.name}".`,
+            `A flow whose leading run: chain reaches a launch step must not declare executionPrerequisite — it launches its own app and controls its start state. Drop the leading launch in "${leading.flow}" to make it a fragment, or drop executionPrerequisite from "${params.name}".${pinRemedy}`,
             {
               error_code: FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE,
               failure_stage: "flow_run_validate",
@@ -878,7 +897,10 @@ returns a notice with the prerequisite instead of running.`,
 
       // LLM-path prerequisite handshake (fragments only; a flow with a leading
       // launch step cannot declare one — validated at parse, and a leading
-      // run: chain into a launch is rejected just above).
+      // run: chain into a launch is rejected just above unless that launch
+      // merely attaches). The chromium-pinned run exempted above lands here and
+      // takes the ordinary notice/acknowledge path, like any other prerequisite
+      // fragment.
       if (flow.executionPrerequisite && !params.prerequisiteAcknowledged) {
         return {
           flow: flowName,
@@ -1014,6 +1036,43 @@ async function resolveRunDevice(
     platform: params.platform as FlowPlatform | undefined,
   });
   return { device, booted: null };
+}
+
+/**
+ * Does an explicit `device` param pin the run to a chromium instance? Answered
+ * from the id's shape, which is the whole of what {@link resolveFlowDevice}
+ * does with an explicit device ({@link resolveDevice}) — so the answer is
+ * exactly the platform the first `launch` step will see, available before the
+ * runner has talked to any device. False for an unpinned run, which stays
+ * refused — not because a boot is certain there, but because it is undecidable
+ * at this point: an unambiguously chromium leading launch ({@link
+ * chromiumBootSpec}) has {@link resolveRunDevice} hoist-boot a fresh instance
+ * the run owns, so that launch settles a brand-new app and the prerequisite
+ * state is gone, while an only *ambiguously* chromium one (multi-platform map,
+ * no `platform`) hoists nothing and would in fact attach to whatever
+ * auto-detection lands on. Telling those apart needs a device listing, and the
+ * refusal has to come before the caller is asked to establish state — so the
+ * guard takes the safe answer, and a caller who knows the instance says so with
+ * `device`.
+ */
+function pinnedToChromium(device: string | undefined): boolean {
+  return device !== undefined && resolveDevice(device).platform === "chromium";
+}
+
+/**
+ * Does this leading launch declare a chromium target — i.e. would the
+ * {@link pinnedToChromium} exemption be any use to the caller staring at the
+ * refusal? Pinned to an instance, a launch naming no chromium app doesn't
+ * attach, it errors ({@link noChromiumAppReason}), so an ios/android/vega-only
+ * launch must not advertise the pin. A multi-platform map counts: pinning is
+ * precisely what picks chromium out of it (only the *boot* hoist demands an
+ * unambiguous one). A bare string names no platform and is the native
+ * bundle-id shape, read as an app path only once something says chromium — so
+ * it counts under `--platform chromium` alone.
+ */
+function chromiumPinnable(app: Launch, platform: string | undefined): boolean {
+  if (typeof app === "string") return platform === "chromium";
+  return chromiumLaunchSpec(app) !== null;
 }
 
 /** {@link scanLeadingLaunch}'s "keep scanning the parent" outcome. */

@@ -1464,14 +1464,16 @@ describe("flow-execute prerequisite vs leading launch chain", () => {
     await writeSiblingFlow(fragment, "e2e-a", "steps:\n  - launch: { chromium: ./app }\n");
     const registry = makeRegistry();
 
-    await expect(
-      runFlow(registry, {
-        name: "indirect-prereq",
-        project_root: PROJECT_ROOT,
-        flow_file: fragment,
-        prerequisiteAcknowledged: true,
-      })
-    ).rejects.toThrow(/must not declare executionPrerequisite/i);
+    const refusal = runFlow(registry, {
+      name: "indirect-prereq",
+      project_root: PROJECT_ROOT,
+      flow_file: fragment,
+      prerequisiteAcknowledged: true,
+    });
+    await expect(refusal).rejects.toThrow(/must not declare executionPrerequisite/i);
+    // And the message names the third way out, since this launch does declare a
+    // chromium app: pinning is a supported answer here, not just a diagnosis.
+    await expect(refusal).rejects.toThrow(/--device chromium-cdp-<port>/);
     // Refused before the hoist — the state the prerequisite demands survives.
     expect(bootElectronApp).not.toHaveBeenCalled();
     expect((registry.invokeTool as any).mock.calls).toEqual([]);
@@ -1574,6 +1576,128 @@ describe("flow-execute prerequisite vs leading launch chain", () => {
       })
     ).rejects.toThrow(/"e2e-a"/);
     expect(bootElectronApp).not.toHaveBeenCalled();
+  });
+
+  it("runs a chromium-pinned fragment whose leading run: reaches a launch, attaching to it", async () => {
+    // The escape hatch the refusal exists to leave open. Pinned with `device`,
+    // resolveRunDevice hoists no boot — so the run owns nothing at step 1 and
+    // e2e-a's launch can only attach (a CDP viewport refresh, no process
+    // touched), leaving the state the caller established exactly as it was.
+    const fragment = await writeFlow(
+      'executionPrerequisite: "the counter must already read taps: 3"\n' +
+        "steps:\n  - run: e2e-a\n  - echo: after\n"
+    );
+    await writeSiblingFlow(
+      fragment,
+      "e2e-a",
+      "steps:\n  - launch: { chromium: ./app }\n  - echo: A launched\n"
+    );
+    const registry = makeRegistry();
+    const refreshViewport = vi.fn(async () => ({ width: 800, height: 600 }));
+    (registry.resolveService as any).mockImplementation(async () => ({
+      refreshViewport,
+      cdp: { send: vi.fn(async () => ({})) },
+    }));
+    const params = {
+      name: "pinned-prereq",
+      project_root: PROJECT_ROOT,
+      flow_file: fragment,
+      device: "chromium-cdp-9999",
+    };
+
+    // Not refused: it takes the ordinary handshake, like any other fragment
+    // carrying a prerequisite — and answers it without touching the device.
+    const noticed = await runFlowRaw(registry, params);
+    expect(noticed).toMatchObject({
+      notice: expect.stringContaining("prerequisite"),
+      executionPrerequisite: "the counter must already read taps: 3",
+    });
+    expect((registry.invokeTool as any).mock.calls).toEqual([]);
+
+    const result = await runFlow(registry, { ...params, prerequisiteAcknowledged: true });
+
+    expect(result.ok).toBe(true);
+    expect(result.device).toBe("chromium-cdp-9999");
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "run:pass",
+      "launch:pass",
+      "echo:pass",
+      "echo:pass",
+    ]);
+    // Attached, not booted: a bare launch pass (no reason) is the attach signal,
+    // and the instance the caller brought is neither booted over nor killed.
+    expect(result.steps[1].reason).toBeUndefined();
+    expect(refreshViewport).toHaveBeenCalledTimes(1);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+    expect(killChromiumByPort).not.toHaveBeenCalled();
+    expect(killChromiumByPortAndWait).not.toHaveBeenCalled();
+  });
+
+  it("still rejects that same fragment with no explicit device", async () => {
+    // The control for the exemption above: unpinned, the hoist boots e2e-a's app
+    // and the run OWNS it, so the leading launch settles a brand-new process and
+    // the prerequisite state is gone. Only the attach makes the refusal wrong.
+    const fragment = await writeFlow(
+      'executionPrerequisite: "the counter must already read taps: 3"\n' +
+        "steps:\n  - run: e2e-a\n  - echo: after\n"
+    );
+    await writeSiblingFlow(
+      fragment,
+      "e2e-a",
+      "steps:\n  - launch: { chromium: ./app }\n  - echo: A launched\n"
+    );
+    const registry = makeRegistry();
+
+    await expect(
+      runFlow(registry, {
+        name: "unpinned-prereq",
+        project_root: PROJECT_ROOT,
+        flow_file: fragment,
+        prerequisiteAcknowledged: true,
+      })
+    ).rejects.toThrow(/must not declare executionPrerequisite/i);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+  });
+
+  it("still rejects a pinned run on a native platform, where a launch restarts the app", async () => {
+    // Pinning proves nothing off chromium: `launch` on ios/android/vega is
+    // restart-app, which terminates and relaunches the app on whatever device it
+    // is handed — the pinned one included — so the state dies at step 1 just as
+    // it would unpinned. Exempting every pinned run would wave these through.
+    const fragment = await writeFlow(
+      'executionPrerequisite: "the counter must already read taps: 3"\n' +
+        "steps:\n  - run: e2e-a\n"
+    );
+    await writeSiblingFlow(
+      fragment,
+      "e2e-a",
+      "steps:\n  - launch: { ios: com.acme.app, android: com.acme.app, vega: com.acme.app }\n"
+    );
+    const registry = makeRegistry();
+
+    // One id per native platform, in resolveDevice's shapes: an `emulator-` adb
+    // serial, an 8-4-4-4-12 iOS udid, an `amazon-` Vega serial — each classifies
+    // off chromium, and each has a launch entry, so the run really would
+    // restart-app on it.
+    for (const device of [
+      "emulator-5554",
+      "00000000-0000-0000-0000-0000000000ab",
+      "amazon-4a27df03c9777152",
+    ]) {
+      const refusal = runFlow(registry, {
+        name: "pinned-native-prereq",
+        project_root: PROJECT_ROOT,
+        flow_file: fragment,
+        device,
+        prerequisiteAcknowledged: true,
+      });
+      await expect(refusal).rejects.toThrow(/must not declare executionPrerequisite/i);
+      // No chromium pin offered: this launch declares no chromium app, so the
+      // exemption is unreachable and suggesting it would just misdirect.
+      await expect(refusal).rejects.not.toThrow(/--device/);
+    }
+    // Refused before the device was touched at all — no restart-app went out.
+    expect((registry.invokeTool as any).mock.calls).toEqual([]);
   });
 
   it("still notices a prerequisite fragment whose leading run: reaches no launch", async () => {
