@@ -1383,26 +1383,24 @@ async function runSwipe(
   let end: { x: number; y: number };
   if (step.direction) {
     const g = SWIPE_GEOMETRY[step.direction];
-    end = g.axis === "x" ? { x: g.end, y: start.y } : { x: start.x, y: g.end };
     const startOnTravelAxis = start[g.axis];
-    if (Math.abs(g.end - startOnTravelAxis) < SWIPE_MIN_TRAVEL) {
+    // The preset line is the endpoint only for the unanchored default start;
+    // for any other anchor, travel the preset's signed magnitude from where the
+    // finger goes down (clamped on-screen), so an element in the last band of
+    // the axis — a drawer handle, bottom sheet, tab bar — still swipes in the
+    // requested direction instead of reversing or collapsing onto the preset.
+    const endOnTravelAxis = step.from
+      ? clamp01(startOnTravelAxis + (g.end - g.start[g.axis]))
+      : g.end;
+    end = g.axis === "x" ? { x: endOnTravelAxis, y: start.y } : { x: start.x, y: endOnTravelAxis };
+    // Clamping can only shorten travel, never flip its sign, so a below-floor
+    // result means the anchor sits too near the target edge to swipe, not that
+    // the direction reversed.
+    const travel = Math.abs(endOnTravelAxis - startOnTravelAxis);
+    if (travel < SWIPE_MIN_TRAVEL) {
       return {
         ok: false,
-        reason: `cannot swipe ${step.direction} from ${g.axis}=${startOnTravelAxis}: the preset endpoint is ${g.axis}=${g.end}, leaving less than the minimum swipe travel of ${SWIPE_MIN_TRAVEL} — a tap, not a swipe`,
-      };
-    }
-    const actualDirection: SwipeDirection =
-      g.axis === "x"
-        ? g.end > startOnTravelAxis
-          ? "right"
-          : "left"
-        : g.end > startOnTravelAxis
-          ? "down"
-          : "up";
-    if (actualDirection !== step.direction) {
-      return {
-        ok: false,
-        reason: `cannot swipe ${step.direction} from ${g.axis}=${startOnTravelAxis}: the preset endpoint is ${g.axis}=${g.end}, so the gesture would travel ${actualDirection}`,
+        reason: `cannot swipe ${step.direction} from ${g.axis}=${startOnTravelAxis}: only ${travel} of travel to the screen edge, less than the minimum swipe travel of ${SWIPE_MIN_TRAVEL} — a tap, not a swipe`,
       };
     }
   } else if (step.by) {
