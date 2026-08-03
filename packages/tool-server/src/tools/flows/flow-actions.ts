@@ -693,7 +693,7 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
 }
 
 /**
- * Resolve a gesture target (`tap`/`long-press`) to a normalized point: a
+ * Resolve a gesture target (`tap`/`long-press`/`swipe`) to a normalized point: a
  * selector resolves to its frame centre (settled tree + auto-wait); raw
  * coordinates pass through untouched. Coordinate targets are the fallback for
  * elements with no stable selector (e.g. an unlabeled view).
