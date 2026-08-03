@@ -45,6 +45,9 @@ describe("swipe: parse/serialize", () => {
         { kind: "swipe" as const, by: { x: 0.2, y: -0.3 }, settle: true },
         // 0.03 is the exact tap/swipe floor — must round-trip clean.
         { kind: "swipe" as const, by: { x: 0.03 } },
+        // Diagonal whose per-axis components are each sub-floor (0.025) but whose
+        // magnitude (0.0354) clears it — serialize and parse must both accept it.
+        { kind: "swipe" as const, by: { x: 0.025, y: 0.025 } },
         {
           kind: "swipe" as const,
           from: { selector: { identifier: "card" } },
@@ -90,9 +93,22 @@ describe("swipe: parse/serialize", () => {
     ["a sub-threshold delta", 0.0005],
     ["float dust", 1e-17],
   ])("rejects programmatic by travel with %s as a tap, not a swipe", (_description, x) => {
+    // Single-axis sub-floor: the guard is on the combined magnitude now, so the
+    // message names `swipe.by` (the vector), not a per-axis `swipe.by.x`.
     expect(() =>
       serializeFlow({ executionPrerequisite: "", steps: [{ kind: "swipe", by: { x } }] })
-    ).toThrow(/cannot serialize flow swipe\.by\.x: .*below the minimum swipe travel/i);
+    ).toThrow(/cannot serialize flow swipe\.by: travels only .*below the minimum swipe travel/i);
+  });
+
+  it("rejects a programmatic diagonal by whose vector magnitude is sub-floor", () => {
+    // Each axis 0.02 is below the 0.03 floor AND the magnitude 0.0283 is too, so
+    // serialize rejects it — matching parse, keeping the round-trip exact.
+    expect(() =>
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "swipe", by: { x: 0.02, y: 0.02 } }],
+      })
+    ).toThrow(/cannot serialize flow swipe\.by: travels only .*below the minimum swipe travel/i);
   });
 
   it.each([
@@ -173,9 +189,28 @@ describe("swipe: parse/serialize", () => {
     ["a tap-scale delta", "0.02"],
     ["a sub-threshold delta", "0.0005"],
     ["float dust", "0.00000000000000001"],
-  ])("rejects a by axis of %s as a tap, not a swipe", (_description, value) => {
+  ])("rejects a single-axis by of %s as a tap, not a swipe", (_description, value) => {
+    // Single-axis sub-floor: the vector magnitude equals |value|, so the
+    // combined-magnitude gate rejects it and the message names `swipe.by`.
     expect(() => parseFlow(`steps:\n  - swipe: { by: { x: ${value} } }\n`)).toThrow(
-      /swipe\.by\.x .*below the minimum swipe travel.*a tap, not a swipe/i
+      /swipe\.by travels only .*below the minimum swipe travel.*a tap, not a swipe/i
+    );
+  });
+
+  it("accepts a diagonal by whose per-axis components are each sub-floor but whose magnitude clears the floor", () => {
+    // x=0.025 and y=0.025 are each below the 0.03 floor, yet the vector length is
+    // 0.0354 ≥ 0.03 — a real swipe. The OLD per-axis guard rejected this (each
+    // |axis| < floor); the magnitude gate accepts it, keeping the boundary
+    // monotonic in distance. This is the parse-side anti-regression proof.
+    const steps = parseFlow("steps:\n  - swipe: { by: { x: 0.025, y: 0.025 } }\n").steps;
+    expect(steps).toEqual([{ kind: "swipe", by: { x: 0.025, y: 0.025 } }]);
+  });
+
+  it("rejects a diagonal by whose vector magnitude is below the floor", () => {
+    // x=0.02, y=0.01 → magnitude 0.0224 < 0.03: still a tap, rejected with the
+    // combined-magnitude message.
+    expect(() => parseFlow("steps:\n  - swipe: { by: { x: 0.02, y: 0.01 } }\n")).toThrow(
+      /swipe\.by travels only .*below the minimum swipe travel.*a tap, not a swipe/i
     );
   });
 
@@ -840,6 +875,26 @@ describe("swipe: execution", () => {
       ),
     });
     expect(result.calls).toEqual([]);
+  });
+
+  it("dispatches a diagonal to whose per-axis deltas are each sub-floor but whose magnitude clears it", async () => {
+    // The reviewer's monotonicity case: from (0.5, 0.5) to (0.529, 0.529) — each
+    // axis delta is 0.029 (< 0.03), yet the straight-line distance is 0.041 ≥
+    // 0.03, a real swipe. The OLD per-axis AND-guard (both |delta| < floor)
+    // rejected this longer diagonal while accepting a shorter straight swipe; the
+    // magnitude gate dispatches it. Execution-side anti-regression proof.
+    await writeFlow("to-diagonal", {
+      executionPrerequisite: "",
+      steps: [{ kind: "swipe", from: { x: 0.5, y: 0.5 }, to: { x: 0.529, y: 0.529 } }],
+    });
+
+    const result = await run("to-diagonal");
+
+    expect(result.ok).toBe(true);
+    expect(result.calls[0]).toMatchObject({
+      tool: "gesture-swipe",
+      args: { udid: DEVICE, fromX: 0.5, fromY: 0.5, toX: 0.529, toY: 0.529 },
+    });
   });
 
   it("fails with the scroll-to hint when the from anchor never appears", async () => {
