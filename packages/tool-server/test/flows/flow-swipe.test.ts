@@ -390,6 +390,63 @@ describe("swipe: execution", () => {
     expect(result.calls).toEqual([]);
   });
 
+  it.each([
+    // Schema-conformant frame — describeFrameSchema bounds x/y/width/height to
+    // [0, 1] independently, so x=0.85 + width 0.4 parses fine yet centres at
+    // x=1.05 — the exact shape an adapter viewport-clipping regression would
+    // emit, with only this guard left between it and the touch-down.
+    ["off the right edge (x > 1)", { x: 0.85, y: 0.4, width: 0.4, height: 0.2 }, "up"],
+    // A negative origin cannot pass the frame schema, but the guard sits
+    // behind adapters and mocked trees that bypass it — pin the < 0 arms too.
+    ["off the left edge (x < 0)", { x: -0.5, y: 0.4, width: 0.2, height: 0.2 }, "up"],
+    ["off the top edge (y < 0)", { x: 0.4, y: -0.5, width: 0.2, height: 0.2 }, "left"],
+  ] as const)(
+    "rejects a selector-derived start whose centre resolves %s",
+    async (_description, frame, direction) => {
+      currentTree = () => screen([n({ label: "Card", frame })]);
+      await writeFlow("offscreen-centre", {
+        executionPrerequisite: "",
+        steps: [{ kind: "swipe", from: { selector: { text: "Card", loose: true } }, direction }],
+      });
+
+      const result = await run("offscreen-centre");
+
+      expect(result.ok).toBe(false);
+      expect(result.steps[0]).toMatchObject({
+        status: "fail",
+        reason: expect.stringMatching(/swipe\.from resolved outside.*between 0 and 1/i),
+      });
+      expect(result.calls).toEqual([]);
+    }
+  );
+
+  it.each([
+    ["x", { x: Number.NaN, y: 0.4, width: 0.4, height: 0.2 }, "up"],
+    ["y", { x: 0.4, y: Number.NaN, width: 0.4, height: 0.2 }, "left"],
+  ] as const)(
+    "rejects a selector-derived start whose centre %s is NaN",
+    async (_axis, frame, direction) => {
+      // NaN fails every < / > comparison, so the range arms alone would let a
+      // buggy adapter frame dispatch a NaN touch-down — only the
+      // Number.isFinite arms catch it. A NaN ORIGIN is the reachable shape: a
+      // NaN width or height already fails isVisible and never resolves.
+      currentTree = () => screen([n({ label: "Card", frame })]);
+      await writeFlow("nan-centre", {
+        executionPrerequisite: "",
+        steps: [{ kind: "swipe", from: { selector: { text: "Card", loose: true } }, direction }],
+      });
+
+      const result = await run("nan-centre");
+
+      expect(result.ok).toBe(false);
+      expect(result.steps[0]).toMatchObject({
+        status: "fail",
+        reason: expect.stringMatching(/swipe\.from resolved outside.*between 0 and 1/i),
+      });
+      expect(result.calls).toEqual([]);
+    }
+  );
+
   it("by travels relative to the anchor and saturates supplied axes to screen bounds", async () => {
     await writeFlow("deltas", {
       executionPrerequisite: "",
