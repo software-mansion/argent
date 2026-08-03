@@ -442,7 +442,43 @@ describe("exportFailureArtifacts", () => {
       expect(step.artifacts?.current).toBe(
         path.join(outDir, `checkout-${pathHash(flowFile)}`, "home__ios-390x844-current.png")
       );
-      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("an unknown source"));
+      // "files", not "artifacts" — the export can't know what a markerless
+      // directory's contents are, only that they exist.
+      expect(errSpy).toHaveBeenCalledWith(
+        expect.stringContaining("already holds files from an unknown source")
+      );
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("claims a pre-created empty directory: documented path, marker written, no warning", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // `mkdir -p out/checkout` before the run is an ordinary CI step — an
+      // empty directory holds nothing to protect, so the export must keep the
+      // stable <output>/<flow>/ path instead of redirecting forever.
+      await fs.mkdir(path.join(outDir, "checkout"), { recursive: true });
+      const step: StepReport = {
+        index: 0,
+        kind: "snapshot",
+        status: "fail",
+        snapshotKey: "home__ios-390x844",
+        artifacts: { current: await writeFile("c.png", "current-bytes") },
+      };
+
+      await exportFailureArtifacts(mkReport([step]), outDir, flowFile, ctx);
+
+      const dest = path.join(outDir, "checkout", "home__ios-390x844-current.png");
+      expect(step.artifacts?.current).toBe(dest);
+      expect(await fs.readFile(dest, "utf8")).toBe("current-bytes");
+      expect(await fs.readdir(outDir)).toEqual(["checkout"]); // no hash-suffixed sibling
+      // The claim is completed with the usual marker, so the next run of this
+      // same file recognizes the directory and overwrites in place.
+      expect(await fs.readFile(path.join(outDir, "checkout", ".argent-flow-source"), "utf8")).toBe(
+        `${flowFile}\n`
+      );
+      expect(errSpy).not.toHaveBeenCalled();
     } finally {
       errSpy.mockRestore();
     }

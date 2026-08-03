@@ -327,8 +327,11 @@ const EXPORT_SOURCE_MARKER = ".argent-flow-source";
  * path — a pure function of the path, so the fallback stays deterministic
  * across invocations (CI references survive re-runs) while never colliding
  * with the other file's directory. A stem directory without a readable
- * marker (operator files, or an export from a pre-marker CLI) is treated as
- * foreign: redirecting is the safe direction, silently overwriting is not.
+ * marker is claimed while it is empty — pre-creating the artifact dir
+ * (`mkdir -p`) is an ordinary CI step, and an empty directory holds nothing
+ * to protect. Once it has any content (operator files, or an export from a
+ * pre-marker CLI) it is treated as foreign, as is one that cannot even be
+ * listed: redirecting is the safe direction, silently overwriting is not.
  * Both name forms are single FLOW_NAME_PATTERN-charset segments (validated
  * stem + hex), so containment under outputDir is preserved. Read-only — the
  * marker itself is written only once artifacts actually land.
@@ -338,16 +341,22 @@ async function resolveExportDirName(
   flowPath: string,
   stem: string
 ): Promise<string> {
-  let owner: string | null; // null = directory exists but proves no owner
+  let owner: string | null; // null = directory has content but proves no owner
   try {
     owner = (await fsp.readFile(path.join(outputDir, stem, EXPORT_SOURCE_MARKER), "utf8")).trim();
   } catch {
     try {
-      await fsp.access(path.join(outputDir, stem));
-      owner = null;
-    } catch {
-      return stem; // no directory yet — claim the documented pretty path
+      if ((await fsp.readdir(path.join(outputDir, stem))).length === 0) {
+        return stem; // pre-created but empty — nothing to protect, claim it
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return stem; // no directory yet — claim the documented pretty path
+      }
+      // Unlistable (permissions, or a plain file squatting on the name):
+      // emptiness can't be proven, so fall through to the foreign path.
     }
+    owner = null;
   }
   // Identity is the resolved path string: the CLI resolved it against cwd, so
   // one file always maps to one spelling within a checkout. (Two symlink
@@ -356,8 +365,9 @@ async function resolveExportDirName(
   if (owner === flowPath) return stem;
   const dirName = `${stem}-${createHash("sha256").update(flowPath).digest("hex").slice(0, 8)}`;
   console.error(
-    `warning: ${path.join(outputDir, stem)} already holds artifacts from ` +
-      `${owner ?? "an unknown source"}; writing this flow's artifacts to ` +
+    `warning: ${path.join(outputDir, stem)} already holds ` +
+      `${owner === null ? "files from an unknown source" : `artifacts from ${owner}`}; ` +
+      `writing this flow's artifacts to ` +
       `${path.join(outputDir, dirName)} so neither set is overwritten`
   );
   return dirName;
