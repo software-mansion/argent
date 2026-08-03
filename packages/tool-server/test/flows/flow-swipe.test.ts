@@ -79,6 +79,15 @@ describe("swipe: parse/serialize", () => {
   });
 
   it.each([
+    ["a sub-threshold delta", 0.0005],
+    ["float dust", 1e-17],
+  ])("rejects programmatic by travel with %s as undeliverable", (_description, x) => {
+    expect(() =>
+      serializeFlow({ executionPrerequisite: "", steps: [{ kind: "swipe", by: { x } }] })
+    ).toThrow(/cannot serialize flow swipe\.by\.x: .*below the minimum deliverable travel/i);
+  });
+
+  it.each([
     ["zero", 0],
     ["negative", -1],
     ["NaN", Number.NaN],
@@ -149,6 +158,15 @@ describe("swipe: parse/serialize", () => {
     expect(() => parseFlow("steps:\n  - swipe: { by: { x: 1.5 } }\n")).toThrow(/between -1 and 1/i);
     expect(() => parseFlow('steps:\n  - swipe: { by: { x: "0.3" } }\n')).toThrow(
       /non-zero fraction/i
+    );
+  });
+
+  it.each([
+    ["a sub-threshold delta", "0.0005"],
+    ["float dust", "0.00000000000000001"],
+  ])("rejects a by axis of %s as undeliverable travel", (_description, value) => {
+    expect(() => parseFlow(`steps:\n  - swipe: { by: { x: ${value} } }\n`)).toThrow(
+      /swipe\.by\.x .*below the minimum deliverable travel.*too small to move a finger/i
     );
   });
 
@@ -311,14 +329,38 @@ describe("swipe: execution", () => {
     expect(result.calls).toEqual([]);
   });
 
+  it("fails an anchored direction swipe whose centre lands dust-close to the preset line", async () => {
+    // Centre x computes to 0.8999999999999999 — bit-distinct from the right
+    // preset's end line x=0.9, so `===` would dispatch a stationary press.
+    currentTree = () =>
+      screen([n({ label: "Card", frame: { x: 0.84, y: 0.4, width: 0.12, height: 0.2 } })]);
+    await writeFlow("dust-direction", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "swipe", from: { selector: { text: "Card", loose: true } }, direction: "right" },
+      ],
+    });
+
+    const result = await run("dust-direction");
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]).toMatchObject({
+      kind: "swipe",
+      status: "fail",
+      reason: expect.stringContaining("would have zero travel"),
+    });
+    expect(result.calls).toEqual([]);
+  });
+
   it("allows short anchored direction travel when it still has the requested sign", async () => {
+    // 0.002 of travel: short, but above the deliverable-travel floor.
     await writeFlow("short-direction-travel", {
       executionPrerequisite: "",
       steps: [
-        { kind: "swipe", from: { x: 0.100001, y: 0.5 }, direction: "left" },
-        { kind: "swipe", from: { x: 0.899999, y: 0.5 }, direction: "right" },
-        { kind: "swipe", from: { x: 0.5, y: 0.100001 }, direction: "up" },
-        { kind: "swipe", from: { x: 0.5, y: 0.899999 }, direction: "down" },
+        { kind: "swipe", from: { x: 0.102, y: 0.5 }, direction: "left" },
+        { kind: "swipe", from: { x: 0.898, y: 0.5 }, direction: "right" },
+        { kind: "swipe", from: { x: 0.5, y: 0.102 }, direction: "up" },
+        { kind: "swipe", from: { x: 0.5, y: 0.898 }, direction: "down" },
       ],
     });
 
@@ -366,6 +408,27 @@ describe("swipe: execution", () => {
     ]);
   });
 
+  it("dispatches a floor-magnitude by delta whose unclamped travel rounds one ulp short", async () => {
+    // 0.01 + 0.001 stays inside [0, 1] (clamp is the identity), yet the
+    // effective travel computes to 0.0009999999999999992 — one ulp under
+    // SWIPE_MIN_TRAVEL — so a bare magnitude gate would fail this
+    // documented-legal boundary delta blaming clamping that never happened.
+    await writeFlow("boundary-by", {
+      executionPrerequisite: "",
+      steps: [{ kind: "swipe", from: { x: 0.01, y: 0.5 }, by: { x: 0.001 } }],
+    });
+
+    const result = await run("boundary-by");
+
+    expect(result.ok).toBe(true);
+    expect(result.calls).toEqual([
+      {
+        tool: "gesture-swipe",
+        args: { udid: DEVICE, fromX: 0.01, fromY: 0.5, toX: 0.011, toY: 0.5 },
+      },
+    ]);
+  });
+
   it("fails by travel when saturation leaves no room on a requested axis", async () => {
     await writeFlow("no-room", {
       executionPrerequisite: "",
@@ -380,6 +443,25 @@ describe("swipe: execution", () => {
       status: "fail",
       reason: expect.stringMatching(
         /swipe\.by\.x requests positive travel from x=1.*\[0, 1\].*no travel.*choose a start point/i
+      ),
+    });
+    expect(result.calls).toEqual([]);
+  });
+
+  it("fails by travel on the y axis when saturation leaves no room", async () => {
+    await writeFlow("no-room-y", {
+      executionPrerequisite: "",
+      steps: [{ kind: "swipe", from: { x: 0.5, y: 1 }, by: { y: 0.3 } }],
+    });
+
+    const result = await run("no-room-y");
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]).toMatchObject({
+      kind: "swipe",
+      status: "fail",
+      reason: expect.stringMatching(
+        /swipe\.by\.y requests positive travel from y=1.*\[0, 1\].*no travel.*choose a start point/i
       ),
     });
     expect(result.calls).toEqual([]);
@@ -430,7 +512,7 @@ describe("swipe: execution", () => {
       kind: "swipe",
       status: "fail",
       reason: expect.stringMatching(
-        /swipe\.to resolved to the start point \(0\.5, 0\.5\).*zero travel.*away from the start/i
+        /swipe\.to resolved onto the start point \(0\.5, 0\.5\).*zero travel.*away from the start/i
       ),
     });
     expect(result.calls).toEqual([]);
@@ -457,7 +539,35 @@ describe("swipe: execution", () => {
       kind: "swipe",
       status: "fail",
       reason: expect.stringMatching(
-        /swipe\.to resolved to the start point \(0\.4, 0\.4\).*zero travel.*away from the start/i
+        /swipe\.to resolved onto the start point \(0\.4, 0\.4\).*zero travel.*away from the start/i
+      ),
+    });
+    expect(result.calls).toEqual([]);
+  });
+
+  it("fails a to selector that resolves a sub-pixel distance from the start", async () => {
+    // Centre y computes to 0.49999999999999994 — one ulp below the default
+    // centre start, so a bit-equality check would dispatch a stationary press.
+    currentTree = () =>
+      screen([
+        n({
+          label: "Card",
+          frame: { x: 0.125, y: 0.41999999999999993, width: 0.75, height: 0.16 },
+        }),
+      ]);
+    await writeFlow("to-sub-pixel", {
+      executionPrerequisite: "",
+      steps: [{ kind: "swipe", to: { selector: { text: "Card", loose: true } } }],
+    });
+
+    const result = await run("to-sub-pixel");
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]).toMatchObject({
+      kind: "swipe",
+      status: "fail",
+      reason: expect.stringMatching(
+        /swipe\.to resolved onto the start point.*zero travel.*away from the start/i
       ),
     });
     expect(result.calls).toEqual([]);
