@@ -1336,6 +1336,16 @@ async function runSwipe(
     duration?: number;
   }
 ): Promise<DirectiveOutcome> {
+  // The endpoint's auto-wait is the long one (a drop target that hasn't
+  // rendered yet), so resolve it before the anchor — the finger must go down
+  // where the anchor is after that wait, not where it was before it.
+  let toPoint: { x: number; y: number } | undefined;
+  if (step.to) {
+    const p = await resolveTargetPoint(env, step.to);
+    if ("fail" in p) return p.fail;
+    toPoint = p;
+  }
+
   let start: { x: number; y: number };
   if (step.from) {
     const p = await resolveTargetPoint(env, step.from);
@@ -1416,11 +1426,10 @@ async function runSwipe(
       }
     }
   } else {
-    const p = await resolveTargetPoint(env, step.to!);
-    if ("fail" in p) return p.fail;
-    end = p;
-    // A selector endpoint only resolves here, so the parser cannot see that it
-    // lands on the start and would dispatch a stationary press, not a swipe.
+    end = toPoint!;
+    // A selector endpoint only resolves at run time, so the parser cannot see
+    // that it lands on the start and would dispatch a stationary press, not a
+    // swipe.
     if (
       Math.abs(end.x - start.x) < SWIPE_MIN_TRAVEL &&
       Math.abs(end.y - start.y) < SWIPE_MIN_TRAVEL
