@@ -1541,6 +1541,159 @@ describe("flow-execute", () => {
   });
 });
 
+// ── saved-flow name spelling ─────────────────────────────────────────
+
+/**
+ * The `name` branch has to hold the same on-disk-spelling invariant the
+ * flow_path branch holds: a case-insensitive filesystem (APFS, NTFS) opens
+ * snap.yaml for "Snap", and the name — not the file — is what keys the report
+ * and __baselines__/, so the run would seed baselines in a directory no entry
+ * carries and fail on the first case-sensitive checkout. Every case here reads
+ * the directory LISTING, which returns stored bytes on every platform, so they
+ * decide identically on case-sensitive (Linux CI) and case-insensitive
+ * filesystems.
+ */
+describe("saved-flow name spelling", () => {
+  const DEVICE = "00000000-0000-0000-0000-0000000000ab";
+
+  async function writeFlowFile(basename: string): Promise<string> {
+    const dir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(dir, { recursive: true });
+    const filePath = path.join(dir, basename);
+    await fs.writeFile(
+      filePath,
+      serializeFlow({ executionPrerequisite: "", steps: [{ kind: "echo", message: "hi" }] }),
+      "utf8"
+    );
+    return filePath;
+  }
+
+  it("rejects a name the filesystem would case-fold, handing back the on-disk name", async () => {
+    await writeFlowFile("snap.yaml");
+
+    const err = await resolveFlowSource({ name: "Snap", project_root: tmpDir }).then(
+      () => null,
+      (e: unknown) => e as Error
+    );
+
+    // The refusal must name the phantom spelling, the real directory entry,
+    // and the stake — then hand back a name, not a flow_path: the caller
+    // passed a name and may have no filesystem to spell a path against.
+    expect(err?.message).toContain('Invalid flow name "Snap"');
+    expect(err?.message).toContain('matched it case-insensitively to "snap.yaml"');
+    expect(err?.message).toContain("__baselines__");
+    expect(err?.message).toContain('Pass name "snap".');
+    expect(err?.message).not.toContain("flow_path");
+  });
+
+  it("suggests a rename when the on-disk flow's extension case is unaddressable", async () => {
+    // upper.YAML is reachable by no name at all — this branch always builds
+    // "<name>.yaml" — and `argent flow list` omits it, so the only honest
+    // recovery is the rename.
+    await writeFlowFile("upper.YAML");
+
+    const err = await resolveFlowSource({ name: "upper", project_root: tmpDir }).then(
+      () => null,
+      (e: unknown) => e as Error
+    );
+
+    expect(err?.message).toContain('matched it case-insensitively to "upper.YAML"');
+    expect(err?.message).toContain(
+      'Rename "upper.YAML" to "upper.yaml" to run it — flow files must be lowercase .yaml.'
+    );
+    expect(err?.message).not.toContain("Pass name");
+  });
+
+  it("accepts the exact on-disk spelling, mixed case included", async () => {
+    // Byte-for-byte is the contract — not lowercasing: a flow really saved as
+    // MixedCase.yaml runs under exactly that name.
+    const filePath = await writeFlowFile("MixedCase.yaml");
+
+    await expect(resolveFlowSource({ name: "MixedCase", project_root: tmpDir })).resolves.toEqual({
+      filePath,
+      flowName: "MixedCase",
+    });
+  });
+
+  it("leaves a name that matches nothing as an ordinary missing flow", async () => {
+    // No entry case-folds to "nonexistent.yaml", so this is not a spelling
+    // problem at all: resolution succeeds and the read reports the absence,
+    // exactly as before this gate existed.
+    await writeFlowFile("other.yaml");
+    const registry = createMockRegistry({});
+
+    await expect(resolveFlowSource({ name: "nonexistent", project_root: tmpDir })).resolves.toEqual(
+      {
+        filePath: path.join(tmpDir, ".argent", "flows", "nonexistent.yaml"),
+        flowName: "nonexistent",
+      }
+    );
+
+    const err = await createRunFlowTool(registry)
+      .execute({}, { name: "nonexistent", project_root: tmpDir, device: DEVICE })
+      .then(
+        () => null,
+        (e: unknown) => e as Error
+      );
+    expect(err?.message).toContain("ENOENT");
+    expect(err?.message).not.toContain("case-insensitively");
+  });
+
+  it("skips the check when the flows directory's listing is unavailable", async () => {
+    // An execute-only flows directory refuses the listing while still opening
+    // the file (here: no .argent/flows at all). An unreadable listing vouches
+    // for nothing, so it must refuse nothing — the later read reports absence.
+    await expect(resolveFlowSource({ name: "unlisted", project_root: tmpDir })).resolves.toEqual({
+      filePath: path.join(tmpDir, ".argent", "flows", "unlisted.yaml"),
+      flowName: "unlisted",
+    });
+  });
+
+  it("trusts a boundary-materialized upload over the local flows directory", async () => {
+    // A remote client's upload lands in a temp dir this server itself named
+    // from `name`, so listing it could only agree with itself; the listing that
+    // could disagree is the client's, on a host this process cannot read. The
+    // co-located snap.yaml below is what THIS host happens to hold at the same
+    // path — checking against it would reject a legitimate remote run.
+    await writeFlowFile("snap.yaml");
+    const uploaded = path.join(os.tmpdir(), "argent-file-input-abc", "Snap.yaml");
+
+    await expect(
+      resolveFlowSource(
+        { name: "Snap", project_root: tmpDir, flow_file: uploaded },
+        {
+          clientPath: path.join(tmpDir, ".argent", "flows", "Snap.yaml"),
+          presentOnHost: false,
+          viaUpload: true,
+        }
+      )
+    ).resolves.toEqual({ filePath: uploaded, flowName: "Snap" });
+  });
+
+  it("flow-execute refuses the mis-cased name before running any step", async () => {
+    const registry = createMockRegistry({ tap: { result: { tapped: true } } });
+    await writeFlowFile("checkout.yaml");
+
+    await expect(
+      createRunFlowTool(registry).execute(
+        {},
+        { name: "Checkout", project_root: tmpDir, device: DEVICE }
+      )
+    ).rejects.toThrow('Pass name "checkout".');
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("flow-read-prerequisite refuses the same name flow-execute would", async () => {
+    // Both tools resolve through resolveFlowSource, so the pre-flight cannot
+    // answer for a spelling the run itself refuses.
+    await writeFlowFile("checkout.yaml");
+
+    await expect(
+      flowReadPrerequisiteTool.execute({}, { name: "Checkout", project_root: tmpDir })
+    ).rejects.toThrow('Invalid flow name "Checkout"');
+  });
+});
+
 // ── flow-read-prerequisite ───────────────────────────────────────────
 
 describe("flow-read-prerequisite", () => {

@@ -1298,6 +1298,51 @@ function errMsg(err: unknown): string {
 }
 
 /**
+ * How the flow file a caller addressed is spelled in its own directory.
+ * `listed`: the directory carries that basename byte-for-byte — or its listing
+ * could not be read at all, which vouches for nothing and so must refuse
+ * nothing (an execute-only parent directory lets stat through while refusing
+ * readdir, and the exact-named contract may well be honored there).
+ * `case_folded`: no entry carries it, but one differs from it only by case —
+ * exactly what a case-insensitive filesystem (APFS, NTFS) opens for a reader
+ * that asked for a spelling nothing on disk has, and the whole point of the
+ * check. `absent`: nothing matches even case-insensitively, i.e. the file is
+ * simply not there. `addressable` says whether the on-disk spelling is one
+ * this module's own ladders accept, so a caller can be pointed at it instead
+ * of at a rename.
+ */
+type OnDiskSpelling =
+  | { state: "listed" }
+  | { state: "case_folded"; actual: string; addressable: boolean }
+  | { state: "absent" };
+
+/**
+ * Classify the supplied basename against `dir`'s listing. One classifier
+ * serves both flow sources — `flow_path`'s caller-visible basename and
+ * `name`'s `${name}.yaml` under the project's flows dir — so the two can never
+ * drift apart in which spellings they accept, which is precisely what let a
+ * `name` key a report and `__baselines__/` under a spelling `flow_path`
+ * refused two arms earlier. readdir, not realpath: realpath rewrites a
+ * symlinked flow to its target's name, and a flow deliberately runs under the
+ * link's own name. Both call sites hand a pure-ASCII basename (flow-name
+ * charset + ".yaml"), so Unicode-normalizing filesystems cannot make the
+ * comparison lie.
+ *
+ * What an `absent` verdict means is the caller's to decide, and the two
+ * differ: `flow_path` arrives with the boundary's stat already vouching for
+ * the file, so a listing that lacks it is itself the phantom-spelling bug,
+ * while a `name` may simply not name a saved flow — an ordinary missing-flow
+ * error the later read reports far better than a casing complaint could.
+ */
+async function classifyOnDiskSpelling(dir: string, base: string): Promise<OnDiskSpelling> {
+  const entries = await fs.readdir(dir).catch(() => null);
+  if (entries === null || entries.includes(base)) return { state: "listed" };
+  const actual = entries.find((entry) => entry.toLowerCase() === base.toLowerCase());
+  if (actual === undefined) return { state: "absent" };
+  return { state: "case_folded", actual, addressable: FLOW_FILE_NAME_PATTERN.test(actual) };
+}
+
+/**
  * Resolve the flow YAML source a tool reads. An explicit `flow_path` is accepted
  * only when the file-input boundary resolved the exact client path in place on
  * this host AND matched the client-recorded stat (`statVerified`) — presence
@@ -1318,10 +1363,12 @@ function errMsg(err: unknown): string {
  * let a caller execute (and, under --update-baselines, write PNGs next to) any
  * YAML on the host, bypassing the project-root containment the rest of the
  * module enforces. The logical flow name for an explicit path comes from the
- * caller-visible YAML basename recorded by the boundary, which must appear in
- * the parent directory's listing byte-for-byte — a case-insensitive
- * filesystem's stat vouches for spellings no directory entry carries. Name and
- * project_root are validated in every branch.
+ * caller-visible YAML basename recorded by the boundary. Either source's flow
+ * name must then appear in that flow's own directory listing byte-for-byte — a
+ * case-insensitive filesystem opens files under spellings no directory entry
+ * carries, and the name is what keys the report and `__baselines__/` (see
+ * {@link classifyOnDiskSpelling}). Name and project_root are validated in every
+ * branch.
  */
 export async function resolveFlowSource(
   params: {
@@ -1466,32 +1513,28 @@ export async function resolveFlowSource(
     // derived from it (which keys the report and __baselines__/) would be one
     // no directory entry carries: a baseline seeded under it is unfindable the
     // moment the tree lands on a case-sensitive volume. Require the supplied
-    // basename to appear in the parent directory byte-for-byte. readdir, not
-    // realpath: realpath rewrites a symlinked flow to its target's name, and
-    // an explicit flow_path deliberately runs a symlink under the link's own
-    // name. The basename is pure ASCII by this point (stem charset + ".yaml"),
-    // so Unicode-normalizing filesystems cannot make the comparison lie. A
-    // readdir failure (an execute-only parent directory lets stat through
-    // while refusing the listing) skips the check rather than refusing a file
-    // the exact-named contract may well be honoring.
+    // basename to appear in the parent directory byte-for-byte. Absence from
+    // the listing refuses either way here — unlike the name branch below, this
+    // path arrives with the boundary's stat vouching for the file, so a
+    // listing that lacks it entirely is the same phantom spelling, just
+    // without a neighbour to name.
     const suppliedBase = path.basename(clientPath);
-    const siblings = await fs.readdir(path.dirname(params.flow_path)).catch(() => null);
-    if (siblings !== null && !siblings.includes(suppliedBase)) {
-      const actual = siblings.find((name) => name.toLowerCase() === suppliedBase.toLowerCase());
+    const spelling = await classifyOnDiskSpelling(path.dirname(params.flow_path), suppliedBase);
+    if (spelling.state !== "listed") {
       // Hint the real spelling only when this same ladder would accept it (a
       // stem-case slip like Checkout.yaml); an invalid real name (Upper.YAML)
       // needs a rename, and pointing at a flow_path the extension arm will
       // refuse helps no one.
       const recovery =
-        actual !== undefined && FLOW_FILE_NAME_PATTERN.test(actual)
-          ? `Pass flow_path with the on-disk basename "${actual}".`
-          : actual !== undefined
-            ? `Rename "${actual}" to "${suppliedBase}" to run it — flow files must be lowercase .yaml.`
-            : `Pass the basename exactly as it appears on disk.`;
+        spelling.state === "absent"
+          ? `Pass the basename exactly as it appears on disk.`
+          : spelling.addressable
+            ? `Pass flow_path with the on-disk basename "${spelling.actual}".`
+            : `Rename "${spelling.actual}" to "${suppliedBase}" to run it — flow files must be lowercase .yaml.`;
       throw new FailureError(
         `Invalid flow_path "${clientPath}": the file must be named as it appears on disk — this ` +
           `filesystem matched "${suppliedBase}" case-insensitively` +
-          (actual !== undefined ? ` to "${actual}"` : "") +
+          (spelling.state === "case_folded" ? ` to "${spelling.actual}"` : "") +
           `, so the flow name (which keys the report and __baselines__/) would be one no ` +
           `directory entry carries. ${recovery}`,
         {
@@ -1509,14 +1552,22 @@ export async function resolveFlowSource(
   const flowName = params.name!;
   assertSafeFlowName(flowName);
   const expected = getFlowPath(flowName);
-  if (!params.flow_file) return { filePath: expected, flowName };
   // A path the boundary materialized from uploaded content is a fresh temp
-  // file this process itself created (see file-inputs.ts) — trusted as-is.
-  if (fileInput?.viaUpload) return { filePath: params.flow_file, flowName };
+  // file this process itself created (see file-inputs.ts) — trusted as-is, and
+  // returned ahead of the on-disk-spelling gate below deliberately: the only
+  // directory there is to list is that temp dir, whose single entry this
+  // server named from `name` itself, so the comparison could only ever agree
+  // with itself. The listing that could disagree is the remote client's, on a
+  // host this process cannot read — a mis-cased name on an uploading client
+  // stays the client's to catch, and refusing here on the strength of whatever
+  // happens to sit at the same path on THIS host would reject legitimate
+  // remote runs.
+  if (params.flow_file && fileInput?.viaUpload) return { filePath: params.flow_file, flowName };
   if (
-    !path.isAbsolute(params.flow_file) ||
-    params.flow_file.split(/[\\/]+/).includes("..") ||
-    path.resolve(params.flow_file) !== path.resolve(expected)
+    params.flow_file &&
+    (!path.isAbsolute(params.flow_file) ||
+      params.flow_file.split(/[\\/]+/).includes("..") ||
+      path.resolve(params.flow_file) !== path.resolve(expected))
   ) {
     throw new FailureError(
       `Invalid flow_file "${params.flow_file}": it must resolve to the flow's path under the ` +
@@ -1530,5 +1581,40 @@ export async function resolveFlowSource(
       }
     );
   }
-  return { filePath: params.flow_file, flowName };
+
+  // Same invariant as the flow_path branch, on the route every remote/MCP
+  // caller takes: nothing above consulted the directory, so on a
+  // case-insensitive filesystem `name: "Snap"` opens a file really named
+  // snap.yaml and then keys the report and __baselines__/ under "Snap" — a
+  // directory no entry carries, whose baselines vanish the moment the tree
+  // lands on a case-sensitive volume. Only a case-folded match refuses: a name
+  // that matches nothing at all is an ordinary missing flow, and the read that
+  // follows says so far better than a casing complaint would.
+  const spelling = await classifyOnDiskSpelling(path.dirname(expected), `${flowName}.yaml`);
+  if (spelling.state === "case_folded") {
+    // Hand back a name only when one can reach the file: an on-disk .YAML is
+    // addressable by no name at all (this branch always builds "<name>.yaml"),
+    // it is omitted from `argent flow list`, and flow_path refuses it too — so
+    // that fork asks for the rename it really needs.
+    const recovery = spelling.addressable
+      ? `Pass name "${path.basename(spelling.actual, ".yaml")}".`
+      : `Rename "${spelling.actual}" to "${flowName}.yaml" to run it — flow files must be ` +
+        `lowercase .yaml.`;
+    throw new FailureError(
+      `Invalid flow name "${flowName}": no saved flow is named "${flowName}.yaml" — this ` +
+        `filesystem matched it case-insensitively to "${spelling.actual}", so the flow name ` +
+        `(which keys the report and __baselines__/) would be one no directory entry carries. ` +
+        recovery,
+      {
+        error_code: FAILURE_CODES.FLOW_NAME_INVALID,
+        failure_stage: "flow_name_casing",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+
+  // Either the boundary's own path for this flow (containment-checked above,
+  // so it resolves to `expected`) or `expected` itself.
+  return { filePath: params.flow_file || expected, flowName };
 }
