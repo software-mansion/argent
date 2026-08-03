@@ -517,6 +517,87 @@ describe("flow-add-step", () => {
     expect(await resolveFlowSource(nested)).toEqual({ filePath: sibling, flowName: "login" });
   });
 
+  it("rejects a mis-cased sibling flow_path, naming the on-disk spelling", async () => {
+    const registry = createMockRegistry({
+      "flow-execute": { result: { ok: true, steps: [] } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "compose-casing", project_root: tmpDir });
+    await writeSiblingFlow("sibling", "steps:\n  - echo: hi\n");
+
+    // Every lexical check accepts "Sibling.yaml", and a case-insensitive
+    // filesystem would open sibling.yaml for it — so before the readdir gate
+    // the recorder baked `run: Sibling` into committed YAML, a name no
+    // case-sensitive checkout can resolve. The gate compares against the
+    // directory LISTING, which returns stored bytes on every platform, so this
+    // rejects deterministically on both filesystem flavors.
+    const err = await tool
+      .execute(
+        {},
+        {
+          command: "flow-execute",
+          args: JSON.stringify({
+            flow_path: path.join(tmpDir, ".argent", "flows", "Sibling.yaml"),
+            project_root: tmpDir,
+          }),
+        }
+      )
+      .then(
+        () => null,
+        (e: unknown) => e as Error
+      );
+
+    // The refusal must name the phantom spelling, the real directory entry,
+    // and hand back the recordable on-disk basename.
+    expect(err?.message).toContain("Cannot record a flow-execute of flow_path");
+    expect(err?.message).toContain('case-insensitively to "sibling.yaml"');
+    expect(err?.message).toContain('pass flow_path with the on-disk basename "sibling.yaml"');
+    // Rejected before the live sub-invoke and the append: nothing ran, nothing recorded.
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(parseFlow(await readFlowFile("compose-casing")).steps).toEqual([]);
+  });
+
+  it("suggests a rename when the on-disk sibling's own extension case is unrecordable", async () => {
+    const registry = createMockRegistry({
+      "flow-execute": { result: { ok: true, steps: [] } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "compose-rename", project_root: tmpDir });
+    // The sibling's REAL name trips the lowercase-extension arm, so the
+    // message must ask for a rename, not point at a flow_path this same
+    // ladder refuses.
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", "frag.YAML"),
+      "steps:\n  - echo: hi\n",
+      "utf8"
+    );
+
+    const err = await tool
+      .execute(
+        {},
+        {
+          command: "flow-execute",
+          args: JSON.stringify({
+            flow_path: path.join(tmpDir, ".argent", "flows", "frag.yaml"),
+            project_root: tmpDir,
+          }),
+        }
+      )
+      .then(
+        () => null,
+        (e: unknown) => e as Error
+      );
+
+    expect(err?.message).toContain('case-insensitively to "frag.YAML"');
+    expect(err?.message).toContain(
+      'rename "frag.YAML" to "frag.yaml" to record it — flow files must be lowercase .yaml'
+    );
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(parseFlow(await readFlowFile("compose-rename")).steps).toEqual([]);
+  });
+
   it("rejects a flow_path outside the recording's flow directory without running it", async () => {
     const registry = createMockRegistry({
       "flow-execute": { result: { ok: true, steps: [] } },

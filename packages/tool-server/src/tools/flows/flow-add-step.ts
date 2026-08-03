@@ -1,7 +1,13 @@
 import { z } from "zod";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { FAILURE_CODES, FailureError, type Registry, type ToolDefinition } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  FLOW_FILE_NAME_PATTERN,
+  type Registry,
+  type ToolDefinition,
+} from "@argent/registry";
 import {
   getActiveFlow,
   getRecordingSession,
@@ -134,10 +140,10 @@ const RUN_TARGET_COMMAND = "flow-execute";
  * flow_path is refused here — it could not replay as a recorded step either,
  * since a raw `tool:` step has no boundary to resolve a path through.
  */
-function rewriteSiblingFlowPath(
+async function rewriteSiblingFlowPath(
   session: RecordingSession | null,
   args: Record<string, unknown>
-): void {
+): Promise<void> {
   const flowPath = args.flow_path;
   // A call naming both sources — or neither — is flow-execute's schema to judge.
   if (typeof flowPath !== "string" || args.name !== undefined) return;
@@ -218,6 +224,47 @@ function rewriteSiblingFlowPath(
     throw invalid(`project_root "${projectRoot}" does not resolve "${stem}" to it`);
   }
 
+  // Every check above compared the SUPPLIED spelling lexically; nothing has
+  // consulted the directory. On a case-insensitive filesystem (APFS, NTFS)
+  // the nested flow-execute would happily open a sibling really named
+  // "sibling.yaml" for "Sibling.yaml", and the rewrite below would bake the
+  // phantom spelling into the recorded YAML as `run: Sibling` — the recording
+  // is the one output that is committed and replayed elsewhere, so the step
+  // replays green here and fails on every case-sensitive checkout (Linux CI).
+  // Require the supplied basename to appear in the flows dir byte-for-byte.
+  // readdir, not realpath: realpath rewrites a symlinked sibling to its
+  // target's name, and a symlink composes under the link's own name. The
+  // basename is pure ASCII by this point (stem charset + ".yaml"), so
+  // Unicode-normalizing filesystems cannot make the comparison lie. This dir
+  // is the recording's own host-persisted one — the recording file itself
+  // lives in it — so an unreadable listing is far less plausible than in the
+  // flow-run/CLI twins, but a readdir failure skips the check all the same
+  // rather than refusing a file the exact-named contract may well be honoring.
+  const suppliedBase = path.basename(flowPath);
+  const siblings = await fs.readdir(flowsDir).catch(() => null);
+  if (siblings !== null && !siblings.includes(suppliedBase)) {
+    const actual = siblings.find((name) => name.toLowerCase() === suppliedBase.toLowerCase());
+    // Hint the real spelling only when this same ladder would accept it (a
+    // stem-case slip like Sibling.yaml); an invalid real name (sibling.YAML)
+    // needs a rename, and pointing at a flow_path the extension arm will
+    // refuse helps no one.
+    const recovery =
+      actual !== undefined && FLOW_FILE_NAME_PATTERN.test(actual)
+        ? `pass flow_path with the on-disk basename "${actual}"`
+        : actual !== undefined
+          ? `rename "${actual}" to "${suppliedBase}" to record it — flow files must be lowercase .yaml`
+          : `pass the basename exactly as it appears on disk`;
+    throw invalid(
+      `the file must be named as it appears on disk — no directory entry is named ` +
+        `"${suppliedBase}"` +
+        (actual !== undefined
+          ? ` (this filesystem matched it case-insensitively to "${actual}")`
+          : "") +
+        `, so the recorded run: step would name a flow no case-sensitive checkout can find — ` +
+        recovery
+    );
+  }
+
   delete args.flow_path;
   args.name = stem;
 }
@@ -289,7 +336,7 @@ If a step was recorded by mistake, edit the .yaml file directly to remove it.`,
       const session = getRecordingSession();
       // A nested flow-execute must never carry a raw flow_path into the live
       // invoke — it has no boundary metadata there and would be rejected.
-      if (params.command === RUN_TARGET_COMMAND) rewriteSiblingFlowPath(session, args);
+      if (params.command === RUN_TARGET_COMMAND) await rewriteSiblingFlowPath(session, args);
 
       // Selector capture must read the tree BEFORE the tap runs: a navigating
       // tap (e.g. a list row that opens a detail screen) replaces the screen, so
