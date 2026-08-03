@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import type { Registry } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
 
 // Serve the flow tree directly: flows resolve selectors against the platform's
@@ -14,6 +18,7 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
   ),
 }));
 
+import { createRunFlowTool } from "../../src/tools/flows/flow-run";
 import { serializeFlow, parseFlow } from "../../src/tools/flows/flow-utils";
 import { createFlowTestHarness, n, screen } from "./harness";
 
@@ -670,6 +675,38 @@ describe("swipe: execution", () => {
     expect(result.calls).toEqual([]);
   });
 
+  it("fails with the scroll-to hint when the from anchor never appears", async () => {
+    currentTree = () => screen([]);
+    await writeFlow("from-missing", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "swipe", from: { selector: { text: "Card", loose: true } }, direction: "left" },
+      ],
+    });
+
+    const result = await run("from-missing");
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]).toMatchObject({ kind: "swipe", status: "fail" });
+    expect(result.steps[0].reason).toMatch(/add a scroll-to step/i);
+    expect(result.calls).toEqual([]);
+  }, 15000);
+
+  it("fails with the scroll-to hint when the to endpoint never appears", async () => {
+    currentTree = () => screen([]);
+    await writeFlow("to-missing", {
+      executionPrerequisite: "",
+      steps: [{ kind: "swipe", to: { selector: { text: "Archive", loose: true } } }],
+    });
+
+    const result = await run("to-missing");
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]).toMatchObject({ kind: "swipe", status: "fail" });
+    expect(result.steps[0].reason).toMatch(/add a scroll-to step/i);
+    expect(result.calls).toEqual([]);
+  }, 15000);
+
   it("rejects swipe on vega with the touch-directive message shape", async () => {
     await writeFlow("swipe-vega", {
       executionPrerequisite: "",
@@ -709,5 +746,60 @@ describe("swipe: execution", () => {
         },
       },
     ]);
+  });
+});
+
+describe("swipe: abort", () => {
+  it("reports a swipe cancelled during the endpoint's auto-wait as a skip, not an offscreen failure", async () => {
+    // The shared harness never threads an AbortSignal, so this test runs the
+    // flow tool directly from its own temp dir, mirroring flow-abort.test.ts:
+    // the endpoint never appears and the third tree read trips the abort,
+    // landing it deterministically inside the `to` auto-wait's polling.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-swipe-abort-"));
+    try {
+      const controller = new AbortController();
+      let reads = 0;
+      currentTree = () => {
+        reads++;
+        if (reads >= 3) controller.abort();
+        return screen([n({ label: "Other", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 } })]);
+      };
+      const flowsDir = path.join(dir, ".argent", "flows");
+      await fs.mkdir(flowsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(flowsDir, "cancelled-swipe.yaml"),
+        serializeFlow({
+          executionPrerequisite: "",
+          steps: [{ kind: "swipe", to: { selector: { text: "Archive", loose: true } } }],
+        }),
+        "utf8"
+      );
+      const calls: string[] = [];
+      const registry = {
+        invokeTool: vi.fn(async (id: string) => {
+          calls.push(id);
+          if (id === "list-devices") return { devices: [] };
+          return { ok: true };
+        }),
+        getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
+      } as unknown as Registry;
+
+      const result = await createRunFlowTool(registry).execute(
+        {},
+        { name: "cancelled-swipe", project_root: dir, device: DEVICE },
+        { signal: controller.signal } as never
+      );
+
+      if (!("steps" in result))
+        throw new Error(`expected a run result, got notice: ${result.notice}`);
+      // A skip with the uniform abort reason — NOT a fail with the misleading
+      // "no visible element matched … add a scroll-to step" hint.
+      expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["swipe:skip"]);
+      expect(result.steps[0].reason).toBe("run aborted");
+      expect(result.ok).toBe(false);
+      expect(calls).not.toContain("gesture-swipe");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 });
