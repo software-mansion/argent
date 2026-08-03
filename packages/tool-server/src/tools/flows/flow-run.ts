@@ -1016,6 +1016,9 @@ async function resolveRunDevice(
   return { device, booted: null };
 }
 
+/** {@link scanLeadingLaunch}'s "keep scanning the parent" outcome. */
+const NO_EXECUTABLE_STEP = "no-executable-step";
+
 /**
  * The launch the RUN begins with, following a leading `run:` — a fragment whose
  * first step composes an e2e flow starts with that flow's launch, and the runner
@@ -1030,19 +1033,52 @@ async function leadingLaunch(
   flowsDir: string,
   seen: string[]
 ): Promise<{ app: Launch; flow: string } | null> {
-  const first = flow.steps.find((s) => s.kind !== "echo");
-  if (!first) return null;
-  if (first.kind === "launch") return { app: first.app, flow: seen[seen.length - 1]! };
-  if (first.kind !== "run") return null;
-  if (seen.includes(first.flow) || seen.length >= MAX_RUN_DEPTH) return null;
-  try {
-    assertSafeFlowName(first.flow);
-    const path_ = path.join(flowsDir, `${first.flow}.yaml`);
-    const nested = parseFlow(await fs.readFile(path_, "utf8"));
-    return await leadingLaunch(nested, flowsDir, [...seen, first.flow]);
-  } catch {
-    return null;
+  const found = await scanLeadingLaunch(flow, flowsDir, seen);
+  return found === NO_EXECUTABLE_STEP ? null : found;
+}
+
+/**
+ * {@link leadingLaunch}'s recursion, plus the third outcome it needs internally:
+ * {@link NO_EXECUTABLE_STEP} — this flow, and everything its leading `run:`s
+ * pulled in, contribute no executable step. That is not a reason to give up on
+ * the run: {@link execRunStep} inlines such a fragment and carries straight on
+ * to the *parent's* next step, so the scan resumes there too. Abandoning the
+ * whole scan instead would make `[run: <echo-only frag>, run: <e2e>]` look
+ * launch-free while the run really does launch first thing — the chromium hoist
+ * would skip (leaving the run attached to whatever instance happens to be up,
+ * green launch step and all) and the prerequisite guard would wave through a
+ * run that destroys the state it just asked the caller to establish.
+ *
+ * The guards below mirror the executor exactly, because a chain it refuses
+ * never reaches its launch: a cyclic or over-deep `run:`, or one whose target
+ * is unsafe or unreadable, errors that step and hard-stops the run — so those
+ * stay `null` (give up), never transparent. `seen` tracks the ancestor chain
+ * only, like `execRunStep`'s runStack: a hop pushes its target for the descent
+ * and pops on the way out, so two sibling `run:`s of one echo-only fragment are
+ * as legal here as they are at run time.
+ */
+async function scanLeadingLaunch(
+  flow: FlowFile,
+  flowsDir: string,
+  seen: string[]
+): Promise<{ app: Launch; flow: string } | typeof NO_EXECUTABLE_STEP | null> {
+  for (const step of flow.steps) {
+    if (step.kind === "echo") continue;
+    if (step.kind === "launch") return { app: step.app, flow: seen[seen.length - 1]! };
+    if (step.kind !== "run") return null;
+    if (seen.includes(step.flow) || seen.length >= MAX_RUN_DEPTH) return null;
+    let nested: FlowFile;
+    try {
+      assertSafeFlowName(step.flow);
+      const path_ = path.join(flowsDir, `${step.flow}.yaml`);
+      nested = parseFlow(await fs.readFile(path_, "utf8"));
+    } catch {
+      return null;
+    }
+    const inner = await scanLeadingLaunch(nested, flowsDir, [...seen, step.flow]);
+    if (inner !== NO_EXECUTABLE_STEP) return inner;
   }
+  return NO_EXECUTABLE_STEP;
 }
 
 /**

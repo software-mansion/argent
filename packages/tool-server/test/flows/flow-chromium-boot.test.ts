@@ -687,6 +687,138 @@ describe("flow-execute chromium boot", () => {
     expect(killChromiumByPortAndWait).toHaveBeenCalledWith(12345, 4242);
   });
 
+  it("boots past a leading run: hop that contributes nothing but echoes", async () => {
+    // execRunStep inlines an echo-only fragment and carries straight on with
+    // the parent's NEXT step, so the run's first executable step is still the
+    // e2e flow's launch. A walk that stopped at the hop would leave the run to
+    // attach to whatever chromium instance happens to be up — a green launch
+    // step against someone else's browser.
+    const fragment = await writeFlow("steps:\n  - run: narrate\n  - run: e2e-chromium\n");
+    await writeSiblingFlow(fragment, "narrate", "steps:\n  - echo: about to launch\n");
+    await writeSiblingFlow(fragment, "e2e-chromium", "steps:\n  - launch: { chromium: ./app }\n");
+    const registry = makeRegistry();
+
+    const result = await runFlow(registry, {
+      name: "hop-then-e2e",
+      project_root: PROJECT_ROOT,
+      flow_file: fragment,
+    });
+
+    expect(bootElectronApp).toHaveBeenCalledTimes(1);
+    expect(bootElectronApp.mock.calls[0][0]).toMatchObject({
+      appPath: path.join(path.dirname(fragment), "app"),
+    });
+    expect(result.ok).toBe(true);
+    expect(result.device).toBe("chromium-cdp-12345");
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "run:pass",
+      "echo:pass",
+      "run:pass",
+      "launch:pass",
+    ]);
+    // The e2e launch settled the hoisted instance instead of attaching: a
+    // reason naming the instance is the owned-vs-attached signal.
+    expect(result.steps[3].reason).toBe("booted chromium instance chromium-cdp-12345");
+    expect(killChromiumByPortAndWait).toHaveBeenCalledWith(12345, 4242);
+  });
+
+  it("boots identically when that narration is inline rather than behind the hop", async () => {
+    // The control the hop case must match: same run, one file fewer.
+    const fragment = await writeFlow("steps:\n  - echo: about to launch\n  - run: e2e-chromium\n");
+    await writeSiblingFlow(fragment, "e2e-chromium", "steps:\n  - launch: { chromium: ./app }\n");
+    const registry = makeRegistry();
+
+    const result = await runFlow(registry, {
+      name: "inline-then-e2e",
+      project_root: PROJECT_ROOT,
+      flow_file: fragment,
+    });
+
+    expect(bootElectronApp).toHaveBeenCalledTimes(1);
+    expect(result.ok).toBe(true);
+    expect(result.device).toBe("chromium-cdp-12345");
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "echo:pass",
+      "run:pass",
+      "launch:pass",
+    ]);
+    expect(result.steps[2].reason).toBe("booted chromium instance chromium-cdp-12345");
+  });
+
+  it("boots past a leading run: hop into a fragment with no steps at all", async () => {
+    // `steps: []` executes as nothing at all, which is the same "contributes
+    // nothing" case as the echo-only fragment — not the end of the chain.
+    const fragment = await writeFlow("steps:\n  - run: placeholder\n  - run: e2e-chromium\n");
+    await writeSiblingFlow(fragment, "placeholder", "steps: []\n");
+    await writeSiblingFlow(fragment, "e2e-chromium", "steps:\n  - launch: { chromium: ./app }\n");
+    const registry = makeRegistry();
+
+    const result = await runFlow(registry, {
+      name: "empty-hop-then-e2e",
+      project_root: PROJECT_ROOT,
+      flow_file: fragment,
+    });
+
+    expect(bootElectronApp).toHaveBeenCalledTimes(1);
+    expect(result.ok).toBe(true);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "run:pass",
+      "run:pass",
+      "launch:pass",
+    ]);
+  });
+
+  it("boots when the same do-nothing fragment is hopped through twice in a row", async () => {
+    // Siblings are not a cycle: execRunStep's runStack pops after each hop, so
+    // it runs this happily — the walk must track the ancestor chain only, or it
+    // would refuse a chain the executor accepts and skip the boot.
+    const fragment = await writeFlow(
+      "steps:\n  - run: narrate\n  - run: narrate\n  - run: e2e-chromium\n"
+    );
+    await writeSiblingFlow(fragment, "narrate", "steps:\n  - echo: about to launch\n");
+    await writeSiblingFlow(fragment, "e2e-chromium", "steps:\n  - launch: { chromium: ./app }\n");
+    const registry = makeRegistry();
+
+    const result = await runFlow(registry, {
+      name: "twice-hopped",
+      project_root: PROJECT_ROOT,
+      flow_file: fragment,
+    });
+
+    expect(bootElectronApp).toHaveBeenCalledTimes(1);
+    expect(result.ok).toBe(true);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "run:pass",
+      "echo:pass",
+      "run:pass",
+      "echo:pass",
+      "run:pass",
+      "launch:pass",
+    ]);
+  });
+
+  it("does not boot past a leading run: hop whose fragment contributes a real step", async () => {
+    // Only echoes are transparent. The tool step runs against the device
+    // first, so the launch behind it is not the run's leading one — and a
+    // non-leading chromium launch boots itself mid-run rather than being
+    // hoisted (here the run never gets that far: there is no device to start on).
+    const fragment = await writeFlow("steps:\n  - run: probe\n  - run: e2e-chromium\n");
+    await writeSiblingFlow(fragment, "probe", "steps:\n  - tool: screenshot\n");
+    await writeSiblingFlow(fragment, "e2e-chromium", "steps:\n  - launch: { chromium: ./app }\n");
+    const registry = makeRegistry(async (id: string) =>
+      id === "list-devices" ? { devices: [] } : {}
+    );
+
+    await expect(
+      runFlow(registry, {
+        name: "real-step-hop",
+        project_root: PROJECT_ROOT,
+        flow_file: fragment,
+      })
+    ).rejects.toThrow(/No booted device found/);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+  });
+
   it("fails the settling launch when the hoisted instance is not the app the step names", async () => {
     // The hoist and the launch step read a leading run: chain's flow file
     // independently, so the instance the settle inherits can be another app's
@@ -792,12 +924,35 @@ describe("flow-execute chromium boot", () => {
     expect(readFileCalls).toHaveBeenCalledTimes(3);
   });
 
+  it("does not boot when a cyclic leading run: precedes a launch-bearing one", async () => {
+    // The shape that tells the walk's two stop conditions apart. A hop that
+    // merely contributes nothing is transparent — the scan resumes at the
+    // parent's next step, as execRunStep does. A hop the executor REFUSES is a
+    // dead end: it errors that step and hard-stops, so the launch behind the
+    // cycle never runs and must not be booted for. With `run: loop-a` alone
+    // (the test above) the two are indistinguishable — nothing follows to boot.
+    const top = await writeFlow("steps:\n  - run: loop-a\n  - run: e2e\n");
+    await writeSiblingFlow(top, "loop-a", "steps:\n  - run: loop-b\n");
+    await writeSiblingFlow(top, "loop-b", "steps:\n  - run: loop-a\n");
+    await writeSiblingFlow(top, "e2e", "steps:\n  - launch: { chromium: ./app }\n");
+    const registry = makeRegistry(async (id: string) =>
+      id === "list-devices" ? { devices: [] } : {}
+    );
+
+    await expect(
+      runFlow(registry, { name: "cyclic-then-e2e", project_root: PROJECT_ROOT, flow_file: top })
+    ).rejects.toThrow(/No booted device found/);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+  });
+
   // The hoist must accept exactly the chains execRunStep accepts (both walk
   // MAX_RUN_DEPTH deep, cycle-checked), or a boot could precede a run the
-  // executor then refuses for depth. The two tests pin the bound from both
-  // sides: 19 run-hops is the deepest chain the executor runs, 20 is refused.
-  async function writeRunChain(hops: number): Promise<string> {
-    const top = await writeFlow("steps:\n  - run: chain-1\n");
+  // executor then refuses for depth. The tests below pin the bound from both
+  // sides: 19 run-hops is the deepest chain the executor runs, 20 is refused —
+  // and a refused chain ends the walk rather than being stepped over.
+  // `topTail` appends further steps after the chain's `run:` in the top flow.
+  async function writeRunChain(hops: number, topTail = ""): Promise<string> {
+    const top = await writeFlow(`steps:\n  - run: chain-1\n${topTail}`);
     for (let i = 1; i < hops; i++) {
       await writeSiblingFlow(top, `chain-${i}`, `steps:\n  - run: chain-${i + 1}\n`);
     }
@@ -831,6 +986,23 @@ describe("flow-execute chromium boot", () => {
     expect(bootElectronApp).not.toHaveBeenCalled();
   });
 
+  it("does not boot when a leading run: chain refused for depth precedes a launch-bearing hop", async () => {
+    // Same distinction as the cyclic pair: the executor errors at the depth
+    // bound and hard-stops, so neither the chain's own launch nor e2e's runs.
+    // A walk that treated the over-deep hop as contributing nothing would carry
+    // on to e2e and boot for a launch this run can never reach.
+    const top = await writeRunChain(20, "  - run: e2e\n");
+    await writeSiblingFlow(top, "e2e", "steps:\n  - launch: { chromium: ./app }\n");
+    const registry = makeRegistry(async (id: string) =>
+      id === "list-devices" ? { devices: [] } : {}
+    );
+
+    await expect(
+      runFlow(registry, { name: "deep-then-e2e", project_root: PROJECT_ROOT, flow_file: top })
+    ).rejects.toThrow(/No booted device found/);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+  });
+
   it("refuses a leading run: that escapes the flows directory, before anything boots", async () => {
     // Defence-in-depth on the hoist: the name check must run before the chain
     // walk reads the file, or `run: ../evil` would boot the caller-chosen app
@@ -848,6 +1020,45 @@ describe("flow-execute chromium boot", () => {
       await expect(
         runFlow(registry, { name: "escape", project_root: PROJECT_ROOT, flow_file: top })
       ).rejects.toThrow(/No booted device found/);
+      expect(bootElectronApp).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(evil, { force: true });
+    }
+  });
+
+  it("refuses that escape as a dead end rather than scanning past it to a later launch", async () => {
+    // The escape above can't tell "give up" from "skip this hop": with nothing
+    // after `run: ../evil`, both boot nothing. Put a launch-bearing hop behind
+    // it and they diverge — and the run itself says which is right: the escape
+    // errors step 1 and hard-stops, so e2e's launch never executes. Booting for
+    // it would leave an instance nothing in the run ever launches (and, if the
+    // walk read the escaped file, an app path the flows dir never sanctioned).
+    const top = await writeFlow("steps:\n  - run: ../evil\n  - run: e2e\n");
+    const evil = path.join(path.dirname(top), "..", "evil.yaml");
+    await fs.writeFile(evil, "steps:\n  - launch: { chromium: /abs/evil-app }\n", "utf8");
+    await writeSiblingFlow(top, "e2e", "steps:\n  - launch: { chromium: ./app }\n");
+    try {
+      const registry = makeRegistry(async (id: string) =>
+        id === "list-devices" ? { devices: [] } : {}
+      );
+
+      await expect(
+        runFlow(registry, { name: "escape-then-e2e", project_root: PROJECT_ROOT, flow_file: top })
+      ).rejects.toThrow(/No booted device found/);
+      expect(bootElectronApp).not.toHaveBeenCalled();
+
+      // The executor's verdict on the same chain, attached to a device so it
+      // actually runs: errored at the escape, everything after it skipped.
+      const result = await runFlow(registry, {
+        name: "escape-then-e2e",
+        project_root: PROJECT_ROOT,
+        flow_file: top,
+        device: "chromium-cdp-9999",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:error", "run:skip"]);
+      expect(result.steps[0].reason).toContain('could not load fragment "../evil"');
       expect(bootElectronApp).not.toHaveBeenCalled();
     } finally {
       await fs.rm(evil, { force: true });
@@ -1302,6 +1513,66 @@ describe("flow-execute prerequisite vs leading launch chain", () => {
         flow_file: fragment,
       })
     ).rejects.toThrow(/must not declare executionPrerequisite/i);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+  });
+
+  it("rejects a prerequisite fragment whose leading run: hop only narrates before the launch", async () => {
+    // An echo-only fragment executes as nothing and the run reaches e2e-a's
+    // launch at step 1 all the same — so the guard has to see through the hop.
+    // Missing it is worse than not guarding: the handshake asks the caller to
+    // establish state, then the acknowledged run relaunches the app and wipes it.
+    const fragment = await writeFlow(
+      'executionPrerequisite: "the counter must already read taps: 1"\n' +
+        "steps:\n  - run: narrate\n  - run: e2e-a\n"
+    );
+    await writeSiblingFlow(fragment, "narrate", "steps:\n  - echo: about to run e2e-a\n");
+    await writeSiblingFlow(fragment, "e2e-a", "steps:\n  - launch: { chromium: ./app }\n");
+    const registry = makeRegistry();
+
+    // Refused on both paths, and pointing at the file that carries the launch.
+    await expect(
+      runFlowRaw(registry, {
+        name: "hop-prereq",
+        project_root: PROJECT_ROOT,
+        flow_file: fragment,
+      })
+    ).rejects.toThrow(/must not declare executionPrerequisite/i);
+    await expect(
+      runFlow(registry, {
+        name: "hop-prereq",
+        project_root: PROJECT_ROOT,
+        flow_file: fragment,
+        prerequisiteAcknowledged: true,
+      })
+    ).rejects.toThrow(/"e2e-a"/);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+    expect((registry.invokeTool as any).mock.calls).toEqual([]);
+  });
+
+  it("rejects the inline-echo spelling of that fragment identically", async () => {
+    // The control: the same run with the narration in the fragment itself.
+    const fragment = await writeFlow(
+      'executionPrerequisite: "the counter must already read taps: 1"\n' +
+        "steps:\n  - echo: about to run e2e-a\n  - run: e2e-a\n"
+    );
+    await writeSiblingFlow(fragment, "e2e-a", "steps:\n  - launch: { chromium: ./app }\n");
+    const registry = makeRegistry();
+
+    await expect(
+      runFlowRaw(registry, {
+        name: "inline-prereq",
+        project_root: PROJECT_ROOT,
+        flow_file: fragment,
+      })
+    ).rejects.toThrow(/must not declare executionPrerequisite/i);
+    await expect(
+      runFlow(registry, {
+        name: "inline-prereq",
+        project_root: PROJECT_ROOT,
+        flow_file: fragment,
+        prerequisiteAcknowledged: true,
+      })
+    ).rejects.toThrow(/"e2e-a"/);
     expect(bootElectronApp).not.toHaveBeenCalled();
   });
 
