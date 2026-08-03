@@ -1073,9 +1073,7 @@ describe("scroll-to directive", () => {
 
     await writeFlow("pinned-bar", {
       executionPrerequisite: "",
-      steps: [
-        { kind: "scroll-to", target: { identifier: "checkout-button" }, direction: "down" },
-      ],
+      steps: [{ kind: "scroll-to", target: { identifier: "checkout-button" }, direction: "down" }],
     });
 
     const tool = createRunFlowTool(registry);
@@ -1220,7 +1218,11 @@ describe("scroll-to directive", () => {
     // scroller's 0.5.
     const scrollers = () => [
       fullScreenScroller(),
-      n({ role: "AXScrollArea", identifier: "inner-list", frame: { x: 0, y: 0.3, width: 1, height: 0.7 } }),
+      n({
+        role: "AXScrollArea",
+        identifier: "inner-list",
+        frame: { x: 0, y: 0.3, width: 1, height: 0.7 },
+      }),
     ];
     const flush = screen([
       ...scrollers(),
@@ -1297,7 +1299,7 @@ describe("scroll-to directive", () => {
     expect(swipes).toHaveLength(1);
   });
 
-  it("skips the start-edge nudge on touch — at the limit the drag is pull-to-refresh", async () => {
+  it("skips the start-edge nudge — at the limit the drag is pull-to-refresh", async () => {
     // An up-scroll typically lands AT the container's start limit: a FlatList
     // scrolled back to row 0 rests at contentOffset 0, and a thin list header
     // (the ordinary section-separator shape) leaves that row at 0.03..0.13 —
@@ -1307,10 +1309,10 @@ describe("scroll-to directive", () => {
     // a `direction: up` nudge drags the finger DOWN — on a list with a
     // RefreshControl that IS pull-to-refresh: a read-only scroll-to would
     // refetch the list's data, on every replay, since the deficit can never
-    // resolve. So on touch a start-edge landing is accepted flush: the step
-    // passes with no gesture at all. Runs on the Android device id (the
-    // on-device repro's platform) while the left mirror uses the iOS one, so
-    // together they pin the veto to every touch platform — not one id shape.
+    // resolve. So a start-edge landing is accepted flush: the step passes with
+    // no gesture at all. Runs on the Android device id (the on-device repro's
+    // platform) while the left mirror uses the iOS one, so together they pin
+    // the veto to every touch platform — not one id shape.
     currentTree = () =>
       screen([
         fullScreenScroller(),
@@ -1327,7 +1329,10 @@ describe("scroll-to directive", () => {
 
     const tool = createRunFlowTool(registry);
     const result = asRun(
-      await tool.execute({}, { name: "edge-nudge-up", project_root: tmpDir, device: ANDROID_DEVICE })
+      await tool.execute(
+        {},
+        { name: "edge-nudge-up", project_root: tmpDir, device: ANDROID_DEVICE }
+      )
     );
 
     expect(result.ok).toBe(true);
@@ -1375,14 +1380,14 @@ describe("scroll-to directive", () => {
     expect(swipes[0].toY).toBeCloseTo(swipes[0].fromY, 5);
   });
 
-  it("skips the left start-edge nudge on touch — the same at-limit drag hazard", async () => {
+  it("skips the left start-edge nudge — the same at-limit drag hazard", async () => {
     // Horizontal mirror of the skipped up-nudge: a `direction: left` nudge
     // drags the finger RIGHT, and a left-scroll typically lands with the
     // carousel at its start limit — undetectably, since adapters clamp
     // frames — where that drag is the horizontal refresh / edge-swipe
     // gesture. Target flush at 0.03..0.13 (clearance 0.03, deficit 0.07)
-    // would demand a nudge on geometry alone; on touch it is accepted flush
-    // with no gesture.
+    // would demand a nudge on geometry alone; it is accepted flush with no
+    // gesture.
     currentTree = () =>
       screen([
         fullScreenScroller(),
@@ -1407,37 +1412,36 @@ describe("scroll-to directive", () => {
     expect(swipes).toHaveLength(0);
   });
 
-  it("nudges via the chromium wheel path with an explicit deltaY", async () => {
-    // The device id shape selects the platform (chromium-cdp-<port> →
-    // chromium), so the same flush landing goes out as a gesture-scroll wheel
-    // burst whose deltaY is the exact nudge distance (0.08 deficit × 1.5), not
-    // the half-viewport default — and no touch swipe is dispatched. The
-    // scroller leaf carries the `scrollable` flag (the CDP DOM walker's
-    // shape, no AX role) — the container gate must detect it through the
-    // flag too.
+  it("searches on chromium with wheel events, not touch swipes", async () => {
+    // The plain search phase on a browser target: the device id shape
+    // (chromium-cdp-<port>) routes the increment through gesture-scroll
+    // instead of gesture-swipe, one half-viewport wheel burst per round
+    // (region is the full screen → deltaY 0.5), anchored at the screen
+    // centre. Chromium dispatches no nudges at all, so this is the only
+    // scroll a flow can make there.
     const domScroller = () => n({ scrollable: true, frame: { x: 0, y: 0, width: 1, height: 1 } });
-    const flush = screen([
+    const offscreen = screen([
       domScroller(),
-      n({ label: "Order #1234", frame: { x: 0.1, y: 0.88, width: 0.8, height: 0.1 } }),
+      n({ label: "Top", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 } }),
     ]);
-    const padded = screen([
+    const withTarget = screen([
       domScroller(),
-      n({ label: "Order #1234", frame: { x: 0.1, y: 0.7, width: 0.8, height: 0.1 } }),
+      n({ label: "Order #1234", frame: { x: 0.1, y: 0.5, width: 0.8, height: 0.1 } }),
     ]);
-    let nudged = false;
-    currentTree = () => (nudged ? padded : flush);
+    let revealed = false;
+    currentTree = () => (revealed ? withTarget : offscreen);
 
     const swipes: SwipeCall[] = [];
     const scrolls: ScrollCall[] = [];
     const registry = mockRegistry(
       swipes,
       () => {
-        nudged = true;
+        revealed = true;
       },
       scrolls
     );
 
-    await writeFlow("edge-nudge-wheel", {
+    await writeFlow("chromium-search", {
       executionPrerequisite: "",
       steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
     });
@@ -1446,7 +1450,7 @@ describe("scroll-to directive", () => {
     const result = asRun(
       await tool.execute(
         {},
-        { name: "edge-nudge-wheel", project_root: tmpDir, device: CHROMIUM_DEVICE }
+        { name: "chromium-search", project_root: tmpDir, device: CHROMIUM_DEVICE }
       )
     );
 
@@ -1454,158 +1458,50 @@ describe("scroll-to directive", () => {
     expect(result.steps[0].status).toBe("pass");
     expect(swipes).toHaveLength(0);
     expect(scrolls).toHaveLength(1);
-    expect(scrolls[0].deltaY).toBeCloseTo(0.12, 5);
-    expect(scrolls[0].x).toBeCloseTo(0.5, 5);
-  });
-
-  it("nudges via the chromium wheel path with an explicit deltaX", async () => {
-    // Horizontal wheel mirror: a right-scroll landing flush at 0.88..0.98
-    // (clearance 0.02, deficit 0.08) goes out as one gesture-scroll whose
-    // deltaX is +0.12 — positive reveals content to the right — with no
-    // deltaY and no touch swipe. Flag-marked scroller leaf, as the DOM
-    // walker emits it.
-    const domScroller = () => n({ scrollable: true, frame: { x: 0, y: 0, width: 1, height: 1 } });
-    const flush = screen([
-      domScroller(),
-      n({ label: "Card 9", frame: { x: 0.88, y: 0.45, width: 0.1, height: 0.1 } }),
-    ]);
-    const padded = screen([
-      domScroller(),
-      n({ label: "Card 9", frame: { x: 0.7, y: 0.45, width: 0.1, height: 0.1 } }),
-    ]);
-    let nudged = false;
-    currentTree = () => (nudged ? padded : flush);
-
-    const swipes: SwipeCall[] = [];
-    const scrolls: ScrollCall[] = [];
-    const registry = mockRegistry(
-      swipes,
-      () => {
-        nudged = true;
-      },
-      scrolls
-    );
-
-    await writeFlow("edge-nudge-wheel-x", {
-      executionPrerequisite: "",
-      steps: [{ kind: "scroll-to", target: { text: "Card 9" }, direction: "right" }],
-    });
-
-    const tool = createRunFlowTool(registry);
-    const result = asRun(
-      await tool.execute(
-        {},
-        { name: "edge-nudge-wheel-x", project_root: tmpDir, device: CHROMIUM_DEVICE }
-      )
-    );
-
-    expect(result.ok).toBe(true);
-    expect(result.steps[0].status).toBe("pass");
-    expect(swipes).toHaveLength(0);
-    expect(scrolls).toHaveLength(1);
-    expect(scrolls[0].deltaX).toBeCloseTo(0.12, 5);
-    expect(scrolls[0].deltaY).toBeUndefined();
-    expect(scrolls[0].y).toBeCloseTo(0.5, 5);
-  });
-
-  it("keeps the start-edge nudge on the chromium wheel path (negative deltaY)", async () => {
-    // The exact top-edge geometry the touch platforms skip (target 0.03..0.13,
-    // clearance 0.03, deficit 0.07) DOES nudge on chromium: the increment is a
-    // wheel event, and a wheel at the scroll limit is a plain no-op — it
-    // cannot fire pull-to-refresh and cannot press anything — so the platform
-    // split keeps the padding win where the gesture is safe. One
-    // gesture-scroll with deltaY −0.105 (0.07 × 1.5, negative reveals content
-    // above), no touch swipe.
-    const domScroller = () => n({ scrollable: true, frame: { x: 0, y: 0, width: 1, height: 1 } });
-    const flush = screen([
-      domScroller(),
-      n({ label: "Row 0", frame: { x: 0.1, y: 0.03, width: 0.8, height: 0.1 } }),
-    ]);
-    const padded = screen([
-      domScroller(),
-      n({ label: "Row 0", frame: { x: 0.1, y: 0.15, width: 0.8, height: 0.1 } }),
-    ]);
-    let nudged = false;
-    currentTree = () => (nudged ? padded : flush);
-
-    const swipes: SwipeCall[] = [];
-    const scrolls: ScrollCall[] = [];
-    const registry = mockRegistry(
-      swipes,
-      () => {
-        nudged = true;
-      },
-      scrolls
-    );
-
-    await writeFlow("edge-nudge-wheel-up", {
-      executionPrerequisite: "",
-      steps: [{ kind: "scroll-to", target: { text: "Row 0" }, direction: "up" }],
-    });
-
-    const tool = createRunFlowTool(registry);
-    const result = asRun(
-      await tool.execute(
-        {},
-        { name: "edge-nudge-wheel-up", project_root: tmpDir, device: CHROMIUM_DEVICE }
-      )
-    );
-
-    expect(result.ok).toBe(true);
-    expect(result.steps[0].status).toBe("pass");
-    expect(swipes).toHaveLength(0);
-    expect(scrolls).toHaveLength(1);
-    expect(scrolls[0].deltaY).toBeCloseTo(-0.105, 5);
+    expect(scrolls[0].deltaY).toBeCloseTo(0.5, 5);
     expect(scrolls[0].deltaX).toBeUndefined();
     expect(scrolls[0].x).toBeCloseTo(0.5, 5);
+    expect(scrolls[0].y).toBeCloseTo(0.5, 5);
   });
 
-  it("keeps the left start-edge nudge on the chromium wheel path (negative deltaX)", async () => {
-    // Horizontal wheel mirror of the kept start-edge nudge: the left-edge
-    // landing touch skips (target 0.03..0.13, deficit 0.07) goes out on
-    // chromium as one gesture-scroll with deltaX −0.105 — negative reveals
-    // content to the left — no deltaY, no touch swipe.
+  it("never nudges on chromium — nothing overlays a browser viewport", async () => {
+    // The device id shape selects the platform (chromium-cdp-<port> →
+    // chromium). The exact end-edge geometry a touch device nudges (target
+    // 0.88..0.98 inside a full-bleed scroller, clearance 0.02, deficit 0.08)
+    // must dispatch NOTHING here: a page has no home indicator, gesture-nav
+    // bar or floating tab bar over it, so there is no chrome to clear — and a
+    // wheel at the scroller's limit is not the no-op it looks like, Chrome
+    // chains it to the nearest scrollable ancestor and scrolls the page. The
+    // scroller leaf carries the `scrollable` flag (the CDP DOM walker's
+    // shape, no AX role), so the target does pass the container gate — the
+    // platform is what declines.
     const domScroller = () => n({ scrollable: true, frame: { x: 0, y: 0, width: 1, height: 1 } });
-    const flush = screen([
-      domScroller(),
-      n({ label: "Back chip", frame: { x: 0.03, y: 0.45, width: 0.1, height: 0.1 } }),
-    ]);
-    const padded = screen([
-      domScroller(),
-      n({ label: "Back chip", frame: { x: 0.15, y: 0.45, width: 0.1, height: 0.1 } }),
-    ]);
-    let nudged = false;
-    currentTree = () => (nudged ? padded : flush);
+    currentTree = () =>
+      screen([
+        domScroller(),
+        n({ label: "Order #1234", frame: { x: 0.1, y: 0.88, width: 0.8, height: 0.1 } }),
+      ]);
 
     const swipes: SwipeCall[] = [];
     const scrolls: ScrollCall[] = [];
-    const registry = mockRegistry(
-      swipes,
-      () => {
-        nudged = true;
-      },
-      scrolls
-    );
+    const registry = mockRegistry(swipes, undefined, scrolls);
 
-    await writeFlow("edge-nudge-wheel-left", {
+    await writeFlow("chromium-no-nudge", {
       executionPrerequisite: "",
-      steps: [{ kind: "scroll-to", target: { text: "Back chip" }, direction: "left" }],
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
     });
 
     const tool = createRunFlowTool(registry);
     const result = asRun(
       await tool.execute(
         {},
-        { name: "edge-nudge-wheel-left", project_root: tmpDir, device: CHROMIUM_DEVICE }
+        { name: "chromium-no-nudge", project_root: tmpDir, device: CHROMIUM_DEVICE }
       )
     );
 
     expect(result.ok).toBe(true);
     expect(result.steps[0].status).toBe("pass");
     expect(swipes).toHaveLength(0);
-    expect(scrolls).toHaveLength(1);
-    expect(scrolls[0].deltaX).toBeCloseTo(-0.105, 5);
-    expect(scrolls[0].deltaY).toBeUndefined();
-    expect(scrolls[0].y).toBeCloseTo(0.5, 5);
+    expect(scrolls).toHaveLength(0);
   });
 });
