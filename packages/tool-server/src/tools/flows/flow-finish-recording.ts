@@ -10,6 +10,7 @@ import {
   parseFlow,
   serializeFlow,
   selectorToYaml,
+  swipeByLabel,
   type FlowSavedTo,
   type FlowSelector,
   type GestureTarget,
@@ -117,9 +118,17 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
           const travel =
             step.direction ??
             (step.by
-              ? `by ${JSON.stringify(step.by)}`
+              ? `by ${swipeByLabel(step.by)}`
               : `to ${targetLabel(step.to as GestureTarget)}`);
-          return `${n}. swipe: ${travel}${step.from ? ` from ${targetLabel(step.from)}` : ""}`;
+          const from = step.from ? ` from ${targetLabel(step.from)}` : "";
+          // Present options only — otherwise distinct gestures collapse into
+          // one line in the very summary read before hand-editing the YAML.
+          const options = [
+            ...(step.settle ? ["settle"] : []),
+            ...(step.duration !== undefined ? [`${step.duration}ms`] : []),
+          ];
+          const tail = options.length > 0 ? ` (${options.join(", ")})` : "";
+          return `${n}. swipe: ${travel}${from}${tail}`;
         }
         case "type":
           return `${n}. type: ${selectorLabel(step.into)} ← "${step.text}"`;
