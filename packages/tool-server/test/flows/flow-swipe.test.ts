@@ -458,13 +458,10 @@ describe("swipe: execution", () => {
     }
   );
 
-  it("by travels relative to the anchor and saturates supplied axes to screen bounds", async () => {
+  it("delivers an in-bounds anchored by delta exactly", async () => {
     await writeFlow("deltas", {
       executionPrerequisite: "",
-      steps: [
-        { kind: "swipe", from: { x: 0.5, y: 0.8 }, by: { y: -0.4 } },
-        { kind: "swipe", from: { x: 0.97, y: 0.03 }, by: { x: 0.2, y: -0.2 } },
-      ],
+      steps: [{ kind: "swipe", from: { x: 0.5, y: 0.8 }, by: { y: -0.4 } }],
     });
 
     const result = await run("deltas");
@@ -472,8 +469,30 @@ describe("swipe: execution", () => {
     expect(result.ok).toBe(true);
     expect(result.calls.map((c) => c.args)).toEqual([
       { udid: DEVICE, fromX: 0.5, fromY: 0.8, toX: 0.5, toY: 0.4 },
-      { udid: DEVICE, fromX: 0.97, fromY: 0.03, toX: 1, toY: 0 },
     ]);
+  });
+
+  it("fails an anchored by delta whose endpoint overflows the screen", async () => {
+    // From a fixed anchor, x=0.97 + 0.2 = 1.17 (and y=0.03 - 0.2 = -0.17) both
+    // run off-screen. Clamping would truncate the magnitude and rotate the
+    // 45° diagonal, so the step must fail on the first overflowing axis (x)
+    // rather than deliver a different gesture.
+    await writeFlow("overflow-anchored", {
+      executionPrerequisite: "",
+      steps: [{ kind: "swipe", from: { x: 0.97, y: 0.03 }, by: { x: 0.2, y: -0.2 } }],
+    });
+
+    const result = await run("overflow-anchored");
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]).toMatchObject({
+      kind: "swipe",
+      status: "fail",
+      reason: expect.stringMatching(
+        /swipe\.by\.x of 0\.2 from x=0\.97 lands at 1\.17.*off the normalized screen.*within \[0, 1\]/i
+      ),
+    });
+    expect(result.calls).toEqual([]);
   });
 
   it("dispatches a floor-magnitude by delta whose unclamped travel rounds one ulp short", async () => {
@@ -497,7 +516,9 @@ describe("swipe: execution", () => {
     ]);
   });
 
-  it("fails by travel when saturation leaves no room on a requested axis", async () => {
+  it("fails an anchored by delta that overflows the x axis", async () => {
+    // From the fixed anchor x=1, any positive x delta lands off-screen, so the
+    // step fails rather than clamp the endpoint back to the edge.
     await writeFlow("no-room", {
       executionPrerequisite: "",
       steps: [{ kind: "swipe", from: { x: 1, y: 0.5 }, by: { x: 0.2, y: 0.2 } }],
@@ -510,16 +531,15 @@ describe("swipe: execution", () => {
       kind: "swipe",
       status: "fail",
       reason: expect.stringMatching(
-        /swipe\.by\.x requests positive travel from x=1.*\[0, 1\].*less than the minimum swipe travel.*choose a start point/i
+        /swipe\.by\.x of 0\.2 from x=1 lands at 1\.2.*off the normalized screen.*within \[0, 1\]/i
       ),
     });
     expect(result.calls).toEqual([]);
   });
 
-  it("fails by travel when clamping leaves only a tap-scale residue", async () => {
-    // Clamping 0.98 + 0.5 to x=1 leaves 0.02 of travel — nonzero, but under
-    // recognizer slop, so dispatching it would deliver a tap in a swipe's
-    // clothing rather than the half-screen drag the author asked for.
+  it("fails an anchored by delta whose large travel overflows the x axis", async () => {
+    // 0.98 + 0.5 = 1.48 runs off the right edge from a fixed anchor; clamping
+    // would truncate the authored half-screen drag, so the step must fail.
     await writeFlow("tap-scale-residue", {
       executionPrerequisite: "",
       steps: [{ kind: "swipe", from: { x: 0.98, y: 0.5 }, by: { x: 0.5 } }],
@@ -532,13 +552,13 @@ describe("swipe: execution", () => {
       kind: "swipe",
       status: "fail",
       reason: expect.stringMatching(
-        /swipe\.by\.x requests positive travel from x=0\.98.*\[0, 1\].*less than the minimum swipe travel.*choose a start point/i
+        /swipe\.by\.x of 0\.5 from x=0\.98 lands at 1\.48.*off the normalized screen.*within \[0, 1\]/i
       ),
     });
     expect(result.calls).toEqual([]);
   });
 
-  it("fails by travel on the y axis when saturation leaves no room", async () => {
+  it("fails an anchored by delta that overflows the y axis", async () => {
     await writeFlow("no-room-y", {
       executionPrerequisite: "",
       steps: [{ kind: "swipe", from: { x: 0.5, y: 1 }, by: { y: 0.3 } }],
@@ -551,10 +571,105 @@ describe("swipe: execution", () => {
       kind: "swipe",
       status: "fail",
       reason: expect.stringMatching(
-        /swipe\.by\.y requests positive travel from y=1.*\[0, 1\].*less than the minimum swipe travel.*choose a start point/i
+        /swipe\.by\.y of 0\.3 from y=1 lands at 1\.3.*off the normalized screen.*within \[0, 1\]/i
       ),
     });
     expect(result.calls).toEqual([]);
+  });
+
+  it("translates an unanchored by that overflows so it delivers the full x travel", async () => {
+    // The reviewer's headline case: by {x:0.8} from the default centre used to
+    // clamp the endpoint and silently dispatch 0.5 of travel. With no anchor to
+    // honor, the whole segment slides into [0, 1] — from x=0.2 to x=1.0 — so the
+    // authored 0.8 is delivered in full.
+    await writeFlow("translate-x", {
+      executionPrerequisite: "",
+      steps: [{ kind: "swipe", by: { x: 0.8 } }],
+    });
+
+    const result = await run("translate-x");
+
+    expect(result.ok).toBe(true);
+    expect(result.calls[0]).toMatchObject({
+      tool: "gesture-swipe",
+      args: {
+        udid: DEVICE,
+        fromX: expect.closeTo(0.2, 10),
+        fromY: 0.5,
+        toX: 1,
+        toY: 0.5,
+      },
+    });
+    const x = result.calls[0].args;
+    expect(x.toX - x.fromX).toBeCloseTo(0.8, 10);
+  });
+
+  it("translates an unanchored by that overflows so it delivers the full y travel", async () => {
+    await writeFlow("translate-y", {
+      executionPrerequisite: "",
+      steps: [{ kind: "swipe", by: { y: 0.9 } }],
+    });
+
+    const result = await run("translate-y");
+
+    expect(result.ok).toBe(true);
+    expect(result.calls[0]).toMatchObject({
+      tool: "gesture-swipe",
+      args: {
+        udid: DEVICE,
+        fromX: 0.5,
+        fromY: expect.closeTo(0.1, 10),
+        toX: 0.5,
+        toY: 1,
+      },
+    });
+    const y = result.calls[0].args;
+    expect(y.toY - y.fromY).toBeCloseTo(0.9, 10);
+  });
+
+  it("translates an unanchored negative by toward the leading edge", async () => {
+    await writeFlow("translate-neg", {
+      executionPrerequisite: "",
+      steps: [{ kind: "swipe", by: { x: -0.8 } }],
+    });
+
+    const result = await run("translate-neg");
+
+    expect(result.ok).toBe(true);
+    expect(result.calls[0].args).toEqual({
+      udid: DEVICE,
+      fromX: 0.8,
+      fromY: 0.5,
+      toX: 0,
+      toY: 0.5,
+    });
+  });
+
+  it("translates a saturating unanchored diagonal without rotating the vector", async () => {
+    // Under the old per-axis clamp, by {x:0.8, y:0.4} from the centre saturated
+    // x to 1.0 while y stayed unclamped, delivering ~(0.5, 0.4) — a 45° intent
+    // bent past 76°. Translating preserves the exact vector: dx=0.8, dy=0.4.
+    await writeFlow("translate-diagonal", {
+      executionPrerequisite: "",
+      steps: [{ kind: "swipe", by: { x: 0.8, y: 0.4 } }],
+    });
+
+    const result = await run("translate-diagonal");
+
+    expect(result.ok).toBe(true);
+    expect(result.calls[0]).toMatchObject({
+      tool: "gesture-swipe",
+      args: {
+        udid: DEVICE,
+        fromX: expect.closeTo(0.2, 10),
+        fromY: 0.5,
+        toX: 1,
+        toY: 0.9,
+      },
+    });
+    const d = result.calls[0].args;
+    expect(d.toX - d.fromX).toBeCloseTo(0.8, 10);
+    expect(d.toY - d.fromY).toBeCloseTo(0.4, 10);
   });
 
   it("to resolves a target endpoint; settle and duration ride the gesture", async () => {
