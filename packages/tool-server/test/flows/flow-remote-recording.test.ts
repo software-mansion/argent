@@ -330,120 +330,224 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
     }
   });
 
-  it("rejects boundary metadata for a different co-located path", () => {
+  it("rejects boundary metadata for a different co-located path", async () => {
     const flowPath = path.join(os.tmpdir(), "selected.yaml");
-    expect(() =>
+    await expect(
       resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: flowPath }, undefined, {
         clientPath: path.join(os.tmpdir(), "different.yaml"),
         presentOnHost: true,
         viaUpload: false,
         statVerified: true,
       })
-    ).toThrow("flow_path file-input boundary");
+    ).rejects.toThrow("flow_path file-input boundary");
   });
 
-  it("rejects a relative flow_path without blaming the boundary it cleared", () => {
+  it("rejects a relative flow_path without blaming the boundary it cleared", async () => {
     // The spelling `argent flow list` prints, in a fully legitimate wrapper:
     // the boundary resolved this path in place and matched the client stat, so
     // the only thing wrong with it is its shape.
     const flowPath = path.join(".argent", "flows", "relflow.yaml");
-    const resolve = () =>
-      resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: flowPath }, undefined, {
-        clientPath: flowPath,
-        presentOnHost: true,
-        viaUpload: false,
-        statVerified: true,
-      });
-    expect(resolve).toThrow("flow paths must be absolute");
-    expect(resolve).not.toThrow("file-input boundary");
+    const err = await resolveFlowSource(
+      { project_root: CLIENT_ROOT, flow_path: flowPath },
+      undefined,
+      { clientPath: flowPath, presentOnHost: true, viaUpload: false, statVerified: true }
+    ).then(
+      () => null,
+      (e: unknown) => e as Error
+    );
+    expect(err?.message).toContain("flow paths must be absolute");
+    expect(err?.message).not.toContain("file-input boundary");
   });
 
-  it('rejects a flow_path carrying ".." segments', () => {
+  it('rejects a flow_path carrying ".." segments', async () => {
     // A fully legitimate wrapper — the host stat succeeds through the kernel,
     // which resolves any symlinked directory component before the "..". What
     // the gate has to stop is the lexical half: dirname keeps the raw string,
     // so run: siblings and __baselines__ would come from another directory.
     const flowPath = [os.tmpdir(), "link", "..", "selected.yaml"].join(path.sep);
-    expect(() =>
+    await expect(
       resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: flowPath }, undefined, {
         clientPath: flowPath,
         presentOnHost: true,
         viaUpload: false,
         statVerified: true,
       })
-    ).toThrow('must not contain ".." segments');
+    ).rejects.toThrow('must not contain ".." segments');
   });
 
   it.each([
     ["a bare basename", [os.tmpdir(), ".yaml"]],
     ["a bare basename under a directory", [os.tmpdir(), "nested", ".yaml"]],
     ["an uppercased bare basename", [os.tmpdir(), ".YAML"]],
-  ])("names the missing stem, not the extension, for %s", (_shape, segments) => {
+  ])("names the missing stem, not the extension, for %s", async (_shape, segments) => {
     // path.extname calls these extensionless dotfiles, so the extension arm
     // would claim ".yaml" is missing from a path that ends in it. The CLI
     // names the empty stem for the same three shapes; so must this path.
     const flowPath = path.join(...segments);
-    const resolve = () =>
-      resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: flowPath }, undefined, {
-        clientPath: flowPath,
-        presentOnHost: true,
-        viaUpload: false,
-        statVerified: true,
-      });
-    expect(resolve).toThrow('Invalid flow name ""');
-    expect(resolve).not.toThrow(/must use the (lowercase )?\.yaml extension/);
+    const err = await resolveFlowSource(
+      { project_root: CLIENT_ROOT, flow_path: flowPath },
+      undefined,
+      { clientPath: flowPath, presentOnHost: true, viaUpload: false, statVerified: true }
+    ).then(
+      () => null,
+      (e: unknown) => e as Error
+    );
+    expect(err?.message).toContain('Invalid flow name ""');
+    expect(err?.message).not.toMatch(/must use the (lowercase )?\.yaml extension/);
   });
 
-  it("still blames the extension when a non-empty stem carries the wrong case", () => {
+  it("still blames the extension when a non-empty stem carries the wrong case", async () => {
     // The companion to the case above: extname is non-empty here, so this input
     // must keep reaching the lowercase-extension arm.
     const flowPath = path.join(os.tmpdir(), "Checkout.YAML");
-    expect(() =>
+    await expect(
       resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: flowPath }, undefined, {
         clientPath: flowPath,
         presentOnHost: true,
         viaUpload: false,
         statVerified: true,
       })
-    ).toThrow('flow files must use the lowercase .yaml extension, not ".YAML"');
+    ).rejects.toThrow('flow files must use the lowercase .yaml extension, not ".YAML"');
   });
 
-  it("rejects presence-only metadata without the client-stat match (statVerified)", () => {
+  it("rejects a mis-cased basename the filesystem's stat vouched for, naming the on-disk spelling", async () => {
+    // The boundary metadata here is exactly what a case-insensitive host
+    // produces for the mis-cased spelling — its stat finds uppercase.yaml for
+    // UpperCase.yaml, so statVerified holds. The gate must compare against the
+    // readdir listing instead, which returns stored bytes on every platform,
+    // making this deterministic on case-sensitive filesystems too: nothing
+    // named "UpperCase" exists in either world.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-path-casing-"));
+    try {
+      await fs.writeFile(path.join(dir, "uppercase.yaml"), "steps: []\n", "utf8");
+      const flowPath = path.join(dir, "UpperCase.yaml");
+      const err = await resolveFlowSource(
+        { project_root: CLIENT_ROOT, flow_path: flowPath },
+        undefined,
+        { clientPath: flowPath, presentOnHost: true, viaUpload: false, statVerified: true }
+      ).then(
+        () => null,
+        (e: unknown) => e as Error
+      );
+      // The refusal must name the phantom spelling, the real directory entry,
+      // and the stake (the flow name keys the report and __baselines__/), then
+      // hand back the runnable on-disk spelling.
+      expect(err?.message).toContain(
+        'matched "UpperCase.yaml" case-insensitively to "uppercase.yaml"'
+      );
+      expect(err?.message).toContain("__baselines__");
+      expect(err?.message).toContain('Pass flow_path with the on-disk basename "uppercase.yaml"');
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("suggests a rename when the on-disk sibling's own extension case is unrunnable", async () => {
+    // The other recovery fork: checkout.YAML is what the name really is, but
+    // passing it as flow_path would trip the lowercase-extension arm — so the
+    // message must ask for a rename, not point at a spelling this same ladder
+    // refuses.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-path-casing-"));
+    try {
+      await fs.writeFile(path.join(dir, "checkout.YAML"), "steps: []\n", "utf8");
+      const flowPath = path.join(dir, "checkout.yaml");
+      const err = await resolveFlowSource(
+        { project_root: CLIENT_ROOT, flow_path: flowPath },
+        undefined,
+        { clientPath: flowPath, presentOnHost: true, viaUpload: false, statVerified: true }
+      ).then(
+        () => null,
+        (e: unknown) => e as Error
+      );
+      expect(err?.message).toContain(
+        'matched "checkout.yaml" case-insensitively to "checkout.YAML"'
+      );
+      expect(err?.message).toContain(
+        'Rename "checkout.YAML" to "checkout.yaml" to run it — flow files must be lowercase .yaml.'
+      );
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts the exact on-disk spelling, mixed case included, and derives its stem", async () => {
+    // Byte-for-byte is the contract — not lowercasing: a flow really named
+    // MixedCase.yaml runs under exactly that name.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-path-casing-"));
+    try {
+      const flowPath = path.join(dir, "MixedCase.yaml");
+      await fs.writeFile(flowPath, "steps: []\n", "utf8");
+      await expect(
+        resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: flowPath }, undefined, {
+          clientPath: flowPath,
+          presentOnHost: true,
+          viaUpload: false,
+          statVerified: true,
+        })
+      ).resolves.toEqual({ filePath: flowPath, flowName: "MixedCase" });
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips the casing check when the parent directory's listing is unavailable", async () => {
+    // An execute-only parent directory lets stat through while refusing the
+    // listing — the boundary evidence may be vouching for a genuinely
+    // exact-named file, so an unreadable (here: nonexistent) parent must not
+    // itself reject. Resolution succeeds and the later file read is what
+    // reports absence.
+    const flowPath = path.join(
+      os.tmpdir(),
+      "flow-path-casing-no-such-parent",
+      "flows",
+      "present.yaml"
+    );
+    await expect(
+      resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: flowPath }, undefined, {
+        clientPath: flowPath,
+        presentOnHost: true,
+        viaUpload: false,
+        statVerified: true,
+      })
+    ).resolves.toEqual({ filePath: flowPath, flowName: "present" });
+  });
+
+  it("rejects presence-only metadata without the client-stat match (statVerified)", async () => {
     // The shape a forged stat-less wrapper produces: the server's own stat
     // succeeded, but nothing tied the caller to the file's client-side stat.
     const flowPath = path.join(os.tmpdir(), "forged.yaml");
-    expect(() =>
+    await expect(
       resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: flowPath }, undefined, {
         clientPath: flowPath,
         presentOnHost: true,
         viaUpload: false,
       })
-    ).toThrow("flow_path file-input boundary");
+    ).rejects.toThrow("flow_path file-input boundary");
   });
 
-  it("rejects an uploaded flow_path because its sibling filesystem is unavailable", () => {
+  it("rejects an uploaded flow_path because its sibling filesystem is unavailable", async () => {
     const uploaded = path.join(os.tmpdir(), "argent-file-input-abc", "materialized.yaml");
-    expect(() =>
+    await expect(
       resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: uploaded }, undefined, {
         clientPath: path.join(CLIENT_ROOT, "flows", "caller-visible.yaml"),
         presentOnHost: false,
         viaUpload: true,
       })
-    ).toThrow("explicit flow paths require a co-located client and tool server");
+    ).rejects.toThrow("explicit flow paths require a co-located client and tool server");
   });
 
-  it("rejects direct callers that provide both flow sources", () => {
-    expect(() =>
+  it("rejects direct callers that provide both flow sources", async () => {
+    await expect(
       resolveFlowSource(
         { name: "saved", project_root: CLIENT_ROOT, flow_path: "/tmp/explicit.yaml" },
         undefined,
         { clientPath: "/tmp/explicit.yaml", presentOnHost: true, viaUpload: false }
       )
-    ).toThrow("exactly one flow source");
+    ).rejects.toThrow("exactly one flow source");
   });
 
-  it("rejects direct callers that provide neither flow source", () => {
-    expect(() => resolveFlowSource({ project_root: CLIENT_ROOT })).toThrow(
+  it("rejects direct callers that provide neither flow source", async () => {
+    await expect(resolveFlowSource({ project_root: CLIENT_ROOT })).rejects.toThrow(
       "exactly one flow source"
     );
   });
@@ -456,39 +560,43 @@ describe("flow_file containment", () => {
     flow_file,
   });
 
-  it("accepts the exact ${project_root}/.argent/flows/${name}.yaml path", () => {
-    expect(resolveFlowSource(params(CLIENT_FLOW_PATH)).filePath).toBe(CLIENT_FLOW_PATH);
+  it("accepts the exact ${project_root}/.argent/flows/${name}.yaml path", async () => {
+    expect((await resolveFlowSource(params(CLIENT_FLOW_PATH))).filePath).toBe(CLIENT_FLOW_PATH);
   });
 
-  it("accepts a boundary-materialized upload wherever the server put it", () => {
+  it("accepts a boundary-materialized upload wherever the server put it", async () => {
     const uploaded = path.join(os.tmpdir(), "argent-file-input-abc", "remote-flow.yaml");
     expect(
-      resolveFlowSource(params(uploaded), {
-        clientPath: CLIENT_FLOW_PATH,
-        presentOnHost: false,
-        viaUpload: true,
-      }).filePath
+      (
+        await resolveFlowSource(params(uploaded), {
+          clientPath: CLIENT_FLOW_PATH,
+          presentOnHost: false,
+          viaUpload: true,
+        })
+      ).filePath
     ).toBe(uploaded);
   });
 
-  it("rejects a relative flow_file", () => {
-    expect(() => resolveFlowSource(params(".argent/flows/remote-flow.yaml"))).toThrow(
+  it("rejects a relative flow_file", async () => {
+    await expect(resolveFlowSource(params(".argent/flows/remote-flow.yaml"))).rejects.toThrow(
       "Invalid flow_file"
     );
   });
 
-  it('rejects ".." traversal even when it resolves back to the flows dir', () => {
+  it('rejects ".." traversal even when it resolves back to the flows dir', async () => {
     // Raw concatenation — path.join would collapse the ".." before the check.
     const sneaky = `${CLIENT_ROOT}/.argent/flows/../flows/remote-flow.yaml`;
-    expect(() => resolveFlowSource(params(sneaky))).toThrow("Invalid flow_file");
+    await expect(resolveFlowSource(params(sneaky))).rejects.toThrow("Invalid flow_file");
   });
 
-  it("rejects an absolute path outside the project's flows dir", () => {
-    expect(() => resolveFlowSource(params("/etc/anything.yaml"))).toThrow("Invalid flow_file");
+  it("rejects an absolute path outside the project's flows dir", async () => {
+    await expect(resolveFlowSource(params("/etc/anything.yaml"))).rejects.toThrow(
+      "Invalid flow_file"
+    );
     // A different flow's file under the right dir is not this flow's path either.
-    expect(() =>
+    await expect(
       resolveFlowSource(params(path.join(CLIENT_ROOT, ".argent", "flows", "other.yaml")))
-    ).toThrow("Invalid flow_file");
+    ).rejects.toThrow("Invalid flow_file");
   });
 
   it("flow-execute refuses an out-of-project flow_file without reading it", async () => {

@@ -102,7 +102,7 @@ Fails if the flow file does not exist.`,
     // co-location boundary (never uploads, never raw server paths) and reports
     // its basename-derived logical name, while the name branch keeps the
     // flow_file containment under project_root.
-    const { filePath, flowName } = resolveFlowSource(
+    const { filePath, flowName } = await resolveFlowSource(
       params,
       ctx?.fileInputs?.flow_file,
       ctx?.fileInputs?.flow_path

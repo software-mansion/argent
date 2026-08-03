@@ -514,7 +514,7 @@ describe("flow-add-step", () => {
     const nested = (registry.invokeTool as any).mock.calls[0][1];
     expect(nested).toEqual({ name: "login", project_root: tmpDir });
     // …which a real tool-server resolves to that same file.
-    expect(resolveFlowSource(nested)).toEqual({ filePath: sibling, flowName: "login" });
+    expect(await resolveFlowSource(nested)).toEqual({ filePath: sibling, flowName: "login" });
   });
 
   it("rejects a flow_path outside the recording's flow directory without running it", async () => {
@@ -765,7 +765,7 @@ describe("flow-add-step", () => {
     expect(registry.invokeTool).toHaveBeenCalledWith("flow-execute", args);
     // …so that a real tool-server is the one that rejects it.
     const nested = (registry.invokeTool as any).mock.calls[0][1];
-    expect(() => resolveFlowSource(nested)).toThrow("Pass exactly one flow source");
+    await expect(resolveFlowSource(nested)).rejects.toThrow("Pass exactly one flow source");
     expect(parseFlow(await readFlowFile("compose-ambiguous")).steps).toEqual([]);
   });
 

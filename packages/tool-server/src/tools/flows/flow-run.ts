@@ -4,6 +4,7 @@ import * as path from "node:path";
 import {
   FAILURE_CODES,
   FailureError,
+  FLOW_FILE_NAME_PATTERN,
   isLiveServiceState,
   zodObjectToJsonSchema,
 } from "@argent/registry";
@@ -578,7 +579,7 @@ returns a notice with the prerequisite instead of running.`,
     services: () => ({}),
     async execute(_services, params, ctx?: ToolContext) {
       const signal = ctx?.signal;
-      const { filePath, flowName } = resolveFlowSource(
+      const { filePath, flowName } = await resolveFlowSource(
         params,
         ctx?.fileInputs?.flow_file,
         ctx?.fileInputs?.flow_path
@@ -1317,10 +1318,12 @@ function errMsg(err: unknown): string {
  * let a caller execute (and, under --update-baselines, write PNGs next to) any
  * YAML on the host, bypassing the project-root containment the rest of the
  * module enforces. The logical flow name for an explicit path comes from the
- * caller-visible YAML basename recorded by the boundary. Name and project_root
- * are validated in every branch.
+ * caller-visible YAML basename recorded by the boundary, which must appear in
+ * the parent directory's listing byte-for-byte — a case-insensitive
+ * filesystem's stat vouches for spellings no directory entry carries. Name and
+ * project_root are validated in every branch.
  */
-export function resolveFlowSource(
+export async function resolveFlowSource(
   params: {
     name?: string;
     project_root: string;
@@ -1329,7 +1332,7 @@ export function resolveFlowSource(
   },
   fileInput?: ResolvedFileInput,
   flowPathInput?: ResolvedFileInput
-): { filePath: string; flowName: string } {
+): Promise<{ filePath: string; flowName: string }> {
   // The schemas' superRefine already enforces this for flow-execute and
   // flow-read-prerequisite; this copy covers direct execute() callers (tests,
   // in-process invocations) and keeps the params.name! below sound.
@@ -1455,6 +1458,51 @@ export function resolveFlowSource(
     // otherwise be reported as a flow *named* that, not as a missing stem.
     const flowName = bareExtension ? "" : path.basename(clientPath, ".yaml");
     assertSafeFlowName(flowName);
+
+    // The boundary's stat matched the basename by the filesystem's rules,
+    // which on a case-insensitive filesystem (APFS, NTFS) finds a file really
+    // named "uppercase.yaml" for "UpperCase.yaml" — every arm above would then
+    // have validated a spelling that exists nowhere on disk, and the flow name
+    // derived from it (which keys the report and __baselines__/) would be one
+    // no directory entry carries: a baseline seeded under it is unfindable the
+    // moment the tree lands on a case-sensitive volume. Require the supplied
+    // basename to appear in the parent directory byte-for-byte. readdir, not
+    // realpath: realpath rewrites a symlinked flow to its target's name, and
+    // an explicit flow_path deliberately runs a symlink under the link's own
+    // name. The basename is pure ASCII by this point (stem charset + ".yaml"),
+    // so Unicode-normalizing filesystems cannot make the comparison lie. A
+    // readdir failure (an execute-only parent directory lets stat through
+    // while refusing the listing) skips the check rather than refusing a file
+    // the exact-named contract may well be honoring.
+    const suppliedBase = path.basename(clientPath);
+    const siblings = await fs.readdir(path.dirname(params.flow_path)).catch(() => null);
+    if (siblings !== null && !siblings.includes(suppliedBase)) {
+      const actual = siblings.find((name) => name.toLowerCase() === suppliedBase.toLowerCase());
+      // Hint the real spelling only when this same ladder would accept it (a
+      // stem-case slip like Checkout.yaml); an invalid real name (Upper.YAML)
+      // needs a rename, and pointing at a flow_path the extension arm will
+      // refuse helps no one.
+      const recovery =
+        actual !== undefined && FLOW_FILE_NAME_PATTERN.test(actual)
+          ? `Pass flow_path with the on-disk basename "${actual}".`
+          : actual !== undefined
+            ? `Rename "${actual}" to "${suppliedBase}" to run it — flow files must be lowercase .yaml.`
+            : `Pass the basename exactly as it appears on disk.`;
+      throw new FailureError(
+        `Invalid flow_path "${clientPath}": the file must be named as it appears on disk — this ` +
+          `filesystem matched "${suppliedBase}" case-insensitively` +
+          (actual !== undefined ? ` to "${actual}"` : "") +
+          `, so the flow name (which keys the report and __baselines__/) would be one no ` +
+          `directory entry carries. ${recovery}`,
+        {
+          error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+          failure_stage: "flow_path_casing",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
+      );
+    }
+
     return { filePath: params.flow_path, flowName };
   }
 
