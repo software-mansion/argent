@@ -102,11 +102,15 @@ export async function captureScreenshot(
   const rotation = opts.rotation && opts.rotation !== "Portrait" ? opts.rotation : null;
   const scale = opts.scale != null && opts.scale > 0 && opts.scale < 1 ? opts.scale : null;
 
+  const dropped: ("rotation" | "scale")[] = [];
+
   if (rotation || scale) {
     const sharp = tryLoadSharp();
     if (!sharp) {
       const features = [rotation && "rotation", scale && "scale"].filter(Boolean).join(" + ");
       warnSharpMissingOnce(features);
+      if (rotation) dropped.push("rotation");
+      if (scale) dropped.push("scale");
     } else {
       let pipeline = sharp(bytes);
       if (rotation) pipeline = pipeline.rotate(ROTATION_DEGREES[rotation]);
@@ -122,6 +126,10 @@ export async function captureScreenshot(
             kernel: DOWNSCALER_TO_KERNEL[opts.downscaler ?? "lanczos3"],
             fit: "fill",
           });
+        } else {
+          // Header unreadable: rotation below still applies, but the resize
+          // cannot be sized, so the scale the caller asked for is lost.
+          dropped.push("scale");
         }
       }
       // The newer @types/node strictly types `Buffer<ArrayBuffer>` while
@@ -135,13 +143,17 @@ export async function captureScreenshot(
   const safeDeviceId = ctx.deviceId.replace(/[^A-Za-z0-9_-]/g, "_");
   const filePath = path.join(mediaDir(), `argent-screenshot-${safeDeviceId}-${stem}.png`);
   fs.writeFileSync(filePath, bytes);
-  return { url: `file://${filePath}`, path: filePath };
+  return {
+    url: `file://${filePath}`,
+    path: filePath,
+    ...(dropped.length > 0 ? { droppedFeatures: dropped } : {}),
+  };
 }
 
 /**
  * Read width / height from a PNG IHDR chunk without spinning up a decoder.
- * Returns null on a malformed or non-PNG buffer — the caller falls back to
- * sharp metadata in that case (which costs a roundtrip but always works).
+ * Returns null on a malformed or non-PNG buffer. The caller skips the resize in
+ * that case and reports `scale` as dropped — there is no metadata fallback.
  */
 function readPngSize(buf: Buffer): { width: number; height: number } | null {
   // PNG signature: 89 50 4E 47 0D 0A 1A 0A

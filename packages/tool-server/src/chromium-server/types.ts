@@ -57,6 +57,13 @@ export interface MediaReady {
   url: string;
   /** Absolute path on the tool-server host. */
   path: string;
+  /**
+   * Geometry the caller asked for that this capture could not apply — the
+   * optional `sharp` package is missing, or the PNG header could not be read.
+   * The image is still returned untouched; the tool turns this into a note so
+   * the omission is visible to the caller rather than only on stderr.
+   */
+  droppedFeatures?: ("rotation" | "scale")[];
 }
 
 export interface ViewportSize {
