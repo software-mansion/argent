@@ -1388,7 +1388,7 @@ async function runSwipe(
     if (Math.abs(g.end - startOnTravelAxis) < SWIPE_MIN_TRAVEL) {
       return {
         ok: false,
-        reason: `cannot swipe ${step.direction} from ${g.axis}=${startOnTravelAxis}: the preset endpoint is ${g.axis}=${g.end}, so the gesture would have zero travel`,
+        reason: `cannot swipe ${step.direction} from ${g.axis}=${startOnTravelAxis}: the preset endpoint is ${g.axis}=${g.end}, leaving less than the minimum swipe travel of ${SWIPE_MIN_TRAVEL} — a tap, not a swipe`,
       };
     }
     const actualDirection: SwipeDirection =
@@ -1420,27 +1420,27 @@ async function runSwipe(
       const effective = end[axis] - start[axis];
       // An in-bounds endpoint is never clamped and keeps the travel within
       // float rounding of the parser-floored request — deliverable as is — so
-      // only a clamped out-of-bounds endpoint can genuinely erase travel.
+      // only a clamped out-of-bounds endpoint can cut travel to tap scale.
       if ((raw < 0 || raw > 1) && Math.abs(effective) < SWIPE_MIN_TRAVEL) {
         const direction = requested > 0 ? "positive" : "negative";
         return {
           ok: false,
-          reason: `swipe.by.${axis} requests ${direction} travel from ${axis}=${start[axis]}, but clamping the endpoint to [0, 1] leaves no travel; choose a start point with room in that direction`,
+          reason: `swipe.by.${axis} requests ${direction} travel from ${axis}=${start[axis]}, but clamping the endpoint to [0, 1] leaves less than the minimum swipe travel; choose a start point with room in that direction`,
         };
       }
     }
   } else {
     end = toPoint!;
     // A selector endpoint only resolves at run time, so the parser cannot see
-    // that it lands on the start and would dispatch a stationary press, not a
-    // swipe.
+    // that it lands within tap range of the start and would dispatch a tap,
+    // not a swipe.
     if (
       Math.abs(end.x - start.x) < SWIPE_MIN_TRAVEL &&
       Math.abs(end.y - start.y) < SWIPE_MIN_TRAVEL
     ) {
       return {
         ok: false,
-        reason: `swipe.to resolved onto the start point (${end.x}, ${end.y}), so the gesture would have zero travel; aim it at a point or element away from the start`,
+        reason: `swipe.to (${end.x}, ${end.y}) resolved within the minimum swipe travel of the start point (${start.x}, ${start.y}); aim it at a point or element farther from the start`,
       };
     }
   }
