@@ -1155,7 +1155,7 @@ function textWaitToYaml(
   }
 }
 
-/** Sugar a gesture target (`tap`/`long-press`) for YAML output, rejecting
+/** Sugar a gesture target (`tap`/`long-press`/`swipe`) for YAML output, rejecting
  * internal states that would serialize to a flow the parser cannot read back. */
 function targetToYaml(step: { selector?: FlowSelector; x?: number; y?: number }): YamlTarget {
   const hasPointField = step.x !== undefined || step.y !== undefined;

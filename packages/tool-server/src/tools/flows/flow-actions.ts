@@ -916,7 +916,7 @@ function unsettledGestureWarning(err: unknown): string {
 }
 
 /**
- * Resolve a gesture target (`tap`/`long-press`) to a normalized point: a
+ * Resolve a gesture target (`tap`/`long-press`/`swipe`) to a normalized point: a
  * selector resolves to its frame centre (settled tree + auto-wait); raw
  * coordinates need no resolution, but still settle before they are used.
  * Coordinates are the fallback for elements with no stable selector.
