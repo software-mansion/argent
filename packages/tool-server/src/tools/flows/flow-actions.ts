@@ -1221,8 +1221,9 @@ const SWIPE_GEOMETRY: Record<
  * (explicit target). Touch dispatches one `gesture-swipe` (natural fling;
  * `settle` opts into the engine's momentum-free variant); Chromium has no
  * touch, so a swipe is a mouse drag (`gesture-drag`) — swipe-as-scroll is
- * already `scroll-to`'s job there, and a drag has no momentum for `settle`
- * to remove.
+ * already `scroll-to`'s job there. `settle` rides both dispatches: web apps
+ * derive their fling from the pointer stream's release velocity just as the
+ * OS does from the touch stream, and the ease-out zeroes both.
  */
 async function runSwipe(
   env: ActionEnv,
@@ -1346,15 +1347,13 @@ async function runSwipe(
     toX: end.x,
     toY: end.y,
     ...(step.duration !== undefined ? { durationMs: step.duration } : {}),
+    ...(step.settle ? { settle: true } : {}),
   };
-  if (env.device.platform === "chromium") {
-    await invokeOnDevice(env, "gesture-drag", travel);
-  } else {
-    await invokeOnDevice(env, "gesture-swipe", {
-      ...travel,
-      ...(step.settle ? { settle: true } : {}),
-    });
-  }
+  await invokeOnDevice(
+    env,
+    env.device.platform === "chromium" ? "gesture-drag" : "gesture-swipe",
+    travel
+  );
   return { ok: true };
 }
 
