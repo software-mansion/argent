@@ -90,51 +90,32 @@ Pass settle:true for a momentum-free drag that releases at ~0 pointer velocity, 
     const durationMs = params.durationMs ?? 300;
     const settle = params.settle ?? false;
     const steps = Math.max(2, Math.round(durationMs / 16));
-    // A left-button drag starting on a draggable node (<img>, <a href>,
-    // draggable="true") or inside an existing text selection otherwise kicks
-    // off a native drag-and-drop that cancels the pointer stream mid-gesture
-    // (the page sees one move and a pointercancel) — intercept it instead.
-    try {
-      await chromium.cdp.send("Input.setInterceptDrags", { enabled: true });
-    } catch {
-      // Older Chromium/Electron lacks the method — proceed unintercepted.
-    }
-    try {
+    await chromium.dispatchMouseEvent({
+      type: "mousePressed",
+      x: startPx.x,
+      y: startPx.y,
+      clickCount: 1,
+    });
+    for (let i = 1; i < steps; i++) {
+      const t = i / steps;
+      // A plain drag advances linearly; a `settle` drag eases-out so the
+      // per-frame step shrinks toward the release, giving pointer-velocity
+      // momentum code nothing to fling with.
+      const progress = settle ? 1 - Math.pow(1 - t, SETTLE_EASE_EXPONENT) : t;
       await chromium.dispatchMouseEvent({
-        type: "mousePressed",
-        x: startPx.x,
-        y: startPx.y,
-        clickCount: 1,
+        type: "mouseMoved",
+        x: startPx.x + (endPx.x - startPx.x) * progress,
+        y: startPx.y + (endPx.y - startPx.y) * progress,
+        button: "left",
       });
-      for (let i = 1; i < steps; i++) {
-        const t = i / steps;
-        // A plain drag advances linearly; a `settle` drag eases-out so the
-        // per-frame step shrinks toward the release, giving pointer-velocity
-        // momentum code nothing to fling with.
-        const progress = settle ? 1 - Math.pow(1 - t, SETTLE_EASE_EXPONENT) : t;
-        await chromium.dispatchMouseEvent({
-          type: "mouseMoved",
-          x: startPx.x + (endPx.x - startPx.x) * progress,
-          y: startPx.y + (endPx.y - startPx.y) * progress,
-          button: "left",
-        });
-        await sleep(16);
-      }
-      await chromium.dispatchMouseEvent({
-        type: "mouseReleased",
-        x: endPx.x,
-        y: endPx.y,
-        clickCount: 1,
-      });
-    } finally {
-      // Restore even on a failed dispatch so interception can't leak to
-      // other CDP consumers of this session.
-      try {
-        await chromium.cdp.send("Input.setInterceptDrags", { enabled: false });
-      } catch {
-        // Best-effort restore mirrors the best-effort enable.
-      }
+      await sleep(16);
     }
+    await chromium.dispatchMouseEvent({
+      type: "mouseReleased",
+      x: endPx.x,
+      y: endPx.y,
+      clickCount: 1,
+    });
     return { dragged: true, timestampMs };
   },
 };
