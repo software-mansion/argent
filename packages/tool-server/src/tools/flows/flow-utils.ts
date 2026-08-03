@@ -1180,6 +1180,14 @@ function targetToYaml(step: { selector?: FlowSelector; x?: number; y?: number })
   return { x: step.x, y: step.y };
 }
 
+/**
+ * Faithful-delivery floor, not a magnitude policy: 0.001 of a screen axis is
+ * at most a few device pixels on the largest real screens and far below every
+ * platform's swipe-recognizer slop, so smaller travel cannot be delivered as
+ * finger movement — it is a stationary press in disguise.
+ */
+export const SWIPE_MIN_TRAVEL = 0.001;
+
 /** Serialize a relative swipe delta without producing a body parseSwipeBy
  * would reject. FlowStep is also constructed programmatically, so its
  * deliberately convenient optional-axis type is not enough at runtime. */
@@ -1200,6 +1208,11 @@ function swipeByToYaml(by: { x?: number; y?: number }): { x?: number; y?: number
     if (!Number.isFinite(value) || value === 0 || value < -1 || value > 1) {
       throw new Error(
         `Cannot serialize flow swipe.by.${axis}: must be a non-zero fraction of the screen between -1 and 1`
+      );
+    }
+    if (Math.abs(value) < SWIPE_MIN_TRAVEL) {
+      throw new Error(
+        `Cannot serialize flow swipe.by.${axis}: ${value} is below the minimum deliverable travel of ${SWIPE_MIN_TRAVEL} — too small to move a finger`
       );
     }
     result[axis] = value;
@@ -2607,9 +2620,11 @@ const SWIPE_OPTION_KEYS = ["from", "direction", "to", "by", "settle", "duration"
 /**
  * Parse a swipe's `by:` delta: signed normalized fractions of the screen,
  * `{ x }` (horizontal), `{ y }` (vertical), or `{ x, y }` (diagonal). Each
- * present axis must be a non-zero number in [-1, 1] — an explicit zero is a
- * spelled-out no-travel axis, so it's rejected with "omit it instead" rather
- * than stored; junk keys are rejected like a point target's.
+ * present axis must be a number in [-1, 1] with at least
+ * {@link SWIPE_MIN_TRAVEL} of magnitude — an explicit zero is a spelled-out
+ * no-travel axis, so it's rejected with "omit it instead" rather than stored,
+ * and float dust below the floor is rejected as undeliverable; junk keys are
+ * rejected like a point target's.
  */
 function parseSwipeBy(raw: unknown, entry: unknown): { x?: number; y?: number } {
   if (raw === null || typeof raw !== "object") {
@@ -2628,6 +2643,12 @@ function parseSwipeBy(raw: unknown, entry: unknown): { x?: number; y?: number } 
       badEntry(
         entry,
         `swipe.by.${axis} must be a non-zero fraction of the screen between -1 and 1 (omit the axis instead of 0)`
+      );
+    }
+    if (Math.abs(v) < SWIPE_MIN_TRAVEL) {
+      badEntry(
+        entry,
+        `swipe.by.${axis} of ${v} is below the minimum deliverable travel of ${SWIPE_MIN_TRAVEL} — too small to move a finger`
       );
     }
     by[axis] = v;

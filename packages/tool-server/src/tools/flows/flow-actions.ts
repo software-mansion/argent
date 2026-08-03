@@ -52,6 +52,7 @@ import {
   IDLE_MIN_STILL_INTERVALS,
   IDLE_POLL_MS,
   SELECTOR_RELATIONS,
+  SWIPE_MIN_TRAVEL,
   type FlowSelector,
   type FlowStep,
   type GestureTarget,
@@ -1269,10 +1270,10 @@ async function runSwipe(
     const g = SWIPE_GEOMETRY[step.direction];
     end = g.axis === "x" ? { x: g.end, y: start.y } : { x: start.x, y: g.end };
     const startOnTravelAxis = start[g.axis];
-    if (startOnTravelAxis === g.end) {
+    if (Math.abs(g.end - startOnTravelAxis) < SWIPE_MIN_TRAVEL) {
       return {
         ok: false,
-        reason: `cannot swipe ${step.direction} from ${g.axis}=${startOnTravelAxis}: the preset endpoint is also ${g.axis}=${g.end}, so the gesture would have zero travel`,
+        reason: `cannot swipe ${step.direction} from ${g.axis}=${startOnTravelAxis}: the preset endpoint is ${g.axis}=${g.end}, so the gesture would have zero travel`,
       };
     }
     const actualDirection: SwipeDirection =
@@ -1300,13 +1301,16 @@ async function runSwipe(
     for (const axis of ["x", "y"] as const) {
       const requested = step.by[axis];
       if (requested === undefined) continue;
+      const raw = start[axis] + requested;
       const effective = end[axis] - start[axis];
-      if (effective === 0 || Math.sign(effective) !== Math.sign(requested)) {
+      // An in-bounds endpoint is never clamped and keeps the travel within
+      // float rounding of the parser-floored request — deliverable as is — so
+      // only a clamped out-of-bounds endpoint can genuinely erase travel.
+      if ((raw < 0 || raw > 1) && Math.abs(effective) < SWIPE_MIN_TRAVEL) {
         const direction = requested > 0 ? "positive" : "negative";
-        const result = effective === 0 ? "no travel" : "travel in the opposite direction";
         return {
           ok: false,
-          reason: `swipe.by.${axis} requests ${direction} travel from ${axis}=${start[axis]}, but clamping the endpoint to [0, 1] leaves ${result}; choose a start point with room in that direction`,
+          reason: `swipe.by.${axis} requests ${direction} travel from ${axis}=${start[axis]}, but clamping the endpoint to [0, 1] leaves no travel; choose a start point with room in that direction`,
         };
       }
     }
@@ -1316,10 +1320,13 @@ async function runSwipe(
     end = p;
     // A selector endpoint only resolves here, so the parser cannot see that it
     // lands on the start and would dispatch a stationary press, not a swipe.
-    if (end.x === start.x && end.y === start.y) {
+    if (
+      Math.abs(end.x - start.x) < SWIPE_MIN_TRAVEL &&
+      Math.abs(end.y - start.y) < SWIPE_MIN_TRAVEL
+    ) {
       return {
         ok: false,
-        reason: `swipe.to resolved to the start point (${end.x}, ${end.y}), so the gesture would have zero travel; aim it at a point or element away from the start`,
+        reason: `swipe.to resolved onto the start point (${end.x}, ${end.y}), so the gesture would have zero travel; aim it at a point or element away from the start`,
       };
     }
   }
