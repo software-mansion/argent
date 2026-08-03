@@ -796,7 +796,12 @@ describe("scroll-to directive", () => {
     // The pane's bottom sits at 0.7 — far from the screen edge, so a landing
     // flush against the pane's own border is already clear of screen chrome
     // and the mechanism must not engage at all: one reveal swipe, no nudge.
-    const pane = () => n({ identifier: "pane", frame: { x: 0, y: 0.2, width: 1, height: 0.5 } });
+    const pane = () =>
+      n({
+        role: "AXScrollArea",
+        identifier: "pane",
+        frame: { x: 0, y: 0.2, width: 1, height: 0.5 },
+      });
     let scrolled = false;
     currentTree = () =>
       screen([
@@ -843,7 +848,12 @@ describe("scroll-to directive", () => {
     // pane centre (y 0.58). Zeroing the epsilon would read 0.96 as "not a
     // screen edge" and silently skip the nudge — this geometry also pins
     // EDGE_AVOID_SCREEN_EPS ≥ 0.04.
-    const pane = () => n({ identifier: "pane", frame: { x: 0, y: 0.2, width: 1, height: 0.76 } });
+    const pane = () =>
+      n({
+        role: "AXScrollArea",
+        identifier: "pane",
+        frame: { x: 0, y: 0.2, width: 1, height: 0.76 },
+      });
     const flush = screen([
       pane(),
       n({ label: "Row 9", frame: { x: 0.1, y: 0.84, width: 0.8, height: 0.1 } }),
@@ -1009,7 +1019,11 @@ describe("scroll-to directive", () => {
     // accepted frame with no further gesture and no container-not-visible
     // failure.
     const withPane = screen([
-      n({ identifier: "pane", frame: { x: 0, y: 0.5, width: 1, height: 0.5 } }),
+      n({
+        role: "AXScrollArea",
+        identifier: "pane",
+        frame: { x: 0, y: 0.5, width: 1, height: 0.5 },
+      }),
       n({ label: "Row 9", frame: { x: 0.1, y: 0.88, width: 0.8, height: 0.1 } }),
     ]);
     const paneless = screen([
@@ -1122,6 +1136,60 @@ describe("scroll-to directive", () => {
     const tool = createRunFlowTool(registry);
     const result = asRun(
       await tool.execute({}, { name: "static-screen", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(0);
+  });
+
+  it("never nudges when a named within container has nothing scrollable in it", async () => {
+    // The same static screen, but the step names a `within` — a plain text
+    // pane, the shape an author reaches for to disambiguate a duplicate
+    // label. The `within` region picks the clip and the anchor, but it does
+    // not stand in for the container gate: a region nothing can scroll shows
+    // the same permanent deficit as the raw screen, and the gesture would go
+    // to whatever sits under its centre. So the gate still asks the tree
+    // whether the target lives in a scroller, and a screen with none
+    // dispatches nothing — `within` cannot buy a nudge the no-within path
+    // would refuse.
+    currentTree = () =>
+      screen([
+        n({
+          identifier: "empty-view",
+          label: "No locations selected",
+          frame: { x: 0, y: 0.45, width: 1, height: 0.55 },
+        }),
+        // Flush against the pane's bottom, which IS the screen bottom:
+        // clearance 0.013, deficit 0.087, headroom 0.45 — every geometric
+        // condition for a 0.13 nudge is met, and only the container gate
+        // declines.
+        n({
+          identifier: "fab",
+          label: "Add city",
+          clickable: true,
+          frame: { x: 0.77, y: 0.9, width: 0.19, height: 0.087 },
+        }),
+      ]);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes);
+
+    await writeFlow("static-within", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "scroll-to",
+          target: { identifier: "fab" },
+          direction: "down",
+          within: { identifier: "empty-view" },
+        },
+      ],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "static-within", project_root: tmpDir, device: DEVICE })
     );
 
     expect(result.ok).toBe(true);

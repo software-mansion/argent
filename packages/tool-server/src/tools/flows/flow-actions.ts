@@ -962,14 +962,15 @@ async function scrollIncrement(
  * measures against — and anchors its gesture in — the container that actually
  * scrolls the target: the `within` container, or (when none is named) the
  * innermost scroll container the tree shows the target living in; a target
- * inside no scroller at all (pinned chrome, a fully static screen) is accepted
- * as it stands with no gesture (see targetScrollerFrame). The phase is bounded
- * three ways: the end-of-scroll fingerprint — scoped, like the gesture, to
- * the scrollers under the round's actual anchor — accepts the flush landing
- * when a nudge moves nothing; a per-round progress check allows a follow-up
- * nudge only when the previous one shrank the entry-edge deficit (the
- * fingerprint alone cannot stop the loop when the gesture's own side effects
- * keep the tree churning); and MAX_EDGE_NUDGES caps the retries. Once the
+ * inside no scroller at all (pinned chrome, a fully static screen, a `within`
+ * naming something that doesn't scroll) is accepted as it stands with no
+ * gesture (see targetScrollerFrame). The phase is bounded three ways: the
+ * end-of-scroll fingerprint — scoped, like the gesture, to the scrollers under
+ * the round's actual anchor — accepts the flush landing when a nudge moves
+ * nothing; a per-round progress check allows a follow-up nudge only when the
+ * previous one shrank the entry-edge deficit (the fingerprint alone cannot
+ * stop the loop when the gesture's own side effects keep the tree churning);
+ * and MAX_EDGE_NUDGES caps the retries. Once the
  * axis check has accepted a frame the step can only pass, and only
  * nudge-sized gestures are dispatched — a round that loses the target stops
  * at the accepted frame.
@@ -1021,12 +1022,16 @@ async function scrollToVisible(
     let nudgeRegion: DescribeFrame | undefined;
     if (frame && axisFullyInside(frame, direction, region)) {
       accepted = frame;
-      // Never the FULL_SCREEN fallback: against the screen a pinned target
-      // outside every scroller shows a permanent deficit and the gesture goes
-      // to whatever sits under the screen centre — no containing scroller
-      // means no nudge, and the step passes exactly as if the nudge phase
-      // didn't exist.
-      const clip = within ? region : targetScrollerFrame(tree, frame);
+      // A containing scroller is the precondition on BOTH paths: against a
+      // region nothing can scroll (the FULL_SCREEN fallback, or a `within`
+      // naming a card or a text pane) a pinned target shows a permanent
+      // deficit and the gesture goes to whatever sits under that region's
+      // centre. No containing scroller means no nudge, and the step passes
+      // exactly as if the nudge phase didn't exist. `within` still picks the
+      // clip when one is named — it names the container to measure and
+      // anchor in, which is the point of the key.
+      const scroller = targetScrollerFrame(tree, frame);
+      const clip = scroller && (within ? region : scroller);
       // Start-edge landings (`up`/`left`) stay flush: at the container's
       // start limit — undetectable in the tree, and exactly where an
       // up-scroll-to typically lands — the continuation drag IS
