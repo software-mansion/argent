@@ -16,6 +16,9 @@ function fakeChromiumApi() {
   return {
     getViewport: () => ({ width: 800, height: 600, devicePixelRatio: 2 }),
     dispatchMouseEvent: vi.fn().mockResolvedValue(undefined),
+    // The real ChromiumCdpApi always carries the raw CDP client; the tool
+    // uses it for Input.setInterceptDrags around the mouse stream.
+    cdp: { send: vi.fn().mockResolvedValue(undefined) },
   };
 }
 
@@ -133,6 +136,97 @@ describe("gesture-drag", () => {
       x: 800 - 1,
       y: 600 - 1,
     });
+  });
+
+  it("brackets the mouse stream with Input.setInterceptDrags on/off so a native drag cannot hijack it", async () => {
+    // A press on a draggable node or an existing text selection otherwise
+    // turns the first move into dragstart + pointercancel — the page gets one
+    // move instead of the gesture, and repeated drags over selectable text
+    // fail from the second one onward.
+    const api = fakeChromiumApi();
+    await gestureDragTool.execute(
+      { chromium: api } as never,
+      {
+        udid: "chromium-cdp-19222",
+        fromX: 0.25,
+        fromY: 0.5,
+        toX: 0.75,
+        toY: 0.5,
+        durationMs: 64,
+      } as never
+    );
+
+    // cdp.send also carries the visibility probe — pick out the intercept calls.
+    const interceptIdx = api.cdp.send.mock.calls
+      .map((c, i) => (c[0] === "Input.setInterceptDrags" ? i : -1))
+      .filter((i) => i >= 0);
+    expect(interceptIdx.map((i) => api.cdp.send.mock.calls[i])).toEqual([
+      ["Input.setInterceptDrags", { enabled: true }],
+      ["Input.setInterceptDrags", { enabled: false }],
+    ]);
+    // Ordering against the mouse stream: enable strictly before the press,
+    // disable strictly after the release.
+    const enableOrder = api.cdp.send.mock.invocationCallOrder[interceptIdx[0]];
+    const disableOrder = api.cdp.send.mock.invocationCallOrder[interceptIdx[1]];
+    const mouseOrders = api.dispatchMouseEvent.mock.invocationCallOrder;
+    expect(mouseOrders.length).toBeGreaterThan(0);
+    expect(enableOrder).toBeLessThan(Math.min(...mouseOrders));
+    expect(disableOrder).toBeGreaterThan(Math.max(...mouseOrders));
+  });
+
+  it("still completes the full drag when Input.setInterceptDrags is unsupported", async () => {
+    // Older Chromium/Electron rejects the method with a protocol error; the
+    // interception is best-effort and must not cost the gesture itself.
+    const api = fakeChromiumApi();
+    api.cdp.send.mockRejectedValue(new Error("'Input.setInterceptDrags' wasn't found"));
+    const result = await gestureDragTool.execute(
+      { chromium: api } as never,
+      {
+        udid: "chromium-cdp-19222",
+        fromX: 0.25,
+        fromY: 0.5,
+        toX: 0.75,
+        toY: 0.5,
+        durationMs: 64,
+      } as never
+    );
+
+    expect(result.dragged).toBe(true);
+    const calls = api.dispatchMouseEvent.mock.calls.map((c) => c[0] as Record<string, unknown>);
+    expect(calls[0]).toMatchObject({ type: "mousePressed" });
+    expect(calls[calls.length - 1]).toMatchObject({ type: "mouseReleased" });
+    expect(calls.length).toBeGreaterThan(2);
+  });
+
+  it("restores Input.setInterceptDrags {enabled: false} even when a mouse dispatch fails mid-drag", async () => {
+    // Interception is session-wide CDP state; a drag that dies mid-stream
+    // must not leave it on for every later consumer of the session.
+    const api = fakeChromiumApi();
+    api.dispatchMouseEvent
+      .mockResolvedValueOnce(undefined) // mousePressed
+      .mockRejectedValueOnce(new Error("renderer gone")); // first mouseMoved
+
+    await expect(
+      gestureDragTool.execute(
+        { chromium: api } as never,
+        {
+          udid: "chromium-cdp-19222",
+          fromX: 0.25,
+          fromY: 0.5,
+          toX: 0.75,
+          toY: 0.5,
+          durationMs: 64,
+        } as never
+      )
+    ).rejects.toThrow("renderer gone");
+
+    const interceptCalls = api.cdp.send.mock.calls.filter(
+      (c) => c[0] === "Input.setInterceptDrags"
+    );
+    expect(interceptCalls[interceptCalls.length - 1]).toEqual([
+      "Input.setInterceptDrags",
+      { enabled: false },
+    ]);
   });
 
   it("is chromium-only: capability gate rejects iOS and Android targets", () => {
