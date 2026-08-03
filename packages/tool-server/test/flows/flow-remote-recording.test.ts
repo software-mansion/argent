@@ -9,11 +9,7 @@ import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recordi
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
 import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recording";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
-import {
-  createRunFlowTool,
-  resolveFlowFilePath,
-  resolveFlowSource,
-} from "../../src/tools/flows/flow-run";
+import { createRunFlowTool, resolveFlowSource } from "../../src/tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../../src/tools/flows/flow-read-prerequisite";
 import {
   clearActiveFlow,
@@ -461,22 +457,22 @@ describe("flow_file containment", () => {
   });
 
   it("accepts the exact ${project_root}/.argent/flows/${name}.yaml path", () => {
-    expect(resolveFlowFilePath(params(CLIENT_FLOW_PATH))).toBe(CLIENT_FLOW_PATH);
+    expect(resolveFlowSource(params(CLIENT_FLOW_PATH)).filePath).toBe(CLIENT_FLOW_PATH);
   });
 
   it("accepts a boundary-materialized upload wherever the server put it", () => {
     const uploaded = path.join(os.tmpdir(), "argent-file-input-abc", "remote-flow.yaml");
     expect(
-      resolveFlowFilePath(params(uploaded), {
+      resolveFlowSource(params(uploaded), {
         clientPath: CLIENT_FLOW_PATH,
         presentOnHost: false,
         viaUpload: true,
-      })
+      }).filePath
     ).toBe(uploaded);
   });
 
   it("rejects a relative flow_file", () => {
-    expect(() => resolveFlowFilePath(params(".argent/flows/remote-flow.yaml"))).toThrow(
+    expect(() => resolveFlowSource(params(".argent/flows/remote-flow.yaml"))).toThrow(
       "Invalid flow_file"
     );
   });
@@ -484,14 +480,14 @@ describe("flow_file containment", () => {
   it('rejects ".." traversal even when it resolves back to the flows dir', () => {
     // Raw concatenation — path.join would collapse the ".." before the check.
     const sneaky = `${CLIENT_ROOT}/.argent/flows/../flows/remote-flow.yaml`;
-    expect(() => resolveFlowFilePath(params(sneaky))).toThrow("Invalid flow_file");
+    expect(() => resolveFlowSource(params(sneaky))).toThrow("Invalid flow_file");
   });
 
   it("rejects an absolute path outside the project's flows dir", () => {
-    expect(() => resolveFlowFilePath(params("/etc/anything.yaml"))).toThrow("Invalid flow_file");
+    expect(() => resolveFlowSource(params("/etc/anything.yaml"))).toThrow("Invalid flow_file");
     // A different flow's file under the right dir is not this flow's path either.
     expect(() =>
-      resolveFlowFilePath(params(path.join(CLIENT_ROOT, ".argent", "flows", "other.yaml")))
+      resolveFlowSource(params(path.join(CLIENT_ROOT, ".argent", "flows", "other.yaml")))
     ).toThrow("Invalid flow_file");
   });
 

@@ -1484,23 +1484,3 @@ export function resolveFlowSource(
   }
   return { filePath: params.flow_file, flowName };
 }
-
-/**
- * Path-only convenience over {@link resolveFlowSource} for callers that do not
- * need the basename-derived logical name. flow-execute and
- * flow-read-prerequisite both use resolveFlowSource directly — they report the
- * logical name, and it must be the same one on both sides of the
- * read-prerequisite → execute handshake.
- */
-export function resolveFlowFilePath(
-  params: {
-    name?: string;
-    project_root: string;
-    flow_file?: string;
-    flow_path?: string;
-  },
-  fileInput?: ResolvedFileInput,
-  flowPathInput?: ResolvedFileInput
-): string {
-  return resolveFlowSource(params, fileInput, flowPathInput).filePath;
-}
