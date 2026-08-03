@@ -20,7 +20,12 @@ import {
   type StartRecordingResult,
   type StopRecordingFile,
 } from "./session-guards";
-import { buildWatermarkGraph, resolveFfmpeg, writeLogoTemp } from "./watermark";
+import {
+  buildWatermarkGraph,
+  ffmpegUnavailableMessage,
+  resolveFfmpeg,
+  writeLogoTemp,
+} from "./watermark";
 
 /**
  * Platform-agnostic screen capture, driven entirely by simulator-server — the
@@ -290,17 +295,19 @@ async function startCaptureLocked(
   }
 ): Promise<StartRecordingResult> {
   const ffmpeg = await resolveFfmpeg();
-  if (!ffmpeg) {
-    throw new FailureError(
-      "`ffmpeg` was not found on PATH. Install it with your system package manager (`brew install ffmpeg` on macOS, `apt install ffmpeg` on Debian/Ubuntu; on Fedora use RPM Fusion's `ffmpeg`, since the default `ffmpeg-free` build has no libx264) or see https://ffmpeg.org/download.html, then retry.",
-      {
-        error_code: FAILURE_CODES.SCREEN_RECORDING_FFMPEG_NOT_FOUND,
-        failure_stage: "screen_recording_resolve_ffmpeg",
-        failure_area: "tool_server",
-        error_kind: "dependency_missing",
-        failure_command: "ffmpeg",
-      }
-    );
+  if (!ffmpeg.ok) {
+    throw new FailureError(ffmpegUnavailableMessage(ffmpeg), {
+      // "found but cannot encode" is a different problem with a different fix
+      // than "not installed", and the code is rendered to the user verbatim.
+      error_code:
+        ffmpeg.reason === "unusable"
+          ? FAILURE_CODES.SCREEN_RECORDING_FFMPEG_UNUSABLE
+          : FAILURE_CODES.SCREEN_RECORDING_FFMPEG_NOT_FOUND,
+      failure_stage: "screen_recording_resolve_ffmpeg",
+      failure_area: "tool_server",
+      error_kind: "dependency_missing",
+      failure_command: "ffmpeg",
+    });
   }
 
   const outputFile = path.join(
@@ -333,7 +340,7 @@ async function startCaptureLocked(
     // (shutdown) while this start was suspended above, abort now rather than
     // spawn an encoder the teardown can no longer reap.
     assertNotDisposed(api, "screen_recording_start");
-    child = spawn(ffmpeg, ffmpegArgs({ outputFile, logoFile, graph }), {
+    child = spawn(ffmpeg.path, ffmpegArgs({ outputFile, logoFile, graph }), {
       stdio: ["pipe", "ignore", "pipe"],
     });
     // Visible to dispose() while the fail-fast grace is pending (captureProcess

@@ -20,7 +20,10 @@ vi.mock("../src/tools/screen-recording/watermark", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/tools/screen-recording/watermark")>();
   return {
     ...actual,
-    resolveFfmpeg: vi.fn(async () => "/fake/ffmpeg"),
+    resolveFfmpeg: vi.fn(async () => ({ ok: true, path: "/fake/ffmpeg", origin: "path" })),
+    // Mocked too: the real one is pure, but leaving it live would run inside
+    // vi.useFakeTimers() and obscure which branch a failing assertion took.
+    ffmpegUnavailableMessage: vi.fn(() => "no usable ffmpeg"),
     writeLogoTemp: vi.fn(async () => "/tmp/fake-logo.png"),
   };
 });
@@ -195,7 +198,7 @@ beforeEach(() => {
   mockSpawn.mockReset();
   mockOpenStream.mockReset();
   mockResolveFfmpeg.mockReset();
-  mockResolveFfmpeg.mockResolvedValue("/fake/ffmpeg");
+  mockResolveFfmpeg.mockResolvedValue({ ok: true, path: "/fake/ffmpeg", origin: "path" });
   vi.useFakeTimers();
 });
 
@@ -374,7 +377,12 @@ describe("screen recording capture", () => {
 
   it("fails the start when ffmpeg is not installed", async () => {
     const api = await makeSession(iosDevice);
-    mockResolveFfmpeg.mockResolvedValue(null);
+    mockResolveFfmpeg.mockResolvedValue({
+      ok: false,
+      reason: "missing",
+      override: null,
+      tried: [],
+    });
 
     try {
       await startAndSettle(api);
@@ -382,6 +390,31 @@ describe("screen recording capture", () => {
     } catch (err) {
       expect(getFailureSignal(err)?.error_code).toBe(
         FAILURE_CODES.SCREEN_RECORDING_FFMPEG_NOT_FOUND
+      );
+    }
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(getActiveScreenRecordings()).toHaveLength(0);
+    expect(api.startPending).toBe(false);
+  });
+
+  // Issue #621: ffmpeg IS installed — several of them — but none can encode
+  // H.264. Reporting that as "not found" is what sent the reporter looking in
+  // the wrong place, so it gets its own code.
+  it("fails the start with a distinct code when no ffmpeg can encode H.264", async () => {
+    const api = await makeSession(iosDevice);
+    mockResolveFfmpeg.mockResolvedValue({
+      ok: false,
+      reason: "unusable",
+      override: null,
+      tried: ["/opt/miniconda3/bin/ffmpeg"],
+    });
+
+    try {
+      await startAndSettle(api);
+      expect.unreachable();
+    } catch (err) {
+      expect(getFailureSignal(err)?.error_code).toBe(
+        FAILURE_CODES.SCREEN_RECORDING_FFMPEG_UNUSABLE
       );
     }
     expect(mockSpawn).not.toHaveBeenCalled();

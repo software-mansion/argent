@@ -1,24 +1,18 @@
 import { promises as fs } from "fs";
-import { execFile } from "child_process";
-import { promisify } from "util";
 import os from "os";
 import path from "path";
 import { WATERMARK_PNG_BASE64, WATERMARK_PNG_WIDTH, WATERMARK_PNG_HEIGHT } from "./watermark-asset";
 
-const execFileAsync = promisify(execFile);
-
 /** Frame rate of the recorded video; every input in the graph runs at it. */
 const OUTPUT_FPS = 30;
 
-// ffmpeg IS the recorder (it encodes simulator-server's frame stream straight
-// to mp4), so resolve it from PATH first, then the usual package-manager
-// prefixes for hosts where the tool-server's PATH is sanitized (launchd /
-// login-shell differences).
-const FFMPEG_FALLBACK_PATHS = [
-  "/opt/homebrew/bin/ffmpeg",
-  "/usr/local/bin/ffmpeg",
-  "/usr/bin/ffmpeg",
-];
+// ffmpeg resolution lives in ./ffmpeg-binary, but is re-exported here because
+// capture.ts imports it from this module and the recording tests mock this
+// module path. Keeping the seam means those mocks still disarm the resolver —
+// without it they would silently stop intercepting and CI would exec a real
+// ffmpeg inside a fake-timers test.
+export { resolveFfmpeg, ffmpegUnavailableMessage } from "./ffmpeg-binary";
+export type { FfmpegResolution } from "./ffmpeg-binary";
 
 // Watermark geometry, all relative to the frame WIDTH so it scales with any
 // device resolution.
@@ -47,30 +41,6 @@ interface WatermarkBox {
   h: number;
   x: number;
   y: number;
-}
-
-/** Locate a binary on PATH, falling back to common install prefixes. */
-async function resolveBinary(name: string, fallbacks: string[]): Promise<string | null> {
-  try {
-    await execFileAsync("/bin/sh", ["-c", `command -v ${name}`], { timeout: 2_000 });
-    return name;
-  } catch {
-    // not on PATH
-  }
-  for (const p of fallbacks) {
-    try {
-      await fs.access(p);
-      return p;
-    } catch {
-      // keep looking
-    }
-  }
-  return null;
-}
-
-/** Absolute path (or bare name) of the ffmpeg to record with; null if absent. */
-export function resolveFfmpeg(): Promise<string | null> {
-  return resolveBinary("ffmpeg", FFMPEG_FALLBACK_PATHS);
 }
 
 // yuv420p (what the encoder writes) subsamples chroma 2x, so crop/scale
