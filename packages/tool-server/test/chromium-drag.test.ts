@@ -55,6 +55,55 @@ describe("gesture-drag", () => {
     }
   });
 
+  it("settle: true eases the moves out (release at ~0 pointer velocity); without it they stay linear", async () => {
+    // durationMs 64 → 4 steps → moves at t = 0.25, 0.5, 0.75. Web drag
+    // libraries compute their fling from the release velocity of this very
+    // mouse stream, so the eased curve must genuinely decay into the release.
+    const params = { udid: "chromium-cdp-19222", fromX: 0.25, fromY: 0.5, toX: 0.75, toY: 0.5 };
+    const startPx = 0.25 * 800;
+    const deltaPx = (0.75 - 0.25) * 800;
+
+    const settled = fakeChromiumApi();
+    await gestureDragTool.execute(
+      { chromium: settled } as never,
+      { ...params, durationMs: 64, settle: true } as never
+    );
+    const settledCalls = settled.dispatchMouseEvent.mock.calls.map(
+      (c) => c[0] as Record<string, unknown>
+    );
+    // Endpoints are untouched by the easing — only the path between changes.
+    expect(settledCalls[0]).toMatchObject({ type: "mousePressed", x: startPx });
+    expect(settledCalls[settledCalls.length - 1]).toMatchObject({
+      type: "mouseReleased",
+      x: 0.75 * 800,
+    });
+    const settledMoves = settledCalls.slice(1, -1);
+    expect(settledMoves).toHaveLength(3);
+    // 1-(1-t)^3 at t = 0.25, 0.5, 0.75 — each point past its linear counterpart.
+    expect(settledMoves[0].x as number).toBeCloseTo(startPx + deltaPx * 0.578125, 5);
+    expect(settledMoves[1].x as number).toBeCloseTo(startPx + deltaPx * 0.875, 5);
+    expect(settledMoves[2].x as number).toBeCloseTo(startPx + deltaPx * 0.984375, 5);
+    // Per-frame step size shrinks monotonically all the way into the release.
+    const xs = settledCalls.map((c) => c.x as number);
+    for (let i = 2; i < xs.length; i++) {
+      expect(xs[i] - xs[i - 1]).toBeLessThan(xs[i - 1] - xs[i - 2]);
+    }
+
+    const control = fakeChromiumApi();
+    await gestureDragTool.execute(
+      { chromium: control } as never,
+      { ...params, durationMs: 64 } as never
+    );
+    const controlMoves = control.dispatchMouseEvent.mock.calls
+      .map((c) => c[0] as Record<string, unknown>)
+      .slice(1, -1);
+    expect(controlMoves).toHaveLength(3);
+    // Without settle the same endpoints interpolate on the straight linear grid.
+    expect(controlMoves[0].x as number).toBeCloseTo(startPx + deltaPx * 0.25, 5);
+    expect(controlMoves[1].x as number).toBeCloseTo(startPx + deltaPx * 0.5, 5);
+    expect(controlMoves[2].x as number).toBeCloseTo(startPx + deltaPx * 0.75, 5);
+  });
+
   it("is chromium-only: capability gate rejects iOS and Android targets", () => {
     expect(() =>
       assertSupported("gesture-drag", gestureDragTool.capability!, chromiumDevice)

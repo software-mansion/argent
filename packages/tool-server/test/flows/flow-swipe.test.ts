@@ -629,7 +629,7 @@ describe("swipe: execution", () => {
     expect(result.calls).toEqual([]);
   });
 
-  it("maps to a mouse drag on chromium (settle dropped — a drag has no momentum)", async () => {
+  it("maps to a mouse drag on chromium with settle forwarded (web fling reads pointer release velocity)", async () => {
     await writeFlow("desktop", {
       executionPrerequisite: "",
       steps: [{ kind: "swipe", direction: "left", settle: true, duration: 500 }],
@@ -648,6 +648,7 @@ describe("swipe: execution", () => {
           toX: 0.1,
           toY: 0.5,
           durationMs: 500,
+          settle: true,
         },
       },
     ]);
