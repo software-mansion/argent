@@ -718,6 +718,37 @@ describe("scroll-to directive", () => {
     expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.05, 5);
   });
 
+  it("leaves a landing a hair short of the padding alone", async () => {
+    // A row at 0.80..0.903 in a full-bleed scroller is 0.097 clear — 0.003
+    // short of EDGE_AVOID_PADDING, and already past every piece of chrome the
+    // padding models. Because the floor rounds any deficit at all up to a
+    // full 0.05 of travel, a bare `deficit <= 0` would spend a whole gesture
+    // (and its settle) scrolling 0.05 to recover 0.003. EDGE_EPS on the gate
+    // is what keeps such a landing a no-op: zero gestures.
+    currentTree = () =>
+      screen([
+        fullScreenScroller(),
+        n({ label: "Order #1234", frame: { x: 0.1, y: 0.8, width: 0.8, height: 0.103 } }),
+      ]);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes);
+
+    await writeFlow("near-enough", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "near-enough", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(0);
+  });
+
   it("scrolls a target into view, then nudges its flush landing off the screen edge", async () => {
     // The end-to-end shape: a half-screen increment reveals the target flush at
     // the bottom (0.88..0.98), then a small nudge lifts it to padding. The two
