@@ -13,6 +13,7 @@ import {
   renderComponentNameMiss,
   describeResolution,
 } from "../../../utils/react-profiler/component-names";
+import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
 const timeRangeSchema = z.object({
   start: z.coerce.number().describe("Start of range in ms (performance.now clock)"),
@@ -21,11 +22,9 @@ const timeRangeSchema = z.object({
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z
-    .string()
-    .describe(
-      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
-    ),
+  device_id: metroDeviceIdParam(
+    "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
+  ),
   mode: z
     .enum(["by_component", "by_time_range", "by_index", "cascade_tree"])
     .describe(
