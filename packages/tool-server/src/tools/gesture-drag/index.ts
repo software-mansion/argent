@@ -91,6 +91,7 @@ Pass settle:true for a momentum-free drag that releases at ~0 pointer velocity, 
       clickCount: 1,
     });
     for (let i = 1; i < steps; i++) {
+      const frameStart = Date.now();
       const t = i / steps;
       // A plain drag advances linearly; a `settle` drag eases-out so the
       // per-frame step shrinks toward the release, giving pointer-velocity
@@ -102,7 +103,11 @@ Pass settle:true for a momentum-free drag that releases at ~0 pointer velocity, 
         y: startPx.y + (endPx.y - startPx.y) * progress,
         button: "left",
       });
-      await sleep(16);
+      // Pace off a per-frame deadline: the dispatch round-trip (~8-10 ms)
+      // counts toward the 16 ms frame instead of stacking on top of it, so
+      // the drag tracks durationMs rather than overrunning it ~1.5x. Apps
+      // threshold a flick against a drag on exactly this duration.
+      await sleep(Math.max(0, 16 - (Date.now() - frameStart)));
     }
     await chromium.dispatchMouseEvent({
       type: "mouseReleased",
