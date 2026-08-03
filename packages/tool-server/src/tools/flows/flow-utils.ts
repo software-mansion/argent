@@ -1181,12 +1181,13 @@ function targetToYaml(step: { selector?: FlowSelector; x?: number; y?: number })
 }
 
 /**
- * Faithful-delivery floor, not a magnitude policy: 0.001 of a screen axis is
- * at most a few device pixels on the largest real screens and far below every
- * platform's swipe-recognizer slop, so smaller travel cannot be delivered as
- * finger movement — it is a stationary press in disguise.
+ * The tap/swipe boundary, not a magnitude policy: travel is a fraction of a
+ * screen axis, and anything under the platform recognizers' slop (8dp on
+ * Android, ~10pt on iOS — about 2–3% of a phone axis) is read as a tap, so a
+ * swipe below this floor cannot be delivered as a swipe. Still an envelope on
+ * faithful delivery, not a judgment that short swipes are bad style.
  */
-export const SWIPE_MIN_TRAVEL = 0.001;
+export const SWIPE_MIN_TRAVEL = 0.03;
 
 /** Serialize a relative swipe delta without producing a body parseSwipeBy
  * would reject. FlowStep is also constructed programmatically, so its
@@ -1212,7 +1213,7 @@ function swipeByToYaml(by: { x?: number; y?: number }): { x?: number; y?: number
     }
     if (Math.abs(value) < SWIPE_MIN_TRAVEL) {
       throw new Error(
-        `Cannot serialize flow swipe.by.${axis}: ${value} is below the minimum deliverable travel of ${SWIPE_MIN_TRAVEL} — too small to move a finger`
+        `Cannot serialize flow swipe.by.${axis}: ${value} is below the minimum swipe travel of ${SWIPE_MIN_TRAVEL} — a travel that small is a tap, not a swipe`
       );
     }
     result[axis] = value;
@@ -2633,7 +2634,7 @@ const SWIPE_OPTION_KEYS = ["from", "direction", "to", "by", "settle", "duration"
  * present axis must be a number in [-1, 1] with at least
  * {@link SWIPE_MIN_TRAVEL} of magnitude — an explicit zero is a spelled-out
  * no-travel axis, so it's rejected with "omit it instead" rather than stored,
- * and float dust below the floor is rejected as undeliverable; junk keys are
+ * and sub-floor travel is rejected as a tap in disguise; junk keys are
  * rejected like a point target's.
  */
 function parseSwipeBy(raw: unknown, entry: unknown): { x?: number; y?: number } {
@@ -2658,7 +2659,7 @@ function parseSwipeBy(raw: unknown, entry: unknown): { x?: number; y?: number } 
     if (Math.abs(v) < SWIPE_MIN_TRAVEL) {
       badEntry(
         entry,
-        `swipe.by.${axis} of ${v} is below the minimum deliverable travel of ${SWIPE_MIN_TRAVEL} — too small to move a finger`
+        `swipe.by.${axis} of ${v} is below the minimum swipe travel of ${SWIPE_MIN_TRAVEL} — a travel that small is a tap, not a swipe`
       );
     }
     by[axis] = v;
