@@ -1181,11 +1181,21 @@ function targetToYaml(step: { selector?: FlowSelector; x?: number; y?: number })
 }
 
 /**
- * The tap/swipe boundary, not a magnitude policy: travel is a fraction of a
- * screen axis, and anything under the platform recognizers' slop (8dp on
- * Android, ~10pt on iOS — about 2–3% of a phone axis) is read as a tap, so a
- * swipe below this floor cannot be delivered as a swipe. Still an envelope on
- * faithful delivery, not a judgment that short swipes are bad style.
+ * The tap/swipe boundary, not a magnitude policy: a travel-vector magnitude
+ * under the platform recognizers' slop (~8dp Android, ~10pt iOS) is read as a
+ * tap, so a swipe below this floor cannot be delivered as a swipe.
+ *
+ * It is one conservative NORMALIZED floor because the flow layer is
+ * device-independent (DeviceInfo carries no point dimensions), so it cannot
+ * turn the physical slop into a per-axis fraction. Slop-as-a-fraction is
+ * largest on the shortest axis of the smallest phones (~10pt ÷ 440pt ≈ 0.023
+ * on a flagship width, but ÷ ~330pt ≈ 0.03 on a compact one), so 0.03 sits at
+ * or just above the slop on the narrowest axis of any phone and a floor-length
+ * swipe is recognized as a swipe on either axis. The cost is over-rejecting a
+ * thin band of deliverable travel on longer axes (0.03 of a 956pt height ≈
+ * 29pt, well past the ~10pt slop) — the right way to err for a boundary that
+ * would otherwise turn a swipe into a silent tap. An envelope on faithful
+ * delivery, not a judgment that short swipes are bad style.
  */
 export const SWIPE_MIN_TRAVEL = 0.03;
 
