@@ -132,8 +132,8 @@ The standalone command uses only the auto-started local tool server. It is unava
 | `flow-add-step`          | Execute a tool call live and record it if it succeeds                                                     |
 | `flow-add-echo`          | Add a label/comment that prints during replay                                                             |
 | `flow-finish-recording`  | Stop recording and get a summary                                                                          |
-| `flow-read-prerequisite` | Read a flow's execution prerequisite without running it                                                   |
-| `flow-execute`           | Replay a saved flow by name                                                                               |
+| `flow-read-prerequisite` | Read a flow's execution prerequisite without running it (same `name`/`flow_path` sources)                 |
+| `flow-execute`           | Replay a flow — a saved one by `name`, or any flow YAML by absolute `flow_path`                           |
 
 Every tool during recording returns the current flow file contents, so you can track what has been recorded. Rules:
 
@@ -191,7 +191,7 @@ Then polish the saved file: the two `await-ui-element` steps become `await:` dir
 
 ## Replaying
 
-Call `flow-execute` with the flow name (and `project_root`, unless a recording this session already stored it). If the flow has an execution prerequisite, the tool returns a **notice** with the prerequisite text instead of running — verify the prerequisite is met (you can also inspect it beforehand with `flow-read-prerequisite`) and call `flow-execute` again with `prerequisiteAcknowledged: true`. A flow without a prerequisite runs immediately. The run executes all steps in order and returns a structured report: `{ ok, passed, failed, skipped, errored, steps }`.
+Call `flow-execute` with exactly one flow source: `name` for a flow saved under `.argent/flows/` (this form also works through a remote tool server), or `flow_path` — an absolute path to any flow `.yaml`, whose `run:` siblings and `__baselines__/` resolve beside it. `flow_path` requires the agent and the tool server to share a filesystem; when they don't, use `name`. Pass `project_root` too — it is always required here; the stored-for-the-session shortcut applies only to the recording tools. If the flow has an execution prerequisite, the tool returns a **notice** with the prerequisite text instead of running — verify the prerequisite is met (you can also inspect it beforehand with `flow-read-prerequisite`, which takes the same `name`/`flow_path` pair) and call `flow-execute` again with `prerequisiteAcknowledged: true`. A flow without a prerequisite runs immediately. The run executes all steps in order and returns a structured report: `{ ok, passed, failed, skipped, errored, steps }`.
 
 **What each step reports.** Raw `tool:` steps include the underlying tool's full `result` (screenshots and other outputs render as usual). The directive steps are summarized: `tap`/`type`/`await`/`assert` report only `status` + `reason`, and `snapshot` adds `artifacts` only when there is something to look at — a failed comparison (baseline/current/diff paths), a missing-baseline failure (`current` only), or a baseline write; a clean pass reports just `status` + `reason`. So converting a `tool: gesture-tap` into a `tap:` directive during cleanup drops only that tap's (uninteresting) raw result — output-bearing tools like `screenshot` have no directive form and stay `tool:` steps, so their results keep flowing through.
 
