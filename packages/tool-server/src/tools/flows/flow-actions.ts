@@ -1303,27 +1303,52 @@ async function runSwipe(
       };
     }
   } else if (step.by) {
-    const clamp = (v: number) => Math.min(1, Math.max(0, v));
-    // An absent axis travels nothing — and is never clamped, so an anchor
-    // at an edge doesn't pick up movement on an axis the author left out.
-    end = {
-      x: step.by.x !== undefined ? clamp(start.x + step.by.x) : start.x,
-      y: step.by.y !== undefined ? clamp(start.y + step.by.y) : start.y,
-    };
-    for (const axis of ["x", "y"] as const) {
-      const requested = step.by[axis];
-      if (requested === undefined) continue;
-      const raw = start[axis] + requested;
-      const effective = end[axis] - start[axis];
-      // An in-bounds endpoint is never clamped and keeps the travel within
-      // float rounding of the parser-floored request — deliverable as is — so
-      // only a clamped out-of-bounds endpoint can cut travel to tap scale.
-      if ((raw < 0 || raw > 1) && Math.abs(effective) < SWIPE_MIN_TRAVEL) {
-        const direction = requested > 0 ? "positive" : "negative";
-        return {
-          ok: false,
-          reason: `swipe.by.${axis} requests ${direction} travel from ${axis}=${start[axis]}, but clamping the endpoint to [0, 1] leaves less than the minimum swipe travel; choose a start point with room in that direction`,
-        };
+    // `by` is a QUANTITATIVE delta — its magnitude AND its angle are the
+    // authored intent — so it must land the exact vector or fail; it may never
+    // truncate one axis or rotate a diagonal to fit the screen. That is what
+    // sets it apart from `direction`, the semantic "swipe that way, clamp-short
+    // at the edge" spelling. An axis overflows when start + by leaves [0, 1].
+    const overflowAxis = (["x", "y"] as const).find((axis) => {
+      const d = step.by![axis];
+      return d !== undefined && (start[axis] + d < 0 || start[axis] + d > 1);
+    });
+    if (overflowAxis === undefined) {
+      // Deliverable as authored: land the exact endpoint (an absent axis stays
+      // put). No clamp touches an in-bounds endpoint, so a delta landing one
+      // ulp inside the bound is passed through untouched.
+      end = {
+        x: step.by.x !== undefined ? start.x + step.by.x : start.x,
+        y: step.by.y !== undefined ? start.y + step.by.y : start.y,
+      };
+    } else if (step.from) {
+      // A fixed anchor can't absorb the overflow: delivering the delta runs
+      // off-screen, and clamping would truncate its magnitude or rotate its
+      // angle. Fail truthfully on the first overflowing axis.
+      const requested = step.by[overflowAxis]!;
+      const raw = start[overflowAxis] + requested;
+      return {
+        ok: false,
+        reason: `swipe.by.${overflowAxis} of ${requested} from ${overflowAxis}=${start[overflowAxis]} lands at ${raw}, off the normalized screen; reduce the delta so from + by stays within [0, 1]`,
+      };
+    } else {
+      // Unanchored default start: no fixed anchor to honor, so slide each
+      // overflowing axis's start→end segment into [0, 1], preserving the exact
+      // delta (magnitude and angle). The parser bounds |by[axis]| ≤ 1, so a
+      // shift always exists. Both start and end move — the dispatch reads start
+      // as fromX/fromY.
+      end = { x: start.x, y: start.y };
+      for (const axis of ["x", "y"] as const) {
+        const d = step.by[axis];
+        if (d === undefined) {
+          end[axis] = start[axis];
+          continue;
+        }
+        const s = start[axis];
+        const lo = Math.min(s, s + d);
+        const hi = Math.max(s, s + d);
+        const shift = lo < 0 ? -lo : hi > 1 ? 1 - hi : 0;
+        start[axis] = s + shift;
+        end[axis] = s + d + shift;
       }
     }
   } else {
