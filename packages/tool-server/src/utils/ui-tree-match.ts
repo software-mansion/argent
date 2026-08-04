@@ -1003,9 +1003,8 @@ export const GENERIC_ROLES = new Set([
  * A POSITIONAL id — `profilePager-selector-2`, `tab-selector-0`. The number is
  * the element's index among its siblings, so the id names a slot rather than a
  * thing: it survives no re-order and silently addresses a different control
- * once one is inserted before it. `argent-create-flow`'s blocking audit already
- * rejects these outright, so deriving one only ever produced a step an author
- * had to delete — and, worse, one that looked strict.
+ * once one is inserted before it. Recording one only ever produced a fragile
+ * step that looked strict — one an author has to notice and replace by hand.
  *
  * It matters most where the recorder is least reliable. The flow tree is
  * flattened and carries no z-order, so a tap inside a full-screen modal can
@@ -1015,8 +1014,12 @@ export const GENERIC_ROLES = new Set([
  * about, but a positional id on a background node passes every one of those
  * checks and records silently. Refusing it turns that case back into the
  * kept-coordinate warning the author is told to act on.
+ *
+ * Exported so the recorder's disambiguation step ({@link narrowedSelectors} in
+ * flow-add-step) applies the SAME refusal — a narrower form must never smuggle
+ * a positional id back past this guard.
  */
-const POSITIONAL_ID = /-selector-\d+$/i;
+export const POSITIONAL_ID = /-selector-\d+$/i;
 
 export function deriveSelector(node: DescribeNode): Selector | null {
   const id = node.identifier?.trim();

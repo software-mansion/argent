@@ -37,6 +37,7 @@ import {
   selectorToFrame,
   frameContains,
   GENERIC_ROLES,
+  POSITIONAL_ID,
   type Selector,
   type TextMatchMode,
   type WaitCondition,
@@ -277,23 +278,32 @@ function isContainerSized(frame: DescribeFrame): boolean {
  * the runner resolves either of these forms.
  *
  * Only the node's OWN attributes are added — its role, then its identifier
- * when the text was chosen over one. A `within` scope is deliberately NOT
- * derived here, even though it would separate one feed row's button from
- * another's: the flow tree is flattened, so a container can only be found
- * geometrically, and geometry is z-order blind. With a modal open, the
- * background screen's elements are still the smallest nodes under the point
- * and the FOREGROUND modal's container is a perfectly good geometric
- * ancestor — a tap on the composer's text input recorded as a feed post
- * "inside" the composer, which then failed on any screen whose feed content
- * differed. The scopes that survive are the ones an author writes knowingly
- * at polish, against a container they have chosen.
+ * when the text was chosen over one. The identifier is added ONLY when it is a
+ * stable id: `base` lacks an identifier exactly when {@link deriveSelector}
+ * declined the node's id, and it declines for two reasons — the id is absent,
+ * or the id is POSITIONAL ({@link POSITIONAL_ID}). Re-adding a positional id
+ * here would smuggle back past the very guard deriveSelector applied, recording
+ * `{ text, identifier: profilePager-selector-2 }` silently in the modal case
+ * this refusal exists for. So a positional id is skipped and the caller keeps
+ * coordinates with its ambiguity warning instead.
+ *
+ * A `within` scope is deliberately NOT derived here, even though it would
+ * separate one feed row's button from another's: the flow tree is flattened,
+ * so a container can only be found geometrically, and geometry is z-order
+ * blind. With a modal open, the background screen's elements are still the
+ * smallest nodes under the point and the FOREGROUND modal's container is a
+ * perfectly good geometric ancestor — a tap on the composer's text input
+ * recorded as a feed post "inside" the composer, which then failed on any
+ * screen whose feed content differed. The scopes that survive are the ones an
+ * author writes knowingly at polish, against a container they have chosen.
  */
 function narrowedSelectors(node: DescribeNode, base: Selector): Selector[] {
   const out: Selector[] = [];
   if (base.role === undefined && node.role && !GENERIC_ROLES.has(node.role.toLowerCase())) {
     out.push({ ...base, role: node.role });
   }
-  if (base.identifier === undefined && node.identifier?.trim()) {
+  const id = node.identifier?.trim();
+  if (base.identifier === undefined && id && !POSITIONAL_ID.test(id)) {
     out.push({ ...base, identifier: node.identifier });
   }
   return out;
@@ -350,7 +360,7 @@ async function captureTapSelector(
   registry: Registry,
   udid: string,
   point: { x: number; y: number }
-): Promise<{ selector?: Selector; warning?: string; ambiguous?: boolean }> {
+): Promise<{ selector?: Selector; warning?: string; ambiguous?: boolean; container?: boolean }> {
   try {
     const device = resolveDevice(udid);
     const { tree, source } = await fetchFlowTree(registry, device);
@@ -375,15 +385,21 @@ async function captureTapSelector(
     }
     const verdict = replayReproducesTap(resolved, point);
     if (verdict === "container") {
-      // The tap landed on a container rather than a control — on some trees a
-      // point on empty margin resolves to the screen root itself, which is
-      // addressable and looks like a perfectly good `{ id: <screen> }`.
-      // Narrowing cannot help: the problem is the element, not the selector.
+      // The selector resolves to an element covering most of the screen — on
+      // some trees a point on empty margin resolves to the screen root itself,
+      // which is addressable and looks like a perfectly good `{ id: <screen> }`.
+      // At this size the tree cannot tell a container from a genuinely
+      // full-bleed control, and narrowing cannot help: the problem is the
+      // element, not the selector. Kept coordinates either way — for a real
+      // container a centre-tap replay would fire elsewhere, and for a full-bleed
+      // control a coordinate replays as well as a selector would.
       return {
+        container: true,
         warning:
           `the tap landed on ${describeSelector(selector)}, which covers most of the screen — ` +
-          `it is a container, not a control, and replay taps a selector's CENTRE, so a step ` +
-          `recorded with it would fire somewhere else entirely`,
+          `at that size a container is indistinguishable from a control, and replay taps a ` +
+          `selector's CENTRE, so if it is a container a step recorded with it would fire ` +
+          `somewhere else entirely`,
       };
     }
     if (verdict === "retargets") {
@@ -582,22 +598,38 @@ function directiveCommandHint(command: string): string | undefined {
  * What to do about a tap whose selector could not be captured, now that the
  * raw point has been kept.
  *
- * Two different failures, and they call for opposite responses: an element
- * nothing can address, versus one that several things address equally. Saying
- * "no selector could be derived" for the second sends the author to
- * re-discover a selector they already have. The advice rides on the recorded
- * step's warning because that is the only moment it is read while the screen
- * is still there to retarget against — a coordinate step replays fine today
- * and breaks on the first layout change, which is why the skills treat this
- * warning as a stop rather than a note.
+ * Three different failures, and they call for different responses: an element
+ * nothing can address, one that several things address equally, and one that
+ * covers most of the screen. Saying "no selector could be derived" for the
+ * second sends the author to re-discover a selector they already have; saying
+ * "an element with no id or label" for the third is simply false — the warning
+ * names the container's own id. The advice rides on the recorded step's warning
+ * because that is the only moment it is read while the screen is still there to
+ * retarget against — a coordinate step replays fine today and breaks on the
+ * first layout change, which is why the skills treat this warning as a stop
+ * rather than a note.
  */
-function coordinateRemedy(captured: { ambiguous?: boolean }, udid: unknown): string {
-  return captured.ambiguous
-    ? `Disambiguate it: give the intended element its own testID, or tap a target whose id is ` +
-        `unique on this screen. At polish, a hand-written \`within\`/\`after\`/\`next\` scope can ` +
-        `also single out the element this point hit.`
-    : `Find the real target with ${treeReaderFor(udid)} and tap its centre; an element with no ` +
-        `id or label is usually worth fixing in the app.`;
+function coordinateRemedy(
+  captured: { ambiguous?: boolean; container?: boolean },
+  udid: unknown
+): string {
+  if (captured.ambiguous) {
+    return (
+      `Disambiguate it: give the intended element its own testID, or tap a target whose id is ` +
+      `unique on this screen. At polish, a hand-written \`within\`/\`after\`/\`next\` scope can ` +
+      `also single out the element this point hit.`
+    );
+  }
+  if (captured.container) {
+    return (
+      `Find the specific control under the point with ${treeReaderFor(udid)} and tap ITS centre — ` +
+      `the smallest element that is genuinely the target, not the full-screen container it sits in.`
+    );
+  }
+  return (
+    `Find the real target with ${treeReaderFor(udid)} and tap its centre; an element with no ` +
+    `id or label is usually worth fixing in the app.`
+  );
 }
 
 function rawCoordinateWarning(
@@ -1103,7 +1135,9 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
         typeof args.x === "number" &&
         typeof args.y === "number";
 
-      let captured: { selector?: Selector; warning?: string; ambiguous?: boolean } | undefined;
+      let captured:
+        | { selector?: Selector; warning?: string; ambiguous?: boolean; container?: boolean }
+        | undefined;
       if (isTap) {
         captured = await captureTapSelector(registry, args.udid as string, {
           x: args.x as number,
@@ -1233,10 +1267,9 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
         step = { kind: "tap", selector: captured.selector, ...tapTimes };
         warning = captured.warning;
       } else if (isTap) {
-        // No stable selector — keep a coordinate tap, but still as a `tap:`
-        // directive so every tap reads uniformly.
-        // No stable selector — keep a coordinate tap, but recording the point
-        // is not an endorsement of it: say what failed AND what to do instead,
+        // No stable selector — keep a coordinate tap (still as a `tap:`
+        // directive so every tap reads uniformly), but recording the point is
+        // not an endorsement of it: say what failed AND what to do instead,
         // since this warning is the whole of the author's signal that the flow
         // just took on a step that survives only until the layout moves.
         step = { kind: "tap", x: args.x as number, y: args.y as number, ...tapTimes };

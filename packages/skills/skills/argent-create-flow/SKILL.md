@@ -7,7 +7,7 @@ description: Record a reusable flow (scripted sequence of MCP tool calls) that c
 
 A flow is a sequence of steps saved to a `.yaml` file in the `.argent/flows/` directory. Each recorded step is **executed live** as you add it, so you verify it works before it becomes part of the flow. Replay a finished flow with `flow-execute`, or — for an e2e flow — headlessly with `argent flow run checkout` (a saved flow's name) or `argent flow run path/to/checkout.yaml`.
 
-Flows store **no device id**: the runner binds a device (the single booted one, or pass `device`/`platform`). A recorded coordinate `gesture-tap` is captured as a portable `tap: { selector }` step whenever the tapped element has stable text/identifier.
+Flows store **no device id**: the runner binds a device (the single booted one, or pass `device`/`platform`). A recorded coordinate `gesture-tap` is captured as a portable `tap: { selector }` step when the tapped element has a stable, unambiguous text or non-positional id that reproduces the tap; a container-sized target, an ambiguous selector, or a positional (`…-selector-N`) id keeps the raw coordinates with a warning saying why and what to fix.
 
 **Two flow types**
 

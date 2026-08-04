@@ -219,6 +219,37 @@ describe("flow-add-step tap selector capture", () => {
     expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.2, y: 0.44 }]);
   });
 
+  // Regression: narrowing must NOT re-add a POSITIONAL id that deriveSelector
+  // already refused. The Bluesky edit-profile modal — a tap resolves against a
+  // background pager tab whose ambiguous text ("Media") retargets, its role is
+  // generic, and its only other anchor is `profilePager-selector-2`. Re-adding
+  // that id records `{ text, identifier: profilePager-selector-2 }` silently,
+  // smuggling the slot id past the guard it was refused by. The recorder must
+  // keep coordinates with the ambiguity warning instead.
+  it("does not re-inject a positional id when narrowing an ambiguous selector", async () => {
+    setTree([
+      // A smaller, non-containing "Media" out-ranks the tapped node for a bare
+      // { text: "Media" }, so the base selector retargets.
+      n({ role: "view", label: "Media", frame: { x: 0.0, y: 0.9, width: 0.1, height: 0.03 } }),
+      // The tapped node: generic role (no role narrowing) and only a positional
+      // id to fall back on.
+      n({
+        identifier: "profilePager-selector-2",
+        role: "view",
+        label: "Media",
+        frame: { x: 0.4, y: 0.15, width: 0.2, height: 0.1 },
+      }),
+    ]);
+
+    const result = await recordTap({ x: 0.5, y: 0.2 });
+
+    expect(result.message).toContain("also matches another element");
+    expect(result.message).toContain("Disambiguate it");
+    // Critically: the positional id was NOT smuggled back into a recorded step.
+    expect(result.message).not.toContain("profilePager-selector-2");
+    expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.5, y: 0.2 }]);
+  });
+
   // A tap on empty space resolves to whatever container spans that spot, and
   // on some trees every screen root is addressable — so the derived selector
   // looked perfect and `frameContains` passed trivially. Observed on Bluesky
@@ -234,7 +265,11 @@ describe("flow-add-step tap selector capture", () => {
     const result = await recordTap({ x: 0.05, y: 0.5 });
 
     expect(result.message).toContain("covers most of the screen");
-    expect(result.message).toContain("it is a container, not a control");
+    expect(result.message).toContain("a container is indistinguishable from a control");
+    // The container has an id (the warning names it), so the remedy must NOT
+    // claim "no id or label" — it points at the smaller control instead.
+    expect(result.message).toContain("not the full-screen container it sits in");
+    expect(result.message).not.toContain("no id or label");
     // The point reproduces the tap; the container selector would not. Keeping
     // it beats recording a step that fires 45% of the screen away.
     expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.05, y: 0.5 }]);
@@ -305,13 +340,6 @@ describe("flow-add-step tap selector capture", () => {
     expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Settings" } }]);
   });
 
-
-
-
-
-
-
-
   it.each(["emulator-5554", "chromium-cdp-9222"])(
     "does not consult native devtools while recording a tap on %s",
     async (udid) => {
@@ -339,7 +367,6 @@ describe("flow-add-step tap selector capture", () => {
       expect(resolveService).not.toHaveBeenCalled();
     }
   );
-
 
   it("keeps coordinates with a warning when the tree fetch fails", async () => {
     currentTreeData = () => {
