@@ -74,6 +74,12 @@ Pass settle:true for a momentum-free swipe that lands exactly where the finger l
     const timestampMs = Date.now();
     const api = services.simulatorServer as SimulatorServerApi;
     const steps = Math.max(1, Math.round(duration / 16));
+    // Android's touch backend drops the Up's coordinates — the finger lifts
+    // wherever the last Move landed — so without repeating the end point as a
+    // Move every swipe is delivered a step short (authored × (steps-1)/steps).
+    // iOS honours the Up, and a duplicate sample before it would feed UIKit's
+    // velocity estimator an extra near-zero interval and damp the fling.
+    const repeatEndPointBeforeLift = resolveDevice(params.udid).platform === "android";
 
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
@@ -89,6 +95,18 @@ Pass settle:true for a momentum-free swipe that lands exactly where the finger l
       const x = params.fromX + (params.toX - params.fromX) * progress;
       const y = params.fromY + (params.toY - params.fromY) * progress;
       const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
+      // Emitted in the Up's own frame, with no added sleep, so the total
+      // duration and the move cadence are unchanged.
+      if (type === "Up" && repeatEndPointBeforeLift) {
+        sendCommand(api, {
+          cmd: "touch",
+          type: "Move",
+          x,
+          y,
+          second_x: null,
+          second_y: null,
+        });
+      }
       sendCommand(api, {
         cmd: "touch",
         type,
