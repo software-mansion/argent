@@ -121,14 +121,14 @@ function runnerSideReadClause(udid: unknown): string {
   const platform = platformOf(udid);
   if (platform === "android") {
     return (
-      "no read-only tool exposes the runner's full hierarchy on Android — `describe` returns the " +
+      "No read-only tool exposes the runner's full hierarchy on Android — `describe` returns the " +
       "trimmed tree the recorder read, not the runner's — so re-record with a selector an " +
       "interactable carries, or keep it raw"
     );
   }
   if (platform === "chromium") {
     return (
-      "no read-only tool exposes the runner's trimmed tree on Chromium — `describe` returns the " +
+      "No read-only tool exposes the runner's trimmed tree on Chromium — `describe` returns the " +
       "full DOM the recorder read, including the non-addressable nodes the runner drops — so " +
       "re-record with a selector an addressable node carries (an id, label, text, or a " +
       "clickable/focused element), or keep it raw"
