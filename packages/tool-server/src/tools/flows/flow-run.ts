@@ -1302,11 +1302,14 @@ function errMsg(err: unknown): string {
  * only when the file-input boundary resolved the exact client path in place on
  * this host AND matched the client-recorded stat (`statVerified`) — presence
  * alone is satisfiable by a hand-crafted stat-less wrapper, so it is not
- * containment. Uploaded explicit paths are rejected:
- * the uploaded root YAML would lose sibling `run:` files, baseline reads, and
- * baseline write-back. A raw `flow_path` is also rejected even if the file
- * exists, so callers cannot bypass the boundary and read arbitrary server
- * files.
+ * containment. Uploaded explicit paths are rejected: the uploaded root YAML
+ * would lose sibling `run:` files, baseline reads, and baseline write-back. A
+ * remote `name` call uploads the same way and is accepted below, so this
+ * rejection does not make composition or baselines work remotely — it only
+ * keeps `flow_path`, whose whole contract is that those resolve beside the
+ * caller's YAML, from silently meaning a temp directory instead. A raw
+ * `flow_path` is also rejected even if the file exists, so callers cannot
+ * bypass the boundary and read arbitrary server files.
  *
  * With no `flow_path` or `flow_file`, derive the saved-flow path from
  * project_root + name. When `flow_file` is set it must be one of the two shapes
@@ -1353,9 +1356,12 @@ export async function resolveFlowSource(
     if (flowPathInput?.viaUpload) {
       throw new FailureError(
         `Invalid flow_path "${flowPathInput.clientPath}": explicit flow paths require a ` +
-          `co-located client and tool server with a shared filesystem. Remote uploads cannot ` +
-          `preserve sibling run: files, baselines, or baseline write-back; use name + ` +
-          `project_root for remote flow-execute calls.`,
+          `co-located client and tool server with a shared filesystem, and this one arrived as ` +
+          `an upload — sibling run: files, baselines, and baseline write-back all resolve beside ` +
+          `the copy this server materialized, alone in a temp directory. Pass name + ` +
+          `project_root to run a self-contained flow from a remote client; name uploads the same ` +
+          `way, so a flow with run: or snapshot: steps needs the client and tool server on one ` +
+          `filesystem.`,
         {
           error_code: FAILURE_CODES.FLOW_FILE_INVALID,
           failure_stage: "flow_path_shared_filesystem",
@@ -1516,7 +1522,13 @@ export async function resolveFlowSource(
   // host this process cannot read — a mis-cased name on an uploading client
   // stays the client's to catch, and refusing here on the strength of whatever
   // happens to sit at the same path on THIS host would reject legitimate
-  // remote runs.
+  // remote runs. That temp dir is also what a run takes flowsDir from, so a
+  // remote `name` run resolves `run:` targets and `__baselines__/` there and
+  // finds neither — the flow's siblings never left the client. What this branch
+  // buys a remote caller is a self-contained flow; one that composes or
+  // snapshots fails against that temp dir, and the failure names it (a fragment
+  // that could not be loaded, a baseline missing from a path under the system
+  // temp dir) rather than the missing co-location that is the real cause.
   if (params.flow_file && fileInput?.viaUpload) return { filePath: params.flow_file, flowName };
   if (
     params.flow_file &&
