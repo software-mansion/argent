@@ -1016,12 +1016,18 @@ async function waitForCondition(
     try {
       const data = await fetchFlowTree(env.registry, env.device);
       lastMatches = flowFindAll(data.tree, step.selector);
-      lastTree = data.tree;
       fetchError = undefined;
       everMatched ||= lastMatches.length > 0;
       const blind =
         data.tree.children.length === 0 && Boolean(data.hint || data.should_restart || everMatched);
-      if (!blind) lastTrustedReadAt = Date.now();
+      if (!blind) {
+        lastTrustedReadAt = Date.now();
+        // Only a trusted read updates lastTree, per its comment: a blind (empty +
+        // degraded) tree has nothing for a miss note to search, and letting it
+        // overwrite an earlier good tree would silently drop the note on a
+        // trailing blip.
+        lastTree = data.tree;
+      }
       lastReadTrusted = !blind;
       if (
         !blind &&
@@ -1118,7 +1124,7 @@ async function waitForCondition(
     ok: false,
     reason:
       assertReason(step.condition, step.selector, step.expectedText, step.textMatch, lastMatches) +
-      compatibilityMissNote(lastTree, step.selector, step.expectedText) +
+      compatibilityMissNote(lastTree, step.condition, step.selector, step.expectedText, step.textMatch) +
       blipNote,
   };
 }
@@ -1132,13 +1138,31 @@ async function waitForCondition(
  * author types `...` for a label the app renders with a single `…`, and gets
  * "no element matched", which points at nothing. Naming the character on
  * screen turns an unexplainable miss into a one-line fix.
+ *
+ * Only ever a note about a MISS. Two conditions are therefore exempt, or the
+ * advice — "copy the characters the app actually renders" — reads backwards:
+ *
+ * - `hidden` fails because an element the selector found is STILL on screen.
+ *   Copying the rendered characters would make the selector match more, not
+ *   fewer; the author wants it gone, not equated.
+ * - `matches` compares a regular expression, not literal text, so `wanted`
+ *   would be the pattern. Folding a pattern's code points against a rendered
+ *   label describes a mismatch that has nothing to do with the pattern that
+ *   failed — the same exemption {@link confusableTextNote} draws, for the same
+ *   reason.
  */
 function compatibilityMissNote(
   tree: DescribeNode | undefined,
+  condition: WaitCondition,
   selector: FlowSelector,
-  expectedText: string | undefined
+  expectedText: string | undefined,
+  textMatch: TextMatchMode | undefined
 ): string {
-  const wanted = typeof selector.text === "string" ? selector.text : expectedText;
+  if (condition === "hidden" || (condition === "text" && textMatch === "matches")) return "";
+  // For a `text` condition the element WAS located — what missed is the
+  // expectation, so name the compat variant of the EXPECTED text. For
+  // exists/visible the selector's own text is the needle that matched nothing.
+  const wanted = condition === "text" ? expectedText : selector.text;
   if (tree === undefined || wanted === undefined || wanted === "") return "";
   let hit: string | undefined;
   const walk = (node: DescribeNode): void => {
