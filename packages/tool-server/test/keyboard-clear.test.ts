@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DeviceInfo } from "@argent/registry";
+import { ServiceState, type DeviceInfo } from "@argent/registry";
 import { typeSimulatorServer } from "../src/tools/keyboard/simulator-server-keys";
 import { makeChromiumImpl } from "../src/tools/keyboard/platforms/chromium";
 import { vegaImpl } from "../src/tools/keyboard/platforms/vega";
@@ -145,12 +145,19 @@ describe("keyboard clear — iOS (simulator-server)", () => {
     });
     await Promise.all([clearing, typing]);
 
+    // The window is bounded by the clear's own presses, not by the Left GUI
+    // down/up pair: every run opens by releasing stranded modifiers, so an
+    // `Up:227` from the SECOND call's prelude lands inside the first call's
+    // chord and would close the window early — the same trap the test three
+    // down records. `Down:227` opens the chord and `Up:42` ends the backspace
+    // that finishes the clear, so this spans the whole first call.
     const guiDown = events.indexOf("Down:227");
-    const guiUp = events.indexOf("Up:227");
+    const clearEnd = events.indexOf("Up:42");
     expect(guiDown).toBeGreaterThanOrEqual(0);
-    expect(events.slice(guiDown, guiUp)).not.toContain("Down:26");
+    expect(clearEnd).toBeGreaterThan(guiDown);
+    expect(events.slice(guiDown, clearEnd)).not.toContain("Down:26");
     // The second call still ran, in full, after the first finished.
-    expect(events.slice(guiUp)).toContain("Down:26");
+    expect(events.slice(clearEnd)).toContain("Down:26");
   });
 
   it("keeps a THIRD call behind the one in flight, not alongside it", async () => {
@@ -642,6 +649,29 @@ describe("keyboard clear — Android (adb input)", () => {
     expect(dumpCmd).not.toMatch(/&&\s*rm -f /);
   });
 
+  it("writes each dump to its own file, so concurrent readers cannot race", async () => {
+    // A shared path means one caller's `cat` reads another's write mid-flight,
+    // and this clear is now a THIRD concurrent reader alongside `describe` and
+    // the Android-TV blueprint — the reason the helper mints a per-call name.
+    // Two whole clears, so `mockImplementationOnce` queues are not enough: the
+    // delete run between them would eat the second level probe's answer.
+    adbShell.mockImplementation(async (_serial: string, cmd: string) =>
+      cmd.includes("keycombination") ? "Usage: input …" : ""
+    );
+    seedDump(dumpWith("abc"));
+    seedDump(dumpWith("abc"));
+
+    await makeAndroidImpl(registryWith({})).handler({}, { udid: ANDROID.id, clear: true }, ANDROID);
+    await makeAndroidImpl(registryWith({})).handler({}, { udid: ANDROID.id, clear: true }, ANDROID);
+
+    const paths = adbExecOutBinary.mock.calls.map(
+      (call) => (call[1] as string).match(/\/data\/local\/tmp\/\S+\.xml/)?.[0]
+    );
+    expect(paths).toHaveLength(2);
+    expect(paths[0]).toBeDefined();
+    expect(paths[0]).not.toBe(paths[1]);
+  });
+
   it("omits `cleared` entirely when clear was not requested", async () => {
     // `cleared` is defined as present only for a call that asked for a clear, so
     // an emitted `cleared: false` reads to an agent as "the clear ran and
@@ -663,6 +693,111 @@ describe("keyboard clear — Android (adb input)", () => {
     await makeAndroidImpl(registryWith({})).handler({}, { udid: ANDROID.id, clear: true }, ANDROID);
 
     expect(adbExecOutBinary).toHaveBeenCalledTimes(2);
+    expect(deleteRun(inputCmds()[1]!)).toHaveLength(120 + 8);
+  });
+
+  describe("reading the hierarchy from the connection's holder", () => {
+    // The device serves ONE UiAutomation connection and argent's own
+    // `android-devtools` helper holds it for ~60s per `describe` (measured 61.2s
+    // on API 30). Inside that window every `uiautomator dump` returns a bare
+    // `Killed` with adb still exiting 0, so the measurement fails, the run falls
+    // to BLIND_DELETE_COUNT, and a long field is truncated with the new text
+    // appended — reported as `cleared: true`, and with the MAX_DELETE_COUNT
+    // refusal bypassed. Measured end to end 6/6: a 200-character field kept 72
+    // characters. `describe` → tap → `keyboard` is the ordinary call order, so
+    // asking the holder rather than racing it is the whole fix.
+    const registryWithDevtools = (getHierarchy: () => Promise<{ xml: string }>, live = true) =>
+      ({
+        getServiceState: () => (live ? ServiceState.RUNNING : ServiceState.IDLE),
+        resolveService: vi.fn(async () => ({ getHierarchy })),
+      }) as never;
+
+    it("measures from the helper, without racing it for a dump", async () => {
+      seedLegacyLevel();
+      const getHierarchy = vi.fn(async () => ({ xml: dumpWith("y".repeat(200)) }));
+
+      await expect(
+        makeAndroidImpl(registryWithDevtools(getHierarchy)).handler(
+          {},
+          { udid: ANDROID.id, clear: true },
+          ANDROID
+        )
+        // Measured, so the length gate fires — where a blind run would have
+        // deleted 128 and left 72 characters behind.
+      ).rejects.toThrow(/reports 200 characters/);
+
+      expect(getHierarchy).toHaveBeenCalledTimes(1);
+      expect(adbExecOutBinary).not.toHaveBeenCalled();
+    });
+
+    it("does not wake the helper when it is not already running", async () => {
+      // With nothing holding the connection the dump works, and a clear must
+      // never pay to spawn (or install) the helper.
+      seedLegacyLevel();
+      seedDump(dumpWith("abc"));
+      const getHierarchy = vi.fn(async () => ({ xml: dumpWith("z".repeat(200)) }));
+
+      await makeAndroidImpl(registryWithDevtools(getHierarchy, false)).handler(
+        {},
+        { udid: ANDROID.id, clear: true },
+        ANDROID
+      );
+
+      expect(getHierarchy).not.toHaveBeenCalled();
+      expect(deleteRun(inputCmds()[1]!)).toHaveLength(3 + 8);
+    });
+
+    it("does not let a wedged helper spend the delete run's reserve", async () => {
+      // The helper's own `getHierarchy` RPC timeout is 15s — longer than the
+      // whole read share of the clear's 20s budget — so an unbounded await here
+      // would eat the 11s the delete run is guaranteed.
+      seedLegacyLevel();
+      seedDump(dumpWith("abcde"));
+      const getHierarchy = vi.fn(() => new Promise<{ xml: string }>(() => {}));
+
+      const startedAt = Date.now();
+      await makeAndroidImpl(registryWithDevtools(getHierarchy)).handler(
+        {},
+        { udid: ANDROID.id, clear: true },
+        ANDROID
+      );
+
+      // The read share is the budget minus the reserve, so the wait is bounded
+      // well under the helper's own 15s — and the dump still measured the field.
+      expect(Date.now() - startedAt).toBeLessThan(14_000);
+      expect(deleteRun(inputCmds()[1]!)).toHaveLength(5 + 8);
+    }, 20_000);
+
+    it("falls back to the dump when the helper cannot answer", async () => {
+      seedLegacyLevel();
+      seedDump(dumpWith("abcd"));
+      const getHierarchy = vi.fn(async () => {
+        throw new Error("helper died mid-request");
+      });
+
+      await makeAndroidImpl(registryWithDevtools(getHierarchy)).handler(
+        {},
+        { udid: ANDROID.id, clear: true },
+        ANDROID
+      );
+
+      expect(getHierarchy).toHaveBeenCalledTimes(1);
+      expect(deleteRun(inputCmds()[1]!)).toHaveLength(4 + 8);
+    });
+  });
+
+  it("falls back to the blind count when the dump cannot be parsed", async () => {
+    // A reply that carries `<hierarchy` but no parseable tree — a truncated
+    // dump, a device that wrote half a file. Returning a measured 0 there would
+    // be the worst of both: `??` does not fire on 0, so the run would be
+    // DELETE_MARGIN backspaces against a field of unknown length and the tool
+    // would report `cleared: true` over most of the value. Unmeasurable has to
+    // mean the blind count.
+    seedLegacyLevel();
+    seedDump('<hierarchy rotation="0"');
+
+    await makeAndroidImpl(registryWith({})).handler({}, { udid: ANDROID.id, clear: true }, ANDROID);
+
     expect(deleteRun(inputCmds()[1]!)).toHaveLength(120 + 8);
   });
 
@@ -1153,10 +1288,186 @@ describe("keyboard clear — Chromium (CDP)", () => {
         { udid: CHROMIUM.id, clear: true, text: "abc", delayMs: 0 },
         CHROMIUM
       )
-    ).rejects.toThrow(/split across fields/);
+    ).rejects.toThrow(/only 0 of the 3 character\(s\)/);
     // The clear went out, and so did every character — the failure reports what
     // already happened rather than pretending the call did nothing.
     expect(events.filter((e) => e.type === "char")).toHaveLength(3);
+  });
+
+  /**
+   * A stub whose read-back (probe 2) and post-typing release (probe 3) can
+   * disagree — the shape every "focus moved DURING the typing" case needs, and
+   * the one `recordingApi` cannot express because it answers both from `after`.
+   */
+  function splitApi(afterTyping: Record<string, unknown>) {
+    const events: KeyEventArgs[] = [];
+    const probes: string[] = [];
+    return {
+      events,
+      probes,
+      api: {
+        dispatchKeyEvent: async (e: KeyEventArgs) => void events.push(e),
+        evaluate: async (expression: string) => {
+          probes.push(expression);
+          if (probes.length === 1) {
+            return JSON.stringify({
+              verdict: "editable",
+              label: "INPUT#email",
+              length: 8,
+              mac: true,
+              parked: true,
+            });
+          }
+          // Probe 2 is the read-back inside the clear: empty, focus still held.
+          if (probes.length === 2)
+            return JSON.stringify({ tracked: true, length: 0, focused: true });
+          return JSON.stringify(afterTyping);
+        },
+      },
+    };
+  }
+
+  it("does not call it a split when the whole value is in the field", async () => {
+    // Focus loss alone is not evidence of a split. A field that advances focus
+    // once its value is complete — the OTP / card-number pattern — ends up
+    // holding EXACTLY what was asked for, and Chrome 150 reported that as a
+    // 500 "the value is split across fields" 5/5 until the length was checked
+    // too.
+    const { api, events } = splitApi({ tracked: true, length: 3, focused: false });
+
+    const result = await makeChromiumImpl(registryWith(api)).handler(
+      {},
+      { udid: CHROMIUM.id, clear: true, text: "abc", delayMs: 0 },
+      CHROMIUM
+    );
+
+    expect(result).toMatchObject({ typed: "abc", keys: 3, cleared: true });
+    expect(events.filter((e) => e.type === "char")).toHaveLength(3);
+  });
+
+  it("does not call a named key's own focus move a split", async () => {
+    // `{ clear, key: "tab" }` could otherwise never succeed: Tab moves focus BY
+    // DEFINITION and dispatches no character, so there is no value to split.
+    // `{ clear, key: "enter" }` on a search box that blurs on submit is the same
+    // shape — both were a deterministic 500 on Chrome 150.
+    for (const key of ["tab", "enter"]) {
+      const { api } = splitApi({ tracked: true, length: 0, focused: false });
+
+      const result = await makeChromiumImpl(registryWith(api)).handler(
+        {},
+        { udid: CHROMIUM.id, clear: true, key, delayMs: 0 },
+        CHROMIUM
+      );
+
+      expect(result).toMatchObject({ typed: key, keys: 1, cleared: true });
+    }
+  });
+
+  it("reports how much of the text landed when the value really was split", async () => {
+    const { api } = splitApi({ tracked: true, length: 1, focused: false });
+
+    await expect(
+      makeChromiumImpl(registryWith(api)).handler(
+        {},
+        { udid: CHROMIUM.id, clear: true, text: "abc", delayMs: 0 },
+        CHROMIUM
+      )
+      // The counts are what make the message actionable — "focus moved" alone
+      // does not distinguish this from the successful case above.
+    ).rejects.toThrow(/only 1 of the 3 character\(s\)/);
+  });
+
+  it("never quotes a count when the split field is a password", async () => {
+    // The same message, for a field whose LENGTH is credential material.
+    const { api } = splitApi({ tracked: true, length: 1, focused: false, secret: true });
+
+    await expect(
+      makeChromiumImpl(registryWith(api)).handler(
+        {},
+        { udid: CHROMIUM.id, clear: true, text: "hunter2", delayMs: 0 },
+        CHROMIUM
+      )
+    ).rejects.toThrow(/not all of the text is in it/);
+  });
+
+  it("fails a clear that left embedded content a text measurement cannot see", async () => {
+    // A contenteditable is measured by `textContent`, so an <img> (or a video,
+    // an <hr>, an attachment chip) survives a cancelled delete at length 0.
+    // Measured on Chrome 150: `cleared: true` with the image untouched, 7/7.
+    const { api, events } = recordingApi(
+      // The image was there BEFORE the clear...
+      { verdict: "editable", label: "DIV#body", mac: true, parked: true, nodes: 1 },
+      // ...and survived it.
+      { tracked: true, length: 0, nodes: 1, focused: true }
+    );
+
+    await expect(
+      makeChromiumImpl(registryWith(api)).handler(
+        {},
+        { udid: CHROMIUM.id, clear: true, text: "replacement", delayMs: 0 },
+        CHROMIUM
+      )
+    ).rejects.toThrow(/still holds 1 embedded element\(s\)/);
+    // Refused before the typing, so the surviving content keeps no new text
+    // appended beside it.
+    expect(events.filter((e) => e.type === "char")).toHaveLength(0);
+  });
+
+  it("accepts an empty-state placeholder the page inserts once the field empties", async () => {
+    // The other half of the same count. A composer that re-inserts an icon-only
+    // `<span contenteditable="false">` whenever its editable becomes empty goes
+    // from 0 embeds to 1 across a clear that worked perfectly — measured on
+    // Chrome 150 as a hard 500 telling the caller the field "was NOT emptied",
+    // 5/5, which is the opposite of the truth. Residue means content that was
+    // there BEFORE and did not go away.
+    const { api } = recordingApi(
+      { verdict: "editable", label: "DIV#ph", mac: true, parked: true, nodes: 0 },
+      { tracked: true, length: 0, nodes: 1, focused: true }
+    );
+
+    const result = await makeChromiumImpl(registryWith(api)).handler(
+      {},
+      { udid: CHROMIUM.id, clear: true, delayMs: 0 },
+      CHROMIUM
+    );
+
+    expect(result.cleared).toBe(true);
+  });
+
+  it("settles for its own window, not the caller's typing cadence", async () => {
+    // `delayMs` is documented as the delay between key presses. Spending it as
+    // the settle before the read-back made it the width of a correctness window
+    // as well: on Chrome 150, `{ clear, text }` against a field that moves focus
+    // 5ms after emptying wrote text outside the target in 8 of 11 runs at
+    // `delayMs: 0` and 0 of 4 at the default — and `delayMs: 0` is what these
+    // tests pass throughout.
+    const trace: { kind: string; at: number }[] = [];
+    const probes: string[] = [];
+    const api = {
+      dispatchKeyEvent: async () => void trace.push({ kind: "key", at: Date.now() }),
+      evaluate: async (expression: string) => {
+        probes.push(expression);
+        trace.push({ kind: "probe", at: Date.now() });
+        return JSON.stringify(
+          probes.length === 1
+            ? { verdict: "editable", label: "INPUT#email", length: 8, mac: true, parked: true }
+            : { tracked: true, length: 0, focused: true }
+        );
+      },
+    };
+
+    await makeChromiumImpl(registryWith(api)).handler(
+      {},
+      { udid: CHROMIUM.id, clear: true, delayMs: 0 },
+      CHROMIUM
+    );
+
+    // The window the page gets to react in: the clear's last key event, then the
+    // read-back both `cleared` and the focus verdict rest on.
+    const lastKey = trace.findLastIndex((e) => e.kind === "key");
+    const readBack = trace[lastKey + 1]!;
+    expect(readBack.kind).toBe("probe");
+    expect(readBack.at - trace[lastKey]!.at).toBeGreaterThanOrEqual(40);
   });
 
   it("refuses to press a named key when the clear moved focus off the field", async () => {

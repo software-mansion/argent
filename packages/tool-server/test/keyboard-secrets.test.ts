@@ -36,16 +36,21 @@ function recordingCdpApi() {
         if (event.commands) cleared = true;
         if (event.type === "char" && event.text) chars.push(event.text);
       },
-      // The chromium clear issues TWO probes — resolve-and-park, then re-read
-      // the parked element — and a stub answering only the first sends every
-      // clear down the best-effort branch instead of the one production takes
-      // against a page it can read. Route by call order, and report a field that
-      // is populated until the clear runs, and that keeps focus afterwards (the
+      // Only the FIRST probe resolves-and-parks the focused editable; every
+      // later one re-reads that parked element. A `{ clear, text }` call issues
+      // three of them (resolve, read-back, post-typing release), so alternating
+      // the two payload shapes would hand the third the `FocusedEditable` shape:
+      // it carries no `tracked`, and the focus-split check that reads it would
+      // fall through untested — the one path that quotes a page-supplied label
+      // back alongside a resolved secret. A stub answering only the first probe
+      // sends every clear down the best-effort branch instead of the one
+      // production takes against a page it can read. Report a field that is
+      // populated until the clear runs, and that keeps focus afterwards (the
       // ordinary shape — a field that blurs on empty refuses the typing).
       evaluate: async () => {
         probes++;
         return JSON.stringify(
-          probes % 2 === 1
+          probes === 1
             ? { verdict: "editable", label: "INPUT#pw", length: 8, mac: true, parked: true }
             : { tracked: true, focused: true, length: cleared ? 0 : 8 }
         );
@@ -225,6 +230,53 @@ describe("keyboard tool with secret placeholders", () => {
     expect(result.typed).toBe("{{secret:APP_PASSWORD}}");
     expect(result.cleared).toBe(true);
     expect(JSON.stringify(result)).not.toContain("hunter2");
+  });
+
+  it("says nothing about the secret's length when the page split it across fields", async () => {
+    // The one clear-path failure that quotes a page-supplied field label back
+    // into the agent's context, and the one that would otherwise quote how many
+    // characters landed — which for a password is credential material.
+    vi.stubEnv("ARGENT_SECRET_APP_PASSWORD", "hunter2");
+    let probes = 0;
+    const api = {
+      dispatchKeyEvent: async () => {},
+      evaluate: async () => {
+        probes++;
+        if (probes === 1) {
+          return JSON.stringify({
+            verdict: "editable",
+            label: "INPUT#pw",
+            length: 8,
+            mac: true,
+            parked: true,
+            secret: true,
+          });
+        }
+        // Probe 2 is the clear's read-back (empty, focus held); probe 3 is the
+        // post-typing release, by which point the page has moved focus and only
+        // part of the value is in the field.
+        return JSON.stringify(
+          probes === 2
+            ? { tracked: true, length: 0, focused: true, secret: true }
+            : { tracked: true, length: 1, focused: false, secret: true }
+        );
+      },
+    };
+    const tool = createKeyboardTool(registryWith(api));
+
+    let caught: Error | undefined;
+    try {
+      await tool.execute(
+        {},
+        { udid: CHROMIUM_UDID, clear: true, text: "{{secret:APP_PASSWORD}}", delayMs: 0 }
+      );
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught).toBeDefined();
+    expect(caught!.message).toMatch(/not all of the text is in it/);
+    expect(caught!.message).not.toContain("hunter2");
+    expect(caught!.message).not.toMatch(/\b7 of\b/);
   });
 
   it("scrubs the resolved value from errors thrown on the clear path", async () => {

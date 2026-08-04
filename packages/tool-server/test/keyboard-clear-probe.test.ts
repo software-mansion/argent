@@ -37,6 +37,8 @@ interface FakeEl {
   validity?: { badInput: boolean };
   /** The element's own root — a Document or an open ShadowRoot. */
   getRootNode?: () => { activeElement: FakeEl | null } | null;
+  /** The document the element lives in, for the frame-chain focus walk. */
+  ownerDocument?: unknown;
 }
 
 interface FakeDoc {
@@ -417,6 +419,176 @@ describe("chromium clear — release probe", () => {
       throw new Error("hostile getRootNode");
     };
     expect(release({ [HANDLE]: hostile }).result).toMatchObject({ tracked: true, focused: false });
+  });
+
+  it("reads activeElement through the prototype accessor, not the page's own", () => {
+    // On an HTML document `activeElement` is declared on Document.prototype,
+    // above the own HTMLDocument.prototype, and the document's own named getter
+    // is `[LegacyOverrideBuiltIns]` — so `<iframe name="activeElement">` shadows
+    // it. A read that stops at the immediate prototype finds nothing, falls back
+    // to the shadowed property, and reports every successful clear as having
+    // lost focus.
+    const el: FakeEl = { tagName: "INPUT", value: "", isConnected: true };
+    const decoy = { tagName: "IFRAME", id: "activeElementDecoy" };
+    // Two prototype levels, the way HTMLDocument.prototype sits under
+    // Document.prototype, with the accessor only on the upper one.
+    const upper = {};
+    Object.defineProperty(upper, "activeElement", { get: () => el, configurable: true });
+    const root = Object.create(Object.create(upper)) as Record<string, unknown>;
+    // The page's own shadowing property, which the accessor must win over.
+    Object.defineProperty(root, "activeElement", { value: decoy, enumerable: true });
+    el.getRootNode = () => root as unknown as { activeElement: FakeEl | null };
+    expect(release({ [HANDLE]: el }).result).toMatchObject({ tracked: true, focused: true });
+  });
+
+  describe("focus across the frame chain", () => {
+    // `Document.activeElement` falls back to that document's `body` whenever
+    // nothing in the document holds focus, so for a `<body contenteditable>`
+    // editing host — TinyMCE's default iframe mode, CKEditor 4 classic,
+    // `designMode`, the shape the resolve probe goes out of its way to accept —
+    // the local read is CONSTANT TRUE. Measured on Chrome 150: with focus moved
+    // to a top-level input the probe still said `focused: true`, and a
+    // `{ clear, text }` that emptied the editor and typed into the sidebar came
+    // back as a clean replacement. Climbing out of every frame is what tells the
+    // two apart.
+    const editorInFrame = (parentActive: unknown) => {
+      const el: FakeEl = {
+        tagName: "BODY",
+        isContentEditable: true,
+        isConnected: true,
+        textContent: "",
+      };
+      const frame = { tagName: "IFRAME" } as Record<string, unknown>;
+      const parentDoc = { activeElement: parentActive === "self" ? frame : parentActive };
+      // The editor document, whose own activeElement is its body either way.
+      const editorDoc = { activeElement: el, defaultView: { frameElement: frame } };
+      el.getRootNode = () => editorDoc as unknown as { activeElement: FakeEl | null };
+      frame.getRootNode = () => parentDoc;
+      return release({ [HANDLE]: el }).result;
+    };
+
+    it("keeps focus when the parent document still points at the frame", () => {
+      expect(editorInFrame("self")).toMatchObject({ tracked: true, focused: true });
+    });
+
+    it("reports focus lost when the parent document points elsewhere", () => {
+      expect(editorInFrame({ tagName: "INPUT", id: "sidebar" })).toMatchObject({
+        tracked: true,
+        focused: false,
+      });
+    });
+
+    it("keeps focus for a frame nested in an open shadow root", () => {
+      // The walk steps out through `getRootNode()`, not `ownerDocument`, because
+      // `ownerDocument` is NOT retargeted: an <iframe> inside an open shadow
+      // root reports the TOP document, while that document's `activeElement`
+      // retargets to the shadow HOST. Comparing the two never matches, and a
+      // field that never lost focus is reported as blurred — the caller is then
+      // told "emptied, but it no longer holds focus", after the clear already
+      // ran and with nothing typed.
+      const el: FakeEl = { tagName: "INPUT", value: "", isConnected: true };
+      const host = { tagName: "MY-WIDGET" } as Record<string, unknown>;
+      const frame = { tagName: "IFRAME" } as Record<string, unknown>;
+      // Top document retargets to the host, exactly as a browser does.
+      const topDoc = { activeElement: host };
+      // The shadow root, identified by `host`, holds the frame.
+      const shadow = { activeElement: frame, host };
+      const frameDoc = { activeElement: el, defaultView: { frameElement: frame } };
+
+      el.getRootNode = () => frameDoc as unknown as { activeElement: FakeEl | null };
+      frame.getRootNode = () => shadow;
+      host.getRootNode = () => topDoc;
+      // A real iframe has BOTH, and they disagree here — which is the whole
+      // point: `ownerDocument` is not retargeted, so stepping up through it
+      // lands on the top document, whose activeElement is the host, not the
+      // frame. Modelling both is what makes this test able to tell the two
+      // reads apart.
+      frame.ownerDocument = topDoc;
+      host.ownerDocument = topDoc;
+
+      expect(release({ [HANDLE]: el }).result).toMatchObject({ tracked: true, focused: true });
+    });
+
+    it("leaves the local verdict alone when an ancestor is cross-origin", () => {
+      // Per HTML, `frameElement` is NULL across origins — it does not throw, and
+      // a document with no browsing context has no `defaultView` either. Both
+      // are "can't tell", and inventing a focus loss there would fail clears
+      // that work today.
+      const el: FakeEl = { tagName: "BODY", isContentEditable: true, isConnected: true };
+      el.getRootNode = () =>
+        ({ activeElement: el, defaultView: { frameElement: null } }) as unknown as {
+          activeElement: FakeEl | null;
+        };
+      expect(release({ [HANDLE]: el }).result).toMatchObject({ tracked: true, focused: true });
+
+      const noView: FakeEl = { tagName: "BODY", isContentEditable: true, isConnected: true };
+      noView.getRootNode = () => ({ activeElement: noView });
+      expect(release({ [HANDLE]: noView }).result).toMatchObject({ tracked: true, focused: true });
+    });
+  });
+
+  describe("residue a text measurement cannot see", () => {
+    // On a non-form target the value read is `textContent`, so content carrying
+    // no text node measures 0 and a clear that emptied nothing reports success.
+    // Measured on Chrome 150 against two contenteditables cancelling the same
+    // `beforeinput`: the one holding text was refused, the one holding a single
+    // `<img>` returned `cleared: true` with the image untouched.
+    // The stub really MATCHES the selector against a list of child tags, rather
+    // than returning a fixed answer — the whole point of the count is WHICH tags
+    // it treats as residue, and a stub that ignores the selector leaves that
+    // unpinned. (Widening the production selector by `br,div,p,span` then turns
+    // every successfully-cleared rich-text editor into a hard failure, since
+    // `<p><br></p>` is Blink's, Quill's and TinyMCE's empty state.)
+    const withChildren = (childTags: string[]) => {
+      const el = {
+        tagName: "DIV",
+        textContent: "",
+        isConnected: true,
+        querySelectorAll: (sel: string) => {
+          const wanted = sel.split(",").map((s) => s.trim().toLowerCase());
+          return childTags.filter((tag) => wanted.includes(tag.toLowerCase()));
+        },
+      };
+      return release({ [HANDLE]: el }).result;
+    };
+
+    it("counts embedded content left behind", () => {
+      expect(withChildren(["img"])).toMatchObject({ tracked: true, length: 0, nodes: 1 });
+      expect(withChildren(["video", "hr", "svg"])).toMatchObject({ tracked: true, nodes: 3 });
+    });
+
+    it("counts nothing for an editor that really is empty", () => {
+      expect(withChildren([])).toMatchObject({ tracked: true, length: 0, nodes: 0 });
+    });
+
+    it("never counts the structural leftovers an emptied editor keeps", () => {
+      // Blink leaves a `<br>`; Quill/Lexical/TinyMCE leave a wrapped one. None
+      // of it is residue, and counting any of it would fail every clear that
+      // actually worked.
+      expect(withChildren(["br", "div", "p", "span", "font"])).toMatchObject({
+        tracked: true,
+        length: 0,
+        nodes: 0,
+      });
+    });
+
+    it("never asks a form control, whose value is the whole story", () => {
+      // A <textarea>'s child nodes are its DEFAULT value and never track
+      // `value`, so counting them would report a cleared field as still full.
+      const el = {
+        tagName: "TEXTAREA",
+        value: "",
+        isConnected: true,
+        querySelectorAll: () => {
+          throw new Error("must not be asked");
+        },
+      };
+      expect(release({ [HANDLE]: el }).result).toMatchObject({
+        tracked: true,
+        length: 0,
+        nodes: 0,
+      });
+    });
   });
 
   it("reports untracked rather than a bogus success when the read throws", () => {

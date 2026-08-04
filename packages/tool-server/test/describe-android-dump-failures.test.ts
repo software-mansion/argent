@@ -8,10 +8,7 @@ const { dumpAndroidUiXml, isAndroidTv, getAndroidScreenSize } = vi.hoisted(() =>
   isAndroidTv: vi.fn(async (): Promise<boolean> => false),
   getAndroidScreenSize: vi.fn(async () => ({ width: 1080, height: 2220 })),
 }));
-vi.mock("../src/utils/android-ui-dump", () => ({
-  dumpAndroidUiXml,
-  ANDROID_UI_DUMP_TIMEOUT_MS: 20_000,
-}));
+vi.mock("../src/utils/android-ui-dump", () => ({ dumpAndroidUiXml }));
 vi.mock("../src/utils/adb", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/adb")>()),
   isAndroidTv,
@@ -77,12 +74,22 @@ describe("describeAndroid — a dump that did not happen is a capture failure", 
     // `adb exec-out` folds the device's stderr into stdout, so a warning can
     // arrive ahead of the XML — a substring test survives that, an anchored one
     // would not.
+    //
+    // The TREE is what has to be asserted, not `source`: that is an
+    // unconditional string literal on this branch, so a version of this function
+    // that never called the parser at all would satisfy it. This is also the
+    // only test that drives the legacy `describeAndroid` path — the four suites
+    // that exercise `parseUiAutomatorDump` call the parser directly and never
+    // reach it.
     dumpAndroidUiXml.mockImplementationOnce(async () => VALID_DUMP);
     const clean = await describeAndroid(undefined, "emulator-5554");
     expect(clean.source).toBe("uiautomator");
+    expect(JSON.stringify(clean.tree)).toContain("hello");
 
     dumpAndroidUiXml.mockImplementationOnce(async () => `WARNING: something\n${VALID_DUMP}`);
     const noisy = await describeAndroid(undefined, "emulator-5554");
     expect(noisy.source).toBe("uiautomator");
+    // The noise must not cost the tree: same parse, prefix and all.
+    expect(noisy.tree).toEqual(clean.tree);
   });
 });
