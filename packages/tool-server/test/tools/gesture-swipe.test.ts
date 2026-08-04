@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Capture the touch-event train the tool sends to the simulator-server. The
-// momentum-free (`settle`) behavior lives entirely in this event sequence, so
-// asserting it is how we lock in "no fling".
+// momentum-free (`momentum: false`) behavior lives entirely in this event
+// sequence, so asserting it is how we lock in "no fling".
 interface TouchCmd {
   cmd: string;
   type: "Down" | "Move" | "Up";
@@ -41,7 +41,7 @@ beforeEach(() => {
 });
 
 describe("gesture-swipe", () => {
-  it("ends with a single Up and no stationary hold when not settling", async () => {
+  it("ends with a single Up and no stationary hold when momentum is on", async () => {
     await gestureSwipeTool.execute(services, { ...base, durationMs: 160 });
 
     expect(sent[0]).toMatchObject({ type: "Down", x: 0.5, y: 0.7 });
@@ -51,8 +51,8 @@ describe("gesture-swipe", () => {
     expect(trailingStationaryMoves(sent, 0.5, 0.2)).toBeLessThanOrEqual(1);
   });
 
-  it("decelerates into the end point (ease-out) before lifting when settling", async () => {
-    await gestureSwipeTool.execute(services, { ...base, durationMs: 160, settle: true });
+  it("decelerates into the end point (ease-out) before lifting when momentum is off", async () => {
+    await gestureSwipeTool.execute(services, { ...base, durationMs: 160, momentum: false });
 
     // Exactly one lift, at the end point.
     expect(sent.filter((e) => e.type === "Up")).toHaveLength(1);
@@ -136,8 +136,8 @@ describe("gesture-swipe end-point delivery", () => {
     expect(delivered).toBeGreaterThan(0.03);
   });
 
-  it("keeps a settling Android swipe exact and still lifts once", async () => {
-    await gestureSwipeTool.execute(services, { udid: ANDROID_SERIAL, ...across, settle: true });
+  it("keeps a momentum-free Android swipe exact and still lifts once", async () => {
+    await gestureSwipeTool.execute(services, { udid: ANDROID_SERIAL, ...across, momentum: false });
 
     expect(sent.filter((e) => e.type === "Up")).toHaveLength(1);
     // One stationary sample at the end point — the repeat, not a hold: a train of

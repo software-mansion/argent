@@ -38,7 +38,7 @@ interface SwipeCall {
   fromY: number;
   toX: number;
   toY: number;
-  settle: unknown;
+  momentum: unknown;
 }
 
 function mockRegistry(swipes: SwipeCall[], onSwipe?: () => void): Registry {
@@ -51,7 +51,7 @@ function mockRegistry(swipes: SwipeCall[], onSwipe?: () => void): Registry {
           fromY: args.fromY as number,
           toX: args.toX as number,
           toY: args.toY as number,
-          settle: args.settle,
+          momentum: args.momentum,
         });
         onSwipe?.();
         return { swiped: true };
@@ -114,7 +114,7 @@ describe("scroll-to directive", () => {
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["scroll-to:pass"]);
     // Exactly one increment, momentum-free, finger travelling UP (reveal below).
     expect(swipes).toHaveLength(1);
-    expect(swipes[0].settle).toBe(true);
+    expect(swipes[0].momentum).toBe(false);
     expect(swipes[0].fromY).toBeGreaterThan(swipes[0].toY);
   });
 
