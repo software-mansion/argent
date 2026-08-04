@@ -12,6 +12,16 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // dragMomentum) is computed from this very pointer stream's release velocity.
 const SETTLE_EASE_EXPONENT = 3;
 
+// Sample floor for a `settle` drag: the ease-out only decelerates as finely as
+// it is sampled, and the final frame before the release carries (1/steps)^3 of
+// the travel — 12.5% at the 2 steps durationMs/16 leaves a 32ms drag, which
+// releases mid-flight, versus ~0.2% at eight. Plain drags keep their frame-rate
+// sampling; there the pointer is meant to be moving at the lift. Below ~70ms
+// the eight frames no longer fit the duration at one CDP round-trip each, so
+// such a drag overruns durationMs — the alternative is a settle that does
+// nothing, and the flow swipe directive floors duration well above that.
+const SETTLE_MIN_STEPS = 8;
+
 const zodSchema = z.object({
   udid: z.string().describe("Target Chromium device id from `list-devices` (chromium-cdp-<port>)."),
   fromX: z.number().describe("Press x: normalized 0.0–1.0 (fraction of window width, not pixels)."),
@@ -28,7 +38,7 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "Momentum-free drag: decelerate into the release point (ease-out) so an app deriving fling from pointer release velocity (carousels, drag libraries) reads ~0 and applies no momentum. Use when the drag must land exactly at the endpoint; default false (a constant-speed drag)."
+      "Momentum-free drag: decelerate into the release point (ease-out) so an app deriving fling from pointer release velocity (carousels, drag libraries) reads ~0 and applies little to no momentum. Use when the drag must land exactly at the endpoint; default false (a constant-speed drag). Deceleration needs wall clock: under ~100ms the whole drag fits inside the velocity window a page averages over (tens of ms), so some fling survives, and under ~70ms its extra frames cannot dispatch fast enough to fit durationMs. Keep durationMs at its default when the fling must be fully suppressed."
     ),
 });
 
@@ -52,9 +62,9 @@ export const gestureDragTool: ToolDefinition<Params, Result> = {
       `Dragged from (${Math.round(params.fromX * 100)}%, ${Math.round(params.fromY * 100)}%) to (${Math.round(params.toX * 100)}%, ${Math.round(params.toY * 100)}%)`,
     failedMsg: ({ failureSignal }) => `Failed to drag: ${failureSignal.error_code}`,
   },
-  description: `Press the left mouse button at a start point, move to an end point, and release — a desktop mouse drag in a Chromium app. All positions are normalized 0.0–1.0 (fractions of the window, not pixels), same coordinate space as gesture-tap and describe. Interpolates mouse-move events at ~60fps over durationMs for a natural drag.
+  description: `Press the left mouse button at a start point, move to an end point, and release — a desktop mouse drag in a Chromium app. All positions are normalized 0.0–1.0 (fractions of the window, not pixels), same coordinate space as gesture-tap and describe. Interpolates mouse-move events at ~60fps over durationMs for a natural drag (a settle drag samples more finely when durationMs is short, so its ease-out has a curve).
 Use for slider thumbs, drag-and-drop, text selection, or draggable UI elements. Dragging never scrolls content on desktop — use gesture-scroll for lists/pages. Chromium only — on iOS/Android use gesture-swipe.
-Pass settle:true for a momentum-free drag that releases at ~0 pointer velocity, so apps that compute a fling from the pointer stream apply none and the drag lands exactly at the endpoint. Returns { dragged: true, timestampMs }. Fails if the Chromium CDP session is not reachable for the given device.`,
+Pass settle:true for a momentum-free drag that decelerates into the release, so apps that compute a fling from the pointer stream read ~0 velocity and the drag lands exactly at the endpoint (a durationMs under ~100ms is too short for the deceleration to suppress the fling entirely). Returns { dragged: true, timestampMs }. Fails if the Chromium CDP session is not reachable for the given device.`,
   alwaysLoad: true,
   searchHint: "drag drop slider mouse press move release chromium select",
   zodSchema,
@@ -83,7 +93,7 @@ Pass settle:true for a momentum-free drag that releases at ~0 pointer velocity, 
     };
     const durationMs = params.durationMs ?? 300;
     const settle = params.settle ?? false;
-    const steps = Math.max(2, Math.round(durationMs / 16));
+    const steps = Math.max(settle ? SETTLE_MIN_STEPS : 2, Math.round(durationMs / 16));
     const frameMs = durationMs / steps;
     // Pace every frame off one run-start deadline (t0 + i * frameMs) so each
     // dispatch round-trip (~8-10 ms) counts toward its own frame instead of
