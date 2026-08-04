@@ -1774,25 +1774,29 @@ export function runTargetName(target: string): string {
 }
 
 /**
- * Shape-check a `run:` value: it must be a relative, forward-slashed `.yaml`
- * path. `..` is deliberately legal — shared fragments may live outside the
- * flows dir, and a fragment reaching sideways to `../shared/login.yaml` is a
- * documented layout. Only the SHAPE is checked here; nothing about WHERE the
- * path lands. At run time execRunStep joins it onto the containing flow
- * file's own directory and resolves the result with kernel semantics (see
- * canonicalFlowPath in flow-run.ts) — deliberately not a lexical collapse,
- * since a `..` after a symlinked component names the parent of the link's
- * target, not of the spelling. There is no path fence at that point: a target
- * runs if the tool server can read it, and fails with that file's own ENOENT
- * if it cannot.
+ * Shape-check a `run:` value: it must be a relative, forward-slashed path whose
+ * final segment is a flow name, with the `.yaml` extension optional (see
+ * {@link completeRunExtension}). `..` is deliberately legal — shared fragments
+ * may live outside the flows dir, and a fragment reaching sideways to
+ * `../shared/login.yaml` is a documented layout. Only the SHAPE is checked
+ * here; nothing about WHERE the path lands. At run time execRunStep joins it
+ * onto the containing flow file's own directory and resolves the result with
+ * kernel semantics (see canonicalFlowPath in flow-run.ts) — deliberately not a
+ * lexical collapse, since a `..` after a symlinked component names the parent
+ * of the link's target, not of the spelling. There is no path fence at that
+ * point: a target runs if the tool server can read it, and fails with that
+ * file's own ENOENT if it cannot.
  */
 function parseRunTarget(raw: unknown, value: unknown): string {
   // The body arrives uncoerced because YAML renders a valueless `run:` (and
   // `run: ~` / `run: null`) as null, and bare scalars as booleans/numbers.
-  // String()-ing those before the checks below would hand FLOW_NAME_PATTERN
-  // the plausible names "null"/"true"/"123", so the bare-name migration branch
-  // would answer a directive that has no target at all with confident advice
-  // to reference a `null.yaml` that was never meant to exist.
+  // String()-ing those before the checks below would hand completeRunExtension
+  // the plausible names "null"/"true"/"123" — and since a bare name is now
+  // ACCEPTED rather than merely advised against, a directive with no target at
+  // all would silently become a live reference to a `null.yaml` that was never
+  // meant to exist (and, on a filesystem where one happens to sit beside the
+  // flow, would run it). The rejection is what keeps the completion below
+  // applying only to targets an author actually wrote.
   if (typeof value !== "string") {
     badEntry(
       raw,
@@ -1811,25 +1815,54 @@ function parseRunTarget(raw: unknown, value: unknown): string {
   if (path.posix.isAbsolute(value) || /^[A-Za-z]:/.test(value)) {
     badEntry(raw, "a `run` path must be relative to the flow file that references it");
   }
-  if (!value.endsWith(".yaml")) {
-    if (FLOW_NAME_PATTERN.test(value)) {
-      badEntry(
-        raw,
-        `\`run\` takes a YAML path relative to this flow's file — did you mean \`run: ${value}.yaml\`?`
-      );
-    }
-    if (value.toLowerCase().endsWith(".yaml")) {
+  const target = completeRunExtension(value);
+  if (!target.endsWith(".yaml")) {
+    if (target.toLowerCase().endsWith(".yaml")) {
       badEntry(raw, "a `run` path must use the lowercase .yaml extension");
     }
-    badEntry(raw, "a `run` path must end in .yaml");
+    // Reached only when completion declined the value, so the bare-name form
+    // is quoted too: "must end in .yaml" alone would contradict the documented
+    // rule for an author who deliberately left the extension off and tripped
+    // the charset (`run: my flow`) or a trailing slash (`run: shared/`).
+    badEntry(raw, "a `run` path must end in .yaml, or name a sibling flow (`run: login`)");
   }
-  if (!FLOW_FILE_NAME_PATTERN.test(path.posix.basename(value))) {
+  if (!FLOW_FILE_NAME_PATTERN.test(path.posix.basename(target))) {
     badEntry(
       raw,
       `a \`run\` target's filename must match ${FLOW_FILE_NAME_PATTERN} — letters, digits, underscore, hyphen before the .yaml`
     );
   }
-  return value;
+  return target;
+}
+
+/**
+ * Complete a `run:` target's optional `.yaml` extension: `run: login` means
+ * `login.yaml` beside the containing flow file, exactly as the spelled-out
+ * form does. This is the compatibility path for flows written when a `run:`
+ * target was a saved-flow NAME looked up in `.argent/flows` — a bare name
+ * resolves to the same file it always did, since those flows sit in that one
+ * directory and a bare target anchors to their own.
+ *
+ * Completed HERE rather than at resolution time so exactly one spelling
+ * reaches everything downstream: canonicalFlowPath's read, the fragment's
+ * on-disk casing check, the report's `target`, and runDisplayName — which
+ * slices a fixed `".yaml".length` off the target and would truncate a real
+ * path segment given a bare one (see flow-run.ts). Re-serializing a parsed
+ * flow therefore writes the completed spelling back, which is the intended
+ * one-way migration.
+ *
+ * The test is the CANDIDATE's basename, not the supplied value's: basename()
+ * strips a trailing slash, so testing `${basename(value)}.yaml` would complete
+ * `shared/` to the unopenable `shared/.yaml`. Anything else the candidate
+ * cannot name — a wrong extension (`login.yml`), a mis-cased one
+ * (`Login.YAML`), an empty target — leaves the value untouched for the
+ * caller's extension diagnostics, which name the real problem better than a
+ * silent completion to `login.yml.yaml` ever could.
+ */
+function completeRunExtension(value: string): string {
+  if (value.endsWith(".yaml")) return value;
+  const candidate = `${value}.yaml`;
+  return FLOW_FILE_NAME_PATTERN.test(path.posix.basename(candidate)) ? candidate : value;
 }
 
 function fromYamlStep(raw: YamlStep, whenDepth = 0): FlowStep {

@@ -139,6 +139,102 @@ describe("flow composition (run:)", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("composes a bare run: name from the containing flow's own directory", async () => {
+    // The legacy layout: both flows saved flat in .argent/flows, main written
+    // when a run: target was a saved-flow NAME resolved in that directory. A
+    // bare target now anchors to the containing file's directory instead —
+    // which for this layout IS that directory, so the flow replays unchanged.
+    await writeFlow("login", {
+      executionPrerequisite: "On login screen",
+      steps: [{ kind: "echo", message: "logging in" }],
+    });
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", "main.yaml"),
+      "steps:\n  - run: login\n  - echo: done\n",
+      "utf8"
+    );
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "run:pass",
+      "echo:pass",
+      "echo:pass",
+    ]);
+    // Parse completed the extension, so the report names the file it opened
+    // while attribution keeps the same stem the spelled-out form produces.
+    expect(result.steps[0]).toMatchObject({ target: "login.yaml", flow: "login" });
+    expect(result.steps[1].flow).toBe("login");
+  });
+
+  it("resolves a bare run: name against a nested fragment's directory", async () => {
+    // The one place the two schemes disagree: a bare name inside a fragment
+    // that does NOT sit in the flows dir root. `helpers/steps.yaml` composing
+    // `login` gets helpers/login.yaml — its own sibling — not the flows-dir
+    // copy a name lookup would have found. Both exist here with different
+    // messages, so the assertion distinguishes them.
+    const helpers = path.join(tmpDir, ".argent", "flows", "helpers");
+    await fs.mkdir(helpers, { recursive: true });
+    await writeFlow("login", {
+      executionPrerequisite: "",
+      steps: [{ kind: "echo", message: "FLOWS-DIR-COPY" }],
+    });
+    await fs.writeFile(
+      path.join(helpers, "login.yaml"),
+      "steps:\n  - echo: HELPERS-SIBLING\n",
+      "utf8"
+    );
+    await fs.writeFile(path.join(helpers, "steps.yaml"), "steps:\n  - run: login\n", "utf8");
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "helpers/steps.yaml" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps.map((s) => s.message)).toContain("HELPERS-SIBLING");
+    expect(result.steps.map((s) => s.message)).not.toContain("FLOWS-DIR-COPY");
+  });
+
+  it("refuses a bare run: name whose casing is not the one on disk", async () => {
+    // Completing the extension must not open a casing hole: `run: Login`
+    // becomes Login.yaml and meets the same on-disk spelling gate as the
+    // spelled-out form, so a macOS-green / Linux-red tree is still refused.
+    await writeFlow("login", {
+      executionPrerequisite: "",
+      steps: [{ kind: "echo", message: "RAN-THE-LOWERCASE-FILE" }],
+    });
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", "main.yaml"),
+      "steps:\n  - run: Login\n",
+      "utf8"
+    );
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:error"]);
+    expect(result.steps[0]?.reason ?? "").toMatch(/^mis-cased fragment reference "Login\.yaml": /);
+    expect(result.steps.map((s) => s.message)).not.toContain("RAN-THE-LOWERCASE-FILE");
+  });
+
   it("resolves run: fragments beside an explicit top-level flow_path", async () => {
     const externalDir = path.join(tmpDir, "external-flows");
     const mainPath = path.join(externalDir, "main.yaml");
@@ -2327,11 +2423,43 @@ describe("flow validation", () => {
     );
   });
 
-  it("rejects a bare saved-flow name in run: with a migration hint", () => {
-    expect(() => parseFlow("steps:\n  - run: login\n")).toThrow(/did you mean `run: login\.yaml`/);
+  it("completes a bare run: name to <name>.yaml", () => {
+    // The compatibility spelling for flows written when a run: target was a
+    // saved-flow name. Completed at PARSE, so one spelling reaches the runner.
+    expect(parseFlow("steps:\n  - run: login\n").steps[0]).toEqual({
+      kind: "run",
+      flow: "login.yaml",
+    });
   });
 
-  it("reports a missing target instead of a null.yaml migration hint for a valueless run:", () => {
+  it("completes an extensionless run: path, keeping its directory prefix", () => {
+    for (const [written, completed] of [
+      ["shared/login", "shared/login.yaml"],
+      ["../shared/login", "../shared/login.yaml"],
+      ["./login", "./login.yaml"],
+    ]) {
+      expect(parseFlow(`steps:\n  - run: ${written}\n`).steps[0], written).toEqual({
+        kind: "run",
+        flow: completed,
+      });
+    }
+  });
+
+  it("does not complete a run: target the extension cannot rescue", () => {
+    // basename() strips a trailing slash, so a completion driven by the
+    // SUPPLIED basename would turn "shared/" into the unopenable "shared/.yaml"
+    // instead of reporting a target that names no file.
+    expect(() => parseFlow("steps:\n  - run: shared/\n")).toThrow(/must end in \.yaml/);
+    expect(() => parseFlow("steps:\n  - run: shared/\n")).not.toThrow(/\.yaml\.yaml/);
+    // A wrong extension is a typo to report, not a stem to extend: completing
+    // it would run "login.yml.yaml" and bury the mistake.
+    expect(() => parseFlow("steps:\n  - run: login.yml\n")).toThrow(/must end in \.yaml/);
+    // Dots are outside the flow-name charset, so a version-ish stem stays an
+    // error rather than becoming "v1.2.yaml".
+    expect(() => parseFlow("steps:\n  - run: v1.2\n")).toThrow(/must end in \.yaml/);
+  });
+
+  it("reports a missing target instead of a null.yaml completion for a valueless run:", () => {
     for (const body of ["", " ~", " null"]) {
       expect(() => parseFlow(`steps:\n  - run:${body}\n`)).toThrow(/`run` has no target/);
       expect(() => parseFlow(`steps:\n  - run:${body}\n`)).not.toThrow(/null\.yaml/);
