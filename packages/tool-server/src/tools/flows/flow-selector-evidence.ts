@@ -66,6 +66,24 @@ export function establishedTerms(step: FlowStep): string[] {
       // one proves it present. A full-screen snapshot has no selector.
       return selectorIdentityTerms(step.cropOn);
     case "tool": {
+      // A run-sequence proves a selector present through its own nested
+      // non-hidden `await-ui-element` waits — the same evidence
+      // `vacuousHiddenSelectors` reads INSIDE the sequence to exonerate a
+      // nested `hidden`. Surface it flow-wide too: a sequence that proved X
+      // present must not leave a LATER step's `hidden X` condemned for proving
+      // nothing. A passing sequence has met every nested wait, so a nested
+      // non-hidden wait that ran is real evidence.
+      if (step.name === "run-sequence") {
+        const nested = (step.args as { steps?: unknown }).steps;
+        if (!Array.isArray(nested)) return [];
+        return nested.flatMap((s) => {
+          const inner = s as { tool?: unknown; args?: { condition?: unknown; selector?: unknown } };
+          if (inner.tool !== AWAIT_UI_ELEMENT_TOOL_ID) return [];
+          return inner.args?.condition === "hidden"
+            ? []
+            : selectorIdentityTerms(inner.args?.selector);
+        });
+      }
       if (step.name !== AWAIT_UI_ELEMENT_TOOL_ID) return [];
       const args = step.args as { condition?: unknown; selector?: unknown };
       return args.condition === "hidden" ? [] : selectorIdentityTerms(args.selector);

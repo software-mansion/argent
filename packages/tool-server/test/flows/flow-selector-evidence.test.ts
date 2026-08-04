@@ -35,6 +35,31 @@ describe("establishedTerms", () => {
       establishedTerms({ kind: "assert", condition: "hidden", selector: { text: "Toast" } })
     ).toEqual([]);
   });
+
+  it("credits a run-sequence's nested non-hidden await selectors flow-wide", () => {
+    // A sequence that proves X present must license a LATER step's `hidden X`,
+    // exactly as a top-level `visible X` would. Its nested `hidden` proves
+    // absence (never credited) and its coordinate gestures carry no selector.
+    const step: FlowStep = {
+      kind: "tool",
+      name: "run-sequence",
+      args: {
+        steps: [
+          { tool: "await-ui-element", args: { condition: "visible", selector: { identifier: "Sheet" } } },
+          { tool: "await-ui-element", args: { condition: "hidden", selector: { identifier: "Gone" } } },
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.5 } },
+        ],
+      },
+    };
+    expect(establishedTerms(step)).toEqual(["id:sheet"]);
+  });
+
+  it("credits nothing for a run-sequence with no nesting or malformed args", () => {
+    expect(establishedTerms({ kind: "tool", name: "run-sequence", args: {} })).toEqual([]);
+    expect(
+      establishedTerms({ kind: "tool", name: "run-sequence", args: { steps: "nope" } })
+    ).toEqual([]);
+  });
 });
 
 describe("selectorEstablishedInSteps", () => {
