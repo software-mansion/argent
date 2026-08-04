@@ -96,6 +96,7 @@ Commands:
   disable     Disable a feature flag (global by default, --scope project for project)
   flags       Show current feature-flag state
   config      Manage configuration (list / get / set / unset, project & global)
+  secrets     List the secrets a {{secret:NAME}} placeholder can type, and their sources
   telemetry   Manage opt-out telemetry (status / enable / disable)
 
 Options:
@@ -167,6 +168,8 @@ async function main(): Promise<void> {
       return (await loadCli()).flags(rest);
     case "config":
       return (await loadCli()).config(rest);
+    case "secrets":
+      return (await loadCli()).secrets(rest);
     case "telemetry":
       return (await loadCli()).telemetry(rest);
     case "--version":
