@@ -64,7 +64,7 @@ async function onDisk(name: string): Promise<string> {
   return fs.readFile(path.join(tmpDir, ".argent", "flows", `${name}.yaml`), "utf8");
 }
 
-async function recordWait(name: string, selectorText: string) {
+async function recordWait(name: string, selectorText: string, udid: string = DEVICE) {
   const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
   return tool.execute(
     {},
@@ -73,13 +73,16 @@ async function recordWait(name: string, selectorText: string) {
       project_root: tmpDir,
       command: "await-ui-element",
       args: JSON.stringify({
-        udid: DEVICE,
+        udid,
         condition: "visible",
         selector: { text: selectorText },
       }),
     }
   );
 }
+
+const ANDROID = "emulator-5554"; // adb-serial shape → classifies android
+const CHROMIUM = "chromium-cdp-9222"; // chromium-cdp- prefix → classifies chromium
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-cross-tree-"));
@@ -144,5 +147,47 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(result.message).toContain("Step added");
     expect(result.message).toContain("could not be re-verified against the tree the RUNNER reads");
     expect(parseFlow(await onDisk("blind")).steps).toHaveLength(1);
+  }, 20_000);
+
+  // The reader clause is platform-specific on purpose: no read-only tool reads
+  // Android's runner tree (the full a11y hierarchy — native-find-views /
+  // native-full-hierarchy are Apple-only), and Android `describe` returns the
+  // TRIMMED tree the recorder already read. So the warning must NOT tell an
+  // Android author that `describe` "reads the runner's side" — that would point
+  // them at the recorder's own tree, the exact wrong-tree steer this warns
+  // about. It also must not name the Apple-only `native-find-views`.
+  it("on Android, does not claim `describe` reads the runner's side", async () => {
+    runnerTree = () => screen(["Proceed"]);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "android", project_root: tmpDir, executionPrerequisite: "on the form" }
+    );
+
+    const result = await recordWait("android", "Continue", ANDROID);
+
+    expect(result.message).toContain("does NOT hold against the tree the runner resolves");
+    expect(result.message).toContain(
+      "no read-only tool exposes the runner's full hierarchy on Android"
+    );
+    expect(result.message).not.toContain("reads the runner's side");
+    expect(result.message).not.toContain("native-find-views");
+    expect(parseFlow(await onDisk("android")).steps).toHaveLength(1);
+  }, 20_000);
+
+  it("on Chromium, names describe (the DOM walker) as the runner's reader", async () => {
+    runnerTree = () => screen(["Proceed"]);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "chromium", project_root: tmpDir, executionPrerequisite: "on the form" }
+    );
+
+    const result = await recordWait("chromium", "Continue", CHROMIUM);
+
+    expect(result.message).toContain("does NOT hold against the tree the runner resolves");
+    expect(result.message).toContain(
+      "`describe` (this platform's DOM walker) reads the runner's side"
+    );
+    expect(result.message).not.toContain("native-find-views");
+    expect(parseFlow(await onDisk("chromium")).steps).toHaveLength(1);
   }, 20_000);
 });
