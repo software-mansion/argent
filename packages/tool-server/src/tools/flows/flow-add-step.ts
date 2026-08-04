@@ -88,17 +88,41 @@ function platformOf(udid: unknown): string | undefined {
 }
 
 /**
- * How to read the tree the RUNNER resolves against, on this device's platform.
+ * The read-only tool that reads the tree the RUNNER resolves against, for the
+ * platforms where one exists. Android is deliberately routed elsewhere (see
+ * {@link runnerSideReadClause}): no read-only tool exposes its runner tree, so
+ * this helper is only ever called here for iOS / Chromium / Vega.
  *
- * `native-find-views` declares Apple capability only, so naming it to an
- * Android or Chromium author points at a tool they cannot call — and the
- * refusals that quote it are the ones an author most needs to act on.
+ * `native-find-views` declares Apple capability only, so it is named for iOS
+ * alone; iOS `describe` is the AX tree — the RECORDER's side — so it is NOT
+ * listed here, where the point is to name the runner's reader.
  */
 function treeReaderFor(udid: unknown): string {
   const platform = platformOf(udid);
-  if (platform === "ios" || platform === "ios-remote") return "`native-find-views`/`describe`";
+  if (platform === "ios" || platform === "ios-remote") return "`native-find-views`";
   if (platform === "chromium") return "`describe` (this platform's DOM walker)";
   return "`describe`";
+}
+
+/**
+ * The clause naming how to read the tree the RUNNER resolves against — or, on
+ * Android, that no read-only tool does. Android's runner tree is the full
+ * accessibility hierarchy; the only full-hierarchy readers (`native-find-views`
+ * / `native-full-hierarchy`) are Apple-only, and Android `describe` returns the
+ * TRIMMED interactables tree the recorder already read. So naming `describe`
+ * there would point the author at the recorder's own tree under the banner of
+ * the runner's — the exact wrong-tree steer this warning exists to prevent.
+ * Every other platform has a reader that genuinely sees the runner's side.
+ */
+function runnerSideReadClause(udid: unknown): string {
+  if (platformOf(udid) === "android") {
+    return (
+      "no read-only tool exposes the runner's full hierarchy on Android — `describe` returns the " +
+      "trimmed tree the recorder read, not the runner's — so re-record with a selector an " +
+      "interactable carries, or keep it raw"
+    );
+  }
+  return `${treeReaderFor(udid)} reads the runner's side`;
 }
 
 /**
@@ -130,7 +154,9 @@ function treeDivergenceFor(udid: unknown): string {
 }
 
 function abortError(): Error {
-  const err = new Error("flow-add-step aborted before the recorded tool was executed");
+  const err = new Error(
+    "flow-add-step aborted while re-probing the recorded wait against the runner's tree"
+  );
   err.name = "AbortError";
   return err;
 }
@@ -635,7 +661,7 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
       if (params.command === AWAIT_UI_ELEMENT_TOOL_ID) {
         const probe = await probeAgainstRunnerTree(registry, ctx, args);
         crossTreeWarning = probe.warning
-          ? `${probe.warning}. ${treeDivergenceFor(args.udid)} ${treeReaderFor(args.udid)} reads the runner's side`
+          ? `${probe.warning}. ${treeDivergenceFor(args.udid)} ${runnerSideReadClause(args.udid)}`
           : undefined;
       }
 
