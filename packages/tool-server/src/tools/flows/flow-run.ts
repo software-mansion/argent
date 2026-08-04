@@ -496,13 +496,6 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    * threaded through {@link resolveRunDevice}, which is this root directory).
    */
   flowsDir: string;
-  /**
-   * The canonical (realpath'd) project root — zone (a) of the `run:` target
-   * containment check in {@link execRunStep}. Canonicalized once in execute(),
-   * beside the root flow path, so both sides of that comparison carry kernel
-   * spellings.
-   */
-  projectRoot: string;
   topFlowName: string;
   updateBaselines: boolean;
   reports: StepReport[];
@@ -673,15 +666,6 @@ returns a notice with the prerequisite instead of running.`,
       // baselines anchored at the symlink's spelling.
       const canonicalPath = await canonicalFlowPath(filePath);
       const flowsDir = path.dirname(canonicalPath);
-      // The project root, canonicalized once for the same reason: it is zone
-      // (a) of the run: containment check (see execRunStep), which compares
-      // canonical target paths — macOS's /var → /private/var symlink alone
-      // would otherwise fail every in-root target. resolveFlowSource already
-      // validated the spelling (absolute, no ".."); when the directory does
-      // not exist on this host (reachable via flow_path) the fallback keeps
-      // that spelling — nothing real can then resolve under zone (a), and the
-      // containing-dir zone (b) still applies.
-      const projectRoot = await fs.realpath(params.project_root).catch(() => params.project_root);
       const flow = parseFlow(await fs.readFile(canonicalPath, "utf8"));
       if (viaUpload) assertUploadSelfContained(flow);
 
@@ -723,7 +707,6 @@ returns a notice with the prerequisite instead of running.`,
         device,
         signal,
         flowsDir,
-        projectRoot,
         topFlowName: flowName,
         updateBaselines: Boolean(params.updateBaselines),
         reports: [],
@@ -1341,21 +1324,6 @@ async function canonicalFlowPath(p: string): Promise<string> {
   }
 }
 
-/**
- * True when `p` names something STRICTLY below `dir` — segment-safe, so
- * `/root` never contains `/rootx`, and equality is excluded (a `run:` target
- * is a file, never the boundary directory itself). Both sides normally arrive
- * canonical (kernel-resolved), where path.relative's lexical collapse is
- * exact; the one exception is canonicalFlowPath's verbatim fallback, which can
- * still carry `..` — but that shape only occurs when the kernel already
- * refused the directory chain, so the read is going to fail either way and
- * the collapse merely decides which error reports it (see execRunStep).
- */
-function isWithin(dir: string, p: string): boolean {
-  const rel = path.relative(dir, p);
-  return rel !== "" && rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
-}
-
 async function execRunStep(
   state: ExecState,
   step: Extract<FlowStep, { kind: "run" }>,
@@ -1406,34 +1374,16 @@ async function execRunStep(
     return fail("max run depth exceeded");
   }
 
-  // Containment: the canonical target must land below the canonical project
-  // root, or below the CONTAINING flow file's canonical directory. Admitting
-  // `..` in parseRunTarget removed the old flows-dir fence, and without a
-  // replacement a run: step could execute (and let snapshot steps write
-  // beside) any YAML the tool-server user can read — the exact escape
-  // resolveFlowSource closes at the front door by rejecting a flow_file
-  // outside the project root and a flow_path with ".." (see its containment
-  // rationale). Zone (b) is what keeps a symlinked-out shared flows tree
-  // working (the vault layout the recorder supports): the root symlink admits its
-  // real directory, and because each hop only extends into subtrees of files
-  // already admitted, the zone cannot ratchet outward — the comparison is on
-  // canonical paths, so a symlink pointing outside both zones fails here too.
-  //
-  // Ordered after the cycle/depth guards (every runStack entry was admitted
-  // by this check — or, for the root, by resolveFlowSource's front door — so
-  // a cycle among admitted files still reports as a cycle; those messages are
-  // pinned) and before the read. For a MISSING in-boundary target
-  // canonicalFlowPath's dir+basename fallback still lands in-zone, so the
-  // clearer per-file ENOENT below reports it; a missing OUT-of-boundary
-  // target errors here instead — deliberately, so the report never discloses
-  // whether anything exists beyond the boundary.
-  if (!isWithin(state.projectRoot, canonical) && !isWithin(scopeFlowDir(scope), canonical)) {
-    return fail(
-      `run: target "${target}" resolves outside the project root and outside its containing ` +
-        `flow file's directory — a run: target must stay inside one of those boundaries`
-    );
-  }
-
+  // There is deliberately NO path fence between here and the read. A `run:`
+  // target is reachable exactly when the tool-server user can read it, which
+  // is the same reach the front door already grants: an operator can point
+  // flow_path at any YAML on the host (see resolveFlowSource), so restricting
+  // composition below that only breaks documented layouts — a fragment shared
+  // sideways (`../shared/login.yaml`), and a flows dir symlinked to a tree
+  // kept outside the project, whose fragments must be able to reach their own
+  // siblings more than one level down. The one route that carries untrusted
+  // content, an uploaded flow, never arrives here at all:
+  // assertUploadSelfContained rejects every `run:` step on that path.
   let fragment: FlowFile;
   try {
     fragment = parseFlow(await fs.readFile(canonical, "utf8"));
@@ -1610,8 +1560,11 @@ function errMsg(err: unknown): string {
  * content (`fileInput.viaUpload` — remote client). Anything else is rejected:
  * the schema marks `flow_file` internal, and honoring an arbitrary path would
  * let a caller execute (and, under --update-baselines, write PNGs next to) any
- * YAML on the host, bypassing the project-root containment the rest of the
- * module enforces. The logical flow name for an explicit path comes from the
+ * YAML on the host through a parameter no caller is supposed to set. Naming a
+ * file outside the flows dir has exactly one legitimate spelling — `flow_path`,
+ * gated above on the file-input boundary having resolved and stat-matched the
+ * caller's own path — and this branch must not become a second one that skips
+ * that gate. The logical flow name for an explicit path comes from the
  * caller-visible YAML basename recorded by the boundary. Either source's flow
  * name must then appear in that flow's own directory listing byte-for-byte — a
  * case-insensitive filesystem opens files under spellings no directory entry

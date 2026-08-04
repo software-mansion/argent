@@ -667,14 +667,14 @@ describe("flow composition (run:)", () => {
     expect(result.steps.map((s) => s.message)).not.toContain("lexical decoy");
   });
 
-  it("errors on a run: target that escapes the project root instead of executing it", async () => {
-    // The containment boundary: parseRunTarget admits `..` (shared fragments
-    // may live outside the flows dir), so the runner must stop a target whose
-    // canonical path lands outside BOTH the project root and the containing
-    // file's directory — otherwise a flow admitted through the
-    // containment-checked front door could execute any YAML the tool-server
-    // user can read. Project root is proj/, the target resolves to the test
-    // area above it, and its steps must never run.
+  it("runs a run: target that reaches above the project root", async () => {
+    // There is no path fence on `run:`. A target is reachable when the tool
+    // server can read it — the same reach the front door already grants,
+    // since flow_path can name any YAML on the host. The old fence made
+    // admission depend on project_root, which the CLI sets to the operator's
+    // cwd, so the identical file passed from the repo root and failed from a
+    // subdirectory. Project root is proj/, the target resolves above it, and
+    // it must run.
     const proj = path.join(tmpDir, "proj");
     const flowsDir = path.join(proj, ".argent", "flows");
     await fs.mkdir(flowsDir, { recursive: true });
@@ -702,20 +702,19 @@ describe("flow composition (run:)", () => {
       )
     );
 
-    expect(result.ok).toBe(false);
-    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:error"]);
-    expect(result.steps[0]?.reason).toBe(
-      'run: target "../../../outside.yaml" resolves outside the project root and outside ' +
-        "its containing flow file's directory — a run: target must stay inside one of those boundaries"
-    );
-    expect(result.steps.map((s) => s.message)).not.toContain("executed from outside project root");
+    expect(result.ok).toBe(true);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:pass", "echo:pass"]);
+    expect(result.steps[0]).toMatchObject({ flow: "outside", target: "../../../outside.yaml" });
+    expect(result.steps[1]).toMatchObject({ message: "executed from outside project root" });
   });
 
-  it("reports a MISSING out-of-boundary target as a boundary error, not ENOENT", async () => {
-    // Pins the guard's placement before the read: an out-of-boundary target
-    // gets the containment error whether or not anything exists there, so the
-    // report never discloses existence beyond the boundary. (An in-boundary
-    // missing target still gets the clearer per-file ENOENT — pinned above.)
+  it("reports a MISSING target above the project root as that file's own ENOENT", async () => {
+    // With the fence gone, a target that resolves nowhere gets the ordinary
+    // per-file load error naming the as-written spelling — the same report an
+    // in-project typo produces, wherever it points. The old boundary error
+    // ("resolves outside the project root") answered a typo above the root
+    // with a policy message about a boundary that no longer exists, sending
+    // the author to look at project_root instead of at the spelling.
     const proj = path.join(tmpDir, "proj");
     const flowsDir = path.join(proj, ".argent", "flows");
     await fs.mkdir(flowsDir, { recursive: true });
@@ -737,17 +736,86 @@ describe("flow composition (run:)", () => {
 
     expect(result.ok).toBe(false);
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:error"]);
-    expect(result.steps[0]?.reason).toContain("resolves outside the project root");
-    expect(result.steps[0]?.reason).not.toContain("ENOENT");
+    expect(result.steps[0]?.reason).toMatch(
+      /could not load fragment "\.\.\/\.\.\/\.\.\/nothing-here\.yaml"/
+    );
+    expect(result.steps[0]?.reason).toMatch(/ENOENT/);
   });
 
-  it("runs a symlinked-out vendored tree's own subtree fragments (containing-dir zone)", async () => {
+  it("gives the same verdict for one flow file under two different project_root values", async () => {
+    // The regression the fence caused: admission was decided by
+    // `params.project_root`, which `argent flow run` sets to process.cwd(),
+    // so `cd packages/app && argent flow run .argent/flows/e2e.yaml` failed
+    // while the identical file passed from the repo root — green locally, red
+    // in CI, for a reason nothing in the flow file expresses. The two roots
+    // here STRADDLE the target: shared/login.yaml sits under tmpDir, which the
+    // old fence's project-root zone admitted, and outside proj, which neither
+    // that zone nor the containing file's directory (proj/.argent/flows)
+    // covered — so the fence passed the first and refused the second. Same
+    // flow_path, same sideways `run:` target: the two must now reach the same
+    // verdict and execute the fragment.
+    const proj = path.join(tmpDir, "proj");
+    const flowsDir = path.join(proj, ".argent", "flows");
+    const sharedDir = path.join(tmpDir, "shared");
+    await fs.mkdir(flowsDir, { recursive: true });
+    await fs.mkdir(sharedDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sharedDir, "login.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "echo", message: "shared login" }],
+      }),
+      "utf8"
+    );
+    const mainPath = path.join(flowsDir, "main.yaml");
+    await fs.writeFile(
+      mainPath,
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "run", flow: "../../../shared/login.yaml" }],
+      }),
+      "utf8"
+    );
+
+    // The flow_path route with a boundary-resolved, stat-verified client path
+    // is exactly what `argent flow run` sends (see packages/argent-cli/src/flow.ts).
+    const runFrom = async (projectRoot: string): Promise<FlowRunResult> =>
+      asRun(
+        await createRunFlowTool(mockRegistry()).execute(
+          {},
+          { project_root: projectRoot, flow_path: mainPath, device: DEVICE },
+          {
+            artifacts: new ArtifactStore(),
+            fileInputs: {
+              flow_path: {
+                clientPath: mainPath,
+                presentOnHost: true,
+                viaUpload: false,
+                statVerified: true,
+              },
+            },
+          }
+        )
+      );
+
+    const fromAboveProject = await runFrom(tmpDir);
+    const fromProject = await runFrom(proj);
+
+    for (const result of [fromAboveProject, fromProject]) {
+      expect(result.ok).toBe(true);
+      expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:pass", "echo:pass"]);
+      expect(result.steps[1]).toMatchObject({ flow: "login", message: "shared login" });
+    }
+  });
+
+  it("runs a symlinked-out vendored tree's own subtree fragments", async () => {
     // The vault/vendored layout with the real tree OUTSIDE the project root:
     // proj/.argent/flows/main.yaml is a symlink to vendor/flows/main.yaml,
-    // which composes helpers/x.yaml below its own real directory. The project
-    // root cannot admit this — only the containing file's canonical directory
-    // does, which is exactly what keeps the SKILL-recommended shared-tree
-    // layout working under containment.
+    // which composes helpers/x.yaml below its own real directory. Every path
+    // here is anchored on the containing file's CANONICAL directory, so the
+    // fragment is looked up beside the real main.yaml in vendor/flows, not
+    // beside the symlink in the project — which is what makes the
+    // SKILL-recommended shared-tree layout work at all.
     const proj = path.join(tmpDir, "proj");
     const projFlows = path.join(proj, ".argent", "flows");
     const vendorFlows = path.join(tmpDir, "vendor", "flows");
@@ -783,22 +851,34 @@ describe("flow composition (run:)", () => {
     expect(result.steps[1]).toMatchObject({ kind: "echo", message: "vendored helper" });
   });
 
-  it("errors when a symlinked-out tree's run: climbs above its own directory too", async () => {
-    // Same vendored layout, but the real main.yaml reaches ../../secrets.yaml —
-    // above the vendor tree AND outside the project root. The containing-dir
-    // zone only extends downward from files already admitted, so the symlink
-    // cannot be used as a ratchet to walk the host: the target fails both
-    // zones and its steps never run.
+  it("lets a nested fragment in a symlinked-out tree reach a sibling of its root flow", async () => {
+    // Same vendored layout, one level deeper: main.yaml → helpers/b.yaml →
+    // ../sibling.yaml, where sibling.yaml sits beside main.yaml in the vendor
+    // tree. This is the case the review filed. The old fence narrowed on
+    // every descent — from helpers/ the admitted zone was helpers/ itself,
+    // and the vendor tree is by definition not under the project root — so a
+    // fragment could reach that sibling from main.yaml but not from one
+    // directory down, capping a shared flows tree at a single level. Nothing
+    // narrows now: each hop anchors on its own containing file's canonical
+    // directory and the target is read if it is there.
     const proj = path.join(tmpDir, "proj");
     const projFlows = path.join(proj, ".argent", "flows");
     const vendorFlows = path.join(tmpDir, "vendor", "flows");
+    await fs.mkdir(path.join(vendorFlows, "helpers"), { recursive: true });
     await fs.mkdir(projFlows, { recursive: true });
-    await fs.mkdir(vendorFlows, { recursive: true });
     await fs.writeFile(
-      path.join(tmpDir, "secrets.yaml"),
+      path.join(vendorFlows, "sibling.yaml"),
       serializeFlow({
         executionPrerequisite: "",
-        steps: [{ kind: "echo", message: "leaked secrets flow" }],
+        steps: [{ kind: "echo", message: "vendored sibling" }],
+      }),
+      "utf8"
+    );
+    await fs.writeFile(
+      path.join(vendorFlows, "helpers", "b.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "run", flow: "../sibling.yaml" }],
       }),
       "utf8"
     );
@@ -806,7 +886,7 @@ describe("flow composition (run:)", () => {
       path.join(vendorFlows, "main.yaml"),
       serializeFlow({
         executionPrerequisite: "",
-        steps: [{ kind: "run", flow: "../../secrets.yaml" }],
+        steps: [{ kind: "run", flow: "helpers/b.yaml" }],
       }),
       "utf8"
     );
@@ -819,10 +899,14 @@ describe("flow composition (run:)", () => {
       )
     );
 
-    expect(result.ok).toBe(false);
-    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:error"]);
-    expect(result.steps[0]?.reason).toContain('run: target "../../secrets.yaml" resolves outside');
-    expect(result.steps.map((s) => s.message)).not.toContain("leaked secrets flow");
+    expect(result.ok).toBe(true);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "run:pass",
+      "run:pass",
+      "echo:pass",
+    ]);
+    expect(result.steps[1]).toMatchObject({ flow: "sibling", target: "../sibling.yaml" });
+    expect(result.steps[2]).toMatchObject({ message: "vendored sibling" });
   });
 
   it("detects a cycle through a symlinked spelling", async () => {

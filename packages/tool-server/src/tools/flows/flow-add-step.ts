@@ -273,9 +273,9 @@ async function rewriteSiblingFlowPath(
  *
  * The `run:` directive itself is not sibling-scoped: it composes any
  * relative YAML path — fragment or e2e, cross-directory included, e.g.
- * `run: ../shared/login.yaml` — resolved by the runner per containing file
- * and contained to the project root or the containing file's subtree
- * (host-resolved composition, design §12). The RECORDER deliberately emits
+ * `run: ../shared/login.yaml` — resolved by the runner against the containing
+ * file's canonical directory, with no path fence (host-resolved composition,
+ * design §12; see `execRunStep` in flow-run.ts). The RECORDER deliberately emits
  * only the sibling subset: `<name>.yaml` beside the recording's REAL file is
  * the one target shape it can validate here and identity-check against the
  * file the live sub-invoke executed; a cross-directory composition is

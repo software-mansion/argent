@@ -1774,13 +1774,17 @@ export function runTargetName(target: string): string {
 }
 
 /**
- * Shape-check a `run:` value: a relative YAML path resolved at run time
- * against the containing flow file's directory. `..` is deliberately legal —
- * shared fragments may live outside the flows dir — but only the SHAPE is
- * checked here: at run time the resolved (canonical) target must still fall
- * inside the project root, or beside/below the flow file that references it
- * (execRunStep's containment check in flow-run.ts) — outside the flows dir is
- * fine, outside those boundaries is not.
+ * Shape-check a `run:` value: it must be a relative, forward-slashed `.yaml`
+ * path. `..` is deliberately legal — shared fragments may live outside the
+ * flows dir, and a fragment reaching sideways to `../shared/login.yaml` is a
+ * documented layout. Only the SHAPE is checked here; nothing about WHERE the
+ * path lands. At run time execRunStep joins it onto the containing flow
+ * file's own directory and resolves the result with kernel semantics (see
+ * canonicalFlowPath in flow-run.ts) — deliberately not a lexical collapse,
+ * since a `..` after a symlinked component names the parent of the link's
+ * target, not of the spelling. There is no path fence at that point: a target
+ * runs if the tool server can read it, and fails with that file's own ENOENT
+ * if it cannot.
  */
 function parseRunTarget(raw: unknown, value: unknown): string {
   // The body arrives uncoerced because YAML renders a valueless `run:` (and
