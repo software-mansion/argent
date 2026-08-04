@@ -160,12 +160,156 @@ export function assertText(node: DescribeNode): string {
   return node.subtreeText ?? nodeText(node);
 }
 
+// ── Text folding ───────────────────────────────────────────────────────────
+//
+// UI text is not the text an author types. A currency label renders with a
+// non-breaking space, a layout wraps a user-supplied name in bidi isolates, a
+// soft hyphen or ZWSP survives a copy-paste. All of them survive
+// `toLowerCase()`, so the comparison fails against two strings that are
+// character-for-character identical on screen and in the failure message. That
+// is unexplainable in CI, and it cost whole 15-second timeouts per attempt.
+//
+// So every literal comparison folds both sides first. Folding only ever
+// removes distinctions the eye cannot see; `matches` (regex) is deliberately
+// exempt, because a pattern carries its own precision.
+//
+// Note what is therefore NOT folded, and must not be added to the list above:
+// emoji ZWJ/variation-selector sequences and fullwidth CJK forms all render
+// differently from their unfolded spellings, so equating them would hide a
+// real rendering regression. The two blocks below say which is which.
+
+/** Space-like codepoints that are not U+0020. NBSP, narrow NBSP, ideographic, en/em quad, etc. */
+const SPACE_LIKE = /[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]/gu;
+/**
+ * Zero-width and other invisible formatting: soft hyphen, ZWSP/ZWNJ/ZWJ, the
+ * LRM/RLM marks, word joiner and invisible operators, deprecated format
+ * controls, BOM — plus the bidi EMBEDDINGS (U+202A-U+202E) and ISOLATES
+ * (U+2066-U+2069).
+ *
+ * The bidi wrappers are not a theoretical case: an app that renders
+ * user-supplied names wraps every one of them, and a census of four Bluesky
+ * web screens found 367 U+202A/U+202C pairs and not a single NBSP. Omitting
+ * them left the most common real instance of this bug unfixed.
+ */
+const INVISIBLE = /[\u00ad\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff]/gu;
+
+// DELIBERATELY NOT FOLDED, for the same reason NFKC is not used: these are
+// invisible ALONE but LOAD-BEARING in sequence, so removing them changes what
+// is on screen.
+//
+// - U+200D ZERO WIDTH JOINER and U+FE00-FE0F VARIATION SELECTORS build emoji
+//   sequences. The transgender flag is U+1F3F3 VS16 ZWJ U+26A7 VS16 — ONE
+//   glyph. Stripping them folded it onto two separate glyphs, so a `text`
+//   check passed against a visibly different display name, and a BROKEN
+//   sequence — a real rendering regression — became invisible to every check.
+// - U+200C ZERO WIDTH NON-JOINER suppresses ligatures in Arabic, Persian and
+//   Indic scripts, where its presence or absence is a spelling difference.
+
+const foldCache = new Map<string, string>();
+const FOLD_CACHE_MAX = 4096;
+
+/**
+ * The comparable form of a piece of UI text: NFC-normalized, invisible
+ * formatting stripped, every space-like codepoint reduced to a plain space,
+ * runs of whitespace collapsed, trimmed, lowercased.
+ *
+ * **NFC, not NFKC.** Canonical normalization only equates spellings that
+ * render identically (a precomposed "é" and its decomposed form). COMPATIBILITY
+ * normalization goes further and folds away differences the eye reads
+ * perfectly well — mathematical alphanumerics, ligatures, full-width forms,
+ * superscripts, circled digits. With NFKC a blackletter display name compared
+ * EQUAL to its plain-ASCII spelling, so a check could not tell an
+ * impersonating account from the real one: a silently-wrong green, which is
+ * exactly what this module's doctrine calls worse than a flake. The invariant
+ * is that folding only ever removes distinctions the eye cannot see, and NFKC
+ * breaks it.
+ */
+export function foldText(value: string): string {
+  const hit = foldCache.get(value);
+  if (hit !== undefined) return hit;
+  const folded = value
+    .normalize("NFC")
+    .replace(INVISIBLE, "")
+    .replace(SPACE_LIKE, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  // Trees are re-read on every poll, so the same strings recur constantly.
+  // A plain size cap (rather than an LRU) is enough: the working set is one
+  // screen's labels, and blowing it away wholesale costs one refill.
+  if (foldCache.size >= FOLD_CACHE_MAX) foldCache.clear();
+  foldCache.set(value, folded);
+  return folded;
+}
+
+/**
+ * Do these two strings differ ONLY by a compatibility variant — a rendered `…`
+ * against three typed dots, a ligature, a fullwidth form?
+ *
+ * Deliberately not folded away (see {@link foldText}): those glyphs are
+ * visibly different, and equating them is how a blackletter display name came
+ * to match the account it imitates. But an author who types `...` for a label
+ * the app renders with U+2026 gets a selector that matches NOTHING, and a
+ * bare "no element matched" gives them no way to see why. This is what turns
+ * that miss into an explanation.
+ */
+export function compatibilityVariantOf(actual: string, expected: string): boolean {
+  if (foldText(actual) === foldText(expected)) return false;
+  const compat = (s: string): string => foldText(s.normalize("NFKD").normalize("NFKC"));
+  return compat(actual) === compat(expected);
+}
+
+/**
+ * A note naming the invisible difference between two strings that LOOK equal.
+ *
+ * This fires only where the FOLD did not already handle it. Folding-equal
+ * strings compare equal, so the check passes and no message is produced at
+ * all; the note therefore has to key on a strictly wider notion of "looks the
+ * same" than {@link foldText} — here, equality once every Unicode format
+ * character (category Cf) is removed. That makes it the safety net for
+ * invisible characters the fold's explicit classes do not list, which is
+ * precisely the failure that is otherwise unexplainable: two identical-looking
+ * strings, quoted side by side, declared unequal.
+ *
+ * Returns undefined when the strings are equal, or differ visibly — the quoted
+ * strings already say that.
+ */
+export function confusableTextNote(actual: string, expected: string): string | undefined {
+  if (actual === expected) return undefined;
+  // Format characters ONLY. Lowercasing or NFKC-folding here would call a
+  // plain case difference — or a compatibility variant like "ﬁ" vs "fi" —
+  // "invisible", which is false: those differ in characters the eye reads
+  // perfectly well. The literal comparators already fold both, so a pair
+  // differing only that way passes and never reaches this note; a regex
+  // comparison is case-sensitive by design and must not be told otherwise.
+  const visible = (s: string): string => s.replace(/\p{Cf}/gu, "");
+  if (visible(actual) !== visible(expected)) return undefined;
+  const codepoints = (s: string): string =>
+    Array.from(s)
+      .map((ch) => `U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`)
+      .join(" ");
+  return (
+    `the two strings differ only in invisible characters — actual [${codepoints(actual)}] ` +
+    `vs expected [${codepoints(expected)}]`
+  );
+}
+
 export function includesCI(haystack: string | undefined, needle: string): boolean {
-  return Boolean(haystack) && haystack!.toLowerCase().includes(needle.toLowerCase());
+  if (!haystack) return false;
+  const wanted = foldText(needle);
+  // A needle that folds away to nothing is not a weak constraint, it is NO
+  // constraint: `"".includes()` is true of every string, so `{ role: " " }`
+  // matched every element on the screen and the check could never fail — the
+  // exact defect class the `hidden` evidence gate exists to prevent, arriving
+  // through a selector field instead. `text` was already covered by
+  // hasVisibleText; `role` and `identifier` were not, so refuse it here where
+  // every literal comparison passes through.
+  if (wanted === "") return false;
+  return foldText(haystack).includes(wanted);
 }
 
 export function equalsCI(actual: string | undefined, expected: string): boolean {
-  return (actual ?? "").toLowerCase() === expected.toLowerCase();
+  return foldText(actual ?? "") === foldText(expected);
 }
 
 /**
@@ -178,7 +322,12 @@ export function equalsCI(actual: string | undefined, expected: string): boolean 
  */
 export function identifierMatches(actual: string | undefined, needle: string): boolean {
   if (!actual) return false;
-  return equalsCI(actual, needle) || actual.toLowerCase().endsWith(`:id/${needle.toLowerCase()}`);
+  // Same rule as includesCI: an identifier that folds away to nothing names no
+  // element, so it must not match one — neither the blank-identifier nodes that
+  // `equalsCI("", "")` would accept, nor every resource-id via a bare `:id/`.
+  const wanted = foldText(needle);
+  if (wanted === "") return false;
+  return equalsCI(actual, needle) || foldText(actual).endsWith(`:id/${wanted}`);
 }
 
 /** @internal A narrow seam for verifying regex compilation lifetime in tests. */

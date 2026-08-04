@@ -15,6 +15,8 @@ import {
   assertText,
   nodeText,
   treeFingerprint,
+  confusableTextNote,
+  compatibilityVariantOf,
   type Selector,
   type WaitCondition,
   type TextMatchMode,
@@ -995,6 +997,8 @@ async function waitForCondition(
   const deadline = Date.now() + timeoutMs;
 
   let lastMatches: ReturnType<typeof findAll> = [];
+  // The last tree a trusted read produced — the evidence a miss note draws on.
+  let lastTree: DescribeNode | undefined;
   let fetchError: string | undefined;
   let everMatched = false;
   // Date.now() of the most recent TRUSTED read — undefined until one lands.
@@ -1012,6 +1016,7 @@ async function waitForCondition(
     try {
       const data = await fetchFlowTree(env.registry, env.device);
       lastMatches = flowFindAll(data.tree, step.selector);
+      lastTree = data.tree;
       fetchError = undefined;
       everMatched ||= lastMatches.length > 0;
       const blind =
@@ -1113,8 +1118,46 @@ async function waitForCondition(
     ok: false,
     reason:
       assertReason(step.condition, step.selector, step.expectedText, step.textMatch, lastMatches) +
+      compatibilityMissNote(lastTree, step.selector, step.expectedText) +
       blipNote,
   };
+}
+
+/**
+ * When a selector (or a `text` expectation) missed and the ONLY thing standing
+ * between it and a match is a compatibility variant, say which one.
+ *
+ * Those variants are deliberately not folded away — a blackletter name must
+ * not match the account it imitates — but the common case is innocent: an
+ * author types `...` for a label the app renders with a single `…`, and gets
+ * "no element matched", which points at nothing. Naming the character on
+ * screen turns an unexplainable miss into a one-line fix.
+ */
+function compatibilityMissNote(
+  tree: DescribeNode | undefined,
+  selector: FlowSelector,
+  expectedText: string | undefined
+): string {
+  const wanted = typeof selector.text === "string" ? selector.text : expectedText;
+  if (tree === undefined || wanted === undefined || wanted === "") return "";
+  let hit: string | undefined;
+  const walk = (node: DescribeNode): void => {
+    if (hit !== undefined) return;
+    for (const candidate of [node.label, node.value, node.subtreeText]) {
+      if (candidate && compatibilityVariantOf(candidate, wanted)) {
+        hit = candidate;
+        return;
+      }
+    }
+    for (const child of node.children) walk(child);
+  };
+  walk(tree);
+  return hit === undefined
+    ? ""
+    : ` — the screen does show "${hit}", which differs only by a typographic variant ` +
+        `(a rendered "…" is ONE character, not three dots; likewise ligatures and fullwidth ` +
+        `forms). Those are not folded together, because doing so would also equate a styled ` +
+        `display name with the plain one it imitates. Copy the characters the app actually renders.`;
 }
 
 function assertReason(
@@ -1148,7 +1191,23 @@ function assertReason(
       const shown = assertText(first);
       const own = nodeText(first);
       const ownNote = own && own !== shown ? ` (own text "${own}")` : "";
-      return `element matched ${sel} but its text was "${shown}"${ownNote} (wanted to ${wanted})`;
+      // The two quoted strings can be indistinguishable on screen and still
+      // compare unequal (an NBSP in a currency label, a stray variation
+      // selector). Say which codepoints differ rather than printing the same
+      // text twice and calling it a mismatch.
+      //
+      // Only for the LITERAL modes: in `matches` the "expected" string is a
+      // regular expression, not text, so comparing its code points against the
+      // element's would describe a mismatch that has nothing to do with the
+      // pattern that failed.
+      const confusable =
+        expectedText !== undefined && textMatch !== "matches"
+          ? (confusableTextNote(shown, expectedText) ?? confusableTextNote(own, expectedText))
+          : undefined;
+      return (
+        `element matched ${sel} but its text was "${shown}"${ownNote} (wanted to ${wanted})` +
+        (confusable ? ` — ${confusable}` : "")
+      );
     }
     default:
       return `assertion failed for selector ${sel}`;
