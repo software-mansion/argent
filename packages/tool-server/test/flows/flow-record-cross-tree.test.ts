@@ -1163,6 +1163,23 @@ describe("a flow-directive name points at the tool that records it", () => {
     expect(await recordedSteps("hints")).toEqual([]);
   });
 
+  it("refuses a recorder tool BEFORE parsing `args`, so malformed `args` cannot pre-empt the guidance", async () => {
+    // The guard runs ahead of `JSON.parse(params.args)` on purpose: a nested
+    // recorder tool must be refused even when `args` is malformed, or a bare
+    // SyntaxError would replace the guidance the author needs. A regression that
+    // moved the guard after the parse would throw here instead of returning the
+    // refusal — and no other test would catch it (they all pass valid `args`).
+    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
+    const result = await tool.execute(
+      {},
+      { name: "hints", project_root: tmpDir, command: "flow-add-echo", args: "{not valid json" }
+    );
+    expect(result.message).toContain("must be called DIRECTLY");
+    expect(result.message).toContain("no step was recorded");
+    expect(result.stepCount).toBe(0);
+    expect(await recordedSteps("hints")).toEqual([]);
+  });
+
   it("tells the author to call flow-add-echo directly, not through the recorder", async () => {
     const result = await hint("echo");
     expect(result.message).toContain("DIRECTLY");
