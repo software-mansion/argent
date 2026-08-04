@@ -284,6 +284,9 @@ describe("flow-add-echo", () => {
     );
 
     expect(result.message).toContain("echo-test");
+    // The whole growing YAML is deliberately no longer echoed per step; the
+    // file on disk is the assertion surface, and `flowFile` must be gone.
+    expect(result).not.toHaveProperty("flowFile");
     const flow = parseFlow(await onDisk("echo-test"));
     expect(flow.steps).toEqual([{ kind: "echo", message: "Hello world" }]);
   });
@@ -368,6 +371,9 @@ describe("flow-add-step", () => {
     );
 
     expect(result.toolResult).toEqual({ tapped: true });
+    // The growing YAML is no longer returned per step; `flowFile` must be gone
+    // from the add-step result too (the breaking change this PR pins).
+    expect(result).not.toHaveProperty("flowFile");
     const flow = parseFlow(await onDisk("step-test"));
     expect(flow.steps).toEqual([{ kind: "tool", name: "tap", args: { x: 0.5, y: 0.3 } }]);
     expect(registry.invokeTool).toHaveBeenCalledWith("tap", {
@@ -403,6 +409,40 @@ describe("flow-add-step", () => {
     expect(result.recorded).toBe(
       summarizeStep(parseFlow(await onDisk("recorded-line")).steps[0], 1)
     );
+  });
+
+  it("records a double-tap's clickCount as `times`, surfaced in the recorded line", async () => {
+    // The clickCount→times rewrite (so a recorded double-tap replays as one,
+    // not a single tap) only fires on a `gesture-tap` command, so the raw-tool
+    // tests above never reach it. Selector capture can't resolve a device under
+    // the mock, so the coordinates are kept — all this case needs to drive the
+    // rewrite and confirm the ×N reaches the recorded line.
+    const registry = createMockRegistry({ "gesture-tap": { result: { tapped: true } } });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "double-tap", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    const result = await tool.execute(
+      {},
+      {
+        name: "double-tap",
+        project_root: tmpDir,
+        command: "gesture-tap",
+        args: JSON.stringify({
+          udid: "00000000-0000-0000-0000-0000000000ab",
+          x: 0.5,
+          y: 0.3,
+          clickCount: 2,
+        }),
+      }
+    );
+
+    const step = parseFlow(await onDisk("double-tap")).steps[0];
+    expect(step).toEqual({ kind: "tap", x: 0.5, y: 0.3, times: 2 });
+    expect(result.recorded).toBe("1. tap: (0.5, 0.3) ×2");
+    expect(result.recorded).toBe(summarizeStep(step, 1));
   });
 
   it("propagates the request's telemetry attribution to the recorded sub-tool", async () => {
@@ -2563,7 +2603,9 @@ describe("the flow-add-step schema the CLI tests hand-copy", () => {
 // live recorder path, so this is the only coverage of that rendering.
 describe("summarizeStep rendering", () => {
   it("renders a tap's times count", () => {
-    expect(summarizeStep({ kind: "tap", selector: { id: "b" }, times: 2 }, 1)).toBe(
+    // A recorded selector spells the id key `identifier`; selectorToYaml maps it
+    // to the file's `id` spelling, so the rendered line reads {"id":…}.
+    expect(summarizeStep({ kind: "tap", selector: { identifier: "b" }, times: 2 }, 1)).toBe(
       '1. tap: {"id":"b"} ×2'
     );
     expect(summarizeStep({ kind: "tap", x: 0.5, y: 0.3 }, 1)).toBe("1. tap: (0.5, 0.3)");
