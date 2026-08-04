@@ -865,7 +865,9 @@ type TapBody = YamlTarget | { on: YamlTarget; times?: number };
  * the options form. The travel is exactly one of `direction` (semantic
  * preset), `to` (explicit endpoint target), or `by` (signed relative delta);
  * `from` anchors the start on a target and defaults to the direction's
- * standard start point (screen centre for `to`/`by`).
+ * standard start point (screen centre for `to`/`by`). `duration` is the travel
+ * time in milliseconds, floored at {@link SWIPE_MIN_DURATION_MS} — shorter is
+ * delivered as a tap, not a swipe.
  */
 type SwipeBody =
   | SwipeDirection
@@ -1199,6 +1201,26 @@ function targetToYaml(step: { selector?: FlowSelector; x?: number; y?: number })
  */
 export const SWIPE_MIN_TRAVEL = 0.03;
 
+/**
+ * The same tap/swipe boundary on the TIME axis: gesture-swipe interpolates one
+ * move per ~16ms frame, so under a few frames the device gets a bare Down/Up
+ * pair with too few (at 16ms, zero) intermediate moves for a pan recognizer to
+ * see a travel — the gesture lands as a tap on the start point however far it
+ * was meant to go.
+ *
+ * 150ms is 8 moves over 9 frames. Measured on iOS a pan needs ~50ms of them to
+ * read as a pan at all (33ms yields one move and is still a tap), so the floor
+ * leaves real margin for slower recognizers and gives `settle`'s ease-out
+ * enough samples to bend — with a single sample it inverts, measuring a
+ * HIGHER release velocity than the linear ramp. It is applied on every
+ * platform, though Chromium's `gesture-drag` floors its own step count and so
+ * never degenerates to a bare press/release: there the floor is margin rather
+ * than a rescue. An envelope on faithful delivery, not a judgment that fast
+ * flicks are bad style: a genuinely sub-floor flick belongs in a raw
+ * `tool: gesture-swipe` step.
+ */
+export const SWIPE_MIN_DURATION_MS = 150;
+
 /** Serialize a relative swipe delta without producing a body parseSwipeBy
  * would reject. FlowStep is also constructed programmatically, so its
  * deliberately convenient optional-axis type is not enough at runtime. */
@@ -1255,6 +1277,19 @@ function positiveMsToYaml(value: number, label: string): number {
     throw new Error(`Cannot serialize flow ${label}: needs a positive number of milliseconds`);
   }
   return value;
+}
+
+/** Serialize a swipe's travel time, gating it on SWIPE_MIN_DURATION_MS as
+ * swipeByToYaml gates the delta on SWIPE_MIN_TRAVEL, so serialize accepts
+ * exactly what parseSwipe accepts and the round-trip stays exact. */
+function swipeDurationToYaml(value: number): number {
+  const duration = positiveMsToYaml(value, "swipe.duration");
+  if (duration < SWIPE_MIN_DURATION_MS) {
+    throw new Error(
+      `Cannot serialize flow swipe.duration: only ${duration}ms — below the minimum swipe duration of ${SWIPE_MIN_DURATION_MS}ms — too few interpolated moves for a pan recognizer to see a travel, so the gesture lands as a tap on the start point`
+    );
+  }
+  return duration;
 }
 
 /** Sugar an await/assert step into the condition-as-key YAML body. */
@@ -1363,8 +1398,7 @@ function toYamlStep(step: FlowStep): YamlStep {
       if (step.to !== undefined) body.to = targetToYaml(step.to);
       if (step.by !== undefined) body.by = swipeByToYaml(step.by);
       if (step.settle) body.settle = true;
-      if (step.duration !== undefined)
-        body.duration = positiveMsToYaml(step.duration, "swipe.duration");
+      if (step.duration !== undefined) body.duration = swipeDurationToYaml(step.duration);
       return { swipe: body };
     }
     case "type": {
@@ -2763,7 +2797,16 @@ function parseSwipe(body: unknown, entry: unknown): FlowStep {
     if (obj.settle) step.settle = true;
   }
   if (obj.duration !== undefined) {
-    step.duration = parsePositiveMs(obj.duration, entry, "swipe.duration", "duration: 800");
+    const duration = parsePositiveMs(obj.duration, entry, "swipe.duration", "duration: 800");
+    // The time-axis twin of parseSwipeBy's magnitude gate: too short and the
+    // dispatch carries too few interpolated moves to read as a travel at all.
+    if (duration < SWIPE_MIN_DURATION_MS) {
+      badEntry(
+        entry,
+        `swipe.duration is only ${duration}ms — below the minimum swipe duration of ${SWIPE_MIN_DURATION_MS}ms; that leaves too few interpolated moves for a pan recognizer to see a travel, so the gesture lands as a tap on the start point`
+      );
+    }
+    step.duration = duration;
   }
   return step;
 }
