@@ -364,11 +364,85 @@ export function editJsoncFile(filePath: string, jsonPath: JSONPath, value: unkno
 
 // ── Directory helpers ─────────────────────────────────────────────────────────
 
-export function copyDir(src: string, dest: string): boolean {
-  if (!fs.existsSync(src)) return false;
-  fs.mkdirSync(dest, { recursive: true });
-  fs.cpSync(src, dest, { recursive: true });
-  return true;
+function realpathOrSelf(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
+// The path a copy destination names: itself, or — when it is a symlink — what
+// it points at, so the copy writes *through* the link instead of replacing it.
+// A link whose target does not exist yet resolves to the path it names, so the
+// caller materializes it; cp(1) refuses that case, but a link written before
+// its target is the friendlier reading, and it keeps a dangling link away from
+// `fs.cp` (see copyDir).
+function resolveLinkedDestination(dest: string): string {
+  try {
+    if (!fs.lstatSync(dest).isSymbolicLink()) return dest;
+    return fs.realpathSync(dest);
+  } catch {
+    // Absent, or a link whose target is missing — fall through and read it.
+  }
+
+  try {
+    // A relative target resolves against the directory the link really lives
+    // in, which is not the lexical dirname when a parent is itself a link into
+    // another subtree.
+    return path.resolve(fs.realpathSync(path.dirname(dest)), fs.readlinkSync(dest));
+  } catch {
+    return dest; // absent or unreadable — let the caller report why
+  }
+}
+
+// Copy a directory tree, writing *through* every symlink it lands on — file or
+// directory, at any depth — rather than replacing it. Returns the directory
+// actually written (which differs from `dest` when that was a symlink), or null
+// when there is nothing to copy.
+//
+// Writing through matters because agent definitions are increasingly the same
+// content across harnesses: people keep the canonical copy in one neutral
+// directory and point each vendor path at it — the whole directory
+// (`.claude/agents -> ../.agents/agents`) or a single file inside it. The host
+// tools already tolerate that — Claude Code documents symlinks for
+// `.claude/rules/` — so argent's writer should too (issue #701).
+//
+// The recursion is what `fs.cpSync(src, dest, { recursive: true })` would do on
+// its own, minus its handling of a symlinked `dest`: it refuses one outright
+// (ERR_FS_CP_DIR_TO_NON_DIR, "cannot overwrite non-directory with directory"),
+// and on a dangling one it does not throw but aborts the process, via an
+// uncatchable C++ std::filesystem exception no try/catch can reach. Resolving
+// each level here keeps both cases away from it.
+export function copyDir(src: string, dest: string): string | null {
+  if (!fs.existsSync(src)) return null;
+
+  const target = resolveLinkedDestination(dest);
+
+  // `fs.cp` refuses to copy a tree into itself. Hand-rolled, the recursion
+  // below would instead keep re-creating the directory it is about to read,
+  // burrowing into the source until the path outgrows the platform limit. The
+  // comparison is between real paths, since the two can name one directory
+  // through different links.
+  const realTarget = path.join(realpathOrSelf(path.dirname(target)), path.basename(target));
+  const fromSource = path.relative(fs.realpathSync(src), realTarget);
+  if (!fromSource.startsWith("..") && !path.isAbsolute(fromSource)) {
+    throw new Error(`Cannot copy ${src} into a subdirectory of itself (${target})`);
+  }
+
+  fs.mkdirSync(target, { recursive: true });
+
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const from = path.join(src, entry.name);
+    const to = path.join(target, entry.name);
+    if (entry.isDirectory()) {
+      copyDir(from, to);
+    } else {
+      fs.cpSync(from, resolveLinkedDestination(to), { recursive: true });
+    }
+  }
+
+  return target;
 }
 
 export function dirExists(p: string): boolean {

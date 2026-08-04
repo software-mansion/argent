@@ -18,6 +18,7 @@ import {
   writeToml,
   readYaml,
   writeYaml,
+  copyDir,
   editJsoncFile,
   isYarnPnp,
   getLocalArgentBinRelPath,
@@ -1815,6 +1816,13 @@ export interface ManagedContentTargets {
   skillsLockTargets: ManagedContentTarget[];
 }
 
+// A symlinked target is written through rather than replaced (see copyDir), so
+// the files can land somewhere other than the configured path. Naming both
+// keeps that redirect auditable in the install output instead of silent.
+function formatCopyDestination(targetPath: string, writtenPath: string): string {
+  return writtenPath === targetPath ? targetPath : `${targetPath} -> ${writtenPath}`;
+}
+
 function formatManagedPathLabel(targetPath: string, root: string): string {
   const home = homedir();
   if (targetPath === home || targetPath.startsWith(`${home}${path.sep}`)) {
@@ -2014,10 +2022,9 @@ export function copyRulesAndAgents(
 
   for (const target of managedTargets.ruleTargets) {
     try {
-      if (fs.existsSync(rulesDir)) {
-        fs.mkdirSync(target.targetPath, { recursive: true });
-        fs.cpSync(rulesDir, target.targetPath, { recursive: true });
-        results.push(`  Copied rules to ${target.targetPath}`);
+      const written = copyDir(rulesDir, target.targetPath);
+      if (written) {
+        results.push(`  Copied rules to ${formatCopyDestination(target.targetPath, written)}`);
       }
     } catch (err) {
       results.push(`  Could not copy rules to ${target.targetPath}: ${err}`);
@@ -2026,10 +2033,9 @@ export function copyRulesAndAgents(
 
   for (const target of managedTargets.agentTargets) {
     try {
-      if (fs.existsSync(agentsDir)) {
-        fs.mkdirSync(target.targetPath, { recursive: true });
-        fs.cpSync(agentsDir, target.targetPath, { recursive: true });
-        results.push(`  Copied agents to ${target.targetPath}`);
+      const written = copyDir(agentsDir, target.targetPath);
+      if (written) {
+        results.push(`  Copied agents to ${formatCopyDestination(target.targetPath, written)}`);
       }
     } catch (err) {
       results.push(`  Could not copy agents to ${target.targetPath}: ${err}`);
