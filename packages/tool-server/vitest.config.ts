@@ -7,7 +7,7 @@ export default defineConfig({
     globals: true,
     // Suite-wide guard against unit tests incidentally shelling out to real
     // `xcrun simctl` / adb (see the setup file's comment).
-    setupFiles: ["test/setup/stub-status-bar.ts"],
+    setupFiles: ["test/setup/stub-status-bar.ts", "test/setup/ignore-device-providers.ts"],
   },
   resolve: {
     alias: {

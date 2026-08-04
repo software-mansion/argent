@@ -549,6 +549,9 @@ describe("list-devices — external provider shadows", () => {
         schemaVersion: 1,
       })
     );
+
+    /** Opt back into discovery, which the suite-wide setup switches off. */
+    delete process.env.ARGENT_DISABLE_DEVICE_PROVIDERS;
     process.env.ARGENT_DEVICE_PROVIDERS = descriptorPath;
     __resetExternalDeviceCacheForTesting();
     __resetProviderWarningsForTesting();
@@ -556,6 +559,7 @@ describe("list-devices — external provider shadows", () => {
 
   afterEach(async () => {
     delete process.env.ARGENT_DEVICE_PROVIDERS;
+    process.env.ARGENT_DISABLE_DEVICE_PROVIDERS = "1";
     await new Promise<void>((resolve) => simulatorServer.close(() => resolve()));
     fs.rmSync(temporaryDirectory, { recursive: true, force: true });
   });
