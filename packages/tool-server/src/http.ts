@@ -8,6 +8,7 @@ import { isFlagEnabled } from "@argent/configuration-core";
 import { randomUUID, createHash } from "node:crypto";
 import {
   FAILURE_CODES,
+  describeParamIssues,
   getFailureSignal,
   type FailureSignal,
   type FileInputSpec,
@@ -745,7 +746,10 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
             },
             req.body
           );
-          res.status(400).json({ error: parseResult.error.message });
+          // Not `parseResult.error.message`: that is the raw issue JSON, which
+          // names the parameter the tool wanted and never the one the caller
+          // actually sent. See describeParamIssues.
+          res.status(400).json({ error: describeParamIssues(parseResult.error, bodyArgs) });
           return;
         }
         parsedData = parseResult.data;

@@ -585,6 +585,135 @@ async function captureTapSelector(
   }
 }
 
+/**
+ * How far the recording has got, without mutating anything — for responses
+ * that record nothing but must still say where the flow stands. Host mode
+ * re-reads the file so manual edits made mid-recording are honored; client
+ * mode's in-memory copy is authoritative.
+ *
+ * Deliberately NOT the flow's YAML. Returning the whole growing file on every
+ * call made the recorder the single largest consumer of a session's context,
+ * and that pressure was observed removing checks from tests. The full file
+ * comes back once, from `flow-finish-recording`.
+ */
+async function activeFlowState(
+  session: RecordingSession
+): Promise<{ stepCount: number; note?: string }> {
+  if (session.persist === "host") {
+    try {
+      session.flow = parseFlow(await fs.readFile(session.filePath, "utf8"));
+    } catch (err) {
+      return {
+        stepCount: session.flow.steps.length,
+        note:
+          `The persisted flow could not be read and parsed (${err instanceof Error ? err.message : String(err)}); ` +
+          `the step count is from the last valid in-memory snapshot.`,
+      };
+    }
+  }
+  return { stepCount: session.flow.steps.length };
+}
+
+/**
+ * `command` names an MCP tool, but the names an author has in mind while
+ * recording are the flow file's own directives — so `command: "echo"` reaches
+ * here and the registry answers "Tool not found", which says nothing about
+ * what to do instead. Name the tool that records that directive.
+ */
+interface DirectiveHint {
+  /** The tool to call instead. */
+  tool: string;
+  /**
+   * Whether the recorder REWRITES that tool call into this directive. Only the
+   * commands the step-shaping switch handles are rewritten; everything else is
+   * stored as a raw `tool:` step that the polish pass converts. Claiming a
+   * rewrite that does not happen sends the author looking for a directive that
+   * is not in the file.
+   */
+  rewritten: boolean;
+}
+
+const DIRECTIVE_COMMAND_HINTS: Record<string, DirectiveHint> = {
+  tap: { tool: "gesture-tap", rewritten: true },
+  launch: { tool: "restart-app", rewritten: true },
+  run: { tool: "flow-execute", rewritten: true },
+  type: { tool: "keyboard", rewritten: false },
+  await: { tool: AWAIT_UI_ELEMENT_TOOL_ID, rewritten: false },
+  assert: { tool: AWAIT_UI_ELEMENT_TOOL_ID, rewritten: false },
+  // `echo`, `wait` and `long-press` are deliberately absent — each needs an
+  // answer this table cannot express, so `directiveCommandHint` handles them
+  // directly: `echo` is recorded by a tool called on its OWN (routing it
+  // through flow-add-step records a second, replay-breaking step), and neither
+  // `wait` nor `long-press` has a recording tool at all.
+};
+
+/**
+ * Recorder tools, which must never be `flow-add-step`'s `command`. Each one
+ * mutates the recording itself, so running it as a nested step records the
+ * action twice — once as the directive the inner tool wrote, once as a raw
+ * `tool:` step that re-runs it at replay, when no recording is open.
+ */
+const NESTED_RECORDER_TOOLS: Record<string, string> = {
+  "flow-add-echo":
+    "`flow-add-echo` records a step itself, so it must be called DIRECTLY, not through " +
+    "flow-add-step — nesting it would write the echo AND a `tool: flow-add-echo` step that " +
+    "fails on every replay.",
+  "flow-add-step":
+    "flow-add-step cannot record itself. Pass the MCP tool you want to execute as `command`.",
+  "flow-start-recording":
+    "`flow-start-recording` truncates the flow it names. Recording it as a step would erase " +
+    "this flow at replay; call it directly when you want to start a recording.",
+  "flow-finish-recording":
+    "`flow-finish-recording` ends the recording, so it cannot also be a step in it. Call it " +
+    "directly when the walkthrough is complete.",
+};
+
+/**
+ * Whether an invocation failed because the registry has no such tool, as
+ * opposed to the tool itself failing. Keyed on the message because the
+ * registry throws a plain Error; a false negative only costs the nicer
+ * message, and a false positive is impossible for a tool that ran.
+ */
+function isToolNotFound(err: unknown, command: string): boolean {
+  if (!(err instanceof Error)) return false;
+  const m = err.message.toLowerCase();
+  return m.includes("not found") && m.includes(command.toLowerCase());
+}
+
+function directiveCommandHint(command: string): string | undefined {
+  if (command === "echo") {
+    return (
+      `"echo" is a flow directive, not a tool. Call \`flow-add-echo\` DIRECTLY — not through ` +
+      `flow-add-step, which would run it as a nested tool AND record a \`tool: flow-add-echo\` ` +
+      `step that fails on every replay.`
+    );
+  }
+  if (command === "wait") {
+    return (
+      `"wait" is a flow directive, not a tool, and there is no tool that records one — a fixed ` +
+      `sleep is not a readiness signal. Record the thing you are actually waiting for with ` +
+      `\`${AWAIT_UI_ELEMENT_TOOL_ID}\` instead.`
+    );
+  }
+  if (command === "long-press") {
+    return (
+      `"long-press" is a flow directive, not a tool, and no tool records one — there is no ` +
+      `gesture-long-press. Record the rest of the path, then add the \`long-press:\` step by ` +
+      `hand during polish and prove it with the replay.`
+    );
+  }
+  const hint = DIRECTIVE_COMMAND_HINTS[command];
+  if (!hint) return undefined;
+  return (
+    `"${command}" is a flow directive, not a tool. Record it by calling \`${hint.tool}\` ` +
+    `through flow-add-step` +
+    (hint.rewritten
+      ? ` — the recorder rewrites it into the \`${command}:\` step for you.`
+      : `. It is stored as a raw \`tool: ${hint.tool}\` step; converting it to \`${command}:\` ` +
+        `is part of the polish pass.`)
+  );
+}
+
 // Replaying a fragment to set up state during recording is done by running it
 // through `flow-execute`. Recorded verbatim that becomes a brittle
 // `tool: flow-execute` step (baked-in project_root + device, no portability).
@@ -904,7 +1033,14 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
     message: string;
     toolResult: unknown;
     stepCount: number;
-    recorded: string;
+    /**
+     * The flow line just appended. Absent on the paths that deliberately record
+     * NOTHING — an unrecognized `command`, or a rejected wait — where the tool
+     * still reports the unchanged `stepCount` so the caller can see its take was
+     * left alone. Required while every return appended a step; these returns are
+     * what reopened it, and a placeholder would claim a line that is not there.
+     */
+    recorded?: string;
     savedTo: FlowSavedTo;
   }
 > {
@@ -943,6 +1079,22 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
         typeof args.x === "number" &&
         typeof args.y === "number";
 
+      // A recorder tool is not a step. Nesting one appends TWICE — the inner
+      // tool writes its own directive and this call additionally records a
+      // raw `tool: <recorder>` step, which then fails on every replay because
+      // no recording is open then. It reports success either way, so nothing
+      // signals the corruption; refuse before anything is written.
+      const nested = NESTED_RECORDER_TOOLS[params.command];
+      if (nested) {
+        const { stepCount, note } = await activeFlowState(session);
+        return {
+          message: `${nested} Nothing was executed and no step was recorded.${note ? ` ${note}` : ""}`,
+          toolResult: undefined,
+          stepCount,
+          savedTo: session.filePath,
+        };
+      }
+
       let captured: { selector?: Selector; warning?: string } | undefined;
       if (isTap) {
         captured = await captureTapSelector(registry, args.udid as string, {
@@ -951,7 +1103,27 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
         });
       }
 
-      const toolResult = await invokeSubTool(registry, ctx, params.command, args);
+      let toolResult: unknown;
+      try {
+        toolResult = await invokeSubTool(registry, ctx, params.command, args);
+      } catch (err) {
+        // `command` names an MCP tool, but the vocabulary an author has in
+        // mind while recording is the flow file's own directives — so
+        // `command: "echo"` lands here as a bare "Tool not found", which says
+        // nothing about what to do instead. Only rewrite a genuine not-found:
+        // a tool that ran and failed must report its own error.
+        const hint = isToolNotFound(err, params.command)
+          ? directiveCommandHint(params.command)
+          : undefined;
+        if (!hint) throw err;
+        const { stepCount, note } = await activeFlowState(session);
+        return {
+          message: `${hint} Nothing was executed and no step was recorded.${note ? ` ${note}` : ""}`,
+          toolResult: undefined,
+          stepCount,
+          savedTo: session.filePath,
+        };
+      }
 
       // A recorded wait that HELD against the tree await-ui-element reads gets
       // asked the tree the runner resolves DIRECTIVES against too, so the author learns

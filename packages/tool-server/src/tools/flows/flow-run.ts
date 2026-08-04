@@ -74,14 +74,21 @@ import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flo
 import { describeVega } from "../describe/platforms/vega";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
 
+// `flow_name` is the parameter name callers reach for — the tool is
+// `flow-execute`, so "the flow's name" spells itself that way. Getting it
+// wrong used to return raw Zod JSON
+// (`[{"expected":"string","code":"invalid_type","path":["name"]}]`), which
+// names the field it wanted but not the one that was sent. Accept the alias
+// instead of spending a turn on a rename.
 const zodSchema = z
   .object({
     name: z
       .string()
       .optional()
       .describe(
-        'Name of a saved flow to run from `.argent/flows` (e.g. "settings-explore"). Omit when flow_path is set.'
+        'Name of a saved flow to run from `.argent/flows` (e.g. "settings-explore"). Omit when flow_path is set. `flow_name` is accepted as an alias.'
       ),
+    flow_name: z.string().optional().describe("Alias for `name`."),
     project_root: z
       .string()
       .describe(
@@ -125,7 +132,10 @@ const zodSchema = z
       ),
   })
   .superRefine((params, ctx) => {
-    if ((params.name === undefined) === (params.flow_path === undefined)) {
+    // The alias counts as a name here: a caller who spelled it `flow_name` has
+    // named a flow source, and must not also be told to pick one.
+    const named = params.name !== undefined || params.flow_name !== undefined;
+    if (named === (params.flow_path !== undefined)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "Pass exactly one flow source: name or flow_path.",
@@ -952,8 +962,13 @@ returns a notice with the prerequisite instead of running.`,
     services: () => ({}),
     async execute(_services, params, ctx?: ToolContext) {
       const signal = ctx?.signal;
+      // `flow_name` is an accepted alias, folded into `name` before the source
+      // resolver reads it so both spellings take one path. Resolved only for a
+      // name call: a flow_path call names no flow, and resolveFlowName would
+      // reject it for the missing name it is not supposed to have.
+      const named = params.flow_path === undefined ? resolveFlowName(params) : undefined;
       const { filePath, flowName, viaUpload } = await resolveFlowSource(
-        params,
+        { ...params, name: named },
         ctx?.fileInputs?.flow_file,
         ctx?.fileInputs?.flow_path
       );

@@ -22,6 +22,7 @@ import {
 import { parseURN } from "./urn";
 import { zodObjectToJsonSchema } from "./zod-to-json-schema";
 import { randomUUID } from "node:crypto";
+import type { $ZodIssue as ZodIssue } from "zod/v4/core";
 
 export class Registry {
   /** Single map: URN -> ServiceNode (all instances). */
@@ -125,7 +126,9 @@ export class Registry {
       if (definition.zodSchema) {
         const parsed = definition.zodSchema.safeParse(params ?? {});
         if (!parsed.success) {
-          throw new Error(`Invalid params for tool "${id}": ${parsed.error.message}`);
+          throw new Error(
+            `Invalid params for tool "${id}": ${describeParamIssues(parsed.error, params)}`
+          );
         }
         effectiveParams = parsed.data;
       }
@@ -437,6 +440,59 @@ export class Registry {
     node.dependents.clear();
     this._transition(node, cause ? ServiceState.ERROR : ServiceState.IDLE, cause);
   }
+}
+
+/**
+ * A schema failure as one sentence per bad parameter, instead of Zod's raw
+ * issue JSON.
+ *
+ * The raw form — `[{"expected":"string","code":"invalid_type","path":["name"]}]`
+ * — names the parameter the tool wanted but never the one the caller actually
+ * sent, so the reader cannot see that they wrote `flow_name` for `name`. That
+ * cost whole turns. Naming the unrecognized keys alongside the missing ones is
+ * what makes the mistake self-evident.
+ */
+export function describeParamIssues(
+  error: { issues: readonly ZodIssue[] },
+  params: unknown
+): string {
+  // Key names only, never values: a params object can carry a secret, and this
+  // string reaches logs, telemetry and the agent transcript. An array's keys
+  // are indices, which say nothing, so skip it.
+  const supplied =
+    params !== null && typeof params === "object" && !Array.isArray(params)
+      ? Object.keys(params as object).slice(0, 24)
+      : [];
+  const parts = error.issues.map((issue) => {
+    const at = issue.path.length > 0 ? issue.path.join(".") : "(root)";
+    // Zod reports a missing required field as an `undefined` input, which
+    // reads as a type error unless it is called out as absent. Keyed on the
+    // rendered message because the issue object does not carry `received` as
+    // an own property; a miss only costs the plainer wording below.
+    // Nested paths get the same wording: `steps.0.tool` is every bit as
+    // missing as a top-level field, and the raw phrasing is what this
+    // function exists to replace.
+    const missing = issue.code === "invalid_type" && /received undefined$/.test(issue.message);
+    if (missing) {
+      const expected = (issue as { expected?: unknown }).expected;
+      const kind = typeof expected === "string" ? ` (${expected})` : "";
+      return `\`${at}\` is required${kind} and was not provided`;
+    }
+    if (issue.code === "unrecognized_keys") {
+      const keys = (issue as { keys?: readonly string[] }).keys ?? [];
+      // Qualify by path, like every other branch. A key nested in `selector`
+      // reported as a bare name contradicts the "You sent:" list printed one
+      // clause later, which only carries top-level keys — and the hottest
+      // instance of this is flow YAML's `id` against the schema's
+      // `identifier`, where the reader most needs to see the nesting.
+      const at = issue.path.length > 0 ? `${issue.path.join(".")}.` : "";
+      return `unknown parameter${keys.length === 1 ? "" : "s"} ${keys.map((k) => `\`${at}${k}\``).join(", ")}`;
+    }
+    return `\`${at}\`: ${issue.message}`;
+  });
+  const sent =
+    supplied.length > 0 ? ` You sent: ${supplied.map((k) => `\`${k}\``).join(", ")}.` : "";
+  return `${parts.join("; ")}.${sent}`;
 }
 
 function formatInteractionMessage(format: () => string | undefined, fallback: string): string {

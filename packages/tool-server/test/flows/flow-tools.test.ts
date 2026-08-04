@@ -454,7 +454,7 @@ describe("flow-add-step", () => {
       counts.push(result.stepCount);
       // The number `recorded` opens with IS the reported count, so the author
       // cannot be shown "3." while being told the flow holds one step.
-      expect(result.recorded.startsWith(`${result.stepCount}. `)).toBe(true);
+      expect(result.recorded?.startsWith(`${result.stepCount}. `)).toBe(true);
     }
 
     expect(counts).toEqual([1, 2, 3]);
