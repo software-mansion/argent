@@ -901,9 +901,12 @@ type TapBody = YamlTarget | { on: YamlTarget; times?: number };
  * the options form. The travel is exactly one of `direction` (semantic
  * preset), `to` (explicit endpoint target), or `by` (signed relative delta);
  * `from` anchors the start on a target and defaults to the direction's
- * standard start point (screen centre for `to`/`by`). `duration` is the travel
- * time in milliseconds, floored at {@link SWIPE_MIN_DURATION_MS} — shorter is
- * delivered as a tap, not a swipe.
+ * standard start point, or screen centre for `to` and — NOMINALLY — for `by`:
+ * an unanchored `by` too large to fit from the centre slides its whole
+ * start→end segment on-screen rather than truncating the delta, so its
+ * touch-down is the centre only while each axis delta stays within 0.5 (see
+ * runSwipe). `duration` is the travel time in milliseconds, floored at
+ * {@link SWIPE_MIN_DURATION_MS} — shorter is delivered as a tap, not a swipe.
  */
 type SwipeBody =
   | SwipeDirection
@@ -1302,8 +1305,10 @@ function swipeByToYaml(by: { x?: number; y?: number }): { x?: number; y?: number
 }
 
 /** Display spelling of a relative swipe delta (`x=-0.31, y=0.2`, absent axes
- * dropped) — shared by the run report's stepTarget and the recording summary
- * so the two surfaces agree. */
+ * dropped) — the DELTA's spelling shared by the run report's stepTarget and the
+ * recording summary, so the two never disagree on it. That is all they share:
+ * the recording summary goes on to append an options tail (`(settle, 800ms)`)
+ * that the report's target does not carry. */
 export function swipeByLabel(by: { x?: number; y?: number }): string {
   return (["x", "y"] as const)
     .filter((axis) => by[axis] !== undefined)
