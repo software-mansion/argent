@@ -953,8 +953,13 @@ async function runType(
   await invokeOnDevice(env, "keyboard", { text: step.text });
   if (step.submit !== false) {
     if (env.signal?.aborted) return ABORTED_OUTCOME;
-    // Press Enter as a separate keyboard call — the tool dispatches `key`
-    // before `text`, so a combined `{ text, key }` would submit before typing.
+    // Enter goes in its own keyboard call because the tool rejects a combined
+    // `{ text, key }` outright (see ../keyboard/index.ts) — two calls are the
+    // only way to express "type, then submit". On an Android TV target this call
+    // is also the one that fails: `typeTv` rejects `key` unconditionally, so the
+    // text lands and the submit errors. (Android TV is the TV kind that reaches
+    // here at all — an Apple TV stops at the focus tap above, whose `gesture-tap`
+    // resolves simulator-server and rejects a tvOS UDID.)
     await invokeOnDevice(env, "keyboard", { key: "enter" });
   }
   return { ok: true };

@@ -158,6 +158,21 @@ describe("android-input — injection", () => {
     );
   });
 
+  it("presses each named key with its own keycode (not one hardcoded value)", async () => {
+    // The map's literal values are pinned above; this pins that the lookup READS
+    // the map, for every entry in it. The other injection tests only ever press
+    // `enter`, so a lookup that mistyped one of the other 23 names — the
+    // realistic switch/refactor slip — is green everywhere except here.
+    for (const [name, keycode] of Object.entries(ANDROID_NAMED_KEYCODES)) {
+      adbShell.mockClear();
+      await injectAndroidNamedKey(SERIAL, name);
+      expect(
+        adbShell.mock.calls.map((c) => c[1]),
+        `wrong keycode for "${name}"`
+      ).toEqual([`input keyevent ${keycode}`]);
+    }
+  });
+
   it("case-folds the named key so uppercase input works (parity with the sim-server path)", async () => {
     // `keyboard`'s `key` is a free `z.string()` (not a lowercase enum), and the
     // sim-server backend folds case (`NAMED_KEYS[key.toLowerCase()]`), so
@@ -326,11 +341,12 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
   });
 
   it("no-ops on an empty request (neither key nor text): { typed:'', keys:0 }, zero adb", async () => {
-    // The schema leaves both `key` and `text` optional with no refinement, so an
-    // empty request is a silent no-op returning { typed:"", keys:0 } and issuing
-    // no adb call — the same contract every keyboard backend (simulator-server,
-    // tv, vega) follows. Pin it so a future change to that behaviour (e.g. making
-    // it throw) is a deliberate, visible edit rather than an unnoticed drift.
+    // `text` and `key` are mutually exclusive (rejected in the tool's `execute`),
+    // but neither is *required*: an empty request stays a silent no-op returning
+    // { typed:"", keys:0 } and issuing no adb call — the same contract every
+    // keyboard backend (simulator-server, tv, vega) follows. Pin it so a future
+    // change to that behaviour (e.g. making it throw too) is a deliberate,
+    // visible edit rather than an unnoticed drift.
     const res = await impl.handler({}, { udid: SERIAL } as KeyboardParams, phone);
     expect(res).toEqual({ typed: "", keys: 0 });
     expect(adbShell).not.toHaveBeenCalled();
@@ -342,33 +358,9 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     expect(adbShell).toHaveBeenCalledWith(SERIAL, "input keyevent 66", expect.anything());
   });
 
-  it("counts key + text together (1 + codepoints), emits BOTH, returns text as `typed`", async () => {
-    const res = await impl.handler(
-      {},
-      { udid: SERIAL, key: "enter", text: "abc" } as KeyboardParams,
-      phone
-    );
-    expect(res).toEqual({ typed: "abc", keys: 4 });
-    // Assert the exact ordered sequence, not just presence: the key fires BEFORE
-    // the text (source contract — press the named key, then type, matching the
-    // simulator-server / vega backends). `toEqual` catches both a dropped keyevent
-    // when text co-occurs AND a silent reorder to text-before-key; a `toContain`
-    // pair would miss the reorder.
-    const cmds = adbShell.mock.calls.map((c) => c[1]);
-    expect(cmds).toEqual(["input keyevent 66", "input text 'abc'"]); // KEYCODE_ENTER, then text
-  });
-
-  it("rejects a key + un-typeable text request with NO on-device side effect", async () => {
-    // The text is validated up front, so a combined request whose text can't be
-    // typed must reject before the key is pressed — not press the key and then
-    // 400 (which would submit a form on `key:"enter"` and double-fire on retry).
-    adbShell.mockClear();
-    await expect(
-      impl.handler({}, { udid: SERIAL, key: "enter", text: "café" } as KeyboardParams, phone)
-    ).rejects.toBeInstanceOf(InvalidToolInputError);
-    // Neither the keyevent nor any text segment reached the device.
-    expect(adbShell).not.toHaveBeenCalled();
-  });
+  // A combined `{ text, key }` request has no coverage here: the tool rejects
+  // that shape in `execute`, above this backend, so it can't reach the handler.
+  // See keyboard-text-key-exclusive.test.ts.
 
   it("surfaces an adb transport failure as a throw (no silent success — the #449 fix)", async () => {
     // The whole point of moving off the fire-and-forget HID transport: a failed
