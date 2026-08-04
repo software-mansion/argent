@@ -1374,6 +1374,57 @@ async function execRunStep(
     return fail("max run depth exceeded");
   }
 
+  // Nothing above consulted the directory: canonicalFlowPath resolves the
+  // spelling by the FILESYSTEM's rules, and a case-insensitive one (APFS,
+  // NTFS) opens a file really named "frag.yaml" for `run: Frag.yaml`. The read
+  // below then succeeds, every expanded step is attributed to a fragment named
+  // "Frag" that no directory entry carries, and the identical tree fails with
+  // ENOENT the moment it lands on a case-sensitive volume (Linux CI) — green
+  // on the author's macOS, red in CI, for a reason nothing in the flow file
+  // expresses. parseRunTarget already holds this line for the ".yaml"
+  // extension of this same string, and resolveFlowSource holds it for the root
+  // flow's own basename; the fragment basename was the last unchecked
+  // spelling. Only a case-folded verdict refuses: a basename matching nothing
+  // at all is an ordinary missing fragment, which the read's own per-file
+  // ENOENT reports far better than a casing complaint could, and an unreadable
+  // listing vouches for nothing so it must refuse nothing.
+  //
+  // Listed against the directory the target is SPELLED in — NOT
+  // path.dirname(canonical): realpath rewrites a symlinked fragment to its
+  // target's name, so `run: alias.yaml` (alias.yaml → a.yaml) — a legitimate
+  // layout the cycle guard already relies on — would be refused for not being
+  // named "a.yaml". That directory is the same concatenation canonicalized
+  // above with only the final segment dropped: path.dirname removes a segment,
+  // it does not collapse `..`, so a `..` in the target still reaches readdir
+  // intact for the kernel to resolve (a lexical collapse here would list a
+  // different directory than the one the read opens, exactly the split
+  // canonicalFlowPath exists to avoid). Only the basename is checked, matching
+  // the two root-flow routes' scope — validating every directory component of
+  // a cross-directory target is a different and much larger contract.
+  const suppliedBase = path.posix.basename(target);
+  const spelling = await classifyOnDiskSpelling(
+    path.dirname(scopeFlowDir(scope) + path.sep + target),
+    suppliedBase
+  );
+  if (spelling.state === "case_folded") {
+    // Quote a replacement target only when parseRunTarget would accept one —
+    // `addressable` tests the same FLOW_FILE_NAME_PATTERN that gate applies to
+    // a run: basename — keeping the target's own directory prefix so the hint
+    // is the line the author can paste. An on-disk ".YAML" is reachable by no
+    // run: target at all (the extension gate refuses it), so that fork asks
+    // for the rename it really needs.
+    const recovery = spelling.addressable
+      ? `reference it as "${target.slice(0, target.length - suppliedBase.length)}${spelling.actual}"`
+      : `rename "${spelling.actual}" to "${suppliedBase}" to compose it — flow files must be ` +
+        `lowercase .yaml`;
+    return fail(
+      `mis-cased fragment reference "${target}": no directory entry is named "${suppliedBase}" ` +
+        `(this filesystem matched it case-insensitively to "${spelling.actual}"), so the fragment ` +
+        `name keying its step reports is one nothing on disk carries and a case-sensitive ` +
+        `checkout could not find the file at all — ${recovery}`
+    );
+  }
+
   // There is deliberately NO path fence between here and the read. A `run:`
   // target is reachable exactly when the tool-server user can read it, which
   // is the same reach the front door already grants: an operator can point

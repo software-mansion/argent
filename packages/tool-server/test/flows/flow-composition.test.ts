@@ -1085,6 +1085,205 @@ describe("flow composition (run:)", () => {
     expect(reason.length).toBeLessThan(500);
   });
 
+  it("refuses a mis-cased run: target instead of running the case-folded file", async () => {
+    // These tests run on macOS, whose case-insensitive APFS is precisely what
+    // makes this reachable: `run: Frag.yaml` opens the file really named
+    // frag.yaml, the fragment's steps run, and every one of them is attributed
+    // to "Frag" — a name no directory entry carries. The same tree on a
+    // case-sensitive checkout (Linux CI) dies with ENOENT, so the slip must be
+    // refused where it is authored, not where it is replayed. Nothing of the
+    // fragment may execute: the refusal precedes the read.
+    await writeFlow("frag", {
+      executionPrerequisite: "",
+      steps: [{ kind: "echo", message: "RAN-THE-LOWERCASE-FILE" }],
+    });
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "run", flow: "Frag.yaml" },
+        { kind: "echo", message: "never reached" },
+      ],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:error", "echo:skip"]);
+    expect(result.steps[0]).toMatchObject({ kind: "run", flow: "Frag", target: "Frag.yaml" });
+    const reason = result.steps[0]?.reason ?? "";
+    expect(reason).toMatch(/^mis-cased fragment reference "Frag\.yaml": /);
+    expect(reason).toContain(`no directory entry is named "Frag.yaml"`);
+    expect(reason).toContain(`case-insensitively to "frag.yaml"`);
+    // The recovery quotes a target the run: gate would itself accept.
+    expect(reason).toContain(`reference it as "frag.yaml"`);
+    // Not the load error: the file was never read, so nothing of it ran.
+    expect(reason).not.toContain("could not load fragment");
+    expect(result.steps.map((s) => s.message)).not.toContain("RAN-THE-LOWERCASE-FILE");
+  });
+
+  it("runs a run: target whose mixed-case spelling is the one really on disk", async () => {
+    // The gate compares byte-for-byte against the listing, not against a
+    // lowercase convention: an on-disk Frag.yaml is a perfectly portable
+    // fragment and `run: Frag.yaml` must compose it, with the mixed-case stem
+    // keying its steps. A gate that merely lowercased the target would fail
+    // this and break every camelCase flow tree.
+    await writeFlow("Frag", {
+      executionPrerequisite: "",
+      steps: [{ kind: "echo", message: "from the mixed-case file" }],
+    });
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "Frag.yaml" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:pass", "echo:pass"]);
+    expect(result.steps[0]).toMatchObject({ flow: "Frag", target: "Frag.yaml" });
+    expect(result.steps[1]).toMatchObject({ flow: "Frag", message: "from the mixed-case file" });
+  });
+
+  it("runs a symlinked run: spelling whose real file is named differently", async () => {
+    // The listing consulted must be the directory the target is SPELLED in,
+    // compared against the SPELLED basename. Comparing against
+    // path.basename(canonical) instead — realpath rewrites a symlink to its
+    // target — would see "a.yaml" for `run: alias.yaml` and refuse a link that
+    // every directory entry backs and that the cycle guard already treats as a
+    // first-class spelling.
+    const flowsDir = path.join(tmpDir, ".argent", "flows");
+    await writeFlow("a", {
+      executionPrerequisite: "",
+      steps: [{ kind: "echo", message: "reached through the link" }],
+    });
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "alias.yaml" }],
+    });
+    await fs.symlink(path.join(flowsDir, "a.yaml"), path.join(flowsDir, "alias.yaml"));
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:pass", "echo:pass"]);
+    expect(result.steps[0]).toMatchObject({ flow: "alias", target: "alias.yaml" });
+    expect(result.steps[1]).toMatchObject({ message: "reached through the link" });
+  });
+
+  it("reports a target absent from the listing as ENOENT, not as a casing slip", async () => {
+    // Only a case-FOLDED verdict may refuse. A mixed-case target with no
+    // case-insensitive neighbour at all is an ordinary missing fragment, and
+    // the per-file ENOENT from the read names the spelling and the reason far
+    // better than a casing complaint could — a gate that fired on `absent` too
+    // would answer every typo with advice about capitalization.
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "Gone.yaml" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:error"]);
+    const reason = result.steps[0]?.reason ?? "";
+    expect(reason).toMatch(/^could not load fragment "Gone\.yaml": /);
+    expect(reason).toContain("ENOENT");
+    expect(reason).not.toContain("case-insensitively");
+  });
+
+  it("refuses a mis-cased run: target in a subdirectory", async () => {
+    // A multi-segment target is checked in whatever directory it lands in, not
+    // only in the containing flow's own — the phantom spelling is exactly as
+    // unportable one level down, and a check anchored on the anchor directory
+    // alone would list the wrong directory and wave it through.
+    const subDir = path.join(tmpDir, ".argent", "flows", "sub");
+    await fs.mkdir(subDir, { recursive: true });
+    await fs.writeFile(
+      path.join(subDir, "frag.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "echo", message: "RAN-THE-SUBDIR-FILE" }],
+      }),
+      "utf8"
+    );
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "sub/Frag.yaml" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:error"]);
+    const reason = result.steps[0]?.reason ?? "";
+    expect(reason).toMatch(/^mis-cased fragment reference "sub\/Frag\.yaml": /);
+    expect(reason).toContain(`case-insensitively to "frag.yaml"`);
+    // The hint keeps the target's own directory prefix, so it is the line the
+    // author can paste back into the flow.
+    expect(reason).toContain(`reference it as "sub/frag.yaml"`);
+    expect(result.steps.map((s) => s.message)).not.toContain("RAN-THE-SUBDIR-FILE");
+  });
+
+  it("asks for a rename when the on-disk spelling no run: target could reach", async () => {
+    // The on-disk name here is frag.YAML, which the run: extension gate
+    // (parseRunTarget) refuses outright — quoting it back as a replacement
+    // target would send the author to an error one layer down. The only way
+    // out is the rename, so that is what the recovery asks for.
+    await fs.mkdir(path.join(tmpDir, ".argent", "flows"), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", "frag.YAML"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "echo", message: "RAN-THE-SHOUTY-FILE" }],
+      }),
+      "utf8"
+    );
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "frag.yaml" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:error"]);
+    const reason = result.steps[0]?.reason ?? "";
+    expect(reason).toMatch(/^mis-cased fragment reference "frag\.yaml": /);
+    expect(reason).toContain(`rename "frag.YAML" to "frag.yaml"`);
+    expect(reason).not.toContain("reference it as");
+    expect(result.steps.map((s) => s.message)).not.toContain("RAN-THE-SHOUTY-FILE");
+  });
+
   it("rejects run: composition when the root flow was uploaded (no shared filesystem)", async () => {
     // A remote client's flow arrives as content and is materialized to a temp
     // file — the files its run: paths reference stayed on the client, and a
