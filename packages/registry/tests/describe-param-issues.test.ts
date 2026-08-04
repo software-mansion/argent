@@ -99,4 +99,15 @@ describe("describeParamIssues", () => {
     expect(msg).toContain("You sent: `name`");
     expect(msg).not.toContain('"code":"invalid_type"');
   });
+
+  it("names an OMITTED field named after a prototype member as missing, not a type error", () => {
+    // A bare `params[key]` reads `Object.prototype.toString` (a function) for an
+    // absent `toString` field, which is `!== undefined`, so the field would be
+    // misreported as "expected string, received function". The value-at-path
+    // lookup must be own-property only for the "is required" verdict to hold.
+    const schema = z.object({ toString: z.string() });
+    const msg = describeParamIssues(issuesOf(schema, {}), {});
+    expect(msg).toContain("`toString` is required (string) and was not provided");
+    expect(msg).not.toContain("received function");
+  });
 });
