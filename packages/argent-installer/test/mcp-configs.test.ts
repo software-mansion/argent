@@ -1667,6 +1667,14 @@ describe("copyRulesAndAgents", () => {
     );
   });
 
+  it("names the target plainly when nothing redirects", () => {
+    const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+
+    const results = copyRulesAndAgents([claudeAdapter], tmpDir, "local", rulesDir, agentsDir);
+
+    expect(results.every((r) => !r.includes(" -> "))).toBe(true);
+  });
+
   it("copies rules to .cursor/rules for Cursor adapter (local)", () => {
     const cursorAdapter = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
     copyRulesAndAgents([cursorAdapter], tmpDir, "local", rulesDir, agentsDir);
@@ -1737,7 +1745,7 @@ describe("copyRulesAndAgents", () => {
       const results = copyRulesAndAgents([claudeAdapter], tmpDir, "local", rulesDir, agentsDir);
       const agentsLine = results.find((r) => r.includes("Copied agents"))!;
 
-      expect(agentsLine).toContain(`${link} -> ${fs.realpathSync(canonical)}`);
+      expect(agentsLine).toContain(`.claude/agents -> ${path.join(".agents", "agents")}`);
     });
 
     it("installs rules into a symlinked .claude/rules", () => {

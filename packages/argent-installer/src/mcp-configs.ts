@@ -19,6 +19,7 @@ import {
   readYaml,
   writeYaml,
   copyDir,
+  realpathOrSelf,
   editJsoncFile,
   isYarnPnp,
   getLocalArgentBinRelPath,
@@ -1818,9 +1819,19 @@ export interface ManagedContentTargets {
 
 // A symlinked target is written through rather than replaced (see copyDir), so
 // the files can land somewhere other than the configured path. Naming both
-// keeps that redirect auditable in the install output instead of silent.
-function formatCopyDestination(targetPath: string, writtenPath: string): string {
-  return writtenPath === targetPath ? targetPath : `${targetPath} -> ${writtenPath}`;
+// keeps that redirect auditable in the install output instead of silent — in
+// the same shortened form the rest of the managed-content output uses, so a
+// destination that escapes the workspace stays absolute and stands out.
+function formatCopyDestination(
+  target: ManagedContentTarget,
+  writtenPath: string,
+  root: string
+): string {
+  if (writtenPath === target.targetPath) return target.label;
+  // The written path came back from realpath, so shorten it against the same:
+  // a workspace reached through a link (macOS /var, a symlinked home) would
+  // otherwise never look relative to its own root.
+  return `${target.label} -> ${formatManagedPathLabel(writtenPath, realpathOrSelf(root))}`;
 }
 
 function formatManagedPathLabel(targetPath: string, root: string): string {
@@ -2024,7 +2035,7 @@ export function copyRulesAndAgents(
     try {
       const written = copyDir(rulesDir, target.targetPath);
       if (written) {
-        results.push(`  Copied rules to ${formatCopyDestination(target.targetPath, written)}`);
+        results.push(`  Copied rules to ${formatCopyDestination(target, written, root)}`);
       }
     } catch (err) {
       results.push(`  Could not copy rules to ${target.targetPath}: ${err}`);
@@ -2035,7 +2046,7 @@ export function copyRulesAndAgents(
     try {
       const written = copyDir(agentsDir, target.targetPath);
       if (written) {
-        results.push(`  Copied agents to ${formatCopyDestination(target.targetPath, written)}`);
+        results.push(`  Copied agents to ${formatCopyDestination(target, written, root)}`);
       }
     } catch (err) {
       results.push(`  Could not copy agents to ${target.targetPath}: ${err}`);

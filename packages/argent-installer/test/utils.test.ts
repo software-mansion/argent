@@ -251,6 +251,7 @@ describe("copyDir", () => {
     it("resolves a dangling relative target from behind a symlinked parent", () => {
       const src = stageSource();
       fs.mkdirSync(path.join(tmpDir, "dotfiles", "claude"), { recursive: true });
+      fs.mkdirSync(path.join(tmpDir, "dotfiles", "shared"), { recursive: true });
       fs.mkdirSync(path.join(tmpDir, "home"), { recursive: true });
       fs.symlinkSync(path.join("..", "dotfiles", "claude"), path.join(tmpDir, "home", ".claude"));
       fs.symlinkSync(
@@ -264,6 +265,42 @@ describe("copyDir", () => {
       expect(fs.existsSync(path.join(tmpDir, "home", ".claude", "rules", "a.txt"))).toBe(true);
     });
 
+    it("follows a chain of destination links to its end", () => {
+      const src = stageSource();
+      const real = path.join(tmpDir, "canonical");
+      fs.mkdirSync(real);
+      fs.symlinkSync("canonical", path.join(tmpDir, "hop"));
+      fs.symlinkSync("hop", path.join(tmpDir, "dest"));
+
+      expect(copyDir(src, path.join(tmpDir, "dest"))).toBe(fs.realpathSync(real));
+      expect(fs.readFileSync(path.join(real, "a.txt"), "utf8")).toBe("hello");
+    });
+
+    // Completing a link is a courtesy for a canonical directory the user has
+    // already made — not a licence to build a tree wherever a link points.
+    it("refuses a dangling link whose parent does not exist, creating nothing", () => {
+      const src = stageSource();
+      const link = path.join(tmpDir, "dest");
+      fs.symlinkSync(path.join("nowhere", "canonical"), link);
+
+      expect(() => copyDir(src, link)).toThrow();
+      expect(fs.existsSync(path.join(tmpDir, "nowhere"))).toBe(false);
+    });
+
+    // Guards a design that resolved these itself and handed the result to
+    // fs.cp, which terminates the runtime on a dangling link rather than
+    // throwing. Left to fs.cp, a leaf link is a plain catchable error.
+    it("reports a dangling chain on a destination file without crashing", () => {
+      const src = stageSource();
+      const dest = path.join(tmpDir, "dest");
+      fs.mkdirSync(path.join(tmpDir, "neutral"), { recursive: true });
+      fs.mkdirSync(dest);
+      fs.symlinkSync(path.join("..", "neutral", "a.txt"), path.join(dest, "a.txt"));
+      fs.symlinkSync(path.join("..", "gone", "a.txt"), path.join(tmpDir, "neutral", "a.txt"));
+
+      expect(() => copyDir(src, dest)).toThrow();
+    });
+
     it("refuses a destination link pointing at a file, without touching it", () => {
       const src = stageSource();
       const file = path.join(tmpDir, "occupied");
@@ -271,7 +308,7 @@ describe("copyDir", () => {
       fs.writeFileSync(file, "mine");
       fs.symlinkSync("occupied", link);
 
-      expect(() => copyDir(src, link)).toThrow(/EEXIST/);
+      expect(() => copyDir(src, link)).toThrow(expect.objectContaining({ code: "EEXIST" }));
       expect(fs.readFileSync(file, "utf8")).toBe("mine");
     });
   });
@@ -288,11 +325,28 @@ describe("copyDir", () => {
     expect(fs.readFileSync(path.join(dest, "sub", "b.txt"), "utf8")).toBe("world");
   });
 
-  it("refuses to copy a tree into a subdirectory of itself", () => {
+  // fs.cp refuses this itself. What matters here is that the walk which
+  // precedes it does not chase its own output down an unbounded path.
+  it("refuses to copy a tree into a subdirectory of itself, without burrowing", () => {
     const src = stageSource();
 
-    expect(() => copyDir(src, path.join(src, "sub"))).toThrow(/subdirectory of itself/);
-    expect(fs.readdirSync(path.join(src, "sub"))).toEqual(["b.txt"]);
+    expect(() => copyDir(src, path.join(src, "sub"))).toThrow();
+    expect(fs.existsSync(path.join(src, "sub", "sub", "sub"))).toBe(false);
+  });
+
+  // fs.cp aborts the process outright when it cannot create a directory, so
+  // the copy makes them itself and reports the failure like any other.
+  it("reports an unwritable destination instead of dying", () => {
+    const src = stageSource();
+    const dest = path.join(tmpDir, "dest");
+    fs.mkdirSync(dest);
+    fs.chmodSync(dest, 0o555);
+
+    try {
+      expect(() => copyDir(src, dest)).toThrow(expect.objectContaining({ code: "EACCES" }));
+    } finally {
+      fs.chmodSync(dest, 0o755);
+    }
   });
 });
 
