@@ -442,3 +442,115 @@ describe("compatibility miss note is scoped to a MISS", () => {
     expect(result.steps[0].reason).toMatch(/Add more languages…/);
   });
 });
+
+describe("text/equals failure notes are wired through the runner and scoped to the element", () => {
+  it("names the differing invisible codepoints when the two strings look identical", async () => {
+    // U+110BD (KAITHI NUMBER SIGN, category Cf) is not one of the fold's
+    // explicit classes, so it does NOT fold away — the check fails against two
+    // strings that read identically on screen. The reason must say which
+    // codepoints differ, not quote the same text twice (confusableTextNote,
+    // reached only through assertReason, which nothing else exercised end-to-end).
+    currentFetch = () => ({
+      tree: screen([
+        n({
+          identifier: "amount",
+          label: "PLN 42\u{110BD}",
+          frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
+        }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("confusable-equals", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "assert",
+          condition: "text",
+          selector: { identifier: "amount" },
+          expectedText: "PLN 42",
+          textMatch: "equals",
+        },
+      ],
+    });
+
+    const result = await run("confusable-equals");
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/differ only in invisible characters/);
+    expect(result.steps[0].reason).toMatch(/U\+110BD/);
+  });
+
+  it("does NOT let an unrelated compat-variant node hijack a genuine text miss", async () => {
+    // The located element (id=banner) genuinely renders "Loading" — a real
+    // mismatch for "More...". A DIFFERENT, unrelated node renders "More…" (one
+    // U+2026). The compat note is scoped to the located element, so it must stay
+    // silent rather than tell the author to copy the rendered characters of a
+    // look-alike that has nothing to do with why the banner failed.
+    currentFetch = () => ({
+      tree: screen([
+        n({
+          identifier: "banner",
+          label: "Loading",
+          frame: { x: 0.1, y: 0.1, width: 0.4, height: 0.05 },
+        }),
+        n({ label: "More…", frame: { x: 0.1, y: 0.8, width: 0.4, height: 0.05 } }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("text-miss-no-hijack", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "assert",
+          condition: "text",
+          selector: { identifier: "banner" },
+          expectedText: "More...",
+          textMatch: "contains",
+        },
+      ],
+    });
+
+    const result = await run("text-miss-no-hijack");
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/but its text was "Loading"/);
+    expect(result.steps[0].reason).not.toMatch(/typographic variant/);
+    expect(result.steps[0].reason).not.toMatch(/More…/);
+  });
+
+  it("still names the compat variant when it IS the located element's own text", async () => {
+    // The intended case survives the scoping: the located element itself renders
+    // "Add more languages…" (one U+2026) while the author typed three dots.
+    currentFetch = () => ({
+      tree: screen([
+        n({
+          identifier: "lbl",
+          label: "Add more languages…",
+          frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.05 },
+        }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("text-compat-own", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "assert",
+          condition: "text",
+          selector: { identifier: "lbl" },
+          expectedText: "Add more languages...",
+          textMatch: "equals",
+        },
+      ],
+    });
+
+    const result = await run("text-compat-own");
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/typographic variant/);
+    expect(result.steps[0].reason).toMatch(/Add more languages…/);
+  });
+});

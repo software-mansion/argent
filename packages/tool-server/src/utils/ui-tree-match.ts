@@ -181,10 +181,12 @@ export function assertText(node: DescribeNode): string {
 /** Space-like codepoints that are not U+0020. NBSP, narrow NBSP, ideographic, en/em quad, etc. */
 const SPACE_LIKE = /[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]/gu;
 /**
- * Zero-width and other invisible formatting: soft hyphen, ZWSP/ZWNJ/ZWJ, the
- * LRM/RLM marks, word joiner and invisible operators, deprecated format
- * controls, BOM — plus the bidi EMBEDDINGS (U+202A-U+202E) and ISOLATES
- * (U+2066-U+2069).
+ * Zero-width and other invisible formatting: soft hyphen, ZWSP, the LRM/RLM
+ * marks, word joiner and invisible operators, deprecated format controls, BOM
+ * — plus the bidi EMBEDDINGS (U+202A-U+202E) and ISOLATES (U+2066-U+2069).
+ * NOT ZWNJ/ZWJ or the variation selectors: the regex jumps U+200B → U+200E to
+ * skip them because they are load-bearing in sequence and deliberately kept
+ * (see the DELIBERATELY NOT FOLDED block below).
  *
  * The bidi wrappers are not a theoretical case: an app that renders
  * user-supplied names wraps every one of them, and a census of four Bluesky
