@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import type { Registry, ToolContext } from "@argent/registry";
-import { createRunSequenceTool } from "../src/tools/run-sequence";
+import { createRunSequenceTool, runSequenceFailure } from "../src/tools/run-sequence";
 
 // A minimal registry stub: records every invokeTool call and returns a marker.
 function makeMockRegistry() {
@@ -354,5 +354,52 @@ describe("run-sequence", () => {
 
     expect(result.completed).toBe(1);
     expect(registry.invokeTool).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Orchestrators (flow-execute, the recorder) read a nested failure back out of
+// an untyped result. A sequence of identical steps produces identical error
+// text for each of them, so the message has to say WHICH one stopped.
+describe("runSequenceFailure", () => {
+  it("names the failed step's position and tool", () => {
+    // The denominator is how many nested steps RAN: run-sequence halts at the
+    // first failure, so the reported steps end at the one that failed.
+    expect(
+      runSequenceFailure("run-sequence", {
+        completed: 1,
+        total: 3,
+        steps: [
+          { tool: "gesture-swipe", result: { swiped: true } },
+          { tool: "gesture-swipe", error: "swipe failed: device not reachable" },
+        ],
+      })
+    ).toBe("step 2/2 (gesture-swipe): swipe failed: device not reachable");
+  });
+
+  it("reports the first failure, not a later one", () => {
+    expect(
+      runSequenceFailure("run-sequence", {
+        steps: [
+          { tool: "keyboard", error: "first" },
+          { tool: "gesture-tap", error: "second" },
+        ],
+      })
+    ).toBe("step 1/2 (keyboard): first");
+  });
+
+  it("still places a step whose tool name is missing", () => {
+    expect(runSequenceFailure("run-sequence", { steps: [null, { error: "boom" }] })).toBe(
+      "step 2/2: boom"
+    );
+  });
+
+  it("is silent for a clean sequence, another tool's result, or a foreign shape", () => {
+    expect(runSequenceFailure("run-sequence", { steps: [{ tool: "keyboard", result: {} }] })).toBe(
+      null
+    );
+    // Same shape from a different tool is not a nested sequence failure.
+    expect(runSequenceFailure("gesture-tap", { steps: [{ tool: "x", error: "e" }] })).toBe(null);
+    expect(runSequenceFailure("run-sequence", { steps: "nope" })).toBe(null);
+    expect(runSequenceFailure("run-sequence", null)).toBe(null);
   });
 });

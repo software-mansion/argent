@@ -62,6 +62,33 @@ type RunSequenceResult = {
   steps: StepResult[];
 };
 
+/**
+ * Return the first nested failure from a run-sequence result. Orchestrators
+ * call run-sequence through the untyped registry boundary, so the helper owns
+ * the result-shape check and prevents a partial sequence from becoming a
+ * passing outer flow step merely because the tool returned instead of threw.
+ */
+export function runSequenceFailure(tool: string, result: unknown): string | null {
+  if (tool !== "run-sequence" || typeof result !== "object" || result === null) return null;
+  const steps = (result as { steps?: unknown }).steps;
+  if (!Array.isArray(steps)) return null;
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    if (typeof step !== "object" || step === null) continue;
+    const error = (step as { error?: unknown }).error;
+    if (typeof error === "string" && error.length > 0) {
+      // Name WHICH nested step failed. The index is the only thing that can
+      // tell three identical `gesture-swipe` steps apart, and without it the
+      // author has to re-derive it from a message that may be identical for
+      // every one of them.
+      const tool = (step as { tool?: unknown }).tool;
+      const which = typeof tool === "string" && tool.length > 0 ? ` (${tool})` : "";
+      return `step ${i + 1}/${steps.length}${which}: ${error}`;
+    }
+  }
+  return null;
+}
+
 // run-sequence is platform-neutral by construction: every step is dispatched
 // through `registry.invokeTool`, and each step's tool runs its own
 // `dispatchByPlatform` against `params.udid`. The capability here just gates

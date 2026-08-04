@@ -23,6 +23,7 @@ import {
   type RecordingSession,
 } from "./flow-utils";
 import { AWAIT_UI_ELEMENT_TOOL_ID } from "../await-ui-element";
+import { runSequenceFailure } from "../run-sequence";
 import { probeWhenCondition } from "./flow-actions";
 import { summarizeStep } from "./flow-finish-recording";
 import { invokeSubTool } from "../../utils/sub-invoke";
@@ -468,6 +469,43 @@ function directiveCommandHint(command: string): string | undefined {
   );
 }
 
+function flowExecuteRecordBlock(
+  result: unknown
+): { reason: string; mayHaveMutated: boolean } | null {
+  if (typeof result !== "object" || result === null) return null;
+  const value = result as { ok?: unknown; notice?: unknown };
+  if (value.ok === false) {
+    return { reason: "flow-execute returned ok: false", mayHaveMutated: true };
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "notice")) {
+    return {
+      reason:
+        typeof value.notice === "string"
+          ? `flow-execute returned a prerequisite notice: ${value.notice}`
+          : "flow-execute returned a prerequisite notice without executing steps",
+      mayHaveMutated: false,
+    };
+  }
+  return null;
+}
+
+function partialMutationWarning(command: "flow-execute" | "run-sequence"): string {
+  const stepKind = command === "flow-execute" ? "composed" : "nested";
+  return (
+    `Prior ${stepKind} steps may already have mutated device state. ` +
+    "Restore the device to the state produced by the recorded prefix before adding another " +
+    "step, or the remaining recording may not be reproducible."
+  );
+}
+
+function runSequenceProgress(result: unknown): string | null {
+  if (typeof result !== "object" || result === null) return null;
+  const { completed, total } = result as { completed?: unknown; total?: unknown };
+  return typeof completed === "number" && typeof total === "number"
+    ? `${completed}/${total} nested steps completed`
+    : null;
+}
+
 // Replaying a fragment to set up state during recording is done by running it
 // through `flow-execute`. Recorded verbatim that becomes a brittle
 // `tool: flow-execute` step (baked-in project_root + device, no portability).
@@ -902,6 +940,54 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
         crossTreeWarning = probe.warning
           ? `${probe.warning}. ${treeDivergenceFor(args.udid)} ${runnerSideReadClause(args.udid)}`
           : undefined;
+      }
+
+      const sequenceFailure = runSequenceFailure(params.command, toolResult);
+      if (sequenceFailure) {
+        const { stepCount, note } = await activeFlowState(session);
+        return {
+          message:
+            `run-sequence stopped on a failed nested step: ${sequenceFailure} — step NOT recorded. ` +
+            `${partialMutationWarning("run-sequence")}${note ? ` ${note}` : ""}`,
+          toolResult,
+          stepCount,
+          savedTo: session.filePath,
+        };
+      }
+
+      // run-sequence honours cancellation between nested steps by returning a
+      // partial result rather than throwing. A post-invoke guard is therefore
+      // required: otherwise that partial sequence would be recorded as if all
+      // nested actions had run successfully.
+      if (params.command === "run-sequence" && ctx?.signal?.aborted) {
+        const { stepCount, note } = await activeFlowState(session);
+        const progress = runSequenceProgress(toolResult);
+        return {
+          message:
+            `run-sequence was cancelled${progress ? ` with ${progress}` : ""} — step NOT recorded. ` +
+            `${partialMutationWarning("run-sequence")}${note ? ` ${note}` : ""}`,
+          toolResult,
+          stepCount,
+          savedTo: session.filePath,
+        };
+      }
+
+      if (params.command === RUN_TARGET_COMMAND) {
+        const recordBlock = flowExecuteRecordBlock(toolResult);
+        if (recordBlock) {
+          const { stepCount, note } = await activeFlowState(session);
+          const mutationWarning = recordBlock.mayHaveMutated
+            ? ` ${partialMutationWarning("flow-execute")}`
+            : "";
+          return {
+            message:
+              `${recordBlock.reason} — step NOT recorded.${mutationWarning}` +
+              `${note ? ` ${note}` : ""}`,
+            toolResult,
+            stepCount,
+            savedTo: session.filePath,
+          };
+        }
       }
 
       // Running a fragment via flow-execute mid-recording is recorded as a
