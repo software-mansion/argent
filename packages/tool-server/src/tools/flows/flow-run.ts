@@ -152,8 +152,40 @@ const inputSchema: Record<string, unknown> = {
   // the same exactly-one source rule visible to MCP and HTTP clients: neither
   // branch matches when both fields are absent, and both branches match (which
   // is invalid for oneOf) when both fields are present.
-  oneOf: [{ required: ["name"] }, { required: ["flow_path"] }],
+  oneOf: [
+    { anyOf: [{ required: ["name"] }, { required: ["flow_name"] }] },
+    { required: ["flow_path"] },
+  ],
 };
+
+/**
+ * The flow name, from `name` or its alias. Required, but deliberately not by
+ * the schema: a Zod `required` failure names the field it wanted and never
+ * the one the caller actually sent, which is the whole reason the alias
+ * exists.
+ *
+ * The message has to name the rejected spellings itself. Every other tool's
+ * schema error closes with the caller's own keys ("You sent: `udidd`, …"), but
+ * this check runs AFTER zod has stripped the unknown ones, so a caller who
+ * wrote `flowName` is no longer distinguishable here from one who sent no name
+ * at all — and the bare version of this text left that caller with nothing
+ * saying their key had been dropped.
+ */
+function resolveFlowName(params: Params): string {
+  // `||`, not `??`: an empty `name` is not a name, and must not mask a valid
+  // alias — rejecting the call while pointing at the field it ignored is the
+  // exact confusion the alias exists to prevent.
+  const name = params.name || params.flow_name;
+  if (name === undefined || name === "") {
+    throw new Error(
+      "flow-execute needs the flow's name in `name` (`flow_name` is accepted as an alias) — " +
+        "it resolves <project_root>/.argent/flows/<name>.yaml. No other spelling names the flow: " +
+        "`flowName` and `flow` are discarded before the tool runs (so this is also what you get " +
+        "when the name was sent under one of those), and `flow_file` is a path, not a name."
+    );
+  }
+  return name;
+}
 
 // A dual-source call (name + flow_path) must be diagnosed by the schema's
 // exactly-one rule, not by whether either unused file happens to exist — in
@@ -170,6 +202,19 @@ const fileInputs: FileInputSpec[] = [
     kind: "file",
     optional: true,
     unwrapWhenSet: "name",
+  },
+  // Two specs, one target: the client interpolates whichever spelling the
+  // caller sent, so the alias survives the file-input boundary. Without the
+  // `flow_name` spec an alias-only call interpolates no template, uploads
+  // nothing, and a REMOTE tool-server then reads a client-side path that is
+  // not on its host — the confusing ENOENT the alias exists to avoid. The
+  // `name` spec is LAST so it wins the client's last-write-wins merge when both
+  // are sent, matching `resolveFlowName`'s `name || flow_name` precedence.
+  {
+    target: "flow_file",
+    path: "${project_root}/.argent/flows/${flow_name}.yaml",
+    kind: "file",
+    skipWhenSet: "flow_path",
   },
   {
     target: "flow_file",
@@ -842,10 +887,16 @@ interface BootedChromium {
  * placeholder fallbacks keep a pathological source from rendering as "" or
  * "undefined".
  */
-function displayFlowName(params: { name?: string; flow_path?: string }): string {
+function displayFlowName(params: {
+  name?: string;
+  flow_name?: string;
+  flow_path?: string;
+}): string {
   const stem =
     params.flow_path === undefined ? undefined : path.basename(params.flow_path, ".yaml");
-  return params.name || stem || params.flow_path || "(unspecified)";
+  // `flow_name` is the accepted alias, so an alias-only call must render its
+  // name here rather than falling through to the placeholder.
+  return params.name || params.flow_name || stem || params.flow_path || "(unspecified)";
 }
 
 /** Yield every parsed step, recursing into `when:` blocks (the parser's only nesting). */

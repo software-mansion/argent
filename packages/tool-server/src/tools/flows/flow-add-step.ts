@@ -631,12 +631,32 @@ interface DirectiveHint {
    * is not in the file.
    */
   rewritten: boolean;
+  /**
+   * For a CONDITIONALLY rewritten directive, the condition — so the hint does
+   * not promise a `${command}:` step the recorder then declines to write (a
+   * `restart-app` with an extra arg, or a `run` target that is not a resolvable
+   * sibling, is kept as a raw `tool:` step to convert during polish). Omitted
+   * when the rewrite is unconditional (e.g. `tap`).
+   */
+  rewriteCondition?: string;
 }
 
 const DIRECTIVE_COMMAND_HINTS: Record<string, DirectiveHint> = {
   tap: { tool: "gesture-tap", rewritten: true },
-  launch: { tool: "restart-app", rewritten: true },
-  run: { tool: "flow-execute", rewritten: true },
+  launch: {
+    tool: "restart-app",
+    rewritten: true,
+    rewriteCondition:
+      "when it carries only the bundle id (a call with an extra arg, e.g. an Android `activity`, " +
+      "is kept as a raw `tool: restart-app` step to convert during polish)",
+  },
+  run: {
+    tool: "flow-execute",
+    rewritten: true,
+    rewriteCondition:
+      "when the target resolves as a sibling flow in this recording's folder (otherwise the raw " +
+      "`tool: flow-execute` step is kept)",
+  },
   type: { tool: "keyboard", rewritten: false },
   await: { tool: AWAIT_UI_ELEMENT_TOOL_ID, rewritten: false },
   assert: { tool: AWAIT_UI_ELEMENT_TOOL_ID, rewritten: false },
@@ -672,7 +692,10 @@ const NESTED_RECORDER_TOOLS: Record<string, string> = {
  * Whether an invocation failed because the registry has no such tool, as
  * opposed to the tool itself failing. Keyed on the message because the
  * registry throws a plain Error; a false negative only costs the nicer
- * message, and a false positive is impossible for a tool that ran.
+ * message. A false positive would need a REGISTERED tool whose id equals a
+ * directive name (echo/wait/tap/…) AND whose own failure message contains
+ * "not found" — no such tool exists, and `directiveCommandHint` only answers
+ * those exact names, so a genuine tool failure still surfaces as itself.
  */
 function isToolNotFound(err: unknown, command: string): boolean {
   if (!(err instanceof Error)) return false;
@@ -708,7 +731,7 @@ function directiveCommandHint(command: string): string | undefined {
     `"${command}" is a flow directive, not a tool. Record it by calling \`${hint.tool}\` ` +
     `through flow-add-step` +
     (hint.rewritten
-      ? ` — the recorder rewrites it into the \`${command}:\` step for you.`
+      ? ` — the recorder rewrites it into the \`${command}:\` step ${hint.rewriteCondition ?? "for you"}.`
       : `. It is stored as a raw \`tool: ${hint.tool}\` step; converting it to \`${command}:\` ` +
         `is part of the polish pass.`)
   );
@@ -1062,6 +1085,25 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
     services: () => ({}),
     async execute(_services, params, ctx) {
       const session = await requireRecordingSession(params.project_root, params.name);
+
+      // A recorder tool is not a step. Nesting one appends TWICE — the inner
+      // tool writes its own directive and this call additionally records a
+      // raw `tool: <recorder>` step, which then fails on every replay because
+      // no recording is open then. It reports success either way, so nothing
+      // signals the corruption; refuse before anything is written — and before
+      // parsing `args`, so a malformed `args` payload cannot pre-empt this
+      // guidance with a bare JSON error.
+      const nested = NESTED_RECORDER_TOOLS[params.command];
+      if (nested) {
+        const { stepCount, note } = await activeFlowState(session);
+        return {
+          message: `${nested} Nothing was executed and no step was recorded.${note ? ` ${note}` : ""}`,
+          toolResult: undefined,
+          stepCount,
+          savedTo: session.filePath,
+        };
+      }
+
       const args: Record<string, unknown> = params.args ? JSON.parse(params.args) : {};
 
       // A nested flow-execute must never carry a raw flow_path into the live
@@ -1078,22 +1120,6 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
         typeof args.udid === "string" &&
         typeof args.x === "number" &&
         typeof args.y === "number";
-
-      // A recorder tool is not a step. Nesting one appends TWICE — the inner
-      // tool writes its own directive and this call additionally records a
-      // raw `tool: <recorder>` step, which then fails on every replay because
-      // no recording is open then. It reports success either way, so nothing
-      // signals the corruption; refuse before anything is written.
-      const nested = NESTED_RECORDER_TOOLS[params.command];
-      if (nested) {
-        const { stepCount, note } = await activeFlowState(session);
-        return {
-          message: `${nested} Nothing was executed and no step was recorded.${note ? ` ${note}` : ""}`,
-          toolResult: undefined,
-          stepCount,
-          savedTo: session.filePath,
-        };
-      }
 
       let captured: { selector?: Selector; warning?: string } | undefined;
       if (isTap) {

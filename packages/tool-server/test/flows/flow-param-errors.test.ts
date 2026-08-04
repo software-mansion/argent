@@ -68,7 +68,11 @@ describe("flow-execute parameter handling", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("names a missing NESTED parameter as missing, not as a type error", async () => {
+  it("names an invalid enum value by its parameter, not as raw Zod JSON", async () => {
+    // `platform` is a recognized top-level key with an invalid value — this
+    // exercises the generic per-issue prose, not the missing/nested branches
+    // (flow-execute's flat schema has no nested path to reach; those branches
+    // are covered directly in registry's describe-param-issues.test.ts).
     let message = "";
     try {
       await registry().invokeTool("flow-execute", {
