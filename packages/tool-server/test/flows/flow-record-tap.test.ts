@@ -597,6 +597,97 @@ describe("flow-add-step tap selector capture", () => {
     });
   });
 
+  it("invalidates a cached timed-out readiness miss after a successful launch-app", async () => {
+    // launch-app foregrounds an already-running process without recording a
+    // launch step, so the recovered tap auto-targets. Its `launched: true` must
+    // clear the per-device miss just like restart-app's `restarted: true`.
+    vi.useFakeTimers();
+    let connected = false;
+    currentTreeData = () => {
+      if (!connected) throw new Error("no connected app");
+      return {
+        tree: screen([
+          n({ label: "Foregrounded", frame: { x: 0.3, y: 0.5, width: 0.4, height: 0.06 } }),
+        ]),
+        source: "native-devtools",
+      };
+    };
+    const listConnectedBundleIds = vi.fn(() =>
+      connected ? ["com.example.app"] : ([] as string[])
+    );
+    const resolveService = vi.fn(async () => ({
+      listConnectedBundleIds,
+      getAppState: async (bundleId: string) => ({
+        bundleId,
+        applicationState: "active",
+        foregroundActiveSceneCount: 1,
+        foregroundInactiveSceneCount: 0,
+        backgroundSceneCount: 0,
+        unattachedSceneCount: 0,
+        isFrontmostCandidate: true,
+      }),
+    }));
+    const registry = {
+      invokeTool: vi.fn(async (id: string) => {
+        if (id === "launch-app") {
+          setTimeout(() => {
+            connected = true;
+          }, 300);
+          return { launched: true, bundleId: "com.example.app" };
+        }
+        return { tapped: true };
+      }),
+      getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
+      resolveService,
+    } as unknown as Registry;
+    const tool = createFlowAddStepTool(registry);
+
+    const missedPending = tool.execute(
+      {},
+      {
+        name: FLOW,
+        project_root: tmpDir,
+        command: "gesture-tap",
+        args: JSON.stringify({ udid: DEVICE, x: 0.5, y: 0.52 }),
+      }
+    );
+    await vi.advanceTimersByTimeAsync(NATIVE_READY_TIMEOUT_MS);
+    const missed = await missedPending;
+    expect(missed.message).toContain("kept coordinates");
+    const callsAtTimeout = listConnectedBundleIds.mock.calls.length;
+    expect(callsAtTimeout).toBeGreaterThan(1);
+
+    await tool.execute(
+      {},
+      {
+        name: FLOW,
+        project_root: tmpDir,
+        command: "launch-app",
+        args: JSON.stringify({ udid: DEVICE, bundleId: "com.example.app" }),
+      }
+    );
+    const recoveredPending = tool.execute(
+      {},
+      {
+        name: FLOW,
+        project_root: tmpDir,
+        command: "gesture-tap",
+        args: JSON.stringify({ udid: DEVICE, x: 0.5, y: 0.52 }),
+      }
+    );
+    await vi.advanceTimersByTimeAsync(500);
+    const recovered = await recoveredPending;
+
+    // The successful launch-app cleared the miss, so the second tap re-probes
+    // (more readiness calls) and captures once the app connects.
+    expect(listConnectedBundleIds.mock.calls.length).toBeGreaterThan(callsAtTimeout);
+    expect(recovered.message).not.toContain("kept coordinates");
+    expect((await recordedSteps()).at(-1)).toEqual({
+      kind: "tap",
+      selector: { text: "Foregrounded" },
+    });
+  });
+
   it("hard-caps readiness when a connected app-state RPC wedges", async () => {
     vi.useFakeTimers();
     currentTreeData = () => {
@@ -635,6 +726,48 @@ describe("flow-add-step tap selector capture", () => {
       "gesture-tap",
       expect.objectContaining({ x: 0.5, y: 0.52 })
     );
+  });
+
+  it("keeps polling to the budget when a connected app-state RPC rejects", async () => {
+    // Distinct from the wedge case: here getAppState REJECTS rather than hanging,
+    // so settleWithin resolves to { type: "error" }. The auto-target branch only
+    // matches aborted/timeout/value, so an error must fall through as not-ready
+    // and keep polling to the budget — not abort early, not spin, not hang.
+    vi.useFakeTimers();
+    currentTreeData = () => {
+      throw new Error("no connected app");
+    };
+    const getAppState = vi.fn(async () => {
+      throw new Error("app-state RPC failed");
+    });
+    const registry = {
+      invokeTool: vi.fn(async () => ({ tapped: true })),
+      getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
+      resolveService: vi.fn(async () => ({
+        listConnectedBundleIds: () => ["com.example.err"],
+        getAppState,
+      })),
+    } as unknown as Registry;
+    const tool = createFlowAddStepTool(registry);
+    const startedAt = Date.now();
+
+    const pending = tool.execute(
+      {},
+      {
+        name: FLOW,
+        project_root: tmpDir,
+        command: "gesture-tap",
+        args: JSON.stringify({ udid: DEVICE, x: 0.5, y: 0.52 }),
+      }
+    );
+    await vi.advanceTimersByTimeAsync(NATIVE_READY_TIMEOUT_MS);
+    const result = await pending;
+
+    expect(Date.now() - startedAt).toBe(NATIVE_READY_TIMEOUT_MS);
+    // Retried each poll (treated as not-ready) rather than giving up on the first
+    // rejection — proof the error result keeps the loop alive to the deadline.
+    expect(getAppState.mock.calls.length).toBeGreaterThan(1);
+    expect(result.message).toContain("kept coordinates");
   });
 
   it("does not treat a connected background app as ready", async () => {
@@ -721,8 +854,21 @@ describe("flow-add-step tap selector capture", () => {
     // not the auto-target branch. The dylib dials back only after a delay, so the
     // gate must ride that window out and still capture a selector.
     await flowStartRecordingTool.execute({}, { name: FLOW, project_root: tmpDir });
-    setTree([n({ label: "Home", frame: { x: 0.3, y: 0.5, width: 0.4, height: 0.06 } })]);
     let connected = false;
+    // Gate the tree read on the connection too. With an unconditional setTree the
+    // ride-out is not falsifiable: a gate that skipped the wait would read the
+    // (already present) tree and capture a selector anyway, so the assertions
+    // below would pass even with the gate removed. Throwing until connected
+    // mirrors the real fetchFlowTree, which fails per-read while native-devtools
+    // is disconnected — so a premature read now degrades to coordinates and the
+    // `not.toContain("kept coordinates")` assertion catches it.
+    currentTreeData = () => {
+      if (!connected) throw new Error("no connected app yet");
+      return {
+        tree: screen([n({ label: "Home", frame: { x: 0.3, y: 0.5, width: 0.4, height: 0.06 } })]),
+        source: "native-devtools",
+      };
+    };
     const isConnected = vi.fn((bundleId: string) => bundleId === "com.example.app" && connected);
     setTimeout(() => {
       connected = true;
@@ -771,8 +917,18 @@ describe("flow-add-step tap selector capture", () => {
     // touched it); B connects only after a delay. The gate must wait for B — the
     // most recent launch — not confirm A and read B's tree before it connected.
     await flowStartRecordingTool.execute({}, { name: FLOW, project_root: tmpDir });
-    setTree([n({ label: "B Home", frame: { x: 0.3, y: 0.5, width: 0.4, height: 0.06 } })]);
     let bConnected = false;
+    // As above: gate the tree read on B's connection so "wait for the most recent
+    // launch" is falsifiable. Keying on A (already connected) would read here
+    // while B is still disconnected and downgrade to coordinates — which the
+    // `not.toContain("kept coordinates")` assertion below would then catch.
+    currentTreeData = () => {
+      if (!bConnected) throw new Error("B not connected yet");
+      return {
+        tree: screen([n({ label: "B Home", frame: { x: 0.3, y: 0.5, width: 0.4, height: 0.06 } })]),
+        source: "native-devtools",
+      };
+    };
     const isConnected = vi.fn(
       (bundleId: string) =>
         bundleId === "com.example.a" || (bundleId === "com.example.b" && bConnected)
