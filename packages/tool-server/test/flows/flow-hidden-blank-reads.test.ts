@@ -430,7 +430,9 @@ describe("compatibility miss note is scoped to a MISS", () => {
 
     await writeFlow("visible-compat", {
       executionPrerequisite: "",
-      steps: [{ kind: "assert", condition: "visible", selector: { text: "Add more languages..." } }],
+      steps: [
+        { kind: "assert", condition: "visible", selector: { text: "Add more languages..." } },
+      ],
     });
 
     const result = await run("visible-compat");

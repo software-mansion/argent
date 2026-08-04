@@ -1124,7 +1124,13 @@ async function waitForCondition(
     ok: false,
     reason:
       assertReason(step.condition, step.selector, step.expectedText, step.textMatch, lastMatches) +
-      compatibilityMissNote(lastTree, step.condition, step.selector, step.expectedText, step.textMatch) +
+      compatibilityMissNote(
+        lastTree,
+        step.condition,
+        step.selector,
+        step.expectedText,
+        step.textMatch
+      ) +
       blipNote,
   };
 }
