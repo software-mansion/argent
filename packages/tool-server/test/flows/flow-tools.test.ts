@@ -913,6 +913,97 @@ describe("flow-add-step", () => {
     ]);
   });
 
+  // A `hidden` wait wrapped in a run-sequence is refused when it proves nothing
+  // (below), but by then the whole sequence has already run — so a mutating
+  // earlier step has changed the device. The refusal must say so, like the
+  // sibling run-sequence failure/cancel refusals do, or a naive retry
+  // re-applies the mutation.
+  it("warns of partial mutation when refusing a run-sequence-wrapped vacuous hidden", async () => {
+    const vacuous = {
+      success: true,
+      note: "condition met immediately — the selector never matched any element, so it may have already been hidden before the wait, or the selector is wrong",
+    };
+    const registry = createMockRegistry({
+      "run-sequence": {
+        result: {
+          completed: 2,
+          total: 2,
+          steps: [
+            { tool: "gesture-tap", result: { tapped: true } },
+            { tool: "await-ui-element", result: vacuous },
+          ],
+        },
+      },
+    });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "seq-vac", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "seq-vac",
+        project_root: tmpDir,
+        command: "run-sequence",
+        args: JSON.stringify({
+          udid: "ABC",
+          steps: [
+            { tool: "gesture-tap", args: { x: 0.5, y: 0.9 } },
+            {
+              tool: "await-ui-element",
+              args: { condition: "hidden", selector: { text: "Sheet" } },
+            },
+          ],
+        }),
+      }
+    );
+
+    expect(result.message).toContain("step NOT recorded");
+    expect(result.message).toContain("mutated device state");
+    expect(parseFlow(await onDisk("seq-vac")).steps).toEqual([]);
+  });
+
+  // A role-only (or regex-text) selector names no identity the evidence model
+  // can track, so it cannot be condemned — the runner passes such a hidden
+  // clean, and the recorder must agree rather than refuse a check it has no
+  // basis to call unfalsifiable.
+  it("records a vacuous hidden whose selector the evidence model cannot name", async () => {
+    const registry = createMockRegistry({
+      "await-ui-element": {
+        result: {
+          success: true,
+          note: "condition met immediately — the selector never matched any element, so it may have already been hidden before the wait, or the selector is wrong",
+        },
+      },
+    });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "role-hidden", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "role-hidden",
+        project_root: tmpDir,
+        command: "await-ui-element",
+        args: '{"udid":"ABC","condition":"hidden","selector":{"role":"button"}}',
+      }
+    );
+
+    expect(result.message).not.toContain("step NOT recorded");
+    expect(parseFlow(await onDisk("role-hidden")).steps).toEqual([
+      {
+        kind: "tool",
+        name: "await-ui-element",
+        args: { condition: "hidden", selector: { role: "button" } },
+      },
+    ]);
+  });
+
   it("warns when delayMs prevents gesture-tap selector capture", async () => {
     const registry = createMockRegistry({
       "gesture-tap": { result: { tapped: true } },

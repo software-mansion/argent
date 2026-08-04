@@ -38,7 +38,7 @@ import {
   vacuousHiddenSelectors,
 } from "../await-ui-element";
 import { AWAIT_SCREEN_IDLE_TOOL_ID } from "../await-screen-idle";
-import { selectorEstablishedInSteps } from "./flow-selector-evidence";
+import { selectorEstablishedInSteps, selectorIdentityTerms } from "./flow-selector-evidence";
 import { runSequenceFailure } from "../run-sequence";
 import { probeWhenCondition } from "./flow-actions";
 import { NATIVE_READY_POLL_MS, NATIVE_READY_TIMEOUT_MS } from "./flow-run";
@@ -1408,7 +1408,13 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
       // a wait NESTED in a `run-sequence` is judged too. Refusing only the
       // direct call left the gate one wrapper away from being bypassed.
       const vacuousHidden = vacuousHiddenSelectors(params.command, toolResult, args).filter(
-        (selector) => !selectorEstablishedInFlow(session, selector)
+        // A selector this evidence model cannot name (role-only, a regex text
+        // locator) is not something it may condemn either — the runner passes
+        // it clean for the same reason, so refusing to record it would only
+        // disagree with the runner. Mirror `hiddenCheckIsFalsifiable`.
+        (selector) =>
+          selectorIdentityTerms(selector).length > 0 &&
+          !selectorEstablishedInFlow(session, selector)
       );
       if (vacuousHidden.length > 0) {
         const { stepCount, note } = await activeFlowState(session);
@@ -1424,7 +1430,12 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
             "it would prove nothing on replay. Record a `visible` check for the same selector " +
             "while the element IS on screen first, then act, then record this one; the flow " +
             "then proves the element went away. If the element is never present at all, the " +
-            `selector is wrong — find the real one with ${treeReaderFor(args.udid)}.${note ? ` ${note}` : ""}`,
+            `selector is wrong — find the real one with ${treeReaderFor(args.udid)}.${
+              // A wrapped wait means the whole sequence ran first, so earlier
+              // nested steps may already have changed device state — the same
+              // hazard the run-sequence failure/cancel refusals warn about.
+              wrapped ? ` ${partialMutationWarning("run-sequence")}` : ""
+            }${note ? ` ${note}` : ""}`,
           toolResult,
           stepCount,
           savedTo: session.filePath,
