@@ -154,6 +154,11 @@ describe("flow-add-step tap selector capture", () => {
 
     expect(result.message).toContain("also matches another element");
     expect(result.message).toContain("kept coordinates");
+    // The warning names only what narrowing actually tries — the node's own
+    // role. Identifier-narrowing does not exist (deriveSelector already uses any
+    // stable id as the base), so the message must not claim it was attempted.
+    expect(result.message).toContain("narrowing by the tapped element's own role");
+    expect(result.message).not.toContain("or identifier");
     // Ambiguity gets its own remedy — re-discovering a selector the recorder
     // already derived is not the fix.
     expect(result.message).toContain("Disambiguate it");
@@ -219,13 +224,13 @@ describe("flow-add-step tap selector capture", () => {
     expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.2, y: 0.44 }]);
   });
 
-  // Regression: narrowing must NOT re-add a POSITIONAL id that deriveSelector
-  // already refused. The Bluesky edit-profile modal — a tap resolves against a
+  // Regression: no derived form may carry a POSITIONAL id that deriveSelector
+  // refused. The Bluesky edit-profile modal — a tap resolves against a
   // background pager tab whose ambiguous text ("Media") retargets, its role is
-  // generic, and its only other anchor is `profilePager-selector-2`. Re-adding
-  // that id records `{ text, identifier: profilePager-selector-2 }` silently,
-  // smuggling the slot id past the guard it was refused by. The recorder must
-  // keep coordinates with the ambiguity warning instead.
+  // generic (so nothing narrows), and its only other anchor is
+  // `profilePager-selector-2`. deriveSelector refuses that slot id, and
+  // narrowing is role-only, so no path can reintroduce it: the recorder keeps
+  // coordinates with the ambiguity warning instead.
   it("does not re-inject a positional id when narrowing an ambiguous selector", async () => {
     setTree([
       // A smaller, non-containing "Media" out-ranks the tapped node for a bare
@@ -285,6 +290,46 @@ describe("flow-add-step tap selector capture", () => {
 
     expect(result.message).toContain("Step added");
     expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Follow" } }]);
+  });
+
+  // MAX_TAP_TARGET_AREA (0.6) is the line between a recordable control and a
+  // refused container; pin BOTH sides so the constant cannot silently drift and
+  // start recording containers (or refusing ordinary large controls) unnoticed.
+  it("records a control whose area sits just under the container threshold", async () => {
+    setTree([n({ label: "Banner", frame: { x: 0, y: 0.2, width: 1, height: 0.59 } })]);
+
+    const result = await recordTap({ x: 0.5, y: 0.49 });
+
+    expect(result.message).toContain("Step added");
+    expect(result.message).not.toContain("covers most of the screen");
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Banner" } }]);
+  });
+
+  it("keeps coordinates for a target whose area sits just over the container threshold", async () => {
+    setTree([n({ label: "Banner", frame: { x: 0, y: 0.2, width: 1, height: 0.61 } })]);
+
+    const result = await recordTap({ x: 0.5, y: 0.5 });
+
+    expect(result.message).toContain("covers most of the screen");
+    expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.5, y: 0.5 }]);
+  });
+
+  // Neither ambiguous nor container: the tapped node has a generic role and no
+  // id or label, so deriveSelector returns null. The remedy must point at the
+  // tree reader (not "disambiguate", there is no selector; not "find a smaller
+  // control", it is not a container) and only CONDITIONALLY suggest the element
+  // itself is worth fixing — the failure may be that no node was addressable.
+  it("sends the author to find a real target when the tapped element is unaddressable", async () => {
+    setTree([n({ role: "AXGroup", frame: { x: 0.3, y: 0.5, width: 0.2, height: 0.05 } })]);
+
+    const result = await recordTap({ x: 0.4, y: 0.52 });
+
+    expect(result.message).toContain("tapped element has no stable text/id");
+    expect(result.message).toContain("Find the real target");
+    expect(result.message).toContain("If the element genuinely has no id or label");
+    expect(result.message).not.toContain("Disambiguate it");
+    expect(result.message).not.toContain("covers most of the screen");
+    expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.4, y: 0.52 }]);
   });
 
   // The flow tree is FLATTENED, so a control's own label is a SIBLING rect

@@ -37,7 +37,6 @@ import {
   selectorToFrame,
   frameContains,
   GENERIC_ROLES,
-  POSITIONAL_ID,
   type Selector,
   type TextMatchMode,
   type WaitCondition,
@@ -269,44 +268,39 @@ function isContainerSized(frame: DescribeFrame): boolean {
 }
 
 /**
- * Narrower forms of a selector that resolved to the WRONG element, best first.
+ * A narrower form of a selector that resolved to the WRONG element — the tapped
+ * node's own specific role added to the base. Returned best-first, or empty
+ * when nothing narrower is available.
  *
  * A derived selector is the plainest thing that describes the tapped node, so
  * on a screen with repeats — a "Search" label shared by a field and a tab — it
  * is ambiguous rather than absent. Ambiguity is not the same failure as "this
  * element cannot be addressed", and it must not be answered with coordinates:
- * the runner resolves either of these forms.
+ * the runner resolves the narrower form.
  *
- * Only the node's OWN attributes are added — its role, then its identifier
- * when the text was chosen over one. The identifier is added ONLY when it is a
- * stable id: `base` lacks an identifier exactly when {@link deriveSelector}
- * declined the node's id, and it declines for two reasons — the id is absent,
- * or the id is POSITIONAL ({@link POSITIONAL_ID}). Re-adding a positional id
- * here would smuggle back past the very guard deriveSelector applied, recording
- * `{ text, identifier: profilePager-selector-2 }` silently in the modal case
- * this refusal exists for. So a positional id is skipped and the caller keeps
- * coordinates with its ambiguity warning instead.
+ * Only the node's OWN role is added, and only when it is specific (not
+ * {@link GENERIC_ROLES}). The identifier is deliberately NOT narrowed on:
+ * {@link deriveSelector} already makes any stable, non-positional id the BASE
+ * selector, so when `base` carries no identifier the node has none left to
+ * add — its id is either absent or POSITIONAL, and a positional id is exactly
+ * what the recorder refuses. There is nothing an identifier branch here could
+ * contribute that deriveSelector has not already used or refused.
  *
- * A `within` scope is deliberately NOT derived here, even though it would
- * separate one feed row's button from another's: the flow tree is flattened,
- * so a container can only be found geometrically, and geometry is z-order
- * blind. With a modal open, the background screen's elements are still the
- * smallest nodes under the point and the FOREGROUND modal's container is a
+ * A `within` scope is deliberately NOT derived here either, even though it
+ * would separate one feed row's button from another's: the flow tree is
+ * flattened, so a container can only be found geometrically, and geometry is
+ * z-order blind. With a modal open, the background screen's elements are still
+ * the smallest nodes under the point and the FOREGROUND modal's container is a
  * perfectly good geometric ancestor — a tap on the composer's text input
  * recorded as a feed post "inside" the composer, which then failed on any
  * screen whose feed content differed. The scopes that survive are the ones an
  * author writes knowingly at polish, against a container they have chosen.
  */
 function narrowedSelectors(node: DescribeNode, base: Selector): Selector[] {
-  const out: Selector[] = [];
-  if (base.role === undefined && node.role && !GENERIC_ROLES.has(node.role.toLowerCase())) {
-    out.push({ ...base, role: node.role });
+  if (base.role !== undefined || !node.role || GENERIC_ROLES.has(node.role.toLowerCase())) {
+    return [];
   }
-  const id = node.identifier?.trim();
-  if (base.identifier === undefined && id && !POSITIONAL_ID.test(id)) {
-    out.push({ ...base, identifier: node.identifier });
-  }
-  return out;
+  return [{ ...base, role: node.role }];
 }
 
 /**
@@ -417,8 +411,7 @@ async function captureTapSelector(
         ambiguous: true,
         warning:
           `selector ${describeSelector(selector)} also matches another element on this screen, ` +
-          `and ranks it first — adding the tapped element's role or identifier did not single ` +
-          `it out`,
+          `and ranks it first — narrowing by the tapped element's own role did not single it out`,
       };
     }
     return { selector, warning: fallbackSourceWarning(source, device.platform) };
@@ -627,8 +620,8 @@ function coordinateRemedy(
     );
   }
   return (
-    `Find the real target with ${treeReaderFor(udid)} and tap its centre; an element with no ` +
-    `id or label is usually worth fixing in the app.`
+    `Find the real target with ${treeReaderFor(udid)} and tap its centre. If the element ` +
+    `genuinely has no id or label, that is usually worth fixing in the app.`
   );
 }
 

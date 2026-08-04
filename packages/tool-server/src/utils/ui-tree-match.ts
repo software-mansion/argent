@@ -1014,12 +1014,8 @@ export const GENERIC_ROLES = new Set([
  * about, but a positional id on a background node passes every one of those
  * checks and records silently. Refusing it turns that case back into the
  * kept-coordinate warning the author is told to act on.
- *
- * Exported so the recorder's disambiguation step ({@link narrowedSelectors} in
- * flow-add-step) applies the SAME refusal — a narrower form must never smuggle
- * a positional id back past this guard.
  */
-export const POSITIONAL_ID = /-selector-\d+$/i;
+const POSITIONAL_ID = /-selector-\d+$/i;
 
 export function deriveSelector(node: DescribeNode): Selector | null {
   const id = node.identifier?.trim();
