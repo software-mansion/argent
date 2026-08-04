@@ -153,6 +153,14 @@ describe("getAutoScreenshotDelayMs", () => {
     }
   });
 
+  // The cap bounds a screen that NEVER settles, so a generous value buys
+  // nothing but dead wait — and it was doing that once per nested sequence.
+  it("does not let any tool sit in a settle wait for more than a few seconds", () => {
+    for (const [tool, ms] of Object.entries(AUTO_SCREENSHOT_DELAY_MS_BY_TOOL)) {
+      expect(ms, `${tool} settle cap`).toBeLessThanOrEqual(3000);
+    }
+  });
+
   it("returns default 1400ms for an unknown tool", () => {
     expect(getAutoScreenshotDelayMs("some-new-tool")).toBe(1400);
   });
