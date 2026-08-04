@@ -215,7 +215,7 @@ describe("tool interaction messages", () => {
       // part — it is caller-authored free text — and stays out.
       definitions.get("flow-add-echo")!.interaction!.completedMsg!({
         params: { name: "checkout", project_root: "/tmp/proj", message: secret },
-        result: { message: secret, flowFile: "/tmp/flow.yaml", savedTo: "project" },
+        result: { message: secret, stepCount: 1, savedTo: "project" },
       }),
     ];
 
