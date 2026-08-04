@@ -7,10 +7,12 @@ import {
   FLOW_NAME_PATTERN,
   getFailureSignal,
   isLiveServiceState,
+  wrapFailure,
   zodObjectToJsonSchema,
 } from "@argent/registry";
 import type {
   DeviceInfo,
+  FailureSignal,
   FileInputSpec,
   Registry,
   ResolvedFileInput,
@@ -547,30 +549,52 @@ async function bootChromiumForLaunch(state: ExecState, app: Launch): Promise<Dir
 const LOCK_SUSPECT_PROBE_TIMEOUT_MS = 800;
 
 /**
- * Reason for a failed mid-run chromium boot. The underlying error explains
- * every failure but one: an Electron process that exits CLEANLY (code 0)
- * before its CDP endpoint comes up — the signature of a second copy quitting
- * against an already-running instance's single-instance lock. Only that shape
- * gets the lock hint (a crash, missing path, or spawn failure speaks for
- * itself). The attached un-owned instance is named as the suspect only while
- * a re-probe shows it still live; otherwise — including hoist-booted runs
- * that never attached — the hint stays general, so the likely cause is still
- * in-band for a lock-holder the runner never knew about.
+ * The signal of a boot failure the underlying error cannot explain: an Electron
+ * process that exits CLEANLY (code 0) before its CDP endpoint comes up — the
+ * signature of a second copy quitting against an already-running instance's
+ * single-instance lock. Null for every other failure, since a crash, missing
+ * path, or spawn failure speaks for itself and a lock hint there would blame
+ * the wrong app. The signal itself is returned, not a boolean, because the
+ * hoist rethrows under it ({@link hoistedBootFailure}): the reworded error has
+ * to keep the `error_code` and exit-code metadata the failure taxonomy reads.
  */
-async function chromiumBootFailureReason(state: ExecState, err: unknown): Promise<string> {
-  const base = `could not boot the chromium app: ${errMsg(err)}`;
+function singleInstanceLockSignal(err: unknown): FailureSignal | null {
   const signal = getFailureSignal(err);
   if (
     signal?.error_code !== FAILURE_CODES.CHROMIUM_ELECTRON_EXITED_BEFORE_READY ||
     signal.failure_exit_code !== 0
   ) {
-    return base;
+    return null;
   }
-  const suspect = await liveAttachedInstance(state);
+  return signal;
+}
+
+/**
+ * The lock explanation, shared by both boot sites so the mid-run failure and
+ * the hoisted one that precedes it name one cause in one wording. `suspect` is
+ * the un-owned instance, passed only when a re-probe showed it still live — a
+ * dead suspect, or a hoisted boot that never attached to anything, keeps the
+ * hint general rather than sending the agent after a ghost, which still beats
+ * leaving the likely cause out of band for a lock-holder the runner never
+ * knew about.
+ */
+function singleInstanceLockHint(suspect: string | null): string {
   const holder = suspect
     ? `${suspect} is running and this run does not own it; if it is this same app, it holds that lock.`
     : `If a copy of this app is already running, close it and rerun.`;
-  return `${base} A clean exit before CDP comes up is the signature of a single-instance lock — an already-running copy of the app quits the new one at startup. ${holder}`;
+  return `A clean exit before CDP comes up is the signature of a single-instance lock — an already-running copy of the app quits the new one at startup. ${holder}`;
+}
+
+/**
+ * Reason for a failed mid-run chromium boot: the underlying error, plus the
+ * lock explanation when the failure carries that signature. The liveness
+ * re-probe sits behind the shape check, so an ordinary boot failure never pays
+ * the round-trip to name a suspect it would not mention.
+ */
+async function chromiumBootFailureReason(state: ExecState, err: unknown): Promise<string> {
+  const base = `could not boot the chromium app: ${errMsg(err)}`;
+  if (!singleInstanceLockSignal(err)) return base;
+  return `${base} ${singleInstanceLockHint(await liveAttachedInstance(state))}`;
 }
 
 /**
@@ -1022,7 +1046,12 @@ async function resolveRunDevice(
     const leading = await leadingLaunch(flow, flowDir, [params.name]);
     const spec = leading && chromiumBootSpec(leading.app, params.platform);
     if (spec) {
-      const booted = await bootChromiumForFlow(spec, flowDir, viaUpload);
+      let booted: BootedChromium;
+      try {
+        booted = await bootChromiumForFlow(spec, flowDir, viaUpload);
+      } catch (err) {
+        throw hoistedBootFailure(err);
+      }
       return { device: resolveDevice(booted.deviceId), booted };
     }
     // Checked after the chromium boot path, which only applies to a flow led by
@@ -1036,6 +1065,24 @@ async function resolveRunDevice(
     platform: params.platform as FlowPlatform | undefined,
   });
   return { device, booted: null };
+}
+
+/**
+ * The hoisted boot's failure, carrying the lock explanation when it is
+ * lock-shaped. This is the likeliest way of all to meet the lock — the app is
+ * already open on the developer's desktop when the run starts — and the one
+ * path with no step report to hang a reason on ({@link bootChromiumForFlow}),
+ * so the diagnosis has to ride the thrown error itself. A hoist has attached to
+ * nothing, so there is never a suspect to name. The rethrow goes through
+ * {@link wrapFailure} under the failure's own signal, which keeps the
+ * `error_code` (and the original error as `cause`) that the CLI and the failure
+ * taxonomy key on — only the message grows; the fallback argument is unreachable
+ * here, since a lock-shaped failure is by definition one that carries a signal.
+ */
+function hoistedBootFailure(err: unknown): unknown {
+  const signal = singleInstanceLockSignal(err);
+  if (!signal) return err;
+  return wrapFailure(err, signal, `${errMsg(err)} ${singleInstanceLockHint(null)}`);
 }
 
 /**
@@ -1187,12 +1234,14 @@ async function resolveAppPath(specPath: string, flowDir: string): Promise<string
 }
 
 /**
- * Boot the Electron app a chromium launch declares. Boot failures propagate
- * as-is, and the two callers surface them differently: from the
+ * Boot the Electron app a chromium launch declares. Boot failures propagate out
+ * of here untouched, and the two callers surface them differently: from the
  * {@link resolveRunDevice} hoist the tool call rejects with no report (the
  * Chromium analog of `resolveFlowDevice` throwing on no booted device), while
  * {@link bootChromiumForLaunch} catches and reports a step error inside the
- * run.
+ * run. Either way a lock-shaped failure picks up the same explanation
+ * ({@link singleInstanceLockHint}) — in the thrown message on the hoist
+ * ({@link hoistedBootFailure}), in the step reason mid-run.
  */
 async function bootChromiumForFlow(
   spec: { path: string; args?: string[] },

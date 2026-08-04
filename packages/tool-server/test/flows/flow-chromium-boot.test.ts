@@ -3,7 +3,7 @@ import { writeFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { FAILURE_CODES, FailureError, type Registry } from "@argent/registry";
+import { FAILURE_CODES, FailureError, getFailureSignal, type Registry } from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 
 // The runner boots a Chromium e2e flow's app itself. Mock the Electron
@@ -1387,6 +1387,91 @@ describe("flow-execute chromium boot", () => {
     expect(failed.reason).toContain("exited with code 1 before CDP was ready");
     expect(failed.reason).not.toMatch(/single-instance lock/i);
     expect(ensureCdpReachable).not.toHaveBeenCalled();
+  });
+
+  it("explains the single-instance lock when the HOISTED boot is the one it quits", async () => {
+    // The likeliest way to meet the lock: the app is already open when the run
+    // starts, so the very first boot loses — and that one is the hoist, which
+    // rejects the whole call with no report to carry a step reason. The
+    // diagnosis therefore has to ride the thrown message itself.
+    const flowFile = await writeFlow("steps:\n  - launch: { chromium: ./app }\n  - echo: done\n");
+    const registry = makeRegistry();
+    bootElectronApp.mockImplementationOnce(async () => {
+      throw lockShapedBootError(12345);
+    });
+
+    const rejection = runFlow(registry, {
+      name: "hoist-locked",
+      project_root: PROJECT_ROOT,
+      flow_file: flowFile,
+    });
+
+    // The underlying error survives the rewording; the hint follows it.
+    await expect(rejection).rejects.toThrow(/exited with code 0 before CDP was ready/);
+    await expect(rejection).rejects.toThrow(/single-instance lock/i);
+    // A hoisted run attached to nothing, so no instance is named as the holder
+    // (and none is probed for liveness).
+    await expect(rejection).rejects.toThrow(/close it and rerun/);
+    await expect(rejection).rejects.not.toThrow(/does not own it/);
+    expect(ensureCdpReachable).not.toHaveBeenCalled();
+    // Only the message grows: the classification the CLI and the failure
+    // taxonomy key on must come through the rethrow intact.
+    const signal = getFailureSignal(await rejection.catch((e: unknown) => e));
+    expect(signal?.error_code).toBe(FAILURE_CODES.CHROMIUM_ELECTRON_EXITED_BEFORE_READY);
+    expect(signal?.failure_exit_code).toBe(0);
+    // The boot never returned an instance, so there is nothing to tear down.
+    expect(killChromiumByPort).not.toHaveBeenCalled();
+    expect(killChromiumByPortAndWait).not.toHaveBeenCalled();
+  });
+
+  it("rethrows a hoisted boot failure that is not lock-shaped exactly as thrown", async () => {
+    // A missing app path already says what is wrong; a lock hint would send the
+    // caller closing windows that have nothing to do with the failure.
+    const flowFile = await writeFlow("steps:\n  - launch: { chromium: ./nope }\n");
+    const registry = makeRegistry();
+    const raw = new Error("Electron boot: path does not exist: /apps/nope");
+    bootElectronApp.mockImplementationOnce(async () => {
+      throw raw;
+    });
+
+    // toBe, not toThrow: the original error object propagates, unwrapped.
+    await expect(
+      runFlow(registry, {
+        name: "hoist-missing-app",
+        project_root: PROJECT_ROOT,
+        flow_file: flowFile,
+      })
+    ).rejects.toBe(raw);
+  });
+
+  it("treats a non-zero exit on the hoisted boot as a crash, not a lock", async () => {
+    // Same failure code as the lock's shape, but code 1 is the app crashing at
+    // startup — so the exit code, not merely the presence of a failure signal,
+    // is what decides on the hoist too.
+    const flowFile = await writeFlow("steps:\n  - launch: { chromium: ./app }\n");
+    const registry = makeRegistry();
+    const raw = new FailureError(
+      "Electron boot: child process exited with code 1 before CDP was ready. Inspect [chromium-cdp-12345] stderr above for the cause.",
+      {
+        error_code: FAILURE_CODES.CHROMIUM_ELECTRON_EXITED_BEFORE_READY,
+        failure_stage: "electron_early_exit",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+        failure_command: "electron",
+        failure_exit_code: 1,
+      }
+    );
+    bootElectronApp.mockImplementationOnce(async () => {
+      throw raw;
+    });
+
+    await expect(
+      runFlow(registry, {
+        name: "hoist-crash",
+        project_root: PROJECT_ROOT,
+        flow_file: flowFile,
+      })
+    ).rejects.toBe(raw);
   });
 
   it("still honors the first launch when a fragment run:s an e2e flow (the common composition)", async () => {
