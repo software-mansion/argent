@@ -125,7 +125,12 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     const result = await recordWait("disagree", "Continue");
 
     expect(result.message).toContain("does NOT hold against the tree the runner resolves");
-    expect(result.message).toContain("converting it to `await:`/`assert:` at polish WILL fail");
+    // The probe reads on the same short grace an `assert:` uses, so it predicts
+    // that conversion exactly; an `await:` polls longer, so it is only warned as
+    // conditional — not a flat "WILL fail" the probe's 1s window can't prove.
+    expect(result.message).toContain("an `assert:` conversion WILL fail");
+    expect(result.message).toContain("an `await:` will too unless the element reaches that tree");
+    expect(result.message).not.toContain("`await:`/`assert:` at polish WILL fail");
     expect(result.message).toContain("native-find-views");
     expect(parseFlow(await onDisk("disagree")).steps).toHaveLength(1);
   }, 20_000);
