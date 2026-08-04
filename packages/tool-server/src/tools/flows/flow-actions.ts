@@ -1241,11 +1241,13 @@ async function runRotate(
  * Notification Center, and an `up` swipe starting near the bottom lands in
  * the home-indicator gesture zone — so `down` starts at 20% height and `up`
  * at the centre. Direction is the FINGER's travel: each entry is a default
- * start point and a fixed end line on the travel axis; an explicit `from`
- * replaces the start and keeps its own cross-axis coordinate. Those preset
- * margins are defaults, not constraints: an authored anchor is used verbatim
- * once its resolved centre is confirmed to be physically on-screen, even when
- * it lies inside an OS gesture zone.
+ * start point and the end line that start travels to on the travel axis. An
+ * explicit `from` replaces the start and keeps its own cross-axis coordinate,
+ * and the line then only fixes the travel's signed magnitude (`end` minus the
+ * default start) — which the anchor travels, rather than landing on the line.
+ * Those preset margins are defaults, not constraints: an authored anchor is
+ * used verbatim once its resolved centre is confirmed to be physically
+ * on-screen, even when it lies inside an OS gesture zone.
  */
 const SWIPE_GEOMETRY: Record<
   SwipeDirection,
@@ -1262,11 +1264,15 @@ const SWIPE_GEOMETRY: Record<
  * drawer), distinct from goal-seeking `scroll-to`. The start is `from`
  * (target → same resolution as tap) or the travel spec's default; the end
  * comes from exactly one of `direction` (Maestro-compatible preset —
- * {@link SWIPE_GEOMETRY}), `by` (relative delta, screen-clamped), or `to`
- * (explicit target). Touch dispatches one `gesture-swipe` (natural fling;
- * `settle` opts into the engine's momentum-free variant); Chromium has no
- * touch, so a swipe is a mouse drag (`gesture-drag`) — swipe-as-scroll is
- * already `scroll-to`'s job there. `settle` rides both dispatches: web apps
+ * {@link SWIPE_GEOMETRY} — clamped short at the screen edge), `by` (signed
+ * relative delta delivered exactly: an unanchored start slides on-screen to
+ * fit it, an authored anchor fails instead), or `to` (explicit target). Touch
+ * dispatches one `gesture-swipe` (natural fling; `settle` opts into the
+ * engine's momentum-free variant); Chromium has no touch, so a swipe is a
+ * mouse drag (`gesture-drag`) — swipe-as-scroll is already `scroll-to`'s job
+ * there, and a `from` on a draggable node (`<img>`, `<a href>`,
+ * `draggable="true"`) hands the gesture to the browser's own drag-and-drop,
+ * exactly as a real mouse would. `settle` rides both dispatches: web apps
  * derive their fling from the pointer stream's release velocity just as the
  * OS does from the touch stream, and the ease-out zeroes both. Either way the
  * step then waits out the motion it started — see the settle after dispatch.
