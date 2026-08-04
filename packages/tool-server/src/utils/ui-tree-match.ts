@@ -181,19 +181,27 @@ export function assertText(node: DescribeNode): string {
 /** Space-like codepoints that are not U+0020. NBSP, narrow NBSP, ideographic, en/em quad, etc. */
 const SPACE_LIKE = /[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]/gu;
 /**
- * Zero-width and other invisible formatting: soft hyphen, ZWSP, the LRM/RLM
+ * Zero-width and other invisible formatting: soft hyphen, the Arabic letter
+ * mark (U+061C) and Mongolian vowel separator (U+180E), ZWSP, the LRM/RLM
  * marks, word joiner and invisible operators, deprecated format controls, BOM
  * — plus the bidi EMBEDDINGS (U+202A-U+202E) and ISOLATES (U+2066-U+2069).
  * NOT ZWNJ/ZWJ or the variation selectors: the regex jumps U+200B → U+200E to
  * skip them because they are load-bearing in sequence and deliberately kept
  * (see the DELIBERATELY NOT FOLDED block below).
  *
+ * U+061C is the zero-width bidi mark for RTL text, the Arabic analog of the
+ * LRM/RLM already listed - an app that wraps an Arabic display name with it
+ * must fold exactly as one wrapped with LRM/RLM does, or the same on-screen
+ * text stays unmatchable for RTL scripts. U+180E renders as nothing since
+ * Unicode 6.3 reclassified it from a space to a zero-width format control.
+ *
  * The bidi wrappers are not a theoretical case: an app that renders
  * user-supplied names wraps every one of them, and a census of four Bluesky
  * web screens found 367 U+202A/U+202C pairs and not a single NBSP. Omitting
  * them left the most common real instance of this bug unfixed.
  */
-const INVISIBLE = /[\u00ad\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff]/gu;
+const INVISIBLE =
+  /[\u00ad\u061c\u180e\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff]/gu;
 
 // DELIBERATELY NOT FOLDED, for the same reason NFKC is not used: these are
 // invisible ALONE but LOAD-BEARING in sequence, so removing them changes what
@@ -211,9 +219,9 @@ const foldCache = new Map<string, string>();
 const FOLD_CACHE_MAX = 4096;
 
 /**
- * The comparable form of a piece of UI text: NFC-normalized, invisible
- * formatting stripped, every space-like codepoint reduced to a plain space,
- * runs of whitespace collapsed, trimmed, lowercased.
+ * The comparable form of a piece of UI text: invisible formatting stripped,
+ * NFC-normalized, every space-like codepoint reduced to a plain space, runs of
+ * whitespace collapsed, trimmed, lowercased.
  *
  * **NFC, not NFKC.** Canonical normalization only equates spellings that
  * render identically (a precomposed "é" and its decomposed form). COMPATIBILITY
@@ -230,8 +238,12 @@ export function foldText(value: string): string {
   const hit = foldCache.get(value);
   if (hit !== undefined) return hit;
   const folded = value
-    .normalize("NFC")
+    // Strip invisibles BEFORE composing: an invisible sitting between a base
+    // letter and its combining mark blocks NFC from composing them, so a
+    // later strip would leave a decomposed grapheme that no longer equals its
+    // precomposed twin. Removing it first lets the NFC pass compose the pair.
     .replace(INVISIBLE, "")
+    .normalize("NFC")
     .replace(SPACE_LIKE, " ")
     .replace(/\s+/g, " ")
     .trim()
