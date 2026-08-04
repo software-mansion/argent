@@ -56,25 +56,26 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 
 ## 4. Choosing the Right Tool
 
-| Action            | Tool               | Notes                                                            |
-| ----------------- | ------------------ | ---------------------------------------------------------------- |
-| Multiple actions  | `run-sequence`     | Batch steps in one call (no intermediate screenshots)            |
-| Open an app       | `launch-app`       | **Always — never tap home-screen icons**                         |
-| Restart an app    | `restart-app`      | Terminate and relaunch by bundle ID                              |
-| Open URL/scheme   | `open-url`         | Web pages, deep links, URL schemes                               |
-| Single tap        | `gesture-tap`      | Buttons, links, checkboxes                                       |
-| Scroll/swipe      | `gesture-swipe`    | Straight-line scroll or swipe                                    |
-| Scroll (Chromium) | `gesture-scroll`   | Wheel-based; deltas are window fractions, positive deltaY = down |
-| Drag (Chromium)   | `gesture-drag`     | Sliders, drag-and-drop, text selection                           |
-| Long press        | `gesture-custom`   | Context menus, drag start                                        |
-| Drag & drop       | `gesture-custom`   | Complex drag interactions                                        |
-| Pinch/zoom        | `gesture-pinch`    | Two-finger pinch with auto-interpolation                         |
-| Rotation          | `gesture-rotate`   | Two-finger rotation with auto-interpolation                      |
-| Custom gesture    | `gesture-custom`   | Arbitrary touch sequences, optional interpolation                |
-| Hardware key      | `button`           | Home, back, power, volume, appSwitch, actionButton               |
-| Type text         | `keyboard`         | iOS+Android. Supports Enter, Escape, arrows                      |
-| Rotate device     | `rotate`           | Orientation changes                                              |
-| Wait for UI       | `await-ui-element` | Block until an element is visible/hidden/exists/contains text    |
+| Action            | Tool                | Notes                                                            |
+| ----------------- | ------------------- | ---------------------------------------------------------------- |
+| Multiple actions  | `run-sequence`      | Batch steps in one call (no intermediate screenshots)            |
+| Open an app       | `launch-app`        | **Always — never tap home-screen icons**                         |
+| Restart an app    | `restart-app`       | Terminate and relaunch by bundle ID                              |
+| Open URL/scheme   | `open-url`          | Web pages, deep links, URL schemes                               |
+| Single tap        | `gesture-tap`       | Buttons, links, checkboxes                                       |
+| Scroll/swipe      | `gesture-swipe`     | Straight-line scroll or swipe                                    |
+| Scroll (Chromium) | `gesture-scroll`    | Wheel-based; deltas are window fractions, positive deltaY = down |
+| Drag (Chromium)   | `gesture-drag`      | Sliders, drag-and-drop, text selection                           |
+| Long press        | `gesture-custom`    | Context menus, drag start                                        |
+| Drag & drop       | `gesture-custom`    | Complex drag interactions                                        |
+| Pinch/zoom        | `gesture-pinch`     | Two-finger pinch with auto-interpolation                         |
+| Rotation          | `gesture-rotate`    | Two-finger rotation with auto-interpolation                      |
+| Custom gesture    | `gesture-custom`    | Arbitrary touch sequences, optional interpolation                |
+| Hardware key      | `button`            | Home, back, power, volume, appSwitch, actionButton               |
+| Type text         | `keyboard`          | Every platform. Supports Enter, Escape, arrows (not on TV)       |
+| Rotate device     | `rotate`            | Orientation changes                                              |
+| Wait for UI       | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text    |
+| Wait for idle     | `await-screen-idle` | Block until a non-empty screen tree stops changing               |
 
 ## 5. Finding Tap Targets
 
@@ -213,10 +214,22 @@ Instead of polling `screenshot`/`describe` in a loop, use `await-ui-element` to 
 - `selector`: `{ text?, identifier?, role? }` — every provided field must match. `text` matches the element's label or value and `role` its element role (e.g. `AXButton`, `button`, `TextView`, `StaticText`), both as case-insensitive substrings; `identifier` matches its accessibility id / resource-id / testID **exactly** (case-insensitive), also accepting the unqualified Android resource-id name (`submit` matches `com.example.app:id/submit`). The synthetic `ROOT` container `describe` prints is never matched, so a `role` like `AXGroup`/`html` won't trivially "match the screen".
 - Prefer a **specific** selector. A loose substring can match several elements, and the tool may then key off one you didn't mean: `text` reads the first **visible** match in **reading order** (top-to-bottom, left-to-right — the same order `describe` lists them, so it's the one you saw first; when no match is visible, the first match overall), while `visible`/`exists` are satisfied by **any** match. Disambiguate with a longer or more exact string, an `identifier`, or a `role` (e.g. pin to a text role like `StaticText` to skip a same-named button). On a `text` timeout the `note` quotes the matched element's text, so you can see which one it landed on.
 - `text` condition also needs `expectedText` (substring the matched element must contain).
-- `hidden` treats a selector that matches **nothing** as already-hidden, so a typo'd selector returns an instant (false) success. Double-check the selector for `hidden` waits — the result `note` flags when the selector never matched any element. (On iOS, if the accessibility backend is down the tree comes back empty; the tool will **not** report `hidden` success off such a degraded read and the `note` surfaces the boot hint instead.)
+- `hidden` treats a selector that matches **nothing** as already-hidden, so a typo'd selector returns an instant (false) success. The result `note` flags when the selector never matched any element; treat that note as a failed check, not a pass, and find the real selector before continuing — a gate that cannot fail proves nothing on replay. (On iOS, if the accessibility backend is down the tree comes back empty; the tool will **not** report `hidden` success off such a degraded read and the `note` surfaces the boot hint instead.)
 - Optional `timeoutMs` (default 5000) and `pollIntervalMs` (default 400).
 
 Returns `{ success, elapsed }`; on a timeout `success` is `false` and a `note` explains what was seen.
+
+### await-screen-idle — Block until the screen stops changing
+
+Use after launch/navigation and before a raw tap, when an early-painted element may still be moving:
+
+```json
+{ "udid": "<UDID>", "timeoutMs": 3000, "minStableMs": 250 }
+```
+
+Local iOS, Android, and Chromium. It polls the same tree as `describe` until a non-empty one stops changing, and reports a timeout as a soft `settled: false` rather than throwing — so continue only on `settled: true`. An idle wrong screen is still wrong: pair it with `await-ui-element` on a destination-specific element.
+
+Live diagnosis only. Do not persist it in a flow and do not nest it in `run-sequence`. A flow's persistable equivalent is `await: { idle: true }`, which also compares screenshots and hard-fails on timeout.
 
 ---
 
