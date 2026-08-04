@@ -667,7 +667,7 @@ describe("flow-add-step", () => {
 
     await flowStartRecordingTool.execute({}, { name: "compose-pinned", project_root: tmpDir });
 
-    const result = await tool.execute(
+    await tool.execute(
       {},
       {
         name: "compose-pinned",
@@ -677,7 +677,7 @@ describe("flow-add-step", () => {
       }
     );
 
-    expect(parseFlow(result.flowFile).steps).toEqual([
+    expect(parseFlow(await onDisk("compose-pinned")).steps).toEqual([
       { kind: "tool", name: "flow-execute", args: { name: "elsewhere", project_root: tmpDir } },
     ]);
   });
