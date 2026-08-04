@@ -51,6 +51,36 @@ describe("prepareFileInputs", () => {
     });
   });
 
+  it("resolves whichever of two same-target specs interpolates (the flow_name alias upload)", async () => {
+    // flow-execute declares flow_file twice — keyed on `${flow_name}` then
+    // `${name}` — so the alias survives the file-input boundary and uploads to
+    // a remote server. Prove an alias-only call still wraps flow_file (else
+    // nothing uploads), and that `name` wins the merge when both are sent.
+    const aliasPath = path.join(tmpDir, "aliased.yaml");
+    const namePath = path.join(tmpDir, "named.yaml");
+    await fs.writeFile(aliasPath, "steps: []");
+    await fs.writeFile(namePath, "steps: []");
+    const specs: FileInputSpec[] = [
+      { target: "flow_file", path: "${dir}/${flow_name}.yaml", kind: "file" },
+      { target: "flow_file", path: "${dir}/${name}.yaml", kind: "file" },
+    ];
+
+    const aliasOnly = (await prepareFileInputs(
+      specs,
+      { dir: tmpDir, flow_name: "aliased" },
+      { includeContent: true }
+    )) as Record<string, FileInputWire>;
+    expect(aliasOnly.flow_file?.path).toBe(aliasPath);
+    expect(Buffer.from(aliasOnly.flow_file!.content!, "base64").toString()).toBe("steps: []");
+
+    const both = (await prepareFileInputs(
+      specs,
+      { dir: tmpDir, name: "named", flow_name: "aliased" },
+      { includeContent: false }
+    )) as Record<string, FileInputWire>;
+    expect(both.flow_file?.path).toBe(namePath); // name wins the last-write-wins merge
+  });
+
   it("inlines base64 content when routed to a remote server", async () => {
     const filePath = path.join(tmpDir, "baseline.png");
     await fs.writeFile(filePath, "png-bytes");

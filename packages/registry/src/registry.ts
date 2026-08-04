@@ -459,10 +459,15 @@ export function describeParamIssues(
   // Key names only, never values: a params object can carry a secret, and this
   // string reaches logs, telemetry and the agent transcript. An array's keys
   // are indices, which say nothing, so skip it.
-  const supplied =
+  const allKeys =
     params !== null && typeof params === "object" && !Array.isArray(params)
-      ? Object.keys(params as object).slice(0, 24)
+      ? Object.keys(params as object)
       : [];
+  // Cap the echoed list, but SIGNAL the cut with an ellipsis: the "You sent:"
+  // list is the only clue to a misspelled key when the schema strips unknowns,
+  // and a silent truncation could drop the very key that clue exists to surface.
+  const supplied = allKeys.slice(0, 24);
+  const truncated = allKeys.length > supplied.length;
   const parts = error.issues.map((issue) => {
     const at = issue.path.length > 0 ? issue.path.join(".") : "(root)";
     // Zod reports a missing required field as an `undefined` input, which
@@ -491,8 +496,13 @@ export function describeParamIssues(
     return `\`${at}\`: ${issue.message}`;
   });
   const sent =
-    supplied.length > 0 ? ` You sent: ${supplied.map((k) => `\`${k}\``).join(", ")}.` : "";
-  return `${parts.join("; ")}.${sent}`;
+    supplied.length > 0
+      ? ` You sent: ${supplied.map((k) => `\`${k}\``).join(", ")}${truncated ? ", …" : ""}.`
+      : "";
+  // Guard the (call-site-unreachable, but exported) empty-issues case so it
+  // never renders a bare leading ".".
+  const body = parts.length > 0 ? `${parts.join("; ")}.` : "";
+  return `${body}${sent}`.trim() || "invalid parameters";
 }
 
 function formatInteractionMessage(format: () => string | undefined, fallback: string): string {
