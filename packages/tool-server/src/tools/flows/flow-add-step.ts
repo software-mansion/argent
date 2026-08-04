@@ -106,20 +106,32 @@ function treeReaderFor(udid: unknown): string {
 
 /**
  * The clause naming how to read the tree the RUNNER resolves against — or, on
- * Android, that no read-only tool does. Android's runner tree is the full
- * accessibility hierarchy; the only full-hierarchy readers (`native-find-views`
- * / `native-full-hierarchy`) are Apple-only, and Android `describe` returns the
- * TRIMMED interactables tree the recorder already read. So naming `describe`
- * there would point the author at the recorder's own tree under the banner of
- * the runner's — the exact wrong-tree steer this warning exists to prevent.
- * Every other platform has a reader that genuinely sees the runner's side.
+ * Android and Chromium, that no read-only tool does. Android's runner tree is
+ * the full accessibility hierarchy; the only full-hierarchy readers
+ * (`native-find-views` / `native-full-hierarchy`) are Apple-only, and Android
+ * `describe` returns the TRIMMED interactables tree the recorder already read.
+ * Chromium's runner tree keeps only addressable nodes, yet `describe` returns
+ * the FULL DOM the recorder read — a superset that still shows the very nodes
+ * the runner drops. So naming `describe` on either platform would point the
+ * author at the recorder's own tree under the banner of the runner's — the
+ * exact wrong-tree steer this warning exists to prevent. iOS (and the remaining
+ * platforms) have a reader that genuinely sees the runner's side.
  */
 function runnerSideReadClause(udid: unknown): string {
-  if (platformOf(udid) === "android") {
+  const platform = platformOf(udid);
+  if (platform === "android") {
     return (
       "no read-only tool exposes the runner's full hierarchy on Android — `describe` returns the " +
       "trimmed tree the recorder read, not the runner's — so re-record with a selector an " +
       "interactable carries, or keep it raw"
+    );
+  }
+  if (platform === "chromium") {
+    return (
+      "no read-only tool exposes the runner's trimmed tree on Chromium — `describe` returns the " +
+      "full DOM the recorder read, including the non-addressable nodes the runner drops — so " +
+      "re-record with a selector an addressable node carries (an id, label, text, or a " +
+      "clickable/focused element), or keep it raw"
     );
   }
   return `${treeReaderFor(udid)} reads the runner's side`;
