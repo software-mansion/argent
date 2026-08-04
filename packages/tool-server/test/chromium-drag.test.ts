@@ -150,9 +150,10 @@ describe("gesture-drag", () => {
   });
 
   it("settle: true eases the moves out (release at ~0 pointer velocity); without it they stay linear", async () => {
-    // durationMs 64 → 4 steps → moves at t = 0.25, 0.5, 0.75. Web drag
-    // libraries compute their fling from the release velocity of this very
-    // mouse stream, so the eased curve must genuinely decay into the release.
+    // Web drag libraries compute their fling from the release velocity of this
+    // very mouse stream, so the eased curve must genuinely decay into the
+    // release. durationMs 64 samples 4 frames, under the settle floor, so the
+    // eased path runs on the floor's 8-frame grid while the plain one keeps 4.
     const params = { udid: "chromium-cdp-19222", fromX: 0.25, fromY: 0.5, toX: 0.75, toY: 0.5 };
     const startPx = 0.25 * 800;
     const deltaPx = (0.75 - 0.25) * 800;
@@ -172,11 +173,14 @@ describe("gesture-drag", () => {
       x: 0.75 * 800,
     });
     const settledMoves = settledCalls.slice(1, -1);
-    expect(settledMoves).toHaveLength(3);
-    // 1-(1-t)^3 at t = 0.25, 0.5, 0.75 — each point past its linear counterpart.
-    expect(settledMoves[0].x as number).toBeCloseTo(startPx + deltaPx * 0.578125, 5);
-    expect(settledMoves[1].x as number).toBeCloseTo(startPx + deltaPx * 0.875, 5);
-    expect(settledMoves[2].x as number).toBeCloseTo(startPx + deltaPx * 0.984375, 5);
+    // 1-(1-t)^3 at t = i/8 — each point past its linear counterpart.
+    const easedProgress = [
+      0.330078125, 0.578125, 0.755859375, 0.875, 0.947265625, 0.984375, 0.998046875,
+    ];
+    expect(settledMoves).toHaveLength(easedProgress.length);
+    settledMoves.forEach((move, i) => {
+      expect(move.x as number).toBeCloseTo(startPx + deltaPx * easedProgress[i], 5);
+    });
     // Per-frame step size shrinks monotonically all the way into the release.
     const xs = settledCalls.map((c) => c.x as number);
     for (let i = 2; i < xs.length; i++) {
@@ -196,6 +200,62 @@ describe("gesture-drag", () => {
     expect(controlMoves[0].x as number).toBeCloseTo(startPx + deltaPx * 0.25, 5);
     expect(controlMoves[1].x as number).toBeCloseTo(startPx + deltaPx * 0.5, 5);
     expect(controlMoves[2].x as number).toBeCloseTo(startPx + deltaPx * 0.75, 5);
+  });
+
+  it("floors the settle sample count so the final frame before the release is a sliver of the travel", async () => {
+    // An ease-out only decelerates as finely as it is sampled, and the last
+    // frame of the cubic covers (1/steps)^3 of the travel. At the 2 samples
+    // durationMs/16 gives a 32ms drag that is 12.5% of the distance crossed in
+    // the frame the page reads as release velocity — `settle` measured as a
+    // no-op there. The floor drops it to ~0.2%.
+    const params = { udid: "chromium-cdp-19222", fromX: 0.1, fromY: 0.5, toX: 0.9, toY: 0.5 };
+    const finalFrameFraction = (stamps: { x: number }[]) => {
+      const last = stamps[stamps.length - 1];
+      return (last.x - stamps[stamps.length - 2].x) / (last.x - stamps[0].x);
+    };
+    for (const durationMs of [32, 50, 100]) {
+      const settled = await runOnVirtualClock({ ...params, durationMs, settle: true });
+      expect(settled.stamps.slice(1, -1)).toHaveLength(7);
+      expect(finalFrameFraction(settled.stamps)).toBeLessThan(0.005);
+      // Same duration without settle: sampling untouched, and its final frame
+      // still carries a sixth to a half of the travel — the contrast is the
+      // whole point of the flag.
+      const plain = await runOnVirtualClock({ ...params, durationMs });
+      expect(plain.stamps.slice(1, -1)).toHaveLength(Math.max(2, Math.round(durationMs / 16)) - 1);
+      expect(finalFrameFraction(plain.stamps)).toBeGreaterThan(0.15);
+    }
+  });
+
+  it("keeps the settle floor off the press→release span and off an already well-sampled drag", async () => {
+    const params = { udid: "chromium-cdp-19222", fromX: 0.1, fromY: 0.5, toX: 0.9, toY: 0.5 };
+    const span = (stamps: { at: number }[]) => stamps[stamps.length - 1].at - stamps[0].at;
+    // 300ms samples 19 frames on its own, above the floor: settle bends the
+    // curve and nothing else — same frame count, same span.
+    const longSettled = await runOnVirtualClock({ ...params, durationMs: 300, settle: true });
+    const longPlain = await runOnVirtualClock({ ...params, durationMs: 300 });
+    expect(longSettled.stamps).toHaveLength(longPlain.stamps.length);
+    expect(longSettled.stamps.slice(1, -1)).toHaveLength(Math.round(300 / 16) - 1);
+    expect(span(longSettled.stamps)).toBeCloseTo(300, 6);
+    expect(span(longPlain.stamps)).toBeCloseTo(300, 6);
+    // And where the floored frame (100/8 = 12.5ms) still clears an ~9ms CDP
+    // round-trip, the run-start deadline absorbs the extra samples for free —
+    // apps threshold a flick against a drag on exactly this span.
+    for (const durationMs of [100, 300]) {
+      const settled = await runOnVirtualClock(
+        { ...params, durationMs, settle: true },
+        { dispatchCostMs: 9 }
+      );
+      expect(span(settled.stamps)).toBeCloseTo(durationMs, 6);
+    }
+    // Below that, eight frames no longer fit at one round-trip each and the span
+    // stretches to what the transport can deliver — the accepted cost of a
+    // settle that isn't a no-op (the flow swipe directive floors duration at
+    // 150ms, so only a direct tool call reaches here).
+    const overrun = await runOnVirtualClock(
+      { ...params, durationMs: 32, settle: true },
+      { dispatchCostMs: 9 }
+    );
+    expect(span(overrun.stamps)).toBeCloseTo(8 * 9, 6);
   });
 
   it("clamps a normalized 1.0 endpoint to the last addressable pixel so the release stays in the viewport", async () => {
