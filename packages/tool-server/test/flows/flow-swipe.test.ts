@@ -19,7 +19,7 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
 }));
 
 import { createRunFlowTool } from "../../src/tools/flows/flow-run";
-import { serializeFlow, parseFlow } from "../../src/tools/flows/flow-utils";
+import { serializeFlow, parseFlow, type FlowStep } from "../../src/tools/flows/flow-utils";
 import { createFlowTestHarness, n, screen } from "./harness";
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
@@ -780,7 +780,7 @@ describe("swipe: execution", () => {
     });
   });
 
-  it("resolves the anchor AFTER the endpoint's auto-wait, so a moved anchor stays fresh", async () => {
+  it("resolves the anchor from the tree the endpoint appeared in, so a moved anchor stays fresh", async () => {
     // The endpoint appears only on later polls, and the anchor moves while
     // that auto-wait runs. The finger must go down on the anchor's current
     // centre (0.7, 0.3) — resolving it before the endpoint wait would dispatch
@@ -816,6 +816,46 @@ describe("swipe: execution", () => {
         fromY: expect.closeTo(0.3, 10),
         toX: expect.closeTo(0.1, 10),
         toY: expect.closeTo(0.95, 10),
+      },
+    });
+  });
+
+  it("resolves the endpoint from the tree the late anchor appeared in, so it cannot go stale", async () => {
+    // The mirror: here the ANCHOR renders late and the ENDPOINT moves during
+    // that wait. Resolving `to` first would lift the finger on the endpoint's
+    // pre-jump centre (0.2, 0.3) instead of (0.7, 0.3) — half a screen of error
+    // on a step that still reports pass.
+    let fetches = 0;
+    currentTree = () => {
+      fetches += 1;
+      return fetches <= 2
+        ? screen([n({ label: "Mover", frame: { x: 0.1, y: 0.25, width: 0.2, height: 0.1 } })])
+        : screen([
+            n({ label: "Mover", frame: { x: 0.6, y: 0.25, width: 0.2, height: 0.1 } }),
+            n({ label: "Late", frame: { x: 0.0, y: 0.9, width: 0.2, height: 0.1 } }),
+          ]);
+    };
+    await writeFlow("late-anchor", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "swipe",
+          from: { selector: { text: "Late", loose: true } },
+          to: { selector: { text: "Mover", loose: true } },
+        },
+      ],
+    });
+
+    const result = await run("late-anchor");
+
+    expect(result.ok).toBe(true);
+    expect(result.calls[0]).toMatchObject({
+      tool: "gesture-swipe",
+      args: {
+        fromX: expect.closeTo(0.1, 10),
+        fromY: expect.closeTo(0.95, 10),
+        toX: expect.closeTo(0.7, 10),
+        toY: expect.closeTo(0.3, 10),
       },
     });
   });
@@ -952,6 +992,8 @@ describe("swipe: execution", () => {
     expect(result.ok).toBe(false);
     expect(result.steps[0]).toMatchObject({ kind: "swipe", status: "fail" });
     expect(result.steps[0].reason).toMatch(/add a scroll-to step/i);
+    // The reason names the end that is actually missing, not the other one.
+    expect(result.steps[0].reason).toContain('text="Card"');
     expect(result.calls).toEqual([]);
   }, 15000);
 
@@ -967,6 +1009,57 @@ describe("swipe: execution", () => {
     expect(result.ok).toBe(false);
     expect(result.steps[0]).toMatchObject({ kind: "swipe", status: "fail" });
     expect(result.steps[0].reason).toMatch(/add a scroll-to step/i);
+    expect(result.steps[0].reason).toContain('text="Archive"');
+    expect(result.calls).toEqual([]);
+  }, 15000);
+
+  it("blames the endpoint when the anchor resolves and only the endpoint is missing", async () => {
+    // One shared wait for both ends must not blur which end missed: the anchor
+    // is on screen the whole time, so the reason may only name the endpoint.
+    currentTree = () =>
+      screen([n({ label: "Anchor", frame: { x: 0.1, y: 0.1, width: 0.2, height: 0.1 } })]);
+    await writeFlow("endpoint-missing", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "swipe",
+          from: { selector: { text: "Anchor", loose: true } },
+          to: { selector: { text: "Drop", loose: true } },
+        },
+      ],
+    });
+
+    const result = await run("endpoint-missing");
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]).toMatchObject({ kind: "swipe", status: "fail" });
+    expect(result.steps[0].reason).toContain('text="Drop"');
+    expect(result.steps[0].reason).not.toContain('text="Anchor"');
+    expect(result.calls).toEqual([]);
+  }, 15000);
+
+  it("blames the anchor when NEITHER end ever appears", async () => {
+    // Deliberate tie-break, pinned so it can't drift: with both ends missing the
+    // reason names `from`, the element the finger needs first and the first field
+    // the step wrote.
+    currentTree = () => screen([]);
+    await writeFlow("both-missing", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "swipe",
+          from: { selector: { text: "Anchor", loose: true } },
+          to: { selector: { text: "Drop", loose: true } },
+        },
+      ],
+    });
+
+    const result = await run("both-missing");
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]).toMatchObject({ kind: "swipe", status: "fail" });
+    expect(result.steps[0].reason).toContain('text="Anchor"');
+    expect(result.steps[0].reason).not.toContain('text="Drop"');
     expect(result.calls).toEqual([]);
   }, 15000);
 
@@ -1013,11 +1106,11 @@ describe("swipe: execution", () => {
 });
 
 describe("swipe: abort", () => {
-  it("reports a swipe cancelled during the endpoint's auto-wait as a skip, not an offscreen failure", async () => {
-    // The shared harness never threads an AbortSignal, so this test runs the
-    // flow tool directly from its own temp dir, mirroring flow-abort.test.ts:
-    // the endpoint never appears and the third tree read trips the abort,
-    // landing it deterministically inside the `to` auto-wait's polling.
+  // The shared harness never threads an AbortSignal, so these tests run the
+  // flow tool directly from their own temp dir, mirroring flow-abort.test.ts:
+  // the selectors never appear and the third tree read trips the abort, landing
+  // it deterministically inside the swipe's target resolution.
+  async function runCancelledSwipe(step: FlowStep) {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-swipe-abort-"));
     try {
       const controller = new AbortController();
@@ -1031,10 +1124,7 @@ describe("swipe: abort", () => {
       await fs.mkdir(flowsDir, { recursive: true });
       await fs.writeFile(
         path.join(flowsDir, "cancelled-swipe.yaml"),
-        serializeFlow({
-          executionPrerequisite: "",
-          steps: [{ kind: "swipe", to: { selector: { text: "Archive", loose: true } } }],
-        }),
+        serializeFlow({ executionPrerequisite: "", steps: [step] }),
         "utf8"
       );
       const calls: string[] = [];
@@ -1055,14 +1145,33 @@ describe("swipe: abort", () => {
 
       if (!("steps" in result))
         throw new Error(`expected a run result, got notice: ${result.notice}`);
+      return { result, calls };
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  it.each<[string, FlowStep]>([
+    ["the endpoint alone", { kind: "swipe", to: { selector: { text: "Archive", loose: true } } }],
+    [
+      "both ends",
+      {
+        kind: "swipe",
+        from: { selector: { text: "Card", loose: true } },
+        to: { selector: { text: "Archive", loose: true } },
+      },
+    ],
+  ])(
+    "reports a swipe cancelled while resolving %s as a skip, not an offscreen failure",
+    async (_description, step) => {
+      const { result, calls } = await runCancelledSwipe(step);
+
       // A skip with the uniform abort reason — NOT a fail with the misleading
       // "no visible element matched … add a scroll-to step" hint.
       expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["swipe:skip"]);
       expect(result.steps[0].reason).toBe("run aborted");
       expect(result.ok).toBe(false);
       expect(calls).not.toContain("gesture-swipe");
-    } finally {
-      await fs.rm(dir, { recursive: true, force: true });
     }
-  });
+  );
 });
