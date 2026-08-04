@@ -179,15 +179,11 @@ Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow
 { "udid": "<UDID>", "clear": true, "text": "new@example.com" }
 ```
 
-- `clear` runs **first**, so the call above replaces the field's value in one call. It may accompany `text` or `key` — but those two still can't be combined with each other, so submitting is a second call (`{ "key": "enter" }`).
-- `{ "udid": "<UDID>", "clear": true }` alone just empties the field.
-- **Focus a text field first.** On Chromium a clear with nothing editable focused is refused outright, since a select-all there would select the page rather than empty an input. On iOS and Android it is dispatched blind at whatever holds focus — on an older Android level that is up to 129 real key events delivered to the app, not a no-op — and still reports success.
-- Supported on iOS, Android and Chromium. Rejected — before anything is typed — on Vega and on TV targets; a silent no-op would be worse than an error.
-- The result reports `"cleared": true`. Only Chromium reads the field back, and it **throws** when it sees the value survive — but a page it cannot read (a cross-origin iframe, a node the page replaced) falls back to best-effort there too. On iOS and Android nothing is read back at all. So `"cleared": true` never means "seen NOT empty", and it is not proof the field is empty — `describe` it if that matters.
-- On Chromium a **readonly** field is refused, like a non-text one.
-- The clear does not count towards `keys` — that reports only the characters and named key you asked to be entered, so `{ "clear": true }` alone returns `"keys": 0`.
-- On older Android levels (those whose `input` has no `keycombination` subcommand) the clear falls back to deleting backwards from the end of the line, sized to the field's measured contents. Single-line fields are emptied exactly, but **a multi-line field keeps whatever sits below the caret** — assert the result if you are clearing a multi-line input on an old device. A field longer than 150 characters is refused there rather than partly deleted.
-- Where that length cannot be read — a **password** field (uiautomator reports the mask, not the value), a dump the device refused, or no focused text field in the dump at all — the fallback sends a fixed 128 backspaces instead (the blind count of 120 plus the 8-key margin). That run is neither exact nor refusable, so a value longer than 128 characters keeps its head while the call still reports success.
+- `clear` runs **first**, so the call above replaces the value in one call. It may accompany `text` or `key`; those two still can't be combined, so submitting is a second call (`{ "key": "enter" }`). `{ "clear": true }` alone just empties the field, returning `"keys": 0` — the clear's own key presses never count.
+- **Focus a text field first.** Chromium refuses a clear with nothing editable (or a readonly / non-text element) focused, because a select-all there would select the page. iOS and Android dispatch it blind at whatever holds focus and report success either way.
+- iOS, Android and Chromium only — rejected up front on Vega and TV targets.
+- `"cleared": true` is **not proof the field is empty.** Only Chromium reads the field back, and even it goes best-effort on a page it cannot read. `describe` the field when the result matters.
+- **Old Android levels** (no `input keycombination`) delete backwards from end-of-line instead: a multi-line field keeps whatever sits below the caret, and a field over 150 characters is refused rather than half-deleted. A length it cannot read — a password field, or a screen it cannot capture — falls back to a fixed 128 backspaces, so a longer value keeps its head while the call still reports success.
 
 **Typing secrets.** To enter a credential without its plaintext ever entering your context, transcript, or logs, use a secret placeholder in `text` (works in `keyboard`, `paste`, `run-sequence` keyboard steps, and flow `type` steps):
 

@@ -65,7 +65,7 @@ Steps:
 7. screenshot → verify home screen appeared
 ```
 
-> **Pre-filled fields:** `keyboard` appends, so a remembered login would leave `user@example.comuser@example.com` behind. `clear: true` empties the field first — use it on any field that may already hold a value. It is not a guarantee: only Chromium reads the field back, and on iOS/Android a widget that swallows the select-all leaves the field one character shorter rather than empty. Assert the field's value after a clear you depend on (see `argent-device-interact` for the per-platform detail).
+> **Pre-filled fields:** `keyboard` appends, so a remembered login would leave `user@example.comuser@example.com` behind. Use `clear: true` on any field that may already hold a value — but assert the result when you depend on it, since only Chromium reads the field back (per-platform detail in `argent-device-interact`).
 
 > **Credentials:** never type plaintext credentials — use a `{{secret:<NAME>}}` placeholder in `keyboard`, resolved server-side from the `ARGENT_SECRET_<NAME>` environment variable, so the value never enters agent context. If the variable is not set, ask the user to export it (e.g. `ARGENT_SECRET_APP_PASSWORD`) instead of pasting the secret into the conversation. Never invent credentials or echo secret values into reports or saved files.
 
