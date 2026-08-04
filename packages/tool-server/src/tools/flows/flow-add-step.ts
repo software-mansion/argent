@@ -98,14 +98,15 @@ function fallbackSourceWarning(source: DescribeSource, platform: string): string
  * (`waitForNativeDevtools` in flow-run.ts): a live `restart-app` returns before
  * the injected dylib dials back, so a tap recorded right after it would read
  * the tree before the app has connected and silently keep coordinates. Ride
- * out that window: when the recording has a leading launch, poll the exact
- * bundle's synchronous connection bit (the same check replay uses); otherwise
- * poll until auto-targeting finds one connected, foreground-like app. Stop when
- * the budget lapses, then let the single tree read report whatever is really
- * there. The budget mirrors replay's NATIVE_READY_TIMEOUT_MS: a cold start the
- * replay gate would ride out, recording rides out too. When the app was never
- * Argent-launched this adds one budget's worth of latency before the (accurate)
- * capture warning; that beats silently downgrading a post-launch tap.
+ * out that window: when the recording has a launch, poll that (most recent)
+ * launch's exact bundle's synchronous connection bit (the same check replay
+ * uses); otherwise poll until auto-targeting finds one connected, foreground-like
+ * app. Stop when the budget lapses, then let the single tree read report
+ * whatever is really there. The budget mirrors replay's NATIVE_READY_TIMEOUT_MS:
+ * a cold start the replay gate would ride out, recording rides out too. When the
+ * app was never Argent-launched this adds one budget's worth of latency before
+ * the (accurate) capture warning; that beats silently downgrading a post-launch
+ * tap.
  */
 type CaptureReadiness = "ready" | "unavailable" | "timed-out" | "aborted";
 
@@ -170,13 +171,26 @@ async function awaitIosDevtoolsTarget(
   }
 }
 
-function leadingLaunch(session: RecordingSession): Extract<FlowStep, { kind: "launch" }> | null {
-  const first = session.flow.steps.find((step) => step.kind !== "echo");
-  return first?.kind === "launch" ? first : null;
+/**
+ * The most recent `launch` step recorded so far — the app the walkthrough is
+ * currently driving, which is what the gate must wait on. Keying on the LEADING
+ * launch instead misfires on a recording that relaunches a second app mid-flow
+ * (`restart A` … `restart B` … tap): `restart-app B` never clears A's connection
+ * bit, so polling A returns ready at once and B's own connect window is never
+ * ridden out — exactly the downgrade this gate exists to prevent. Replay gates
+ * each launch step on its own bundle for the same reason. Reduces to the leading
+ * launch for the common single-launch flow.
+ */
+function mostRecentLaunch(session: RecordingSession): Extract<FlowStep, { kind: "launch" }> | null {
+  for (let i = session.flow.steps.length - 1; i >= 0; i--) {
+    const step = session.flow.steps[i];
+    if (step.kind === "launch") return step;
+  }
+  return null;
 }
 
 function recordedLaunchApp(session: RecordingSession, platform: string): string | null {
-  const launch = leadingLaunch(session);
+  const launch = mostRecentLaunch(session);
   return launch ? appIdForPlatform(launch.app, platform) : null;
 }
 

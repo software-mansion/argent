@@ -715,6 +715,113 @@ describe("flow-add-step tap selector capture", () => {
     expect(result.message).not.toContain("kept coordinates");
   });
 
+  it("polls the leading launch's exact bundle and captures once it connects", async () => {
+    // The PR's headline path: an injectable leading launch drives the gate's
+    // exact-bundle `isConnected` poll (mirroring replay's waitForNativeDevtools),
+    // not the auto-target branch. The dylib dials back only after a delay, so the
+    // gate must ride that window out and still capture a selector.
+    await flowStartRecordingTool.execute({}, { name: FLOW, project_root: tmpDir });
+    setTree([n({ label: "Home", frame: { x: 0.3, y: 0.5, width: 0.4, height: 0.06 } })]);
+    let connected = false;
+    const isConnected = vi.fn((bundleId: string) => bundleId === "com.example.app" && connected);
+    setTimeout(() => {
+      connected = true;
+    }, 300);
+    const registry = {
+      invokeTool: vi.fn(async (id: string) =>
+        id === "restart-app" ? { restarted: true, bundleId: "com.example.app" } : { tapped: true }
+      ),
+      getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
+      resolveService: vi.fn(async () => ({
+        isConnected,
+        listConnectedBundleIds: () => (connected ? ["com.example.app"] : []),
+        getAppState: vi.fn(),
+      })),
+    } as unknown as Registry;
+    const tool = createFlowAddStepTool(registry);
+    await tool.execute(
+      {},
+      {
+        name: FLOW,
+        project_root: tmpDir,
+        command: "restart-app",
+        args: JSON.stringify({ udid: DEVICE, bundleId: "com.example.app" }),
+      }
+    );
+
+    const result = await tool.execute(
+      {},
+      {
+        name: FLOW,
+        project_root: tmpDir,
+        command: "gesture-tap",
+        args: JSON.stringify({ udid: DEVICE, x: 0.5, y: 0.52 }),
+      }
+    );
+
+    // The exact-bundle bit was polled (not the auto-target path), and the gate
+    // rode the connect window out rather than downgrading to coordinates.
+    expect(isConnected).toHaveBeenCalledWith("com.example.app");
+    expect(result.message).not.toContain("kept coordinates");
+    expect((await recordedSteps()).at(-1)).toEqual({ kind: "tap", selector: { text: "Home" } });
+  });
+
+  it("gates on the most recent launch, riding out a mid-flow app switch", async () => {
+    // restart A … restart B … tap. A stays connected (restart-app B never
+    // touched it); B connects only after a delay. The gate must wait for B — the
+    // most recent launch — not confirm A and read B's tree before it connected.
+    await flowStartRecordingTool.execute({}, { name: FLOW, project_root: tmpDir });
+    setTree([n({ label: "B Home", frame: { x: 0.3, y: 0.5, width: 0.4, height: 0.06 } })]);
+    let bConnected = false;
+    const isConnected = vi.fn(
+      (bundleId: string) =>
+        bundleId === "com.example.a" || (bundleId === "com.example.b" && bConnected)
+    );
+    setTimeout(() => {
+      bConnected = true;
+    }, 300);
+    const registry = {
+      invokeTool: vi.fn(async (id: string) =>
+        id === "restart-app" ? { restarted: true } : { tapped: true }
+      ),
+      getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
+      resolveService: vi.fn(async () => ({
+        isConnected,
+        listConnectedBundleIds: () => [],
+        getAppState: vi.fn(),
+      })),
+    } as unknown as Registry;
+    const tool = createFlowAddStepTool(registry);
+    for (const bundleId of ["com.example.a", "com.example.b"]) {
+      await tool.execute(
+        {},
+        {
+          name: FLOW,
+          project_root: tmpDir,
+          command: "restart-app",
+          args: JSON.stringify({ udid: DEVICE, bundleId }),
+        }
+      );
+    }
+
+    const result = await tool.execute(
+      {},
+      {
+        name: FLOW,
+        project_root: tmpDir,
+        command: "gesture-tap",
+        args: JSON.stringify({ udid: DEVICE, x: 0.5, y: 0.52 }),
+      }
+    );
+
+    // Falsifiable against the old leading-launch keying, which would poll A
+    // (already connected) and never wait for — or even query — B.
+    expect(isConnected).toHaveBeenCalledWith("com.example.b");
+    expect(isConnected).not.toHaveBeenCalledWith("com.example.a");
+    expect(result.message).not.toContain("kept coordinates");
+    expect((await recordedSteps()).at(-1)).toEqual({ kind: "tap", selector: { text: "B Home" } });
+  });
+
   it.each(["emulator-5554", "chromium-cdp-9222"])(
     "does not consult native devtools while recording a tap on %s",
     async (udid) => {
