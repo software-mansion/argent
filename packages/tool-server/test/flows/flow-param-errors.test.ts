@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Registry } from "@argent/registry";
+import { Registry, getFailureSignal, FAILURE_CODES } from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 
 // An agent passed `flow_name` instead of `name` and got back
@@ -113,6 +113,26 @@ describe("flow-execute parameter handling", () => {
         prerequisiteAcknowledged: true,
       })
     ).rejects.toThrow(/needs the flow's name in `name`.*`flow_name` is accepted as an alias/s);
+  });
+
+  it("classifies a name-less call as a client-input VALIDATION error, not an internal fault", async () => {
+    // Because `name` is optional (for the alias), a name-less call passes zod
+    // and is rejected inside execute(). It must still carry a validation signal
+    // so the HTTP boundary maps it to 400 (via InvalidToolInputError) and
+    // telemetry does not log it as ARGENT_UNCLASSIFIED_FAILURE, matching the
+    // sibling validations, and the pre-alias zod-rejection it replaced.
+    let caught: unknown;
+    try {
+      await registry().invokeTool("flow-execute", {
+        project_root: tmpDir,
+        prerequisiteAcknowledged: true,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    const signal = getFailureSignal(caught);
+    expect(signal?.error_kind).toBe("validation");
+    expect(signal?.error_code).toBe(FAILURE_CODES.TOOL_INPUT_INVALID);
   });
 
   it("renders a schema failure as a sentence naming what was sent", async () => {

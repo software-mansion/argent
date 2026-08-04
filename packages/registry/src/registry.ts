@@ -443,6 +443,20 @@ export class Registry {
 }
 
 /**
+ * The value at a Zod issue's `path` within the caller's params, or `undefined`
+ * when any segment is absent (or the parent is not indexable). Used to tell an
+ * OMITTED field from a present-but-wrong one, without parsing Zod's message.
+ */
+function valueAtPath(root: unknown, path: readonly PropertyKey[]): unknown {
+  let current: unknown = root;
+  for (const key of path) {
+    if (current === null || typeof current !== "object") return undefined;
+    current = (current as Record<PropertyKey, unknown>)[key];
+  }
+  return current;
+}
+
+/**
  * A schema failure as one sentence per bad parameter, instead of Zod's raw
  * issue JSON.
  *
@@ -470,15 +484,19 @@ export function describeParamIssues(
   const truncated = allKeys.length > supplied.length;
   const parts = error.issues.map((issue) => {
     const at = issue.path.length > 0 ? issue.path.join(".") : "(root)";
-    // Zod reports a missing required field as an `undefined` input, which
-    // reads as a type error unless it is called out as absent. Keyed on the
-    // rendered message because the issue object does not carry `received` as
-    // an own property; a miss only costs the plainer wording below.
-    // Nested paths get the same wording: `steps.0.tool` is every bit as
-    // missing as a top-level field, and the raw phrasing is what this
-    // function exists to replace.
-    const missing = issue.code === "invalid_type" && /received undefined$/.test(issue.message);
-    if (missing) {
+    // A field the caller never supplied reads as a type error unless it is
+    // called out as absent, but Zod signals absence differently per field
+    // kind: `invalid_type ... received undefined` for a plain type, yet
+    // `invalid_value` for an omitted enum/literal, whose message is the
+    // misleading "Invalid option: expected one of …" as if a bad value had
+    // been SENT. So decide "missing" from the INPUT, not the rendered message:
+    // the value at this issue's path being `undefined` is absence whatever the
+    // code, which also drops the locale-fragile English-suffix match. A value
+    // present-but-wrong (`null`, a number for a string, a bad enum option) is
+    // NOT undefined, so it still falls to the per-issue wording below.
+    // Nested paths get the same treatment: `steps.0.tool` is every bit as
+    // missing as a top-level field.
+    if (valueAtPath(params, issue.path) === undefined) {
       const expected = (issue as { expected?: unknown }).expected;
       const kind = typeof expected === "string" ? ` (${expected})` : "";
       return `\`${at}\` is required${kind} and was not provided`;

@@ -60,6 +60,37 @@ describe("describeParamIssues", () => {
     expect(msg).toContain("; ");
   });
 
+  it("names an OMITTED required enum as missing, not 'Invalid option' (implying a bad value was sent)", () => {
+    // Zod emits `invalid_value` (not `invalid_type`) for a missing enum, so its
+    // message is "Invalid option: expected one of ...", which reads as though a
+    // wrong value was sent when the field was simply absent. The verdict must
+    // come from the input (value undefined), not the message.
+    const schema = z.object({ mode: z.enum(["a", "b"]) });
+    const msg = describeParamIssues(issuesOf(schema, {}), {});
+    expect(msg).toContain("`mode` is required and was not provided");
+    expect(msg).not.toContain("Invalid option");
+  });
+
+  it("still reports a PRESENT-but-wrong enum value as an invalid option (not as missing)", () => {
+    // The mirror case: a value WAS sent, it is just not allowed. This must not
+    // be swept into the "is required" wording; the caller did supply the key.
+    const schema = z.object({ mode: z.enum(["a", "b"]) });
+    const value = { mode: "c" };
+    const msg = describeParamIssues(issuesOf(schema, value), value);
+    expect(msg).toContain("`mode`");
+    expect(msg).not.toContain("is required");
+    expect(msg).toContain("You sent: `mode`");
+  });
+
+  it("treats a PRESENT null for a required field as a type error, not as missing", () => {
+    // `null` is a value the caller chose to send; only `undefined` is absence.
+    const schema = z.object({ name: z.string() });
+    const value = { name: null };
+    const msg = describeParamIssues(issuesOf(schema, value), value);
+    expect(msg).not.toContain("is required");
+    expect(msg).toContain("`name`");
+  });
+
   it("renders a missing top-level field with the caller's own keys, not raw JSON", () => {
     const schema = z.object({ name: z.string(), project_root: z.string() });
     const value = { name: "x" };
