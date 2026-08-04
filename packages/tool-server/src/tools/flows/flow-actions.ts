@@ -13,6 +13,7 @@ import {
   frameContains,
   isVisible,
   assertText,
+  frameWithin,
   nodeText,
   treeFingerprint,
   confusableTextNote,
@@ -406,6 +407,43 @@ function framesOverlap(a: DescribeFrame, b: DescribeFrame): boolean {
 }
 
 /**
+ * How much larger than the typed-into element a focused ANCESTOR may be and
+ * still count as evidence about it. A wrapper around an input is roughly the
+ * input's size; anything far bigger is a different thing that merely encloses
+ * it.
+ */
+const FOCUS_ANCESTOR_AREA_RATIO = 4;
+
+function frameArea(f: DescribeFrame): number {
+  return f.width * f.height;
+}
+
+/**
+ * Is `focused` evidence that `target` has keyboard focus?
+ *
+ * Not a bare intersection: an element that only clips a corner of the target
+ * says nothing. Not bare nesting either, which is where this first landed and
+ * was wrong in one direction — a modal composer three quarters of the screen
+ * tall CONTAINS every node of the screen behind it, so it confirmed focus for
+ * any of them, and `type:` then injected the keys at HID level into the
+ * composer while reporting a pass on a static label behind it. Silent, and
+ * wrong in the worst way: the text lands somewhere real.
+ *
+ * The direction that carries evidence is `focused` inside `target` — the
+ * documented case where the selector matches a testID container and the input
+ * inside it reports the focus. The reverse, a focused ancestor, is accepted
+ * only while it stays close to the target's own size, because a platform may
+ * legitimately mark a field's immediate wrapper focused rather than the field.
+ */
+function framesNest(focused: DescribeFrame, target: DescribeFrame): boolean {
+  if (frameWithin(focused, target)) return true;
+  return (
+    frameWithin(target, focused) &&
+    frameArea(focused) <= frameArea(target) * FOCUS_ANCESTOR_AREA_RATIO
+  );
+}
+
+/**
  * Is this node a scroll container? Android's uiautomator dump flags one
  * directly (`scrollable`); the iOS full-hierarchy adapter carries no such flag
  * but maps UIScrollView/UITableView/UICollectionView class names to the
@@ -465,25 +503,29 @@ function collectFocused(node: DescribeNode, acc: DescribeNode[]): DescribeNode[]
  * through to typing after the timeout rather than failing the step, since "no
  * focus seen" can also mean the focused view didn't make it into the tree.
  */
+type FocusVerdict = "confirmed" | "unconfirmed" | "unreported" | "unreadable" | "aborted";
+
 async function waitForFocus(
   env: ActionEnv,
   into: FlowSelector,
   tappedFrame: DescribeFrame
-): Promise<void> {
+): Promise<FocusVerdict> {
   const deadline = Date.now() + TYPE_FOCUS_TIMEOUT_MS;
+  let read = false;
   for (;;) {
-    if (env.signal?.aborted) return;
+    if (env.signal?.aborted) return "aborted";
     try {
       const { tree, source } = await fetchFlowTree(env.registry, env.device);
-      if (!FOCUS_REPORTING_SOURCES.has(source)) return;
+      if (!FOCUS_REPORTING_SOURCES.has(source)) return "unreported";
+      read = true;
       const target = flowSelectorToFrame(tree, into) ?? tappedFrame;
-      if (collectFocused(tree, []).some((n) => framesOverlap(n.frame, target))) return;
+      if (collectFocused(tree, []).some((n) => framesNest(n.frame, target))) return "confirmed";
     } catch {
       // transient describe failure — retry until the deadline
     }
-    if (Date.now() >= deadline) return;
+    if (Date.now() >= deadline) return read ? "unconfirmed" : "unreadable";
     const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
-    if (!(await sleepOrAbort(sleepMs, env.signal))) return;
+    if (!(await sleepOrAbort(sleepMs, env.signal))) return "aborted";
   }
 }
 
@@ -951,6 +993,22 @@ async function runRotate(
  * later steps (chained form fields that end in an explicit submit `tap` should
  * pass `submit: false`).
  */
+/**
+ * Tap a field's centre and wait for focus to land there, re-resolving the
+ * field's frame first (the keyboard sliding up can scroll it).
+ */
+async function tapForFocus(
+  env: ActionEnv,
+  into: FlowSelector,
+  frame: DescribeFrame
+): Promise<FocusVerdict> {
+  await invokeOnDevice(env, "gesture-tap", getDescribeTapPoint(frame));
+  // Keys are injected at the HID level and go to whatever holds focus, so the
+  // tap-to-type gap must cover the app's focus round-trip (see the constants).
+  if (!(await sleepOrAbort(TYPE_FOCUS_SETTLE_MS, env.signal))) return "aborted";
+  return waitForFocus(env, into, frame);
+}
+
 async function runType(
   env: ActionEnv,
   step: { into: FlowSelector; text: string; submit?: boolean }
@@ -960,18 +1018,37 @@ async function runType(
   if (!frame) {
     return { ok: false, reason: offscreenHint(step.into) };
   }
-  await invokeOnDevice(env, "gesture-tap", getDescribeTapPoint(frame));
-  // Keys are injected at the HID level and go to whatever holds focus, so the
-  // tap→type gap must cover the app's focus round-trip (see the constants).
-  if (!(await sleepOrAbort(TYPE_FOCUS_SETTLE_MS, env.signal))) {
-    return ABORTED_OUTCOME;
+  let focus = await tapForFocus(env, step.into, frame);
+  if (focus === "unconfirmed") {
+    const retryFrame = await waitForFrame(env, step.into);
+    if (retryFrame === "aborted") return ABORTED_OUTCOME;
+    if (retryFrame) focus = await tapForFocus(env, step.into, retryFrame);
   }
-  await waitForFocus(env, step.into, frame);
-  // waitForFocus returns void on abort as well as on focus/timeout — re-check
-  // before every keyboard dispatch (the keyboard tool has no abort handling of
-  // its own), so a cancelled run can never type into, or submit, whatever the
-  // app has focused after the caller gave up.
-  if (env.signal?.aborted) return ABORTED_OUTCOME;
+  // waitForFocus reports abort separately from focus/timeout — re-check before
+  // every keyboard dispatch (the keyboard tool has no abort handling of its
+  // own), so a cancelled run can never type into, or submit, whatever the app
+  // has focused after the caller gave up.
+  if (focus === "aborted" || env.signal?.aborted) return ABORTED_OUTCOME;
+  if (focus === "unconfirmed") {
+    return {
+      ok: false,
+      reason:
+        `${describeSelector(step.into)} did not take keyboard focus within ` +
+        `${TYPE_FOCUS_TIMEOUT_MS}ms, after two taps — nothing was typed. Keys are injected at ` +
+        `the HID level and would have gone to whatever else holds focus. Something is likely ` +
+        `covering the field (a sheet mid-animation, a toast), or it is not a text input.`,
+    };
+  }
+  if (focus === "unreadable") {
+    return {
+      ok: false,
+      indeterminate: true,
+      reason:
+        `could not read the UI tree while waiting for ${describeSelector(step.into)} to take ` +
+        `keyboard focus, so nothing was typed. Whether focus landed is unknown, not wrong — ` +
+        `this is an environment failure.`,
+    };
+  }
   await invokeOnDevice(env, "keyboard", { text: step.text });
   if (step.submit !== false) {
     if (env.signal?.aborted) return ABORTED_OUTCOME;
