@@ -1184,9 +1184,21 @@ function compatibilityMissNote(
     if (expectedText === undefined || expectedText === "") return "";
     const first = firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches);
     if (first === undefined) return "";
-    hit = [assertText(first), nodeText(first)].find(
-      (text) => text !== "" && compatibilityVariantOf(text, expectedText)
-    );
+    const shown = assertText(first);
+    const own = nodeText(first);
+    // Defer to the confusable (invisible-character) note assertReason already
+    // emits: when the hoisted subtree text and the node's own text miss the
+    // expected string in DIFFERENT ways - one an invisible-only difference, the
+    // other a typographic variant - both notes would otherwise fire and print
+    // two conflicting explanations of one failure. The codepoint note is the
+    // more precise, so this note stands down whenever it applies.
+    if (
+      confusableTextNote(shown, expectedText) !== undefined ||
+      confusableTextNote(own, expectedText) !== undefined
+    ) {
+      return "";
+    }
+    hit = [shown, own].find((text) => text !== "" && compatibilityVariantOf(text, expectedText));
   } else {
     // exists/visible: nothing matched, so the selector's own text is the needle
     // that found nothing — search the whole tree for what it nearly matched.

@@ -40,6 +40,16 @@ describe("foldText", () => {
     expect(foldText(`a${ZWSP}b`)).toBe("ab");
     expect(foldText(`${BOM}ab`)).toBe("ab");
     expect(foldText(`so${SOFT_HYPHEN}ft`)).toBe("soft");
+    // Mongolian vowel separator: a zero-width format control since Unicode 6.3.
+    expect(foldText("a᠎b")).toBe("ab");
+  });
+
+  it("composes a grapheme even when an invisible sat between base and combining mark", () => {
+    // NFC must run AFTER invisibles are stripped: a ZWSP wedged between "a" and
+    // a combining acute would otherwise block composition and leave a decomposed
+    // grapheme that no longer equals its precomposed, identically-rendered twin.
+    expect(foldText("a​́")).toBe(foldText("á"));
+    expect(foldText("a​́")).toBe("á");
   });
 
   it("keeps the joiners that BUILD a glyph", () => {
@@ -112,6 +122,9 @@ describe("bidi wrappers", () => {
     expect(equalsCI(`${LRE}@bsky.app${PDF}`, "@bsky.app")).toBe(true);
     expect(equalsCI(`${LRI}@bsky.app${PDI}`, "@bsky.app")).toBe(true);
     expect(includesCI(`${LRE}Jane Doe${PDF} posted`, "Jane Doe")).toBe(true);
+    // U+061C ARABIC LETTER MARK: the zero-width RTL analog of LRM/RLM, wrapping
+    // an RTL name the same way. It must fold exactly as the LTR embeddings do.
+    expect(equalsCI("؜@bsky.app؜", "@bsky.app")).toBe(true);
   });
 
   it("does not swallow the narrow no-break space next to that range", () => {

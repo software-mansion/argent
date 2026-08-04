@@ -481,6 +481,117 @@ describe("text/equals failure notes are wired through the runner and scoped to t
     expect(result.steps[0].reason).toMatch(/U\+110BD/);
   });
 
+  it("emits only ONE note when own text and subtree text miss in different ways", async () => {
+    // A pathological node: its OWN text differs from "file" by an invisible
+    // (U+110BD), while its hoisted SUBTREE text differs by a ligature ("ﬁle").
+    // The invisible-codepoint note (from assertReason) and the typographic
+    // variant note would both fire and print two conflicting explanations of one
+    // failure. The codepoint note is more precise, so the compat note stands down.
+    currentFetch = () => ({
+      tree: screen([
+        n({
+          identifier: "x",
+          label: "file\u{110BD}",
+          subtreeText: "ﬁle",
+          frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
+        }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("cross-case-note", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "assert",
+          condition: "text",
+          selector: { identifier: "x" },
+          expectedText: "file",
+          textMatch: "equals",
+        },
+      ],
+    });
+
+    const result = await run("cross-case-note");
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/differ only in invisible characters/);
+    expect(result.steps[0].reason).toMatch(/U\+110BD/);
+    expect(result.steps[0].reason).not.toMatch(/typographic variant/);
+  });
+
+  it("names the invisible codepoints via the own-text fallback when subtree text differs visibly", async () => {
+    // The hoisted subtree text is a visibly different string, so the confusable
+    // note falls through to the node's OWN text, which differs from the expected
+    // only by an invisible U+110BD. Exercises the second operand of the `??`.
+    currentFetch = () => ({
+      tree: screen([
+        n({
+          identifier: "amt",
+          label: "PLN 42\u{110BD}",
+          subtreeText: "Total due now",
+          frame: { x: 0.1, y: 0.1, width: 0.6, height: 0.05 },
+        }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("confusable-own-fallback", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "assert",
+          condition: "text",
+          selector: { identifier: "amt" },
+          expectedText: "PLN 42",
+          textMatch: "equals",
+        },
+      ],
+    });
+
+    const result = await run("confusable-own-fallback");
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/differ only in invisible characters/);
+    expect(result.steps[0].reason).toMatch(/U\+110BD/);
+  });
+
+  it("does not add the invisible-codepoint note to a regex `matches` failure", async () => {
+    // The label carries an invisible U+110BD; an anchored pattern fails on it.
+    // In `matches` mode the expected string is a pattern, not text, so the
+    // confusable note must not compare their codepoints (the same exemption the
+    // compat note draws, but for the confusable note reached via assertReason).
+    currentFetch = () => ({
+      tree: screen([
+        n({
+          identifier: "amt",
+          label: "PLN 42\u{110BD}",
+          frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
+        }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("matches-confusable", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "assert",
+          condition: "text",
+          selector: { identifier: "amt" },
+          expectedText: "^PLN 42$",
+          textMatch: "matches",
+        },
+      ],
+    });
+
+    const result = await run("matches-confusable");
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/but its text was/);
+    expect(result.steps[0].reason).not.toMatch(/differ only in invisible characters/);
+  });
+
   it("does NOT let an unrelated compat-variant node hijack a genuine text miss", async () => {
     // The located element (id=banner) genuinely renders "Loading" — a real
     // mismatch for "More...". A DIFFERENT, unrelated node renders "More…" (one
