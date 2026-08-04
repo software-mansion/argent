@@ -1,10 +1,27 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { MaterializeContext } from "@argent/tools-client";
 import { exportFailureArtifacts, type FlowReport, type StepReport } from "../src/flow.js";
+
+// Spies over the real implementations, not stubs: every test here runs against
+// a real temp filesystem. Only the marker-retry test overrides anything, and
+// only for one read — reproducing the one-syscall window between an O_EXCL
+// create publishing the marker's path and its bytes landing, which racing real
+// calls cannot schedule deterministically. Node builtins can't be spied on
+// in place (their ESM namespace is frozen), so the module is mocked.
+vi.mock("node:fs/promises", { spy: true });
+
+/**
+ * Whether mode bits actually deny this process a write. `chmod 0555` means
+ * nothing to root (some CI containers run as root) and nothing on Windows, and
+ * there the refused-claim fixtures would be writable — the assertions would
+ * pass for the wrong reason, so skip them instead.
+ */
+const canDenyWrite = process.platform !== "win32" && process.getuid?.() !== 0;
 
 let tmpDir: string;
 let outDir: string;
@@ -716,4 +733,330 @@ describe("exportFailureArtifacts", () => {
       errSpy.mockRestore();
     }
   });
+
+  it("gives two concurrent runs of different files sharing a stem their own directories", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // The CI shape the marker exists for: two suites' checks.yaml exporting
+      // into one --output at the same time. Both classify <output>/checks
+      // before either has written anything into it, so nothing but the marker's
+      // exclusive create can separate them — a classify-then-claim protocol
+      // lets both write there, leaving a directory whose marker names one flow
+      // while holding the other's bytes.
+      const flowA = path.join(tmpDir, "suiteA", "checks.yaml");
+      const flowB = path.join(tmpDir, "suiteB", "checks.yaml");
+      const stepA: StepReport = {
+        index: 0,
+        kind: "snapshot",
+        status: "fail",
+        snapshotKey: "shot__ios-390x844",
+        artifacts: { current: await writeFile("a.png", "suiteA-bytes") },
+      };
+      const stepB: StepReport = {
+        index: 0,
+        kind: "snapshot",
+        status: "fail",
+        snapshotKey: "shot__ios-390x844",
+        artifacts: { current: await writeFile("b.png", "suiteB-bytes") },
+      };
+
+      await Promise.all([
+        exportFailureArtifacts(mkReport([stepA]), outDir, flowA, ctx),
+        exportFailureArtifacts(mkReport([stepB]), outDir, flowB, ctx),
+      ]);
+
+      // Two directories, never one — whichever run won <output>/checks, the
+      // other took its own deterministic hash rung.
+      expect(await fs.readdir(outDir)).toHaveLength(2);
+      for (const [flow, step, bytes] of [
+        [flowA, stepA, "suiteA-bytes"],
+        [flowB, stepB, "suiteB-bytes"],
+      ] as const) {
+        const dest = step.artifacts?.current as string;
+        const dir = path.dirname(dest);
+        expect([
+          path.join(outDir, "checks"),
+          path.join(outDir, `checks-${pathHash(flow)}`),
+        ]).toContain(dir);
+        // The marker names the flow whose bytes are actually in the directory:
+        // the property a lost race silently breaks, and the one a later run of
+        // the named flow then relies on to overwrite in place.
+        expect(await fs.readFile(path.join(dir, ".argent-flow-source"), "utf8")).toBe(`${flow}\n`);
+        expect(await fs.readFile(dest, "utf8")).toBe(bytes);
+        // Marker + this run's one PNG, so nothing of the other run leaked in.
+        expect((await fs.readdir(dir)).sort()).toEqual([
+          ".argent-flow-source",
+          "shot__ios-390x844-current.png",
+        ]);
+      }
+      expect(path.dirname(stepA.artifacts?.current as string)).not.toBe(
+        path.dirname(stepB.artifacts?.current as string)
+      );
+      // Exactly one redirect warning: the run that lost the stem directory,
+      // whether it lost by classification or by the claim.
+      expect(errSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("escalates to its hash directory when the marker's exclusive create loses the race", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // Pre-created and empty, so both runs classify <output>/checks as free
+      // ("nothing to protect") and neither can be redirected by the read alone.
+      // Exactly one wins the create; the loser must read the winner's marker
+      // and treat it like any other foreign owner — same escalation, same
+      // warning as a classify-time verdict.
+      await fs.mkdir(path.join(outDir, "checks"), { recursive: true });
+      const flowA = path.join(tmpDir, "suiteA", "checks.yaml");
+      const flowB = path.join(tmpDir, "suiteB", "checks.yaml");
+      const mkStep = async (name: string, content: string): Promise<StepReport> => ({
+        index: 0,
+        kind: "snapshot",
+        status: "fail",
+        snapshotKey: "shot__ios-390x844",
+        artifacts: { current: await writeFile(name, content) },
+      });
+      const stepA = await mkStep("a.png", "suiteA-bytes");
+      const stepB = await mkStep("b.png", "suiteB-bytes");
+
+      await Promise.all([
+        exportFailureArtifacts(mkReport([stepA]), outDir, flowA, ctx),
+        exportFailureArtifacts(mkReport([stepB]), outDir, flowB, ctx),
+      ]);
+
+      // Winner-agnostic: whoever holds the pre-created stem directory won.
+      const stemDir = path.join(outDir, "checks");
+      const a = { flow: flowA, dir: path.dirname(stepA.artifacts?.current as string) };
+      const b = { flow: flowB, dir: path.dirname(stepB.artifacts?.current as string) };
+      const [winner, loser] = a.dir === stemDir ? [a, b] : [b, a];
+      expect(winner.dir).toBe(stemDir);
+      expect(loser.dir).toBe(path.join(outDir, `checks-${pathHash(loser.flow)}`));
+      expect(await fs.readFile(path.join(stemDir, ".argent-flow-source"), "utf8")).toBe(
+        `${winner.flow}\n`
+      );
+      expect(errSpy).toHaveBeenCalledWith(
+        `warning: ${stemDir} already holds artifacts from ${winner.flow}; ` +
+          `writing this flow's artifacts to ${loser.dir} so neither set is overwritten`
+      );
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("keeps two concurrent runs of the same flow file in one directory", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // Two runs of one file are indistinguishable to a separate process, so
+      // the loser of the claim must recognize its own path in the winner's
+      // marker and share the directory. Redirecting here would scatter one
+      // flow's evidence across hash siblings on every parallel CI shard.
+      const mkStep = async (name: string, content: string): Promise<StepReport> => ({
+        index: 0,
+        kind: "snapshot",
+        status: "fail",
+        snapshotKey: "home__ios-390x844",
+        artifacts: { current: await writeFile(name, content) },
+      });
+      const first = await mkStep("c1.png", "run1-bytes");
+      const second = await mkStep("c2.png", "run2-bytes");
+
+      await Promise.all([
+        exportFailureArtifacts(mkReport([first]), outDir, flowFile, ctx),
+        exportFailureArtifacts(mkReport([second]), outDir, flowFile, ctx),
+      ]);
+
+      const dest = path.join(outDir, "checkout", "home__ios-390x844-current.png");
+      expect(first.artifacts?.current).toBe(dest);
+      expect(second.artifacts?.current).toBe(dest);
+      expect(await fs.readdir(outDir)).toEqual(["checkout"]); // no spurious redirect
+      expect(await fs.readFile(path.join(outDir, "checkout", ".argent-flow-source"), "utf8")).toBe(
+        `${flowFile}\n`
+      );
+      expect(errSpy).not.toHaveBeenCalled();
+      // Deliberately NOT fixed: both runs write the same key, so one set of
+      // bytes wins — exactly as before any ownership machinery existed. The
+      // marker is truthful either way, which is what makes it survivable.
+      expect(["run1-bytes", "run2-bytes"]).toContain(await fs.readFile(dest, "utf8"));
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("claims nothing for failed snapshots that turn out to copy no bytes", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // Three shapes that reach the copy loop with a perfectly usable key and
+      // still write nothing: an empty artifacts object, roles that are already
+      // null, and — the realistic one — a remote handle whose download fails,
+      // which the materializer rewrites to null. Claiming before the first byte
+      // would leave <output>/checkout and its marker behind for a run holding
+      // no artifacts, and that marker is not inert: it makes the stem foreign
+      // to every other flow file from then on, so each such run adds another
+      // hash-suffixed directory to a reused --output.
+      const noRoles: StepReport = {
+        index: 0,
+        kind: "snapshot",
+        status: "fail",
+        snapshotKey: "home__ios-390x844",
+        artifacts: {},
+      };
+      const nulled: StepReport = {
+        index: 1,
+        kind: "snapshot",
+        status: "fail",
+        snapshotKey: "list__ios-390x844",
+        artifacts: { baseline: null, current: null, diff: null },
+      };
+      const remote: StepReport = {
+        index: 2,
+        kind: "snapshot",
+        status: "fail",
+        snapshotKey: "detail__ios-390x844",
+        artifacts: {
+          diff: {
+            __argentArtifact: true,
+            id: "diff-1",
+            filename: "remote-diff.png",
+            mimeType: "image/png",
+            size: 10,
+          },
+        },
+      };
+      // The server evicted the artifact: the fetch happens, the bytes don't.
+      const fetchSpy = vi.fn(async () => new Response("gone", { status: 404 }));
+
+      await exportFailureArtifacts(mkReport([noRoles, nulled, remote]), outDir, flowFile, {
+        toolsUrl: "http://tools.invalid",
+        fetchImpl: fetchSpy as unknown as typeof fetch,
+      });
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1); // the download really was tried
+      expect(remote.artifacts?.diff).toBeNull();
+      // Not a directory, not a marker, not a warning — --output as it was.
+      await expect(fs.access(outDir)).rejects.toThrow();
+      expect(errSpy).not.toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("rides out an empty marker read instead of scattering to a hash sibling", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // <output>/checkout is this flow's own directory. A concurrent run of the
+      // SAME file can catch the marker mid-create: the O_EXCL open publishes the
+      // path one syscall before the bytes, so a read landing in between returns
+      // "". Reading that as "names nobody" would classify the flow's own
+      // directory foreign and split its evidence across a hash sibling for no
+      // reason, so an empty read is retried before the marker is written off.
+      await fs.mkdir(path.join(outDir, "checkout"), { recursive: true });
+      await fs.writeFile(path.join(outDir, "checkout", ".argent-flow-source"), `${flowFile}\n`);
+      let served = false;
+      vi.mocked(fs.readFile).mockImplementation((async (file: unknown, options: unknown) => {
+        if (!served && String(file).endsWith(".argent-flow-source")) {
+          served = true; // exactly one read falls inside the window
+          return "";
+        }
+        return readFileSync(file as string, options as never);
+      }) as unknown as typeof fs.readFile);
+      const step: StepReport = {
+        index: 0,
+        kind: "snapshot",
+        status: "fail",
+        snapshotKey: "home__ios-390x844",
+        artifacts: { current: await writeFile("c.png", "current-bytes") },
+      };
+
+      await exportFailureArtifacts(mkReport([step]), outDir, flowFile, ctx);
+
+      expect(served).toBe(true); // the window was actually exercised
+      expect(step.artifacts?.current).toBe(
+        path.join(outDir, "checkout", "home__ios-390x844-current.png")
+      );
+      expect(await fs.readdir(outDir)).toEqual(["checkout"]); // no hash sibling
+      expect(errSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(fs.readFile).mockRestore();
+      errSpy.mockRestore();
+    }
+  });
+
+  it.skipIf(!canDenyWrite)(
+    "steps past a directory the filesystem refuses to let it claim",
+    async () => {
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const stemDir = path.join(outDir, "checkout");
+      await fs.mkdir(stemDir, { recursive: true });
+      await fs.chmod(stemDir, 0o555); // listable and empty, but unwritable
+      try {
+        // Empty, so the read says "free" — and then the marker create fails with
+        // EACCES, leaving the claim unproven. An unproven claim must never be
+        // written into (the pre-claim code wrote the marker best-effort and copied
+        // in anyway, which would drop unowned bytes into a shared directory), so
+        // this escalates exactly like a foreign occupant and says which it is.
+        const step: StepReport = {
+          index: 0,
+          kind: "snapshot",
+          status: "fail",
+          snapshotKey: "home__ios-390x844",
+          artifacts: { current: await writeFile("c.png", "current-bytes") },
+        };
+
+        await exportFailureArtifacts(mkReport([step]), outDir, flowFile, ctx);
+
+        const target = path.join(outDir, `checkout-${pathHash(flowFile)}`);
+        expect(step.artifacts?.current).toBe(path.join(target, "home__ios-390x844-current.png"));
+        expect(await fs.readFile(step.artifacts?.current as string, "utf8")).toBe("current-bytes");
+        expect(await fs.readdir(stemDir)).toEqual([]); // nothing was forced in
+        expect(errSpy).toHaveBeenCalledTimes(1);
+        expect(errSpy).toHaveBeenCalledWith(
+          `warning: ${stemDir} could not be claimed (EACCES: permission denied, ` +
+            `open '${path.join(stemDir, ".argent-flow-source")}'); ` +
+            `writing this flow's artifacts to ${target} so neither set is overwritten`
+        );
+      } finally {
+        await fs.chmod(stemDir, 0o755);
+        errSpy.mockRestore();
+      }
+    }
+  );
+
+  it.skipIf(!canDenyWrite)(
+    "skips the export when no candidate directory can be claimed at all",
+    async () => {
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      await fs.mkdir(outDir, { recursive: true });
+      await fs.chmod(outDir, 0o555); // --output itself refuses every mkdir
+      try {
+        const source = await writeFile("c.png", "current-bytes");
+        const step: StepReport = {
+          index: 0,
+          kind: "snapshot",
+          status: "fail",
+          snapshotKey: "home__ios-390x844",
+          artifacts: { current: source },
+        };
+
+        await exportFailureArtifacts(mkReport([step]), outDir, flowFile, ctx);
+
+        // Every rung unclaimable is the give-up case: source path left in place,
+        // verdict unchanged, one warning naming the whole span it tried.
+        expect(step.artifacts?.current).toBe(source);
+        expect(await fs.readdir(outDir)).toEqual([]);
+        expect(errSpy).toHaveBeenCalledTimes(1);
+        expect(errSpy).toHaveBeenCalledWith(
+          `warning: not exporting artifacts for ${flowFile}: no candidate directory from ` +
+            `${path.join(outDir, "checkout")} through ` +
+            `${path.join(outDir, `checkout-${pathHash(flowFile, 64)}`)} could be claimed without ` +
+            `overwriting other files; leaving this run's artifact paths in place so nothing is ` +
+            `overwritten`
+        );
+      } finally {
+        await fs.chmod(outDir, 0o755);
+        errSpy.mockRestore();
+      }
+    }
+  );
 });

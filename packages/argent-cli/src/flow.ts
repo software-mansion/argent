@@ -316,21 +316,60 @@ function shellQuoteArg(arg: string): string {
  * `suiteB/checks.yaml`) while a CI suite funnels every run into one
  * `--output` dir — the marker is how a later invocation (a separate process
  * with no memory of earlier runs) tells "my own previous run, overwrite in
- * place" apart from "a different flow's evidence, keep out".
+ * place" apart from "a different flow's evidence, keep out". Creating this
+ * file with O_EXCL is also the act of claiming (see takeExportDir), so the
+ * marker can never end up naming one flow while the directory holds another's
+ * bytes.
  */
 const EXPORT_SOURCE_MARKER = ".argent-flow-source";
 
 /**
- * How a candidate export directory relates to this flow: free to claim
- * (absent, or pre-created but empty — `mkdir -p` before the run is an
- * ordinary CI step, and an empty directory holds nothing to protect),
- * already this flow's own (the marker names `flowPath`), or foreign — owned
- * by a different YAML path (`owner` is that path) or holding content that
- * proves no owner (`owner` is null: operator files, an export from a
- * pre-marker CLI, or a directory that cannot even be listed — emptiness
- * can't be proven, and redirecting is the safe direction). One classifier
- * serves the pretty stem directory and every hash-suffixed fallback alike,
- * so the two can never drift apart in what they refuse to overwrite.
+ * An O_EXCL create publishes the marker's path one syscall before its
+ * contents, so a reader arriving inside that window sees an existing but empty
+ * file. That is the only way a freshly written marker reads as empty, and
+ * concluding "names nobody" there would send a concurrent run of the *same*
+ * flow off to a hash-suffixed sibling for no reason. So an empty read is
+ * retried a handful of times — ~20ms, paid only inside that window — before
+ * the marker is written off as illegible.
+ */
+const MARKER_READ_RETRIES = 4;
+const MARKER_READ_DELAY_MS = 5;
+
+/**
+ * Read a directory's ownership marker: the resolved flow path that claimed it,
+ * `undefined` when there is no readable marker file (an absent directory
+ * included — the caller tells those apart), or null when the file is there but
+ * names nobody.
+ */
+async function readExportMarker(dir: string): Promise<string | null | undefined> {
+  const marker = path.join(dir, EXPORT_SOURCE_MARKER);
+  for (let attempt = 0; ; attempt++) {
+    let owner: string;
+    try {
+      owner = (await fsp.readFile(marker, "utf8")).trim();
+    } catch {
+      return undefined;
+    }
+    if (owner) return owner;
+    if (attempt === MARKER_READ_RETRIES) return null;
+    await new Promise((resolve) => setTimeout(resolve, MARKER_READ_DELAY_MS));
+  }
+}
+
+/**
+ * How a candidate export directory related to this flow at the instant it was
+ * read: free to claim (absent, or pre-created but empty — `mkdir -p` before
+ * the run is an ordinary CI step, and an empty directory holds nothing to
+ * protect), already this flow's own (the marker names `flowPath`), or foreign
+ * — owned by a different YAML path (`owner` is that path) or holding content
+ * that proves no owner (`owner` is null: operator files, an export from a
+ * pre-marker CLI, an illegible marker, or a directory that cannot even be
+ * listed — emptiness can't be proven, and redirecting is the safe direction).
+ * One classifier serves the pretty stem directory and every hash-suffixed
+ * fallback alike, so the two can never drift apart in what they refuse to
+ * overwrite. "free" is a snapshot, never a reservation: two processes reading
+ * at the same instant both get it, so taking the directory is a second,
+ * atomic step (takeExportDir) and only its verdict is binding.
  */
 type ExportDirClaim =
   | { state: "free" }
@@ -338,10 +377,8 @@ type ExportDirClaim =
   | { state: "foreign"; owner: string | null };
 
 async function classifyExportDir(dir: string, flowPath: string): Promise<ExportDirClaim> {
-  let owner: string | null; // null = directory has content but proves no owner
-  try {
-    owner = (await fsp.readFile(path.join(dir, EXPORT_SOURCE_MARKER), "utf8")).trim();
-  } catch {
+  let owner = await readExportMarker(dir); // null = has content but proves no owner
+  if (owner === undefined) {
     try {
       if ((await fsp.readdir(dir)).length === 0) {
         return { state: "free" }; // pre-created but empty — nothing to protect
@@ -362,31 +399,88 @@ async function classifyExportDir(dir: string, flowPath: string): Promise<ExportD
   return owner === flowPath ? { state: "mine" } : { state: "foreign", owner };
 }
 
+/** The clause explaining why a candidate directory could not be taken. */
+function occupiedBy(owner: string | null): string {
+  return owner === null
+    ? "already holds files from an unknown source"
+    : `already holds artifacts from ${owner}`;
+}
+
 /**
- * Pick the subdirectory name under `--output` for this flow's artifacts, or
- * null when nothing can be claimed without destroying someone else's. The
- * filename stem when it is free or already claimed by this same YAML file;
- * otherwise `<stem>-<prefix>` where the prefix is a growing slice (8, then
- * 16, … up to all 64 hex chars) of the sha256 of the resolved flow path.
- * Every candidate — fallbacks included — passes the same occupancy check as
- * the stem (see classifyExportDir): a foreign directory is stepped past to
- * the next longer prefix, never written into. The ladder is a pure function
- * of the flow path, so a re-run walks the same rungs and lands back in the
- * directory its previous run claimed (CI references survive) — unless an
- * earlier rung's foreign occupant was deleted in between, in which case the
- * re-run claims that now-free earlier rung and its old directory goes stale
- * (a redirect, never an overwrite). Two distinct paths can never share the
- * full 64-char hash, so escalation terminates without randomness. If even the full-hash directory is foreign
- * (only possible when something else squats on it), returns null after a
- * warning: the caller skips this flow's export, because losing one export
- * beats destroying another flow's evidence. Each warning names the
- * directory actually being avoided and the directory the artifacts actually
- * land in (or that nothing is written at all). Both name forms are single
- * FLOW_NAME_PATTERN-charset segments (validated stem + hex), so containment
- * under outputDir is preserved for every candidate. Read-only — the marker
- * itself is written only once artifacts actually land.
+ * Take `dir` for `flowPath`. Creating the marker with O_EXCL *is* the claim,
+ * so however many processes race for one directory, exactly one wins the
+ * create. Returns null once the directory is this flow's (it then exists and
+ * holds the marker), or the clause explaining why it isn't.
+ *
+ * Classification alone cannot decide this: between `classifyExportDir` reading
+ * "free" and the first artifact landing there sits a window in which another
+ * process classifies the same directory "free" too — both the pre-created-empty
+ * and the ENOENT branch race — and both then write into it. The loser's bytes
+ * end up under the winner's marker, which is worse than a plain overwrite: a
+ * later, perfectly ordinary run of the flow the marker names classifies that
+ * directory "mine" and overwrites it without a warning, destroying evidence it
+ * never produced.
+ *
+ * EEXIST means the create lost — either to a racing process or to this flow's
+ * own marker from an earlier run (the expected `mine` path). Judge the marker
+ * that is actually there now: our own path is genuinely ours, anything else is
+ * reported exactly like a classify-time `foreign` verdict so the caller
+ * escalates to the next candidate.
+ *
+ * Any other error (unwritable directory, full or read-only filesystem) leaves
+ * the claim unproven, and an unproven claim must never be written into — it is
+ * reported like an occupant so the caller steps past to a candidate it can
+ * actually take. The pre-claim code wrote the marker best-effort and copied in
+ * regardless, which was tolerable only while the marker was a hint; now that it
+ * is the claim, a silent failure would put unowned bytes in a shared directory.
  */
-async function resolveExportDirName(
+async function takeExportDir(dir: string, flowPath: string): Promise<string | null> {
+  try {
+    await fsp.mkdir(dir, { recursive: true });
+    await fsp.writeFile(path.join(dir, EXPORT_SOURCE_MARKER), `${flowPath}\n`, { flag: "wx" });
+    return null; // won the create — the directory is ours
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
+      return `could not be claimed (${err instanceof Error ? err.message : String(err)})`;
+    }
+  }
+  // undefined = the marker vanished under us, or `dir` is a plain file (which
+  // is what made mkdir itself EEXIST): unprovable either way, so foreign.
+  const owner = await readExportMarker(dir);
+  return owner === flowPath ? null : occupiedBy(owner ?? null);
+}
+
+/**
+ * Claim the subdirectory under `--output` for this flow's artifacts and return
+ * its name, or null when nothing can be claimed without destroying someone
+ * else's. The filename stem when it is free or already claimed by this same
+ * YAML file; otherwise `<stem>-<prefix>` where the prefix is a growing slice
+ * (8, then 16, … up to all 64 hex chars) of the sha256 of the resolved flow
+ * path. Every candidate — fallbacks included — passes the same occupancy check
+ * as the stem (see classifyExportDir) and is then taken atomically (see
+ * takeExportDir): a foreign directory, or one another process wins first, is
+ * stepped past to the next longer prefix, never written into. On return the
+ * chosen directory exists and holds this flow's marker, so the caller only has
+ * to copy. The ladder is a pure function of the flow path, so a re-run walks
+ * the same rungs and lands back in the directory its previous run claimed (CI
+ * references survive) — unless an earlier rung's foreign occupant was deleted
+ * in between, in which case the re-run claims that now-free earlier rung and
+ * its old directory goes stale (a redirect, never an overwrite). Two distinct
+ * paths can never share the full 64-char hash, so escalation terminates without
+ * randomness. If even the full-hash directory cannot be taken (only possible
+ * when something else squats on it), returns null after a warning: the caller
+ * skips this flow's export, because losing one export beats destroying another
+ * flow's evidence. Each warning names the directory actually being avoided and
+ * the directory the artifacts actually land in (or that nothing is written at
+ * all). Both name forms are single FLOW_NAME_PATTERN-charset segments
+ * (validated stem + hex), so containment under outputDir is preserved for every
+ * candidate. What it creates: the directory it returns, holding this flow's
+ * marker — plus, only where the filesystem refused the marker after the mkdir
+ * had succeeded, an empty directory it then stepped past. Creating is the whole
+ * point (the marker *is* the claim), so this must be reached only once a byte
+ * is certain to be copied — see the lazy claim in exportFailureArtifacts.
+ */
+async function claimExportDirName(
   outputDir: string,
   flowPath: string,
   stem: string
@@ -396,29 +490,33 @@ async function resolveExportDirName(
   for (let len = 8; len <= hash.length; len += 8) {
     candidates.push(`${stem}-${hash.slice(0, len)}`);
   }
-  const avoided: { dir: string; owner: string | null }[] = [];
+  const avoided: { dir: string; reason: string }[] = [];
   for (const name of candidates) {
-    const claim = await classifyExportDir(path.join(outputDir, name), flowPath);
-    if (claim.state === "foreign") {
-      avoided.push({ dir: path.join(outputDir, name), owner: claim.owner });
+    const dir = path.join(outputDir, name);
+    const claim = await classifyExportDir(dir, flowPath);
+    // Reading "free"/"mine" only earns the right to *try* the atomic take;
+    // losing it reads exactly like a classify-time foreign verdict, so both
+    // escalate — and warn — through the same path.
+    const reason =
+      claim.state === "foreign" ? occupiedBy(claim.owner) : await takeExportDir(dir, flowPath);
+    if (reason !== null) {
+      avoided.push({ dir, reason });
       continue;
     }
     // Warn only once the real destination is known, so every line names both
     // the directory being avoided and where the artifacts actually land.
-    for (const { dir, owner } of avoided) {
+    for (const entry of avoided) {
       console.error(
-        `warning: ${dir} already holds ` +
-          `${owner === null ? "files from an unknown source" : `artifacts from ${owner}`}; ` +
-          `writing this flow's artifacts to ` +
-          `${path.join(outputDir, name)} so neither set is overwritten`
+        `warning: ${entry.dir} ${entry.reason}; writing this flow's artifacts to ` +
+          `${dir} so neither set is overwritten`
       );
     }
     return name;
   }
   console.error(
-    `warning: not exporting artifacts for ${flowPath}: every candidate directory from ` +
-      `${avoided[0].dir} through ${avoided[avoided.length - 1].dir} already holds other ` +
-      `files; leaving this run's artifact paths in place so nothing is overwritten`
+    `warning: not exporting artifacts for ${flowPath}: no candidate directory from ` +
+      `${avoided[0].dir} through ${avoided[avoided.length - 1].dir} could be claimed without ` +
+      `overwriting other files; leaving this run's artifact paths in place so nothing is overwritten`
   );
   return null;
 }
@@ -436,8 +534,18 @@ async function resolveExportDirName(
  * overwrites in place. The fallback gets the same occupancy check as the
  * stem, escalating to longer hash prefixes when it too is taken — and when
  * nothing at all can be claimed, this flow's export is skipped with a
- * warning rather than ever overwriting. This is the only place the CLI needs artifact bytes,
- * so materialization happens here, scoped to each failed snapshot's
+ * warning rather than ever overwriting. The destination is claimed atomically
+ * (claimExportDirName) before a single byte is copied, so two suites racing
+ * into one `--output` cannot both take one directory — and never earlier than
+ * that first byte, so a run that copies nothing (a clean pass, an unusable
+ * key, every download failed) leaves `--output` exactly as it was: no
+ * directory, no marker, no collision warning about a write that never happens.
+ * What that does NOT fix, by design: two parallel runs of the *same* flow file
+ * into one `--output` still overwrite each other's identical-key artifacts,
+ * exactly as before any of this ownership machinery existed — one file's runs
+ * are indistinguishable to a separate process, and the directory's marker names
+ * them truthfully either way. This is the only place the CLI needs artifact
+ * bytes, so materialization happens here, scoped to each failed snapshot's
  * artifacts — a co-located tool-server resolves them in place, a remote one
  * downloads just these files. Rewrites each copied role's path in the report
  * so the renderers and `--json` print the durable location instead of a temp
@@ -461,16 +569,19 @@ export async function exportFailureArtifacts(
     );
     return;
   }
-  // Nothing to export → decide nothing, touch nothing: a clean pass must
-  // leave --output exactly as it was (no directory, no marker, no collision
-  // warning about a write that will never happen).
-  if (!report.steps.some((s) => s.kind === "snapshot" && s.status === "fail" && s.artifacts)) {
-    return;
-  }
-  const dirName = await resolveExportDirName(outputDir, flowPath, stem);
-  if (dirName === null) return; // warned already; sources stay in place, verdict unchanged
-  const dir = path.join(outputDir, dirName);
-  let markerWritten = false;
+  // Claimed lazily, at the first byte actually about to be copied — null until
+  // then, because nothing earlier proves a byte will land at all: a clean pass
+  // carries no failed snapshot, a failed snapshot can carry no usable key, and
+  // a step past both of those filters still writes nothing when its artifacts
+  // object is empty or every role came back null (the realistic one: the
+  // downloads failed). Claiming for any of them would leave a directory and a
+  // marker behind for a run holding no artifacts — and the marker is not inert:
+  // it makes the stem foreign to every *other* flow file from then on, so the
+  // next one redirects itself to a hash sibling, and a reused --output collects
+  // one more empty directory per zero-byte run. Claiming late is exactly as
+  // race-free as claiming early: the atomicity is O_EXCL's, not the ordering's,
+  // and the marker still precedes the first byte.
+  let dir: string | null = null;
   for (const s of report.steps) {
     if (s.kind !== "snapshot" || s.status !== "fail" || !s.artifacts) continue;
     // Key first: a legacy tool-server sends plain path strings, and
@@ -485,24 +596,26 @@ export async function exportFailureArtifacts(
     s.artifacts = result as Record<string, unknown>;
     for (const [role, value] of Object.entries(s.artifacts)) {
       if (typeof value !== "string") continue; // null = failed materialization
+      if (dir === null) {
+        const dirName = await claimExportDirName(outputDir, flowPath, stem);
+        if (dirName === null) return; // warned already; sources stay in place, verdict unchanged
+        // Claimed: the directory exists and holds this flow's marker. Nothing
+        // below re-creates it — if it is deleted mid-run the copies fail and
+        // warn, rather than resurrecting it unmarked for the next run to
+        // redirect away from.
+        dir = path.join(outputDir, dirName);
+      }
       const dest = path.join(dir, `${key}-${role}.png`);
-      // Same resolved-path check as the server's getFlowPath: even if the
-      // pattern above is ever weakened, the copy stays inside --output. Also
+      // Same resolved-path check as the server's getFlowPath: even if the key
+      // and stem patterns are ever weakened, the copy stays inside --output. Also
       // covers `role`, the remaining server-supplied piece of the destination.
+      // It judges the real destination, so it can only run once `dir` is known,
+      // i.e. after the claim: a `role` hostile enough to escape is the single
+      // way a claim can still precede zero bytes — a broken or malicious
+      // tool-server, never an ordinary run.
       const rel = path.relative(outputDir, dest);
       if (rel.startsWith("..") || path.isAbsolute(rel)) continue;
       try {
-        await fsp.mkdir(dir, { recursive: true });
-        if (!markerWritten) {
-          // Claim the directory for this YAML path, once, alongside the first
-          // real artifact. Best-effort with no warning: a marker failure must
-          // not block the copies, and its absence only makes a later run treat
-          // the directory as foreign and redirect away — the safe direction.
-          await fsp
-            .writeFile(path.join(dir, EXPORT_SOURCE_MARKER), `${flowPath}\n`)
-            .catch(() => {});
-          markerWritten = true;
-        }
         await fsp.copyFile(value, dest);
         s.artifacts[role] = dest;
       } catch (err) {
