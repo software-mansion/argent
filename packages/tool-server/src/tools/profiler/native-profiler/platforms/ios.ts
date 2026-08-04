@@ -4,6 +4,7 @@ import { promises as fs } from "fs";
 import { existsSync } from "node:fs";
 import * as path from "path";
 import type { NativeProfilerSessionApi } from "../../../../blueprints/native-profiler-session";
+import { externalNativeId } from "../../../../utils/external-devices";
 import { deviceSetForUdid, simctlArgsForUdidSync } from "../../../../utils/ios-device-sets";
 import { getDebugDir } from "../../../../utils/react-profiler/debug/dump";
 import {
@@ -500,6 +501,14 @@ export async function startNativeProfilerIos(
   // Warm the UDID → device-set cache so the synchronous simctl helpers below
   // (enumerate/list/terminate/launch via execFileSync) target the right set.
   await deviceSetForUdid(params.device_id);
+
+  /**
+   * `xctrace --device` resolves a CoreSimulator UDID, and the `ext:` prefix a
+   * provider-supplied id carries means nothing outside Argent. simctl argv is
+   * substituted by {@linkcode simctlArgsForUdidSync}, this one isn't.
+   */
+  const xctraceDevice = externalNativeId(params.device_id);
+
   if (api.profilingActive) {
     throw new FailureError(
       `A native profiling session is already running (PID: ${api.capturePid}).`,
@@ -635,7 +644,7 @@ export async function startNativeProfilerIos(
         "--template",
         templatePath,
         "--device",
-        params.device_id,
+        xctraceDevice,
         "--output",
         outputFile,
         "--no-prompt",
@@ -651,7 +660,7 @@ export async function startNativeProfilerIos(
       // host-wide --all-processes) build the argv.
       xctraceArgs = strategy!.buildRecordArgs({
         templatePath,
-        deviceId: params.device_id,
+        deviceId: xctraceDevice,
         target: detected!,
         outputFile,
         notifyName: notify ? notifyName : undefined,
