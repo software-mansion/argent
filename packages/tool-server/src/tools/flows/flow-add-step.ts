@@ -458,7 +458,7 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
     },
     description: `Execute a tool call and record it as a step in the flow named by \`name\` + \`project_root\` (the recording must already be open — see flow-start-recording). Use when recording a flow and you want to run and capture each action. A coordinate \`gesture-tap\` is recorded as a portable \`tap: { selector }\` step when the tapped element has stable text/identifier (otherwise coordinates are kept with a warning); a \`restart-app\` is recorded as a \`launch\` step (record one FIRST to make the flow a self-contained e2e flow; restart-app has no chromium support, so a chromium flow records as a fragment — add the \`launch: { chromium: <app path> }\` line to the YAML afterward, deleting the executionPrerequisite line if one was recorded: a flow that starts with a launch must not declare it).
 Returns { message, toolResult, stepCount, recorded, savedTo } - \`recorded\` is the one line that was appended, and \`stepCount\` how many steps the flow now has. The flow's full YAML is deliberately NOT returned per step; read it back from \`flow-finish-recording\`. \`savedTo\` is where the YAML landed: a host path, or, against a remote client, the directive that has the client write it (the only field naming the destination in that mode). If it fails an error is returned and nothing is recorded.
-If a step was recorded by mistake, remove it from the .yaml after \`flow-finish-recording\` — editing the file while the recording is active can be overwritten by the in-memory copy.`,
+If a step was recorded by mistake, edit the .yaml to remove it. In host (local) mode the recorder re-reads the file before each append, so an edit made between steps is kept. Against a remote client, edit after \`flow-finish-recording\` because the in-memory copy is authoritative there and can overwrite a mid-recording edit.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params, ctx) {
@@ -546,8 +546,7 @@ If a step was recorded by mistake, remove it from the .yaml after \`flow-finish-
         };
       }
 
-      const { savedTo } = await appendStepToFlow(session, step);
-      const stepCount = session.flow.steps.length;
+      const { savedTo, stepCount } = await appendStepToFlow(session, step);
 
       return {
         message: `Step added to "${params.name}" flow${warning ? ` — ${warning}` : ""}`,

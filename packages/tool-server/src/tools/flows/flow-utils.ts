@@ -2968,7 +2968,7 @@ function assertSessionStillLive(session: RecordingSession, step: FlowStep): void
 export async function appendStepToFlow(
   session: RecordingSession,
   step: FlowStep
-): Promise<{ flowFile: string; savedTo: FlowSavedTo }> {
+): Promise<{ flowFile: string; savedTo: FlowSavedTo; stepCount: number }> {
   // The session's OWN key, not a fresh resolution of it: the lock this append
   // takes and the identity {@link assertSessionStillLive} checks must be the
   // same one, or a key that moved under the session (a symlink repointed
@@ -2980,7 +2980,11 @@ export async function appendStepToFlow(
     if (session.persist === "host") {
       const flowFile = await appendStep(session.filePath, step);
       session.flow = parseFlow(flowFile);
-      return { flowFile, savedTo: session.filePath };
+      // Count inside the lock, off the just-refreshed `session.flow`: a caller
+      // reading `session.flow.steps.length` after this returns would be racing
+      // a concurrent same-key append, which can reassign `session.flow` between
+      // the release here and that read.
+      return { flowFile, savedTo: session.filePath, stepCount: session.flow.steps.length };
     }
     session.flow.steps.push(step);
     try {
@@ -2992,7 +2996,11 @@ export async function appendStepToFlow(
       // would re-hit the same error with no way to recover.
       validateFlow(session.flow);
       const flowFile = serializeFlow(session.flow);
-      return { flowFile, savedTo: clientFileDirective(session.filePath, flowFile) };
+      return {
+        flowFile,
+        savedTo: clientFileDirective(session.filePath, flowFile),
+        stepCount: session.flow.steps.length,
+      };
     } catch (err) {
       session.flow.steps.pop(); // keep the in-memory copy consistent: nothing recorded
       throw err;
