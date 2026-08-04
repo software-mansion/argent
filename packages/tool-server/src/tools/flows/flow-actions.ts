@@ -338,18 +338,19 @@ function axisFullyInside(
 // gesture-nav bar, an overlaying tab bar). After acceptance the loop keeps
 // scrolling in the SAME direction in deficit-sized increments until the target
 // sits EDGE_AVOID_PADDING clear of the entry edge. The clip those increments
-// measure against — and the region the gesture anchors in — is the container
-// that actually scrolls the target: the step's `within` container when one is
-// named, otherwise the innermost scroll container the tree shows the target
-// living in (see targetScrollerFrame) — never the whole screen, which would
-// show a permanent deficit for a pinned element no scroll can move and
-// dispatch the gesture into whatever sits under the screen centre.
+// measure against — and the region the gesture anchors in — is always a
+// container that actually scrolls: the step's `within` container when one is
+// named AND the tree reports it scrollable, otherwise the innermost scroll
+// container the tree shows the target living in (see targetScrollerFrame and
+// scrollerRegion) — never the whole screen, and never a static pane, either
+// of which shows a deficit no gesture can close while dispatching that
+// gesture into whatever sits under its centre.
 // Best-effort by design:
 // it engages only when that container's entry edge effectively is a screen
 // edge (an inset container already clears screen chrome), and gives up —
-// accepting the flush landing — when the target has no scroll container at
-// all, the previous nudge failed to move it, the target has no headroom, or
-// the attempts run out. A nudge can therefore delay a step but never fail one
+// accepting the flush landing — when no scrolling clip resolves, the previous
+// nudge failed to move the target, the target has no headroom, or the
+// attempts run out. A nudge can therefore delay a step but never fail one
 // that was already visible.
 //
 // Touch platforms only, and only END-edge (`down`/`right`) landings.
@@ -413,12 +414,13 @@ function entryEdgeDeficit(
  * gesture, since the travel is capped at `headroom / 2` and a shorter swipe
  * would register as a tap (see MIN_SCROLL_INCREMENT).
  *
- * `clip` is the container that actually scrolls the target — the step's
- * `within` region, or the target's own scroll-container ancestor — never the
- * whole screen: with a FULL_SCREEN clip the screen-edge gate is trivially
- * true and the deficit measures the target's distance to the SCREEN edge, so
- * a pinned element (bottom bar, FAB, sticky footer) that no scroll can move
- * would always demand a nudge, dispatched into some unrelated scroller.
+ * `clip` is a container the tree reports scrollable — the step's `within`
+ * region when it is one, else the target's own scroll-container ancestor —
+ * never the whole screen and never a static pane: with a FULL_SCREEN clip the
+ * screen-edge gate is trivially true and the deficit measures the target's
+ * distance to the SCREEN edge, so a pinned element (bottom bar, FAB, sticky
+ * footer) that no scroll can move would always demand a nudge, dispatched
+ * into some unrelated scroller.
  *
  * Geometry only — direction- and platform-agnostic. The `headroom` here is
  * viewport room, NOT scrollability: it cannot see whether the container is
@@ -823,6 +825,40 @@ function targetScrollerFrame(tree: DescribeNode, frame: DescribeFrame): Describe
   return best;
 }
 
+/**
+ * `region` back again when the step's `within` names a visible scroll
+ * container, otherwise undefined — the `within` half of the nudge's clip gate.
+ *
+ * Whether the TARGET sits in some scroller (see targetScrollerFrame) is a
+ * different question, and not the one that matters here: a static card inside
+ * a scrollable page passes that test while the clip stays the card, so the
+ * deficit is measured against a clip that moves WITH the target under the
+ * nudge's own gesture — unclosable by construction — while the swipe scrolls
+ * the page the step never named.
+ *
+ * Frame identity, not containment: `region` came from this same tree, so the
+ * node it was resolved from is the one to classify.
+ */
+function scrollerRegion(tree: DescribeNode, region: DescribeFrame): DescribeFrame | undefined {
+  let found = false;
+  const walk = (node: DescribeNode): void => {
+    const f = node.frame;
+    if (
+      isScrollContainer(node) &&
+      isVisible(node) &&
+      f.x === region.x &&
+      f.y === region.y &&
+      f.width === region.width &&
+      f.height === region.height
+    ) {
+      found = true;
+    }
+    for (const child of node.children) walk(child);
+  };
+  walk(tree);
+  return found ? region : undefined;
+}
+
 function collectFocused(node: DescribeNode, acc: DescribeNode[]): DescribeNode[] {
   if (node.focused) acc.push(node);
   for (const child of node.children) collectFocused(child, acc);
@@ -962,12 +998,12 @@ async function scrollIncrement(
  * limit — where an up-scroll-to typically lands, undetectably so — the
  * continuation drag is pull-to-refresh, and Chromium has no chrome over its
  * viewport to clear in the first place (see the nudge overview). The nudge
- * measures against — and anchors its gesture in — the container that actually
- * scrolls the target: the `within` container, or (when none is named) the
- * innermost scroll container the tree shows the target living in; a target
- * inside no scroller at all (pinned chrome, a fully static screen, a `within`
- * naming something that doesn't scroll) is accepted as it stands with no
- * gesture (see targetScrollerFrame). The phase is bounded three ways: the
+ * measures against — and anchors its gesture in — a container the tree reports
+ * scrollable: the `within` container when it is one, or (when none is named)
+ * the innermost scroll container the tree shows the target living in. With no
+ * such clip (pinned chrome, a fully static screen, a `within` naming a card or
+ * a text pane) the landing is accepted as it stands with no gesture (see
+ * scrollerRegion and targetScrollerFrame). The phase is bounded three ways: the
  * end-of-scroll fingerprint — scoped, like the gesture, to the scrollers under
  * the round's actual anchor — accepts the flush landing when a nudge moves
  * nothing; a per-round progress check allows a follow-up nudge only when the
@@ -1025,16 +1061,16 @@ async function scrollToVisible(
     let nudgeRegion: DescribeFrame | undefined;
     if (frame && axisFullyInside(frame, direction, region)) {
       accepted = frame;
-      // A containing scroller is the precondition on BOTH paths: against a
-      // region nothing can scroll (the FULL_SCREEN fallback, or a `within`
-      // naming a card or a text pane) a pinned target shows a permanent
-      // deficit and the gesture goes to whatever sits under that region's
-      // centre. No containing scroller means no nudge, and the step passes
-      // exactly as if the nudge phase didn't exist. `within` still picks the
-      // clip when one is named — it names the container to measure and
-      // anchor in, which is the point of the key.
-      const scroller = targetScrollerFrame(tree, frame);
-      const clip = scroller && (within ? region : scroller);
+      // The clip must be a container that actually scrolls, on BOTH paths:
+      // against one that doesn't (the FULL_SCREEN fallback, or a `within`
+      // naming a card or a text pane) the deficit is unclosable — a pinned
+      // target never moves, and a clip inside some outer scroller travels with
+      // the target — while the gesture goes to whatever sits under that
+      // region's centre. So `within` picks the clip only when the region it
+      // names is itself a scroller; otherwise, as for a target inside no
+      // scroller at all, there is no nudge and the step passes exactly as if
+      // the phase didn't exist.
+      const clip = within ? scrollerRegion(tree, region) : targetScrollerFrame(tree, frame);
       // Start-edge landings (`up`/`left`) stay flush: at the container's
       // start limit — undetectable in the tree, and exactly where an
       // up-scroll-to typically lands — the continuation drag IS

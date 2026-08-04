@@ -1228,6 +1228,56 @@ describe("scroll-to directive", () => {
     expect(swipes).toHaveLength(0);
   });
 
+  it("never nudges when a named within container is static inside a real scroller", async () => {
+    // Reviewer repro: the `within` names a NON-scrolling card that lives
+    // inside a scrollable page — so "does the target sit in some scroller"
+    // answers yes (the page) while the clip is still the card. Measuring the
+    // target's scroller instead of the named region is what makes this shape
+    // slip through: the nudge would anchor at the card's centre and scroll the
+    // page, a container the step never named, and it could never succeed —
+    // the clip travels WITH the target under its own gesture, so the deficit
+    // (0.073 here) is identical afterwards and only the progress check ends
+    // it. The clip must therefore be scrollable itself, not merely sit in
+    // something scrollable.
+    currentTree = () =>
+      screen([
+        n({
+          role: "AXScrollArea",
+          identifier: "page-scroller",
+          frame: { x: 0, y: 0.2993, width: 1, height: 0.7007 },
+        }),
+        // Flush against the screen bottom, so every other gate passes:
+        // clip end 1.0 is a screen edge, deficit 0.073, headroom 0.2734 —
+        // geometry for a 0.1095 nudge anchored at (0.5, 0.8357).
+        n({ identifier: "bottom-card", frame: { x: 0, y: 0.6714, width: 1, height: 0.3286 } }),
+        n({ identifier: "card-item", frame: { x: 0, y: 0.9448, width: 1, height: 0.0282 } }),
+      ]);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes);
+
+    await writeFlow("within-static-card", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "scroll-to",
+          target: { identifier: "card-item" },
+          direction: "down",
+          within: { identifier: "bottom-card" },
+        },
+      ],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "within-static-card", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(0);
+  });
+
   it("measures the nudge clip against the target's scroller, not the screen", async () => {
     // The scroller leaf's bottom sits at 0.93 — outside EDGE_AVOID_SCREEN_EPS
     // (0.05) of the screen edge, so its own border already clears screen
