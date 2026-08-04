@@ -830,6 +830,51 @@ describe("flow-add-step", () => {
     expect(parseFlow(await onDisk("sequence-failed")).steps).toEqual([]);
   });
 
+  it("omits the mutation warning when the run-sequence failed on its first step", async () => {
+    // completed: 0 — nothing ran before the failure, so no prior state was
+    // mutated and the "restore the recorded prefix" advice would be misleading.
+    const registry = createMockRegistry({
+      "run-sequence": {
+        result: {
+          completed: 0,
+          total: 2,
+          steps: [
+            { tool: "await-ui-element", error: "await-ui-element condition not met: not seen" },
+          ],
+        },
+      },
+    });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "sequence-failed-first", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "sequence-failed-first",
+        project_root: tmpDir,
+        command: "run-sequence",
+        args: JSON.stringify({
+          udid: "ABC",
+          steps: [
+            {
+              tool: "await-ui-element",
+              args: { condition: "visible", selector: { text: "Home" } },
+            },
+            { tool: "gesture-tap", args: { x: 0.5, y: 0.3 } },
+          ],
+        }),
+      }
+    );
+
+    expect(result.message).toContain("failed nested step");
+    expect(result.message).toContain("step NOT recorded");
+    expect(result.message).not.toContain("mutated device state");
+    expect(parseFlow(await onDisk("sequence-failed-first")).steps).toEqual([]);
+  });
+
   it("does not record a run-sequence cancelled after partial execution", async () => {
     const controller = new AbortController();
     const registry = {
@@ -907,6 +952,42 @@ describe("flow-add-step", () => {
     expect(result.message).toContain("Prior composed steps may already have mutated device state");
     expect(result.message).toContain("state produced by the recorded prefix");
     expect(parseFlow(await onDisk("compose-failed")).steps).toEqual([]);
+  });
+
+  it("omits the mutation warning when flow-execute failed with no step passing", async () => {
+    // passed: 0 — the composed flow failed on its first step (a read-only assert
+    // here), so nothing mutated and the restore-the-prefix advice is misleading.
+    const registry = createMockRegistry({
+      "flow-execute": {
+        result: {
+          ok: false,
+          passed: 0,
+          failed: 1,
+          steps: [{ kind: "assert", status: "fail", reason: "Home not visible" }],
+        },
+      },
+    });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "compose-failed-first", project_root: tmpDir }
+    );
+    await writeSiblingFlow("login", "steps:\n  - echo: hi\n");
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "compose-failed-first",
+        project_root: tmpDir,
+        command: "flow-execute",
+        args: JSON.stringify({ name: "login", project_root: tmpDir, device: "ABC" }),
+      }
+    );
+
+    expect(result.message).toContain("ok: false");
+    expect(result.message).toContain("NOT recorded");
+    expect(result.message).not.toContain("mutated device state");
+    expect(parseFlow(await onDisk("compose-failed-first")).steps).toEqual([]);
   });
 
   it("does not record run: when flow-execute returned a prerequisite notice", async () => {

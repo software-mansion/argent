@@ -179,8 +179,9 @@ steps:
   });
 });
 
-it("fails a raw run-sequence step when one nested step returned an error", async () => {
-  const flowFile = await writeFlow(`executionPrerequisite: ""
+describe("flow-execute with a nested run-sequence step", () => {
+  it("fails a raw run-sequence step when one nested step returned an error", async () => {
+    const flowFile = await writeFlow(`executionPrerequisite: ""
 steps:
   - tool: run-sequence
     args:
@@ -191,36 +192,37 @@ steps:
             selector: { text: Continue }
   - echo: must not run
 `);
-  const registry = makeRegistry(async (id) => {
-    if (id !== "run-sequence") return {};
-    return {
-      completed: 0,
-      total: 1,
-      steps: [
-        {
-          tool: "await-ui-element",
-          error: "await-ui-element condition not met: no element matched",
-        },
-      ],
-    };
-  });
+    const registry = makeRegistry(async (id) => {
+      if (id !== "run-sequence") return {};
+      return {
+        completed: 0,
+        total: 1,
+        steps: [
+          {
+            tool: "await-ui-element",
+            error: "await-ui-element condition not met: no element matched",
+          },
+        ],
+      };
+    });
 
-  const result = asRun(
-    await createRunFlowTool(registry).execute(
-      {},
-      { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile, device: "X" }
-    )
-  );
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile, device: "X" }
+      )
+    );
 
-  expect(result.steps[0]).toMatchObject({
-    kind: "tool",
-    tool: "run-sequence",
-    status: "fail",
-    reason: expect.stringContaining("await-ui-element condition not met"),
+    expect(result.steps[0]).toMatchObject({
+      kind: "tool",
+      tool: "run-sequence",
+      status: "fail",
+      reason: expect.stringContaining("await-ui-element condition not met"),
+    });
+    // Which nested step stopped it, by position and tool — the outer report
+    // names only "run-sequence", and a sequence's steps are often identical.
+    expect(result.steps[0]!.reason).toContain("stopped at await-ui-element after 0 of 1 steps");
+    expect(result.steps[1]).toMatchObject({ kind: "echo", status: "skip" });
+    expect(result.ok).toBe(false);
   });
-  // Which nested step stopped it, by position and tool — the outer report
-  // names only "run-sequence", and a sequence's steps are often identical.
-  expect(result.steps[0]!.reason).toContain("step 1/1 (await-ui-element)");
-  expect(result.steps[1]).toMatchObject({ kind: "echo", status: "skip" });
-  expect(result.ok).toBe(false);
 });
