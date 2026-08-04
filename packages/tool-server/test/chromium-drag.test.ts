@@ -22,6 +22,41 @@ function fakeChromiumApi() {
   };
 }
 
+// Drives the tool on a virtual clock that both the dispatch round-trip and
+// every `sleep` advance, so a measured press→release span is exact instead of
+// carrying real-scheduler jitter.
+async function runOnVirtualClock(
+  params: Record<string, unknown>,
+  opts: { dispatchCostMs?: number; startMs?: number } = {}
+) {
+  const api = fakeChromiumApi();
+  const dispatchCostMs = opts.dispatchCostMs ?? 0;
+  let now = opts.startMs ?? 1000;
+  const stamps: { type: string; at: number; x: number }[] = [];
+  const sleepDelays: number[] = [];
+  const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+  api.dispatchMouseEvent.mockImplementation(async (event: Record<string, unknown>) => {
+    stamps.push({ type: event.type as string, at: now, x: event.x as number });
+    now += dispatchCostMs;
+  });
+  const timeoutSpy = vi.spyOn(global, "setTimeout").mockImplementation(((
+    fn: () => void,
+    ms?: number
+  ) => {
+    sleepDelays.push(ms ?? 0);
+    now += ms ?? 0;
+    fn();
+    return 0 as unknown as ReturnType<typeof setTimeout>;
+  }) as never);
+  try {
+    await gestureDragTool.execute({ chromium: api } as never, params as never);
+  } finally {
+    timeoutSpy.mockRestore();
+    nowSpy.mockRestore();
+  }
+  return { stamps, sleepDelays };
+}
+
 describe("gesture-drag", () => {
   it("presses at the start, interpolates moves, releases at the end (viewport px)", async () => {
     const api = fakeChromiumApi();
@@ -59,46 +94,58 @@ describe("gesture-drag", () => {
   });
 
   it("paces each frame off a deadline so the dispatch round-trip counts toward the 16ms budget", async () => {
-    // Simulate an ~11ms CDP round-trip per dispatch by advancing the clock,
-    // and capture the delay every `sleep` requests. A fixed sleep(16) would
-    // charge 16ms on top of each dispatch (the ~1.5x overrun); the deadline
-    // charges only the remainder, so the frame stays ~16ms total.
-    const api = fakeChromiumApi();
-    let now = 1000;
-    const dispatchCost = 11;
-    const sleepDelays: number[] = [];
-    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
-    api.dispatchMouseEvent.mockImplementation(async () => {
-      now += dispatchCost;
-    });
-    const timeoutSpy = vi.spyOn(global, "setTimeout").mockImplementation(((
-      fn: () => void,
-      ms?: number
-    ) => {
-      sleepDelays.push(ms ?? 0);
-      fn();
-      return 0 as unknown as ReturnType<typeof setTimeout>;
-    }) as never);
-    try {
-      await gestureDragTool.execute(
-        { chromium: api } as never,
-        {
-          udid: "chromium-cdp-19222",
-          fromX: 0.1,
-          fromY: 0.5,
-          toX: 0.9,
-          toY: 0.5,
-          durationMs: 320,
-        } as never
-      );
-    } finally {
-      timeoutSpy.mockRestore();
-      nowSpy.mockRestore();
-    }
+    // Simulate an ~11ms CDP round-trip per dispatch and capture the delay every
+    // `sleep` requests. A fixed sleep(16) would charge 16ms on top of each
+    // dispatch (the ~1.5x overrun); the deadline charges only the remainder, so
+    // the frame stays ~16ms total. durationMs 320 → 20 steps → a 16ms frame.
+    const dispatchCostMs = 11;
+    const { sleepDelays } = await runOnVirtualClock(
+      {
+        udid: "chromium-cdp-19222",
+        fromX: 0.1,
+        fromY: 0.5,
+        toX: 0.9,
+        toY: 0.5,
+        durationMs: 320,
+      },
+      { dispatchCostMs }
+    );
     // Every frame subtracts the dispatch it just awaited from the 16ms budget.
     expect(sleepDelays.length).toBeGreaterThan(0);
     for (const delay of sleepDelays) {
-      expect(delay).toBe(16 - dispatchCost);
+      expect(delay).toBe(16 - dispatchCostMs);
+    }
+  });
+
+  it("delivers the whole requested press→release span, not one frame short", async () => {
+    // Pacing `steps - 1` frames off a fixed 16ms landed the release a frame
+    // early — 32ms of a requested 50 (0.64x) — and short durations are exactly
+    // where apps threshold a flick against a drag. The run-start deadline spends
+    // that last frame before the release instead.
+    for (const durationMs of [50, 100, 300, 1000]) {
+      const { stamps } = await runOnVirtualClock({
+        udid: "chromium-cdp-19222",
+        fromX: 0.1,
+        fromY: 0.5,
+        toX: 0.9,
+        toY: 0.5,
+        durationMs,
+      });
+      const press = stamps[0];
+      const release = stamps[stamps.length - 1];
+      expect(press.type).toBe("mousePressed");
+      expect(release.type).toBe("mouseReleased");
+      // Nothing costs wall clock under the mock, so the span is the pacing alone.
+      expect(release.at - press.at).toBeGreaterThanOrEqual(durationMs - 3);
+      expect(release.at - press.at).toBeLessThanOrEqual(durationMs + 3);
+      // The release alone carries the endpoint: a move there plus the final
+      // still frame would read as a hold and kill a non-settle drag's fling.
+      const moves = stamps.slice(1, -1);
+      expect(moves.length).toBeGreaterThan(0);
+      for (const move of moves) {
+        expect(move.type).toBe("mouseMoved");
+        expect(move.x).toBeLessThan(release.x);
+      }
     }
   });
 
