@@ -36,10 +36,14 @@ vi.mock("../../src/tools/devices/boot-electron", () => ({
 }));
 vi.mock("../../src/utils/chromium-discovery", () => ({ untrackChromiumPort: vi.fn() }));
 
-// The single-instance-lock hint re-probes the attached instance's CDP endpoint
+// The single-instance-lock hint re-probes every suspect instance's CDP endpoint
 // before naming it. Mock only that probe (live by default) so no test does a
-// real HTTP fetch; everything else in the blueprint stays real.
-const ensureCdpReachable = vi.fn(async () => ({ Browser: "TestApp/1.0" }));
+// real HTTP fetch; everything else in the blueprint stays real. Typed on the
+// port so a test can decide liveness per instance — several suspects are probed
+// in parallel, so call order is not a handle to grab any one of them by.
+const ensureCdpReachable = vi.fn(async (_port: number, _signal?: AbortSignal) => ({
+  Browser: "TestApp/1.0",
+}));
 vi.mock("../../src/blueprints/chromium-cdp", async () => {
   const actual = await vi.importActual<typeof import("../../src/blueprints/chromium-cdp")>(
     "../../src/blueprints/chromium-cdp"
@@ -1255,9 +1259,10 @@ describe("flow-execute chromium boot", () => {
     expect(failed.reason).not.toContain("chromium-cdp-9999 is running");
   });
 
-  it("still names the foreign instance after the run has moved onto one it owns", async () => {
-    // The foreign instance outlives every launch (the runner never kills it), so
-    // the hint must name IT — not the owned instance the run currently sits on.
+  it("names the foreign instance AND the run's own after the run has moved onto one it owns", async () => {
+    // Both are suspects and neither subsumes the other: the foreign instance
+    // outlives every launch (the runner never kills it) and is the one a reader
+    // can actually close, while the owned one is the holder no rerun can escape.
     const flowFile = await writeFlow(
       "steps:\n  - launch: { chromium: ./app-lock }\n  - launch: { chromium: ./app-b }\n  - launch: { chromium: ./app-lock }\n"
     );
@@ -1282,16 +1287,24 @@ describe("flow-execute chromium boot", () => {
     const failed = result.steps[2];
     expect(failed).toMatchObject({ kind: "launch", status: "error" });
     expect(failed.reason).toMatch(/single-instance lock/i);
-    expect(failed.reason).toContain("chromium-cdp-9999");
-    expect(failed.reason).not.toContain("chromium-cdp-12345");
+    expect(failed.reason).toContain("chromium-cdp-9999 is running and this run does not own it");
+    // The owned app-b instance is named too, with the path that makes the name
+    // collision checkable — and the closable advice is withdrawn for it.
+    expect(failed.reason).toContain(
+      `chromium-cdp-12345 (${path.join(path.dirname(flowFile), "app-b")})`
+    );
+    expect(failed.reason).toContain("closing it is not on offer and a rerun fails identically");
     // Only the instance the runner booted for app-b is torn down.
     expect(killChromiumByPortAndWait.mock.calls).toEqual([[12345, 4242]]);
   });
 
-  it("hints the single-instance lock on a hoisted run even with no attached instance to name", async () => {
-    // Hoist-booted run: it never attached, so the runner knows of no foreign
-    // instance — but a lock-shaped failure still means one likely exists, and
-    // the diagnosis must land in-band rather than only in the tool-server log.
+  it("names the run's OWN instance as the holder when the lock beats a later launch", async () => {
+    // Hoist-booted run: it never attached, so the only thing that can hold the
+    // lock is the instance the run itself booted — the case two app directories
+    // sharing one Electron `name` (a v1/v2 build pair) produces, since the
+    // path-equality retire in bootChromiumForLaunch can't see they are one app.
+    // "Close it and rerun" is unactionable here: the runner kills that holder at
+    // run end, so there is nothing to close and the rerun fails identically.
     const flowFile = await writeFlow(
       "steps:\n  - launch: { chromium: ./app-a }\n  - launch: { chromium: ./app-b }\n"
     );
@@ -1312,11 +1325,83 @@ describe("flow-execute chromium boot", () => {
     expect(failed).toMatchObject({ kind: "launch", status: "error" });
     expect(failed.reason).toContain("could not boot the chromium app");
     expect(failed.reason).toMatch(/single-instance lock/i);
-    // Generalized: no instance is named (and none is probed).
+    // The holder is named with the app path that makes the shared `name`
+    // checkable — app-a, which no retire could match against app-b.
+    expect(failed.reason).toContain(
+      `This run booted chromium-cdp-12345 (${path.join(path.dirname(flowFile), "app-a")})`
+    );
+    expect(failed.reason).toContain("alive until run end");
+    expect(failed.reason).toContain("shares an Electron `name`");
+    expect(failed.reason).toContain("closing it is not on offer and a rerun fails identically");
+    // Both the misleading advice and the un-owned wording stay off a holder the
+    // run owns: one is impossible to act on, the other is simply false.
+    expect(failed.reason).not.toContain("close it and rerun");
     expect(failed.reason).not.toContain("is running and this run does not own it");
-    expect(ensureCdpReachable).not.toHaveBeenCalled();
+    // "alive until run end" was verified, not assumed from the boot record.
+    expect(ensureCdpReachable).toHaveBeenCalledWith(12345, expect.anything());
     // The hoisted instance is still reclaimed at run end.
     expect(killChromiumByPortAndWait.mock.calls).toEqual([[12345, 4242]]);
+  });
+
+  it("lists every instance the run owns, since it cannot tell which one shares the name", async () => {
+    // Two live owned instances of different apps: the failing path matched
+    // neither (or one would have been retired), and the colliding Electron
+    // `name` is only in the app manifests the runner never reads — so naming a
+    // single guess would point at the wrong app half the time.
+    const flowFile = await writeFlow(
+      "steps:\n  - launch: { chromium: ./app-a }\n  - launch: { chromium: ./app-b }\n  - launch: { chromium: ./app-c }\n"
+    );
+    const registry = makeRegistry();
+    // Hoist (app-a) and app-b boot; app-c's is the one the lock quits.
+    bootElectronApp
+      .mockImplementationOnce(defaultBoot)
+      .mockImplementationOnce(defaultBoot)
+      .mockImplementationOnce(async () => {
+        throw lockShapedBootError(12347);
+      });
+
+    const result = await runFlow(registry, {
+      name: "locked-two-owned",
+      project_root: PROJECT_ROOT,
+      flow_file: flowFile,
+    });
+
+    expect(result.ok).toBe(false);
+    const dir = path.dirname(flowFile);
+    expect(result.steps[2].reason).toContain(
+      `This run booted chromium-cdp-12345 (${path.join(dir, "app-a")}), chromium-cdp-12346 (${path.join(dir, "app-b")})`
+    );
+  });
+
+  it("does not name an owned instance whose CDP endpoint is gone", async () => {
+    // Owning a process is not evidence it lives — it can crash or be closed
+    // after its boot, and a dead one holds no lock. Same ghost rule as the
+    // attached suspect: with nothing live left to name, the hint generalizes.
+    const flowFile = await writeFlow(
+      "steps:\n  - launch: { chromium: ./app-a }\n  - launch: { chromium: ./app-b }\n"
+    );
+    const registry = makeRegistry();
+    bootElectronApp.mockImplementationOnce(defaultBoot).mockImplementationOnce(async () => {
+      throw lockShapedBootError(12346);
+    });
+    // Keyed on the port, not call order: the suspects are probed in parallel, so
+    // a `once` handler would attach to whichever probe happened to run first.
+    ensureCdpReachable.mockImplementation(async (port: number) => {
+      if (port === 12345) throw new Error("connect ECONNREFUSED 127.0.0.1:12345");
+      return { Browser: "TestApp/1.0" };
+    });
+
+    const result = await runFlow(registry, {
+      name: "locked-dead-owned",
+      project_root: PROJECT_ROOT,
+      flow_file: flowFile,
+    });
+
+    expect(result.ok).toBe(false);
+    const failed = result.steps[1];
+    expect(failed.reason).toMatch(/single-instance lock/i);
+    expect(failed.reason).not.toContain("chromium-cdp-12345");
+    expect(failed.reason).toContain("If a copy of this app is already running, close it and rerun");
   });
 
   it("keeps the bare error when a boot failure is not lock-shaped, even with an attached instance", async () => {

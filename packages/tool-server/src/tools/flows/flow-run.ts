@@ -518,6 +518,10 @@ async function bootChromiumForLaunch(state: ExecState, app: Launch): Promise<Dir
   // run left this instance, so a green report shows the move (and its fate).
   const prevId = device.id;
 
+  // Path equality, so two app directories shipping one Electron `name` (a v1/v2
+  // build pair) are not recognized as one app: the first stays alive, its lock
+  // quits this boot, and the failure lands on {@link singleInstanceLockHint} —
+  // which is why that hint has to name the instances this run owns.
   const retiring = state.owned.findIndex((o) => o.appPath === appPath);
   let retiredId: string | undefined;
   if (retiring !== -1) {
@@ -570,19 +574,53 @@ function singleInstanceLockSignal(err: unknown): FailureSignal | null {
 }
 
 /**
- * The lock explanation, shared by both boot sites so the mid-run failure and
- * the hoisted one that precedes it name one cause in one wording. `suspect` is
- * the un-owned instance, passed only when a re-probe showed it still live — a
- * dead suspect, or a hoisted boot that never attached to anything, keeps the
- * hint general rather than sending the agent after a ghost, which still beats
- * leaving the likely cause out of band for a lock-holder the runner never
- * knew about.
+ * The instances that could be holding the lock a boot just lost to, each one
+ * re-probed for liveness ({@link liveLockSuspects}) — the hint must not assert
+ * that a process "is running" when it has since exited.
  */
-function singleInstanceLockHint(suspect: string | null): string {
-  const holder = suspect
-    ? `${suspect} is running and this run does not own it; if it is this same app, it holds that lock.`
-    : `If a copy of this app is already running, close it and rerun.`;
-  return `A clean exit before CDP comes up is the signature of a single-instance lock — an already-running copy of the app quits the new one at startup. ${holder}`;
+interface LockSuspects {
+  /** The un-owned instance the run attached to, when it still answers CDP. */
+  attached: string | null;
+  /** Instances this run booted and still holds, oldest first, that still answer CDP. */
+  owned: BootedChromium[];
+}
+
+/** The hoisted boot's suspects: it attached to nothing and owns nothing yet. */
+const NO_LOCK_SUSPECTS: LockSuspects = Object.freeze({ attached: null, owned: [] });
+
+/**
+ * The lock explanation, shared by both boot sites so the mid-run failure and
+ * the hoisted one that precedes it name one cause in one wording. Both suspect
+ * kinds are named when both are live, because they answer different questions:
+ * the attached instance is the one the reader can actually close, while a
+ * run-owned holder is what makes "close it and rerun" a lie — the runner kills
+ * that one at run end, so there is nothing left to close and the rerun loses
+ * the identical lock. With neither (every suspect dead, or a hoisted boot that
+ * never attached) the hint stays general rather than sending the agent after a
+ * ghost, which still beats leaving the likely cause out of band for a
+ * lock-holder the runner never knew about.
+ */
+function singleInstanceLockHint(suspects: LockSuspects): string {
+  const clauses: string[] = [];
+  if (suspects.attached) {
+    clauses.push(
+      `${suspects.attached} is running and this run does not own it; if it is this same app, it holds that lock.`
+    );
+  }
+  if (suspects.owned.length > 0) {
+    // Every owned instance is listed rather than one guess: the failing app path
+    // matched none of them (a match is retired before the boot), so what is left
+    // is exactly the set the runner cannot rule out — telling WHICH one ships the
+    // colliding Electron `name` would take reading each app's manifest, and
+    // picking one would point at the wrong app as readily as the right one.
+    const owned = suspects.owned.map((o) => `${o.deviceId} (${o.appPath})`).join(", ");
+    clauses.push(
+      `This run booted ${owned}, alive until run end — an app path that shares an Electron \`name\` with this one shares its lock. That holder is the runner's own, so closing it is not on offer and a rerun fails identically; launch them in separate runs, or give this launch its own \`--user-data-dir\` in \`args\`.`
+    );
+  }
+  if (clauses.length === 0)
+    clauses.push(`If a copy of this app is already running, close it and rerun.`);
+  return `A clean exit before CDP comes up is the signature of a single-instance lock — an already-running copy of the app quits the new one at startup. ${clauses.join(" ")}`;
 }
 
 /**
@@ -594,12 +632,23 @@ function singleInstanceLockHint(suspect: string | null): string {
 async function chromiumBootFailureReason(state: ExecState, err: unknown): Promise<string> {
   const base = `could not boot the chromium app: ${errMsg(err)}`;
   if (!singleInstanceLockSignal(err)) return base;
-  return `${base} ${singleInstanceLockHint(await liveAttachedInstance(state))}`;
+  return `${base} ${singleInstanceLockHint(await liveLockSuspects(state))}`;
 }
 
 /**
- * The attached (un-owned) chromium instance re-probed for liveness — the hint
- * must not assert an instance "is running" that has since exited. Null when
+ * Every instance that could still hold the lock, probed in parallel so an
+ * already-failing step pays one probe timeout rather than one per instance.
+ */
+async function liveLockSuspects(state: ExecState): Promise<LockSuspects> {
+  const [attached, owned] = await Promise.all([
+    liveAttachedInstance(state),
+    liveOwnedInstances(state),
+  ]);
+  return { attached, owned };
+}
+
+/**
+ * The attached (un-owned) chromium instance re-probed for liveness. Null when
  * the run never attached or the instance's CDP endpoint no longer answers.
  */
 async function liveAttachedInstance(state: ExecState): Promise<string | null> {
@@ -607,11 +656,27 @@ async function liveAttachedInstance(state: ExecState): Promise<string | null> {
   if (id === undefined) return null;
   const port = parseChromiumCdpPort(id);
   if (port === null) return null;
+  return (await answersCdp(port)) ? id : null;
+}
+
+/**
+ * The run's own instances, re-probed like the attached one: owning a process is
+ * not evidence it lives — it can crash or be closed after its boot — and a dead
+ * one holds no lock, so naming it would send the reader after the same ghost the
+ * attached probe exists to avoid.
+ */
+async function liveOwnedInstances(state: ExecState): Promise<BootedChromium[]> {
+  const alive = await Promise.all(state.owned.map((o) => answersCdp(o.port)));
+  return state.owned.filter((_, i) => alive[i]);
+}
+
+/** Whether an instance still answers CDP, within the hint's probe budget. */
+async function answersCdp(port: number): Promise<boolean> {
   try {
     await ensureCdpReachable(port, AbortSignal.timeout(LOCK_SUSPECT_PROBE_TIMEOUT_MS));
-    return id;
+    return true;
   } catch {
-    return null;
+    return false;
   }
 }
 
@@ -696,9 +761,11 @@ interface ExecState extends Omit<ActionEnv, "device"> {
   snapshotApps: Map<string, string>;
   /**
    * The un-owned chromium instance the run started attached to, if any — the
-   * one instance the runner never kills, so it stands as the single-instance
+   * one instance the runner never kills, so it stands as a single-instance
    * lock suspect for every later lock-shaped boot failure
-   * ({@link chromiumBootFailureReason}), even after the run moves on.
+   * ({@link chromiumBootFailureReason}), even after the run moves on. The
+   * instances in {@link ExecState.owned} are the other suspects: the runner
+   * does kill those, but only at run end.
    */
   attachedDeviceId?: string;
   /**
@@ -1082,7 +1149,7 @@ async function resolveRunDevice(
 function hoistedBootFailure(err: unknown): unknown {
   const signal = singleInstanceLockSignal(err);
   if (!signal) return err;
-  return wrapFailure(err, signal, `${errMsg(err)} ${singleInstanceLockHint(null)}`);
+  return wrapFailure(err, signal, `${errMsg(err)} ${singleInstanceLockHint(NO_LOCK_SUSPECTS)}`);
 }
 
 /**
