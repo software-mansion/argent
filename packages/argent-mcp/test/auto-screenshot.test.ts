@@ -156,14 +156,16 @@ describe("getAutoScreenshotDelayMs", () => {
   // An in-app-transition cap only bounds a screen that never settles, so a
   // generous value there buys nothing but dead wait — this guards against a
   // future entry reintroducing one (run-sequence's old 15s was exactly that).
-  // launch-app/restart-app are exempt: they bound a real app cold start, which
-  // can legitimately exceed 3s, so their cap is safety headroom, not waste. (The
-  // effective runtime delay can still be raised above the cap via the
-  // ARGENT_AUTO_SCREENSHOT_DELAY_MS floor, covered separately below.)
-  const COLD_START_TOOLS = new Set(["launch-app", "restart-app"]);
+  // The app-launch tools are exempt: launch-app/restart-app/open-url start an
+  // app (or, for a web open-url, the browser), a real cold start that can
+  // legitimately exceed 3s, so their cap is safety headroom, not the in-app dead
+  // wait this guard targets. (The effective runtime delay can still be raised
+  // above the cap via the ARGENT_AUTO_SCREENSHOT_DELAY_MS floor, covered
+  // separately below.)
+  const APP_LAUNCH_TOOLS = new Set(["launch-app", "restart-app", "open-url"]);
   it("keeps every in-app-transition settle cap at or below 3s", () => {
     for (const [tool, ms] of Object.entries(AUTO_SCREENSHOT_DELAY_MS_BY_TOOL)) {
-      if (COLD_START_TOOLS.has(tool)) continue;
+      if (APP_LAUNCH_TOOLS.has(tool)) continue;
       expect(ms, `${tool} settle cap`).toBeLessThanOrEqual(3000);
     }
   });
@@ -171,9 +173,10 @@ describe("getAutoScreenshotDelayMs", () => {
   // Pin the value this cap is about: run-sequence dropped 15000 -> 3000. The
   // "returns configured delay" test above is self-referential (expected IS the
   // map value), so on its own it would not catch a silent drift of this entry.
+  // Asserting the map constant directly is env-immune; the accessor result for
+  // run-sequence is already covered by that loop test.
   it("caps the run-sequence settle wait at 3s", () => {
     expect(AUTO_SCREENSHOT_DELAY_MS_BY_TOOL["run-sequence"]).toBe(3000);
-    expect(getAutoScreenshotDelayMs("run-sequence")).toBe(3000);
   });
 
   it("returns default 1400ms for an unknown tool", () => {
