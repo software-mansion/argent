@@ -473,16 +473,23 @@ function flowExecuteRecordBlock(
   result: unknown
 ): { reason: string; mayHaveMutated: boolean } | null {
   if (typeof result !== "object" || result === null) return null;
-  const value = result as { ok?: unknown; notice?: unknown };
+  const value = result as { ok?: unknown; notice?: unknown; executionPrerequisite?: unknown };
   if (value.ok === false) {
     return { reason: "flow-execute returned ok: false", mayHaveMutated: true };
   }
   if (Object.prototype.hasOwnProperty.call(value, "notice")) {
+    // The notice string only carries the generic handshake ("re-call with
+    // prerequisiteAcknowledged"); name the actual prerequisite alongside it so
+    // the author learns WHAT to satisfy without re-reading the returned result.
+    const prereq =
+      typeof value.executionPrerequisite === "string" && value.executionPrerequisite.length > 0
+        ? ` (unmet prerequisite: ${value.executionPrerequisite})`
+        : "";
     return {
       reason:
         typeof value.notice === "string"
-          ? `flow-execute returned a prerequisite notice: ${value.notice}`
-          : "flow-execute returned a prerequisite notice without executing steps",
+          ? `flow-execute returned a prerequisite notice: ${value.notice}${prereq}`
+          : `flow-execute returned a prerequisite notice without executing steps${prereq}`,
       mayHaveMutated: false,
     };
   }

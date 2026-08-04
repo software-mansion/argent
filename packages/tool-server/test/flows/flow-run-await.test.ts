@@ -140,10 +140,47 @@ describe("flow-execute with await-ui-element gating", () => {
 
     expect(registry.invokeTool).not.toHaveBeenCalled();
   });
+
+  it("scores a tool that completes under a mid-invocation abort as skip", async () => {
+    // The client disconnects while the tool is running: the sub-tool still
+    // returns (e.g. run-sequence honours the cancel by returning a partial
+    // result rather than throwing), so the post-invoke abort guard is what
+    // stops that return being scored a pass.
+    const flowFile = await writeFlow(`executionPrerequisite: ""
+steps:
+  - tool: gesture-tap
+    args:
+      udid: X
+      x: 0.5
+      y: 0.5
+`);
+    const controller = new AbortController();
+    const registry = makeRegistry(async () => {
+      controller.abort();
+      return { tapped: true };
+    });
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile, device: "X" },
+        { signal: controller.signal } as never
+      )
+    );
+
+    expect(registry.invokeTool).toHaveBeenCalledTimes(1);
+    expect(result.steps[0]).toMatchObject({
+      kind: "tool",
+      tool: "gesture-tap",
+      status: "skip",
+      reason: "run aborted during tool",
+    });
+    expect(result.ok).toBe(false);
+  });
 });
 
-  it("fails a raw run-sequence step when one nested step returned an error", async () => {
-    const flowFile = await writeFlow(`executionPrerequisite: ""
+it("fails a raw run-sequence step when one nested step returned an error", async () => {
+  const flowFile = await writeFlow(`executionPrerequisite: ""
 steps:
   - tool: run-sequence
     args:
@@ -154,36 +191,36 @@ steps:
             selector: { text: Continue }
   - echo: must not run
 `);
-    const registry = makeRegistry(async (id) => {
-      if (id !== "run-sequence") return {};
-      return {
-        completed: 0,
-        total: 1,
-        steps: [
-          {
-            tool: "await-ui-element",
-            error: "await-ui-element condition not met: no element matched",
-          },
-        ],
-      };
-    });
-
-    const result = asRun(
-      await createRunFlowTool(registry).execute(
-        {},
-        { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile, device: "X" }
-      )
-    );
-
-    expect(result.steps[0]).toMatchObject({
-      kind: "tool",
-      tool: "run-sequence",
-      status: "fail",
-      reason: expect.stringContaining("await-ui-element condition not met"),
-    });
-    // Which nested step stopped it, by position and tool — the outer report
-    // names only "run-sequence", and a sequence's steps are often identical.
-    expect(result.steps[0]!.reason).toContain("step 1/1 (await-ui-element)");
-    expect(result.steps[1]).toMatchObject({ kind: "echo", status: "skip" });
-    expect(result.ok).toBe(false);
+  const registry = makeRegistry(async (id) => {
+    if (id !== "run-sequence") return {};
+    return {
+      completed: 0,
+      total: 1,
+      steps: [
+        {
+          tool: "await-ui-element",
+          error: "await-ui-element condition not met: no element matched",
+        },
+      ],
+    };
   });
+
+  const result = asRun(
+    await createRunFlowTool(registry).execute(
+      {},
+      { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile, device: "X" }
+    )
+  );
+
+  expect(result.steps[0]).toMatchObject({
+    kind: "tool",
+    tool: "run-sequence",
+    status: "fail",
+    reason: expect.stringContaining("await-ui-element condition not met"),
+  });
+  // Which nested step stopped it, by position and tool — the outer report
+  // names only "run-sequence", and a sequence's steps are often identical.
+  expect(result.steps[0]!.reason).toContain("step 1/1 (await-ui-element)");
+  expect(result.steps[1]).toMatchObject({ kind: "echo", status: "skip" });
+  expect(result.ok).toBe(false);
+});
