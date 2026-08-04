@@ -3,10 +3,13 @@ import {
   compatibilityVariantOf,
   confusableTextNote,
   equalsCI,
+  evaluateCondition,
+  findAll,
   foldText,
   identifierMatches,
   includesCI,
 } from "../src/utils/ui-tree-match";
+import type { DescribeNode } from "../src/tools/describe/contract";
 
 // R10. Two strings that render identically compared unequal, because the
 // comparison was a plain `toLowerCase()`. The observed failure:
@@ -165,9 +168,12 @@ describe("confusableTextNote", () => {
   });
 
   it("says nothing for a difference the fold already absorbs", () => {
-    // These compare EQUAL, so the check passes and the note is never reached;
-    // returning one here would be dead weight.
+    // An NBSP folds to a plain space, so the comparators compare EQUAL and the
+    // check passes without ever reaching the note. Called directly it must
+    // still stay quiet — NBSP is space-like (Zs), not a Cf format character, so
+    // it is not the "invisible difference" this note explains.
     expect(equalsCI(`PLN${NBSP}42`, "PLN 42")).toBe(true);
+    expect(confusableTextNote(`PLN${NBSP}42`, "PLN 42")).toBeUndefined();
   });
 });
 
@@ -206,5 +212,40 @@ describe("a needle that folds away to nothing", () => {
     // A bidi-wrapped label still equals its plain form — the guard rejects only
     // an expected that folds to EMPTY, never a real one.
     expect(equalsCI("‪@bsky.app‬", "@bsky.app")).toBe(true);
+  });
+});
+
+describe("end-to-end: a plain selector matches a bidi-wrapped label through findAll", () => {
+  // The comparators are exercised above in isolation; this pins the user-facing
+  // invariant that the fold actually reaches the MATCH pipeline
+  // (findAll -> evaluateCondition), so a plain authored selector resolves — and
+  // a `text`/`equals` step goes green against — a label wrapped the way Bluesky
+  // wraps every display name: LRE ... PDF (U+202A ... U+202C), the exact form
+  // captured off a real iPhone/Pixel screen.
+  const WRAPPED = "‪Eddie Robson‬";
+  const leaf = (label: string): DescribeNode => ({
+    role: "AXStaticText",
+    label,
+    frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.02 },
+    children: [],
+  });
+  const root: DescribeNode = {
+    role: "ROOT",
+    frame: { x: 0, y: 0, width: 1, height: 1 },
+    children: [leaf(WRAPPED)],
+  };
+
+  it("findAll resolves the wrapped node from the plain authored text", () => {
+    expect(findAll(root, { text: "Eddie Robson" })).toHaveLength(1);
+  });
+
+  it("a text/equals condition goes green on the folded label", () => {
+    const matches = findAll(root, { text: "Eddie Robson" });
+    expect(evaluateCondition("text", "Eddie Robson", matches, "equals")).toBe(true);
+  });
+
+  it("but a genuinely different name still fails, so the fold has not gone blind", () => {
+    const matches = findAll(root, { text: "Eddie Robson" });
+    expect(evaluateCondition("text", "Eddie Robertson", matches, "equals")).toBe(false);
   });
 });

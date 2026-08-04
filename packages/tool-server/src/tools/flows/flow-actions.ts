@@ -1129,7 +1129,8 @@ async function waitForCondition(
         step.condition,
         step.selector,
         step.expectedText,
-        step.textMatch
+        step.textMatch,
+        lastMatches
       ) +
       blipNote,
   };
@@ -1156,32 +1157,53 @@ async function waitForCondition(
  *   label describes a mismatch that has nothing to do with the pattern that
  *   failed — the same exemption {@link confusableTextNote} draws, for the same
  *   reason.
+ *
+ * And it is scoped by what actually missed. For `exists`/`visible` nothing
+ * matched, so the selector's own text is a needle that found nothing and
+ * searching the WHOLE tree for its near-match is right. For `text` the element
+ * WAS located, so it looks only at THAT element's text: searching the tree for
+ * a `text` miss let an UNRELATED node that merely happened to render a compat
+ * variant of the expected string hijack the note — telling an author whose
+ * element is simply in the wrong state to "copy the rendered characters" of a
+ * look-alike elsewhere on screen, which sends them down a dead end.
  */
 function compatibilityMissNote(
   tree: DescribeNode | undefined,
   condition: WaitCondition,
   selector: FlowSelector,
   expectedText: string | undefined,
-  textMatch: TextMatchMode | undefined
+  textMatch: TextMatchMode | undefined,
+  matches: ReturnType<typeof findAll>
 ): string {
   if (condition === "hidden" || (condition === "text" && textMatch === "matches")) return "";
-  // For a `text` condition the element WAS located — what missed is the
-  // expectation, so name the compat variant of the EXPECTED text. For
-  // exists/visible the selector's own text is the needle that matched nothing.
-  const wanted = condition === "text" ? expectedText : selector.text;
-  if (tree === undefined || wanted === undefined || wanted === "") return "";
   let hit: string | undefined;
-  const walk = (node: DescribeNode): void => {
-    if (hit !== undefined) return;
-    for (const candidate of [node.label, node.value, node.subtreeText]) {
-      if (candidate && compatibilityVariantOf(candidate, wanted)) {
-        hit = candidate;
-        return;
+  if (condition === "text") {
+    // The element WAS located; what missed is the expectation, not the locator.
+    // Scope strictly to the located element's own text — the very node
+    // assertReason quotes — so an unrelated look-alike cannot hijack the note.
+    if (expectedText === undefined || expectedText === "") return "";
+    const first = firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches);
+    if (first === undefined) return "";
+    hit = [assertText(first), nodeText(first)].find(
+      (text) => text !== "" && compatibilityVariantOf(text, expectedText)
+    );
+  } else {
+    // exists/visible: nothing matched, so the selector's own text is the needle
+    // that found nothing — search the whole tree for what it nearly matched.
+    const wanted = selector.text;
+    if (tree === undefined || wanted === undefined || wanted === "") return "";
+    const walk = (node: DescribeNode): void => {
+      if (hit !== undefined) return;
+      for (const candidate of [node.label, node.value, node.subtreeText]) {
+        if (candidate && compatibilityVariantOf(candidate, wanted)) {
+          hit = candidate;
+          return;
+        }
       }
-    }
-    for (const child of node.children) walk(child);
-  };
-  walk(tree);
+      for (const child of node.children) walk(child);
+    };
+    walk(tree);
+  }
   return hit === undefined
     ? ""
     : ` — the screen does show "${hit}", which differs only by a typographic variant ` +
@@ -1222,9 +1244,13 @@ function assertReason(
       const own = nodeText(first);
       const ownNote = own && own !== shown ? ` (own text "${own}")` : "";
       // The two quoted strings can be indistinguishable on screen and still
-      // compare unequal (an NBSP in a currency label, a stray variation
-      // selector). Say which codepoints differ rather than printing the same
-      // text twice and calling it a mismatch.
+      // compare unequal — a ZWSP or a bidi mark that survived a copy-paste, or
+      // any other format character (category Cf) the fold's explicit classes do
+      // not list. Say which codepoints differ rather than printing the same text
+      // twice and calling it a mismatch. (A space-like difference never reaches
+      // here: the fold reduces NBSP and its kin to a plain space, so the check
+      // already passes; a variation selector is category Mn, not Cf, so it is
+      // not one of these either — see confusableTextNote.)
       //
       // Only for the LITERAL modes: in `matches` the "expected" string is a
       // regular expression, not text, so comparing its code points against the
