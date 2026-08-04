@@ -153,12 +153,17 @@ describe("getAutoScreenshotDelayMs", () => {
     }
   });
 
-  // Each configured cap only bounds a screen that never settles, so a generous
-  // value buys nothing but dead wait. This pins the table itself; the effective
-  // runtime delay can still be raised above it via the
-  // ARGENT_AUTO_SCREENSHOT_DELAY_MS floor (covered separately below).
-  it("keeps every configured settle cap in the table at or below 3s", () => {
+  // An in-app-transition cap only bounds a screen that never settles, so a
+  // generous value there buys nothing but dead wait — this guards against a
+  // future entry reintroducing one (run-sequence's old 15s was exactly that).
+  // launch-app/restart-app are exempt: they bound a real app cold start, which
+  // can legitimately exceed 3s, so their cap is safety headroom, not waste. (The
+  // effective runtime delay can still be raised above the cap via the
+  // ARGENT_AUTO_SCREENSHOT_DELAY_MS floor, covered separately below.)
+  const COLD_START_TOOLS = new Set(["launch-app", "restart-app"]);
+  it("keeps every in-app-transition settle cap at or below 3s", () => {
     for (const [tool, ms] of Object.entries(AUTO_SCREENSHOT_DELAY_MS_BY_TOOL)) {
+      if (COLD_START_TOOLS.has(tool)) continue;
       expect(ms, `${tool} settle cap`).toBeLessThanOrEqual(3000);
     }
   });
