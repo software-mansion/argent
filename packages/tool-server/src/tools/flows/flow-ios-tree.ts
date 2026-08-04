@@ -322,19 +322,36 @@ export async function queryFullHierarchyTree(
   // resolveNativeTargetApp's own errors suggest providing a bundleId — a flow
   // selector step has no way to express one (this call hardcodes
   // auto-targeting) — so replace that advice with the remedy available for the
-  // specific failure. An ambiguous connected-app set needs disambiguation; no
-  // connected app can mean the target was launched outside Argent
-  // (Metro/Expo, Xcode, or the home-screen icon) and needs an Argent relaunch.
+  // specific failure. When apps ARE connected but none is uniquely frontmost
+  // (ambiguous set, or a lone backgrounded app) the remedy is to foreground the
+  // intended one, NOT to relaunch it for instrumentation it already has. Only
+  // "no connected app" means the target was launched outside Argent (Metro/Expo,
+  // Xcode, or the home-screen icon) and needs an Argent relaunch.
   let target: ResolvedNativeTargetApp;
   try {
     target = await resolveNativeTargetApp(nativeApi, undefined);
   } catch (err) {
-    if (getFailureSignal(err)?.error_code === FAILURE_CODES.NATIVE_TARGET_MULTIPLE_APPS_AMBIGUOUS) {
+    const failureCode = getFailureSignal(err)?.error_code;
+    if (failureCode === FAILURE_CODES.NATIVE_TARGET_MULTIPLE_APPS_AMBIGUOUS) {
       throw wrapPreservingFailure(
         `could not uniquely target a native-devtools-connected app to read the view hierarchy from:\n` +
           `${withoutExplicitBundleIdAdvice(errMsg(err))}\n` +
           `Flow selector steps auto-target and cannot provide a bundleId. Bring the intended app to ` +
           `the foreground, and background or terminate the other connected apps, then retry.`,
+        err
+      );
+    }
+    if (failureCode === FAILURE_CODES.NATIVE_TARGET_SINGLE_APP_NOT_FOREGROUND) {
+      // The lone connected app is already instrumented; it is just not frontmost
+      // (home/system UI over it, a permission dialog, a deep-link that
+      // backgrounded it). Foregrounding it fixes the read, so the generic
+      // relaunch-for-instrumentation advice below would misdiagnose the state.
+      // Keep resolveNativeTargetApp's per-app applicationState diagnostic.
+      throw wrapPreservingFailure(
+        `the only native-devtools-connected app is not foreground, so it cannot be auto-targeted:\n` +
+          `${withoutExplicitBundleIdAdvice(errMsg(err))}\n` +
+          `Flow selector steps auto-target and cannot provide a bundleId. Bring that app to the ` +
+          `foreground (it is already instrumented, just not frontmost), then retry.`,
         err
       );
     }
@@ -395,13 +412,18 @@ function errMsg(err: unknown): string {
 }
 
 function firstClause(err: unknown): string {
-  const firstLine = errMsg(err).split("\n", 1)[0] ?? "native target resolution failed";
+  const firstLine = errMsg(err).split("\n", 1)[0];
   const sentenceEnd = firstLine.indexOf(".");
   return sentenceEnd === -1 ? firstLine : firstLine.slice(0, sentenceEnd + 1);
 }
 
+// Strip resolveNativeTargetApp's trailing "Provide bundleId explicitly…" line —
+// a flow selector step hardcodes auto-targeting and cannot act on it. Matching
+// the whole line (not just the bare sentence) covers both wordings it emits:
+// the ambiguous case ends "Provide bundleId explicitly." and the single-app case
+// ends "Provide bundleId explicitly if you still want to target this app.".
 function withoutExplicitBundleIdAdvice(message: string): string {
-  return message.replace(/\nProvide bundleId explicitly\.?$/, "");
+  return message.replace(/\nProvide bundleId explicitly[^\n]*$/, "");
 }
 
 /** Add actionable flow-specific context without stripping FailureError data. */
