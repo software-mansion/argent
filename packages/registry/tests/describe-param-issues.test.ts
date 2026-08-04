@@ -42,6 +42,28 @@ describe("describeParamIssues", () => {
     expect(msg).toContain("`token`"); // the key is named
   });
 
+  it("does not leak a present-but-wrong ENUM value (invalid_value branch, secret-shaped value)", () => {
+    // The enum branch renders "Invalid option: expected one of …" — the ALLOWED
+    // options, which are schema-public. The rejected value the caller sent must
+    // never appear, since it can carry a secret (a tenant id, a token).
+    const schema = z.object({ mode: z.enum(["read", "write"]) });
+    const value = { mode: "SECRET-TENANT-ID-abc123" };
+    const msg = describeParamIssues(issuesOf(schema, value), value);
+    expect(msg).not.toContain("SECRET-TENANT-ID-abc123");
+    expect(msg).toContain("`mode`"); // the key is named
+  });
+
+  it("does not leak the VALUE of an unrecognized key (unrecognized_keys branch names the key only)", () => {
+    // The unrecognized-keys branch is the one most likely to receive a caller's
+    // stray secret under a misspelled key. It must name the KEY and never echo
+    // the value beside it.
+    const schema = z.object({ known: z.string().optional() }).strict();
+    const value = { secret_key: "sk-live-DEADBEEF" };
+    const msg = describeParamIssues(issuesOf(schema, value), value);
+    expect(msg).not.toContain("sk-live-DEADBEEF");
+    expect(msg).toContain("unknown parameter `secret_key`");
+  });
+
   it("caps the 'You sent:' list at 24 keys and SIGNALS the cut with an ellipsis", () => {
     const value: Record<string, unknown> = {};
     for (let i = 0; i < 30; i++) value[`k${i}`] = i; // 30 unknown keys, all stripped

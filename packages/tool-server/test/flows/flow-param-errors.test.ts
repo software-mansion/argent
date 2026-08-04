@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Registry, getFailureSignal, FAILURE_CODES } from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
+import { flowReadPrerequisiteTool } from "../../src/tools/flows/flow-read-prerequisite";
 
 // An agent passed `flow_name` instead of `name` and got back
 //   [{"expected":"string","code":"invalid_type","path":["name"]}]
@@ -149,5 +150,38 @@ describe("flow-execute parameter handling", () => {
     expect(message).toContain("You sent: `name`");
     // And not the raw issue JSON.
     expect(message).not.toContain('"code":"invalid_type"');
+  });
+
+  it("never renders 'undefined' in the interaction line for a name-less call", () => {
+    // The interaction message fires inside `invokeTool` BEFORE `execute`, so it
+    // is emitted even for the name-less call `resolveFlowName` later rejects.
+    // It must not read "Running flow undefined" in the event log, telemetry or
+    // MCP progress; and the alias path must still show the real flow name.
+    const tool = createRunFlowTool(new Registry());
+    const nameless = tool.interaction!.startedMsg!({ params: { project_root: "/x" } as never });
+    expect(nameless).not.toContain("undefined");
+    const aliased = tool.interaction!.startedMsg!({ params: { flow_name: "feeds" } as never });
+    expect(aliased).toContain("feeds");
+  });
+});
+
+describe("flow-file file-input spec order", () => {
+  it("puts the `${flow_name}` spec before the `${name}` spec so `name` wins the client merge", () => {
+    // The client interpolates each spec and merges last-write-wins on `target`,
+    // so the `name` spec must come LAST to match `resolveFlowName`'s
+    // `name || flow_name` precedence. If it did not, a REMOTE call sending both
+    // keys would upload the `flow_name` file while the run reports `name` — a
+    // silent divergence between the flow executed and the flow named. The
+    // client's own merge is unit-tested against a hand-built array, which would
+    // not catch a reorder of THESE production specs.
+    for (const tool of [createRunFlowTool(new Registry()), flowReadPrerequisiteTool]) {
+      const flowFilePaths = (tool.fileInputs ?? [])
+        .filter((spec) => spec.target === "flow_file")
+        .map((spec) => spec.path);
+      expect(flowFilePaths, tool.id).toEqual([
+        "${project_root}/.argent/flows/${flow_name}.yaml",
+        "${project_root}/.argent/flows/${name}.yaml",
+      ]);
+    }
   });
 });
