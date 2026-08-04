@@ -171,8 +171,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     const result = await recordWait("android", "Continue", ANDROID);
 
     expect(result.message).toContain("does NOT hold against the tree the runner resolves");
+    // The reader clause is its own sentence after the divergence sentence's
+    // period, so it must start capitalized — not "…drops. no read-only…".
     expect(result.message).toContain(
-      "no read-only tool exposes the runner's full hierarchy on Android"
+      "drops. No read-only tool exposes the runner's full hierarchy on Android"
     );
     expect(result.message).not.toContain("reads the runner's side");
     expect(result.message).not.toContain("native-find-views");
@@ -196,11 +198,105 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     const result = await recordWait("chromium", "Continue", CHROMIUM);
 
     expect(result.message).toContain("does NOT hold against the tree the runner resolves");
+    // Capitalized, as its own sentence after the divergence sentence's period.
     expect(result.message).toContain(
-      "no read-only tool exposes the runner's trimmed tree on Chromium"
+      "runner. No read-only tool exposes the runner's trimmed tree on Chromium"
     );
     expect(result.message).not.toContain("reads the runner's side");
     expect(result.message).not.toContain("native-find-views");
     expect(parseFlow(await onDisk("chromium")).steps).toHaveLength(1);
   }, 20_000);
+
+  // A `condition: "text"` wait carries an expectedText (and optional textMatch)
+  // that the probe must forward into the runner-tree evaluation. If they were
+  // dropped, the probe would score `text` as false unconditionally and warn on
+  // every text wait that actually agrees; if expectedText were ignored, a wrong
+  // value would never warn. These two pin both directions.
+  it("forwards expectedText on a `text` wait: no warning when the value matches", async () => {
+    runnerTree = () => screen(["Total: $5.00"]);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "textok", project_root: tmpDir, executionPrerequisite: "on the form" }
+    );
+    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "textok",
+        project_root: tmpDir,
+        command: "await-ui-element",
+        args: JSON.stringify({
+          udid: DEVICE,
+          condition: "text",
+          selector: { text: "Total" },
+          expectedText: "$5.00",
+        }),
+      }
+    );
+
+    expect(result.message).toContain("Step added");
+    expect(result.message).not.toContain("does NOT hold");
+    expect(parseFlow(await onDisk("textok")).steps).toHaveLength(1);
+  });
+
+  it("evaluates expectedText on a `text` wait: warns when the value is absent", async () => {
+    runnerTree = () => screen(["Total: $3.00"]);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "textbad", project_root: tmpDir, executionPrerequisite: "on the form" }
+    );
+    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "textbad",
+        project_root: tmpDir,
+        command: "await-ui-element",
+        args: JSON.stringify({
+          udid: DEVICE,
+          condition: "text",
+          selector: { text: "Total" },
+          expectedText: "$5.00",
+        }),
+      }
+    );
+
+    expect(result.message).toContain("does NOT hold against the tree the runner resolves");
+    expect(parseFlow(await onDisk("textbad")).steps).toHaveLength(1);
+  }, 20_000);
+
+  it("throws AbortError when the run is cancelled during the re-probe", async () => {
+    // The live await-ui-element still "passes" (the mock ignores the signal), so
+    // the abort lands in the re-probe — strictly after the recorded tool ran.
+    // The probe must surface that as an abort and record nothing.
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "cancel", project_root: tmpDir, executionPrerequisite: "on the form" }
+    );
+    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      tool.execute(
+        {},
+        {
+          name: "cancel",
+          project_root: tmpDir,
+          command: "await-ui-element",
+          args: JSON.stringify({
+            udid: DEVICE,
+            condition: "visible",
+            selector: { text: "Continue" },
+          }),
+        },
+        { signal: controller.signal } as never
+      )
+    ).rejects.toThrow(/aborted while re-probing/);
+
+    // The abort fired before the append, so the flow still has no steps.
+    expect(parseFlow(await onDisk("cancel")).steps).toHaveLength(0);
+  });
 });
