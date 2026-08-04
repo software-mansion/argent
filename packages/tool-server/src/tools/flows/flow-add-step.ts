@@ -227,7 +227,9 @@ async function probeAgainstRunnerTree(
       `recorded, but this condition does NOT hold against the tree the runner resolves ` +
       `directives against (${outcome.reason ?? "no match"}). As the raw ` +
       `\`tool: ${AWAIT_UI_ELEMENT_TOOL_ID}\` step it replays fine — it reads the same tree it ` +
-      `just passed against — but converting it to \`await:\`/\`assert:\` at polish WILL fail. ` +
+      `just passed against — but an \`assert:\` conversion WILL fail (it reads that tree on ` +
+      `the same short grace this probe just used), and an \`await:\` will too unless the ` +
+      `element reaches that tree within its longer timeout. ` +
       `Either keep it raw deliberately, or re-record the wait with a selector present in both`,
   };
 }
