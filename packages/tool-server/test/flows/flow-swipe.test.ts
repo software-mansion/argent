@@ -635,7 +635,7 @@ describe("swipe: execution", () => {
         toY: 0.5,
       },
     });
-    const x = result.calls[0].args;
+    const x = result.calls[0].args as { fromX: number; toX: number };
     expect(x.toX - x.fromX).toBeCloseTo(0.8, 10);
   });
 
@@ -658,7 +658,7 @@ describe("swipe: execution", () => {
         toY: 1,
       },
     });
-    const y = result.calls[0].args;
+    const y = result.calls[0].args as { fromY: number; toY: number };
     expect(y.toY - y.fromY).toBeCloseTo(0.9, 10);
   });
 
@@ -702,7 +702,7 @@ describe("swipe: execution", () => {
         toY: 0.9,
       },
     });
-    const d = result.calls[0].args;
+    const d = result.calls[0].args as { fromX: number; toX: number; fromY: number; toY: number };
     expect(d.toX - d.fromX).toBeCloseTo(0.8, 10);
     expect(d.toY - d.fromY).toBeCloseTo(0.4, 10);
   });

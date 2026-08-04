@@ -178,6 +178,7 @@ export function stepRequiresDevice(registry: Registry, step: FlowStep): boolean 
     case "launch":
     case "tap":
     case "long-press":
+    case "swipe":
     case "type":
     case "await":
     case "assert":
