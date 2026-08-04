@@ -45,8 +45,14 @@ describe("establishedTerms", () => {
       name: "run-sequence",
       args: {
         steps: [
-          { tool: "await-ui-element", args: { condition: "visible", selector: { identifier: "Sheet" } } },
-          { tool: "await-ui-element", args: { condition: "hidden", selector: { identifier: "Gone" } } },
+          {
+            tool: "await-ui-element",
+            args: { condition: "visible", selector: { identifier: "Sheet" } },
+          },
+          {
+            tool: "await-ui-element",
+            args: { condition: "hidden", selector: { identifier: "Gone" } },
+          },
           { tool: "gesture-tap", args: { x: 0.5, y: 0.5 } },
         ],
       },

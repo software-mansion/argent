@@ -169,6 +169,31 @@ steps:
     expect(r.steps.at(-1)!.status).toBe("pass");
     expect(r.steps.at(-1)!.warning).toBeUndefined();
   });
+
+  it("warns when the scoped container never appears — a typo'd scope cannot fail", async () => {
+    // "Saved" is on screen, but the named container is a typo that never
+    // renders, so `Saved within ghost-container` can NEVER match however the
+    // screen changes. The scope-drop must NOT reprieve it: without the
+    // container the check is exactly the permanently-green gate this exists to
+    // catch. (Contrast the case above, where the container IS present.)
+    currentTree = () =>
+      n({
+        role: "AXWindow",
+        frame: FULL,
+        children: [n({ label: "Saved", frame: { x: 0.3, y: 0.1, width: 0.4, height: 0.05 } })],
+      });
+    await writeFlow(
+      "typo-scope",
+      `executionPrerequisite: ""
+steps:
+  - assert: { hidden: { text: "Saved", within: { identifier: "ghost-container" } } }
+`
+    );
+    const r = await run("typo-scope");
+    expect(r.ok).toBe(true);
+    expect(r.steps.at(-1)!.status).toBe("pass");
+    expect(r.steps.at(-1)!.warning).toContain("cannot fail and proves nothing");
+  });
 });
 
 // `await-screen-idle` reports a screen that never settled as a soft

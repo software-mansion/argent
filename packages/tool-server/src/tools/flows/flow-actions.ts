@@ -1006,10 +1006,21 @@ function hiddenCheckIsFalsifiable(
   // the check names, so it would fail the moment it appeared there. Only the
   // scope made the match empty, and saying "this proves nothing" about it
   // would be false.
+  //
+  // But the reprieve holds ONLY when the scope anchors actually resolve. A
+  // `within`/`after`/`next` whose container/anchor never appears keeps the
+  // scoped match permanently empty for a reason unscoped matching cannot see —
+  // a typo'd container is exactly the permanently-green check this gate exists
+  // to catch, so it must still warn. Both reads demand a VISIBLE match: a
+  // zero-area ghost is not "on screen" and cannot make the check falsifiable.
   if (lastTree !== undefined && SELECTOR_RELATIONS.some((rel) => rel in step.selector)) {
     const unscoped = { ...step.selector };
     for (const rel of SELECTOR_RELATIONS) delete unscoped[rel];
-    if (flowFindAll(lastTree, unscoped).length > 0) return true;
+    const scopesResolve = SELECTOR_RELATIONS.every((rel) => {
+      const scope = step.selector[rel];
+      return scope === undefined || flowFindAll(lastTree, scope).some(isVisible);
+    });
+    if (scopesResolve && flowFindAll(lastTree, unscoped).some(isVisible)) return true;
   }
   return false;
 }
