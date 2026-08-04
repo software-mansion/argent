@@ -300,3 +300,83 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(parseFlow(await onDisk("cancel")).steps).toHaveLength(0);
   });
 });
+
+// `command` names an MCP tool, but the vocabulary an author has in mind
+// while recording is the flow file's own directives, so `command: "echo"`
+// used to come back as a bare "Tool not found".
+describe("a flow-directive name points at the tool that records it", () => {
+  beforeEach(async () => {
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "hints", project_root: tmpDir, executionPrerequisite: "anywhere" }
+    );
+  });
+
+  const hint = async (command: string) => {
+    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
+    return tool.execute({}, { name: "hints", project_root: tmpDir, command });
+  };
+
+  it("names flow-add-echo for `echo`", async () => {
+    const result = await hint("echo");
+    expect(result.message).toContain("flow-add-echo");
+    expect(result.message).toContain("no step was recorded");
+  });
+
+  it("explains that `wait` has no recording tool at all", async () => {
+    const result = await hint("wait");
+    expect(result.message).toContain("a fixed sleep is not a readiness signal");
+    expect(result.message).toContain("await-ui-element");
+  });
+
+  it("names restart-app for `launch`", async () => {
+    expect((await hint("launch")).message).toContain("restart-app");
+  });
+
+  // Following the old `echo` hint appended TWO steps — flow-add-echo wrote its
+  // own directive, and flow-add-step additionally recorded a raw
+  // `tool: flow-add-echo` step that errors on every replay, because no
+  // recording is open then. It reported success either way.
+  it("refuses a recorder tool as `command` instead of nesting it", async () => {
+    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
+    for (const command of [
+      "flow-add-echo",
+      "flow-add-step",
+      "flow-start-recording",
+      "flow-finish-recording",
+    ]) {
+      const result = await tool.execute(
+        {},
+        { name: "hints", project_root: tmpDir, command, args: "{}" }
+      );
+      expect(result.message, command).toContain("no step was recorded");
+      expect(result.stepCount, command).toBe(0);
+    }
+    expect(parseFlow(await onDisk("hints")).steps).toEqual([]);
+  });
+
+  it("tells the author to call flow-add-echo directly, not through the recorder", async () => {
+    const result = await hint("echo");
+    expect(result.message).toContain("DIRECTLY");
+    expect(result.message).toContain("fails on every replay");
+  });
+
+  it("does not claim a rewrite for the commands the recorder stores raw", async () => {
+    // `type`/`await`/`assert` are recorded as `tool:` steps; polish converts
+    // them. Promising a rewrite sends the author looking for a directive that
+    // is not in the file.
+    for (const command of ["type", "await", "assert"]) {
+      const result = await hint(command);
+      expect(result.message, command).toContain("stored as a raw");
+      expect(result.message, command).toContain("polish pass");
+    }
+    // …while the four that ARE rewritten still say so.
+    expect((await hint("launch")).message).toContain("rewrites it into the `launch:` step");
+  });
+
+  it("lets a genuine tool failure report itself", async () => {
+    // "screenshot" is not a directive name, so a not-found for it must surface
+    // as the registry's own error rather than being rewritten.
+    await expect(hint("screenshot")).rejects.toThrow(/not found/i);
+  });
+});
