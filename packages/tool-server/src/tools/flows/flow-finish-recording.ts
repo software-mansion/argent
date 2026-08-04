@@ -10,6 +10,7 @@ import {
   serializeFlow,
   selectorToYaml,
   type FlowFile,
+  type FlowStep,
   type FlowSavedTo,
   type FlowSelector,
 } from "./flow-utils";
@@ -163,60 +164,81 @@ function renderToolArgs(args: unknown): string {
   }
 }
 
+/** The pre-step sleep a replay performs, when the step carries one. */
+function delayLabel(step: FlowStep): string {
+  const delayMs = (step as { delayMs?: number }).delayMs;
+  return typeof delayMs === "number" ? ` (after ${delayMs}ms)` : "";
+}
+
 /** One human-readable line per recorded step, in the flow file's own spellings. */
 function summarizeSteps(flow: FlowFile): string[] {
-  return flow.steps.map((step, i) => {
-    const n = i + 1;
-    switch (step.kind) {
-      case "echo":
-        return `${n}. echo: ${step.message}`;
-      case "launch":
-        return `${n}. launch: ${typeof step.app === "string" ? step.app : JSON.stringify(step.app)}`;
-      case "run":
-        return `${n}. run: ${step.flow}`;
-      case "tap":
-      case "long-press":
-        return `${n}. ${step.kind}: ${step.selector ? selectorLabel(step.selector) : `(${step.x}, ${step.y})`}`;
-      case "type":
-        return `${n}. type: ${selectorLabel(step.into)} ← "${step.text}"`;
-      case "await":
-      case "assert": {
-        const tail =
-          step.condition === "text"
-            ? textConditionLabel(step.selector, step.expectedText, step.textMatch)
-            : `${step.condition} ${selectorLabel(step.selector)}`;
-        return `${n}. ${step.kind}: ${tail}`;
-      }
-      case "wait":
-        return `${n}. wait: ${step.ms}ms`;
-      case "when": {
-        // Mirror the await/assert rendering above — selectorLabel spelling,
-        // same comparator tail for text guards.
-        const cond =
-          step.condition.kind === "platform"
-            ? `platform ${step.condition.platform}`
-            : step.condition.condition === "text"
-              ? textConditionLabel(
-                  step.condition.selector,
-                  step.condition.expectedText,
-                  step.condition.textMatch
-                )
-              : `${step.condition.condition} ${selectorLabel(step.condition.selector)}`;
-        // Pluralize like flow-run's skip reason so the two surfaces agree.
-        const count = step.steps.length;
-        return `${n}. when: ${cond} (${count} step${count === 1 ? "" : "s"})`;
-      }
-      case "scroll-to":
-        return `${n}. scroll-to: ${selectorLabel(step.target)} (${step.direction})`;
-      case "pinch":
-        return `${n}. pinch: scale ${step.scale}${step.selector ? ` on ${selectorLabel(step.selector)}` : ""}`;
-      case "rotate":
-        return `${n}. rotate: by ${step.by}°${step.selector ? ` on ${selectorLabel(step.selector)}` : ""}`;
-      case "snapshot":
-        return `${n}. snapshot: ${step.name}`;
-      case "tool":
-      default:
-        return `${n}. tool: ${step.name} ${renderToolArgs(step.args)}`;
+  return flow.steps.map((step, i) => summarizeStep(step, i + 1));
+}
+
+/**
+ * One recorded step, rendered the way the flow FILE spells it. Shared with the
+ * recorder, which echoes just the line it appended instead of the whole
+ * growing file.
+ */
+export function summarizeStep(step: FlowStep, n: number): string {
+  switch (step.kind) {
+    case "echo":
+      return `${n}. echo: ${step.message}`;
+    case "launch":
+      return `${n}. launch: ${typeof step.app === "string" ? step.app : JSON.stringify(step.app)}`;
+    case "run":
+      return `${n}. run: ${step.flow}`;
+    case "tap":
+    case "long-press": {
+      // `times` and `delayMs` change what replays, so a summary line that
+      // drops them misdescribes the file — and since the recorder stopped
+      // returning the YAML per step, this line is the author's only per-step
+      // view of what was appended.
+      const target = step.selector ? selectorLabel(step.selector) : `(${step.x}, ${step.y})`;
+      const times = step.kind === "tap" && step.times !== undefined ? ` ×${step.times}` : "";
+      const held =
+        step.kind === "long-press" && step.duration !== undefined ? ` for ${step.duration}ms` : "";
+      return `${n}. ${step.kind}: ${target}${times}${held}${delayLabel(step)}`;
     }
-  });
+    case "type":
+      return `${n}. type: ${selectorLabel(step.into)} ← "${step.text}"`;
+    case "await":
+    case "assert": {
+      const tail =
+        step.condition === "text"
+          ? textConditionLabel(step.selector, step.expectedText, step.textMatch)
+          : `${step.condition} ${selectorLabel(step.selector)}`;
+      return `${n}. ${step.kind}: ${tail}`;
+    }
+    case "wait":
+      return `${n}. wait: ${step.ms}ms`;
+    case "when": {
+      // Mirror the await/assert rendering above — selectorLabel spelling,
+      // same comparator tail for text guards.
+      const cond =
+        step.condition.kind === "platform"
+          ? `platform ${step.condition.platform}`
+          : step.condition.condition === "text"
+            ? textConditionLabel(
+                step.condition.selector,
+                step.condition.expectedText,
+                step.condition.textMatch
+              )
+            : `${step.condition.condition} ${selectorLabel(step.condition.selector)}`;
+      // Pluralize like flow-run's skip reason so the two surfaces agree.
+      const count = step.steps.length;
+      return `${n}. when: ${cond} (${count} step${count === 1 ? "" : "s"})`;
+    }
+    case "scroll-to":
+      return `${n}. scroll-to: ${selectorLabel(step.target)} (${step.direction})`;
+    case "pinch":
+      return `${n}. pinch: scale ${step.scale}${step.selector ? ` on ${selectorLabel(step.selector)}` : ""}`;
+    case "rotate":
+      return `${n}. rotate: by ${step.by}°${step.selector ? ` on ${selectorLabel(step.selector)}` : ""}`;
+    case "snapshot":
+      return `${n}. snapshot: ${step.name}`;
+    case "tool":
+    default:
+      return `${n}. tool: ${step.name} ${renderToolArgs(step.args)}${delayLabel(step)}`;
+  }
 }
