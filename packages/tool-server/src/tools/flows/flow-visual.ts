@@ -146,6 +146,12 @@ export async function runSnapshot(
   env: ActionEnv,
   opts: {
     flowsDir: string;
+    /**
+     * The `__baselines__/<segment>` key, NOT necessarily the name the run
+     * reports under: it is the ROOT flow's canonical stem (`baselineKeyFor` in
+     * flow-run.ts), because it must identify the same file `flowsDir` does —
+     * a key and an anchor that disagree let two distinct flows share a store.
+     */
     flowName: string;
     name: string;
     maxMismatch: number;

@@ -4,6 +4,7 @@ import * as path from "node:path";
 import {
   FAILURE_CODES,
   FailureError,
+  FLOW_NAME_PATTERN,
   isLiveServiceState,
   zodObjectToJsonSchema,
 } from "@argent/registry";
@@ -496,7 +497,14 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    * threaded through {@link resolveRunDevice}, which is this root directory).
    */
   flowsDir: string;
-  topFlowName: string;
+  /**
+   * The `__baselines__/<segment>` this run's snapshots key their store under —
+   * the ROOT flow's CANONICAL stem, so the key agrees with {@link flowsDir}
+   * (see {@link baselineKeyFor}). Deliberately NOT the run's caller-visible
+   * identity: the report's `flow`, the runStack seed's display name, and the
+   * CLI's `--output` directory all keep the as-written name.
+   */
+  baselineKey: string;
   updateBaselines: boolean;
   reports: StepReport[];
   stopped: boolean;
@@ -707,7 +715,7 @@ returns a notice with the prerequisite instead of running.`,
         device,
         signal,
         flowsDir,
-        topFlowName: flowName,
+        baselineKey: baselineKeyFor(canonicalPath, flowName),
         updateBaselines: Boolean(params.updateBaselines),
         reports: [],
         stopped: false,
@@ -1324,6 +1332,43 @@ async function canonicalFlowPath(p: string): Promise<string> {
   }
 }
 
+/**
+ * The `__baselines__/<segment>` a run's snapshots key their baseline store
+ * under. The store is `<flowsDir>/__baselines__/<key>` and `flowsDir` is the
+ * CANONICAL root flow's directory, so the key must name the canonical file too
+ * — directory and name have to agree on which file they identify. With the
+ * as-written stem they do not, and the disagreement merges distinct flows: two
+ * projects whose `.argent/flows/smoke.yaml` are symlinks into one shared vault
+ * (`vault/a-smoke.yaml`, `vault/b-smoke.yaml`) both anchor at `vault/` and both
+ * key "smoke", so a single `vault/__baselines__/smoke/` holds one PNG the two
+ * flows silently overwrite in turn — each `--update-baselines` run reporting
+ * "baseline updated" while it actually replaced another project's reviewed,
+ * committed baseline. The canonical stem separates them
+ * (`__baselines__/a-smoke/`, `__baselines__/b-smoke/`). For a root flow that is
+ * a regular file the canonical stem IS the as-written one, so nothing moves for
+ * the common case; only symlinked roots do.
+ *
+ * The canonical stem is the symlink TARGET's filename, and nothing has ever
+ * validated that: `assertSafeFlowName` and `classifyOnDiskSpelling` only run
+ * against the as-written spelling, so a vault file may legitimately be called
+ * `my.smoke.yaml`, `A Smoke.yaml`, or `...yaml` — whose stem after `.yaml` is
+ * `..`, and `path.join(flowsDir, "__baselines__", "..")` IS `flowsDir`: every
+ * baseline would be written beside the flow files themselves, outside
+ * `__baselines__/` entirely (the escape `flow-path-baseline-escape.test.ts`
+ * pins for the as-written spelling). Hence the pattern check, against the same
+ * charset every other flow name is held to. An unsafe stem falls back to the
+ * as-written `flowName`, which is always validated, rather than throwing: an
+ * unusually named vault file is not the caller's error to fix mid-run, the
+ * collision this prevents is a shared-vault edge case, and the fallback is
+ * exactly the behaviour that shipped before.
+ */
+function baselineKeyFor(canonicalPath: string, flowName: string): string {
+  // path.basename leaves a bare ".yaml" intact (stripping it would leave
+  // nothing) — the pattern rejects that spelling too, so it falls back as well.
+  const stem = path.basename(canonicalPath, ".yaml");
+  return FLOW_NAME_PATTERN.test(stem) ? stem : flowName;
+}
+
 async function execRunStep(
   state: ExecState,
   step: Extract<FlowStep, { kind: "run" }>,
@@ -1445,7 +1490,7 @@ async function execRunStep(
   // Marker for the composition point, then expand the fragment's steps inline,
   // one level deeper, attributed to the fragment. The fragment's own directory
   // becomes the anchor for `run:` paths inside it; baselines stay anchored to
-  // the root flow (state.flowsDir / state.topFlowName).
+  // the root flow (state.flowsDir / state.baselineKey).
   pushReport(state, {
     index,
     kind: "run",
@@ -1521,7 +1566,7 @@ async function execLeafStep(
       try {
         const r = await runSnapshot(deviceEnv(state), {
           flowsDir: state.flowsDir,
-          flowName: state.topFlowName,
+          flowName: state.baselineKey,
           name: step.name,
           maxMismatch: step.maxMismatch ?? DEFAULT_MAX_MISMATCH,
           updateBaselines: state.updateBaselines,

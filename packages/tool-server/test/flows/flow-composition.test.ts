@@ -1918,11 +1918,139 @@ describe("flow composition (run:)", () => {
     );
 
     expect(result.ok).toBe(true);
-    // The real directory, not the spelling the run was addressed by.
+    // The real directory, not the spelling the run was addressed by. (The
+    // link and its target share a basename here, so this fixture cannot tell
+    // the two candidate KEYS apart — the vault tests below do that.)
     expect(vi.mocked(runSnapshot)).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ flowsDir: sharedFlows, flowName: "visual" })
     );
+  });
+
+  /**
+   * The baseline store is `<flowsDir>/__baselines__/<flowName>`, and flowsDir
+   * is the CANONICAL root flow's directory — so the key has to name the
+   * canonical file too, or the pair identifies no single file. These pin that
+   * agreement from both sides: two flows that share an anchor must not share a
+   * store, and a flow that is its own real file must not move.
+   */
+  it("gives two projects' same-named symlinks into one vault separate baseline stores", async () => {
+    // The shared-vault layout: each project has its own legitimately named
+    // .argent/flows/smoke.yaml, both symlinked into one vault at differently
+    // named real files. The canonical anchor is vault/ for both, so keying by
+    // the as-written stem would give them ONE vault/__baselines__/smoke/:
+    // whichever project ran --update-baselines last would silently replace the
+    // other's reviewed, committed PNG — reported as "baseline updated", as
+    // though it had refreshed its own — and the other project's next run would
+    // then fail against a screen it never captured. Nothing is printed either
+    // way, so only the store paths can catch this.
+    const vault = path.join(tmpDir, "vault");
+    await fs.mkdir(vault, { recursive: true });
+    const snapshotFlow = serializeFlow({
+      executionPrerequisite: "",
+      steps: [{ kind: "snapshot", name: "home", maxMismatch: 0.5 }],
+    });
+    await fs.writeFile(path.join(vault, "a-smoke.yaml"), snapshotFlow, "utf8");
+    await fs.writeFile(path.join(vault, "b-smoke.yaml"), snapshotFlow, "utf8");
+    const vaultedProject = async (proj: string, target: string): Promise<string> => {
+      const flows = path.join(tmpDir, proj, ".argent", "flows");
+      await fs.mkdir(flows, { recursive: true });
+      await fs.symlink(path.join(vault, target), path.join(flows, "smoke.yaml"));
+      return path.join(tmpDir, proj);
+    };
+    const projA = await vaultedProject("projA", "a-smoke.yaml");
+    const projB = await vaultedProject("projB", "b-smoke.yaml");
+
+    vi.mocked(runSnapshot).mockClear();
+    const runFlow = createRunFlowTool(mockRegistry());
+    const a = asRun(
+      await runFlow.execute({}, { name: "smoke", project_root: projA, device: DEVICE })
+    );
+    const b = asRun(
+      await runFlow.execute({}, { name: "smoke", project_root: projB, device: DEVICE })
+    );
+
+    expect([a.ok, b.ok]).toEqual([true, true]);
+    // The caller-visible identity is untouched — both runs still report as the
+    // flow the user asked to run. Only the baseline key follows the real file.
+    expect([a.flow, b.flow]).toEqual(["smoke", "smoke"]);
+
+    const stores = vi
+      .mocked(runSnapshot)
+      .mock.calls.map(([, opts]) => path.join(opts.flowsDir, "__baselines__", opts.flowName));
+    expect(stores).toEqual([
+      path.join(vault, "__baselines__", "a-smoke"),
+      path.join(vault, "__baselines__", "b-smoke"),
+    ]);
+  });
+
+  it("leaves a regular (non-symlinked) root flow's baseline store exactly where it was", async () => {
+    // The no-regression pin for every existing user: when the root flow is a
+    // real file its canonical stem IS the as-written one, so deriving the key
+    // from the canonical path must not move the store anyone has already
+    // seeded and committed under .argent/flows/__baselines__/<flow>/.
+    await writeFlow("checkout", {
+      executionPrerequisite: "",
+      steps: [{ kind: "snapshot", name: "home", maxMismatch: 0.5 }],
+    });
+
+    vi.mocked(runSnapshot).mockClear();
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "checkout", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    const [, opts] = vi.mocked(runSnapshot).mock.calls[0]!;
+    expect(path.join(opts.flowsDir, "__baselines__", opts.flowName)).toBe(
+      path.join(tmpDir, ".argent", "flows", "__baselines__", "checkout")
+    );
+  });
+
+  it("keys a fragment's snapshot to a symlinked root's REAL file, not the fragment or the link", async () => {
+    // The root-anchoring pin above, extended to the symlinked-root case the
+    // key change touches: the snapshot is authored in vault/frag.yaml, so
+    // three names are in play — the fragment's stem ("frag"), the spelling the
+    // run was addressed by ("smoke"), and the root's real file ("a-smoke").
+    // Only the last agrees with the anchor the store sits in.
+    const vault = path.join(tmpDir, "vault");
+    await fs.mkdir(vault, { recursive: true });
+    await fs.writeFile(
+      path.join(vault, "a-smoke.yaml"),
+      serializeFlow({ executionPrerequisite: "", steps: [{ kind: "run", flow: "frag.yaml" }] }),
+      "utf8"
+    );
+    await fs.writeFile(
+      path.join(vault, "frag.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "snapshot", name: "home", maxMismatch: 0.5 }],
+      }),
+      "utf8"
+    );
+    const flowsDir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(flowsDir, { recursive: true });
+    await fs.symlink(path.join(vault, "a-smoke.yaml"), path.join(flowsDir, "smoke.yaml"));
+
+    vi.mocked(runSnapshot).mockClear();
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "smoke", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:pass", "snapshot:pass"]);
+    expect(vi.mocked(runSnapshot)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ flowsDir: vault, flowName: "a-smoke" })
+    );
+    // Report attribution is unchanged by the key: the root still reports under
+    // the name it was run as, the expanded step under the fragment's.
+    expect(result.flow).toBe("smoke");
+    expect(result.steps[1]?.flow).toBe("frag");
   });
 
   it("stamps nesting depth on expanded fragment steps (omitted at top level)", async () => {

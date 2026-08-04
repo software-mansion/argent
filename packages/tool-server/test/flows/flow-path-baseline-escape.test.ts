@@ -129,7 +129,8 @@ function asRun(result: FlowRunResult | { notice: string }): FlowRunResult {
 /**
  * The happy-path complement: a valid stem has to ARRIVE, not just an invalid
  * one be refused. The derived name is threaded three separate ways —
- * state.topFlowName into runSnapshot's baseline directory, the step scope's
+ * state.baselineKey into runSnapshot's baseline directory (for a real file the
+ * canonical stem it derives from IS this one), the step scope's
  * flow into every report, and runStack[0] into run: cycle detection — and only
  * a flow_path run can tell any of them apart from params.name (undefined
  * here), so each thread is pinned end-to-end through the same boundary the
@@ -215,5 +216,114 @@ describe("the stem a valid flow_path derives", () => {
     expect(result.ok).toBe(false);
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:pass", "run:error"]);
     expect(result.steps[1].reason).toBe("cyclic flow reference: checkout → helper → ./checkout");
+  });
+});
+
+/**
+ * The baseline key follows the CANONICAL root flow (`baselineKeyFor`), because
+ * the directory it joins onto — flowsDir — is canonical: two projects
+ * symlinking their own `smoke.yaml` into one shared vault would otherwise both
+ * key `vault/__baselines__/smoke/` and overwrite each other's committed PNGs.
+ * That canonical basename is the symlink TARGET's, and it is validated by
+ * nothing: assertSafeFlowName and classifyOnDiskSpelling above only ever saw
+ * the as-written spelling, so a link to a file named "...yaml" re-opens exactly
+ * the collapse this file exists for — `path.join(flowsDir, "__baselines__",
+ * "..")` IS flowsDir — with no upstream arm left to refuse it. Like the tests
+ * above, these run end-to-end with updateBaselines and assert the file the
+ * adoption copy actually left on disk, not a message.
+ */
+describe("the baseline key a symlinked flow_path derives from its target", () => {
+  /**
+   * Run `flowDir/safe.yaml` — a symlink to `flowDir/vault/<targetBase>`, the
+   * one-project spelling of the vault layout. The as-written name is always
+   * "safe" and always valid, so the target's name is the only variable.
+   */
+  async function runVaultedFlow(targetBase: string): Promise<FlowRunResult> {
+    const vault = path.join(flowDir, "vault");
+    await fs.mkdir(vault);
+    await fs.writeFile(
+      path.join(vault, targetBase),
+      ["executionPrerequisite: ''", "steps:", "  - snapshot: shot", ""].join("\n"),
+      "utf8"
+    );
+    const flowPath = path.join(flowDir, "safe.yaml");
+    await fs.symlink(path.join(vault, targetBase), flowPath);
+
+    const runFlow = createRunFlowTool(mockRegistry());
+    return asRun(
+      await runFlow.execute(
+        {},
+        {
+          project_root: flowDir,
+          flow_path: flowPath,
+          device: IOS_DEVICE,
+          updateBaselines: true,
+        },
+        boundaryCtx(flowPath)
+      )
+    );
+  }
+
+  /** Every file the run left anywhere under the flow directory. */
+  async function tree(): Promise<string[]> {
+    return (await fs.readdir(flowDir, { recursive: true })).sort();
+  }
+
+  it("keys the store by the target's stem, so vault-sharing links can't share one", async () => {
+    // The fix itself, on the write path: the adopted PNG lands under the REAL
+    // file's name. A second project whose own smoke.yaml points at a different
+    // vault file therefore writes a different directory, instead of replacing
+    // this baseline in place.
+    const result = await runVaultedFlow("real-name.yaml");
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0]).toMatchObject({
+      status: "pass",
+      reason: "baseline written (shot__ios-390x844.png)",
+    });
+    // The report keeps the as-written identity; only the store moved.
+    expect(result.flow).toBe("safe");
+    expect(await tree()).toEqual(
+      [
+        "safe.yaml",
+        "vault",
+        path.join("vault", "__baselines__"),
+        path.join("vault", "__baselines__", "real-name"),
+        path.join("vault", "__baselines__", "real-name", "shot__ios-390x844.png"),
+        path.join("vault", "real-name.yaml"),
+      ].sort()
+    );
+  });
+
+  it.each([
+    // The escape: stem "..", which path.join collapses back out — every
+    // baseline would land in the vault itself, beside the flow files.
+    ["...yaml", ".."],
+    // Not an escape, but not a flow name either: a dotted vault filename is
+    // perfectly legal on disk and must not become a path segment unchecked.
+    ["my.smoke.yaml", "my.smoke"],
+  ])('falls back to the as-written key when the target "%s" stems to "%s"', async (targetBase) => {
+    const result = await runVaultedFlow(targetBase);
+
+    // A run must not FAIL over an unusually named vault file — the fallback
+    // key is the as-written one, which every source validated.
+    expect(result.ok).toBe(true);
+    expect(result.steps[0]).toMatchObject({
+      status: "pass",
+      reason: "baseline written (shot__ios-390x844.png)",
+    });
+    // The whole tree, so the assertion catches a write anywhere: under
+    // __baselines__/safe/ and nowhere else — in particular nothing beside the
+    // real file in vault/, which is where the collapsed ".." key would land it.
+    expect(await tree()).toEqual(
+      [
+        "safe.yaml",
+        "vault",
+        path.join("vault", "__baselines__"),
+        path.join("vault", "__baselines__", "safe"),
+        path.join("vault", "__baselines__", "safe", "shot__ios-390x844.png"),
+        path.join("vault", targetBase),
+      ].sort()
+    );
   });
 });
