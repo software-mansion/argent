@@ -59,7 +59,11 @@ import {
   type ActionEnv,
   type DirectiveOutcome,
 } from "./flow-actions";
-import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
+import {
+  isInjectableBundleId,
+  nativeDevtoolsRef,
+  type NativeDevtoolsApi,
+} from "../../blueprints/native-devtools";
 import { androidDevtoolsRef, type AndroidDevtoolsApi } from "../../blueprints/android-devtools";
 import {
   chromiumCdpRef,
@@ -454,7 +458,14 @@ async function treeSourceGate(
   bundleId: string,
   signal?: AbortSignal
 ): Promise<string | null> {
-  if (device.platform === "ios" && !signal?.aborted) {
+  // An Apple system app (com.apple.*) can never load the injected dylib
+  // (library validation — see isInjectableBundleId), so there is no connection
+  // to wait for: gating would present that terminal state as a retryable
+  // "re-run to relaunch" failure. Skip the gate instead — an injection-free
+  // flow (raw point taps + `tool: await-ui-element` steps against the AX tree)
+  // drives such an app fine, and a selector directive still fails per-read
+  // with fetchFlowTree's reason.
+  if (device.platform === "ios" && isInjectableBundleId(bundleId) && !signal?.aborted) {
     const connected = await waitForNativeDevtools(registry, device, bundleId, signal);
     if (!connected && !signal?.aborted) {
       return (

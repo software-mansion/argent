@@ -2355,6 +2355,38 @@ describe("flow composition (run:)", () => {
     expect(result.steps[0].reason).toMatch(/could not connect to native devtools/i);
     expect(result.ok).toBe(false);
   });
+
+  it("skips the devtools gate for a non-injectable (com.apple.*) app on iOS", async () => {
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [
+        // Prefix matching is deliberately case-insensitive.
+        { kind: "launch", app: "com.APPLE.Preferences" },
+        { kind: "echo", message: "runs without a devtools connection" },
+      ],
+    });
+    // A resolvable service that never connects makes this test distinguish a
+    // real non-injectable skip from "wait, time out, then ignore the result".
+    const resolveService = vi.fn(async () => ({ isConnected: () => false }));
+    const registry = {
+      invokeTool: vi.fn(async (id: string) =>
+        id === "list-devices" ? { devices: [] } : { ok: true }
+      ),
+      getTool: vi.fn(() => undefined),
+      resolveService,
+    } as unknown as Registry;
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:pass", "echo:pass"]);
+    expect(result.ok).toBe(true);
+    expect(resolveService).not.toHaveBeenCalled();
+  });
 });
 
 describe("device binding (portability)", () => {
