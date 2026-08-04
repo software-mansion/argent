@@ -45,13 +45,20 @@ const TVOS_HINT =
 // them would never help — returning `should_restart` here puts the agent in an
 // unbounded restart-app → describe loop. This hint is reached only once
 // `describe`'s own ax-service path has already returned empty, so it leads with
-// `screenshot` (re-recommending `describe` would be circular) and shares the
+// an inspection-only screenshot (re-recommending `describe` would be circular)
+// and distinguishes direct use of previously-discovered coordinates from
+// tree-gated flow directives, which still need the unavailable full hierarchy.
+// It shares the
 // `native-*` dead-end warning verbatim with the precheck throw and
 // `native-devtools-status`.
 const NON_INJECTABLE_HINT =
   "This is an Apple system app (com.apple.*), which cannot load argent's native-devtools " +
   "instrumentation — the native view hierarchy is unavailable and restarting the app will NOT " +
-  "help. Take a `screenshot` to see the screen and interact by coordinate. " +
+  "help. Take a `screenshot` to inspect visual state only; never derive coordinates from it. " +
+  "Direct `gesture-*` calls can use coordinates previously obtained from a discovery tool, but " +
+  "tree-gated flow directives — including raw-point `tap` and `long-press` — require the full flow " +
+  "hierarchy and are unavailable for this app; raw `tool: gesture-*` steps retain direct tool " +
+  "semantics. " +
   NON_INJECTABLE_NATIVE_WARNING;
 
 function emptyTree(): DescribeNode {

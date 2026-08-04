@@ -81,14 +81,15 @@ afterEach(async () => {
 
 describe("type directive focus wait", () => {
   it("waits for the tapped field to report focus before typing (android)", async () => {
-    // Script the hierarchy by call count: reads 1-2 are the pre-tap settle
-    // (identical, unfocused), read 3 is the focus poll's first look (focus not
-    // landed yet), read 4 reports it — only then may the keyboard fire.
+    // Script the hierarchy by call count: reads 1-2 are the matching pre-tap
+    // tree, read 3 is the mandatory post-pixel revalidation, read 4 is the
+    // focus poll's first look (focus not landed yet), and read 5 reports it —
+    // only then may the keyboard fire.
     let hierarchyReads = 0;
     const calls: Call[] = [];
     const registry = mockRegistry(calls, () => {
       hierarchyReads++;
-      return { xml: emailXml(hierarchyReads >= 4) };
+      return { xml: emailXml(hierarchyReads >= 5) };
     });
 
     await writeFlow("login", {
@@ -105,7 +106,7 @@ describe("type directive focus wait", () => {
 
     expect(result.ok).toBe(true);
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["type:pass"]);
-    expect(hierarchyReads).toBe(4);
+    expect(hierarchyReads).toBe(5);
 
     const tap = calls.find((c) => c.id === "gesture-tap");
     const keys = calls.filter((c) => c.id === "keyboard");
@@ -113,7 +114,7 @@ describe("type directive focus wait", () => {
     // Text first, then the submitting Enter as a separate call.
     expect(keys.map((c) => c.args.text ?? c.args.key)).toEqual(["a@b.com", "enter"]);
     // The gap covers the fixed settle (500ms) plus at least one poll interval
-    // (300ms) before read 4 confirmed focus. setTimeout never fires early, so
+    // (300ms) before read 5 confirmed focus. setTimeout never fires early, so
     // the lower bound is safe to assert; no upper bound (CI jitter).
     expect(keys[0]!.t - tap!.t).toBeGreaterThanOrEqual(800);
   });
@@ -153,9 +154,10 @@ describe("type directive focus wait", () => {
 
     expect(result.ok).toBe(true);
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["type:pass"]);
-    // Reads 1-2: pre-tap settle. Read 3: the focus wait's single look, after
-    // which the ax-service source bails out instead of polling to the timeout.
-    expect(axReads).toBe(3);
+    // Reads 1-2: matching pre-tap tree. Read 3: mandatory post-pixel
+    // revalidation. Read 4: the focus wait's single look, after which the
+    // ax-service source bails out instead of polling to the timeout.
+    expect(axReads).toBe(4);
 
     const tap = calls.find((c) => c.id === "gesture-tap");
     const keys = calls.filter((c) => c.id === "keyboard");

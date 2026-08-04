@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Registry } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
+import type { PixelFrame } from "../../src/tools/flows/flow-pixels";
 
 // Cancel the run mid-directive by tripping an AbortController from inside the
 // tree fetch itself: the mock counts reads and aborts on a scripted one, which
@@ -14,14 +15,42 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
   fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => currentFetch()),
 }));
 
+// Keep the real pixel comparison and capability logic; script only the capture,
+// so the post-pixel revalidation case below can drive the settle to a genuine
+// visual "settled" verdict from frames it controls. Tests on the iOS-shaped
+// DEVICE never reach a capture (its runtime-kind probe resolves unknown, so
+// the settle degrades to the unavailable fallback before capturing).
+vi.mock("../../src/tools/flows/flow-pixels", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/tools/flows/flow-pixels")>();
+  return { ...actual, capturePixels: vi.fn() };
+});
+
+import { capturePixels } from "../../src/tools/flows/flow-pixels";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow } from "../../src/tools/flows/flow-utils";
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
+// Android resolves pixel-capture support synchronously ("available", no
+// runtime-kind probe), so a settle on this device runs the real pixel phase
+// against the scripted captures above.
+const ANDROID_DEVICE = "emulator-5554";
 let tmpDir: string;
 
 function n(partial: Partial<DescribeNode> & { frame: DescribeNode["frame"] }): DescribeNode {
   return { role: "AXOther", children: [], ...partial };
+}
+
+/** A solid-color RGBA frame, used to script capture readings. */
+function solid(color: [number, number, number]): PixelFrame {
+  const [r, g, b] = color;
+  const data = Buffer.alloc(4 * 4);
+  for (let i = 0; i < 4; i++) {
+    data[i * 4] = r;
+    data[i * 4 + 1] = g;
+    data[i * 4 + 2] = b;
+    data[i * 4 + 3] = 255;
+  }
+  return { width: 2, height: 2, data };
 }
 
 function screen(children: DescribeNode[]): DescribeNode {
@@ -50,9 +79,14 @@ function asRun(r: FlowRunResult | { notice: string }): FlowRunResult {
   return r;
 }
 
-async function run(name: string, registry: Registry, signal: AbortSignal): Promise<FlowRunResult> {
+async function run(
+  name: string,
+  registry: Registry,
+  signal: AbortSignal,
+  device: string = DEVICE
+): Promise<FlowRunResult> {
   return asRun(
-    await createRunFlowTool(registry).execute({}, { name, project_root: tmpDir, device: DEVICE }, {
+    await createRunFlowTool(registry).execute({}, { name, project_root: tmpDir, device }, {
       signal,
     } as never)
   );
@@ -60,6 +94,7 @@ async function run(name: string, registry: Registry, signal: AbortSignal): Promi
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-abort-"));
+  vi.mocked(capturePixels).mockReset();
 });
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
@@ -176,6 +211,83 @@ describe("run cancellation mid-directive", () => {
     expect(calls).not.toContain("gesture-tap");
   });
 
+  it("dispatches no tap when a raw-coordinate tap is cancelled during its settle", async () => {
+    const controller = new AbortController();
+    // Raw x/y never consult the tree, but they still wait for the combined
+    // settle. The tree is stable, so read 2 completes the settle's fingerprint
+    // pair; the abort lands inside that read. The coordinate branch's own
+    // abort check is the only guard on this path — runTap does not re-check
+    // the signal before dispatch — so losing it would tap the device after
+    // the client gave up.
+    let reads = 0;
+    currentFetch = () => {
+      reads++;
+      if (reads >= 2) controller.abort();
+      return {
+        tree: screen([n({ label: "Other", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 } })]),
+        source: "native-devtools",
+      };
+    };
+    const calls: string[] = [];
+
+    await writeFlow("cancelled-raw-tap-settle", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tap", x: 0.5, y: 0.4 }],
+    });
+
+    const result = await run("cancelled-raw-tap-settle", mockRegistry(calls), controller.signal);
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:skip"]);
+    expect(result.steps[0].reason).toBe("run aborted");
+    expect(result.ok).toBe(false);
+    expect(calls).not.toContain("gesture-tap");
+  });
+
+  it("dispatches no tap when a raw-coordinate tap is cancelled during the post-pixel revalidation read", async () => {
+    const controller = new AbortController();
+    // The companion to the case above, one await point later: reads 1-2
+    // converge the fingerprint pair, the two scripted captures match (visual
+    // becomes "settled"), and the abort lands inside read 3 — the mandatory
+    // post-pixel tree revalidation. That read's own abort exit is the only
+    // guard on this path: raw x/y accept `visual === "settled"` without
+    // consulting tree freshness, so a settleTree that fabricated any result
+    // here instead of returning undefined would dispatch the tap after the
+    // client gave up and record the cancelled run as a pass.
+    vi.mocked(capturePixels).mockResolvedValue(solid([255, 255, 255]));
+    let reads = 0;
+    currentFetch = () => {
+      reads++;
+      if (reads >= 3) controller.abort();
+      return {
+        tree: screen([n({ label: "Other", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 } })]),
+        source: "native-devtools",
+      };
+    };
+    const calls: string[] = [];
+
+    await writeFlow("cancelled-raw-tap-revalidation", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tap", x: 0.5, y: 0.4 }],
+    });
+
+    const result = await run(
+      "cancelled-raw-tap-revalidation",
+      mockRegistry(calls),
+      controller.signal,
+      ANDROID_DEVICE
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:skip"]);
+    expect(result.steps[0].reason).toBe("run aborted");
+    expect(result.ok).toBe(false);
+    expect(calls).not.toContain("gesture-tap");
+    // The matching pair really ran — the settle reached the pixel phase's
+    // "settled" verdict, not the unavailable fallback — and the abort landed
+    // exactly in the revalidation read, with nothing polled beyond it.
+    expect(vi.mocked(capturePixels)).toHaveBeenCalledTimes(2);
+    expect(reads).toBe(3);
+  });
+
   it("dispatches no scroll increment when the run is cancelled during a mid-scroll settle read", async () => {
     const controller = new AbortController();
     // The target never appears and the tree is stable — after read 2 settles,
@@ -237,13 +349,13 @@ describe("run cancellation mid-directive", () => {
 
   it("injects no keyboard input when the run is cancelled during the focus wait", async () => {
     const controller = new AbortController();
-    // Reads 1-2 are the pre-tap settle (field resolves immediately); read 3 is
-    // the focus poll's first look — the field never reports focus, and the run
-    // is cancelled there.
+    // Reads 1-2 are the pre-tap tree settle and read 3 is its post-pixel tree
+    // revalidation; read 4 is the focus poll's first look. The field never
+    // reports focus, and the run is cancelled there.
     let reads = 0;
     currentFetch = () => {
       reads++;
-      if (reads >= 3) controller.abort();
+      if (reads >= 4) controller.abort();
       return {
         tree: screen([
           n({ identifier: "email", frame: { x: 0.1, y: 0.2, width: 0.8, height: 0.06 } }),

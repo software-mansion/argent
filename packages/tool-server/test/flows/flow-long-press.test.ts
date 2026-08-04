@@ -221,7 +221,7 @@ describe("long-press: execution", () => {
     ]);
   });
 
-  it("presses a raw point without resolving the tree", async () => {
+  it("presses a raw point after auto-settling the screen", async () => {
     currentTree = () => screen([]);
     await writeFlow("press-point", {
       executionPrerequisite: "",

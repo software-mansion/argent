@@ -8,11 +8,15 @@ import { runSnapshot } from "../../src/tools/flows/flow-visual";
 import { ArtifactStore } from "../../src/artifacts";
 import type { DiffPngFilesOptions } from "../../src/tools/screenshot-diff/screenshot-diff";
 import {
+  DEFAULT_ACTION_TIMEOUT_MS,
   settleTree,
   invokeOnDevice,
-  waitForFrame,
+  waitForFrameResult,
   type ActionEnv,
+  type SettleResult,
 } from "../../src/tools/flows/flow-actions";
+import { FlowTreeSourceUnavailableError } from "../../src/tools/flows/flow-errors";
+import { settlePixels } from "../../src/tools/flows/flow-pixels";
 
 // Stub settle + capture so the tests exercise only the baseline write/diff decision.
 const h = vi.hoisted(() => ({
@@ -29,12 +33,18 @@ const h = vi.hoisted(() => ({
   diffTopMask: "" as "" | NonNullable<DiffPngFilesOptions["topMask"]>,
   /** Set by the differ mock: the normalizeSizes option it was passed. */
   diffNormalizeSizes: undefined as boolean | undefined,
-  /** What the waitForFrame mock resolves a cropOn selector to. */
+  /** What the waitForFrameResult mock resolves a cropOn selector to. */
   cropFrame: undefined as
     | undefined
     | "aborted"
     | { x: number; y: number; width: number; height: number },
-  /** When set, the waitForFrame mock rejects with this (a tree-source outage). */
+  cropSettle: {
+    tree: {} as never,
+    converged: true,
+    treeFresh: true,
+    visual: "settled",
+  } as SettleResult,
+  /** When set, the waitForFrameResult mock rejects with this (a tree-source outage). */
   cropFrameError: null as null | Error,
   dimensionMismatch: null as null | {
     expected: { width: number; height: number };
@@ -42,17 +52,29 @@ const h = vi.hoisted(() => ({
   },
 }));
 
+// Keep the real module (the snapshot settler shares its deadline constants,
+// and cropOn failures must surface the directives' standard not-found reason
+// from the real offscreenHint); stub only the settle and dispatch entry points.
 vi.mock("../../src/tools/flows/flow-actions", async (importOriginal) => ({
-  // The real offscreenHint: cropOn failures must surface the directives'
-  // standard not-found reason, so the tests assert against the real text.
-  offscreenHint: (await importOriginal<typeof import("../../src/tools/flows/flow-actions")>())
-    .offscreenHint,
-  settleTree: vi.fn(async () => ({})),
+  ...(await importOriginal<typeof import("../../src/tools/flows/flow-actions")>()),
+  settleTree: vi.fn(async () => ({
+    tree: {},
+    converged: true,
+    treeFresh: true,
+    visual: "settled",
+  })),
   invokeOnDevice: vi.fn(async () => ({ image: { hostPath: h.shotPath } })),
-  waitForFrame: vi.fn(async () => {
+  waitForFrameResult: vi.fn(async () => {
     if (h.cropFrameError) throw h.cropFrameError;
-    return h.cropFrame;
+    return h.cropFrame === "aborted"
+      ? { frame: "aborted" as const }
+      : { frame: h.cropFrame, settle: h.cropSettle };
   }),
+}));
+
+vi.mock("../../src/tools/flows/flow-pixels", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/tools/flows/flow-pixels")>()),
+  settlePixels: vi.fn(async () => "settled"),
 }));
 
 vi.mock("../../src/tools/screenshot-diff/screenshot-diff", () => ({
@@ -145,6 +167,10 @@ function opts(overrides: Partial<Parameters<typeof runSnapshot>[1]> = {}) {
   };
 }
 
+function treeOutage(message = "native devtools is unavailable"): FlowTreeSourceUnavailableError {
+  return new FlowTreeSourceUnavailableError(new Error(message));
+}
+
 const baselinePath = () => path.join(tmpDir, "__baselines__", "checkout", "home__ios-390x844.png");
 
 beforeEach(async () => {
@@ -158,11 +184,30 @@ beforeEach(async () => {
   h.diffTopMask = "";
   h.diffNormalizeSizes = undefined;
   h.cropFrame = undefined;
+  h.cropSettle = {
+    tree: {} as never,
+    converged: true,
+    treeFresh: true,
+    visual: "settled",
+  };
   h.cropFrameError = null;
   h.dimensionMismatch = null;
+  vi.mocked(settleTree)
+    .mockReset()
+    .mockResolvedValue({
+      tree: {} as never,
+      converged: true,
+      treeFresh: true,
+      visual: "settled",
+    });
+  vi.mocked(settlePixels).mockReset().mockResolvedValue("settled");
+  vi.mocked(invokeOnDevice)
+    .mockReset()
+    .mockImplementation(async () => ({ image: { hostPath: h.shotPath } }));
   await writeFakePng(h.shotPath);
 });
 afterEach(async () => {
+  vi.useRealTimers();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -280,11 +325,27 @@ describe("runSnapshot baselines", () => {
 });
 
 describe("runSnapshot settle", () => {
-  it("proceeds to capture when the tree source is down", async () => {
+  it("finishes the combined settle before capturing the snapshot", async () => {
+    vi.mocked(settleTree).mockClear();
+    vi.mocked(invokeOnDevice).mockClear();
+
+    await runSnapshot(env, opts({ updateBaselines: true }));
+
+    // The settle rides the shared action deadline so its retries stay bounded.
+    expect(vi.mocked(settleTree)).toHaveBeenCalledWith(env, {
+      absoluteDeadline: expect.any(Number),
+    });
+    expect(vi.mocked(settleTree).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(invokeOnDevice).mock.invocationCallOrder[0]!
+    );
+    expect(vi.mocked(settlePixels)).not.toHaveBeenCalled();
+  });
+
+  it("falls back to pixel-only settling before capture when the tree source is down", async () => {
     // settleTree throws when every read in its window failed (native devtools
     // disconnected). The capture reads pixels, not the tree — the snapshot
     // must still capture and compare instead of reporting an error.
-    vi.mocked(settleTree).mockRejectedValueOnce(new Error("native devtools is unavailable"));
+    vi.mocked(settleTree).mockRejectedValueOnce(treeOutage());
     vi.mocked(invokeOnDevice).mockClear();
     await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
     await writeFakePng(baselinePath());
@@ -292,7 +353,383 @@ describe("runSnapshot settle", () => {
     const r = await runSnapshot(env, opts());
 
     expect(r.status).toBe("pass");
+    expect(r.reason).not.toContain("degraded");
+    expect(vi.mocked(settlePixels)).toHaveBeenCalledWith(env, {
+      absoluteDeadline: expect.any(Number),
+    });
+    expect(vi.mocked(settlePixels).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(invokeOnDevice).mock.invocationCallOrder[0]!
+    );
     expect(vi.mocked(invokeOnDevice)).toHaveBeenCalledWith(env, "screenshot", expect.anything());
+  });
+
+  it("degrades — not skips — when the outage fallback starts with the window already spent", async () => {
+    // The first tree settle can consume the entire action window before it
+    // proves the source down (a failing read completing at the very end), so
+    // the pixels-only fallback enters with zero budget. Drive the REAL
+    // settlePixels through that shape: its zero-budget outcome is
+    // load-bearing — "timed-out" degrades the comparison honestly, while
+    // "aborted" would turn this uncancelled run into a skip blaming a
+    // cancellation that never happened.
+    vi.useFakeTimers();
+    const actual = await vi.importActual<typeof import("../../src/tools/flows/flow-pixels")>(
+      "../../src/tools/flows/flow-pixels"
+    );
+    vi.mocked(settlePixels).mockImplementationOnce(actual.settlePixels);
+    vi.mocked(settleTree).mockImplementationOnce(async () => {
+      vi.advanceTimersByTime(DEFAULT_ACTION_TIMEOUT_MS + 1);
+      throw treeOutage();
+    });
+    vi.mocked(invokeOnDevice).mockClear();
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+
+    const r = await runSnapshot(env, opts());
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).toContain("best-effort/degraded");
+    // "timed out", not "unavailable": the settle launched nothing, so it may
+    // not blame the capture backend (env has no registry — a capture attempt
+    // would soft-fail into "unavailable" and trip this).
+    expect(r.reason).toContain("timed out");
+    // The snapshot still captured and compared — one screenshot dispatch, no
+    // settle-side captures.
+    expect(vi.mocked(invokeOnDevice)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(invokeOnDevice)).toHaveBeenCalledWith(env, "screenshot", expect.anything());
+  });
+
+  it.each(["timed-out", "unavailable"] as const)(
+    "reports an ordinary comparison as degraded when pixel-only settling is %s",
+    async (outcome) => {
+      vi.mocked(settleTree).mockRejectedValueOnce(treeOutage());
+      vi.mocked(settlePixels).mockResolvedValueOnce(outcome);
+      await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+      await writeFakePng(baselinePath());
+
+      const r = await runSnapshot(env, opts());
+
+      expect(r.status).toBe("pass");
+      expect(r.reason).toContain("best-effort/degraded");
+      expect(r.reason).toContain(outcome === "timed-out" ? "timed out" : "unavailable");
+    }
+  );
+
+  it("reports a missing-baseline capture as degraded when combined pixels are unavailable", async () => {
+    vi.mocked(settleTree).mockResolvedValueOnce({
+      tree: {} as never,
+      converged: true,
+      treeFresh: true,
+      visual: "unavailable",
+    });
+
+    const r = await runSnapshot(env, opts());
+
+    expect(r.status).toBe("fail");
+    expect(r.reason).toContain("no baseline");
+    expect(r.reason).toContain("best-effort/degraded");
+    expect(r.reason).toContain("unavailable");
+  });
+
+  it("compares undegraded when pixels settled but tree revalidation missed the deadline", async () => {
+    vi.useFakeTimers();
+    // A hung post-pixel read leaves `visual: "settled"` without freshness.
+    // The settler prefers full convergence: it re-settles, the second settle
+    // converges, and the comparison proceeds undegraded.
+    vi.mocked(settleTree).mockResolvedValueOnce({
+      tree: {} as never,
+      converged: false,
+      treeFresh: false,
+      visual: "settled",
+    });
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+
+    const pending = runSnapshot(env, opts());
+    await vi.advanceTimersByTimeAsync(1_000);
+    const r = await pending;
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).not.toContain("degraded");
+    expect(vi.mocked(settleTree)).toHaveBeenCalledTimes(2);
+  });
+
+  it("writes a baseline under updateBaselines when pixels settled without tree freshness", async () => {
+    vi.useFakeTimers();
+    vi.mocked(settleTree).mockResolvedValueOnce({
+      tree: {} as never,
+      converged: false,
+      treeFresh: false,
+      visual: "settled",
+    });
+
+    const pending = runSnapshot(env, opts({ updateBaselines: true }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    const r = await pending;
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).toContain("baseline written");
+    expect(r.reason).not.toContain("degraded");
+    await expect(fs.access(baselinePath())).resolves.toBeUndefined();
+  });
+
+  it("accepts the settled-but-stale screen only when the retry deadline exhausts", async () => {
+    vi.useFakeTimers();
+    // Every settle is visually settled but never tree-fresh (a persistently
+    // slow source). The settler re-settles for freshness and accepts the
+    // stale-but-settled screen only at deadline exhaustion.
+    vi.mocked(settleTree).mockResolvedValue({
+      tree: {} as never,
+      converged: false,
+      treeFresh: false,
+      visual: "settled",
+    });
+
+    const pending = runSnapshot(env, opts({ updateBaselines: true }));
+    await vi.advanceTimersByTimeAsync(8_000);
+    const r = await pending;
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).toContain("baseline written");
+    expect(r.reason).not.toContain("degraded");
+    // The acceptance came from retry exhaustion, not from the first result.
+    expect(vi.mocked(settleTree).mock.calls.length).toBeGreaterThan(2);
+    await expect(fs.access(baselinePath())).resolves.toBeUndefined();
+  });
+
+  it("accepts an established stale settle when the tree source goes dark on the retry", async () => {
+    vi.useFakeTimers();
+    // The first settle proves the pixels stopped (visually settled, tree
+    // stale); the freshness retry then finds the tree source dark. The outage
+    // cannot un-prove that established stillness, so the snapshot proceeds on
+    // it directly — no pixels-only fallback round re-deriving what the first
+    // settle already proved, and no degradation note.
+    vi.mocked(settleTree)
+      .mockResolvedValueOnce({
+        tree: {} as never,
+        converged: false,
+        treeFresh: false,
+        visual: "settled",
+      })
+      .mockRejectedValueOnce(treeOutage());
+
+    const pending = runSnapshot(env, opts({ updateBaselines: true }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    const r = await pending;
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).toBe("baseline written (home__ios-390x844.png)");
+    // The outage arrived on the freshness retry, not the first settle…
+    expect(vi.mocked(settleTree)).toHaveBeenCalledTimes(2);
+    // …and the stillness was accepted as-is, not re-proved from extra captures.
+    expect(vi.mocked(settlePixels)).not.toHaveBeenCalled();
+    await expect(fs.access(baselinePath())).resolves.toBeUndefined();
+  });
+
+  it("degrades a stale settle when a freshness retry observes the screen moving", async () => {
+    vi.useFakeTimers();
+    // The first settle proves stillness without the confirming tree read; the
+    // freshness retry is a full settle whose pixel phase runs and never finds
+    // a matching pair — the screen moved strictly AFTER the stale pair
+    // matched, and the capture happens after the settle returns. The retry's
+    // motion overrides the stale claim: the adopted baseline may show
+    // mid-animation pixels, so the write must carry the timeout note instead
+    // of reading like a clean one.
+    vi.mocked(settleTree)
+      .mockResolvedValueOnce({
+        tree: {} as never,
+        converged: false,
+        treeFresh: false,
+        visual: "settled",
+      })
+      .mockResolvedValue({
+        tree: {} as never,
+        converged: false,
+        treeFresh: true,
+        visual: "timed-out",
+      });
+
+    const pending = runSnapshot(env, opts({ updateBaselines: true }));
+    await vi.advanceTimersByTimeAsync(8_000);
+    const r = await pending;
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).toBe(
+      "baseline written (home__ios-390x844.png); " +
+        "capture is best-effort/degraded because visual settling timed out"
+    );
+    // The motion round returned immediately — no retrying past observed
+    // motion toward the deadline's undegraded stale-settled exit.
+    expect(vi.mocked(settleTree)).toHaveBeenCalledTimes(2);
+    await expect(fs.access(baselinePath())).resolves.toBeUndefined();
+  });
+
+  it("writes an undegraded baseline when a converged combined settle had no pixel phase", async () => {
+    // A platform with no capture backend (Vega) converges with visual
+    // "skipped": the absence is architectural, so the reason must read exactly
+    // like any healthy write — no best-effort/degraded suffix.
+    vi.mocked(settleTree).mockResolvedValue({
+      tree: {} as never,
+      converged: true,
+      treeFresh: true,
+      visual: "skipped",
+    });
+    const vegaEnv = { ...env, device: { platform: "vega", id: "vega-1" } } as unknown as ActionEnv;
+
+    const r = await runSnapshot(vegaEnv, opts({ updateBaselines: true }));
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).toBe("baseline written (home__vega-390x844.png)");
+  });
+
+  it("fails a missing baseline undegraded when the combined settle had no pixel phase", async () => {
+    vi.mocked(settleTree).mockResolvedValue({
+      tree: {} as never,
+      converged: true,
+      treeFresh: true,
+      visual: "skipped",
+    });
+    const vegaEnv = { ...env, device: { platform: "vega", id: "vega-1" } } as unknown as ActionEnv;
+
+    const r = await runSnapshot(vegaEnv, opts());
+
+    expect(r.status).toBe("fail");
+    expect(r.reason).toContain('no baseline for "home"');
+    expect(r.reason).not.toContain("best-effort/degraded");
+  });
+
+  it("compares undegraded when the converged combined settle had no pixel phase", async () => {
+    vi.mocked(settleTree).mockResolvedValue({
+      tree: {} as never,
+      converged: true,
+      treeFresh: true,
+      visual: "skipped",
+    });
+    const vegaEnv = { ...env, device: { platform: "vega", id: "vega-1" } } as unknown as ActionEnv;
+    const vegaBaseline = path.join(tmpDir, "__baselines__", "checkout", "home__vega-390x844.png");
+    await fs.mkdir(path.dirname(vegaBaseline), { recursive: true });
+    await writeFakePng(vegaBaseline);
+
+    const r = await runSnapshot(vegaEnv, opts());
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).toBe("diff 0.00% ≤ 0.5% (home__vega-390x844.png)");
+  });
+
+  it("writes a degraded baseline when a restarted settle never re-observed pixels", async () => {
+    // settleTree downgraded a pre-restart "settled" to "skipped" — the write
+    // still proceeds best-effort, flagged as a settle timeout.
+    vi.mocked(settleTree).mockResolvedValueOnce({
+      tree: {} as never,
+      converged: false,
+      treeFresh: true,
+      visual: "skipped",
+    });
+
+    const r = await runSnapshot(env, opts({ updateBaselines: true }));
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).toContain("baseline written");
+    expect(r.reason).toContain("timed out");
+    await expect(fs.access(baselinePath())).resolves.toBeUndefined();
+  });
+
+  it("degrades a non-converged unavailable settle as timed out, not merely unavailable", async () => {
+    // converged: false alongside "unavailable" hides an earlier pixel
+    // timeout — the note must name the timeout, not just unavailability.
+    vi.mocked(settleTree).mockResolvedValueOnce({
+      tree: {} as never,
+      converged: false,
+      treeFresh: true,
+      visual: "unavailable",
+    });
+
+    const r = await runSnapshot(env, opts({ updateBaselines: true }));
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).toContain("baseline written");
+    expect(r.reason).toContain("timed out");
+    expect(r.reason).not.toContain("unavailable");
+  });
+
+  it("writes a missing baseline with a degradation note after settle timeout", async () => {
+    vi.mocked(settleTree).mockResolvedValueOnce({
+      tree: {} as never,
+      converged: false,
+      treeFresh: true,
+      visual: "timed-out",
+    });
+
+    const r = await runSnapshot(env, opts({ updateBaselines: true }));
+
+    // A timed-out settle degrades the write, never blocks it: the note warns
+    // that the adopted baseline may show mid-animation pixels.
+    expect(r.status).toBe("pass");
+    expect(r.reason).toContain("baseline written");
+    expect(r.reason).toContain("best-effort/degraded");
+    expect(r.reason).toContain("timed out");
+    expect(r.artifacts?.baseline).toMatchObject({
+      __argentArtifact: true,
+      hostPath: baselinePath(),
+    });
+    await expect(fs.access(baselinePath())).resolves.toBeUndefined();
+  });
+
+  it("updates an existing baseline with a degradation note after settle timeout", async () => {
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath(), 390, 844);
+    const before = await fs.readFile(baselinePath());
+    await fs.appendFile(h.shotPath, Buffer.from("different-current"));
+    vi.mocked(settleTree).mockResolvedValueOnce({
+      tree: {} as never,
+      converged: false,
+      treeFresh: true,
+      visual: "timed-out",
+    });
+
+    const r = await runSnapshot(env, opts({ updateBaselines: true }));
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).toContain("baseline updated");
+    expect(r.reason).toContain("timed out");
+    expect(await fs.readFile(baselinePath())).not.toEqual(before);
+    expect(await fs.readFile(baselinePath())).toEqual(await fs.readFile(h.shotPath));
+  });
+
+  it("may write a baseline after a tree outage when pixel-only settling succeeds", async () => {
+    vi.mocked(settleTree).mockRejectedValueOnce(treeOutage());
+
+    const r = await runSnapshot(env, opts({ updateBaselines: true }));
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).toContain("baseline written");
+    await expect(fs.access(baselinePath())).resolves.toBeUndefined();
+  });
+
+  it("propagates an unrelated settle failure without capturing or seeding a baseline", async () => {
+    const failure = new Error("tree fingerprint invariant failed");
+    vi.mocked(settleTree).mockRejectedValueOnce(failure);
+    vi.mocked(invokeOnDevice).mockClear();
+
+    await expect(runSnapshot(env, opts({ updateBaselines: true }))).rejects.toBe(failure);
+
+    expect(vi.mocked(settlePixels)).not.toHaveBeenCalled();
+    expect(vi.mocked(invokeOnDevice)).not.toHaveBeenCalled();
+    await expect(fs.access(baselinePath())).rejects.toThrow();
+  });
+
+  it("propagates an unrelated settle failure without capturing or overwriting a baseline", async () => {
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+    const before = await fs.readFile(baselinePath());
+    const failure = new Error("unexpected settle implementation error");
+    vi.mocked(settleTree).mockRejectedValueOnce(failure);
+    vi.mocked(invokeOnDevice).mockClear();
+
+    await expect(runSnapshot(env, opts({ updateBaselines: true }))).rejects.toBe(failure);
+
+    expect(vi.mocked(settlePixels)).not.toHaveBeenCalled();
+    expect(vi.mocked(invokeOnDevice)).not.toHaveBeenCalled();
+    expect(await fs.readFile(baselinePath())).toEqual(before);
   });
 
   it("skips without capturing when the run was aborted during settle", async () => {
@@ -301,6 +738,18 @@ describe("runSnapshot settle", () => {
     const abortedEnv = { ...env, signal: { aborted: true } } as unknown as ActionEnv;
 
     const r = await runSnapshot(abortedEnv, opts());
+
+    expect(r.status).toBe("skip");
+    expect(r.reason).toContain("aborted");
+    expect(vi.mocked(invokeOnDevice)).not.toHaveBeenCalled();
+  });
+
+  it("preserves abort-as-skip when the pixel-only fallback is aborted", async () => {
+    vi.mocked(settleTree).mockRejectedValueOnce(treeOutage());
+    vi.mocked(settlePixels).mockResolvedValueOnce("aborted");
+    vi.mocked(invokeOnDevice).mockClear();
+
+    const r = await runSnapshot(env, opts());
 
     expect(r.status).toBe("skip");
     expect(r.reason).toContain("aborted");
@@ -388,12 +837,52 @@ describe("runSnapshot cropOn", () => {
     const r = await runSnapshot(env, opts({ updateBaselines: true, cropOn }));
 
     expect(r.status).toBe("pass");
-    expect(vi.mocked(waitForFrame)).toHaveBeenCalledWith(env, cropOn);
-    // waitForFrame settles internally — the plain settle must not run too.
+    expect(vi.mocked(waitForFrameResult)).toHaveBeenCalledWith(env, cropOn);
+    // waitForFrameResult settles internally — the plain settle must not run too.
     expect(vi.mocked(settleTree)).not.toHaveBeenCalled();
     // Key: the FULL capture's dimensions (device-class identity) plus the
     // selector hash (crop identity). Content: the crop.
     expect(r.snapshotKey).toBe(cropKey);
+    await expect(pngSize(cropBaselinePath())).resolves.toEqual({ w: 50, h: 50 });
+  });
+
+  it("marks a cropOn baseline write degraded when its frame settle timed out", async () => {
+    h.cropSettle = {
+      tree: {} as never,
+      converged: false,
+      treeFresh: true,
+      visual: "timed-out",
+    };
+
+    const r = await runSnapshot(env, opts({ updateBaselines: true, cropOn }));
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).toBe(
+      `baseline written (${cropKey}.png); ` +
+        "capture is best-effort/degraded because visual settling timed out"
+    );
+    await expect(pngSize(cropBaselinePath())).resolves.toEqual({ w: 50, h: 50 });
+  });
+
+  it("writes an undegraded cropOn baseline when the frame settle had no pixel phase", async () => {
+    // A platform with no capture backend (Vega, the Apple TV simulator)
+    // converges with visual "skipped" — the pixel phase is architecturally
+    // absent, not degraded, so the write must read like any healthy one.
+    h.cropSettle = {
+      tree: {} as never,
+      converged: true,
+      treeFresh: true,
+      visual: "skipped",
+    };
+
+    const r = await runSnapshot(env, opts({ updateBaselines: true, cropOn }));
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).toBe(`baseline written (${cropKey}.png)`);
+    expect(r.artifacts?.baseline).toMatchObject({
+      __argentArtifact: true,
+      hostPath: cropBaselinePath(),
+    });
     await expect(pngSize(cropBaselinePath())).resolves.toEqual({ w: 50, h: 50 });
   });
 
@@ -414,6 +903,26 @@ describe("runSnapshot cropOn", () => {
     expect(h.diffNormalizeSizes).toBe(false);
     // …and the unregistered crop did not outlive the call.
     await expect(fs.access(path.dirname(h.diffCurrentPath))).rejects.toThrow();
+  });
+
+  it("marks a failing cropOn comparison degraded when visual settling was unavailable", async () => {
+    await fs.mkdir(path.dirname(cropBaselinePath()), { recursive: true });
+    await writeRealPng(cropBaselinePath(), 50, 50);
+    h.mismatchPercentage = 3.1;
+    h.cropSettle = {
+      tree: {} as never,
+      converged: true,
+      treeFresh: true,
+      visual: "unavailable",
+    };
+
+    const r = await runSnapshot(env, opts({ cropOn }));
+
+    expect(r.status).toBe("fail");
+    expect(r.reason).toContain("diff 3.10% > 0.5%");
+    expect(r.reason).toContain(
+      "capture is best-effort/degraded because visual settling was unavailable"
+    );
   });
 
   it("never masks a crop, even one overlapping the status-bar band", async () => {
@@ -531,6 +1040,12 @@ describe("runSnapshot cropOn", () => {
 
   it("fails a sub-pixel crop region instead of writing an empty PNG", async () => {
     h.cropFrame = { x: 0.5, y: 0.5, width: 0.001, height: 0.001 };
+    h.cropSettle = {
+      tree: {} as never,
+      converged: false,
+      treeFresh: true,
+      visual: "timed-out",
+    };
     const preexistingCropDirs = new Set(
       (await fs.readdir(os.tmpdir())).filter((e) => e.startsWith("argent-flow-crop-"))
     );
@@ -538,7 +1053,11 @@ describe("runSnapshot cropOn", () => {
     const r = await runSnapshot(env, opts({ cropOn }));
 
     expect(r.status).toBe("fail");
-    expect(r.reason).toContain("empty at this resolution");
+    expect(r.reason).toBe(
+      `cropOn matched text="Header" but its on-screen region is ` +
+        `empty at this resolution — nothing was compared; ` +
+        `capture is best-effort/degraded because visual settling timed out`
+    );
     // The key still names the failure for an exporter (CLI --output), and the
     // FULL capture is attached as `current` — no crop exists to show.
     expect(r.snapshotKey).toBe(cropKey);

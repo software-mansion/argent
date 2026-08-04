@@ -19,10 +19,22 @@ import {
   type WaitCondition,
   type TextMatchMode,
 } from "../../utils/ui-tree-match";
-import { sleepOrAbort } from "../../utils/timing";
+import { settleWithin, sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { bindDeviceArgs } from "./flow-device";
+import { FlowTreeSettleTimeoutError, FlowTreeSourceUnavailableError } from "./flow-errors";
 import { fetchFlowTree } from "./flow-tree";
+import {
+  capturePixels,
+  getPixelCaptureSupport,
+  pixelCaptureTimeoutMs,
+  PIXEL_CAPTURE_TIMEOUT_MS,
+  PIXEL_SETTLE_POLL_MS,
+  PIXEL_SETTLE_TIMEOUT_MS,
+  pixelsDiffer,
+  type PixelCaptureSupport,
+  type PixelSettleOutcome,
+} from "./flow-pixels";
 import {
   buildAxisCandidate,
   decomposePinch,
@@ -104,8 +116,10 @@ export function invokeOnDevice(
   );
 }
 
-const DEFAULT_ACTION_TIMEOUT_MS = 7500;
-const POLL_INTERVAL_MS = 300;
+// One action-scoped deadline and retry cadence for every step kind — exported
+// so flow-visual's snapshot settle retries on the same budget.
+export const DEFAULT_ACTION_TIMEOUT_MS = 7500;
+export const POLL_INTERVAL_MS = 300;
 
 // `type` focus handshake: the focus tap resolves as soon as its Up event is
 // enqueued, but the app still has to move input focus there (first responder /
@@ -130,6 +144,45 @@ const FOCUS_REPORTING_SOURCES: ReadonlySet<DescribeSource> = new Set([
 // never lands mid-fling and a resolved frame can't go stale before we act.
 const SETTLE_POLL_MS = 250;
 const SETTLE_TIMEOUT_MS = 3000;
+
+// Pixel settle backstop: the tree fingerprint can't see visual motion the
+// reported geometry never reflects. Canonical case: an iOS Core Animation
+// transition (modal dismiss, nav push) sets the model frame to its final value
+// when the animation STARTS and animates only the presentation layer — which
+// keeps hit-testing — so a settled tree can still be covered by a dismissing
+// modal. Same blindness for Android window animations and Chromium opacity
+// fades. So once the tree converges, confirm the pixels stopped too. Captures
+// and their observation gap share flow-pixels' bounded window; a perpetual
+// animator is cut off earlier still, at the ordinary phase window below. A
+// `scroll-to` uses this only before its first increment; later checkpoints
+// are tree-only because each increment is already momentum-free/settled.
+// Leave one bounded tree-read window after the pixel phase. Without this
+// reserve a hung capture can consume the caller's entire deadline, leaving no
+// opportunity to prove that the pre-capture selector coordinates are current.
+const FINAL_TREE_REVALIDATE_RESERVE_MS = SETTLE_POLL_MS;
+// The ordinary phase bounds ALL polling — tree re-reads and pixel-pair
+// polling alike — and stays short enough for action-level callers to retry a
+// stale final tree. The separate hard ceiling below covers only work already
+// in flight when that window closes: a first capture may spend its full
+// first-frame-aware budget, plus the one warm capture that completes its
+// pair. The distinction is what keeps a screen with perpetual tree-invisible
+// motion (video, a shimmer, a colour pulse) from converting one settle into
+// the caller's whole action budget: polling stops at the phase window even
+// though a slow cold capture may legitimately still be running past it.
+const COMBINED_PHASE_TIMEOUT_MS = SETTLE_TIMEOUT_MS + PIXEL_CAPTURE_TIMEOUT_MS;
+export const COMBINED_HARD_TIMEOUT_MS =
+  SETTLE_TIMEOUT_MS + PIXEL_SETTLE_TIMEOUT_MS + FINAL_TREE_REVALIDATE_RESERVE_MS;
+// A tree read already in flight may outlive the tree polling window: Android's
+// full hierarchy commonly takes longer than 3s under load (the sources
+// themselves budget far more — android-devtools grants getHierarchy 15s, and a
+// uiautomator dump allows up to 20s). When no caller supplies a hard deadline,
+// an unowned settle must not abandon that read sooner than the action budget
+// every deadline-owning caller grants it (`Date.now() +
+// DEFAULT_ACTION_TIMEOUT_MS`): anything shorter makes a healthy 5–7.5s read
+// fail only the deadline-less call sites (`scroll-to`'s per-iteration settles)
+// while every other directive would accept the same read. Matching the action
+// budget keeps the timeout cliff at the same 7.5s everywhere.
+const DEFAULT_TREE_READ_TIMEOUT_MS = DEFAULT_ACTION_TIMEOUT_MS;
 
 // `scroll-to`: a bounded number of momentum-free increments. Each travels half
 // the clip window along the scroll axis (half the screen when no `within`
@@ -300,52 +353,500 @@ function flowSelectorToFrame(tree: DescribeNode, sel: FlowSelector): DescribeFra
   return undefined;
 }
 
+/** Outcome of {@link settleTree}: the tree plus whether it genuinely stopped. */
+export interface SettleResult {
+  tree: DescribeNode;
+  /**
+   * True when the requested settle phases stabilized: the tree in tree-only
+   * mode, or the tree plus any available pixels in combined mode. False when
+   * a deadline hit first (`tree` is then the best-effort last read).
+   */
+  converged: boolean;
+  /**
+   * True only when `tree` is safe to use for selector coordinates. A
+   * best-effort result can outlive the last successful read when a capture,
+   * an awaited capability probe, or a final tree read consumes a combined
+   * settle's deadline — or, in either mode, when a mid-phase tree read
+   * outlives the source read budget; acting callers must reject it.
+   */
+  treeFresh: boolean;
+  /**
+   * Pixel phase outcome. `skipped` means no pixel phase ran: tree-only mode,
+   * a platform with no capture backend at all ({@link getPixelCaptureSupport} — the
+   * only way a combined settle converges with `skipped`), or tree settling
+   * exhausting its deadline before a combined settle could start (or re-run)
+   * captures. `settled` always describes the screen as returned (a pre-restart
+   * match is downgraded to `skipped`), so a caller may trust it without
+   * `treeFresh` for anything that consumes no tree-derived value.
+   * Aborts return `undefined` from settleTree instead of a result.
+   */
+  visual: Exclude<PixelSettleOutcome, "aborted"> | "skipped";
+}
+
+export type SettleMode = "combined" | "tree-only";
+
+export interface SettleOptions {
+  /** Combined tree + pixel stabilization by default; tree-only skips captures. */
+  mode?: SettleMode;
+  /**
+   * Optional hard caller deadline. Phase windows still bound tree polling and
+   * pixel comparison, but an already-started tree read may use this full
+   * budget.
+   */
+  absoluteDeadline?: number;
+}
+
+type PixelCaptureResult =
+  | Awaited<ReturnType<typeof capturePixels>>
+  | "deadline"
+  | "not-attempted"
+  | "aborted";
+type PixelCaptureSupportResult = PixelCaptureSupport | "deadline" | "not-attempted" | "aborted";
+type TreeReadResult =
+  | { type: "tree"; tree: DescribeNode }
+  | { type: "error"; error: Error }
+  | { type: "deadline" }
+  | { type: "aborted" };
+
+function noSuccessfulTreeRead(lastError?: Error): Error {
+  // Only a completed source failure proves an outage. A read that merely
+  // outlived our hard deadline may still succeed, so keep that as an ordinary
+  // settle timeout instead of routing snapshots into their pixels-only outage
+  // fallback.
+  return lastError
+    ? new FlowTreeSourceUnavailableError(lastError)
+    : new FlowTreeSettleTimeoutError();
+}
+
+/** Run one tree read inside the same hard boundary as the rest of settling. */
+async function fetchTreeBefore(env: ActionEnv, deadline: number): Promise<TreeReadResult> {
+  if (env.signal?.aborted) return { type: "aborted" };
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return { type: "deadline" };
+  // Preserve the original Error object (and any structured failure metadata)
+  // while still ensuring a late rejection is consumed after our wait ends.
+  const pending = fetchFlowTree(env.registry, env.device).then(
+    ({ tree }) => ({ type: "tree", tree }) as const,
+    (err) =>
+      ({
+        type: "error",
+        error: err instanceof Error ? err : new Error(String(err)),
+      }) as const
+  );
+  const result = await settleWithin(pending, remaining, env.signal);
+  if (result.type === "aborted" || env.signal?.aborted) return { type: "aborted" };
+  if (result.type === "timeout") return { type: "deadline" };
+  // `pending` resolves both its success and failure arms, but retain a safe
+  // fallback if that wrapper changes later.
+  if (result.type === "error") return { type: "error", error: new Error(result.error) };
+  return result.value;
+}
+
 /**
- * Re-read the describe tree until two consecutive reads are identical — the UI
- * has settled (a scroll's fling has stopped, an animation finished). Returns the
- * stable tree, the last tree read on timeout (best effort), or undefined if the
- * run was aborted. Resolving a frame from a settled tree is what keeps a tap
- * from landing mid-deceleration (where a scroll view swallows it) or acting on a
- * frame that has already moved.
+ * Bound a screenshot read by the settle deadline. The capture itself is never
+ * cancelled — Chromium/CDP takes no signal, and the simulator-server arm
+ * deliberately threads none (see `captureFile`: aborting the fetch would
+ * orphan the temp PNG the server writes before replying) — so only our wait
+ * is raced. The underlying {@link capturePixels} promise remains responsible
+ * for decoding and deleting its temporary file when it eventually completes;
+ * settleWithin also consumes a late rejection.
  *
- * Throws when EVERY read in the window failed: that is a tree-source outage
- * (e.g. native devtools disconnected mid-run — `fetchFlowTree` refuses to
- * degrade to a trimmed tree), not a mid-animation blip, and swallowing it would
- * convert the outage into a misleading "element not found" downstream. The
- * throw lands in the step's structured report via `execLeafStep`'s catch.
+ * The two zero-progress shapes stay distinct, mirroring
+ * {@link pixelCaptureSupportBefore}: `not-attempted` means the pixel budget
+ * was already spent before a capture could launch — no backend was consulted
+ * and no time passed. `deadline` means a real capture was awaited and outlived
+ * the wait — only there did unrevalidated time elapse while the screen may
+ * have moved.
  */
-export async function settleTree(env: ActionEnv): Promise<DescribeNode | undefined> {
-  const deadline = Date.now() + SETTLE_TIMEOUT_MS;
-  let prevFp: string | undefined;
-  let prevTree: DescribeNode | undefined;
+async function capturePixelsBefore(
+  env: ActionEnv,
+  overallDeadline: number,
+  timeoutMs: number
+): Promise<PixelCaptureResult> {
+  if (env.signal?.aborted) return "aborted";
+  const deadline = Math.min(overallDeadline, Date.now() + timeoutMs);
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return "not-attempted";
+  const result = await settleWithin(capturePixels(env), remaining, env.signal);
+  if (result.type === "aborted" || env.signal?.aborted) return "aborted";
+  if (result.type === "timeout") return "deadline";
+  // capturePixels is deliberately soft-failing, but keep that contract even if
+  // a future implementation lets an error escape.
+  if (result.type === "error") return undefined;
+  return result.value;
+}
+
+/**
+ * Bound the native runtime-kind capability probe by the caller's hard budget.
+ *
+ * The two zero-progress shapes stay distinct. `not-attempted` means the budget
+ * was already spent before the probe could start: no time passes here, so
+ * whatever the caller's tree looked like an instant ago it still looks like
+ * now. `deadline` means the probe was genuinely awaited and outlived the wait
+ * — only there did unrevalidated time elapse while the screen may have moved.
+ */
+async function pixelCaptureSupportBefore(
+  env: ActionEnv,
+  deadline: number
+): Promise<PixelCaptureSupportResult> {
+  if (env.signal?.aborted) return "aborted";
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return "not-attempted";
+  const result = await settleWithin(getPixelCaptureSupport(env.device), remaining, env.signal);
+  if (result.type === "aborted" || env.signal?.aborted) return "aborted";
+  if (result.type === "timeout") return "deadline";
+  // The support resolver normally converts lookup failures to `unknown`; keep
+  // that honest fallback if its implementation ever lets an error escape.
+  if (result.type === "error") return "unknown";
+  return result.value;
+}
+
+/**
+ * The single auto-settle primitive for flow interactions and snapshots.
+ *
+ * First, re-read the describe tree until two consecutive fingerprints match.
+ * In `combined` mode (the default), then wait for two matching pixel captures
+ * when screenshots are available and re-read the tree once more. If that final
+ * tree moved during the pixel wait, restart from it instead of handing a stale
+ * frame to the caller. `tree-only` mode returns after the matching tree pair
+ * and never attempts a pixel capture; a platform with no capture backend at
+ * all ({@link getPixelCaptureSupport}) settles the same way even in combined mode.
+ *
+ * Returns the fully stable tree (`converged: true`), the best-effort latest tree
+ * when either phase exhausts its bounded budget (`converged: false`), or
+ * undefined if the run was aborted. `treeFresh` independently records whether
+ * the returned selector coordinates are current (including the mandatory
+ * post-pixel read in combined mode).
+ * Screenshot unavailability is a soft fallback to tree-only settling, but is
+ * still followed by that final tree read because even a failed capture may
+ * have taken long enough for the model tree to move.
+ *
+ * Throws in exactly two shapes, both raised only when the window closes with
+ * zero successful reads — with any successful tree in hand, deadline
+ * exhaustion returns best-effort results instead, the contract consumers are
+ * written against (`resolveTargetPoint` catches only
+ * {@link FlowTreeSettleTimeoutError}, `settleSnapshot` only the two typed
+ * errors). {@link FlowTreeSourceUnavailableError}: some read completed with a
+ * failure — a proven tree-source outage (e.g. native devtools disconnected
+ * mid-run — `fetchFlowTree` refuses to degrade to a trimmed tree), not a
+ * mid-animation blip, and swallowing it would convert the outage into a
+ * misleading "element not found" downstream.
+ * {@link FlowTreeSettleTimeoutError}: no read completed at all — explicitly
+ * not proof of an outage, since an in-flight native hierarchy read may still
+ * succeed after we stop waiting. Either throw lands in the step's structured
+ * report via `execLeafStep`'s catch.
+ */
+export async function settleTree(
+  env: ActionEnv,
+  options: SettleOptions = {}
+): Promise<SettleResult | undefined> {
+  const mode = options.mode ?? "combined";
+  const settleTimeout = mode === "combined" ? COMBINED_PHASE_TIMEOUT_MS : SETTLE_TIMEOUT_MS;
+  const startedAt = Date.now();
+  // Tree/pixel polling retains its per-settle budget so a caller can retry a
+  // stale result while its wider action window remains.
+  const phaseDeadline = Math.min(
+    options.absoluteDeadline ?? Number.POSITIVE_INFINITY,
+    startedAt + settleTimeout
+  );
+  const hardDeadline =
+    options.absoluteDeadline ??
+    startedAt + (mode === "combined" ? COMBINED_HARD_TIMEOUT_MS : SETTLE_TIMEOUT_MS);
+  // The source operation has a distinct hard boundary. Do not silently shorten
+  // a caller-owned action budget to the internal 5s combined window, or a
+  // healthy 5–7.5s native hierarchy read becomes an early action failure. With
+  // no caller deadline, grant the read the same action budget an owning caller
+  // would pass, so the unowned settle stays bounded without a lower cliff of
+  // its own.
+  const treeReadDeadline = options.absoluteDeadline ?? startedAt + DEFAULT_TREE_READ_TIMEOUT_MS;
+  let seedFp: string | undefined;
+  let lastTree: DescribeNode | undefined;
   let lastError: Error | undefined;
+  // Freshness is independent of convergence. Every successful read makes the
+  // returned tree current at that instant; only starting a pixel attempt makes
+  // it unsafe again until a post-pixel read succeeds.
+  let treeFresh = false;
+  // A timeout remains best-effort across a tree restart unless a later pixel
+  // phase actually observes a matching pair. Merely losing the capture backend
+  // on the retry cannot retroactively turn timed-out pixels into convergence.
+  let pixelsTimedOut = false;
+  // Once the capture backend reports itself unavailable, finish any required
+  // tree restart without probing it again. This preserves the original
+  // tree-only soft fallback while still revalidating after the failed attempt.
+  let pixelsUnavailable = false;
+  let visual: SettleResult["visual"] = "skipped";
+
   for (;;) {
-    if (env.signal?.aborted) return undefined;
-    let tree: DescribeNode | undefined;
-    try {
-      ({ tree } = await fetchFlowTree(env.registry, env.device));
-    } catch (err) {
-      // transient describe failure mid-navigation — retry until the deadline
-      lastError = err instanceof Error ? err : new Error(String(err));
+    const treeDeadline = Math.min(phaseDeadline, Date.now() + SETTLE_TIMEOUT_MS);
+    let prevFp = seedFp;
+    let stableTree: DescribeNode | undefined;
+    let stableFp: string | undefined;
+    let attemptedTreeRead = false;
+
+    // Tree phase: find two matching successful reads. A failed read stays a
+    // transient gap, preserving the previous successful fingerprint exactly as
+    // the original tree-only settle did.
+    for (;;) {
+      if (env.signal?.aborted) return undefined;
+      // Always permit the phase's first read, even when the caller handed us a
+      // deadline equal to "now", so its no-read result retains the established
+      // timeout taxonomy. After an attempt, however, never start another poll
+      // once the phase deadline has elapsed (including a sleep landing on it).
+      if (attemptedTreeRead && Date.now() >= treeDeadline) {
+        if (lastTree === undefined) throw noSuccessfulTreeRead(lastError);
+        return { tree: lastTree, converged: false, treeFresh, visual };
+      }
+      attemptedTreeRead = true;
+      // The tree-phase deadline bounds polling for a matching pair, not the
+      // source operation itself. Let an in-flight read use its remaining hard
+      // budget: a healthy 3.5s Android hierarchy read must not be abandoned at
+      // the 3s settle window when a longer read budget is still available.
+      const reading = await fetchTreeBefore(env, treeReadDeadline);
+      if (reading.type === "aborted") return undefined;
+      if (reading.type === "deadline") {
+        if (lastTree === undefined) {
+          throw noSuccessfulTreeRead(lastError);
+        }
+        // A read was genuinely awaited here and outlived the source read
+        // budget: unrevalidated time — up to that whole budget — passed since
+        // the carried tree was read, morally the same hung wait as a capture
+        // or capability probe consuming the deadline, so the tree must come
+        // back unsafe for acting callers (`scroll-to` skips the round and
+        // re-settles instead of dispatching off a screen no second read ever
+        // confirmed). The zero-time shape cannot smuggle a fresh tree through
+        // this return: every phase window is capped by the read budget, so a
+        // non-first poll only launches with budget open, and a phase's first
+        // read starting past it can hold no successful read — it throws
+        // above.
+        return { tree: lastTree, converged: false, treeFresh: false, visual };
+      }
+      if (reading.type === "error") {
+        lastError = reading.error;
+      } else {
+        const fp = treeFingerprint(reading.tree);
+        lastTree = reading.tree;
+        treeFresh = true;
+        if (prevFp !== undefined && fp === prevFp) {
+          stableTree = reading.tree;
+          stableFp = fp;
+          break;
+        }
+        prevFp = fp;
+      }
+      if (Date.now() >= treeDeadline) {
+        if (lastTree === undefined) throw noSuccessfulTreeRead(lastError);
+        return { tree: lastTree, converged: false, treeFresh, visual };
+      }
+      const sleepMs = Math.min(SETTLE_POLL_MS, Math.max(0, treeDeadline - Date.now()));
+      if (!(await sleepOrAbort(sleepMs, env.signal))) return undefined;
     }
-    // The abort can land while the read above is in flight (e.g. the HTTP
-    // client disconnecting mid-flow trips the run's AbortController). Without
-    // this re-check the two-identical-reads return below — or the deadline's
-    // best-effort tree — would hand the caller a settled tree to act on, and a
-    // gesture would still be dispatched after cancellation with the step
-    // recorded as a pass instead of the uniform aborted skip.
-    if (env.signal?.aborted) return undefined;
-    if (tree !== undefined) {
-      const fp = treeFingerprint(tree);
-      if (prevFp !== undefined && fp === prevFp) return tree;
-      prevFp = fp;
-      prevTree = tree;
+
+    // A platform with no capture backend converges tree-only by construction:
+    // `visual` stays "skipped" — an architectural absence, not the
+    // probed-and-failed "unavailable" — and no revalidation read is owed
+    // because no pixel wait ran for the tree to move under.
+    if (mode === "tree-only" || pixelsUnavailable) {
+      return { tree: stableTree, converged: !pixelsTimedOut, treeFresh: true, visual };
     }
-    if (Date.now() >= deadline) {
-      if (prevTree === undefined && lastError !== undefined) throw lastError;
-      return prevTree;
+    // The instant the pair converged, taken before the awaited support probe.
+    // On iOS a cold probe is a real `xcrun simctl` round trip, so the
+    // `not-attempted` capture arm below cannot assume this instant is "now" —
+    // it compares against this timestamp to tell a spent-before-convergence
+    // pixel window from one the probe itself consumed.
+    const pairConvergedAt = Date.now();
+    const pixelSupport = await pixelCaptureSupportBefore(env, hardDeadline);
+    if (pixelSupport === "aborted" || env.signal?.aborted) return undefined;
+    if (pixelSupport === "not-attempted") {
+      // What spent the budget was the healthy tree read just above, not a sick
+      // probe: an in-flight read is deliberately allowed to run to the caller's
+      // action deadline (see `treeReadDeadline`), and one that finishes with a
+      // synchronous parse delivers its converged tree with the deadline already
+      // behind it. No time has passed since that read and no pixel attempt
+      // started, so the tree is current and safe for selector coordinates —
+      // hand it back best-effort instead of failing a settle whose tree phase
+      // just succeeded. On Android/Chromium/Vega there is not even a probe to
+      // consult ({@link getPixelCaptureSupport} resolves synchronously there).
+      return { tree: stableTree, converged: false, treeFresh: true, visual };
     }
-    if (!(await sleepOrAbort(SETTLE_POLL_MS, env.signal))) return undefined;
+    if (pixelSupport === "deadline") {
+      // Here the probe itself was awaited and consumed the remaining budget:
+      // unrevalidated time passed while the screen may have moved — morally a
+      // hung capture eating the deadline — so the tree must be marked unsafe
+      // for acting callers. Still a best-effort result, never an error: the
+      // tree source stayed healthy throughout.
+      return { tree: stableTree, converged: false, treeFresh: false, visual };
+    }
+    if (pixelSupport === "absent") {
+      return { tree: stableTree, converged: !pixelsTimedOut, treeFresh: true, visual };
+    }
+
+    // Pixel phase. Every outcome flows to the final tree read below: even the
+    // first capture can fail only after a long backend timeout, during which
+    // the UI tree may have moved. Reserve a short slice of the hard outer
+    // deadline so a hung capture cannot consume the only chance to revalidate.
+    const pixelDeadline = Math.min(
+      hardDeadline - FINAL_TREE_REVALIDATE_RESERVE_MS,
+      Date.now() + PIXEL_SETTLE_TIMEOUT_MS
+    );
+    // Polling for a matching pair belongs to the ordinary phase window, just
+    // like tree polling above: on a screen whose pixels never stop, the loop
+    // must hand back control while the action-level caller still has budget to
+    // retry, not launch captures until the caller's hard deadline. The hard
+    // `pixelDeadline` above bounds capture *runtime* only — an in-flight first
+    // capture keeps its first-frame-aware budget, and the single warm capture
+    // that completes that capture's pair is part of the same allowance (a pair
+    // needs two reads, so the phase window closing while the first capture ran
+    // must not void the attempt it already paid for).
+    const pixelPollDeadline = Math.min(pixelDeadline, phaseDeadline);
+    let pixelsConverged = true;
+    treeFresh = false;
+    const firstPixels =
+      pixelSupport === "unknown"
+        ? undefined
+        : await capturePixelsBefore(env, pixelDeadline, pixelCaptureTimeoutMs(env.device, true));
+    if (firstPixels === "aborted") return undefined;
+    if (firstPixels === "not-attempted") {
+      // The pixel phase never started: `pixelDeadline` was already behind us
+      // before a capture could launch. What that means for freshness turns on
+      // when the window closed. A pair that converged with the window already
+      // spent (`pairConvergedAt >= pixelDeadline`) reached this point through
+      // a probe that answered in negligible time — at most the sub-reserve
+      // sliver left before the hard deadline — so the tree is still current
+      // for selector coordinates and no revalidation read is owed. But a pair
+      // that converged while pixel budget remained got here because the
+      // awaited probe consumed that budget (a cold iOS runtime-kind lookup is
+      // a real `xcrun simctl` round trip): unrevalidated time passed while
+      // the screen may have moved — morally the probe-`deadline` return
+      // above, merely resolving inside the final-read reserve instead of past
+      // it — so the tree must come back unsafe for acting callers. Either way
+      // this is not a pixel timeout: `visual` keeps its sticky value
+      // ("skipped" by default, or a prior round's verdict) because a phase
+      // that never ran must stay distinct from captures that were observed
+      // and never matched — the distinction snapshot degradation reporting
+      // keys on.
+      return {
+        tree: stableTree,
+        converged: false,
+        treeFresh: pairConvergedAt >= pixelDeadline,
+        visual,
+      };
+    }
+    if (firstPixels === "deadline") {
+      pixelsConverged = false;
+      pixelsTimedOut = true;
+      visual = "timed-out";
+    } else if (firstPixels === undefined) {
+      pixelsUnavailable = true;
+      visual = "unavailable";
+    } else {
+      let prevPixels = firstPixels;
+      let warmCaptureRan = false;
+      for (;;) {
+        // Once one warm capture has run, the pair-completion allowance is
+        // spent: any further polling round belongs to the ordinary phase
+        // window, and a window already closed means the screen provably kept
+        // moving for the whole phase — a pixel timeout, handed back while the
+        // caller retains retry budget.
+        if (warmCaptureRan && Date.now() >= pixelPollDeadline) {
+          pixelsConverged = false;
+          pixelsTimedOut = true;
+          visual = "timed-out";
+          break;
+        }
+        const sleepMs = Math.min(PIXEL_SETTLE_POLL_MS, Math.max(0, pixelDeadline - Date.now()));
+        if (sleepMs <= 0) {
+          pixelsConverged = false;
+          pixelsTimedOut = true;
+          visual = "timed-out";
+          break;
+        }
+        if (!(await sleepOrAbort(sleepMs, env.signal))) return undefined;
+        const nextPixels = await capturePixelsBefore(
+          env,
+          pixelDeadline,
+          pixelCaptureTimeoutMs(env.device, false)
+        );
+        warmCaptureRan = true;
+        if (nextPixels === "aborted") return undefined;
+        if (nextPixels === "deadline" || nextPixels === "not-attempted") {
+          // Mid-phase the two zero-progress shapes converge: a capture already
+          // ran here without producing a matching pair, so exhausting the
+          // budget — inside a capture, or in the instant between the sleep
+          // guard above and the next launch — is a pixel timeout, not a phase
+          // that never happened.
+          pixelsConverged = false;
+          pixelsTimedOut = true;
+          visual = "timed-out";
+          break;
+        }
+        if (nextPixels === undefined) {
+          pixelsUnavailable = true;
+          visual = "unavailable";
+          break;
+        }
+        if (!pixelsDiffer(prevPixels, nextPixels)) {
+          pixelsTimedOut = false;
+          visual = "settled";
+          break;
+        }
+        prevPixels = nextPixels;
+      }
+    }
+
+    // Revalidate after every pixel attempt, including a slow first capture that
+    // returned undefined and all timeout paths. If this read cannot complete,
+    // retain the best-effort tree for diagnostics/snapshots but mark it unsafe
+    // for any caller that would derive gesture coordinates from it.
+    // Fast pixel phases retain the original phase deadline, giving callers a
+    // chance to retry a stale final tree. Once the pixel phase has crossed
+    // that window, the read runs on the ordinary source read budget — the
+    // same budget every tree-phase read above already gets — so a healthy
+    // slow hierarchy read after a phase-bounded pixel timeout is not cut down
+    // to the reserve and systematically reported stale. The reserve slice
+    // stays the floor (a capture that ran to the hard `pixelDeadline` left
+    // exactly that slice) and the hard ceiling stays the roof for the
+    // deadline-less case, where the read budget can predate the pixel window
+    // closing.
+    const finalTreeDeadline =
+      Date.now() < phaseDeadline
+        ? phaseDeadline
+        : Math.min(
+            hardDeadline,
+            Math.max(treeReadDeadline, Date.now() + FINAL_TREE_REVALIDATE_RESERVE_MS)
+          );
+    const finalReading = await fetchTreeBefore(env, finalTreeDeadline);
+    if (finalReading.type === "aborted") return undefined;
+    if (finalReading.type === "deadline") {
+      return { tree: lastTree ?? stableTree, converged: false, treeFresh: false, visual };
+    }
+    if (finalReading.type === "tree") {
+      lastTree = finalReading.tree;
+      treeFresh = true;
+      const finalFp = treeFingerprint(finalReading.tree);
+      if (finalFp === stableFp) {
+        return {
+          tree: finalReading.tree,
+          converged: pixelsConverged && !pixelsTimedOut,
+          treeFresh: true,
+          visual,
+        };
+      }
+      // The model tree moved while pixels were being observed. Treat this
+      // fresh read as the first sample of the next tree phase.
+      seedFp = finalFp;
+    } else {
+      lastError = finalReading.error;
+      seedFp = stableFp;
+    }
+
+    // A restart invalidates a prior `settled` — the screen provably changed
+    // after that pixel pair matched. A re-converging restart re-runs the pixel
+    // phase and overwrites this; `unavailable` and the sticky timeout stay.
+    if (visual === "settled") visual = "skipped";
+
+    if (Date.now() >= phaseDeadline) {
+      return { tree: lastTree ?? stableTree, converged: false, treeFresh, visual };
+    }
   }
 }
 
@@ -356,27 +857,102 @@ export async function settleTree(env: ActionEnv): Promise<DescribeNode | undefin
  * the two misses must stay distinguishable, or a cancelled `tap`/`type` would
  * be reported as a genuine "element not found" failure.
  *
- * Exported for `snapshot: { cropOn }` (flow-visual.ts), which resolves the
- * crop element's frame with the same settle + auto-wait the directives get.
+ * `settleTree` owns both tree and pixel stabilization and revalidates the tree
+ * after the pixel wait, so selector resolution never uses a pre-transition
+ * frame. Only fresh trees are consulted while budget remains; at deadline
+ * exhaustion the selector is resolved once, best-effort, from the last valid
+ * settled tree — a window of merely slow settles must not read as "element
+ * not found". A genuinely absent element still returns undefined.
+ *
+ * {@link waitForFrameResult} exposes the settle that produced the frame for
+ * `snapshot: { cropOn }`; ordinary directive callers keep this frame-only API.
  */
 export async function waitForFrame(
   env: ActionEnv,
   selector: FlowSelector
 ): Promise<DescribeFrame | "aborted" | undefined> {
+  return (await waitForFrameResult(env, selector)).frame;
+}
+
+export type WaitForFrameResult =
+  | { frame: DescribeFrame; settle: SettleResult }
+  | { frame: undefined; settle?: SettleResult }
+  | { frame: "aborted" };
+
+/**
+ * Resolve a selector exactly like {@link waitForFrame}, retaining the settle
+ * that supplied its tree. Crop snapshots use the paired result so they can
+ * report visual degradation without settling a second time after the frame
+ * was chosen.
+ */
+export async function waitForFrameResult(
+  env: ActionEnv,
+  selector: FlowSelector
+): Promise<WaitForFrameResult> {
   const deadline = Date.now() + DEFAULT_ACTION_TIMEOUT_MS;
+  let lastTree: DescribeNode | undefined;
+  let lastSettle: SettleResult | undefined;
+  // An unknown iOS runtime probe is intentionally evicted globally so a later
+  // action can recover when the simulator becomes visible. Within one selector
+  // wait, though, retrying that same capability on every round only burns the
+  // action budget and can turn a healthy terminal tree miss into a probe
+  // timeout. Once it degrades, keep this wait tree-only.
+  let pixelsUnavailableForWait = false;
   for (;;) {
-    if (env.signal?.aborted) return "aborted";
-    const tree = await settleTree(env);
-    if (tree) {
-      const frame = flowSelectorToFrame(tree, selector);
-      if (frame) return frame;
-    } else if (env.signal?.aborted) {
-      return "aborted"; // settleTree bailed on the abort, not on a blank read
+    if (env.signal?.aborted) return { frame: "aborted" };
+    if (Date.now() >= deadline) break;
+    const forceTreeOnly: boolean = pixelsUnavailableForWait;
+    let settled: SettleResult | undefined;
+    try {
+      settled = await settleTree(env, {
+        absoluteDeadline: deadline,
+        ...(forceTreeOnly ? { mode: "tree-only" as const } : {}),
+      });
+    } catch (err) {
+      // A retry round that opens near the action deadline can close its
+      // no-read window before the source answers at all, which settleTree
+      // types as FlowTreeSettleTimeoutError — explicitly NOT proof of an
+      // outage (an in-flight hierarchy read may still succeed after we stop
+      // waiting). With a settled tree already in hand from an earlier round,
+      // that taxonomy earns the same treatment settleTree itself gives
+      // deadline exhaustion after any successful read: fall through to the
+      // terminal best-effort resolution below instead of erroring a step
+      // whose settles merely ran long. With no tree at all the timeout stays
+      // fatal — resolving nothing here would misreport a possibly-alive
+      // source as "element not found" — and a proven source outage
+      // (FlowTreeSourceUnavailableError) propagates unconditionally.
+      if (err instanceof FlowTreeSettleTimeoutError && lastTree !== undefined) break;
+      throw err;
     }
-    if (Date.now() >= deadline) return undefined;
+    // A forced tree-only retry is still part of a wait whose visual channel
+    // was unavailable. Keep that verdict paired with any frame (and terminal
+    // miss) produced by the retry instead of reporting visual work as skipped.
+    const effectiveSettle: SettleResult | undefined =
+      settled && forceTreeOnly ? { ...settled, visual: "unavailable" } : settled;
+    if (effectiveSettle) {
+      lastTree = effectiveSettle.tree;
+      lastSettle = effectiveSettle;
+      // Only a completed tree settle establishes a healthy tree-only fallback.
+      // A failed post-pixel revalidation must retry the combined path so its
+      // unavailable verdict cannot conceal the preceding pixel timeout.
+      pixelsUnavailableForWait ||=
+        effectiveSettle.converged && effectiveSettle.visual === "unavailable";
+    }
+    if (effectiveSettle?.treeFresh) {
+      const frame = flowSelectorToFrame(effectiveSettle.tree, selector);
+      if (frame) return { frame, settle: effectiveSettle };
+    } else if (env.signal?.aborted) {
+      return { frame: "aborted" }; // settleTree bailed on the abort, not on a blank read
+    }
+    if (Date.now() >= deadline) break;
     const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
-    if (!(await sleepOrAbort(sleepMs, env.signal))) return "aborted";
+    if (!(await sleepOrAbort(sleepMs, env.signal))) return { frame: "aborted" };
   }
+  // Best-effort last resort: stale coordinates beat failing a step whose
+  // settles merely ran long.
+  if (!lastTree || !lastSettle) return { frame: undefined, settle: lastSettle };
+  const frame = flowSelectorToFrame(lastTree, selector);
+  return frame ? { frame, settle: lastSettle } : { frame: undefined, settle: lastSettle };
 }
 
 function framesOverlap(a: DescribeFrame, b: DescribeFrame): boolean {
@@ -540,19 +1116,24 @@ async function scrollIncrement(
 /**
  * Scroll until `target` is as visible as it can get within the scroll viewport
  * along the scroll axis — fully inside it, or (for a target as tall/wide as the
- * viewport or larger) spanning it — returning its frame. Each round settles the
- * tree, checks the target, then — if it isn't fully in view — does one
- * momentum-free increment. Stopping only once the target has cleared the entry
- * edge (not on the first sliver) is what keeps a following `tap`/`snapshot`
- * off a half-clipped element. If a
- * round's settled tree — fingerprinted within the scrolled region only (the
- * `within` container, or the scroll containers under the gesture anchor when
- * none is named) — is identical to the previous round's, the container has hit
- * its end (or the anchor scrolls nothing): the target is then as visible as it
- * will ever be, so it's accepted wherever it landed — the LAST item sits flush
- * against the far edge and can never clear it, and a genuinely stuck partial
- * can't be improved either. A target already fully on screen returns
- * immediately (no scroll).
+ * viewport or larger) spanning it — returning its frame. Before the first
+ * decision it performs a combined tree + pixel settle so scrolling never
+ * starts through an unrelated transition; a round whose settle cannot
+ * revalidate the tree is skipped (no scroll, no fingerprint) and the next
+ * iteration re-settles instead of failing the step. Later rounds
+ * settle only the tree: every increment is momentum-free/settled, and a
+ * following tap/type/snapshot performs its own visual settle. Each round then
+ * checks the target and, if it isn't fully in view, does one increment.
+ * Stopping only once the target has cleared the entry edge (not on the first
+ * sliver) is what keeps a following `tap`/`snapshot` off a half-clipped
+ * element. If a round's settled tree — fingerprinted within the scrolled
+ * region only (the `within` container, or the scroll containers under the
+ * gesture anchor when none is named) — is identical to the previous round's,
+ * the container has hit its end (or the anchor scrolls nothing): the target is
+ * then as visible as it will ever be, so it's accepted wherever it landed —
+ * the LAST item sits flush against the far edge and can never clear it, and a
+ * genuinely stuck partial can't be improved either. A target already fully on
+ * screen returns immediately (no scroll).
  */
 async function scrollToVisible(
   env: ActionEnv,
@@ -564,8 +1145,16 @@ async function scrollToVisible(
   for (let i = 0; i < MAX_SCROLL_ITERATIONS; i++) {
     if (env.signal?.aborted) return { aborted: true };
 
-    const tree = await settleTree(env);
-    if (!tree) return { aborted: true }; // settleTree only returns undefined on abort
+    const settled = await settleTree(env, { mode: i === 0 ? "combined" : "tree-only" });
+    if (!settled) return { aborted: true }; // settleTree only returns undefined on abort
+    if (!settled.treeFresh) {
+      // A stale settle — round 0's combined pixel wait, or any round's tree
+      // read outliving the read budget — is skipped and re-settled: not
+      // scrolling keeps the content in place, not fingerprinting keeps the
+      // end-of-scroll check honest.
+      continue;
+    }
+    const tree = settled.tree;
 
     // Anchor the gesture inside the container (so the right nested scroller
     // moves), or over the whole screen when none is named. Its frame is also the
@@ -678,8 +1267,16 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
 /**
  * Resolve a gesture target (`tap`/`long-press`) to a normalized point: a
  * selector resolves to its frame centre (settled tree + auto-wait); raw
- * coordinates pass through untouched. Coordinate targets are the fallback for
- * elements with no stable selector (e.g. an unlabeled view).
+ * coordinates still wait for the same combined settle before dispatch, with
+ * {@link waitForFrame}'s patience: a settle without a usable result is
+ * retried until the shared action deadline. The literal x/y never consult
+ * the tree, so a fresh tree or settled pixels both count as usable — and at
+ * deadline exhaustion the gesture dispatches anyway, the settle being
+ * best-effort stabilization rather than a precondition.
+ * Coordinate targets are the fallback for elements with no stable selector
+ * (e.g. an unlabeled view), not an escape hatch from full-hierarchy settling:
+ * they bypass selector resolution only — a tree-source outage throw from
+ * settleTree propagates as ever.
  */
 async function resolveTargetPoint(
   env: ActionEnv,
@@ -694,6 +1291,38 @@ async function resolveTargetPoint(
     return getDescribeTapPoint(frame);
   }
   if (typeof target.x === "number" && typeof target.y === "number") {
+    const deadline = Date.now() + DEFAULT_ACTION_TIMEOUT_MS;
+    for (;;) {
+      // A sleep can land exactly on the deadline. A zero-budget settle is a
+      // doomed round — no read can start, so it can only throw
+      // FlowTreeSettleTimeoutError, which the catch below turns into this same
+      // break to best-effort dispatch; skip the wasted call.
+      if (Date.now() >= deadline) break;
+      let settled: SettleResult | undefined;
+      try {
+        settled = await settleTree(env, { absoluteDeadline: deadline });
+      } catch (err) {
+        // Literal coordinates do not consume the tree. If no hierarchy read
+        // completed before the action's hard deadline, settling exhausted its
+        // best-effort budget and the gesture may still dispatch. A completed
+        // source failure proves an outage and every other error remains fatal.
+        if (err instanceof FlowTreeSettleTimeoutError) break;
+        throw err;
+      }
+      if (!settled) return { fail: ABORTED_OUTCOME };
+      // A fresh tree proves the settle's view is current; settled pixels
+      // prove the screen itself stopped (settleTree never leaks a pre-restart
+      // "settled"). Either one is enough for coordinates no selector reads.
+      if (settled.treeFresh || settled.visual === "settled") {
+        return { x: target.x, y: target.y };
+      }
+      if (Date.now() >= deadline) break;
+      const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
+      if (!(await sleepOrAbort(sleepMs, env.signal))) return { fail: ABORTED_OUTCOME };
+    }
+    // Deadline exhausted without a usable settle (e.g. an endless animation):
+    // the settle is best-effort, so dispatch anyway — only a dispatch failure
+    // may fail the step. Aborts and outages already short-circuited above.
     return { x: target.x, y: target.y };
   }
   return { fail: { ok: false, reason: "gesture needs a selector or x/y coordinates" } };

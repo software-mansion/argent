@@ -8,12 +8,13 @@ import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/co
 // The scroll/settle loop reads the flow tree, so it is driven by stubbing the
 // tree fetch itself (flows hard-fail rather than degrade to the AX tree). The
 // mock returns a scripted tree per call; `revealTarget()` flips it to a screen
-// where the target is visible (simulating a scroll bringing it on-screen).
-let currentTree: () => DescribeNode;
+// where the target is visible (simulating a scroll bringing it on-screen). A
+// script may also return a pending promise to model a read that hangs.
+let currentTree: () => DescribeNode | Promise<DescribeNode>;
 vi.mock("../../src/tools/flows/flow-tree", () => ({
   fetchFlowTree: vi.fn(
     async (): Promise<DescribeTreeData> => ({
-      tree: currentTree(),
+      tree: await currentTree(),
       source: "native-devtools",
     })
   ),
@@ -80,6 +81,7 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-scroll-"));
 });
 afterEach(async () => {
+  vi.useRealTimers();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -572,6 +574,58 @@ describe("scroll-to directive", () => {
     expect(result.steps[0].status).toBe("pass");
     // Two increments of real progress — neither misread as end-of-scroll.
     expect(swipes).toHaveLength(2);
+  });
+
+  it("skips a round whose settle read outlives the read budget instead of swiping off the stale tree", async () => {
+    vi.useFakeTimers();
+    // Round 0's first read catches the list mid-transition: the target sits
+    // flush against the bottom fold — a shape the axis check refuses, so
+    // acting on it would swipe. The second read, the one that would confirm
+    // or refute that frame, hangs past the whole 7.5s read budget (an Android
+    // hierarchy source's own budgets — getHierarchy 15s, a uiautomator dump
+    // 20s — are far larger). Every read after the hung one sees the finished
+    // transition: the target fully visible, nothing left to scroll.
+    const stale = screen([
+      n({ label: "Order #1234", frame: { x: 0.1, y: 0.9, width: 0.8, height: 0.1 } }),
+    ]);
+    const finished = screen([
+      n({ label: "Order #1234", frame: { x: 0.1, y: 0.5, width: 0.8, height: 0.1 } }),
+    ]);
+    let reads = 0;
+    currentTree = () => {
+      reads++;
+      if (reads === 1) return stale;
+      if (reads === 2) return new Promise<DescribeNode>(() => {});
+      return finished;
+    };
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes);
+
+    await writeFlow("stale-round", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const pending = tool.execute(
+      {},
+      { name: "stale-round", project_root: tmpDir, device: "emulator-5554" }
+    );
+    // Let the run reach its first tree read before driving the fake clock, so
+    // the hung second read's budget elapses inside the advance below.
+    await vi.waitFor(() => expect(reads).toBeGreaterThanOrEqual(1));
+    await vi.advanceTimersByTimeAsync(10_000);
+    const result = asRun(await pending);
+
+    // Round 0's settle comes back not-fresh — the hung read never confirmed
+    // the flush frame — so the round is skipped (no swipe, no fingerprint)
+    // and round 1 re-settles onto the finished screen, where the target is
+    // already fully in view. Trusting the stale tree instead would dispatch
+    // one gesture-swipe off a frame the screen had long since left behind.
+    expect(result.ok).toBe(true);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["scroll-to:pass"]);
+    expect(swipes).toHaveLength(0);
   });
 
   it("fails with a no-progress reason when scrolling reveals nothing new", async () => {

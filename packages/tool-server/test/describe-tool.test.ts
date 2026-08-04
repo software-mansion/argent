@@ -286,6 +286,13 @@ describe("describe tool", () => {
     // carries the same native-* dead-end warning verbatim as the precheck throw
     // and the native-devtools-status description.
     expect(result.hint).toMatch(/`screenshot`/);
+    expect(result.hint).toContain("inspect visual state only");
+    expect(result.hint).toContain("never derive coordinates from it");
+    expect(result.hint).toContain("Direct `gesture-*` calls");
+    expect(result.hint).toContain("tree-gated flow directives");
+    expect(result.hint).toContain("raw-point `tap` and `long-press`");
+    expect(result.hint).toContain("require the full flow hierarchy");
+    expect(result.hint).toContain("raw `tool: gesture-*` steps retain direct tool semantics");
     expect(result.hint).toContain(NON_INJECTABLE_NATIVE_WARNING);
   });
 

@@ -62,6 +62,8 @@ export const NON_INJECTABLE_NATIVE_WARNING =
  * (the precheck throw from a native-* tool, and the `native-devtools-status`
  * description). `describe` reads these apps via the ax-service without injection
  * and `screenshot` is always available, so both are safe next steps here.
+ * `describe` may provide coordinates for direct live gestures; a screenshot is
+ * inspection-only and cannot make tree-gated flow directives available.
  *
  * The `native-devtools-status` description INLINES this text rather than
  * interpolating the constant: tool descriptions must be plain literals so
@@ -80,7 +82,10 @@ export const NON_INJECTABLE_NATIVE_WARNING =
  */
 export const NON_INJECTABLE_RECOVERY =
   "Use the standard `describe` tool (its accessibility path reads the screen without injection) " +
-  "or `screenshot` (then interact by coordinate). " +
+  "to obtain coordinates for direct `gesture-*` calls, or use `screenshot` to inspect visual state " +
+  "only; never derive coordinates from a screenshot. Tree-gated flow directives — including " +
+  "raw-point `tap` and `long-press` — require the full flow hierarchy and are unavailable for this " +
+  "app; raw `tool: gesture-*` steps retain direct tool semantics. " +
   NON_INJECTABLE_NATIVE_WARNING;
 
 // Max consecutive init failures per service instance before it stops retrying.

@@ -358,13 +358,21 @@ describe("precheckNativeDevtools — non-injectable terminal error", () => {
 describe("non-injectable recovery guidance is consistent and points only at working tools", () => {
   const UDID = "55555555-5555-5555-5555-555555555555";
 
-  it("recommends describe and screenshot but only warns the agent OFF the native-* tools", () => {
+  it("separates direct gesture tools from tree-gated flow directives", () => {
     // The recovery must send the agent to tools that actually work on a system
     // app; the view-at-point tools re-run this same precheck and re-throw, so
     // recommending them dead-ends. describe/screenshot are recommended, and the
     // view-at-point tools appear only inside the "do not fall back" warning.
     expect(NON_INJECTABLE_RECOVERY).toMatch(/`describe`/);
     expect(NON_INJECTABLE_RECOVERY).toMatch(/`screenshot`/);
+    expect(NON_INJECTABLE_RECOVERY).toContain("direct `gesture-*` calls");
+    expect(NON_INJECTABLE_RECOVERY).toContain("never derive coordinates from a screenshot");
+    expect(NON_INJECTABLE_RECOVERY).toContain("Tree-gated flow directives");
+    expect(NON_INJECTABLE_RECOVERY).toContain("raw-point `tap` and `long-press`");
+    expect(NON_INJECTABLE_RECOVERY).toContain("require the full flow hierarchy");
+    expect(NON_INJECTABLE_RECOVERY).toContain(
+      "raw `tool: gesture-*` steps retain direct tool semantics"
+    );
     expect(NON_INJECTABLE_RECOVERY).toContain(NON_INJECTABLE_NATIVE_WARNING);
     expect(NON_INJECTABLE_NATIVE_WARNING).toMatch(
       /Do not fall back to the native-devtools feature tools/
