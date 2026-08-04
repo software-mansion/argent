@@ -726,6 +726,193 @@ describe("flow-add-step", () => {
     ]);
   });
 
+  it("does not record an await-ui-element whose condition was not met", async () => {
+    // An unmet wait reports { success: false } WITHOUT throwing — recorded
+    // as-is it would bake a gate that fails every replay, so the gate must
+    // surface the result and record nothing.
+    const registry = createMockRegistry({
+      "await-ui-element": { result: { success: false, elapsed: 5000, note: "not seen" } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "unmet-await", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    const result = await tool.execute(
+      {},
+      {
+        name: "unmet-await",
+        project_root: tmpDir,
+        command: "await-ui-element",
+        args: '{"udid":"ABC","condition":"visible","selector":{"text":"Home"}}',
+      }
+    );
+
+    expect(result.message).toContain("NOT recorded");
+    expect(result.toolResult).toEqual({ success: false, elapsed: 5000, note: "not seen" });
+    const flow = parseFlow(await onDisk("unmet-await"));
+    expect(flow.steps).toEqual([]);
+    const content = await readFlowFile("unmet-await");
+    expect(parseFlow(content).steps).toEqual([]);
+  });
+
+  it("reports a cancelled await without suggesting a longer timeout", async () => {
+    const controller = new AbortController();
+    const registry = {
+      invokeTool: vi.fn(async () => {
+        controller.abort();
+        return {
+          success: false,
+          elapsed: 20,
+          note: "wait was cancelled before the condition was met",
+        };
+      }),
+      getTool: vi.fn(() => undefined),
+    } as unknown as Registry;
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "cancelled-await", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "cancelled-await",
+        project_root: tmpDir,
+        command: "await-ui-element",
+        args: '{"udid":"ABC","condition":"visible","selector":{"text":"Home"}}',
+      },
+      { signal: controller.signal } as never
+    );
+
+    expect(result.message).toContain("was cancelled");
+    expect(result.message).toContain("step NOT recorded");
+    expect(result.message).not.toContain("longer timeout");
+    expect(parseFlow(await onDisk("cancelled-await")).steps).toEqual([]);
+  });
+
+  it("returns a valid in-memory snapshot if the host flow file disappears", async () => {
+    const registry = createMockRegistry({
+      "await-ui-element": { result: { success: false, elapsed: 5000, note: "not seen" } },
+    });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "deleted-await", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    await fs.rm(path.join(tmpDir, ".argent", "flows", "deleted-await.yaml"));
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "deleted-await",
+        project_root: tmpDir,
+        command: "await-ui-element",
+        args: '{"condition":"visible","selector":{"text":"Home"}}',
+      }
+    );
+
+    expect(result.message).toContain("last valid in-memory snapshot");
+    // The file is gone, so the step count comes from the in-memory copy.
+    expect(result.stepCount).toBe(0);
+  });
+
+  it("reflects and validates a host-side edit in a no-op response", async () => {
+    const registry = createMockRegistry({
+      "await-ui-element": { result: { success: false, elapsed: 5000, note: "not seen" } },
+    });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "edited-await", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", "edited-await.yaml"),
+      serializeFlow({
+        executionPrerequisite: PREREQ,
+        steps: [{ kind: "echo", message: "manual edit" }],
+      })
+    );
+
+    await tool.execute(
+      {},
+      {
+        name: "edited-await",
+        project_root: tmpDir,
+        command: "await-ui-element",
+        args: '{"condition":"visible","selector":{"text":"Home"}}',
+      }
+    );
+
+    expect(parseFlow(await onDisk("edited-await")).steps).toEqual([
+      { kind: "echo", message: "manual edit" },
+    ]);
+  });
+
+  // The unmet-wait gate keys on `await-ui-element` specifically, not on "some
+  // field of the result was falsy" — otherwise every tool that reports a soft
+  // negative would stop being recordable. `await-screen-idle` used to be this
+  // test's example; it now has a refusal of its own (it is a live diagnostic
+  // whose `settled: false` cannot fail a replay), so the invariant is pinned
+  // here with a tool that has no special handling at all.
+  it("does not apply the unmet-wait gate to another falsy soft result", async () => {
+    const registry = createMockRegistry({
+      "screenshot-diff": { result: { matched: false, diffRatio: 0.12 } },
+    });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "diff-soft-result", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "diff-soft-result",
+        project_root: tmpDir,
+        command: "screenshot-diff",
+        args: "{}",
+      }
+    );
+
+    expect(result.message).toContain("Step added");
+    expect(parseFlow(await onDisk("diff-soft-result")).steps).toEqual([
+      { kind: "tool", name: "screenshot-diff", args: {} },
+    ]);
+  });
+
+  it("records an await-ui-element whose condition was met", async () => {
+    const registry = createMockRegistry({
+      "await-ui-element": { result: { success: true, elapsed: 250 } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "met-await", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    await tool.execute(
+      {},
+      {
+        name: "met-await",
+        project_root: tmpDir,
+        command: "await-ui-element",
+        args: '{"udid":"ABC","condition":"visible","selector":{"text":"Home"}}',
+      }
+    );
+
+    const flow = parseFlow(await onDisk("met-await"));
+    expect(flow.steps).toEqual([
+      {
+        kind: "tool",
+        name: "await-ui-element",
+        args: { condition: "visible", selector: { text: "Home" } },
+      },
+    ]);
+  });
+
   it("warns when delayMs prevents gesture-tap selector capture", async () => {
     const registry = createMockRegistry({
       "gesture-tap": { result: { tapped: true } },

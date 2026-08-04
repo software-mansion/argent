@@ -23,6 +23,7 @@ import {
 } from "../../utils/ui-tree-match";
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
+import { selectorIdentityTerms } from "./flow-selector-evidence";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree } from "./flow-tree";
 import {
@@ -54,6 +55,13 @@ export interface ActionEnv {
   ctx?: ToolContext;
   device: DeviceInfo;
   signal?: AbortSignal;
+  /**
+   * Selector identity terms (`id:…`/`text:…`) the run has positively
+   * established so far — populated by the runner as each step passes. Absent
+   * for one-off directive callers, which have no flow around them to carry
+   * evidence. Read by the `hidden` falsifiability guard.
+   */
+  establishedSelectors?: Set<string>;
 }
 
 /** Outcome of a selector directive: ok, or a machine-readable reason it failed. */
@@ -71,6 +79,18 @@ export interface DirectiveOutcome {
    * can't vouch for; a plain `assert` reports it as an ordinary failure.
    */
   indeterminate?: boolean;
+  /**
+   * The step passed, but something about HOW it passed weakens it as proof —
+   * currently only a `hidden` check that held without its selector ever
+   * matching, in a run that never established it. Not a failure: the condition
+   * genuinely held, and three legitimate patterns reach it (a scoped `hidden`
+   * whose match sits outside the container, a fragment whose
+   * `executionPrerequisite` established the element, a baseline absence check).
+   * But it is indistinguishable from a typo'd selector, so it must not read as
+   * a clean pass either — the recorder refuses to WRITE one of these, and a
+   * hand-written flow deserves to be told what it bought.
+   */
+  warning?: string;
 }
 
 /**
@@ -963,6 +983,47 @@ async function runType(
 }
 
 /**
+ * Whether a `hidden` check that never saw its selector can still fail — i.e.
+ * whether an earlier step of the run positively established that selector.
+ * With no evidence set at all (a one-off directive caller outside a flow run)
+ * the answer is yes: only a FLOW can carry the wider evidence, and refusing a
+ * bare directive would break callers that never had the guard.
+ */
+function hiddenCheckIsFalsifiable(
+  env: ActionEnv,
+  step: { selector: FlowSelector },
+  lastTree: DescribeNode | undefined
+): boolean {
+  const established = env.establishedSelectors;
+  if (established === undefined) return true;
+  const terms = selectorIdentityTerms(step.selector);
+  // A selector this evidence model cannot name (role-only, a regex text
+  // locator) is not something it may condemn either.
+  if (terms.length === 0) return true;
+  if (terms.some((term) => established.has(term))) return true;
+  // A SCOPED check whose selector matches once the scope is dropped is doing
+  // real work: the element is on screen, just not in the container/position
+  // the check names, so it would fail the moment it appeared there. Only the
+  // scope made the match empty, and saying "this proves nothing" about it
+  // would be false.
+  if (lastTree !== undefined && SELECTOR_RELATIONS.some((rel) => rel in step.selector)) {
+    const unscoped = { ...step.selector };
+    for (const rel of SELECTOR_RELATIONS) delete unscoped[rel];
+    if (flowFindAll(lastTree, unscoped).length > 0) return true;
+  }
+  return false;
+}
+
+export function vacuousHiddenReason(selector: FlowSelector): string {
+  return (
+    `the \`hidden\` condition held without ${describeSelector(selector)} ever matching, and no ` +
+    `earlier step in this run established it — so this check cannot fail and proves nothing. ` +
+    `Prove the element is present first (a \`visible\` check on the same selector, before the ` +
+    `action that removes it), or fix the selector if the element is never there at all.`
+  );
+}
+
+/**
  * Poll a condition against the flow tree until it holds or `timeoutMs` passes.
  * One engine behind both conditional directives — they differ only in budget
  * and intent:
@@ -1033,6 +1094,19 @@ async function waitForCondition(
         !blind &&
         evaluateCondition(step.condition, step.expectedText, lastMatches, step.textMatch)
       ) {
+        // `hidden` satisfied without the selector ever matching, by a flow
+        // that never showed it present, is a gate that cannot fail — a typo,
+        // a renamed id and the wrong screen all pass it. The recorder refuses
+        // to WRITE one; refuse to score one as clean, or a hand-written (or
+        // hand-edited) flow keeps the permanently-green check the recorder
+        // exists to prevent.
+        if (
+          step.condition === "hidden" &&
+          !everMatched &&
+          !hiddenCheckIsFalsifiable(env, step, lastTree)
+        ) {
+          return { ok: true, warning: vacuousHiddenReason(step.selector) };
+        }
         return { ok: true };
       }
     } catch (err) {

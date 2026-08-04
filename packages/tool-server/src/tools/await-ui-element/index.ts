@@ -49,6 +49,64 @@ export function isUnmetUiWaitResult(tool: string, result: unknown): boolean {
   );
 }
 
+// Marker on the note of a `hidden` wait that passed WITHOUT the selector ever
+// matching. Kept as a constant rather than re-matched from the prose so the
+// recorder's refusal (flow-add-step) cannot drift from the message below.
+export const VACUOUS_HIDDEN_MARKER = "the selector never matched any element";
+
+// True when `result` is a `hidden` wait that succeeded vacuously: nothing ever
+// matched the selector, so "it is gone" was true before the wait began and
+// would stay true against a typo'd selector, a renamed id, or the wrong screen
+// entirely. The wait itself reports this honestly in its note; the recorder
+// uses this to refuse to BAKE such a check into a flow, where it becomes a
+// gate that can never fail and therefore proves nothing on replay.
+export function isVacuousHiddenWaitResult(tool: string, result: unknown): boolean {
+  if (tool !== AWAIT_UI_ELEMENT_TOOL_ID) return false;
+  return resultIsVacuousHidden(result);
+}
+
+/** The marker test alone, with no opinion about which tool produced `result`. */
+function resultIsVacuousHidden(result: unknown): boolean {
+  if (typeof result !== "object" || result === null) return false;
+  const r = result as { success?: unknown; note?: unknown };
+  return r.success === true && typeof r.note === "string" && r.note.includes(VACUOUS_HIDDEN_MARKER);
+}
+
+/**
+ * Every selector this result proves NOTHING about — the selectors of the
+ * `hidden` waits inside it that passed without ever matching.
+ *
+ * Covers the wait called directly AND the ones nested in a `run-sequence`,
+ * because the gate is only worth having if it cannot be stepped around:
+ * wrapping the identical wait in a one-step sequence used to buy a
+ * permanently-green check that the recorder refuses to write directly and the
+ * runner marks with ⚠. Nested selectors are read from the REQUEST args by
+ * index — a run-sequence step result carries its tool and result but not the
+ * arguments it was called with.
+ */
+export function vacuousHiddenSelectors(tool: string, result: unknown, args: unknown): unknown[] {
+  const argRecord = typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {};
+  if (tool === AWAIT_UI_ELEMENT_TOOL_ID) {
+    return resultIsVacuousHidden(result) ? [argRecord.selector] : [];
+  }
+  if (tool !== "run-sequence") return [];
+  const steps = (result as { steps?: unknown })?.steps;
+  const requested = argRecord.steps;
+  if (!Array.isArray(steps) || !Array.isArray(requested)) return [];
+  const out: unknown[] = [];
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i] as { tool?: unknown; result?: unknown } | null;
+    if (step?.tool !== AWAIT_UI_ELEMENT_TOOL_ID || !resultIsVacuousHidden(step.result)) continue;
+    const nestedArgs = (requested[i] as { args?: unknown } | undefined)?.args;
+    out.push(
+      typeof nestedArgs === "object" && nestedArgs !== null
+        ? (nestedArgs as Record<string, unknown>).selector
+        : undefined
+    );
+  }
+  return out;
+}
+
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_POLL_INTERVAL_MS = 400;
 
@@ -339,7 +397,7 @@ or before tapping an element that appears asynchronously.`,
             const result: WaitResult = { success: true, elapsed: Date.now() - start };
             if (params.condition === "hidden" && !everMatched) {
               result.note =
-                "condition met immediately — the selector never matched any element, " +
+                `condition met immediately — ${VACUOUS_HIDDEN_MARKER}, ` +
                 "so it may have already been hidden before the wait, or the selector is wrong";
             }
             return { done: true, result };
