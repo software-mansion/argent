@@ -179,7 +179,14 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(parseFlow(await onDisk("android")).steps).toHaveLength(1);
   }, 20_000);
 
-  it("on Chromium, names describe (the DOM walker) as the runner's reader", async () => {
+  // The Chromium reader clause is special-cased for the same reason Android is:
+  // `describe` on Chromium is the recorder's UN-trimmed DOM (a superset), and it
+  // still shows the very nodes — role-only, non-addressable — that the runner's
+  // addressable-only tree drops. Telling the author `describe` "reads the
+  // runner's side" would send them to a tool that shows the element the runner
+  // can't see, so they'd ship an `assert:` that fails every replay. The warning
+  // must NOT name `describe` as the runner's reader there.
+  it("on Chromium, does not claim `describe` reads the runner's side", async () => {
     runnerTree = () => screen(["Proceed"]);
     await flowStartRecordingTool.execute(
       {},
@@ -190,8 +197,9 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
     expect(result.message).toContain("does NOT hold against the tree the runner resolves");
     expect(result.message).toContain(
-      "`describe` (this platform's DOM walker) reads the runner's side"
+      "no read-only tool exposes the runner's trimmed tree on Chromium"
     );
+    expect(result.message).not.toContain("reads the runner's side");
     expect(result.message).not.toContain("native-find-views");
     expect(parseFlow(await onDisk("chromium")).steps).toHaveLength(1);
   }, 20_000);
