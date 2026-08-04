@@ -325,17 +325,20 @@ describe("copyDir", () => {
     expect(fs.readFileSync(path.join(dest, "sub", "b.txt"), "utf8")).toBe("world");
   });
 
-  // fs.cp refuses this itself. What matters here is that the walk which
-  // precedes it does not chase its own output down an unbounded path.
-  it("refuses to copy a tree into a subdirectory of itself, without burrowing", () => {
+  // Nothing sensible asks for this, but the walk must not chase its own output
+  // down an unbounded path, and must not truncate a file by copying it over
+  // itself.
+  it("does not burrow when the destination is inside the source", () => {
     const src = stageSource();
 
-    expect(() => copyDir(src, path.join(src, "sub"))).toThrow();
+    copyDir(src, path.join(src, "sub"));
+
     expect(fs.existsSync(path.join(src, "sub", "sub", "sub"))).toBe(false);
+    expect(fs.readFileSync(path.join(src, "a.txt"), "utf8")).toBe("hello");
+    expect(fs.readFileSync(path.join(src, "sub", "b.txt"), "utf8")).toBe("world");
   });
 
-  // fs.cp aborts the process outright when it cannot create a directory, so
-  // the copy makes them itself and reports the failure like any other.
+  // Creating a directory is what fs.cp cannot survive, so the copy does it.
   it("reports an unwritable destination instead of dying", () => {
     const src = stageSource();
     const dest = path.join(tmpDir, "dest");

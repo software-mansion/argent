@@ -411,53 +411,48 @@ function resolveLinkedDestination(dest: string): string {
   return dest;
 }
 
-// Create every directory the copy is going to land in, resolving links on the
-// way down.
-//
-// `fs.cp` would make them itself, but its directory creation fails in a way no
-// caller can survive: handed a dangling link, or a directory it may not write
-// to, it does not throw — it aborts the process through an uncatchable C++
-// std::filesystem exception. Doing it here turns both into ordinary errors the
-// installer can report, and leaves `fs.cp` only the work it does correctly.
-function createDestinationTree(src: string, dest: string): void {
-  // Read the source before creating anything: a destination that resolves back
-  // inside the source would otherwise grow the very tree being walked.
-  const subdirectories = fs
-    .readdirSync(src, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name);
-
-  fs.mkdirSync(dest, { recursive: true });
-
-  for (const name of subdirectories) {
-    createDestinationTree(path.join(src, name), resolveLinkedDestination(path.join(dest, name)));
-  }
-}
-
-// Copy a directory tree onto `dest`, writing *through* it when it is a symlink
-// rather than replacing it. Returns the directory actually written (which
-// differs from `dest` when that was a link), or null when there is nothing to
-// copy.
+// Copy a directory tree onto `dest`, writing *through* every symlink it lands
+// on — file or directory, at any depth — rather than replacing it. Returns the
+// directory actually written (which differs from `dest` when that was a link),
+// or null when there is nothing to copy.
 //
 // Writing through matters because agent definitions are increasingly the same
 // content across harnesses: people keep the canonical copy in one neutral
-// directory and point each vendor path at it (`.claude/agents ->
-// ../.agents/agents`). The host tools already tolerate that — Claude Code
-// documents symlinks for `.claude/rules/` — so argent's writer should too
-// (issue #701). `fs.cp` does write through a symlinked file, and a symlinked
-// directory below the top level; it just refuses the top level itself, with
-// ERR_FS_CP_DIR_TO_NON_DIR ("cannot overwrite non-directory with directory").
-// Resolving that one path up front is the whole fix — everything below it stays
-// `fs.cp`'s own behaviour, including its guard against copying a tree into
-// itself.
+// directory and point each vendor path at it — the whole directory
+// (`.claude/agents -> ../.agents/agents`) or a single file inside it. The host
+// tools already tolerate that — Claude Code documents symlinks for
+// `.claude/rules/` — so argent's writer should too (issue #701).
+//
+// `fs.cp` cannot do any of this, because what it does with a symlinked
+// destination depends on which runtime you are on. Node 20 refuses one at any
+// level (ERR_FS_CP_DIR_TO_NON_DIR) and quietly replaces a symlinked file,
+// leaving the canonical copy stale; Node 22 writes through both, but aborts
+// the process — an uncatchable C++ std::filesystem exception no try/catch can
+// reach — whenever it has to create a directory and cannot, whether that is a
+// dangling link or one it may not write to. Argent supports both. Walking the
+// tree here is what makes the behaviour the same on every supported runtime,
+// and `fs.copyFileSync` reports each failure as a plain, catchable errno.
 export function copyDir(src: string, dest: string): string | null {
   if (!fs.existsSync(src)) return null;
 
   const target = resolveLinkedDestination(dest);
-  createDestinationTree(src, target);
-  fs.cpSync(src, target, { recursive: true });
-
+  copyTree(src, target);
   return target;
+}
+
+function copyTree(src: string, dest: string): void {
+  // Read the source before creating anything: a destination that resolves back
+  // inside the source would otherwise grow the very tree being walked.
+  const entries = fs.readdirSync(src, { withFileTypes: true });
+
+  fs.mkdirSync(dest, { recursive: true });
+
+  for (const entry of entries) {
+    const from = path.join(src, entry.name);
+    const to = resolveLinkedDestination(path.join(dest, entry.name));
+    if (entry.isDirectory()) copyTree(from, to);
+    else fs.copyFileSync(from, to);
+  }
 }
 
 export function dirExists(p: string): boolean {
