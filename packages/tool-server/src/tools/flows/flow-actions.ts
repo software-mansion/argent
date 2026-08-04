@@ -1268,7 +1268,8 @@ const SWIPE_GEOMETRY: Record<
  * touch, so a swipe is a mouse drag (`gesture-drag`) — swipe-as-scroll is
  * already `scroll-to`'s job there. `settle` rides both dispatches: web apps
  * derive their fling from the pointer stream's release velocity just as the
- * OS does from the touch stream, and the ease-out zeroes both.
+ * OS does from the touch stream, and the ease-out zeroes both. Either way the
+ * step then waits out the motion it started — see the settle after dispatch.
  */
 async function runSwipe(
   env: ActionEnv,
@@ -1436,6 +1437,22 @@ async function runSwipe(
     env.device.platform === "chromium" ? "gesture-drag" : "gesture-swipe",
     travel
   );
+
+  // The momentum this swipe created is this step's business: only a SELECTOR
+  // target makes the next step wait, so a following point target would touch
+  // down mid-deceleration, where the scroll view eats the touch to arrest the
+  // scroll and both steps still report pass. Unconditional, `settle` or not —
+  // that flag zeroes the finger's release velocity, not the app's animations —
+  // and best effort, since a fling can outlast SETTLE_TIMEOUT_MS.
+  try {
+    await settleTree(env);
+  } catch {
+    // Tree-source outage AFTER the device performed the gesture: proceed as
+    // runSnapshot's settle does rather than fail a swipe that actually happened.
+  }
+  // settleTree returns undefined only on abort, which must read as the uniform
+  // aborted skip, never a pass.
+  if (env.signal?.aborted) return ABORTED_OUTCOME;
   return { ok: true };
 }
 
