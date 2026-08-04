@@ -34,7 +34,7 @@ import { adbExecOutBinary } from "./adb";
 const DUMP_COMMAND_FLAGS = "--compressed";
 
 /** Default budget for one dump. A cold `uiautomator` on a busy emulator is slow. */
-export const ANDROID_UI_DUMP_TIMEOUT_MS = 20_000;
+const ANDROID_UI_DUMP_TIMEOUT_MS = 20_000;
 
 /**
  * `uiautomator dump` on `serial`, returned as UTF-8 XML.

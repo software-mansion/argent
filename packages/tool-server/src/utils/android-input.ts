@@ -225,6 +225,47 @@ function clearLegTimeout(deadline: number, reserveMs = 0): number {
   return Math.max(1_000, deadline - Date.now() - reserveMs);
 }
 
+export interface AndroidClearOptions {
+  /**
+   * Read the view hierarchy the way `describe` prefers to, or return undefined
+   * when that source is not available right now.
+   *
+   * This exists because the device serves exactly ONE UiAutomation connection
+   * and argent's own `android-devtools` helper holds it — measured on a live API
+   * 30 emulator at 61.2s per `describe`, during which every `uiautomator dump`
+   * comes back as a bare `Killed` with adb still exiting 0. That is not a race
+   * a backoff can wait out, and the cost is not a slow clear: the measurement
+   * fails, {@link clearByDeleting} falls to BLIND_DELETE_COUNT, and a field
+   * longer than that keeps its head while the tool reports `cleared: true`.
+   * Measured end to end on that emulator, 6/6 — a 200-character field left 72
+   * characters of residue with the new text appended to it, and the
+   * MAX_DELETE_COUNT refusal that would otherwise have caught it never fired.
+   * `describe` → tap → `keyboard` is the ordinary call order, so the window is
+   * not an edge case.
+   *
+   * Asking the holder for the hierarchy instead of racing it removes the
+   * contention outright, and skips a dump plus the retry backoff when it works.
+   *
+   * Two consequences of reading from the helper rather than a compressed dump,
+   * both measured on the same API 30 screen:
+   *
+   *   - it sees MORE windows (219 nodes across the app, systemui and the IME,
+   *     against the dump's 7). The `EditText` filter still excludes the IME's
+   *     own focused node, but a focused EditText in an overlay window is now
+   *     visible to the measurement where it was not before — which is the
+   *     "belongs to a different focused field" hazard the MAX_DELETE_COUNT
+   *     refusal already warns about, reachable slightly more often.
+   *   - a helper that is ALIVE but cannot answer inside the budget still falls
+   *     to BLIND_DELETE_COUNT, and a long field is then truncated exactly as it
+   *     was before this option existed. Not a regression — a raw dump fails
+   *     identically in that state (verified: `Killed` in both) — but it is the
+   *     one hole this does not close. Reaching it took root + SIGSTOP, or 250
+   *     synthetic concurrent RPC sockets; the tool-server serialises its own
+   *     calls on one client socket, so ordinary usage does not produce it.
+   */
+  readHierarchy?: () => Promise<string | undefined>;
+}
+
 /**
  * Empty the focused text field: select its whole contents, then delete.
  *
@@ -270,7 +311,10 @@ function clearLegTimeout(deadline: number, reserveMs = 0): number {
  * On a level without `keycombination` the clear falls back to
  * {@link clearByDeleting}.
  */
-export async function injectAndroidClear(serial: string): Promise<void> {
+export async function injectAndroidClear(
+  serial: string,
+  options: AndroidClearOptions = {}
+): Promise<void> {
   // One deadline for every leg below — see ANDROID_CLEAR_BUDGET_MS.
   const deadline = Date.now() + ANDROID_CLEAR_BUDGET_MS;
   const out = await adbShell(
@@ -279,7 +323,7 @@ export async function injectAndroidClear(serial: string): Promise<void> {
     { timeoutMs: clearLegTimeout(deadline, DELETE_RUN_RESERVE_MS) }
   );
   if (/unknown command|usage: input/i.test(out)) {
-    await clearByDeleting(serial, deadline);
+    await clearByDeleting(serial, deadline, options.readHierarchy);
     return;
   }
   await adbShell(serial, `input keyevent ${KEYCODE_DEL}`, {
@@ -371,8 +415,13 @@ export const MAX_DELETE_COUNT = 150;
  * search box took 6.9s wall-clock and emptied it; against an idle field the same
  * run is ~0.75s, since the cost is dominated by one `input` VM start.
  */
-async function clearByDeleting(serial: string, deadline: number): Promise<void> {
-  const count = (await measureFocusedTextLength(serial, deadline)) ?? BLIND_DELETE_COUNT;
+async function clearByDeleting(
+  serial: string,
+  deadline: number,
+  preferredRead?: () => Promise<string | undefined>
+): Promise<void> {
+  const count =
+    (await measureFocusedTextLength(serial, deadline, preferredRead)) ?? BLIND_DELETE_COUNT;
   const keys = count + DELETE_MARGIN;
   // Refuse BEFORE touching the field, and on length alone. Time is deliberately
   // not a second ground: the run is already bounded by DELETE_RUN_RESERVE_MS,
@@ -387,11 +436,11 @@ async function clearByDeleting(serial: string, deadline: number): Promise<void> 
       `keyboard clear: a focused text field on this screen reports ${count} characters, more ` +
         `than this Android level can clear. Without \`input keycombination\` (added after API ` +
         `30) the only available clear is one backspace per character, which is too slow to ` +
-        `finish reliably past ${MAX_DELETE_COUNT}. The count is read from the uiautomator ` +
-        `dump, which reports an empty field's placeholder in the same attribute as its value ` +
-        `and covers every window, so it may belong to a different focused field than the one ` +
-        `you meant. Nothing was modified and nothing was typed. Clear the field with the ` +
-        `app's own affordance, or use an emulator on a newer API level.`,
+        `finish reliably past ${MAX_DELETE_COUNT}. The count comes from the screen's view ` +
+        `hierarchy, which reports an empty field's placeholder in the same attribute as its ` +
+        `value and covers every window, so it may belong to a different focused field than ` +
+        `the one you meant. Nothing was modified and nothing was typed. Clear the field with ` +
+        `the app's own affordance, or use an emulator on a newer API level.`,
       {
         // Its own code rather than KEYBOARD_CLEAR_INEFFECTIVE: this is a
         // caller-fixable rejection (a 400) that changed nothing, whereas
@@ -426,6 +475,12 @@ const DUMP_RETRY_BACKOFF_MS = 2_500;
 // result that cannot arrive.
 const MIN_USEFUL_DUMP_MS = 2_500;
 
+// Cap on the {@link AndroidClearOptions.readHierarchy} read. The helper answers
+// a live RPC in well under a second, so this is generous — it exists only to
+// bound a wedged one, and is deliberately far below that RPC's own 15s timeout
+// so a hung helper still leaves the dump fallback a usable share of the budget.
+const PREFERRED_READ_BUDGET_MS = 5_000;
+
 /**
  * One `uiautomator dump`, retried once after a backoff when the device returns
  * no hierarchy.
@@ -441,8 +496,39 @@ const MIN_USEFUL_DUMP_MS = 2_500;
  *
  * Returns undefined when neither attempt produced a hierarchy, or when there is
  * not enough budget left to try.
+ *
+ * `preferredRead` is tried first and is what makes the common case work at all:
+ * the connection's usual holder is argent's own `android-devtools` helper, for
+ * ~60s after every `describe`, and neither dump can win against that — see
+ * {@link AndroidClearOptions}. A read that comes back without a hierarchy, or
+ * throws, falls through to the dumps rather than failing the clear.
  */
-async function readHierarchy(serial: string, deadline: number): Promise<string | undefined> {
+async function readHierarchy(
+  serial: string,
+  deadline: number,
+  preferredRead?: () => Promise<string | undefined>
+): Promise<string | undefined> {
+  // Withhold BOTH the delete run's reserve and one dump's worth of budget. The
+  // helper's own `getHierarchy` RPC timeout is 15s — longer than this whole read
+  // share — so an unbounded await would let a wedged helper spend the reserve
+  // AND leave nothing for the fallback below, turning a slow helper into the
+  // blind count this path exists to avoid. Losing the race just falls through to
+  // the dump, which is what ran before the helper was consulted at all.
+  const preferredBudgetMs = Math.min(
+    PREFERRED_READ_BUDGET_MS,
+    deadline - Date.now() - DELETE_RUN_RESERVE_MS - MIN_USEFUL_DUMP_MS
+  );
+  if (preferredRead && preferredBudgetMs > 0) {
+    try {
+      const xml = await Promise.race([
+        preferredRead(),
+        sleep(preferredBudgetMs).then(() => undefined),
+      ]);
+      if (xml && xml.includes("<hierarchy")) return xml;
+    } catch {
+      // The helper is not usable — same fallthrough.
+    }
+  }
   for (let attempt = 0; attempt < 2; attempt++) {
     const waitMs = attempt > 0 ? DUMP_RETRY_BACKOFF_MS : 0;
     // Withhold the delete run's reserve, and count the backoff BEFORE spending
@@ -503,11 +589,12 @@ async function readHierarchy(serial: string, deadline: number): Promise<string |
  */
 async function measureFocusedTextLength(
   serial: string,
-  deadline: number
+  deadline: number,
+  preferredRead?: () => Promise<string | undefined>
 ): Promise<number | undefined> {
   let xml: string | undefined;
   try {
-    xml = await readHierarchy(serial, deadline);
+    xml = await readHierarchy(serial, deadline, preferredRead);
   } catch {
     return undefined;
   }
@@ -547,7 +634,13 @@ async function measureFocusedTextLength(
  * android.view.KeyEvent keycode, or throw. Split out from the injection so a
  * caller can validate a key name without pressing it — the keyboard backend does
  * that before a `clear`, which must not empty a field for a request it then
- * rejects. Mirrors `resolveVegaNamedKeycode`.
+ * rejects.
+ *
+ * The iOS and Chromium backends resolve their own named key up front for the
+ * same reason (`simulator-server-keys.ts`, `platforms/chromium.ts`); they need no
+ * split helper because their key tables are plain lookups. Vega has neither the
+ * split nor the hazard — `injectVegaNamedKey` resolves and presses in one
+ * function, and `platforms/vega.ts` refuses `clear` outright.
  */
 export function resolveAndroidNamedKeycode(name: string): number {
   const lower = name.toLowerCase();
