@@ -520,6 +520,45 @@ export async function settleTree(
 }
 
 /**
+ * Poll until EVERY given selector matches on ONE settled tree, returning the
+ * frames positionally (an undefined slot — a gesture end carrying raw
+ * coordinates — stays undefined and, if no slot holds a selector, reads no tree
+ * at all). Resolving a pair through two sequential waits instead reads whichever
+ * end goes first from a tree older than the other end's wait, so that end's
+ * frame is already stale when the gesture dispatches. One deadline covers the
+ * whole set: waiting per selector would multiply a step's worst case by the
+ * number of ends. Returns "aborted" when the run was cancelled or the first
+ * still-unresolved selector in argument order once the deadline passes — the two
+ * misses must stay distinguishable, or a cancelled step would be reported as a
+ * genuine "element not found" failure, and argument order decides which end
+ * carries the blame when several are missing.
+ */
+async function waitForFrames(
+  env: ActionEnv,
+  selectors: readonly (FlowSelector | undefined)[]
+): Promise<(DescribeFrame | undefined)[] | "aborted" | { unresolved: FlowSelector }> {
+  const pending = selectors.flatMap((selector, i) => (selector ? [{ i, selector }] : []));
+  if (pending.length === 0) return selectors.map(() => undefined);
+  const deadline = Date.now() + DEFAULT_ACTION_TIMEOUT_MS;
+  let unresolved = pending[0].selector;
+  for (;;) {
+    if (env.signal?.aborted) return "aborted";
+    const tree = await settleTree(env);
+    if (tree) {
+      const frames = selectors.map((s) => (s ? flowSelectorToFrame(tree, s) : undefined));
+      const missing = pending.find(({ i }) => frames[i] === undefined);
+      if (!missing) return frames;
+      unresolved = missing.selector;
+    } else if (env.signal?.aborted) {
+      return "aborted"; // settleTree bailed on the abort, not on a blank read
+    }
+    if (Date.now() >= deadline) return { unresolved };
+    const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
+    if (!(await sleepOrAbort(sleepMs, env.signal))) return "aborted";
+  }
+}
+
+/**
  * Poll until a visible element matches the selector, resolving against a
  * *settled* tree each round so the returned frame is stable. Returns the frame,
  * undefined once the deadline passes, or "aborted" when the run was cancelled —
@@ -533,20 +572,9 @@ export async function waitForFrame(
   env: ActionEnv,
   selector: FlowSelector
 ): Promise<DescribeFrame | "aborted" | undefined> {
-  const deadline = Date.now() + DEFAULT_ACTION_TIMEOUT_MS;
-  for (;;) {
-    if (env.signal?.aborted) return "aborted";
-    const tree = await settleTree(env);
-    if (tree) {
-      const frame = flowSelectorToFrame(tree, selector);
-      if (frame) return frame;
-    } else if (env.signal?.aborted) {
-      return "aborted"; // settleTree bailed on the abort, not on a blank read
-    }
-    if (Date.now() >= deadline) return undefined;
-    const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
-    if (!(await sleepOrAbort(sleepMs, env.signal))) return "aborted";
-  }
+  const frames = await waitForFrames(env, [selector]);
+  if (frames === "aborted") return "aborted";
+  return Array.isArray(frames) ? frames[0] : undefined;
 }
 
 function framesOverlap(a: DescribeFrame, b: DescribeFrame): boolean {
@@ -936,10 +964,27 @@ async function resolveTargetPoint(
     }
     return { point: getDescribeTapPoint(frame) };
   }
+  const point = targetPointFromFrame(target, undefined);
+  if ("fail" in point) return point;
+  const settle = await settleForGesture(env);
+  if (settle.aborted) return { fail: ABORTED_OUTCOME };
+  return { point, ...warned(settle) };
+}
+
+/**
+ * The tree-free half of {@link resolveTargetPoint}, for callers that resolved
+ * the selector themselves (a swipe resolves both ends on one tree): the
+ * already-resolved frame's centre, else the target's raw coordinates. Reading
+ * no tree, it settles none: the coordinate branch's {@link settleForGesture}
+ * stays in `resolveTargetPoint`, around this call.
+ */
+function targetPointFromFrame(
+  target: { selector?: FlowSelector; x?: number; y?: number },
+  frame: DescribeFrame | undefined
+): { x: number; y: number } | { fail: DirectiveOutcome } {
+  if (frame) return getDescribeTapPoint(frame);
   if (typeof target.x === "number" && typeof target.y === "number") {
-    const settle = await settleForGesture(env);
-    if (settle.aborted) return { fail: ABORTED_OUTCOME };
-    return { point: { x: target.x, y: target.y }, ...warned(settle) };
+    return { x: target.x, y: target.y };
   }
   return { fail: { ok: false, reason: "gesture needs a selector or x/y coordinates" } };
 }
@@ -1236,19 +1281,30 @@ async function runSwipe(
     duration?: number;
   }
 ): Promise<DirectiveOutcome> {
-  // The endpoint's auto-wait is the long one (a drop target that hasn't
-  // rendered yet), so resolve it before the anchor — the finger must go down
-  // where the anchor is after that wait, not where it was before it.
+  // Both selector ends come from ONE settled tree, so neither is read before
+  // the other's auto-wait: either order of two independent waits leaves the end
+  // that went first pointing where it was before the other end rendered or
+  // moved. `from` leads the pair so a swipe where NEITHER end ever appears is
+  // blamed on the anchor, the element the finger needs first.
+  const ends = [step.from, step.to] as const;
+  const frames = await waitForFrames(
+    env,
+    ends.map((end) => (end && "selector" in end ? end.selector : undefined))
+  );
+  if (frames === "aborted") return ABORTED_OUTCOME;
+  if (!Array.isArray(frames)) return { ok: false, reason: offscreenHint(frames.unresolved) };
+  const [fromFrame, toFrame] = frames;
+
   let toPoint: { x: number; y: number } | undefined;
   if (step.to) {
-    const p = await resolveTargetPoint(env, step.to);
+    const p = targetPointFromFrame(step.to, toFrame);
     if ("fail" in p) return p.fail;
     toPoint = p;
   }
 
   let start: { x: number; y: number };
   if (step.from) {
-    const p = await resolveTargetPoint(env, step.from);
+    const p = targetPointFromFrame(step.from, fromFrame);
     if ("fail" in p) return p.fail;
     start = p;
   } else if (step.direction) {
