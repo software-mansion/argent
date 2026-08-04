@@ -451,6 +451,13 @@ function valueAtPath(root: unknown, path: readonly PropertyKey[]): unknown {
   let current: unknown = root;
   for (const key of path) {
     if (current === null || typeof current !== "object") return undefined;
+    // Own-property only: a schema field named after an `Object.prototype`
+    // member (`toString`, `constructor`, `hasOwnProperty`, …) that the caller
+    // OMITTED must read as absent, not as the inherited function — a bare
+    // `current[key]` returns that function (`!== undefined`), so the field
+    // would be misreported as a type error instead of "is required". Mirrors
+    // the `Object.hasOwn` guards the directive lookups already use.
+    if (!Object.hasOwn(current as object, key)) return undefined;
     current = (current as Record<PropertyKey, unknown>)[key];
   }
   return current;
