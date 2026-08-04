@@ -445,6 +445,59 @@ describe("flow-add-step", () => {
     expect(result.recorded).toBe(summarizeStep(step, 1));
   });
 
+  it("finish-recording's summary carries the same delay/times spellings as `recorded`", async () => {
+    // The per-step `recorded` lines are unit-covered above; this pins the OTHER
+    // summarizeStep consumer — finish-recording's `summary` array — so the two
+    // surfaces can't drift. It must render the pre-step delay and the tap count
+    // exactly as the recorder echoed them per step.
+    const registry = createMockRegistry({
+      "screenshot": { result: { ok: true } },
+      "gesture-tap": { result: { tapped: true } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "summary-labels", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    const delayed = await tool.execute(
+      {},
+      {
+        name: "summary-labels",
+        project_root: tmpDir,
+        command: "screenshot",
+        args: "{}",
+        delayMs: 250,
+      }
+    );
+    const doubled = await tool.execute(
+      {},
+      {
+        name: "summary-labels",
+        project_root: tmpDir,
+        command: "gesture-tap",
+        args: JSON.stringify({
+          udid: "00000000-0000-0000-0000-0000000000ab",
+          x: 0.5,
+          y: 0.3,
+          clickCount: 2,
+        }),
+      }
+    );
+
+    const finished = await flowFinishRecordingTool.execute(
+      {},
+      { name: "summary-labels", project_root: tmpDir }
+    );
+
+    expect(finished.summary).toEqual([
+      "1. tool: screenshot {} (after 250ms)",
+      "2. tap: (0.5, 0.3) ×2",
+    ]);
+    // The finished summary and each step's `recorded` line are the same spelling.
+    expect(finished.summary).toEqual([delayed.recorded, doubled.recorded]);
+  });
+
   it("propagates the request's telemetry attribution to the recorded sub-tool", async () => {
     const registry = createMockRegistry({ tap: { result: { ok: true } } });
     const tool = createFlowAddStepTool(registry);
@@ -2609,6 +2662,16 @@ describe("summarizeStep rendering", () => {
       '1. tap: {"id":"b"} ×2'
     );
     expect(summarizeStep({ kind: "tap", x: 0.5, y: 0.3 }, 1)).toBe("1. tap: (0.5, 0.3)");
+  });
+
+  it("never renders ×1 — the file can't carry times: 1", () => {
+    // parseTapTimes normalizes `times: 1` to absent, so a valid flow file never
+    // spells a single tap with a count. summarizeStep renders the file's
+    // spelling, so a stray in-memory `times: 1` must read as a plain tap, not ×1.
+    expect(summarizeStep({ kind: "tap", x: 0.5, y: 0.3, times: 1 }, 1)).toBe("1. tap: (0.5, 0.3)");
+    expect(summarizeStep({ kind: "tap", selector: { identifier: "b" }, times: 1 }, 1)).toBe(
+      '1. tap: {"id":"b"}'
+    );
   });
 
   it("renders a long-press hold duration", () => {

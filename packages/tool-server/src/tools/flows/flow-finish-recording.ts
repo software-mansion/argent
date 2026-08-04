@@ -196,7 +196,11 @@ export function summarizeStep(step: FlowStep, n: number): string {
       // only per-step view of what was appended. Neither kind carries a
       // `delayMs` (only `tool` steps do), so no delayLabel here.
       const target = step.selector ? selectorLabel(step.selector) : `(${step.x}, ${step.y})`;
-      const times = step.kind === "tap" && step.times !== undefined ? ` ×${step.times}` : "";
+      // Only ×2..×10 is renderable: `times: 1` is the default and never lands in
+      // the file (parseTapTimes normalizes it to absent), so rendering `×1` for
+      // a stray in-memory `times: 1` would describe a file that can't exist.
+      const times =
+        step.kind === "tap" && step.times !== undefined && step.times > 1 ? ` ×${step.times}` : "";
       const held =
         step.kind === "long-press" && step.duration !== undefined ? ` for ${step.duration}ms` : "";
       return `${n}. ${step.kind}: ${target}${times}${held}`;
