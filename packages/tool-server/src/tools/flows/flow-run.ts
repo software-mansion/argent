@@ -2202,6 +2202,13 @@ async function execLeafStep(
         // A run cancelled mid-directive is a skip (matching the pre-step guard
         // and `wait`), never a step failure — the app did nothing wrong.
         if (r.aborted) return { ...base, status: "skip", reason: r.reason };
+        // An INDETERMINATE outcome is not a verdict about the app: the check
+        // could not run at all (an unreadable tree, no route reader, focus
+        // unconfirmed with nothing to read it from). Reporting it as `fail`
+        // makes CI read an environment problem as a regression and a QA
+        // author reset a pass streak over it. `error` keeps the run non-ok
+        // while saying plainly that the app was never judged.
+        if (!r.ok && r.indeterminate) return { ...base, status: "error", reason: r.reason };
         return {
           ...base,
           status: r.ok ? "pass" : "fail",
