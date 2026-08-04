@@ -303,9 +303,9 @@ async function captureTapSelector(
 }
 
 /**
- * How far the recording has got, without mutating anything — for responses
- * that record nothing but must still say where the flow stands. Host mode
- * re-reads the file so manual edits made mid-recording are honored; client
+ * How far the recording has got — for responses that record no step but must
+ * still say where the flow stands. Host mode re-reads the file (refreshing the
+ * in-memory snapshot) so manual edits made mid-recording are honored; client
  * mode's in-memory copy is authoritative.
  *
  * Deliberately NOT the flow's YAML. Returning the whole growing file on every
@@ -442,7 +442,12 @@ function directiveCommandHint(command: string): string | undefined {
       `hand during polish and prove it with the replay.`
     );
   }
-  const hint = DIRECTIVE_COMMAND_HINTS[command];
+  // `Object.hasOwn`, not a bare index: `command` is caller-controlled, so a
+  // value like `"constructor"` or `"toString"` would otherwise resolve to an
+  // inherited prototype member and render a nonsense hint (`tool: undefined`).
+  const hint = Object.hasOwn(DIRECTIVE_COMMAND_HINTS, command)
+    ? DIRECTIVE_COMMAND_HINTS[command]
+    : undefined;
   if (!hint) return undefined;
   return (
     `"${command}" is a flow directive, not a tool. Record it by calling \`${hint.tool}\` ` +
@@ -808,7 +813,13 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
       // signals the corruption; refuse before anything is written — and before
       // parsing `args`, so a malformed `args` payload cannot pre-empt this
       // guidance with a bare JSON error.
-      const nested = NESTED_RECORDER_TOOLS[params.command];
+      // `Object.hasOwn`, not a bare index: a caller-supplied `command` equal to
+      // an inherited member (`"__proto__"`, `"constructor"`, …) would otherwise
+      // read truthy off the prototype chain and refuse the call with a garbage
+      // message instead of falling through to the plain not-found path.
+      const nested = Object.hasOwn(NESTED_RECORDER_TOOLS, params.command)
+        ? NESTED_RECORDER_TOOLS[params.command]
+        : undefined;
       if (nested) {
         const { stepCount, note } = await activeFlowState(session);
         return {
