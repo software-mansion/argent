@@ -440,6 +440,7 @@ export function start(): void {
     recordFailure: (toolId, meta, signal, durationMs) => {
       telemetryTrack("tool:fail", {
         tool: toolId,
+        ...(meta.device_provider ? { device_provider: meta.device_provider } : {}),
         ...(meta.platform ? { platform: meta.platform } : {}),
         duration_ms: durationMs,
         ...signal,

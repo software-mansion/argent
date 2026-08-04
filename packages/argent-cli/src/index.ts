@@ -17,3 +17,4 @@ export {
   type FlagDefinition,
 } from "@argent/configuration-core";
 export { telemetry } from "./telemetry.js";
+export { providers } from "./providers.js";

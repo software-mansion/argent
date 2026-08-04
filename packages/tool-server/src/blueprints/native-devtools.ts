@@ -9,6 +9,7 @@ import {
   type ServiceBlueprint,
   type ServiceEvents,
 } from "@argent/registry";
+import { assertExternalCapability } from "../utils/external-devices";
 import { pickIosHost, buildDyldInsertLibraries, type IosEndpoint } from "../utils/ios-host";
 
 // Re-exported for the env-merging unit test that imports it from this module.
@@ -375,6 +376,16 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         }
       );
     }
+
+    /**
+     * Mechanism gate for provider-supplied devices. Gating here at the
+     * blueprint, rather than per tool is what keeps this bounded. Every tool
+     * built on `NATIVE_DEVTOOLS_NAMESPACE`, now and in future, inherits the
+     * check without being re-audited. A no-op for every device Argent booted
+     * itself.
+     */
+    await assertExternalCapability(NATIVE_DEVTOOLS_NAMESPACE, device, "native-devtools");
+
     const host = pickIosHost(device);
     // Remote sims can't use unix sockets because the QUIC reverse tunnel
     // only bridges TCP streams.

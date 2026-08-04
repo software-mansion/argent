@@ -18,7 +18,12 @@ import { isTvOsSimulator } from "../utils/ios-devices";
 import { deviceSetForUdid } from "../utils/ios-device-sets";
 import { UnsupportedOperationError } from "../utils/capability";
 import { openMoqClient } from "../utils/moq-client";
-import { createMoqTransport } from "../utils/simulator-client";
+import { createMoqTransport, sendCommand } from "../utils/simulator-client";
+import {
+  assertExternalCapability,
+  isExternalId,
+  lookupExternalDevice,
+} from "../utils/external-devices";
 import { simctlPbcopy } from "../utils/sim-remote";
 import { encodeKey } from "../utils/datachannel-proto";
 
@@ -65,6 +70,13 @@ export interface SimulatorServerApi {
    * route through MoQ instead of WebSocket + HTTP. Undefined for local sims.
    */
   transport?: import("../utils/simulator-client").SimulatorServerTransport;
+  /**
+   * `true` when this server belongs to an external provider rather than a
+   * process Argent spawned. `simulator-client.ts` uses it to enforce the parity
+   * rule (`ALLOWED_SIM_SERVER_ENDPOINTS`): Argent may only use surfaces its own
+   * build serves, so attaching never becomes consuming a provider's extras.
+   */
+  external?: boolean;
 }
 
 /**
@@ -115,6 +127,58 @@ async function buildRemoteInstance(
       await moq.close();
     },
     events,
+  };
+}
+
+/**
+ * Attach to a simulator-server an external provider is already running,
+ * instead of spawning one.
+ *
+ * `simulator-client.ts` is entirely URL-driven and the control API is
+ * multi-client (the MJPEG stream refcounts consumers), so this is only about
+ * not spawning. The rest of the stack is reused verbatim.
+ *
+ *  - `dispose()` is a no-op. Argent must never kill a process it did not
+ *    start.
+ *  - `pressKey` cannot use `stdin`, which an attached server has none of. The
+ *    WebSocket protocol carries the same command, so route it through
+ *    `sendCommand`. Without this, `keyboard` would silently no-op.
+ */
+async function buildAttachedInstance(
+  device: DeviceInfo
+): Promise<ServiceInstance<SimulatorServerApi>> {
+  /**
+   * Every lookup re-reads the provider's file, which is the whole reconnection
+   * story: a restarted simulator-server rebinds an ephemeral port, the next
+   * call gets `ECONNREFUSED`, `recoverable()` disposes, the registry re-runs
+   * this factory, and this read picks up the new port.
+   */
+  const externalDevice = await lookupExternalDevice(device.id);
+
+  await assertExternalCapability(SIMULATOR_SERVER_NAMESPACE, device, "simulator-server");
+
+  if (!externalDevice.simulatorServer) {
+    throw new UnsupportedOperationError(
+      SIMULATOR_SERVER_NAMESPACE,
+      device,
+      `${externalDevice.provider.name} did not publish a simulator-server endpoint for this device`
+    );
+  }
+
+  const api: SimulatorServerApi = {
+    apiUrl: externalDevice.simulatorServer.apiUrl,
+    external: true,
+    pressKey: (direction, code) => {
+      sendCommand(api, { cmd: "key", code, direction });
+    },
+    streamUrl: externalDevice.simulatorServer.streamUrl,
+    /** `transport: undefined`, so the WS + HTTP path is reused unchanged. */
+  };
+
+  return {
+    api,
+    dispose: async () => {},
+    events: new TypedEventEmitter<ServiceEvents>(),
   };
 }
 
@@ -331,6 +395,14 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
           error_kind: "validation",
         }
       );
+    }
+
+    /**
+     * Ahead of every platform branch. An external device needs no tvOS probe,
+     * `adb` check or `simctl` bootstrap — its provider already did that setup.
+     */
+    if (isExternalId(device.id)) {
+      return buildAttachedInstance(device);
     }
 
     if (device.platform === "ios-remote") {

@@ -13,12 +13,7 @@ import {
   tcpInjectionDylibs,
 } from "@argent/native-devtools-ios";
 import { SIMCTL_KILL_SIGNAL, SIMCTL_SPAWN_TIMEOUT_MS } from "./simctl-config";
-import {
-  cachedDeviceSetForUdid,
-  deviceSetForUdid,
-  simctlArgsForUdid,
-  simctlPrefix,
-} from "./ios-device-sets";
+import { simctlArgsForUdid, simctlTargetForUdid, simctlTargetForUdidSync } from "./ios-device-sets";
 import { isTvOsSimulator } from "./ios-devices";
 import { ensureAutomationEnabled, isEntitlementBypassActive } from "./ax-prefs";
 import {
@@ -114,7 +109,7 @@ async function ensureAccessibilityEnabled(udid: string): Promise<void> {
   // in the simulator's defaults for SwiftUI to populate the accessibility tree.
   // Without these flags, all UIAccessibility APIs return nil/0 for SwiftUI views.
   const flags = ["AccessibilityEnabled", "ApplicationAccessibilityEnabled"];
-  const prefix = simctlPrefix(await deviceSetForUdid(udid));
+  const { nativeId, prefix } = await simctlTargetForUdid(udid);
   await Promise.all(
     flags.map((flag) =>
       execFileAsync(
@@ -122,7 +117,7 @@ async function ensureAccessibilityEnabled(udid: string): Promise<void> {
         [
           ...prefix,
           "spawn",
-          udid,
+          nativeId,
           "defaults",
           "write",
           "com.apple.Accessibility",
@@ -148,7 +143,7 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
       ? bootstrapDylibPathTcp()
       : bootstrapDylibPath();
 
-  const prefix = simctlPrefix(await deviceSetForUdid(udid));
+  const { nativeId, prefix } = await simctlTargetForUdid(udid);
 
   // Read from launchctl inside the simulator (via simctl spawn) instead of
   // `simctl getenv`. The latter silently truncates values longer than 127 bytes,
@@ -156,7 +151,7 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
   // accumulate on every ensureEnv() cycle.
   const result = await execFileAsync(
     "xcrun",
-    [...prefix, "spawn", udid, "launchctl", "getenv", "DYLD_INSERT_LIBRARIES"],
+    [...prefix, "spawn", nativeId, "launchctl", "getenv", "DYLD_INSERT_LIBRARIES"],
     { encoding: "utf8", timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
   ).catch((e) => ({ stdout: (e as NodeJS.ErrnoException & { stdout?: string }).stdout ?? "" }));
 
@@ -166,7 +161,7 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
   if (updated !== existing) {
     await execFileAsync(
       "xcrun",
-      [...prefix, "spawn", udid, "launchctl", "setenv", "DYLD_INSERT_LIBRARIES", updated],
+      [...prefix, "spawn", nativeId, "launchctl", "setenv", "DYLD_INSERT_LIBRARIES", updated],
       { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
     );
   }
@@ -180,7 +175,7 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
       [
         ...prefix,
         "spawn",
-        udid,
+        nativeId,
         "launchctl",
         "setenv",
         "NATIVE_DEVTOOLS_IOS_CDP_PORT",
@@ -194,7 +189,7 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
       [
         ...prefix,
         "spawn",
-        udid,
+        nativeId,
         "launchctl",
         "setenv",
         "NATIVE_DEVTOOLS_IOS_CDP_SOCKET",
@@ -265,12 +260,14 @@ function spawnAxDaemonLocal(udid: string, endpoint: IosEndpoint): ChildProcess {
 
   // Synchronous by contract (returns the ChildProcess), so use the cached
   // device-set verdict — `bootstrapAx` has always resolved it by this point.
+  const axTarget = simctlTargetForUdidSync(udid);
+
   const proc = execFile(
     "xcrun",
     [
-      ...simctlPrefix(cachedDeviceSetForUdid(udid)),
+      ...axTarget.prefix,
       "spawn",
-      udid,
+      axTarget.nativeId,
       binaryPath,
       ...endpointArgs,
       "--timeout",

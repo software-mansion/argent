@@ -11,7 +11,7 @@ import {
 import { tvosAxServiceBinaryPath, tvosHidDaemonBinaryPath } from "@argent/native-devtools-ios";
 import { ensureAutomationEnabled } from "./ax-service";
 import { listIosSimulators, cacheSimulatorRuntimeKind } from "../utils/ios-devices";
-import { cachedDeviceSetForUdid, simctlPrefix } from "../utils/ios-device-sets";
+import { simctlTargetForUdidSync } from "../utils/ios-device-sets";
 import { UnsupportedOperationError } from "../utils/capability";
 import type { TvControlApi, TvDescribeResponse, TvDirection, TvElement } from "./tv-control-types";
 
@@ -124,9 +124,9 @@ function spawnAxDaemon(udid: string, socketPath: string): ChildProcess {
   const proc = execFile(
     "xcrun",
     [
-      ...simctlPrefix(cachedDeviceSetForUdid(udid)),
+      ...simctlTargetForUdidSync(udid).prefix,
       "spawn",
-      udid,
+      simctlTargetForUdidSync(udid).nativeId,
       tvosAxServiceBinaryPath(),
       "--socket",
       socketPath,

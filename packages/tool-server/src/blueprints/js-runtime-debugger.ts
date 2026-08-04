@@ -7,6 +7,7 @@ import {
 } from "@argent/registry";
 import { discoverMetro } from "../utils/debugger/discovery";
 import { classifyDevice } from "../utils/device-info";
+import { assertExternalCapability } from "../utils/external-devices";
 import { proxyStart } from "../utils/sim-remote";
 import { selectTarget } from "../utils/debugger/target-selection";
 import { rememberDeviceAlias, forgetDeviceAlias } from "../utils/debugger/device-alias";
@@ -178,6 +179,15 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     if (classifyDevice(deviceId) === "ios-remote") {
       await proxyStart(deviceId, port);
     }
+
+    /**
+     * Mechanism gate for provider-supplied devices. Every tool that speaks CDP
+     * to the app's JS runtime (the debugger family, the React profiler and the
+     * network inspector via its declared dependency on this service) resolves
+     * this blueprint, so one check here covers them all. A no-op for every
+     * device Argent booted itself.
+     */
+    await assertExternalCapability(JS_RUNTIME_DEBUGGER_NAMESPACE, deviceId, "js-debugger");
 
     const metro = await discoverMetro(port);
     const selected = selectTarget(metro.targets, port, {

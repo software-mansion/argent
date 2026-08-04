@@ -38,6 +38,13 @@ import {
   UnsupportedOperationError,
 } from "./utils/capability";
 import { resolveDevice } from "./utils/device-info";
+import {
+  disposeExternalDeviceServices,
+  externalProviderLabel,
+  externalSupportHint,
+  isExternalId,
+  revalidateExternalDevice,
+} from "./utils/external-devices";
 import { refineTvPlatform } from "./utils/telemetry-platform";
 import type { Server as HttpServer } from "node:http";
 import {
@@ -134,11 +141,21 @@ function extractDeviceArg(data: unknown): string | null {
   return null;
 }
 
-type InvocationMeta = { platform?: TelemetryPlatform } & AiTelemetryProps;
+type InvocationMeta = {
+  /**
+   * Coarse vendor label, which makes adoption and failure rates measurable.
+   * @see {@link externalProviderLabel}
+   */
+  device_provider?: string;
+  platform?: TelemetryPlatform;
+} & AiTelemetryProps;
 // Only coarse platform context is retained for failure telemetry. The raw
 // device id (UDID / serial) is used transiently to infer platform and never
 // stored or forwarded.
-type HttpFailureMeta = { platform?: TelemetryPlatform } & AiTelemetryProps;
+type HttpFailureMeta = {
+  device_provider?: string;
+  platform?: TelemetryPlatform;
+} & AiTelemetryProps;
 
 // `refineTvPlatform` — splitting a TV target out of its coarse mobile platform
 // for telemetry from the warm runtime-kind cache — now lives in
@@ -182,6 +199,9 @@ function extractInvocationMeta(
     const platform = platformFromArgs(data);
     if (platform) meta.platform = platform;
   }
+  const deviceArg = extractDeviceArg(data);
+  const provider = deviceArg ? externalProviderLabel(deviceArg) : undefined;
+  if (provider) meta.device_provider = provider;
   return Object.keys(meta).length > 0 ? meta : null;
 }
 
@@ -213,7 +233,18 @@ function platformFromArgs(data: unknown): TelemetryPlatform | null {
  */
 function deriveChildInvocationMeta(parentMeta: InvocationMeta, childArgs: unknown): InvocationMeta {
   const childPlatform = platformFromArgs(childArgs);
-  return childPlatform ? { ...parentMeta, platform: childPlatform } : parentMeta;
+  const childDeviceArg = extractDeviceArg(childArgs);
+  /**
+   * Re-derived like the platform. A flow can dispatch across several devices,
+   * so inheriting the parent's label would misattribute them.
+   */
+  const childProvider = childDeviceArg ? externalProviderLabel(childDeviceArg) : undefined;
+  if (!childPlatform && !childProvider) return parentMeta;
+  return {
+    ...parentMeta,
+    ...(childProvider ? { device_provider: childProvider } : {}),
+    ...(childPlatform ? { platform: childPlatform } : {}),
+  };
 }
 
 // ── HTTP app ────────────────────────────────────────────────────────
@@ -639,10 +670,12 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       ): void => {
         if (!options?.recordFailure) return;
         const failedDeviceArg = extractDeviceArg(parsedDataForMeta);
+        const provider = failedDeviceArg ? externalProviderLabel(failedDeviceArg) : undefined;
         const platform = inferPlatform(failedDeviceArg);
         options.recordFailure(
           name,
           {
+            ...(provider ? { device_provider: provider } : {}),
             ...(platform ? { platform } : {}),
             ...aiMeta,
           },
@@ -764,6 +797,26 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           );
           res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
           return;
+        }
+      }
+
+      /**
+       * Revocation. Factories re-read the provider's declaration, but the
+       * registry caches the resolved service, so a withdrawn or narrowed
+       * device would keep working through a warm handle. Dropping the cached
+       * services here makes the next resolve re-run the gates against the
+       * current grant. Uncached and synchronous (one small local file read,
+       * like the per-request feature-flag read above) so a change bites on the
+       * next call.
+       */
+      if (deviceArg && isExternalId(deviceArg)) {
+        const { reason, stale } = revalidateExternalDevice(deviceArg);
+
+        if (stale) {
+          await disposeExternalDeviceServices(registry, deviceArg).catch(() => []);
+          process.stderr.write(
+            `[device-providers] dropped cached services for ${deviceArg}: ${reason}\n`
+          );
         }
       }
 
@@ -892,13 +945,23 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           res.json({ data, ...notePayload });
         }
       } catch (err: unknown) {
+        /**
+         * Attribution, applied once here rather than at ~30 throw sites. A
+         * failure on a provider-supplied device names the provider and points
+         * at ITS issue tracker, keeping those reports out of argent's queue.
+         */
+        const attribute = (message: string): string => {
+          if (!deviceArg || !isExternalId(deviceArg)) return message;
+          const hint = externalSupportHint(deviceArg);
+          return hint ? `${message} ${hint}` : message;
+        };
         if (wantsStream) {
-          writeLine({ event: "error", error: streamErrorMessage(err) });
+          writeLine({ event: "error", error: attribute(streamErrorMessage(err)) });
           res.end();
           return;
         }
         if (err instanceof ToolNotFoundError) {
-          res.status(404).json({ error: err.message });
+          res.status(404).json({ error: attribute(err.message) });
           return;
         }
         // Walk the cause chain so a registry ToolExecutionError wrapping
@@ -907,7 +970,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         // global preflight; this is their fall-back surface.
         const depErr = findDependencyMissing(err);
         if (depErr) {
-          res.status(424).json({ error: depErr.message, missing: depErr.missing });
+          res.status(424).json({ error: attribute(depErr.message), missing: depErr.missing });
           return;
         }
         // Unwrap the cause chain: these are thrown from inside execute() / a
@@ -915,7 +978,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         // top-level instanceof would miss them and fall through to a 500.
         const unsupportedErr = findErrorInCauseChain(err, UnsupportedOperationError);
         if (unsupportedErr) {
-          res.status(400).json({ error: unsupportedErr.message });
+          res.status(400).json({ error: attribute(unsupportedErr.message) });
           return;
         }
         // A tool rejecting its arguments (e.g. an unknown named key on any
@@ -935,20 +998,20 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         // http-dep-gate.test.ts, so reordering is a visible, deliberate change.
         const invalidInputErr = findErrorInCauseChain(err, InvalidToolInputError);
         if (invalidInputErr) {
-          res.status(400).json({ error: invalidInputErr.message });
+          res.status(400).json({ error: attribute(invalidInputErr.message) });
           return;
         }
         const notImplementedErr = findErrorInCauseChain(err, NotImplementedOnPlatformError);
         if (notImplementedErr) {
           res.status(501).json({
-            error: notImplementedErr.message,
+            error: attribute(notImplementedErr.message),
             toolId: notImplementedErr.toolId,
             platform: notImplementedErr.platform,
             hint: notImplementedErr.hint,
           });
           return;
         }
-        res.status(500).json({ error: formatErrorForAgent(err) });
+        res.status(500).json({ error: attribute(formatErrorForAgent(err)) });
       } finally {
         if (keepAlive) clearInterval(keepAlive);
         releaseInvocationMeta?.();
