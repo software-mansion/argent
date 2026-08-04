@@ -1937,6 +1937,13 @@ async function execWhenStep(
   // Marker for the block, then the guarded steps inline — same fragment
   // attribution, one level deeper, failures hard-stop as anywhere else.
   pushReport(state, { ...marker, status: "pass", reason: `condition met (${label})` });
+  // The guard HELD, so its (non-hidden) selector was present — evidence for a
+  // later `hidden` check, exactly as an inline `assert: { visible }` would be.
+  if (step.condition.kind === "ui" && step.condition.condition !== "hidden") {
+    for (const term of selectorIdentityTerms(step.condition.selector)) {
+      state.establishedSelectors.add(term);
+    }
+  }
   await execSteps(state, step.steps, inner);
 }
 

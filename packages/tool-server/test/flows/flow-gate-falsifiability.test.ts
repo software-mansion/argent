@@ -124,6 +124,27 @@ steps:
     expect(r.steps.at(-1)!.warning).toBeUndefined();
   });
 
+  it("says nothing when an entered `when:` guard established the selector", async () => {
+    // A guard that HELD (visible Sheet) is proof Sheet was present, exactly as
+    // an inline `visible` would be — so the later `hidden` inside the block is
+    // falsifiable, not vacuous.
+    let call = 0;
+    currentTree = () => (call++ < 3 ? screen(["Compose", "Sheet"]) : screen(["Compose"]));
+    await writeFlow(
+      "guarded",
+      `executionPrerequisite: ""
+steps:
+  - when: { visible: "Sheet" }
+    steps:
+      - await: { hidden: "Sheet", timeout: 300 }
+`
+    );
+    const r = await run("guarded");
+    expect(r.ok).toBe(true);
+    expect(r.steps.at(-1)!.status).toBe("pass");
+    expect(r.steps.at(-1)!.warning).toBeUndefined();
+  });
+
   it("says nothing when the selector is scoped and the match sits outside the scope", async () => {
     // The scope is doing real work: "Saved" is on screen, just not in the
     // container, so this check would fail the moment a toast appeared there.

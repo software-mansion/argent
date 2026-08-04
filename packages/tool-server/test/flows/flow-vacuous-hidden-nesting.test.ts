@@ -71,11 +71,70 @@ describe("vacuousHiddenSelectors", () => {
     ).toEqual([SELECTOR]);
   });
 
+  it("clears a nested hidden that an earlier nested wait established — a self-contained proof", () => {
+    // `[visible Sheet, tap, hidden Sheet]` in one sequence proves Sheet went
+    // away: the earlier `visible` is the evidence, so the `hidden` is NOT
+    // vacuous even though its own poll window never saw Sheet.
+    const sheet = { text: "Sheet" };
+    expect(
+      vacuousHiddenSelectors(
+        "run-sequence",
+        {
+          completed: 3,
+          total: 3,
+          steps: [
+            { tool: "await-ui-element", result: { success: true, elapsed: 10 } },
+            { tool: "gesture-tap", result: { tapped: true } },
+            { tool: "await-ui-element", result: vacuousResult },
+          ],
+        },
+        {
+          udid: "emulator-5554",
+          steps: [
+            { tool: "await-ui-element", args: { condition: "visible", selector: sheet } },
+            { tool: "gesture-tap", args: { x: 0.5, y: 0.5 } },
+            { tool: "await-ui-element", args: { condition: "hidden", selector: sheet } },
+          ],
+        }
+      )
+    ).toEqual([]);
+  });
+
+  it("does not let a FAILED earlier wait establish the selector", () => {
+    // The earlier `visible` did not succeed, so it proves nothing — the later
+    // hidden on the same selector stays vacuous.
+    const sheet = { text: "Sheet" };
+    expect(
+      vacuousHiddenSelectors(
+        "run-sequence",
+        {
+          completed: 2,
+          total: 2,
+          steps: [
+            { tool: "await-ui-element", result: { success: false, elapsed: 300 } },
+            { tool: "await-ui-element", result: vacuousResult },
+          ],
+        },
+        {
+          udid: "emulator-5554",
+          steps: [
+            { tool: "await-ui-element", args: { condition: "visible", selector: sheet } },
+            { tool: "await-ui-element", args: { condition: "hidden", selector: sheet } },
+          ],
+        }
+      )
+    ).toEqual([sheet]);
+  });
+
   it("stays silent for a wait that genuinely saw its element", () => {
     expect(
       vacuousHiddenSelectors(
         "run-sequence",
-        { completed: 1, total: 1, steps: [{ tool: "await-ui-element", result: { success: true } }] },
+        {
+          completed: 1,
+          total: 1,
+          steps: [{ tool: "await-ui-element", result: { success: true } }],
+        },
         { steps: [{ tool: "await-ui-element", args: { condition: "hidden", selector: SELECTOR } }] }
       )
     ).toEqual([]);

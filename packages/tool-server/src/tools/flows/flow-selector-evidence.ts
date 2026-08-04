@@ -55,6 +55,16 @@ export function establishedTerms(step: FlowStep): string[] {
     case "assert":
       // A prior `hidden` check proves absence, never presence.
       return step.condition === "hidden" ? [] : selectorIdentityTerms(step.selector);
+    case "pinch":
+    case "rotate":
+      // A pinch/rotate resolves its target through `waitForFrame` and FAILS if
+      // the element is not on screen, so a passing one proves the selector
+      // present. The selector is optional (a coordinate gesture has none).
+      return selectorIdentityTerms(step.selector);
+    case "snapshot":
+      // A `cropOn` snapshot hard-fails on a missing crop element, so a passing
+      // one proves it present. A full-screen snapshot has no selector.
+      return selectorIdentityTerms(step.cropOn);
     case "tool": {
       if (step.name !== AWAIT_UI_ELEMENT_TOOL_ID) return [];
       const args = step.args as { condition?: unknown; selector?: unknown };
@@ -78,7 +88,15 @@ export function selectorEstablishedInSteps(steps: FlowStep[], selector: unknown)
   const walk = (list: FlowStep[]): void => {
     for (const step of list) {
       for (const term of establishedTerms(step)) seen.add(term);
-      if (step.kind === "when") walk(step.steps);
+      if (step.kind === "when") {
+        // A guard that had to HOLD for the block to run proved its selector
+        // present too (unless it proves ABSENCE) — the same evidence an inline
+        // `visible` check inside the block would carry.
+        if (step.condition.kind === "ui" && step.condition.condition !== "hidden") {
+          for (const term of selectorIdentityTerms(step.condition.selector)) seen.add(term);
+        }
+        walk(step.steps);
+      }
     }
   };
   walk(steps);
