@@ -255,7 +255,10 @@ export function foldText(value: string): string {
  */
 export function compatibilityVariantOf(actual: string, expected: string): boolean {
   if (foldText(actual) === foldText(expected)) return false;
-  const compat = (s: string): string => foldText(s.normalize("NFKD").normalize("NFKC"));
+  // NFKC is itself NFKD followed by canonical composition, so the leading NFKD
+  // is redundant — `s.normalize("NFKD").normalize("NFKC")` equals
+  // `s.normalize("NFKC")` for every codepoint.
+  const compat = (s: string): string => foldText(s.normalize("NFKC"));
   return compat(actual) === compat(expected);
 }
 
@@ -309,7 +312,15 @@ export function includesCI(haystack: string | undefined, needle: string): boolea
 }
 
 export function equalsCI(actual: string | undefined, expected: string): boolean {
-  return foldText(actual ?? "") === foldText(expected);
+  // Same rule as includesCI/identifierMatches: an expected that folds away to
+  // nothing is NO constraint, not an exact one, so it must not equal a textless
+  // element. Without this, `equalsCI("", " ")` is true — a `text`/`equals`
+  // check whose expected is whitespace- or invisible-only (a bare `" "`, a
+  // bidi pair, a ZWSP that survived a copy-paste) passed against every element
+  // with no text: the silently-wrong green this module rates worse than a flake.
+  const wanted = foldText(expected);
+  if (wanted === "") return false;
+  return foldText(actual ?? "") === wanted;
 }
 
 /**

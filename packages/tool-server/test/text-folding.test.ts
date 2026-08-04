@@ -189,8 +189,22 @@ describe("a needle that folds away to nothing", () => {
     expect(identifierMatches("com.example.app:id/save-button", needle)).toBe(false);
   });
 
+  it.each(BLANK_NEEDLES)("equalsCI(_, %j) equals nothing — not even a textless node", (needle) => {
+    // Same guard, extended to the exact comparator: an expected that folds
+    // away is NO constraint, so a `text`/`equals` check against a textless
+    // element (whose folded text is "") must NOT pass. Without the guard
+    // `equalsCI("", " ") === true` — a silently-passing assertion.
+    expect(equalsCI("", needle)).toBe(false);
+    expect(equalsCI(undefined, needle)).toBe(false);
+    expect(equalsCI("Button", needle)).toBe(false);
+  });
+
   it("still matches a real value, so the guard is not over-broad", () => {
     expect(includesCI("Button", "butt")).toBe(true);
     expect(identifierMatches("com.example.app:id/save-button", "save-button")).toBe(true);
+    expect(equalsCI("Save", "save")).toBe(true);
+    // A bidi-wrapped label still equals its plain form — the guard rejects only
+    // an expected that folds to EMPTY, never a real one.
+    expect(equalsCI("‪@bsky.app‬", "@bsky.app")).toBe(true);
   });
 });

@@ -351,3 +351,92 @@ describe("dark-tail diagnostics (non-hidden conditions)", () => {
     );
   });
 });
+
+describe("compatibility miss note is scoped to a MISS", () => {
+  // A fullwidth "＠bsky.app" is a compatibility variant of "@bsky.app" (NFKC
+  // folds ＠→@) but is deliberately NOT folded together, so a selector for the
+  // plain form never matches it. The note names it only where naming it helps.
+
+  it("does not append backwards 'copy the rendered characters' advice to a hidden failure", async () => {
+    // `hidden` fails because the PLAIN handle is still on screen. Telling the
+    // author to copy the rendered characters of a fullwidth look-alike is
+    // backwards for an assertion that wants the element GONE.
+    currentFetch = () => ({
+      tree: screen([
+        n({ label: "‪@bsky.app‬", frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 } }),
+        n({ label: "＠bsky.app", frame: { x: 0.1, y: 0.2, width: 0.5, height: 0.05 } }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("hidden-compat", {
+      executionPrerequisite: "",
+      steps: [{ kind: "assert", condition: "hidden", selector: { text: "@bsky.app" } }],
+    });
+
+    const result = await run("hidden-compat");
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/still visible/);
+    expect(result.steps[0].reason).not.toMatch(/typographic variant/);
+    expect(result.steps[0].reason).not.toMatch(/Copy the characters/);
+  });
+
+  it("does not append the note to a regex `matches` failure (wanted is a pattern, not text)", async () => {
+    // The element renders a single "…"; the pattern uses three dots. The note
+    // would compare the pattern's code points to the rendered label, which has
+    // nothing to do with why the regex failed — the same exemption the
+    // confusable note draws.
+    currentFetch = () => ({
+      tree: screen([
+        n({
+          identifier: "lbl",
+          label: "Add more languages…",
+          frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.05 },
+        }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("matches-compat", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "assert",
+          condition: "text",
+          selector: { identifier: "lbl" },
+          expectedText: "Add more languages...",
+          textMatch: "matches",
+        },
+      ],
+    });
+
+    const result = await run("matches-compat");
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/but its text was/);
+    expect(result.steps[0].reason).not.toMatch(/typographic variant/);
+  });
+
+  it("still fires the note on a genuine miss (visible), so the guard is not over-broad", async () => {
+    // The intended case: a selector typed with three dots misses a label the app
+    // renders with one "…". Naming it turns an unexplainable miss into a fix.
+    currentFetch = () => ({
+      tree: screen([
+        n({ label: "Add more languages…", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.05 } }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("visible-compat", {
+      executionPrerequisite: "",
+      steps: [{ kind: "assert", condition: "visible", selector: { text: "Add more languages..." } }],
+    });
+
+    const result = await run("visible-compat");
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/typographic variant/);
+    expect(result.steps[0].reason).toMatch(/Add more languages…/);
+  });
+});
