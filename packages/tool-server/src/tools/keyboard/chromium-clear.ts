@@ -34,6 +34,25 @@
  * treats an unconfirmable focus (`flow-actions.ts` `waitForFocus`). Refusing
  * there would break clears that work today for the sake of a check that is
  * merely blind.
+ *
+ * What it still cannot see, all measured on Chrome 150 and all erring toward a
+ * silent success rather than a false failure:
+ *
+ *   - a page that reacts LATER than the settle. A field restoring its value
+ *     120ms after being emptied reads as empty and reports a clean replacement.
+ *   - a split where the page also LENGTHENS the value. The corroboration is
+ *     "the target holds fewer characters than were dispatched", so a
+ *     format-as-you-type field that turns `50` into `$5.00` while sending the
+ *     `0` elsewhere passes the count test.
+ *   - residue rendered without an element the count recognises — an `<a>` drawn
+ *     entirely by a CSS `background-image`. Widening `countEmbeds` far enough to
+ *     catch it would start counting the structural leftovers of a genuinely
+ *     empty editor, which fails clears that worked.
+ *
+ * The converse — a page that SHORTENS what it receives (stripping separators,
+ * trimming, `maxlength`) and moves focus while the characters go out — is
+ * indistinguishable from a real split, and is reported. See the guard in
+ * `platforms/chromium.ts` for why that direction is the deliberate one.
  */
 import { randomUUID } from "node:crypto";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
@@ -57,6 +76,45 @@ export function newTargetHandle(): string {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Page-side helper, inlined into both probes: how much content the element
+ * holds that `textContent` cannot see.
+ *
+ * A non-form target is measured by `textContent`, so anything carrying no text
+ * node — an `<img>`, a `<video>`/`<canvas>`/`<svg>`, an `<hr>`, an
+ * attachment chip, a table — measures 0 and a clear that emptied nothing reports
+ * success (measured on Chrome 150: an `<img>`-only editor returned
+ * `cleared: true` with the image untouched, 7/7).
+ *
+ * Two families count, and neither is a structural leftover. The tag list is
+ * embedded/replaced content. `contenteditable="false"` is how every rich-text
+ * editor marks an ATOMIC embed — a mention pill, an attachment chip, a
+ * CSS-rendered token — which is exactly the content that survives a cancelled
+ * delete while contributing no text. `<br>`, `<div>`, `<p>`, `<span>` and
+ * `<font>` are deliberately absent: `<p><br></p>` is the EMPTY state of Blink,
+ * Quill, Lexical and TinyMCE, and counting it would fail every clear that
+ * actually worked.
+ *
+ * The count alone is still not a verdict — see `clearChromiumField`, which fails
+ * only when the same embedded content was present BEFORE the clear and survived
+ * it. An editor that re-inserts a placeholder node once empty (measured 5/5)
+ * would otherwise have its successful clear reported as a failure.
+ */
+const COUNT_EMBEDS_FN = `
+  const EMBED_TAGS = "img,video,audio,canvas,svg,embed,object,iframe,hr,input,select," +
+    "textarea,button,picture,math,table";
+  const countEmbeds = (node, isFormControl) => {
+    // A <textarea>'s child nodes are its DEFAULT value and never track \`value\`,
+    // so counting them would report a cleared field as still full.
+    if (isFormControl || !node || !node.querySelectorAll) return 0;
+    try {
+      const seen = node.querySelectorAll(EMBED_TAGS + ",[contenteditable=false]");
+      return seen.length;
+    } catch (e) {
+      return 0;
+    }
+  };`;
 
 /**
  * Resolves the editable element that holds focus — across shadow roots and
@@ -98,6 +156,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // returns and every verdict it computes would otherwise rest on a manual
 // browser session alone.
 export const focusedEditableProbe = (handle: string) => `(() => {
+  ${COUNT_EMBEDS_FN}
   // What a user pressing "select all" on THIS machine would send, so the page
   // sees the real chord. Read from the renderer, not the tool-server host — CDP
   // reaches remote renderers through a forwarded local port. Resolved OUTSIDE
@@ -180,6 +239,9 @@ export const focusedEditableProbe = (handle: string) => `(() => {
       window[${JSON.stringify(handle)}] = el;
       return JSON.stringify({
         verdict: "editable", label, mac, parked: window[${JSON.stringify(handle)}] === el,
+        // The BEFORE count, so the verdict can tell content that SURVIVED the
+        // clear from an empty-state placeholder the page inserts once emptied.
+        nodes: countEmbeds(el, false),
       });
     }
     // Anything else is refused, INCLUDING a custom element whose shadow root is
@@ -200,7 +262,15 @@ export const focusedEditableProbe = (handle: string) => `(() => {
  * Re-reads the element the probe parked. Releases it unless `keep` is set.
  *
  * `tracked: false` means the element is gone — the page navigated, or the probe
- * never parked one — which is not evidence either way.
+ * never parked one — which is not evidence either way. It is also what a page
+ * that REPLACES the field on edit produces (the React remount pattern), and
+ * there the blindness is total: nothing below runs, so a `{ clear, text }` whose
+ * characters went nowhere still returns `cleared: true`. Measured on Chrome 150
+ * against a field cloned on every `input` — 4/4 reported a clean replacement
+ * with the text absent from the document. Detecting it would mean guessing which
+ * node replaced the old one, and guessing wrong is the over-eager-guard failure
+ * the focus checks below were narrowed to avoid, so this stays best-effort and
+ * `cleared`'s own doc (../types.ts) says so.
  *
  * `focused` answers a second question the caller needs: does the element still
  * hold focus? Clearing routinely moves it — a field that blurs once empty, an
@@ -211,36 +281,94 @@ export const focusedEditableProbe = (handle: string) => `(() => {
  * expose `activeElement`, and it is scoped to the tree the element actually
  * lives in.
  *
+ * That test alone is not enough for one shape this file went out of its way to
+ * support: a `<body contenteditable>` editing host (TinyMCE's default iframe
+ * mode, CKEditor 4 classic, `document.designMode`). `Document.activeElement`
+ * falls back to that document's `body` whenever nothing in the document holds
+ * focus, so `active === el` is CONSTANT TRUE there — measured on Chrome 150,
+ * with focus moved to a top-level input, the probe still reported
+ * `focused: true` while `innerDoc.hasFocus()` had gone false, and a
+ * `{ clear, text }` that emptied the editor and typed into the sidebar came back
+ * as a clean replacement. So the containment chain is walked as well: at every
+ * level the node must be its own root's `activeElement`, and the walk steps out
+ * through `getRootNode()` — a shadow host, then the frame holding the document —
+ * until it reaches the top or a container it cannot see past. `hasFocus()` is
+ * deliberately NOT the test: it is false for the whole page whenever the browser
+ * window is unfocused, which a CDP-driven browser routinely is, and that would
+ * fail every clear.
+ *
  * `activeElement` is read through the prototype accessor of whichever root came
  * back, for the same reason `focusedEditableProbe` does it: on a document it is
  * a `[LegacyOverrideBuiltIns]` named getter, so `<iframe name="activeElement">`
  * makes the raw read return that frame's `Window` and every successful clear
  * report that the field lost focus.
  *
+ * `nodes` counts residue a text measurement cannot see. On a non-form target the
+ * value read is `textContent`, so content carrying no text node — an `<img>`, a
+ * `<video>`/`<canvas>`/`<svg>`, an `<hr>` — measures 0 and a clear that emptied
+ * nothing reports success. Measured on Chrome 150: two contenteditables on one
+ * page cancelling the same `beforeinput`, the one holding text refused (7/7) and
+ * the one holding a single `<img>` returned `cleared: true` with the image
+ * untouched. The tag list is embedded/replaced content only — never a structural
+ * leftover like the `<br>`, `<div>` or `<p>` Blink and every rich-text editor
+ * leave behind in a genuinely empty field.
+ *
  * `keep: true` leaves the element parked so the caller can ask again after it
  * has typed — the reason `releaseTargetProbe` exists.
  */
 // Exported for test/keyboard-clear-probe.test.ts — see focusedEditableProbe.
 export const clearedTargetProbe = (handle: string, keep = false) => `(() => {
+  ${COUNT_EMBEDS_FN}
   try {
     const el = window[${JSON.stringify(handle)}];
     ${keep ? "" : `delete window[${JSON.stringify(handle)}];`}
     if (!el) return JSON.stringify({ tracked: false });
     let focused = false;
     try {
-      const root = el.getRootNode ? el.getRootNode() : null;
-      // Walk the prototype CHAIN, not just the immediate one: on an HTML
-      // document the own prototype is HTMLDocument.prototype while
+      // \`activeElement\` of a root or document, read through the prototype
+      // accessor. Walk the prototype CHAIN, not just the immediate one: on an
+      // HTML document the own prototype is HTMLDocument.prototype while
       // \`activeElement\` is declared on Document.prototype above it, so a
       // one-level lookup finds nothing and falls back to the shadowed read.
-      let activeOf;
-      for (let proto = root && Object.getPrototypeOf(root); proto; ) {
-        const d = Object.getOwnPropertyDescriptor(proto, "activeElement");
-        if (d && d.get) { activeOf = d.get; break; }
-        proto = Object.getPrototypeOf(proto);
+      const activeIn = (node) => {
+        let activeOf;
+        for (let proto = node && Object.getPrototypeOf(node); proto; ) {
+          const d = Object.getOwnPropertyDescriptor(proto, "activeElement");
+          if (d && d.get) { activeOf = d.get; break; }
+          proto = Object.getPrototypeOf(proto);
+        }
+        return node ? (activeOf ? activeOf.call(node) : node.activeElement) : null;
+      };
+      // Climb out of every tree the element sits in, requiring at each level
+      // that the node is its OWN root's \`activeElement\`, then stepping up to
+      // whatever contains that root — a shadow host, or the frame holding the
+      // document. The local read alone is not enough: a body editing host is its
+      // document's \`activeElement\` even when focus left that document entirely.
+      //
+      // Stepping up through \`getRootNode()\` rather than \`ownerDocument\` is what
+      // makes the shadow case right. \`ownerDocument\` is NOT retargeted, so an
+      // \`<iframe>\` inside an open shadow root reports the TOP document, while
+      // that document's \`activeElement\` retargets to the shadow HOST — the frame
+      // and the active element then never match, and a field that never lost
+      // focus is reported as blurred.
+      let node = el;
+      focused = true;
+      for (let hop = 0; hop < 32; hop++) {
+        const root = node.getRootNode ? node.getRootNode() : null;
+        if (activeIn(root) !== node) { focused = false; break; }
+        // A shadow root: the next question is whether its host holds focus.
+        if (root.host) { node = root.host; continue; }
+        // A document: step out to the frame containing it, if any. A
+        // cross-origin container reports \`frameElement\` as null (and a document
+        // with no browsing context has no \`defaultView\`), which is "can't tell"
+        // — stop and keep the verdict the levels below already established
+        // rather than inventing a loss. The \`try\` is belt and braces for an
+        // engine that throws instead.
+        let frame = null;
+        try { frame = root.defaultView && root.defaultView.frameElement; } catch (e) { break; }
+        if (!frame) break;
+        node = frame;
       }
-      const active = root ? (activeOf ? activeOf.call(root) : root.activeElement) : null;
-      focused = active === el;
     } catch (e) { focused = false; }
     // A page that replaces the field on edit (the React remount pattern) leaves
     // this node detached and holding its OLD value forever, while the live field
@@ -251,9 +379,11 @@ export const clearedTargetProbe = (handle: string, keep = false) => `(() => {
     const form = tag === "INPUT" || tag === "TEXTAREA";
     const bad = form && !!(el.validity && el.validity.badInput);
     const value = form ? (el.value || "") : (el.textContent || "");
+    const nodes = countEmbeds(el, form);
     return JSON.stringify({
       tracked: true,
       focused,
+      nodes,
       secret: (el.type || "") === "password",
       length: bad ? Math.max(1, value.length) : value.length,
     });
@@ -270,6 +400,8 @@ export interface FocusedEditable {
   secret?: boolean;
   /** False when the page refused the slot assignment — then nothing was parked. */
   parked?: boolean;
+  /** Embedded content held BEFORE the clear — see `countEmbeds`. */
+  nodes?: number;
 }
 
 export interface ClearedTarget {
@@ -278,6 +410,8 @@ export interface ClearedTarget {
   focused?: boolean;
   secret?: boolean;
   length?: number;
+  /** Embedded content (an image, a video, an `<hr>`) `textContent` cannot see. */
+  nodes?: number;
 }
 
 /**
@@ -291,6 +425,25 @@ export interface ClearOutcome {
   /** The element label the probe reported, for the caller's error message. */
   label?: string;
 }
+
+/**
+ * How long to let the page react before measuring the cleared field.
+ *
+ * A module constant, NOT the caller's `delayMs`. `delayMs` is documented as
+ * typing cadence ("Delay in ms between key presses"), and spending it here made
+ * it the width of a correctness window as well: measured on Chrome 150 against a
+ * field that moves focus 5ms after becoming empty, `{ clear, text: "hi" }` at
+ * the default 50 refused cleanly and left the page untouched 4/4, while the same
+ * call with `delayMs: 0` wrote text outside the target field in 8 of 11 runs —
+ * splitting it across two fields, or landing the whole value in the neighbour.
+ * `delayMs: 0` is what this PR's own Chromium tests pass throughout.
+ *
+ * 50ms is the `delayMs` default, and the window the settle was measured at
+ * (5/5 catching a blur at 10-40ms). A caller asking for a LONGER cadence still
+ * gets it — a slow page is the one case where more settle can only help — so the
+ * value used is the larger of the two.
+ */
+const CLEAR_SETTLE_MS = 50;
 
 /**
  * Re-read the parked element's focus and release it, in one round trip.
@@ -358,8 +511,9 @@ const CDP_MODIFIER_META = 4;
 export async function clearChromiumField(
   api: ChromiumCdpApi,
   handle: string,
-  settleMs: number
+  delayMs: number
 ): Promise<ClearOutcome> {
+  const settleMs = Math.max(delayMs, CLEAR_SETTLE_MS);
   const before = await readFocusedEditable(api, handle);
   if (before.verdict === "none" || before.verdict === "not-editable") {
     // Well-formed request against a page that cannot serve it — a 400, the same
@@ -441,9 +595,29 @@ export async function clearChromiumField(
   // second is exactly what an app cancelling the chord produces.
   if (!after?.tracked) return { label: before.label };
   const remaining = after.length ?? 0;
-  if (remaining === 0) return { keptFocus: after.focused === true, label: before.label };
+  // Embedded content counts as residue only when it was ALREADY there and
+  // survived. An editor that re-inserts a placeholder node once it becomes empty
+  // — an icon-only `<span contenteditable="false">`, the common composer
+  // pattern — goes from 0 embeds to 1 across a clear that worked perfectly, and
+  // measured 5/5 as a hard failure telling the caller the field "was NOT
+  // emptied". Requiring the count to have been non-zero BEFORE, and not to have
+  // fallen, keeps the case this check exists for (an `<img>`-only editor whose
+  // delete the page cancelled: 1 before, 1 after) while letting the empty-state
+  // placeholder through.
+  const embedsBefore = before.nodes ?? 0;
+  const residualNodes = embedsBefore > 0 && (after.nodes ?? 0) >= embedsBefore ? after.nodes! : 0;
+  if (remaining === 0 && residualNodes === 0) {
+    return { keptFocus: after.focused === true, label: before.label };
+  }
 
-  const held = after.secret || before.secret ? "its contents" : `${remaining} character(s)`;
+  const held =
+    after.secret || before.secret
+      ? "its contents"
+      : remaining > 0
+        ? `${remaining} character(s)`
+        : // Embedded content only: no text survived, but an image / video /
+          // `<hr>` did, and `textContent` cannot see it.
+          `${residualNodes} embedded element(s) (an image, a video or similar)`;
   throw new FailureError(
     `keyboard clear: ${before.label ?? "the field"} still holds ${held} ` +
       `after the select-all + delete. The page most likely cancelled the key or the ` +

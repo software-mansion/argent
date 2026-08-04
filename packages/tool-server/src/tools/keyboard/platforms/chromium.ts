@@ -81,8 +81,11 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
 
   try {
     if (handle) {
-      // `delay` is spent INSIDE the clear, between the key dispatch and the
-      // read-back, so the focus answer is the last thing before the loop below.
+      // The clear settles between its key dispatch and its read-back, so the
+      // focus answer is the last thing before the loop below. `delay` is passed
+      // only as a FLOOR on that settle — a caller asking for a slower cadence
+      // gets a longer wait, but a fast one cannot shrink the window the verdict
+      // rests on (see CLEAR_SETTLE_MS).
       const outcome = await clearChromiumField(api, handle, delay);
       clearedLabel = outcome.label;
       // Emptying a field routinely moves focus off it — a field that blurs once
@@ -102,9 +105,10 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
         throw new FailureError(
           `keyboard: ${outcome.label ?? "the field"} was emptied, but it no longer holds focus ` +
             `afterwards — the page moved focus in response to the clear (a field that blurs when ` +
-            `empty, or an app that advances to the next input). Nothing was typed, because the ` +
-            `keys would have gone to whatever holds focus now rather than to that field. Tap the ` +
-            `field again and type without \`clear\` — it is already empty.`,
+            `empty, or an app that advances to the next input). Nothing was typed and no key was ` +
+            `pressed, because either would have gone to whatever holds focus now rather than to ` +
+            `that field. Tap the field again and send the rest of the request without \`clear\` — ` +
+            `the field is already empty.`,
           {
             error_code: FAILURE_CODES.KEYBOARD_CLEAR_INEFFECTIVE,
             failure_stage: "keyboard_clear_focus_lost_chromium",
@@ -159,14 +163,53 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
     // `er@example.comOTHER-FIELD` in its neighbour, reported as a clean
     // replacement. Asking the same parked element again is what turns that into
     // a failure the caller can see; it also releases the element.
-    if (handle && typing) {
+    //
+    // Focus loss ALONE is not that evidence, and treating it as such made this
+    // fire on requests where every character landed where it was asked to.
+    // Measured on Chrome 150, all reproduced 4-5/5:
+    //
+    //   - `{ clear, text }` on a field that advances focus once its value is
+    //     complete (the OTP / card-number pattern) — the whole value in the
+    //     target, the neighbour empty, and a "split across fields" 500;
+    //   - `{ clear, key: "tab" }` — Tab moves focus BY DEFINITION and dispatches
+    //     no character at all, so this combination could never succeed;
+    //   - `{ clear, key: "enter" }` on a search box that blurs on submit — the
+    //     ordinary "replace the query and submit" shape.
+    //
+    // So the check is narrowed on both axes. A named `key` is excluded outright:
+    // one key event cannot be split across two fields, and for `tab`/`enter` the
+    // focus move IS the requested effect. And for characters, focus loss has to
+    // be corroborated by the target not holding what was typed — after a clear it
+    // should hold exactly those characters, so FEWER means the rest went
+    // somewhere else.
+    //
+    // Strictly fewer, so a page that LENGTHENS what it receives — an input mask
+    // inserting separators, an autocompleter — is not read as a split. A page
+    // that SHORTENS it is not covered and cannot be: a field that strips
+    // characters (`value.replace(/\D/g, "")`), trims whitespace, or truncates at
+    // `maxlength`, AND moves focus while the characters are going out, is
+    // indistinguishable here from a genuine split — both leave the target
+    // holding fewer characters than were dispatched. The message therefore
+    // reports what was OBSERVED and names the benign reading, rather than
+    // asserting a split as fact; erring toward the report is deliberate, since
+    // the alternative is the silent half-written field this parameter exists to
+    // prevent (measured on Chrome 150: 8 of 11 runs wrote text outside the
+    // target field).
+    if (handle && descs.length > 0) {
       const after = await releaseTarget();
-      if (after?.tracked && after.focused === false) {
+      const landed = after?.length ?? 0;
+      if (after?.tracked && after.focused === false && landed < descs.length) {
+        // A password field's length is credential material, so the counts are
+        // reported only for a field that is not one.
+        const missing = after.secret
+          ? `not all of the text is in it`
+          : `only ${landed} of the ${descs.length} character(s) are in it`;
         throw new FailureError(
-          `keyboard: the page moved focus away from ${clearedLabel ?? "the field"} while the text was being ` +
-            `typed, so the value is split across fields — part of it landed somewhere other than ` +
-            `the field that was cleared. Re-read the screen before continuing; do not treat this ` +
-            `call as a replacement.`,
+          `keyboard: the page moved focus away from ${clearedLabel ?? "the field"} while the text ` +
+            `was being typed, and ${missing} — so the rest of the value most likely landed ` +
+            `wherever focus went. (The other reading: a field that strips or truncates what it ` +
+            `receives holds a shorter value legitimately.) Either way this was not a clean ` +
+            `replacement — re-read the screen before continuing.`,
           {
             error_code: FAILURE_CODES.KEYBOARD_CLEAR_INEFFECTIVE,
             failure_stage: "keyboard_clear_focus_lost_typing_chromium",
