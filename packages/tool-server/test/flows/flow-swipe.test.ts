@@ -54,6 +54,8 @@ describe("swipe: parse/serialize", () => {
           to: { selector: { identifier: "archive" } },
         },
         { kind: "swipe" as const, from: { x: 0.9, y: 0.5 }, to: { x: 0.1, y: 0.5 }, duration: 800 },
+        // 150 is the exact tap/swipe floor on the time axis — must round-trip clean.
+        { kind: "swipe" as const, direction: "up" as const, duration: 150 },
       ],
     };
     expect(parseFlow(serializeFlow(flow)).steps).toEqual(flow.steps);
@@ -124,6 +126,26 @@ describe("swipe: parse/serialize", () => {
       })
     ).toThrow(/cannot serialize flow swipe\.duration: needs a positive number of milliseconds/i);
   });
+
+  it.each([
+    ["a sub-frame duration", 10],
+    ["a one-move duration", 33],
+    ["one millisecond under the floor", 149],
+  ])(
+    "rejects a programmatic swipe duration of %s as a tap, not a swipe",
+    (_description, duration) => {
+      // Positive but too short to interpolate a recognizable travel: serialize must
+      // reject exactly what parse rejects, or the round-trip breaks.
+      expect(() =>
+        serializeFlow({
+          executionPrerequisite: "",
+          steps: [{ kind: "swipe", direction: "left", duration }],
+        })
+      ).toThrow(
+        /cannot serialize flow swipe\.duration: only \d+ms — below the minimum swipe duration of 150ms.*lands as a tap on the start point/i
+      );
+    }
+  );
 
   it("bare-direction sugar: a direction-only swipe serializes back to the bare string", () => {
     const steps = parseFlow("steps:\n  - swipe: left\n").steps;
@@ -236,6 +258,25 @@ describe("swipe: parse/serialize", () => {
     expect(() => parseFlow("steps:\n  - swipe: { direction: left, duration: 0 }\n")).toThrow(
       /duration needs a positive number/i
     );
+  });
+
+  it.each([
+    ["a sub-frame flick", "10"],
+    ["a fractional millisecond", "0.5"],
+    ["a one-move duration", "33"],
+    ["one millisecond under the floor", "149"],
+  ])("rejects a duration of %s as a tap, not a swipe", (_description, value) => {
+    // Under the floor the dispatch interpolates too few moves for a pan
+    // recognizer, so the gesture would land as a tap on the start point and
+    // still report pass — the time-axis twin of the swipe.by travel floor.
+    expect(() => parseFlow(`steps:\n  - swipe: { direction: left, duration: ${value} }\n`)).toThrow(
+      /swipe\.duration is only \S+ms — below the minimum swipe duration of 150ms.*lands as a tap on the start point/i
+    );
+  });
+
+  it("accepts the exact minimum swipe duration", () => {
+    const steps = parseFlow("steps:\n  - swipe: { direction: left, duration: 150 }\n").steps;
+    expect(steps).toEqual([{ kind: "swipe", direction: "left", duration: 150 }]);
   });
 
   it("normalizes settle: false to absent (round-trip stays inverse)", () => {
