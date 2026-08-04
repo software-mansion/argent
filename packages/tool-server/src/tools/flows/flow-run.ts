@@ -2266,6 +2266,9 @@ async function execLeafStep(
       }
       try {
         const result = await invokeSubTool(registry, ctx, step.name, args);
+        if (signal?.aborted) {
+          return { ...base, status: "skip", tool: step.name, reason: "run aborted during tool" };
+        }
         if (isUnmetUiWaitResult(step.name, result)) {
           const note = (result as { note?: string }).note;
           return {
