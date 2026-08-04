@@ -18,7 +18,7 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
   ),
 }));
 
-import { createRunFlowTool } from "../../src/tools/flows/flow-run";
+import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow, parseFlow, type FlowStep } from "../../src/tools/flows/flow-utils";
 import { createFlowTestHarness, n, screen } from "./harness";
 
@@ -1105,50 +1105,70 @@ describe("swipe: execution", () => {
   });
 });
 
+// The shared harness records tool calls but not tree reads, and never threads an
+// AbortSignal, so the two blocks below run the flow tool directly (mirroring
+// flow-abort.test.ts) with ONE ordered log interleaving the gesture dispatch and
+// every tree read — the ordering is the contract, not merely that a read
+// happened.
+async function runLoggedSwipe(
+  step: FlowStep,
+  hooks: {
+    tree?: () => DescribeNode;
+    onInvoke?: (id: string) => void;
+    signal?: AbortSignal;
+  } = {}
+): Promise<{ result: FlowRunResult; events: string[] }> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-swipe-logged-"));
+  try {
+    const events: string[] = [];
+    currentTree = () => {
+      events.push("tree");
+      return hooks.tree ? hooks.tree() : screen([]);
+    };
+    const flowsDir = path.join(dir, ".argent", "flows");
+    await fs.mkdir(flowsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(flowsDir, "logged.yaml"),
+      serializeFlow({ executionPrerequisite: "", steps: [step] }),
+      "utf8"
+    );
+    const registry = {
+      invokeTool: vi.fn(async (id: string) => {
+        if (id === "list-devices") return { devices: [] };
+        events.push(id);
+        hooks.onInvoke?.(id);
+        return { ok: true };
+      }),
+      getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
+    } as unknown as Registry;
+
+    const result = await createRunFlowTool(registry).execute(
+      {},
+      { name: "logged", project_root: dir, device: DEVICE },
+      { signal: hooks.signal } as never
+    );
+    if (!("steps" in result))
+      throw new Error(`expected a run result, got notice: ${result.notice}`);
+    return { result, events };
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+}
+
 describe("swipe: abort", () => {
-  // The shared harness never threads an AbortSignal, so these tests run the
-  // flow tool directly from their own temp dir, mirroring flow-abort.test.ts:
-  // the selectors never appear and the third tree read trips the abort, landing
+  // The selectors never appear and the third tree read trips the abort, landing
   // it deterministically inside the swipe's target resolution.
   async function runCancelledSwipe(step: FlowStep) {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-swipe-abort-"));
-    try {
-      const controller = new AbortController();
-      let reads = 0;
-      currentTree = () => {
+    const controller = new AbortController();
+    let reads = 0;
+    return runLoggedSwipe(step, {
+      signal: controller.signal,
+      tree: () => {
         reads++;
         if (reads >= 3) controller.abort();
         return screen([n({ label: "Other", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 } })]);
-      };
-      const flowsDir = path.join(dir, ".argent", "flows");
-      await fs.mkdir(flowsDir, { recursive: true });
-      await fs.writeFile(
-        path.join(flowsDir, "cancelled-swipe.yaml"),
-        serializeFlow({ executionPrerequisite: "", steps: [step] }),
-        "utf8"
-      );
-      const calls: string[] = [];
-      const registry = {
-        invokeTool: vi.fn(async (id: string) => {
-          calls.push(id);
-          if (id === "list-devices") return { devices: [] };
-          return { ok: true };
-        }),
-        getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
-      } as unknown as Registry;
-
-      const result = await createRunFlowTool(registry).execute(
-        {},
-        { name: "cancelled-swipe", project_root: dir, device: DEVICE },
-        { signal: controller.signal } as never
-      );
-
-      if (!("steps" in result))
-        throw new Error(`expected a run result, got notice: ${result.notice}`);
-      return { result, calls };
-    } finally {
-      await fs.rm(dir, { recursive: true, force: true });
-    }
+      },
+    });
   }
 
   it.each<[string, FlowStep]>([
@@ -1164,14 +1184,87 @@ describe("swipe: abort", () => {
   ])(
     "reports a swipe cancelled while resolving %s as a skip, not an offscreen failure",
     async (_description, step) => {
-      const { result, calls } = await runCancelledSwipe(step);
+      const { result, events } = await runCancelledSwipe(step);
 
       // A skip with the uniform abort reason — NOT a fail with the misleading
       // "no visible element matched … add a scroll-to step" hint.
       expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["swipe:skip"]);
       expect(result.steps[0].reason).toBe("run aborted");
       expect(result.ok).toBe(false);
-      expect(calls).not.toContain("gesture-swipe");
+      expect(events).not.toContain("gesture-swipe");
     }
   );
+});
+
+describe("swipe: post-dispatch settle", () => {
+  it("waits out the fling after a swipe between two raw points", async () => {
+    const { result, events } = await runLoggedSwipe({
+      kind: "swipe",
+      from: { x: 0.5, y: 0.85 },
+      to: { x: 0.5, y: 0.3 },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["swipe:pass"]);
+    // Neither end is a selector, so nothing else in the step reads the tree:
+    // these reads can only be the post-dispatch settle, and they land AFTER the
+    // gesture. Without them a following point-target step would touch down
+    // mid-deceleration and be swallowed while still reporting pass.
+    expect(events).toEqual(["gesture-swipe", "tree", "tree"]);
+  });
+
+  it("waits out the animation after a settle: true swipe too", async () => {
+    // `settle` zeroes the finger's release velocity — it says nothing about the
+    // app's own animations (a dismissed card, a paging carousel), so the wait is
+    // not conditional on it.
+    const { result, events } = await runLoggedSwipe({
+      kind: "swipe",
+      by: { y: -0.5 },
+      settle: true,
+    });
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["swipe:pass"]);
+    expect(events).toEqual(["gesture-swipe", "tree", "tree"]);
+  });
+
+  it("passes when the tree source dies after the gesture was delivered", async () => {
+    // A sustained outage makes settleTree throw. The device already performed
+    // the swipe, so that must not fail the step retroactively.
+    const { result, events } = await runLoggedSwipe(
+      { kind: "swipe", direction: "up" },
+      {
+        tree: () => {
+          throw new Error("native devtools disconnected");
+        },
+      }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["swipe:pass"]);
+    expect(result.steps[0].reason).toBeUndefined();
+    expect(events[0]).toBe("gesture-swipe");
+    expect(events.slice(1).every((e) => e === "tree")).toBe(true);
+    expect(events.length).toBeGreaterThan(1);
+  }, 15000);
+
+  it("reports a swipe cancelled during its post-dispatch settle as the aborted skip", async () => {
+    const controller = new AbortController();
+    const { result, events } = await runLoggedSwipe(
+      { kind: "swipe", direction: "left" },
+      {
+        signal: controller.signal,
+        // Cancel the run as the gesture is dispatched: the settle that follows
+        // must surface the uniform aborted skip, not a pass.
+        onInvoke: (id) => {
+          if (id === "gesture-swipe") controller.abort();
+        },
+      }
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["swipe:skip"]);
+    expect(result.steps[0].reason).toBe("run aborted");
+    expect(result.ok).toBe(false);
+    // The settle bails on the abort before reading anything.
+    expect(events).toEqual(["gesture-swipe"]);
+  });
 });
