@@ -62,7 +62,18 @@ export function typeSimulatorServer(
   device: DeviceInfo,
   params: KeyboardParams
 ): Promise<KeyboardResult> {
-  return serializePerDevice(device.id, () => runSimulatorServerType(registry, device, params));
+  // Case-folded, because `device.id` is the caller's own string verbatim
+  // (`resolveDevice` classifies an iOS UDID by shape and never canonicalises
+  // it), while the modifier state this serializes lives in the GUEST and is
+  // shared by every spelling. Measured on an iPhone 17 Pro simulator, 7/7: a
+  // `{ text: "w" }` addressed in lowercase ran INSIDE the Left GUI hold of a
+  // `{ clear: true }` addressed in uppercase, and the `w` never reached the
+  // field while the call reported it as typed — the exact corruption this chain
+  // exists to prevent. No two distinct devices can collide under case-folding:
+  // an adb serial and a chromium id are already lower-case, and a UDID is hex.
+  return serializePerDevice(device.id.toLowerCase(), () =>
+    runSimulatorServerType(registry, device, params)
+  );
 }
 
 async function runSimulatorServerType(
@@ -75,21 +86,6 @@ async function runSimulatorServerType(
   const delay = params.delayMs ?? 50;
   let keysPressed = 0;
 
-  // Press `keyCode`, optionally while holding a modifier (shift for a capital,
-  // Left GUI/Command for the select-all in a clear). The modifier is held across
-  // the whole down/up pair so the guest sees a real chord, not two taps.
-  //
-  // The release is in a `finally` because modifier state lives in the GUEST and
-  // a modifier left down stays down, turning every subsequent keystroke into a
-  // chord — a stuck Shift only mis-cases text, a stuck Command runs system
-  // shortcuts (Cmd+H backgrounds the app). The `finally` covers a throw; it does
-  // NOT cover the tool-server process dying between the two writes, which is
-  // what `releaseHeldModifiers` below exists for.
-  //
-  // The hold spans awaits, so a keystroke from a CONCURRENT call would land
-  // inside the chord (measured: `{ text: "w" }` 15ms behind a `{ clear: true }`
-  // reached the guest as Cmd+W and was never typed). That is why the whole run
-  // is serialized per device — see `serializePerDevice`.
   // Release every modifier this backend is capable of holding, before pressing
   // anything. HID `Up` on a key that is not down is a no-op, so this costs two
   // fire-and-forget writes and heals a modifier the guest is still holding from
@@ -107,6 +103,21 @@ async function runSimulatorServerType(
     api.pressKey("Up", LEFT_GUI_KEYCODE);
   };
 
+  // Press `keyCode`, optionally while holding a modifier (shift for a capital,
+  // Left GUI/Command for the select-all in a clear). The modifier is held across
+  // the whole down/up pair so the guest sees a real chord, not two taps.
+  //
+  // The release is in a `finally` because modifier state lives in the GUEST and
+  // a modifier left down stays down, turning every subsequent keystroke into a
+  // chord — a stuck Shift only mis-cases text, a stuck Command runs system
+  // shortcuts (Cmd+H backgrounds the app). The `finally` covers a throw; it does
+  // NOT cover the tool-server process dying between the two writes, which is
+  // what `releaseHeldModifiers` above exists for.
+  //
+  // The hold spans awaits, so a keystroke from a CONCURRENT call would land
+  // inside the chord (measured: `{ text: "w" }` 15ms behind a `{ clear: true }`
+  // reached the guest as Cmd+W and was never typed). That is why the whole run
+  // is serialized per device — see `serializePerDevice`.
   const pressKeyCode = async (keyCode: number, modifierKeyCode?: number) => {
     if (modifierKeyCode !== undefined) {
       api.pressKey("Down", modifierKeyCode);
