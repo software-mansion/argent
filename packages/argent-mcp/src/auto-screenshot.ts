@@ -44,11 +44,11 @@ export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
   "gesture-tap": 1500,
   "gesture-pinch": 1500,
   "gesture-rotate": 1500,
-  // A nested sequence's own steps have already settled by the time it returns,
-  // so this cap is not "time for the sequence to finish" — it only bounds a
-  // screen that never settles at all. At 15 s that cost 15 s of dead wait per
-  // call on any screen with a permanent animation, for a screenshot that was
-  // going to be a blur either way. 3 s is past every real transition.
+  // run-sequence never waits for settle itself (a fixed ~100 ms inter-step gap),
+  // so this bounds the final step's settle. Its steps are gestures/keyboard only
+  // (no launch-app/open-url), which settle within the ~1.5 s their standalone
+  // tools get — 3 s covers them with margin. The old 15 s only added dead wait on
+  // a screen that never settles (a spinner/video), blurred at any cap.
   "run-sequence": 3000,
   "button": 1500,
   "rotate": 1000,

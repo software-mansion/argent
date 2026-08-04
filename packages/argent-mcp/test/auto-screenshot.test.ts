@@ -153,12 +153,22 @@ describe("getAutoScreenshotDelayMs", () => {
     }
   });
 
-  // The cap bounds a screen that NEVER settles, so a generous value buys
-  // nothing but dead wait — and it was doing that once per nested sequence.
-  it("does not let any tool sit in a settle wait for more than a few seconds", () => {
+  // Each configured cap only bounds a screen that never settles, so a generous
+  // value buys nothing but dead wait. This pins the table itself; the effective
+  // runtime delay can still be raised above it via the
+  // ARGENT_AUTO_SCREENSHOT_DELAY_MS floor (covered separately below).
+  it("keeps every configured settle cap in the table at or below 3s", () => {
     for (const [tool, ms] of Object.entries(AUTO_SCREENSHOT_DELAY_MS_BY_TOOL)) {
       expect(ms, `${tool} settle cap`).toBeLessThanOrEqual(3000);
     }
+  });
+
+  // Pin the value this cap is about: run-sequence dropped 15000 -> 3000. The
+  // "returns configured delay" test above is self-referential (expected IS the
+  // map value), so on its own it would not catch a silent drift of this entry.
+  it("caps the run-sequence settle wait at 3s", () => {
+    expect(AUTO_SCREENSHOT_DELAY_MS_BY_TOOL["run-sequence"]).toBe(3000);
+    expect(getAutoScreenshotDelayMs("run-sequence")).toBe(3000);
   });
 
   it("returns default 1400ms for an unknown tool", () => {
