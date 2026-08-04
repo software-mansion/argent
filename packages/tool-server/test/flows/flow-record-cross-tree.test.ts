@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Registry } from "@argent/registry";
+import { ToolNotFoundError, ToolExecutionError } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
 
 // `await-ui-element` evaluates against the ACCESSIBILITY tree; the
@@ -54,7 +55,10 @@ function registryWhereWaitSucceeds(): Registry {
   return {
     invokeTool: vi.fn(async (id: string) => {
       if (id === "await-ui-element") return { success: true, elapsed: 120 };
-      throw new Error(`Tool "${id}" not found`);
+      // The real registry throws `ToolNotFoundError` (not a plain Error) for an
+      // unregistered id — `isToolNotFound` keys on that type, so the mock must
+      // match production for the directive-hint path to be reached.
+      throw new ToolNotFoundError(id);
     }),
     getTool: vi.fn(() => undefined),
   } as unknown as Registry;
@@ -385,10 +389,39 @@ describe("a flow-directive name points at the tool that records it", () => {
     expect(tap).toContain("raw `tool: gesture-tap`");
   });
 
+  it("names flow-execute for `run`, with the sibling-flow rewrite condition", async () => {
+    // `run` is rewritten into a `run:` step only when its target resolves as a
+    // sibling flow; the hint must state that condition (and the delayMs opt-out),
+    // or the author is promised a `run:` step the recorder may decline to write.
+    const msg = (await hint("run")).message;
+    expect(msg).toContain("flow-execute");
+    expect(msg).toContain("rewrites it into the `run:` step");
+    expect(msg).toContain("sibling flow");
+    expect(msg).toContain("delayMs");
+  });
+
   it("lets a genuine tool failure report itself", async () => {
     // "screenshot" is not a directive name, so a not-found for it must surface
     // as the registry's own error rather than being rewritten.
     await expect(hint("screenshot")).rejects.toThrow(/not found/i);
+  });
+
+  it("does not rewrite a REGISTERED tool's own 'not found' failure into a directive hint", async () => {
+    // The identity check in `isToolNotFound`: a tool that RAN and failed with a
+    // message containing "not found" (e.g. "element not found") is a
+    // ToolExecutionError, not a ToolNotFoundError — so even a command sharing a
+    // directive name (`tap`) surfaces its own error rather than the gesture-tap
+    // hint. A message-substring check would have masked it.
+    const registryWhereTapRanAndFailed = {
+      invokeTool: vi.fn(async () => {
+        throw new ToolExecutionError("tap", "element not found");
+      }),
+      getTool: vi.fn(() => undefined),
+    } as unknown as Registry;
+    const tool = createFlowAddStepTool(registryWhereTapRanAndFailed);
+    await expect(
+      tool.execute({}, { name: "hints", project_root: tmpDir, command: "tap", args: "{}" })
+    ).rejects.toThrow(/element not found/);
   });
 
   it("treats a prototype-member command name as a plain not-found, not a table hit", async () => {
@@ -400,5 +433,60 @@ describe("a flow-directive name points at the tool that records it", () => {
       await expect(hint(command), command).rejects.toThrow(/not found/i);
     }
     expect(parseFlow(await onDisk("hints")).steps).toEqual([]);
+  });
+});
+
+// flow-execute now accepts `flow_name` as an alias for `name`. A nested
+// flow-execute recorded via that alias must still be captured as the portable
+// `run: <name>` directive — not kept as a raw, non-portable `tool: flow-execute`
+// step with a false "had no flow name" warning.
+describe("a recorded flow-execute honors the flow_name alias", () => {
+  // A registry whose only registered tool is flow-execute, which succeeds — so
+  // the recorder reaches `captureRunTarget` (which runs only after the sub-tool
+  // returns).
+  const registryWhereRunSucceeds = (): Registry =>
+    ({
+      invokeTool: vi.fn(async (id: string) => {
+        if (id === "flow-execute") return { ok: true };
+        throw new ToolNotFoundError(id);
+      }),
+      getTool: vi.fn(() => undefined),
+    }) as unknown as Registry;
+
+  const recordRun = async (execArgs: Record<string, unknown>) => {
+    const tool = createFlowAddStepTool(registryWhereRunSucceeds());
+    return tool.execute(
+      {},
+      {
+        name: "wrapper",
+        project_root: tmpDir,
+        command: "flow-execute",
+        args: JSON.stringify(execArgs),
+      }
+    );
+  };
+
+  beforeEach(async () => {
+    // `run:` capture resolves the target against the recording's own flows dir,
+    // so the sibling must exist and parse.
+    const dir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "helper.yaml"), "steps:\n  - echo: hi\n");
+    await flowStartRecordingTool.execute({}, { name: "wrapper", project_root: tmpDir });
+  });
+
+  it("captures `run: <name>` when the nested call named the flow via flow_name", async () => {
+    const result = await recordRun({ flow_name: "helper", project_root: tmpDir, device: DEVICE });
+    expect(result.message).not.toContain("had no flow name");
+    const steps = parseFlow(await onDisk("wrapper")).steps;
+    expect(steps).toHaveLength(1);
+    expect(steps[0]).toEqual({ kind: "run", flow: "helper" });
+  });
+
+  it("still captures `run: <name>` for the canonical `name` (no regression)", async () => {
+    await recordRun({ name: "helper", project_root: tmpDir, device: DEVICE });
+    const steps = parseFlow(await onDisk("wrapper")).steps;
+    expect(steps).toHaveLength(1);
+    expect(steps[0]).toEqual({ kind: "run", flow: "helper" });
   });
 });
