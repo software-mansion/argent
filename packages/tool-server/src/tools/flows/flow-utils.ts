@@ -706,6 +706,14 @@ export type FlowStep =
       expectedText?: string;
       textMatch?: TextMatchMode;
     }
+  /**
+   * Screen READINESS: the UI tree has content, and neither it nor the rendered
+   * pixels are still changing. Spelled `await: { idle: true }` — a condition
+   * like any other, but the only one that takes no selector, because stillness
+   * is a property of the whole screen. There is no `assert` form: "has it
+   * stopped moving yet" is inherently a wait.
+   */
+  | { kind: "idle"; timeout?: number; minStableMs?: number }
   | { kind: "wait"; ms: number }
   | { kind: "scroll-to"; target: FlowSelector; direction: ScrollDirection; within?: FlowSelector }
   | { kind: "pinch"; selector?: FlowSelector; scale: number }
@@ -843,6 +851,14 @@ type YamlWaitCondition =
 
 type YamlTextWaitCondition = Extract<YamlWaitCondition, { text: unknown }>;
 
+/**
+ * The one condition that takes no selector. It shares the `await:` key with
+ * {@link YamlWaitCondition} but is deliberately NOT part of that union — a step
+ * body carries either a selector condition or this one, never a mix — so it is
+ * parsed by {@link parseIdleFields} rather than by parseWaitFields.
+ */
+type YamlIdleCondition = { idle: true; minStableMs?: number; timeout?: number };
+
 /** `scroll-to` body: a bare target (scrolls down), or a map with options. */
 type YamlScrollBody =
   | YamlSelector
@@ -867,7 +883,7 @@ type YamlStep =
   | { tap: TapBody }
   | { "long-press": YamlTarget | { on: YamlTarget; duration?: number } }
   | { type: { into: YamlSelector; text: string; submit?: boolean } }
-  | { await: YamlWaitCondition & { timeout?: number } }
+  | { await: (YamlWaitCondition & { timeout?: number }) | YamlIdleCondition }
   | { assert: YamlWaitCondition }
   | { wait: number }
   | { "scroll-to": YamlScrollBody }
@@ -1150,10 +1166,24 @@ function waitToYaml(
   return body;
 }
 
+/**
+ * Sugar an `idle` step back under its `await:` key. Optional fields are emitted
+ * only when set, so the canonical minimal spelling (`await: { idle: true }`)
+ * round-trips unchanged.
+ */
+function idleToYaml(step: Extract<FlowStep, { kind: "idle" }>): YamlStep {
+  const body: YamlIdleCondition = { idle: true };
+  if (step.minStableMs !== undefined) body.minStableMs = step.minStableMs;
+  if (step.timeout !== undefined) body.timeout = step.timeout;
+  return { await: body };
+}
+
 function toYamlStep(step: FlowStep): YamlStep {
   switch (step.kind) {
     case "echo":
       return { echo: step.message };
+    case "idle":
+      return idleToYaml(step);
     case "launch":
       return { launch: step.app };
     case "run":
@@ -1568,18 +1598,22 @@ type WaitFields = {
  * `assert` carrying one is rejected rather than silently ignored.
  */
 function parseWaitFields(raw: unknown, kind: "await" | "assert" | "when"): WaitFields {
+  // What the author is allowed to write, which is NOT the same as what this
+  // function parses: a body naming `idle` is routed to parseIdleFields before
+  // we get here, so this list is only ever read by an author whose body named
+  // no legal condition, or more than one — and omitting `idle` from it left the
+  // one condition they may have been reaching for out of the answer. Only
+  // `await` gains it; `assert` and `when:` genuinely have no readiness form.
+  const legalKeys = kind === "await" ? [...WAIT_CONDITIONS, IDLE_CONDITION] : WAIT_CONDITIONS;
   if (raw === null || typeof raw !== "object") {
-    badEntry({ [kind]: raw }, `${kind} needs a condition (${WAIT_CONDITIONS.join(", ")})`);
+    badEntry({ [kind]: raw }, `${kind} needs a condition (${legalKeys.join(", ")})`);
   }
   const b = raw as Record<string, unknown>;
 
   // The condition is the key; its value is the selector.
   const present = WAIT_CONDITIONS.filter((c) => c in b);
   if (present.length !== 1) {
-    badEntry(
-      { [kind]: b },
-      `${kind} needs exactly one condition key (${WAIT_CONDITIONS.join(", ")})`
-    );
+    badEntry({ [kind]: b }, `${kind} needs exactly one condition key (${legalKeys.join(", ")})`);
   }
   const condition = present[0]!;
 
@@ -1591,16 +1625,7 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert" | "when"): WaitF
         "assert has no timeout — it is an immediate check; use `await` for a timed wait"
       );
     }
-    // Like `wait`, reject non-finite values: YAML `.inf` (or an overflowing
-    // literal like 1e400) parses to Infinity — typeof number and > 0 — which
-    // would make the runner's poll deadline unreachable and the await unbounded.
-    if (typeof b.timeout !== "number" || !Number.isFinite(b.timeout) || b.timeout <= 0) {
-      badEntry(
-        { [kind]: b },
-        "await.timeout needs a positive number of milliseconds (e.g. `timeout: 10000`)"
-      );
-    }
-    timeout = b.timeout as number;
+    timeout = parseAwaitTimeout({ [kind]: b }, b.timeout);
   }
 
   // `await` takes the condition key plus `timeout`; `assert` the condition key
@@ -1656,6 +1681,119 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert" | "when"): WaitF
   }
 
   return { condition, selector: parseSelector(b[condition], `${kind}.${condition}`), timeout };
+}
+
+/**
+ * The one condition key that takes no selector. Its presence in an
+ * `await`/`assert` body routes parsing away from {@link parseWaitFields} — see
+ * {@link parseIdleFields}.
+ */
+const IDLE_CONDITION = "idle";
+
+/**
+ * `idle`'s defaults, spelled here rather than beside the runner because the
+ * parser needs the timeout one: a hold that cannot fit inside the wait is a
+ * gate that fails on every run, and this file rejects unsatisfiable gates.
+ */
+export const IDLE_DEFAULT_TIMEOUT_MS = 7500;
+export const IDLE_DEFAULT_MIN_STABLE_MS = 250;
+
+/**
+ * The `timeout` sibling key an `await` may carry, spelled once for both the
+ * selector conditions and `idle`.
+ *
+ * Non-finite values are rejected alongside non-positive ones: YAML `.inf` (or
+ * an overflowing literal like 1e400) parses to Infinity — typeof number and
+ * > 0 — which would make the runner's poll deadline unreachable and the await
+ * unbounded.
+ */
+function parseAwaitTimeout(entry: unknown, value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    badEntry(
+      entry,
+      "await.timeout needs a positive number of milliseconds (e.g. `timeout: 10000`)"
+    );
+  }
+  return value as number;
+}
+
+/** Bounded non-negative integer option, in milliseconds. */
+function parseBoundedMs(
+  entry: unknown,
+  value: unknown,
+  where: string,
+  max: number,
+  why?: string
+): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > max) {
+    badEntry(
+      entry,
+      `${where} needs an integer between 0 and ${max} (milliseconds)${why ? ` — ${why}` : ""}`
+    );
+  }
+  return value as number;
+}
+
+/**
+ * Parse an `await`/`assert` body carrying the `idle` condition. Returns the
+ * finished step, because unlike the selector conditions it has no selector to
+ * hand back as fields.
+ *
+ * `assert` is rejected outright: waiting is the whole point of the check.
+ */
+function parseIdleFields(raw: Record<string, unknown>, kind: "await" | "assert"): FlowStep {
+  const entry = { [kind]: raw };
+
+  if (kind !== "await") {
+    badEntry(
+      entry,
+      "idle has no assert form — it waits for the screen to stop changing, which is an `await`"
+    );
+  }
+  rejectUnknownKeys(entry, raw, ["idle", "minStableMs", "timeout"], kind);
+
+  // `idle: true` only. A falsey value would spell "assert the screen is NOT
+  // settled", which no flow wants and the runner cannot answer.
+  if (raw.idle !== true) {
+    badEntry(entry, "idle takes only `true` (`await: { idle: true }`)");
+  }
+
+  const step: Extract<FlowStep, { kind: "idle" }> = { kind: "idle" };
+  if ("timeout" in raw) step.timeout = parseAwaitTimeout(entry, raw.timeout);
+  if (raw.minStableMs !== undefined) {
+    // A hold as long as the whole wait can never be observed within it, so the
+    // step would fail on every run — and fail blaming the app, which is the one
+    // thing such a failure is not evidence about. Caught here, deviceless.
+    const timeoutMs = step.timeout ?? IDLE_DEFAULT_TIMEOUT_MS;
+    step.minStableMs = parseBoundedMs(
+      entry,
+      raw.minStableMs,
+      "idle.minStableMs",
+      timeoutMs - 1,
+      `the hold has to fit inside the ${step.timeout === undefined ? "default " : ""}${timeoutMs}ms timeout`
+    );
+  }
+  return step;
+}
+
+/**
+ * Whether an `await`/`assert` body names the `idle` condition rather than an
+ * ordinary selector one. Rejects a body that mixes the two rather than silently
+ * preferring one.
+ */
+function isIdleCondition(raw: unknown, kind: "await" | "assert"): boolean {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return false;
+  const body = raw as Record<string, unknown>;
+  if (!(IDLE_CONDITION in body)) return false;
+  const selectorConditions = WAIT_CONDITIONS.filter((c) => c in body);
+  if (selectorConditions.length > 0) {
+    badEntry(
+      { [kind]: body },
+      `${kind} mixes \`${IDLE_CONDITION}\` with \`${selectorConditions.join("`, `")}\` — a step ` +
+        `checks exactly one condition`
+    );
+  }
+  return true;
 }
 
 /**
@@ -2267,12 +2405,24 @@ function fromYamlStep(raw: YamlStep, whenDepth = 0): FlowStep {
     return step;
   }
 
+  // `await:` / `assert:` carry two families of condition: the selector ones
+  // (visible/hidden/exists/text, matched against the UI tree) and `idle`, which
+  // takes no selector because stillness is a property of the whole screen. The
+  // body's key decides which.
   if ("await" in raw) {
-    return { kind: "await", ...parseWaitFields((raw as { await: unknown }).await, "await") };
+    const body = (raw as { await: unknown }).await;
+    if (isIdleCondition(body, "await")) {
+      return parseIdleFields(body as Record<string, unknown>, "await");
+    }
+    return { kind: "await", ...parseWaitFields(body, "await") };
   }
 
   if ("assert" in raw) {
-    return { kind: "assert", ...parseWaitFields((raw as { assert: unknown }).assert, "assert") };
+    const body = (raw as { assert: unknown }).assert;
+    if (isIdleCondition(body, "assert")) {
+      return parseIdleFields(body as Record<string, unknown>, "assert");
+    }
+    return { kind: "assert", ...parseWaitFields(body, "assert") };
   }
 
   if ("wait" in raw) {

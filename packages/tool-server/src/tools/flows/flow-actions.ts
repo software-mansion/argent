@@ -19,10 +19,11 @@ import {
   type WaitCondition,
   type TextMatchMode,
 } from "../../utils/ui-tree-match";
-import { sleepOrAbort } from "../../utils/timing";
+import { settleWithin, sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree } from "./flow-tree";
+import { capturePixelsWithin, pixelsDiffer, type PixelFrame } from "./flow-pixels";
 import {
   buildAxisCandidate,
   decomposePinch,
@@ -40,6 +41,8 @@ import {
 import {
   describeSelector,
   describeTextExpectation,
+  IDLE_DEFAULT_MIN_STABLE_MS,
+  IDLE_DEFAULT_TIMEOUT_MS,
   SELECTOR_RELATIONS,
   type FlowSelector,
   type FlowStep,
@@ -66,9 +69,16 @@ export interface DirectiveOutcome {
    * blind/degraded tree), or a `hidden` check ended on a blind or failed
    * read after the element had matched. Read by the `when:` guard probe,
    * which must error rather than silently skip a block a broken tree source
-   * can't vouch for; a plain `assert` reports it as an ordinary failure.
+   * can't vouch for; a plain `assert` reports it as an ordinary failure. An
+   * `idle` step is the exception — it has no condition to fall back on, so the
+   * runner scores its indeterminate outcome `error` rather than `fail`.
    */
   indeterminate?: boolean;
+  /**
+   * The step passed, but the WAY it passed weakens it as proof — carried into
+   * the step report so the author is told what the green actually bought.
+   */
+  warning?: string;
 }
 
 /**
@@ -84,10 +94,21 @@ export const ABORTED_OUTCOME: DirectiveOutcome = {
   reason: "run aborted",
 };
 
-/** The selector-acting steps {@link runDirective} handles. */
+/** The condition/action steps {@link runDirective} handles. */
 export type DirectiveStep = Extract<
   FlowStep,
-  { kind: "tap" | "long-press" | "type" | "await" | "assert" | "scroll-to" | "pinch" | "rotate" }
+  {
+    kind:
+      | "tap"
+      | "long-press"
+      | "type"
+      | "await"
+      | "assert"
+      | "idle"
+      | "scroll-to"
+      | "pinch"
+      | "rotate";
+  }
 >;
 
 /** Dispatch a tool with the run's resolved device id bound into its args. */
@@ -621,7 +642,11 @@ export function offscreenHint(sel: FlowSelector): string {
   return `no visible element matched selector ${describeSelector(sel)} — if it is off-screen, add a scroll-to step before this one`;
 }
 
-/** Execute one selector-acting directive (`tap` / `long-press` / `type` / `await` / `assert` / `scroll-to` / `pinch` / `rotate`). */
+/**
+ * Execute one directive step: the selector-acting ones (`tap` / `long-press` /
+ * `type` / `await` / `assert` / `scroll-to` / `pinch` / `rotate`) plus `idle`,
+ * which takes no selector because stillness is a property of the whole screen.
+ */
 export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise<DirectiveOutcome> {
   // Vega is remote-driven — there is no touch input, so the touch directives
   // can never act on it. Fail upfront with authoring guidance instead of a
@@ -663,6 +688,8 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
       return waitForCondition(env, step, step.timeout ?? DEFAULT_ACTION_TIMEOUT_MS);
     case "assert":
       return waitForCondition(env, step, DEFAULT_ASSERT_TIMEOUT_MS);
+    case "idle":
+      return waitForIdle(env, step);
     case "scroll-to": {
       const r = await scrollToVisible(env, step.target, step.direction, step.within);
       if (r.aborted) return ABORTED_OUTCOME;
@@ -1114,6 +1141,277 @@ async function waitForCondition(
     reason:
       assertReason(step.condition, step.selector, step.expectedText, step.textMatch, lastMatches) +
       blipNote,
+  };
+}
+
+// ── Screen readiness ─────────────────────────────────────────────────
+//
+// `await: { idle: true }` asks one question a selector condition cannot: has
+// the screen stopped moving? It is deliberately NOT an identity check — a
+// dropped tap leaves the source screen perfectly idle — so it belongs next to
+// the element check that says WHICH screen, never instead of it.
+
+/**
+ * `idle` poll cadence, matching `await-screen-idle`'s own. The timeout and hold
+ * defaults live in flow-utils beside the parser, which needs the timeout to
+ * reject a hold that could never fit inside the wait.
+ */
+const IDLE_POLL_MS = 200;
+
+/**
+ * How many consecutive intervals must read as still before the screen is
+ * called settled. Two, not one, because a single agreeing pair of captures is
+ * not evidence of stillness: any animation that reverses — a cross-fade, a
+ * pulse, a bounce — has a turning point, and two samples straddling it come
+ * back identical while the screen is very much moving. Observed on a 3s
+ * white/indigo cross-fade, where a default-shaped step passed on roughly one
+ * run in three. A second agreeing interval needs a third sample, which the
+ * same phase symmetry cannot supply unless the animation's period happens to
+ * match the poll — so the aliasing that survives one comparison does not
+ * survive two.
+ */
+const MIN_STILL_INTERVALS = 2;
+
+/**
+ * The smallest budget a poll round is allowed to start with. A round begun
+ * with nothing left cannot capture and cannot read, and both absences were
+ * being recorded as facts about the device: the skipped capture latched
+ * "captures do not work here", and the abandoned read latched "the tree source
+ * is not answering". Neither was true — the step had simply run out of time.
+ * The first round always runs, so an unusually short `timeout:` still buys one
+ * honest look, and ending up to one round early is strictly better than
+ * judging a screen nobody managed to observe.
+ */
+const MIN_ROUND_BUDGET_MS = IDLE_POLL_MS;
+
+/** How the last tree read ended. Only `value` licenses a verdict about the app. */
+type TreeReadOutcome = "value" | "error" | "timeout";
+
+/**
+ * Wait until the screen has content and stops moving — in the UI tree AND in
+ * the rendered pixels.
+ *
+ * Both signals are required because each is blind to what the other sees. The
+ * tree cannot see presentation-layer motion: an iOS push or modal dismissal
+ * commits its hierarchy up front and then animates a layer over ~300-500ms, and
+ * a cross-fade or a scrim moves no node at all — so a tree-only settle reports
+ * a screen that is still sliding. Pixels cannot see a tree that is still
+ * churning behind an unchanged-looking surface, and anything genuinely animated
+ * forever (a video, a shimmer) would make a pixel-only settle unsatisfiable on
+ * a screen the tree calls ready.
+ *
+ * This is `await-screen-idle`'s question asked against the tree the directives
+ * actually resolve against, and — unlike that tool — it FAILS when the screen
+ * never settles, which is what makes it safe to persist in a flow.
+ *
+ * Every verdict is drawn from the LAST round that observed something, never
+ * from a latch remembering that the screen was once still: a screen that
+ * settles and then moves again has not settled.
+ */
+async function waitForIdle(
+  env: ActionEnv,
+  step: Extract<FlowStep, { kind: "idle" }>
+): Promise<DirectiveOutcome> {
+  const timeoutMs = step.timeout ?? IDLE_DEFAULT_TIMEOUT_MS;
+  const minStableMs = step.minStableMs ?? IDLE_DEFAULT_MIN_STABLE_MS;
+  const deadline = Date.now() + timeoutMs;
+
+  // Two hold clocks, because the tree can settle while the pixels have not.
+  // The combined one decides; the tree-only one feeds the degraded report at
+  // the bottom, for a run whose captures never produced a comparable pair.
+  let treeSignature: string | undefined;
+  let treeSince = 0;
+  let treeStillIntervals = 0;
+  let treeSettledAtLastRead = false;
+  let previousFrame: PixelFrame | undefined;
+  let bothSince = 0;
+  let stillIntervals = 0;
+
+  let readsSucceeded = 0;
+  // Definitely assigned: the loop below always completes at least one round,
+  // and every arm of that round sets it.
+  let lastRead!: TreeReadOutcome;
+  let treeErrorMessage: string | undefined;
+  let sawContent = false;
+  let pixelsEverMoved = false;
+  let captureFailed = false;
+  let firstCapture = true;
+
+  for (;;) {
+    if (env.signal?.aborted) return ABORTED_OUTCOME;
+    // The tree read is bounded by what is left of the step's budget, the same
+    // way the capture is. Without that bound `timeout:` was not an upper bound
+    // at all: no describe path takes a signal, and a wedged one (a hung
+    // ViewInspector RPC, an `adb` that has stopped answering) ran the round
+    // past the deadline — measured at 2.25s over an 8000ms budget.
+    const roundBudget = Math.max(1, deadline - Date.now());
+    // Read both signals from as close to one instant as possible: they describe
+    // the same screen, and any gap between them is a window motion hides in.
+    // They also travel over different channels (tree source vs. capture
+    // backend), so serializing them would double the round without buying
+    // anything.
+    const [read, frame] = await Promise.all([
+      settleWithin(fetchFlowTree(env.registry, env.device), roundBudget, env.signal),
+      capturePixelsWithin(env, deadline, firstCapture),
+    ]);
+    firstCapture = false;
+    // Before anything is concluded from this round: a capture abandoned by an
+    // abort comes back indistinguishable from one that failed, and a verdict
+    // about the app must never be derived from a run that was cancelled.
+    if (env.signal?.aborted || read.type === "aborted") return ABORTED_OUTCOME;
+
+    if (read.type === "timeout") {
+      // The read did not come back inside the round. That is the absence of an
+      // observation, not an observation: it neither refutes the last known
+      // tree state nor stands in for one, so the hold state is left as it was
+      // and the bottom decides what, if anything, it means.
+      lastRead = "timeout";
+    } else if (read.type === "error") {
+      // A tree-source blip mid-animation is expected; keep polling. Only its
+      // presence on the LAST read is reportable.
+      lastRead = "error";
+      treeErrorMessage = read.error;
+      treeSignature = undefined;
+      previousFrame = undefined;
+      treeSince = 0;
+      treeStillIntervals = 0;
+      treeSettledAtLastRead = false;
+      bothSince = 0;
+      stillIntervals = 0;
+    } else {
+      lastRead = "value";
+      readsSucceeded += 1;
+      treeErrorMessage = undefined;
+      const tree = read.value.tree;
+      if (tree.children.length === 0) {
+        // Blank or still loading — never "settled", and it resets both holds.
+        // Unlike a failed read this IS an observation, so it also clears the
+        // tree-only verdict: a screen showing nothing has not settled on
+        // anything.
+        treeSignature = undefined;
+        previousFrame = undefined;
+        treeSince = 0;
+        treeStillIntervals = 0;
+        treeSettledAtLastRead = false;
+        bothSince = 0;
+        stillIntervals = 0;
+      } else {
+        sawContent = true;
+        const signature = treeFingerprint(tree);
+        const now = Date.now();
+
+        // Stillness is a property of an INTERVAL, so no verdict comes from one
+        // observation — and, per MIN_STILL_INTERVALS, none comes from one
+        // interval either. `minStableMs: 0` therefore still means three reads:
+        // a single sample proves nothing about motion, and a single agreeing
+        // pair can be two points of an animation that reversed between them.
+        const treeHeld = signature === treeSignature;
+        treeSignature = signature;
+        if (!treeHeld) {
+          treeSince = now;
+          treeStillIntervals = 0;
+        } else {
+          treeStillIntervals += 1;
+        }
+        treeSettledAtLastRead =
+          treeStillIntervals >= MIN_STILL_INTERVALS && now - treeSince >= minStableMs;
+
+        // A missing frame is the ABSENCE of visual evidence, never evidence of
+        // stillness. Letting it stand in for "the pixels held" is what turned a
+        // screen that never stopped moving into a pass.
+        let pixelsHeld = false;
+        if (frame === undefined) {
+          captureFailed = true;
+        } else if (previousFrame !== undefined) {
+          if (pixelsDiffer(previousFrame, frame)) pixelsEverMoved = true;
+          else pixelsHeld = true;
+        }
+        previousFrame = frame;
+
+        if (treeHeld && pixelsHeld) {
+          stillIntervals += 1;
+          if (stillIntervals >= MIN_STILL_INTERVALS && now - bothSince >= minStableMs) {
+            return { ok: true };
+          }
+        } else {
+          bothSince = now;
+          stillIntervals = 0;
+        }
+      }
+    }
+
+    if (env.signal?.aborted) return ABORTED_OUTCOME;
+    const left = deadline - Date.now();
+    if (left < MIN_ROUND_BUDGET_MS) break;
+    if (!(await sleepOrAbort(Math.min(IDLE_POLL_MS, left), env.signal))) return ABORTED_OUTCOME;
+  }
+
+  // An unreadable window is never a verdict about the app. Which flavour of
+  // unreadable it was decides the repair, so they stay apart.
+  const unreadable = (underlying: string): DirectiveOutcome => ({
+    ok: false,
+    indeterminate: true,
+    // The underlying reader reports an instrumentation failure, whose remedy
+    // (relaunch the app) is the wrong repair for the commonest cause of it
+    // here: the app is simply not in the foreground, which reads exactly the
+    // same from the tree source. Name that first so the author checks it
+    // before relaunching anything.
+    reason:
+      `could not read the UI tree while waiting for the screen to settle — check the app is ` +
+      `still in the foreground (a backgrounded app reads the same as an uninstrumented one). ` +
+      `Underlying error: ${underlying}`,
+  });
+
+  if (readsSucceeded === 0) {
+    if (treeErrorMessage !== undefined) return unreadable(treeErrorMessage);
+    return {
+      ok: false,
+      indeterminate: true,
+      reason:
+        `the tree source never answered within the step's ${timeoutMs}ms — raise this step's ` +
+        `\`timeout:\` if it is merely slow (a tree read on a busy screen can take seconds), or ` +
+        `repair it if it has stopped answering altogether`,
+    };
+  }
+  // Reads worked, then stopped: a backgrounded app, a dropped instrumentation
+  // session. One early success does not license a verdict drawn from a window
+  // that went dark afterwards. (A read that merely ran out of budget is NOT
+  // this case — it is the step ending, and the evidence below still stands.)
+  if (lastRead === "error" && treeErrorMessage !== undefined) {
+    return unreadable(treeErrorMessage);
+  }
+  // Readable throughout and never once carrying content: the screen rendered
+  // nothing, which is not the same claim as "it never stopped moving".
+  if (!sawContent) {
+    return {
+      ok: false,
+      indeterminate: true,
+      reason: `the UI tree stayed empty for ${timeoutMs}ms — the screen never rendered content`,
+    };
+  }
+  // The tree was settled as of the last read and no pair of captures ever
+  // showed motion, yet the combined hold never completed. With captures
+  // arriving this is unreachable: a pair either agrees — and the tree was
+  // holding, so the hold would have run — or disagrees, which sets
+  // pixelsEverMoved. So `captureFailed` is what is left, and it is required
+  // here rather than assumed. The hierarchy genuinely held still, so this is a
+  // pass; half of the proof is missing, so it is a warned one.
+  if (treeSettledAtLastRead && !pixelsEverMoved && captureFailed) {
+    return {
+      ok: true,
+      warning:
+        `settled on the UI tree alone — no screenshot of this screen could be read, so animation ` +
+        `that moves pixels without moving nodes (a push, a fade, a dismissing modal) was not ` +
+        `waited out. Follow this with the element check the next step actually needs.`,
+    };
+  }
+  return {
+    ok: false,
+    reason:
+      `the screen never held still for ${minStableMs}ms within ${timeoutMs}ms — the UI tree or ` +
+      `the pixels kept changing, so it is still animating, or something on it never stops moving ` +
+      `(a looping animation, a video, a carousel that keeps advancing). Gate on the element you ` +
+      `actually need instead of on stillness.`,
   };
 }
 

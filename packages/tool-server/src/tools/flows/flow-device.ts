@@ -201,10 +201,12 @@ export function stripDeviceKeys(args: Record<string, unknown>): Record<string, u
  * added later inherits today's behaviour instead of silently running against no
  * device, and the `never` binding makes leaving it unclassified a compile error.
  *
- * Two of the classifications are worth stating outright:
+ * Three of the classifications are worth stating outright:
  *
  * - `when` needs a device whatever its body contains, because the guard itself
  *   reads one — the device's platform, or its view tree.
+ * - `idle` needs one despite carrying no selector: it reads the device twice
+ *   over, the UI tree and a screenshot of it.
  * - `run` needs one without the fragment being read here. The flow it names is
  *   resolved at run time; resolving it a second time would duplicate that lookup
  *   and could disagree with it if the file changed in between. The cost is that
@@ -225,6 +227,7 @@ export function stepRequiresDevice(registry: Registry, step: FlowStep): boolean 
     case "type":
     case "await":
     case "assert":
+    case "idle":
     case "scroll-to":
     case "pinch":
     case "rotate":

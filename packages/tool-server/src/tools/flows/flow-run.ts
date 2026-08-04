@@ -188,6 +188,14 @@ export interface StepReport {
    * the runner does not own reports no reason.
    */
   reason?: string;
+  /**
+   * The step passed, but the WAY it passed weakens it as proof. Rendered as a
+   * "⚠" suffix by the MCP client. Raised by an `await: { idle: true }` whose
+   * captures never produced a comparable pair, so it proved stillness on the
+   * UI tree alone and never saw the presentation-layer motion it exists to
+   * catch.
+   */
+  warning?: string;
   /** Underlying tool id for `tool` steps. */
   tool?: string;
   /** Tool result for `tool` steps. */
@@ -915,7 +923,11 @@ reads "inside card inside list", each container's frame inside the next);
 (\`pinch: { on?, scale }\` — scale > 1 in, < 1 out; screen center when \`on\` is omitted); \`rotate\` is the
 two-finger rotation gesture (\`rotate: { on?, by }\` — degrees, + clockwise, within ±3000°; screen center
 when \`on\` is omitted; distinct from the \`rotate\` tool, which changes device orientation); \`await\` waits
-for a UI condition; \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
+for a UI condition, and additionally takes the one condition that has no selector: \`idle: true\` waits
+until the screen has content and stops moving in BOTH the UI tree and the rendered pixels (unlike the
+\`await-screen-idle\` tool it FAILS on timeout, so it is safe to persist; it says nothing about WHICH
+screen settled — a dropped tap leaves the source screen perfectly idle — so pair it with the element
+check that names the destination); \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
 diffs a screenshot — or, with \`cropOn: <selector>\`, one element's cropped region — against a stored
 baseline (a missing baseline fails the step — set updateBaselines to adopt the current screen; a
 cropped element whose size drifted fails on dimensions); \`echo\` annotates; \`run\` executes another flow
@@ -1549,6 +1561,10 @@ function stepTarget(step: FlowStep): string | undefined {
     case "await":
     case "assert":
       return conditionLabel(step, selectorLabel);
+    case "idle":
+      // The caller already prints the kind, and this step has no target beyond
+      // the screen itself: returning one would render as "idle screen idle".
+      return undefined;
     case "when":
       return step.condition.kind === "platform"
         ? `platform ${step.condition.platform}`
@@ -2098,6 +2114,7 @@ async function execLeafStep(
     case "type":
     case "await":
     case "assert":
+    case "idle":
     case "scroll-to":
     case "pinch":
     case "rotate": {
@@ -2109,7 +2126,23 @@ async function execLeafStep(
         // A run cancelled mid-directive is a skip (matching the pre-step guard
         // and `wait`), never a step failure — the app did nothing wrong.
         if (r.aborted) return { ...base, status: "skip", reason: r.reason };
-        return { ...base, status: r.ok ? "pass" : "fail", reason: r.reason };
+        // An INDETERMINATE `idle` outcome is not a verdict about the app: the
+        // wait could not run at all (an unreadable or degraded tree, a screen
+        // nobody managed to observe). Reporting it as `fail` makes CI read an
+        // environment problem as a regression and a QA author reset a pass
+        // streak over it. `error` keeps the run non-ok while saying plainly
+        // that the app was never judged. Scoped to `idle`, whose whole verdict
+        // rests on being able to observe the screen; the selector conditions
+        // keep their existing `fail` mapping.
+        if (!r.ok && r.indeterminate && step.kind === "idle") {
+          return { ...base, status: "error", reason: r.reason };
+        }
+        return {
+          ...base,
+          status: r.ok ? "pass" : "fail",
+          reason: r.reason,
+          ...(r.warning !== undefined ? { warning: r.warning } : {}),
+        };
       } catch (err) {
         return { ...base, status: "error", reason: errMsg(err) };
       }
