@@ -30,7 +30,7 @@ class ExitError extends Error {
   }
 }
 
-const output = () => logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+const output = () => logSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
 
 function write(filePath: string, content: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
