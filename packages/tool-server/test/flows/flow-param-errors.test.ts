@@ -51,6 +51,25 @@ describe("flow-execute parameter handling", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("prefers `name` over `flow_name` when both are sent (matches the file-input merge)", async () => {
+    // `name || flow_name`: when both resolve, `name` wins — and the client's
+    // file-input merge puts the `name` spec last for the same precedence, so
+    // the file executed is always the one resolveFlowName reports.
+    await writeFlow("by-name");
+    await writeFlow("by-alias");
+
+    const result = await registry().invokeTool<FlowRunResult>("flow-execute", {
+      name: "by-name",
+      flow_name: "by-alias",
+      project_root: tmpDir,
+      device: "00000000-0000-0000-0000-0000000000ab",
+      prerequisiteAcknowledged: true,
+    });
+
+    expect(result.flow).toBe("by-name");
+    expect(result.ok).toBe(true);
+  });
+
   it("does not let an EMPTY name mask a valid alias", async () => {
     // `??` would keep `""` and reject the call while pointing at the very
     // field it ignored — the exact confusion the alias exists to prevent.

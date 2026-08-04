@@ -2591,7 +2591,10 @@ describe("flow-read-prerequisite", () => {
         name: { type: "string" },
         flow_path: { type: "string" },
       },
-      oneOf: [{ required: ["name"] }, { required: ["flow_path"] }],
+      oneOf: [
+        { anyOf: [{ required: ["name"] }, { required: ["flow_name"] }] },
+        { required: ["flow_path"] },
+      ],
     });
   });
 
@@ -2676,6 +2679,34 @@ describe("flow-read-prerequisite", () => {
         { name: "gate", project_root: tmpDir, flow_path: path.join(tmpDir, "gate.yaml") }
       )
     ).rejects.toThrow("exactly one flow source");
+  });
+
+  it("accepts `flow_name` as an alias for `name` (parity with flow-execute)", async () => {
+    // An agent that learned the alias on flow-execute must not hit a bare
+    // "name required" here — the same tool reads the same flow.
+    const dir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "aliased.yaml"),
+      serializeFlow({
+        executionPrerequisite: "On the form",
+        steps: [{ kind: "echo", message: "hi" }],
+      })
+    );
+
+    const result = await flowReadPrerequisiteTool.execute(
+      {},
+      { flow_name: "aliased", project_root: tmpDir }
+    );
+
+    expect(result.flow).toBe("aliased");
+    expect(result.executionPrerequisite).toBe("On the form");
+  });
+
+  it("names the parameter it needs when neither `name` nor `flow_name` is present", async () => {
+    await expect(flowReadPrerequisiteTool.execute({}, { project_root: tmpDir })).rejects.toThrow(
+      /flow-read-prerequisite needs the flow's name/
+    );
   });
 });
 

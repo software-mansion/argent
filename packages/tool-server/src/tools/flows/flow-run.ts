@@ -171,14 +171,17 @@ const inputSchema: Record<string, unknown> = {
  * at all — and the bare version of this text left that caller with nothing
  * saying their key had been dropped.
  */
-function resolveFlowName(params: Params): string {
+export function resolveFlowName(
+  params: { name?: string; flow_name?: string },
+  toolName = "flow-execute"
+): string {
   // `||`, not `??`: an empty `name` is not a name, and must not mask a valid
   // alias — rejecting the call while pointing at the field it ignored is the
   // exact confusion the alias exists to prevent.
   const name = params.name || params.flow_name;
   if (name === undefined || name === "") {
     throw new Error(
-      "flow-execute needs the flow's name in `name` (`flow_name` is accepted as an alias) — " +
+      `${toolName} needs the flow's name in \`name\` (\`flow_name\` is accepted as an alias) — ` +
         "it resolves <project_root>/.argent/flows/<name>.yaml. No other spelling names the flow: " +
         "`flowName` and `flow` are discarded before the tool runs (so this is also what you get " +
         "when the name was sent under one of those), and `flow_file` is a path, not a name."

@@ -1183,4 +1183,15 @@ describe("a flow-directive name points at the tool that records it", () => {
     // as the registry's own error rather than being rewritten.
     await expect(hint("screenshot")).rejects.toThrow(/not found/i);
   });
+
+  it("treats a prototype-member command name as a plain not-found, not a table hit", async () => {
+    // `command` is caller-controlled. A value equal to an inherited member
+    // (`__proto__`, `constructor`, …) must not read truthy off the directive
+    // tables' prototype and refuse the call with a garbage message — it falls
+    // through to the ordinary not-found, and records nothing.
+    for (const command of ["__proto__", "constructor", "toString", "hasOwnProperty"]) {
+      await expect(hint(command), command).rejects.toThrow(/not found/i);
+    }
+    expect(await recordedSteps("hints")).toEqual([]);
+  });
 });

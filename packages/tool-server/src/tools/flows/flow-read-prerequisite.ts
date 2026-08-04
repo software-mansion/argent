@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import { zodObjectToJsonSchema } from "@argent/registry";
 import type { FileInputSpec, ToolContext, ToolDefinition } from "@argent/registry";
 import { parseFlow } from "./flow-utils";
-import { resolveFlowSource } from "./flow-run";
+import { resolveFlowName, resolveFlowSource } from "./flow-run";
 
 const zodSchema = z
   .object({
@@ -11,8 +11,9 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        'Name of a saved flow to inspect from `.argent/flows` (e.g. "settings-explore"). Omit when flow_path is set.'
+        'Name of a saved flow to inspect from `.argent/flows` (e.g. "settings-explore"). Omit when flow_path is set. `flow_name` is accepted as an alias.'
       ),
+    flow_name: z.string().optional().describe("Alias for `name`."),
     project_root: z
       .string()
       .describe(
@@ -32,7 +33,9 @@ const zodSchema = z
       ),
   })
   .superRefine((params, ctx) => {
-    if ((params.name === undefined) === (params.flow_path === undefined)) {
+    // The alias counts as a name, matching flow-execute.
+    const named = params.name !== undefined || params.flow_name !== undefined;
+    if (named === (params.flow_path !== undefined)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "Pass exactly one flow source: name or flow_path.",
@@ -47,7 +50,10 @@ const inputSchema: Record<string, unknown> = {
   // the same exactly-one source rule visible to MCP and HTTP clients — the
   // identical addition flow-execute makes, so the pre-flight read advertises
   // the same contract as the run it precedes.
-  oneOf: [{ required: ["name"] }, { required: ["flow_path"] }],
+  oneOf: [
+    { anyOf: [{ required: ["name"] }, { required: ["flow_name"] }] },
+    { required: ["flow_path"] },
+  ],
 };
 
 // Mirror of flow-execute's specs, field for field: the documented pre-flight is
@@ -65,6 +71,15 @@ const fileInputs: FileInputSpec[] = [
     kind: "file",
     optional: true,
     unwrapWhenSet: "name",
+  },
+  // Two specs, one target — the alias survives the file-input boundary the same
+  // way flow-execute's does (the `name` spec is LAST so it wins the client's
+  // last-write-wins merge when both are sent, matching resolveFlowName).
+  {
+    target: "flow_file",
+    path: "${project_root}/.argent/flows/${flow_name}.yaml",
+    kind: "file",
+    skipWhenSet: "flow_path",
   },
   {
     target: "flow_file",
@@ -102,8 +117,14 @@ Fails if the flow file does not exist.`,
     // co-location boundary (never uploads, never raw server paths) and reports
     // its basename-derived logical name, while the name branch keeps the
     // flow_file containment under project_root.
+    // Same alias fold as flow-execute, and for the same reason: only a name
+    // call resolves one, since a flow_path call names no flow.
+    const named =
+      params.flow_path === undefined
+        ? resolveFlowName(params, "flow-read-prerequisite")
+        : undefined;
     const { filePath, flowName } = await resolveFlowSource(
-      params,
+      { ...params, name: named },
       ctx?.fileInputs?.flow_file,
       ctx?.fileInputs?.flow_path
     );
