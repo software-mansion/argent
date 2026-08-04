@@ -153,8 +153,13 @@ function describeAdbFailure(args: string[], err: unknown): Error {
  * Mapping the whole argv covers every `-s <serial>` call site at once, rather
  * than threading a device-aware helper through dozens of functions. It is safe
  * because only a device id can carry the prefix.
+ *
+ * {@linkcode runAdb} applies it, so anything routed through there is covered.
+ * It is exported for the callers that cannot: a long-running `adb` whose
+ * stdin and stdout are the protocol has to spawn for itself, and must map its
+ * own argv or hand `adb` an `ext:` id it has never heard of.
  */
-function adbArgv(args: string[]): string[] {
+export function adbArgv(args: string[]): string[] {
   return args.map(externalNativeId);
 }
 
