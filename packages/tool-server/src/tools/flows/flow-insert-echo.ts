@@ -35,14 +35,14 @@ Returns { message, stepCount, savedTo } - \`stepCount\` is how many steps the fl
   async execute(_services, params) {
     const session = await requireRecordingSession(params.project_root, params.name);
 
-    const { savedTo } = await appendStepToFlow(session, {
+    const { savedTo, stepCount } = await appendStepToFlow(session, {
       kind: "echo",
       message: params.message,
     });
 
     return {
       message: `Echo added to "${params.name}" flow`,
-      stepCount: session.flow.steps.length,
+      stepCount,
       savedTo,
     };
   },

@@ -190,15 +190,16 @@ export function summarizeStep(step: FlowStep, n: number): string {
       return `${n}. run: ${step.flow}`;
     case "tap":
     case "long-press": {
-      // `times` and `delayMs` change what replays, so a summary line that
-      // drops them misdescribes the file — and since the recorder stopped
-      // returning the YAML per step, this line is the author's only per-step
-      // view of what was appended.
+      // `times` (tap) and `duration` (long-press) change what replays, so a
+      // summary line that drops them misdescribes the file, and since the
+      // recorder stopped returning the YAML per step this line is the author's
+      // only per-step view of what was appended. Neither kind carries a
+      // `delayMs` (only `tool` steps do), so no delayLabel here.
       const target = step.selector ? selectorLabel(step.selector) : `(${step.x}, ${step.y})`;
       const times = step.kind === "tap" && step.times !== undefined ? ` ×${step.times}` : "";
       const held =
         step.kind === "long-press" && step.duration !== undefined ? ` for ${step.duration}ms` : "";
-      return `${n}. ${step.kind}: ${target}${times}${held}${delayLabel(step)}`;
+      return `${n}. ${step.kind}: ${target}${times}${held}`;
     }
     case "type":
       return `${n}. type: ${selectorLabel(step.into)} ← "${step.text}"`;
