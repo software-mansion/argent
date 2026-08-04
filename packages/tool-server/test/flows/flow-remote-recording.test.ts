@@ -221,6 +221,31 @@ describe("flow recording with a remote client (probe miss)", () => {
     ).rejects.toThrow("No active recording");
   });
 
+  it("reports a running stepCount in client mode, without returning the YAML per step", async () => {
+    // The host-mode add-echo/add-step tests count stepCount off the re-read
+    // file; this pins the OTHER branch of appendStepToFlow — client mode counts
+    // off the in-memory flow and must report the same running total, still
+    // without echoing the growing YAML (the write travels via savedTo).
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "remote-flow", project_root: CLIENT_ROOT, executionPrerequisite: "Home" },
+      remoteCtx()
+    );
+    const first = await flowInsertEchoTool.execute(
+      {},
+      { name: "remote-flow", project_root: CLIENT_ROOT, message: "one" }
+    );
+    const second = await flowInsertEchoTool.execute(
+      {},
+      { name: "remote-flow", project_root: CLIENT_ROOT, message: "two" }
+    );
+
+    expect(first.stepCount).toBe(1);
+    expect(second.stepCount).toBe(2);
+    expect(first).not.toHaveProperty("flowFile");
+    expect(second).not.toHaveProperty("flowFile");
+  });
+
   it("a rejected append leaves the session usable instead of poisoning it", async () => {
     // In client mode the in-memory flow is the ONLY copy, so a step the append
     // refuses must not stay in it — every later append, and the finish itself,
