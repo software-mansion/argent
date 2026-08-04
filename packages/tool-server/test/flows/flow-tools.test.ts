@@ -937,6 +937,8 @@ describe("flow-add-step", () => {
     );
 
     expect(result.message).toContain("prerequisite notice");
+    // Names the actual prerequisite, not just the generic handshake text.
+    expect(result.message).toContain("On login screen");
     expect(result.message).toContain("NOT recorded");
     expect(result.message).not.toContain("mutated device state");
     expect(parseFlow(await onDisk("compose-notice")).steps).toEqual([]);
