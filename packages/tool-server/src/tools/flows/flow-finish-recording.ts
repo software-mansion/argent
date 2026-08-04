@@ -383,7 +383,7 @@ export function summarizeStep(step: FlowStep, n: number): string {
       // Present options only — otherwise distinct gestures collapse into
       // one line in the very summary read before hand-editing the YAML.
       const options = [
-        ...(step.settle ? ["settle"] : []),
+        ...(step.momentum === false ? ["momentum-free"] : []),
         ...(step.duration !== undefined ? [`${step.duration}ms`] : []),
       ];
       const tail = options.length > 0 ? ` (${options.join(", ")})` : "";

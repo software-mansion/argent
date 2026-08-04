@@ -677,7 +677,8 @@ interface ScrollResolve {
  * point is clamped, so the down stays at the anchor and keeps latching to the
  * right container), sized to the clip window rather than the screen so
  * consecutive views of a small container's content still overlap. Touch
- * platforms use a `settle` swipe (no fling); Chromium uses wheel events.
+ * platforms use a `momentum: false` swipe (no fling); Chromium uses wheel
+ * events.
  */
 async function scrollIncrement(
   env: ActionEnv,
@@ -725,7 +726,7 @@ async function scrollIncrement(
       fromY: cy,
       toX: to.x,
       toY: to.y,
-      settle: true,
+      momentum: false,
       durationMs: 600,
     });
   } catch (err) {
@@ -1282,12 +1283,12 @@ const SWIPE_GEOMETRY: Record<
  * {@link SWIPE_GEOMETRY} — clamped short at the screen edge), `by` (signed
  * relative delta delivered exactly: an unanchored start slides on-screen to
  * fit it, an authored anchor fails instead), or `to` (explicit target). Touch
- * dispatches one `gesture-swipe` (natural fling; `settle` opts into the
- * engine's momentum-free variant); Chromium has no touch, so a swipe is a
+ * dispatches one `gesture-swipe` (natural fling; `momentum: false` opts into
+ * the engine's momentum-free variant); Chromium has no touch, so a swipe is a
  * mouse drag (`gesture-drag`) — swipe-as-scroll is already `scroll-to`'s job
  * there, and a `from` on a draggable node (`<img>`, `<a href>`,
  * `draggable="true"`) hands the gesture to the browser's own drag-and-drop,
- * exactly as a real mouse would. `settle` rides both dispatches: web apps
+ * exactly as a real mouse would. `momentum` rides both dispatches: web apps
  * derive their fling from the pointer stream's release velocity just as the
  * OS does from the touch stream, and the ease-out zeroes both. Either way the
  * step then waits out the motion it started — see the settle after dispatch.
@@ -1299,7 +1300,7 @@ async function runSwipe(
     direction?: SwipeDirection;
     to?: GestureTarget;
     by?: { x?: number; y?: number };
-    settle?: boolean;
+    momentum?: boolean;
     duration?: number;
   }
 ): Promise<DirectiveOutcome> {
@@ -1487,7 +1488,7 @@ async function runSwipe(
     toX: end.x,
     toY: end.y,
     ...(step.duration !== undefined ? { durationMs: step.duration } : {}),
-    ...(step.settle ? { settle: true } : {}),
+    ...(step.momentum === false ? { momentum: false } : {}),
   };
   try {
     await invokeOnDevice(
@@ -1505,9 +1506,9 @@ async function runSwipe(
   // The momentum this swipe created is this step's business: only a SELECTOR
   // target makes the next step wait, so a following point target would touch
   // down mid-deceleration, where the scroll view eats the touch to arrest the
-  // scroll and both steps still report pass. Unconditional, `settle` or not —
-  // that flag zeroes the finger's release velocity, not the app's animations —
-  // and best effort, since a fling can outlast SETTLE_TIMEOUT_MS.
+  // scroll and both steps still report pass. Unconditional, momentum-free or
+  // not — that flag zeroes the finger's release velocity, not the app's
+  // animations — and best effort, since a fling can outlast SETTLE_TIMEOUT_MS.
   try {
     await settleTree(env);
   } catch {

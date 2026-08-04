@@ -139,7 +139,7 @@ Anchoring decides how a travel that does not fit is resolved:
 
 Only the direction presets carry OS-edge margins. A resolved `from` point is used verbatim, so use `from` for app-level gestures only and write system-edge gestures such as system back as raw `tool: gesture-swipe` steps.
 
-`settle: true` removes momentum, so the swipe lands where the finger stops. `duration` (ms) is the travel time: default 300, minimum 150. A shorter gesture gives the content too few frames to track the travel, so it overshoots and may fling backwards. Every `swipe` then waits for the tree to settle, best effort, so its momentum does not swallow the next step's touch.
+`momentum: false` removes the fling, so the swipe lands where the finger stops. The default `momentum: true` is a natural flick that flings on. `duration` (ms) is the travel time: default 300, minimum 150. A shorter gesture gives the content too few frames to track the travel, so it overshoots and may fling backwards. Every `swipe` then waits for the tree to settle, best effort, so its momentum does not swallow the next step's touch.
 
 On Chromium a swipe is a mouse drag (`gesture-drag`), so a `from` on an `<img>`, an `<a href>` or a `draggable="true"` node starts the browser's native drag-and-drop: the page gets `pointerdown` then `pointercancel` and sees no travel. On Vega, `swipe` fails upfront like the other touch directives.
 
