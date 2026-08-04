@@ -1,7 +1,13 @@
 import { z } from "zod";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { FAILURE_CODES, FailureError, type Registry, type ToolDefinition } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  ToolNotFoundError,
+  type Registry,
+  type ToolDefinition,
+} from "@argent/registry";
 import {
   requireRecordingSession,
   appendStepToFlow,
@@ -692,18 +698,21 @@ const NESTED_RECORDER_TOOLS: Record<string, string> = {
 };
 
 /**
- * Whether an invocation failed because the registry has no such tool, as
- * opposed to the tool itself failing. Keyed on the message because the
- * registry throws a plain Error; a false negative only costs the nicer
- * message. A false positive would need a REGISTERED tool whose id equals a
- * directive name (echo/wait/tap/…) AND whose own failure message contains
- * "not found" — no such tool exists, and `directiveCommandHint` only answers
- * those exact names, so a genuine tool failure still surfaces as itself.
+ * Whether the invocation failed because the registry has no tool named
+ * `command`, as opposed to the tool itself running and failing.
+ *
+ * Keyed on the error's IDENTITY, not its message text: the registry throws a
+ * raw `ToolNotFoundError` (carrying the missing `toolId`) for an unregistered
+ * or flag-gated id, thrown BEFORE the invoke wrapper — while a tool that runs
+ * and fails, or one whose OWN nested lookup misses, surfaces as a
+ * `ToolExecutionError`. Matching `toolId === command` means a genuine "…not
+ * found" *message* from a tool that actually ran (e.g. "element not found") is
+ * never mistaken for the command itself being absent, and the guard no longer
+ * depends on `directiveCommandHint`'s whitelist to stay correct if a tool is
+ * ever registered under a directive name.
  */
 function isToolNotFound(err: unknown, command: string): boolean {
-  if (!(err instanceof Error)) return false;
-  const m = err.message.toLowerCase();
-  return m.includes("not found") && m.includes(command.toLowerCase());
+  return err instanceof ToolNotFoundError && err.toolId === command;
 }
 
 function directiveCommandHint(command: string): string | undefined {
@@ -938,8 +947,15 @@ async function captureRunTarget(
   session: RecordingSession,
   args: Record<string, unknown>
 ): Promise<{ flow?: string; warning?: string }> {
-  const name = typeof args.name === "string" ? args.name : undefined;
-  if (name === undefined) {
+  // Honor the `flow_name` alias that `flow-execute` now accepts, with the same
+  // `name || flow_name` precedence `resolveFlowName` uses. A nested call that
+  // named the flow via the alias runs fine at execution, so it must also be
+  // captured as the portable `run: <name>` directive — reading `args.name`
+  // alone would keep a raw, non-portable `tool: flow-execute` step AND print
+  // the now-false "had no flow name" warning for a call that did name the flow.
+  const named = args.name || args.flow_name;
+  const name = typeof named === "string" ? named : undefined;
+  if (name === undefined || name === "") {
     return { warning: "flow-execute call had no flow name; kept the raw step" };
   }
   if (session.persist !== "host") {
