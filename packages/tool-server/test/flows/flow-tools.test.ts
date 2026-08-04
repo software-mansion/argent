@@ -7,7 +7,10 @@ import { ArtifactStore, zodObjectToJsonSchema } from "@argent/registry";
 
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
-import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recording";
+import {
+  flowFinishRecordingTool,
+  summarizeStep,
+} from "../../src/tools/flows/flow-finish-recording";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import {
   createRunFlowTool,
@@ -290,14 +293,19 @@ describe("flow-add-echo", () => {
       {},
       { name: "multi-echo", project_root: tmpDir, executionPrerequisite: PREREQ }
     );
-    await flowInsertEchoTool.execute(
+    const first = await flowInsertEchoTool.execute(
       {},
       { name: "multi-echo", project_root: tmpDir, message: "First" }
     );
-    await flowInsertEchoTool.execute(
+    const second = await flowInsertEchoTool.execute(
       {},
       { name: "multi-echo", project_root: tmpDir, message: "Second" }
     );
+
+    // stepCount reflects the running total, not a constant — it is the only
+    // per-step size signal now that the growing YAML is no longer returned.
+    expect(first.stepCount).toBe(1);
+    expect(second.stepCount).toBe(2);
 
     const flow = parseFlow(await onDisk("multi-echo"));
     expect(flow.steps).toEqual([
@@ -366,6 +374,35 @@ describe("flow-add-step", () => {
       x: 0.5,
       y: 0.3,
     });
+  });
+
+  it("returns the appended step as the `recorded` line, carrying delayMs", async () => {
+    const registry = createMockRegistry({ tap: { result: { tapped: true } } });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "recorded-line", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    const result = await tool.execute(
+      {},
+      {
+        name: "recorded-line",
+        project_root: tmpDir,
+        command: "tap",
+        args: '{"x":0.5,"y":0.3}',
+        delayMs: 500,
+      }
+    );
+
+    // `recorded` is the author's only per-step view of the file now that the
+    // whole YAML is no longer echoed, and it must spell the step exactly the
+    // way flow-finish-recording's summary does — including the pre-step sleep.
+    expect(result.stepCount).toBe(1);
+    expect(result.recorded).toBe('1. tool: tap {"x":0.5,"y":0.3} (after 500ms)');
+    expect(result.recorded).toBe(
+      summarizeStep(parseFlow(await onDisk("recorded-line")).steps[0], 1)
+    );
   });
 
   it("propagates the request's telemetry attribution to the recorded sub-tool", async () => {
@@ -2513,6 +2550,40 @@ describe("the flow-add-step schema the CLI tests hand-copy", () => {
   it("still opens its description with the sentence those fixtures quote verbatim", () => {
     expect(createFlowAddStepTool({} as unknown as Registry).description).toContain(
       "Execute a tool call and record it as a step in the flow named by `name` + `project_root`"
+    );
+  });
+});
+
+// ── summarizeStep rendering ──────────────────────────────────────────
+//
+// summarizeStep is the single spelling shared by the recorder's per-step
+// `recorded` line and flow-finish-recording's `summary`. `times` (tap),
+// `duration` (long-press) and `delayMs` (tool) change what replays, so a
+// summary that drops them misdescribes the file. long-press steps have no
+// live recorder path, so this is the only coverage of that rendering.
+describe("summarizeStep rendering", () => {
+  it("renders a tap's times count", () => {
+    expect(summarizeStep({ kind: "tap", selector: { id: "b" }, times: 2 }, 1)).toBe(
+      '1. tap: {"id":"b"} ×2'
+    );
+    expect(summarizeStep({ kind: "tap", x: 0.5, y: 0.3 }, 1)).toBe("1. tap: (0.5, 0.3)");
+  });
+
+  it("renders a long-press hold duration", () => {
+    expect(
+      summarizeStep({ kind: "long-press", selector: { text: "Row" }, duration: 1200 }, 3)
+    ).toBe('3. long-press: {"text":"Row"} for 1200ms');
+    expect(summarizeStep({ kind: "long-press", x: 0.4, y: 0.5 }, 3)).toBe(
+      "3. long-press: (0.4, 0.5)"
+    );
+  });
+
+  it("renders a tool step's pre-step delay", () => {
+    expect(
+      summarizeStep({ kind: "tool", name: "screenshot", args: { scale: 0.2 }, delayMs: 500 }, 4)
+    ).toBe('4. tool: screenshot {"scale":0.2} (after 500ms)');
+    expect(summarizeStep({ kind: "tool", name: "screenshot", args: {} }, 4)).toBe(
+      "4. tool: screenshot {}"
     );
   });
 });
