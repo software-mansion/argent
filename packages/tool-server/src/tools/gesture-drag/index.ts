@@ -84,6 +84,14 @@ Pass settle:true for a momentum-free drag that releases at ~0 pointer velocity, 
     const durationMs = params.durationMs ?? 300;
     const settle = params.settle ?? false;
     const steps = Math.max(2, Math.round(durationMs / 16));
+    const frameMs = durationMs / steps;
+    // Pace every frame off one run-start deadline (t0 + i * frameMs) so each
+    // dispatch round-trip (~8-10 ms) counts toward its own frame instead of
+    // stacking on top of it, and the press→release span tracks durationMs at
+    // every duration — apps threshold a flick against a drag on exactly this
+    // number. Where frameMs falls under the round-trip the waits floor at 0 and
+    // the span can only overrun; nothing dispatches faster than the CDP hop.
+    const t0 = Date.now();
     await chromium.dispatchMouseEvent({
       type: "mousePressed",
       x: startPx.x,
@@ -91,7 +99,7 @@ Pass settle:true for a momentum-free drag that releases at ~0 pointer velocity, 
       clickCount: 1,
     });
     for (let i = 1; i < steps; i++) {
-      const frameStart = Date.now();
+      await sleep(Math.max(0, t0 + i * frameMs - Date.now()));
       const t = i / steps;
       // A plain drag advances linearly; a `settle` drag eases-out so the
       // per-frame step shrinks toward the release, giving pointer-velocity
@@ -103,12 +111,11 @@ Pass settle:true for a momentum-free drag that releases at ~0 pointer velocity, 
         y: startPx.y + (endPx.y - startPx.y) * progress,
         button: "left",
       });
-      // Pace off a per-frame deadline: the dispatch round-trip (~8-10 ms)
-      // counts toward the 16 ms frame instead of stacking on top of it, so
-      // the drag tracks durationMs rather than overrunning it ~1.5x. Apps
-      // threshold a flick against a drag on exactly this duration.
-      await sleep(Math.max(0, 16 - (Date.now() - frameStart)));
     }
+    // Spend the last frame's wait here, not on another move at the endpoint: a
+    // point there followed by a still frame reads as a hold, and app momentum
+    // code derives its fling from this stream's release velocity.
+    await sleep(Math.max(0, t0 + durationMs - Date.now()));
     await chromium.dispatchMouseEvent({
       type: "mouseReleased",
       x: endPx.x,
