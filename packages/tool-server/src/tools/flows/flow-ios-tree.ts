@@ -1,6 +1,19 @@
-import type { DeviceInfo, Registry } from "@argent/registry";
-import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
-import { resolveNativeTargetApp } from "../../utils/native-target-app";
+import {
+  FAILURE_CODES,
+  FailureError,
+  getFailureSignal,
+  type DeviceInfo,
+  type Registry,
+} from "@argent/registry";
+import {
+  nativeDevtoolsRef,
+  NON_INJECTABLE_NATIVE_WARNING,
+  type NativeDevtoolsApi,
+} from "../../blueprints/native-devtools";
+import {
+  resolveNativeTargetApp,
+  type ResolvedNativeTargetApp,
+} from "../../utils/native-target-app";
 import { flattenHoisting, type FlatNode } from "./flow-tree-flatten";
 import {
   type DescribeFrame,
@@ -263,6 +276,28 @@ const FULL_HIERARCHY_FIELDS = [
 ];
 
 /**
+ * Depth ceiling for the flow selector tree. This counts RAW UIView nesting, so
+ * it has to clear the invisible wrapper layers RN stacks on every screen —
+ * nested navigators (RNSScreenStackView → RNSScreenView, often two deep) plus a
+ * drawer/root wrapper routinely bury on-screen content 40–60 levels down before
+ * the first tappable view. At 40, plainly visible interactive elements in a
+ * deeply nested production RN app were truncated at depths 41–62, so `id:` and
+ * `text:` selectors silently failed to resolve and only coordinate taps worked.
+ * Because an overflow is silent (nothing reports "truncated" — selectors just
+ * stop matching), the cap carries generous headroom rather than hugging the
+ * deepest observed measurement.
+ *
+ * Cost note: this tree is internal to selector resolution — it is consumed by
+ * `selectorToFrame`/`evaluateCondition` and never returned to the caller — so a
+ * deeper cap does NOT enlarge any tool result or agent context. It only grows
+ * the getFullHierarchy payload over the native-devtools socket, and that payload
+ * is already field-limited (`FULL_HIERARCHY_FIELDS`). In the measured production
+ * tree, depth-40 was ~11KB and depth-48 ~15KB; past the tree's real depth a
+ * higher cap adds nothing at all, so 100 stays modest.
+ */
+const FLOW_TREE_MAX_DEPTH = 100;
+
+/**
  * Query the raw UIView tree via native-devtools `getFullHierarchy` and adapt
  * it. Throws — with the reason — when native-devtools is unavailable / not yet
  * connected / errored, or when the resolved target returns no windows (a
@@ -279,18 +314,49 @@ export async function queryFullHierarchyTree(
     const ndRef = nativeDevtoolsRef(device);
     nativeApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
   } catch (err) {
-    throw new Error(
+    throw wrapPreservingFailure(
       `native devtools is unavailable (${errMsg(err)}) — flows resolve selectors against the full view hierarchy it serves`,
-      { cause: err }
+      err
     );
   }
-  // resolveNativeTargetApp's own errors (no connected app / ambiguous frontmost)
-  // already carry the actionable next step, so they propagate unwrapped.
-  const target = await resolveNativeTargetApp(nativeApi, undefined);
+  // resolveNativeTargetApp's own errors suggest providing a bundleId — a flow
+  // selector step has no way to express one (this call hardcodes
+  // auto-targeting) — so replace that advice with the remedy available for the
+  // specific failure. An ambiguous connected-app set needs disambiguation; no
+  // connected app can mean the target was launched outside Argent
+  // (Metro/Expo, Xcode, or the home-screen icon) and needs an Argent relaunch.
+  let target: ResolvedNativeTargetApp;
+  try {
+    target = await resolveNativeTargetApp(nativeApi, undefined);
+  } catch (err) {
+    if (getFailureSignal(err)?.error_code === FAILURE_CODES.NATIVE_TARGET_MULTIPLE_APPS_AMBIGUOUS) {
+      throw wrapPreservingFailure(
+        `could not uniquely target a native-devtools-connected app to read the view hierarchy from:\n` +
+          `${withoutExplicitBundleIdAdvice(errMsg(err))}\n` +
+          `Flow selector steps auto-target and cannot provide a bundleId. Bring the intended app to ` +
+          `the foreground, and background or terminate the other connected apps, then retry.`,
+        err
+      );
+    }
+    throw wrapPreservingFailure(
+      `could not target a native-devtools-connected app to read the view hierarchy from (${firstClause(err)}) — ` +
+        `flow selectors require an instrumented process. launch-app does not terminate the app first: ` +
+        `when the app is already running from Metro/Expo, Xcode, or its icon, launch-app only ` +
+        `foregrounds that existing uninstrumented process. restart-app (or an e2e flow's launch step) ` +
+        `terminates and relaunches it, which guarantees instrumentation for an injectable app. ` +
+        `An Apple system app (com.apple.*) can never be instrumented; drive it with raw point taps and ` +
+        `tool: await-ui-element steps instead. ${NON_INJECTABLE_NATIVE_WARNING}`,
+      err
+    );
+  }
 
   if (await nativeApi.requiresAppRestart(target.bundleId)) {
     throw new Error(
-      `${target.bundleId} was launched before argent's instrumentation loaded — relaunch it (launch-app, or a flow \`launch\` step) so the full view hierarchy is readable`
+      `${target.bundleId} was launched before argent's instrumentation loaded — relaunch it with ` +
+        `restart-app (or a flow \`launch\` step at replay) so the full view hierarchy is readable. ` +
+        `launch-app does not terminate the app first: when the app is already running, it only ` +
+        `foregrounds that existing uninstrumented process. Only restart-app (terminate + relaunch) ` +
+        `guarantees an instrumented launch.`
     );
   }
 
@@ -299,7 +365,7 @@ export async function queryFullHierarchyTree(
     "ViewHierarchy.getFullHierarchy",
     {
       fields: FULL_HIERARCHY_FIELDS,
-      maxDepth: 40,
+      maxDepth: FLOW_TREE_MAX_DEPTH,
     }
   )) as { windows?: unknown[]; error?: string };
 
@@ -326,4 +392,21 @@ export async function queryFullHierarchyTree(
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function firstClause(err: unknown): string {
+  const firstLine = errMsg(err).split("\n", 1)[0] ?? "native target resolution failed";
+  const sentenceEnd = firstLine.indexOf(".");
+  return sentenceEnd === -1 ? firstLine : firstLine.slice(0, sentenceEnd + 1);
+}
+
+function withoutExplicitBundleIdAdvice(message: string): string {
+  return message.replace(/\nProvide bundleId explicitly\.?$/, "");
+}
+
+/** Add actionable flow-specific context without stripping FailureError data. */
+function wrapPreservingFailure(message: string, err: unknown): Error {
+  const cause = err instanceof Error ? err : new Error(String(err));
+  const signal = getFailureSignal(err);
+  return signal ? new FailureError(message, signal, { cause }) : new Error(message, { cause });
 }
