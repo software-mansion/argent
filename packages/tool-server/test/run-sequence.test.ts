@@ -361,9 +361,10 @@ describe("run-sequence", () => {
 // an untyped result. A sequence of identical steps produces identical error
 // text for each of them, so the message has to say WHICH one stopped.
 describe("runSequenceFailure", () => {
-  it("names the failed step's position and tool", () => {
-    // The denominator is how many nested steps RAN: run-sequence halts at the
-    // first failure, so the reported steps end at the one that failed.
+  it("names the failed step's position and tool against the DECLARED total", () => {
+    // run-sequence halts at the first failure and returns only the steps up to
+    // it, so `steps.length` is 2 here — but the caller declared `total: 3`, and
+    // the denominator reports that so a dropped third step is not hidden.
     expect(
       runSequenceFailure("run-sequence", {
         completed: 1,
@@ -373,7 +374,20 @@ describe("runSequenceFailure", () => {
           { tool: "gesture-swipe", error: "swipe failed: device not reachable" },
         ],
       })
-    ).toBe("step 2/2 (gesture-swipe): swipe failed: device not reachable");
+    ).toBe("step 2/3 (gesture-swipe): swipe failed: device not reachable");
+  });
+
+  it("flags a nested failure even when its error message is empty", () => {
+    // A tool that throws `new Error("")` records `error: ""`. Keying on a
+    // non-empty message would skip it and let the failed sequence record as a
+    // pass — the exact hole this guard closes.
+    expect(
+      runSequenceFailure("run-sequence", {
+        completed: 0,
+        total: 1,
+        steps: [{ tool: "keyboard", error: "" }],
+      })
+    ).toBe("step 1/1 (keyboard): failed without an error message");
   });
 
   it("reports the first failure, not a later one", () => {
