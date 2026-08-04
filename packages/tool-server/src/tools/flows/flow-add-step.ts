@@ -441,8 +441,8 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
     message: string;
     toolResult: unknown;
     stepCount: number;
-    recorded?: string;
-    savedTo?: FlowSavedTo;
+    recorded: string;
+    savedTo: FlowSavedTo;
   }
 > {
   return {
