@@ -11,7 +11,7 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        'Name of a saved flow to inspect from `.argent/flows` (e.g. "settings-explore"). Omit when flow_path is set. `flow_name` is accepted as an alias.'
+        'Name of a saved flow to inspect from `.argent/flows` (e.g. "settings-explore"). Omit when flow_path is set; otherwise required, via `name` or its `flow_name` alias. Optional in the schema only so the alias is accepted.'
       ),
     flow_name: z.string().optional().describe("Alias for `name`."),
     project_root: z

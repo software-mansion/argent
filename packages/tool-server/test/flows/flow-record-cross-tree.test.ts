@@ -1178,6 +1178,17 @@ describe("a flow-directive name points at the tool that records it", () => {
     expect((await hint("launch")).message).toContain("rewrites it into the `launch:` step");
   });
 
+  it("qualifies a rewrite hint with the delayMs opt-out", async () => {
+    // `tap`/`launch`/`run` are rewritten only when the flow-add-step call sets no
+    // `delayMs` (a replay delay has no directive form, so the step is kept raw).
+    // The hint has to say so, or an author who adds delayMs is promised a `tap:`
+    // step the recorder then declines to write.
+    const tap = (await hint("tap")).message;
+    expect(tap).toContain("rewrites it into the `tap:` step");
+    expect(tap).toContain("delayMs");
+    expect(tap).toContain("raw `tool: gesture-tap`");
+  });
+
   it("lets a genuine tool failure report itself", async () => {
     // "screenshot" is not a directive name, so a not-found for it must surface
     // as the registry's own error rather than being rewritten.

@@ -632,11 +632,14 @@ interface DirectiveHint {
    */
   rewritten: boolean;
   /**
-   * For a CONDITIONALLY rewritten directive, the condition — so the hint does
-   * not promise a `${command}:` step the recorder then declines to write (a
-   * `restart-app` with an extra arg, or a `run` target that is not a resolvable
-   * sibling, is kept as a raw `tool:` step to convert during polish). Omitted
-   * when the rewrite is unconditional (e.g. `tap`).
+   * For a CONDITIONALLY rewritten directive, the ARG-SHAPE condition, so the
+   * hint does not promise a `${command}:` step the recorder then declines to
+   * write (a `restart-app` with an extra arg, or a `run` target that is not a
+   * resolvable sibling, is kept as a raw `tool:` step to convert during polish).
+   * Omitted when no arg-shape condition applies (e.g. `tap`). Note the separate
+   * `delayMs` opt-out (every rewrite also gates on `delayMs === undefined`) is
+   * NOT expressed here; it is appended to all rewrite hints by
+   * `directiveCommandHint`, so `tap` is not truly unconditional.
    */
   rewriteCondition?: string;
 }
@@ -736,7 +739,9 @@ function directiveCommandHint(command: string): string | undefined {
     `"${command}" is a flow directive, not a tool. Record it by calling \`${hint.tool}\` ` +
     `through flow-add-step` +
     (hint.rewritten
-      ? ` — the recorder rewrites it into the \`${command}:\` step ${hint.rewriteCondition ?? "for you"}.`
+      ? ` — the recorder rewrites it into the \`${command}:\` step ${hint.rewriteCondition ?? "for you"}. ` +
+        `A \`delayMs\` on the call opts out of the rewrite: it is then kept as a raw \`tool: ${hint.tool}\` ` +
+        `step (a replay delay has no directive form), so leave \`delayMs\` off if you want the \`${command}:\` step.`
       : `. It is stored as a raw \`tool: ${hint.tool}\` step; converting it to \`${command}:\` ` +
         `is part of the polish pass.`)
   );

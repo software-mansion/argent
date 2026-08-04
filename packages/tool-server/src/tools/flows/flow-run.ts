@@ -86,7 +86,7 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        'Name of a saved flow to run from `.argent/flows` (e.g. "settings-explore"). Omit when flow_path is set. `flow_name` is accepted as an alias.'
+        'Name of a saved flow to run from `.argent/flows` (e.g. "settings-explore"). Omit when flow_path is set; otherwise required, via `name` or its `flow_name` alias. Optional in the schema only so the alias is accepted.'
       ),
     flow_name: z.string().optional().describe("Alias for `name`."),
     project_root: z
@@ -170,6 +170,14 @@ const inputSchema: Record<string, unknown> = {
  * wrote `flowName` is no longer distinguishable here from one who sent no name
  * at all — and the bare version of this text left that caller with nothing
  * saying their key had been dropped.
+ *
+ * `InvalidToolInputError`, not a plain `Error`: a missing name is a client
+ * input error, so it must reach the HTTP boundary as a 400 (the class maps
+ * there, matching the zod-validation path) and telemetry as a `validation`
+ * signal, not the 500 / `ARGENT_UNCLASSIFIED_FAILURE` a plain `Error` yields.
+ * Making `name` optional (for the alias) moved this check out of zod, so it now
+ * has to carry that classification itself, the way its sibling validations
+ * (`assertSafeFlowName`, `resolveFlowFilePath`) already do.
  */
 export function resolveFlowName(
   params: { name?: string; flow_name?: string },
@@ -180,7 +188,7 @@ export function resolveFlowName(
   // exact confusion the alias exists to prevent.
   const name = params.name || params.flow_name;
   if (name === undefined || name === "") {
-    throw new Error(
+    throw new InvalidToolInputError(
       `${toolName} needs the flow's name in \`name\` (\`flow_name\` is accepted as an alias) — ` +
         "it resolves <project_root>/.argent/flows/<name>.yaml. No other spelling names the flow: " +
         "`flowName` and `flow` are discarded before the tool runs (so this is also what you get " +
