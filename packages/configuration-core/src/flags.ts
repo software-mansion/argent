@@ -60,6 +60,11 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
       "Argent Lens — the propose_variant / await_user_selection tools and the Electron preview window for staging UI design variants and letting a human pick among them. Off by default while the feature is in development.",
   },
   {
+    name: "argent-map",
+    description:
+      "Argent Map — the `argent map` command and map-app crawler that explore a running app and build a graph of its reachable screens, rendered live in the preview window's Map tab. Off by default while the feature is in development.",
+  },
+  {
     name: "artifacts-list-endpoint",
     description: "Expose GET /artifacts for remote artifact inventory consumers.",
   },

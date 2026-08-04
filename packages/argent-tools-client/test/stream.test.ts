@@ -103,6 +103,49 @@ describe("callTool progress streaming", () => {
     expect(events).toEqual([{ index: 0 }]);
   });
 
+  it("aborts an in-flight streaming call via opts.signal", async () => {
+    // The server sends one progress line and then never ends the stream — the
+    // client's abort must tear the call down rather than hanging forever.
+    let pending: ServerResponse | undefined;
+    await startServer((_req, res) => {
+      pending = res;
+      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+      res.write(`${JSON.stringify({ event: "progress", data: { index: 0 } })}\n`);
+    });
+
+    const ac = new AbortController();
+    const events: unknown[] = [];
+    const { callTool } = createToolsClient();
+    const call = callTool(
+      "streamy",
+      {},
+      {
+        onProgress: (e) => {
+          events.push(e);
+          ac.abort();
+        },
+        signal: ac.signal,
+      }
+    );
+
+    await expect(call).rejects.toThrow();
+    expect(events).toEqual([{ index: 0 }]);
+    pending?.destroy();
+  });
+
+  it("rejects immediately when the signal is already aborted", async () => {
+    let invoked = false;
+    await startServer((_req, res) => {
+      invoked = true;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ data: { ok: true } }));
+    });
+
+    const { callTool } = createToolsClient();
+    await expect(callTool("streamy", {}, { signal: AbortSignal.abort() })).rejects.toThrow();
+    expect(invoked).toBe(false);
+  });
+
   it("rejects when the stream ends without a terminal line (connection lost)", async () => {
     await startServer((_req, res) => {
       res.writeHead(200, { "Content-Type": "application/x-ndjson" });

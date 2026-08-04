@@ -202,6 +202,13 @@ export const FAILURE_CODES = {
   NATIVE_PROFILER_PERFETTO_READY_TIMEOUT: "NATIVE_PROFILER_PERFETTO_READY_TIMEOUT",
   NATIVE_PROFILER_PERFETTO_READY_EXITED: "NATIVE_PROFILER_PERFETTO_READY_EXITED",
 
+  // map-app. One crawl at a time (the store is a process singleton), and a crawl
+  // that cannot establish the target app as the readable, frontmost one at launch
+  // has nothing to walk — both are caller-fixable, so they are classified rather
+  // than falling through to the generic tool-execution bucket.
+  MAP_CRAWL_ALREADY_RUNNING: "MAP_CRAWL_ALREADY_RUNNING",
+  MAP_APP_NOT_VISIBLE: "MAP_APP_NOT_VISIBLE",
+
   // screen-recording-start / screen-recording-stop. One capture path for every
   // platform (simulator-server's frame stream into ffmpeg), so the stages name
   // the step that failed rather than the device family.
