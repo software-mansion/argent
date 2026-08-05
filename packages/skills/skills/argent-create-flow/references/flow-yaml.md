@@ -120,19 +120,21 @@ Identity is an element that exists **only** on the destination ([which ones qual
 
 ### `idle` — readiness
 
-The one condition that carries no selector, because stillness is a property of the whole screen. It holds until the screen has content and stops moving in **both** the UI tree and the rendered pixels, and fails if it never does. A tree that stays empty or unreadable is `errored` instead — the check could not run, which is not a verdict about the app.
+The one condition that carries no selector, because stillness is a property of the whole screen. It returns the moment the screen has content and stops moving in **both** the UI tree and the rendered pixels, so the next tap resolves its target against a screen that has stopped rather than one still sliding under it.
 
 ```yaml
 - await: { idle: true, minStableMs: 400, timeout: 9000 }
 ```
 
-The pixel half is why it exists: an iOS push or modal dismissal commits its hierarchy up front and then animates a layer for a few hundred milliseconds, and a cross-fade or scrim moves no node at all. A tree-only wait returns while the screen is still sliding, and the next tap lands on a moving target.
+The pixel half is why it exists: an iOS push or modal dismissal commits its hierarchy up front and then animates a layer for a few hundred milliseconds, and a cross-fade or scrim moves no node at all. A tree-only wait returns mid-transition.
 
 `minStableMs` (default 250) is how long stillness must hold; it must be shorter than `timeout` (default 7500) or the gate could never pass, and parse rejects it. Stillness is measured across intervals, so a settle takes at least three reads: `minStableMs: 0` means "the first two agreeing intervals", not "the first read".
 
-This is the persistable counterpart of the `await-screen-idle` tool, whose soft `settled: false` cannot carry a verdict on an unattended replay. Prefer it over `wait:` for any transition with no element to gate on. It has no `assert` form — waiting is the whole point.
+It has no `assert` form — waiting is the whole point. Prefer it over `wait:` for any transition with no element to gate on.
 
-Three limits. It says nothing about **which** screen settled, so it never replaces the identity gate. Where no screenshot could be read it still passes on the tree alone, reporting a ⚠ warning that says so — treat that as the half-proof it names. And it cannot settle on a screen that never stops moving (a looping animation, a video, an advancing carousel) — gate on the element you actually need there.
+**It never fails a run.** A screen that never settles spends the timeout, then passes with a ⚠ warning — readiness is not an acceptance criterion, and healthy screens often never stop (a video, a shimmer, a carousel, live-updating text, which on Android moves the tree as well as the pixels). Treat that warning as a finding: go and look, because a load that never finished looks exactly the same from the report. Gate the next action on a stable element, never on stillness.
+
+Two more limits. It says nothing about **which** screen settled, so it never replaces the identity gate. And where no screenshot could be read it passes on the tree alone with a different ⚠ — the hierarchy held still, but presentation-layer motion above it was never waited out. Only an unreadable or permanently empty tree stops a run, as an `errored` step.
 
 Add one during polish after each screen change, not after every step: it is a directive with no live tool behind it, and each costs roughly 0.5-1.5 s warm — more on the first capture of a run.
 

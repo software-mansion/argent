@@ -76,7 +76,9 @@ Repeat this cycle for every action:
 On the destination screen, in this order:
 
 1. **Identity.** Record `await-ui-element` `visible` on an element that exists **only** on the destination — its root id, or a control no other screen in the flow shows. Anything the source screen also has passes without the navigation happening, so it proves nothing.
-2. **Readiness.** Add `- await: { idle: true }` during polish, and name in the preceding echo what it is waiting out. It is a directive, not a tool, so it cannot be recorded live — do not reach for the `await-screen-idle` tool instead, whose soft `settled: false` carries no verdict on an unattended replay.
+2. **Readiness.** Add `- await: { idle: true }` during polish, and name in the preceding echo what it is waiting out. It is a directive, not a tool, so it cannot be recorded live — do not persist `await-screen-idle` instead, which reads only the tree and returns while a transition is still animating over it.
+
+   It never fails; a screen that never settles passes with a ⚠ warning. **If you saw something moving on this screen — a video, a shimmer, a carousel, a spinner — expect that warning**, say so in the echo, and make sure the next action is gated on a stable element rather than on stillness.
 
    Where a specific control marks the screen usable, record an `await-ui-element` on that control as well — but it does not replace the `idle` gate, which is what waits out motion the tree cannot see.
 
@@ -235,5 +237,7 @@ rg -n 'open-url' .argent/flows/<name>.yaml
 Run `flow-execute` on the complete polished flow with the absolute project root. For a fragment, verify its prerequisite and rerun with `prerequisiteAcknowledged: true` when requested. A replay you rescued by hand is not a pass: if you tapped, waited, or reset anything to get the run through, the pass does not count.
 
 An `errored` step is not a failed one: it could not be evaluated at all — an unreadable tree, focus unconfirmed with nothing to read it from. Fix the environment named in its reason and rerun; it is not a verdict about the app and never counts for or against a pass.
+
+**A ⚠ on a passing step is a finding, not noise.** From `await: { idle: true }` it means the screen never stopped moving, and the report cannot tell intended motion from a load that never finished. Go and look at that screen, disclose what was moving, and confirm the following step targets a stable element.
 
 The base create-flow gate is one uninterrupted full pass of the finished YAML. Return to the invoking skill for any stronger completion rule: `argent-qa-flows` requires two consecutive full passes of the unchanged flow. For CI, use `argent flow run <name> [--platform ...]`; it exits non-zero on failure.

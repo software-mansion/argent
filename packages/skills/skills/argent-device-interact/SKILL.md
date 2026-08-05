@@ -229,7 +229,7 @@ Use after launch/navigation and before a raw tap, when an early-painted element 
 
 Local iOS, Android, and Chromium. It polls the same tree as `describe` until a non-empty one stops changing, and reports a timeout as a soft `settled: false` rather than throwing — so continue only on `settled: true`. An idle wrong screen is still wrong: pair it with `await-ui-element` on a destination-specific element.
 
-Live diagnosis only. Do not persist it in a flow and do not nest it in `run-sequence`. A flow's persistable equivalent is `await: { idle: true }`, which also compares screenshots and hard-fails on timeout.
+Live diagnosis only. Do not persist it in a flow and do not nest it in `run-sequence`. A flow's persistable equivalent is `await: { idle: true }`, which also compares screenshots — this tool reads the tree alone, so it returns while a transition is still animating over it.
 
 ---
 
