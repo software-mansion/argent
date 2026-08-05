@@ -1386,13 +1386,17 @@ function toYamlStep(step: FlowStep): YamlStep {
       }
 
       // Canonical minimal spelling: a direction with no other field
-      // round-trips to the bare-direction sugar (`swipe: left`).
+      // round-trips to the bare-direction sugar (`swipe: left`). A falsy
+      // `settle` counts as no field, matching the body builder below and
+      // parseSwipe's normalization of `settle: false` to absent — otherwise a
+      // programmatically-built step carrying the default would serialize to
+      // the verbose form.
       if (
         step.direction !== undefined &&
         step.from === undefined &&
         step.to === undefined &&
         step.by === undefined &&
-        step.settle === undefined &&
+        !step.settle &&
         step.duration === undefined
       ) {
         return { swipe: step.direction };
