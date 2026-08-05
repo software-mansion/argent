@@ -247,6 +247,39 @@ describe("flow-execute chromium boot", () => {
     expect(killChromiumByPortAndWait).toHaveBeenCalledWith(12345, 4242);
   });
 
+  it("auto-detects instead of booting when that same launch has no chromium hint", async () => {
+    // The negative twin: with neither --platform nor a lone chromium key, the
+    // launch names a phone as readily as a desktop app, so the hoist must stand
+    // down and let device detection pick — booting Electron here would run the
+    // wrong platform's app against a booted simulator.
+    const flowFile = await writeFlow(
+      "steps:\n  - launch: { ios: com.acme.app, chromium: ./app }\n"
+    );
+    // A real UDID shape: the runner reads the platform off the id.
+    const udid = "1A2B3C4D-5E6F-4A8B-9C0D-1E2F3A4B5C6D";
+    const registry = makeRegistry(async (id: string) =>
+      id === "list-devices" ? { devices: [{ platform: "ios", udid, state: "Booted" }] } : {}
+    );
+    // The ios launch waits on native devtools; hand it a connected one.
+    (registry.resolveService as any).mockImplementation(async () => ({ isConnected: () => true }));
+
+    const result = await runFlow(registry, {
+      name: "ambiguous",
+      project_root: PROJECT_ROOT,
+      flow_file: flowFile,
+    });
+
+    expect(bootElectronApp).not.toHaveBeenCalled();
+    expect(result.device).toBe(udid);
+    expect(result.steps[0]).toMatchObject({ kind: "launch", status: "pass" });
+    // The run went to the phone, not the desktop app: the launch restarted the
+    // ios app id it declared.
+    expect((registry.invokeTool as any).mock.calls).toContainEqual([
+      "restart-app",
+      { bundleId: "com.acme.app" },
+    ]);
+  });
+
   it("takes an absolute launch path as-is", async () => {
     const flowFile = await writeFlow("steps:\n  - launch: { chromium: /abs/app }\n");
     const registry = makeRegistry();
