@@ -1692,8 +1692,8 @@ const IDLE_CONDITION = "idle";
 
 /**
  * `idle`'s defaults, spelled here rather than beside the runner because the
- * parser needs the timeout one: a hold that cannot fit inside the wait is a
- * gate that fails on every run, and this file rejects unsatisfiable gates.
+ * parser needs the timeout one: a hold that cannot fit inside the wait can
+ * never be satisfied, and this file rejects unsatisfiable gates.
  */
 export const IDLE_DEFAULT_TIMEOUT_MS = 7500;
 export const IDLE_DEFAULT_MIN_STABLE_MS = 250;
@@ -1762,8 +1762,9 @@ function parseIdleFields(raw: Record<string, unknown>, kind: "await" | "assert")
   if ("timeout" in raw) step.timeout = parseAwaitTimeout(entry, raw.timeout);
   if (raw.minStableMs !== undefined) {
     // A hold as long as the whole wait can never be observed within it, so the
-    // step would fail on every run — and fail blaming the app, which is the one
-    // thing such a failure is not evidence about. Caught here, deviceless.
+    // step would spend its full timeout and warn on every run, however still
+    // the screen was — a gate that cannot pass, reported as if the app were at
+    // fault. Caught here, deviceless.
     const timeoutMs = step.timeout ?? IDLE_DEFAULT_TIMEOUT_MS;
     step.minStableMs = parseBoundedMs(
       entry,

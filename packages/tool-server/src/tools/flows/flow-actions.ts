@@ -1150,6 +1150,16 @@ async function waitForCondition(
 // the screen stopped moving? It is deliberately NOT an identity check — a
 // dropped tap leaves the source screen perfectly idle — so it belongs next to
 // the element check that says WHICH screen, never instead of it.
+//
+// It never fails a run. Readiness is not an acceptance criterion: the flow's
+// verdict belongs to the identity and outcome checks around it, and a screen
+// that keeps moving is usually a property of the app rather than a regression
+// — a video, a shimmer, a carousel. On Android it is also routine: that tree
+// carries live text, so a ticking timer or a relative timestamp moves it on
+// every read, where the iOS tree cannot see either. Hard-failing on a signal
+// that sensitive, and that different per platform, turns one flow file into
+// two verdicts. So a screen that never settles is reported as a WARNING on a
+// passing step, naming what to look at.
 
 /**
  * `idle` poll cadence, matching `await-screen-idle`'s own. The timeout and hold
@@ -1201,8 +1211,14 @@ type TreeReadOutcome = "value" | "error" | "timeout";
  * a screen the tree calls ready.
  *
  * This is `await-screen-idle`'s question asked against the tree the directives
- * actually resolve against, and — unlike that tool — it FAILS when the screen
- * never settles, which is what makes it safe to persist in a flow.
+ * actually resolve against. It returns early the moment the screen is still,
+ * which is the point: the following tap resolves its target against a screen
+ * that has stopped, instead of racing a transition still in flight.
+ *
+ * A screen that never settles spends the whole timeout and then passes with a
+ * warning (see the section note above). Only an unreadable window is a hard
+ * stop, and it is `indeterminate` — the check could not run, which is not a
+ * verdict about the app.
  *
  * Every verdict is drawn from the LAST round that observed something, never
  * from a latch remembering that the screen was once still: a screen that
@@ -1406,12 +1422,13 @@ async function waitForIdle(
     };
   }
   return {
-    ok: false,
-    reason:
-      `the screen never held still for ${minStableMs}ms within ${timeoutMs}ms — the UI tree or ` +
-      `the pixels kept changing, so it is still animating, or something on it never stops moving ` +
-      `(a looping animation, a video, a carousel that keeps advancing). Gate on the element you ` +
-      `actually need instead of on stillness.`,
+    ok: true,
+    warning:
+      `the screen never held still for ${minStableMs}ms within ${timeoutMs}ms, so this step went ` +
+      `ahead without waiting it out. Either something on it never stops (a video, a looping ` +
+      `animation, a carousel, live-updating text) or the screen never finished loading — a stuck ` +
+      `spinner looks like both. Look at what is moving, and make sure the next action is gated on ` +
+      `a stable element rather than on stillness.`,
   };
 }
 
