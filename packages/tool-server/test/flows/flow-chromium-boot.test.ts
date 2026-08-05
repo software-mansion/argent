@@ -535,6 +535,40 @@ describe("flow-execute chromium boot", () => {
     expect(killChromiumByPort).not.toHaveBeenCalled();
   });
 
+  it("does not kill the retired instance twice when the relaunch boot then fails", async () => {
+    // The retire tears down the run's only instance of that app before the
+    // replacement exists, so a failing boot leaves the run holding none of it —
+    // and the run-end sweep must not reach the one already killed.
+    const flowFile = await writeFlow(
+      "steps:\n  - launch: { chromium: ./app }\n  - launch: { chromium: ./app }\n  - echo: after\n"
+    );
+    const registry = makeRegistry();
+    bootElectronApp.mockImplementationOnce(defaultBoot).mockImplementationOnce(async () => {
+      throw new Error("Electron boot: failed to spawn electron: EACCES");
+    });
+
+    const result = await runFlow(registry, {
+      name: "retire-then-fail",
+      project_root: PROJECT_ROOT,
+      flow_file: flowFile,
+    });
+
+    expect(result.ok).toBe(false);
+    // The failed launch hard-stops the run, so nothing runs on the dead instance.
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "launch:pass",
+      "launch:error",
+      "echo:skip",
+    ]);
+    expect(result.steps[1]!.reason).toBe(
+      "could not boot the chromium app: Electron boot: failed to spawn electron: EACCES"
+    );
+    // The retire is the only kill: the instance left state.owned when it was
+    // retired, and the boot that would have replaced it never landed there.
+    expect(killChromiumByPortAndWait.mock.calls).toEqual([[12345, 4242]]);
+    expect(killChromiumByPort).not.toHaveBeenCalled();
+  });
+
   it("marks the instance the run left and the older one it retired, on a cross-app relaunch", async () => {
     // Relaunching app-a while the run sits on app-b's instance retires app-a's
     // OLD instance but moves the run off app-b's — "retired" would be false for
