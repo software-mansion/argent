@@ -396,6 +396,21 @@ export type FlowFile = {
 };
 
 /**
+ * The literal child steps of a block directive, or undefined for a leaf step.
+ *
+ * The single predicate for "this step has authored children". The runner reads
+ * it wherever a block does NOT execute — a hard stop, a device-free flow, a
+ * cancellation, an unmet guard — to expand the block's steps as skip lines, so
+ * a report keeps one line per authored step no matter where the run ended. Four
+ * sites asked `kind === "when"` directly before this existed; a second block
+ * directive would have had to remember all four, and a forgotten one drops a
+ * whole block from the report silently. Now it is one case here.
+ */
+export function blockSteps(step: FlowStep): FlowStep[] | undefined {
+  return step.kind === "when" ? step.steps : undefined;
+}
+
+/**
  * A flow is end-to-end iff it BEGINS by launching an app — its first step
  * (ignoring `echo` narration) is a `launch`. Such a flow controls its own
  * start state, so it is the natural standalone/suite entry point and must not
@@ -1427,6 +1442,14 @@ const STEP_DIRECTIVE_KEYS: readonly string[] = [
 ];
 
 /**
+ * The directive keys that carry a sibling `steps:` list. Parse-time counterpart
+ * to {@link blockSteps} (which answers the same question about an already
+ * parsed step): these are exempt from the single-key sibling check, because
+ * their own parser validates their siblings with pointed messages.
+ */
+const BLOCK_DIRECTIVE_KEYS: readonly string[] = ["when"];
+
+/**
  * Parse `times` on a tap body: an integer tap count dispatched as ONE
  * multi-tap gesture (2 = double-tap; the OS may recognize it as such — N
  * *independent* taps are N tap steps). `times: 1` is the default and
@@ -1719,13 +1742,50 @@ function parseWhenCondition(raw: unknown): WhenCondition {
 }
 
 /**
- * Nesting cap for `when` blocks — the parse-side analog of flow-run's
- * MAX_RUN_DEPTH. `when` is the only step kind whose parse recurses into child
- * steps, and the yaml library happily materializes a cyclic alias
- * (`steps: &s … steps: *s`) as a cyclic object; without a cap that cycle
+ * Nesting cap for block directives — the parse-side analog of flow-run's
+ * MAX_RUN_DEPTH. A block directive is the only kind of step whose parse
+ * recurses into child steps, and the yaml library happily materializes a cyclic
+ * alias (`steps: &s … steps: *s`) as a cyclic object; without a cap that cycle
  * escapes parseFlow as a raw RangeError instead of a structured parse error.
+ *
+ * ONE counter shared by every block directive, deliberately: a per-directive
+ * counter would let an alternating chain evade all of them and reopen the hole.
  */
-const MAX_WHEN_DEPTH = 20;
+const MAX_BLOCK_DEPTH = 20;
+
+/**
+ * Guard a block directive's recursion depth. Called FIRST in a block's parse —
+ * before its own key/shape checks — so a cyclic alias reports as a depth error
+ * rather than surfacing whatever the cycle happens to make the shallower checks
+ * say.
+ */
+function assertBlockDepth(raw: unknown, depth: number): void {
+  if (depth >= MAX_BLOCK_DEPTH) {
+    badEntry(
+      raw,
+      `block directives nest deeper than ${MAX_BLOCK_DEPTH} levels — check for a cyclic YAML alias (\`steps: &s … steps: *s\`)`
+    );
+  }
+}
+
+/**
+ * Parse a block directive's sibling `steps:` list: non-empty, every entry an
+ * object, each parsed one level deeper so the shared depth cap sees the whole
+ * chain. `emptyDetail` is the directive's own message for an absent or empty
+ * list — the one part worth phrasing per directive, since it is where an author
+ * lands when they wrote the guard but not the body.
+ */
+function parseBlockSteps(
+  raw: Record<string, unknown>,
+  depth: number,
+  emptyDetail: string
+): FlowStep[] {
+  if (!Array.isArray(raw.steps) || raw.steps.length === 0) badEntry(raw, emptyDetail);
+  return (raw.steps as unknown[]).map((s) => {
+    if (s !== null && typeof s === "object") return fromYamlStep(s as YamlStep, depth + 1);
+    return badEntry(s, "step must be an object");
+  });
+}
 
 /**
  * Parse a `when` step: `{ when: <condition>, steps: [<step>, …] }` — a guarded
@@ -1734,12 +1794,7 @@ const MAX_WHEN_DEPTH = 20;
  * back on the known path), so paths may only reconverge, never diverge.
  */
 function parseWhenStep(raw: Record<string, unknown>, depth: number): FlowStep {
-  if (depth >= MAX_WHEN_DEPTH) {
-    badEntry(
-      raw,
-      `when blocks nest deeper than ${MAX_WHEN_DEPTH} levels — check for a cyclic YAML alias (\`steps: &s … steps: *s\`)`
-    );
-  }
+  assertBlockDepth(raw, depth);
   if ("else" in raw) {
     badEntry(
       raw,
@@ -1750,13 +1805,7 @@ function parseWhenStep(raw: Record<string, unknown>, depth: number): FlowStep {
     badEntry(raw, "a when step takes exactly { when: <condition>, steps: [...] }");
   }
   const condition = parseWhenCondition(raw.when);
-  if (!Array.isArray(raw.steps) || raw.steps.length === 0) {
-    badEntry(raw, "when needs a non-empty steps list to guard");
-  }
-  const steps = (raw.steps as unknown[]).map((s) => {
-    if (s !== null && typeof s === "object") return fromYamlStep(s as YamlStep, depth + 1);
-    return badEntry(s, "step must be an object");
-  });
+  const steps = parseBlockSteps(raw, depth, "when needs a non-empty steps list to guard");
   return { kind: "when", condition, steps };
 }
 
@@ -1865,7 +1914,7 @@ function completeRunExtension(value: string): string {
   return FLOW_FILE_NAME_PATTERN.test(path.posix.basename(candidate)) ? candidate : value;
 }
 
-function fromYamlStep(raw: YamlStep, whenDepth = 0): FlowStep {
+function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
   const entry = raw as Record<string, unknown>;
   // There is deliberately no per-step `optional:` — it would have to be
   // re-plumbed into every action directive (and each future gesture
@@ -1894,12 +1943,12 @@ function fromYamlStep(raw: YamlStep, whenDepth = 0): FlowStep {
   }
   // Only a `tool` step carries sibling keys (`args`, `delayMs`); every other
   // directive step is a single-key mapping — its options live INSIDE the
-  // value, so a sibling key is a mis-nested or misspelled option. A `when`
-  // step also carries siblings (`steps`, and the rejected `else`), but
-  // parseWhenStep validates them itself with pointed messages, so the generic
-  // check stays out of its way.
+  // value, so a sibling key is a mis-nested or misspelled option. A block
+  // directive also carries siblings (`steps`, and whatever it rejects beside
+  // it), but its own parser validates them with pointed messages, so the
+  // generic check stays out of its way.
   const kind = kinds[0]!;
-  if (kind !== "when") {
+  if (!BLOCK_DIRECTIVE_KEYS.includes(kind)) {
     const siblings = kind === "tool" ? ["tool", "args", "delayMs"] : [kind];
     const extras = Object.keys(entry).filter((k) => !siblings.includes(k));
     if (extras.length > 0) {
@@ -1916,7 +1965,7 @@ function fromYamlStep(raw: YamlStep, whenDepth = 0): FlowStep {
   if ("echo" in raw) return { kind: "echo", message: String(raw.echo) };
   if ("launch" in raw) return { kind: "launch", app: parseLaunch(raw.launch) };
   if ("run" in raw) return { kind: "run", flow: parseRunTarget(raw, raw.run) };
-  if ("when" in raw) return parseWhenStep(entry, whenDepth);
+  if ("when" in raw) return parseWhenStep(entry, blockDepth);
 
   if ("tap" in raw) return parseTap((raw as { tap: unknown }).tap, raw);
 
