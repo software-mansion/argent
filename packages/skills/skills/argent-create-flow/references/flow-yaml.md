@@ -132,9 +132,9 @@ The pixel half is why it exists: an iOS push or modal dismissal commits its hier
 
 It has no `assert` form — waiting is the whole point. Prefer it over `wait:` for any transition with no element to gate on.
 
-**It never fails a run.** A screen that never settles spends the timeout, then passes with a ⚠ warning — readiness is not an acceptance criterion, and healthy screens often never stop (a video, a shimmer, a carousel, live-updating text, which on Android moves the tree as well as the pixels). Treat that warning as a finding: go and look, because a load that never finished looks exactly the same from the report. Gate the next action on a stable element, never on stillness.
+**It never fails a run.** A screen that never settles spends the timeout, then passes with a `warning` on the step — readiness is not an acceptance criterion, and healthy screens often never stop (a video, a shimmer, a carousel, live-updating text, which on Android moves the tree as well as the pixels). Treat that warning as a finding: go and look, because a load that never finished looks exactly the same from the report. Gate the next action on a stable element, never on stillness.
 
-Two more limits. It says nothing about **which** screen settled, so it never replaces the identity gate. And where no screenshot could be read it passes on the tree alone with a different ⚠ — the hierarchy held still, but presentation-layer motion above it was never waited out. Only an unreadable or permanently empty tree stops a run, as an `errored` step.
+Two more limits. It says nothing about **which** screen settled, so it never replaces the identity gate. And where no screenshot could be read it passes on the tree alone with a different `warning` — the hierarchy held still, but presentation-layer motion above it was never waited out. Only an unreadable or permanently empty tree stops a run, as an `errored` step.
 
 Add one during polish after each screen change, not after every step: it is a directive with no live tool behind it, and each costs roughly 0.5-1.5 s warm — more on the first capture of a run.
 

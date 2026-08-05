@@ -98,7 +98,7 @@ After the last edit and audit, set the pass streak to zero:
 3. Make the first trial fresh, through the same Argent server as the chosen runner — two warm passes are correlated evidence, because a fixed timing margin can pass twice simply because environment speed did not change. Recycle the services with `stop-all-simulator-servers`, scoped to `devices: [<this flow's device>]` so a shared tool-server's other agents keep theirs: through that MCP connection before two `flow-execute` passes, or `argent run stop-all-simulator-servers` from the same Argent install before two standalone passes. Nothing needs reconnecting: the run establishes its own device and debugger connections, and the reset does not alter app/account data. For Chromium, let the runner boot the declared app path without an explicit `device` pin.
 4. Run the entire flow from its own launch and in-flow setup, without baseline-update mode. Increment the streak only when the run reports `ok: true` and every required acceptance check—including each snapshot comparison—executed. A false `when:` may skip optional setup/interstitial steps only. A run with `errored > 0` neither passes nor fails: fix the environment and rerun, and do not report it as a regression.
 
-   A ⚠ on a passing step does not block the streak, but it must be resolved before you finish. An `idle` warning means that screen never stopped moving, and nothing in the report distinguishes intended motion from a load that never completed. Inspect the screen, disclose the cause, and confirm the acceptance checks around it rest on stable elements rather than on stillness.
+   A passing step that carries a `warning` does not block the streak, but it must be resolved before you finish. An `idle` warning means that screen never stopped moving, and nothing in the report distinguishes intended motion from a load that never completed. Inspect the screen, disclose the cause, and confirm the acceptance checks around it rest on stable elements rather than on stillness.
 
 5. Run the same unchanged flow again immediately with the same runner. Do not manually reset app/account data between passing runs; the flow must make run 2 valid.
 6. On any failure, YAML edit, re-recording, baseline update, or manual state-changing recovery, reset the streak to zero. Diagnose and repair through `argent-create-flow`, audit, and restart proof from step 1, including the fresh-service setup.
@@ -116,7 +116,7 @@ Report:
 - the test-contract table, restated with its requirement-to-step/check mapping and any interpretation chosen;
 - the navigation table from the audit;
 - how the persistent baseline and end state are established;
-- both consecutive passing run results, runner used, and fresh-service setup before pass 1, plus every ⚠ warning either run raised and what you found behind it;
+- both consecutive passing run results, runner used, and fresh-service setup before pass 1, plus every step `warning` either run raised and what you found behind it;
 - every snapshot name/scope, reviewed baseline status, and justified mismatch tolerance;
 - coordinate/raw-gesture exceptions and accepted live-data dependencies;
 - any remaining manual judgment or blocker.
