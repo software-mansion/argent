@@ -978,6 +978,67 @@ describe("swipe: execution", () => {
     });
   });
 
+  it.each([
+    // Same schema-conformant shape the start guard pins, on the lift instead of
+    // the touch-down: describeFrameSchema bounds x/y/width/height to [0, 1]
+    // independently, so x=0.85 + width 0.4 parses fine yet centres at x=1.05.
+    // `to` is the only travel spelling that can carry a resolved endpoint
+    // off-screen, and every one of these clears the travel floor from the
+    // default (0.5, 0.5) start — without the bounds check the step would
+    // dispatch a swipe whose finger lifts outside the screen.
+    ["off the right edge (x > 1)", { x: 0.85, y: 0.4, width: 0.4, height: 0.2 }],
+    ["off the bottom edge (y > 1)", { x: 0.4, y: 0.85, width: 0.2, height: 0.4 }],
+    // A negative origin cannot pass the frame schema, but the guard sits behind
+    // adapters and mocked trees that bypass it — pin the < 0 arms too.
+    ["off the left edge (x < 0)", { x: -0.5, y: 0.4, width: 0.2, height: 0.2 }],
+    ["off the top edge (y < 0)", { x: 0.4, y: -0.5, width: 0.2, height: 0.2 }],
+  ] as const)(
+    "rejects a selector-derived to whose centre resolves %s",
+    async (_description, frame) => {
+      currentTree = () => screen([n({ label: "Card", frame })]);
+      await writeFlow("to-offscreen-centre", {
+        executionPrerequisite: "",
+        steps: [{ kind: "swipe", to: { selector: { text: "Card", loose: true } } }],
+      });
+
+      const result = await run("to-offscreen-centre");
+
+      expect(result.ok).toBe(false);
+      expect(result.steps[0]).toMatchObject({
+        kind: "swipe",
+        status: "fail",
+        reason: expect.stringMatching(/swipe\.to resolved outside.*between 0 and 1/i),
+      });
+      expect(result.calls).toEqual([]);
+    }
+  );
+
+  it.each([
+    ["x", { x: Number.NaN, y: 0.4, width: 0.4, height: 0.2 }],
+    ["y", { x: 0.4, y: Number.NaN, width: 0.4, height: 0.2 }],
+  ] as const)("rejects a selector-derived to whose centre %s is NaN", async (_axis, frame) => {
+    // NaN fails every < / > comparison — and makes the travel hypot NaN, so the
+    // minimum-travel gate below waves it through as well. Only the
+    // Number.isFinite arms stop a buggy adapter frame from dispatching a NaN
+    // lift. A NaN ORIGIN is the reachable shape: a NaN width or height already
+    // fails isVisible and never resolves.
+    currentTree = () => screen([n({ label: "Card", frame })]);
+    await writeFlow("to-nan-centre", {
+      executionPrerequisite: "",
+      steps: [{ kind: "swipe", to: { selector: { text: "Card", loose: true } } }],
+    });
+
+    const result = await run("to-nan-centre");
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]).toMatchObject({
+      kind: "swipe",
+      status: "fail",
+      reason: expect.stringMatching(/swipe\.to resolved outside.*between 0 and 1/i),
+    });
+    expect(result.calls).toEqual([]);
+  });
+
   it("fails with the scroll-to hint when the from anchor never appears", async () => {
     currentTree = () => screen([]);
     await writeFlow("from-missing", {
