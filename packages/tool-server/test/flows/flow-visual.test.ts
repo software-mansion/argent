@@ -640,4 +640,48 @@ describe("runSnapshot cropOn", () => {
 
     expect(r1.snapshotKey).not.toBe(r2.snapshotKey);
   });
+
+  it("fails a crop key recaptured from another app, like any other key", async () => {
+    const seenKeys = new Map<string, string>();
+
+    const r1 = await runSnapshot(env, opts({ updateBaselines: true, cropOn, seenKeys }));
+    const r2 = await runSnapshot(
+      env,
+      opts({ updateBaselines: true, cropOn, seenKeys, appIdentity: "/apps/app-b" })
+    );
+
+    expect(r1.status).toBe("pass");
+    expect(r2.status).toBe("fail");
+    expect(r2.reason).toContain("already captured in this run from a different app (/apps/app-a)");
+    expect(r2.reason).toContain(`${cropKey}.png`);
+    // One file on disk: app-b never wrote over app-a's crop.
+    const files = await fs.readdir(path.join(tmpDir, "__baselines__", "checkout"));
+    expect(files).toEqual([`${cropKey}.png`]);
+  });
+
+  it("lets two apps share a snapshot name when they crop different elements", async () => {
+    // The keys carry the selector, so the two never share a baseline file —
+    // a guard keyed on the snapshot NAME would wrongly reject this.
+    const seenKeys = new Map<string, string>();
+
+    const r1 = await runSnapshot(
+      env,
+      opts({ updateBaselines: true, cropOn: { text: "Header" }, seenKeys })
+    );
+    const r2 = await runSnapshot(
+      env,
+      opts({
+        updateBaselines: true,
+        cropOn: { identifier: "hdr" },
+        seenKeys,
+        appIdentity: "/apps/app-b",
+      })
+    );
+
+    expect(r1.status).toBe("pass");
+    expect(r2.status).toBe("pass");
+    expect(r1.snapshotKey).not.toBe(r2.snapshotKey);
+    const files = await fs.readdir(path.join(tmpDir, "__baselines__", "checkout"));
+    expect(files.sort()).toEqual([`${r1.snapshotKey}.png`, `${r2.snapshotKey}.png`].sort());
+  });
 });
