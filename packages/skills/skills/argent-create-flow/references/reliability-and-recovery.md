@@ -2,7 +2,13 @@
 
 Read this file when selector capture warns, a finished file contains coordinates/raw scrolling, a transition or overlay can swallow an action, the platform's flow tree source is unavailable (iOS native devtools, the Android helper, a Chromium CDP session, the Vega toolkit), or a replay fails.
 
-[Coordinate fallback gate](#coordinate-fallback-gate) · [iOS selector recovery](#ios-selector-recovery) · [Tree source recovery on Android, Chromium, and Vega](#tree-source-recovery-on-android-chromium-and-vega) · [Strong transition gates](#strong-transition-gates) · [Obscured targets and persistent overlays](#obscured-targets-and-persistent-overlays) · [Diagnose a replay failure](#diagnose-a-replay-failure) · [Correct the smallest justified unit](#correct-the-smallest-justified-unit)
+- [Coordinate fallback gate](#coordinate-fallback-gate)
+- [iOS selector recovery](#ios-selector-recovery)
+- [Tree source recovery on Android, Chromium, and Vega](#tree-source-recovery-on-android-chromium-and-vega)
+- [Strong transition gates](#strong-transition-gates)
+- [Obscured targets and persistent overlays](#obscured-targets-and-persistent-overlays)
+- [Diagnose a replay failure](#diagnose-a-replay-failure)
+- [Correct the smallest justified unit](#correct-the-smallest-justified-unit)
 
 ## Coordinate fallback gate
 
@@ -14,7 +20,7 @@ Use this order for every element-targeting action, applying the [stable-selector
 4. `scroll-to` plus one of those selectors for an off-screen target;
 5. raw coordinates only after completing this gate.
 
-An element-seeking swipe follows the same rule: if its purpose is to reveal a target, replace it with `scroll-to`. Keep a coordinate swipe only when the gesture itself is the intended UI action—for example, testing or invoking a real swipe-to-dismiss interaction—and no selector-based directive expresses it.
+An element-seeking swipe follows the same rule: if its purpose is to reveal a target, replace it with `scroll-to`. Keep a coordinate swipe only when the gesture itself is the intended UI action — for example, testing or invoking a real swipe-to-dismiss interaction — and no selector-based directive expresses it.
 
 ### Run the gate on the warning, not at audit time
 
@@ -23,10 +29,11 @@ Work this gate the moment `flow-add-step` warns that it kept a raw point, while 
 1. On iOS, make an evidenced full-tree probe before keeping the point: query each plausible id/label with `native-find-views`; when there is no useful query term, call `native-full-hierarchy` with narrow `fields` and `maxDepth: 100`. Record the relevant match or no-match result with the exception evidence. `describe` and the leaf-only `native-describe-screen` are accessibility projections and are never sufficient evidence that no flow selector exists. A recorder warning only proves automatic derivation failed; it does not rule out a sibling or child label that can safely receive the tap.
 2. On other platforms, inspect the deepest available app tree: `debugger-component-tree` for React Native, otherwise `describe`. On Android no tool exposes the runner's tree at all, so step 3 is the only way to confirm a candidate there. Prefer an id on iOS and Android even when trimmed discovery omits it; on Chromium the runner's tree is a [subset of `describe`](flow-yaml.md#the-runner-tree-is-not-the-discovery-tree), so an element absent there has no selector at all.
 3. Verify candidates in a scratch fragment containing `assert: { visible: <candidate> }`, executed on the valid target screen. If one passes, replace the point. If it fails, inspect the exact reason and try a better id, label, target app, or container; do not assume a visible miss is depth truncation.
+4. If no candidate resolves and you have the app's source, read it for the element's `testID` / `accessibilityIdentifier` / `resource-id` — the code is the one projection no discovery tool trims, and it names ids the others can drop. If the element has none, tell the user which element needs a stable test id and report that as the real fix; a kept coordinate is the workaround.
 
 A tree-unavailable error makes the candidate run **void** — on iOS an error containing `could not target a native-devtools-connected app` or `native devtools is unavailable`, on Android a failure to reach the devtools helper, on Chromium an unreachable CDP session, on Vega a missing page source. It proves the tree was absent, not that the selector failed, and never authorizes coordinates — and it is the same reason the recorder quotes back in its `selector capture failed` warning, so read that warning before treating it as a verdict about the element.
 
-Coordinates may remain only when the target is genuinely unlabeled (no id/text/label in available discovery) or all plausible labeled candidates failed against a working flow tree. Precede the kept point with an echo naming the target, follow it with an `await:` or `assert:` that proves the result, and report the evidence. Anything the gate did not clear gets re-recorded against a selector, not annotated. A QA flow may keep such a step only for a genuinely unlabeled target, and every kept coordinate must appear in the report with its evidence; any other kept coordinate is a blocking defect.
+Coordinates may remain only when the target is genuinely unlabeled (no id/text/label in available discovery) or all plausible labeled candidates failed against a working flow tree. Precede the kept point with an echo naming the target, and follow it with an `await:`/`assert:` on the **outcome** — the destination screen, the changed state, the element that disappeared. The target itself has no selector to check, so what makes the step falsifiable is proof that the tap landed, not proof that the target exists. Report the evidence. Anything the gate did not clear gets re-recorded against a selector, not annotated. A QA flow may keep such a step only for a genuinely unlabeled target, and every kept coordinate must appear in the report with its evidence; any other kept coordinate is a blocking defect.
 
 ## iOS selector recovery
 
@@ -117,7 +124,7 @@ Then:
 ## Correct the smallest justified unit
 
 - **Parameter/selector error in one step:** edit the YAML, preferring a stable selector over a new coordinate.
-- **Timing/readiness failure:** repair the transition gate, then audit every step of the same shape in the flow—especially taps after a launch, screen push, drawer/sheet open, or mutating action. A fixed delay at only the observed failure leaves the same race at the other sites.
+- **Timing/readiness failure:** repair the transition gate, then audit every step of the same shape in the flow — especially taps after a launch, screen push, drawer/sheet open, or mutating action. A fixed delay at only the observed failure leaves the same race at the other sites.
 - **Identity failure (a silent misfire, or arrival on the wrong screen):** run the same same-shape audit. Every navigation gated the same weak way has the same defect, whether or not it has surfaced yet.
 - **One new/missing transition or two to three structural steps:** reset to entry state and re-record the working prefix and changed portion live.
 - **Four or more broken steps, unclear state, or comparison/profiling flow:** fully re-record so every action is exercised consistently.

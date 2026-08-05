@@ -40,21 +40,23 @@ Make repeated runs deterministic:
 - Gate the normalized baseline early and hard. After launch, required non-mutating navigation, and any recorded reset/seed setup, add an echo that names the baseline and an `assert:` that proves it before the first scenario mutation. A destination-unique `await:` may serve as that hard gate only when it completely proves the named baseline. A dirty baseline must fail in setup, not many steps later on an unrelated check.
 - Preferably restore the same data state at the end, so run N and run N+1 start from the same place.
 
-Use `run:` for a dedicated reset/seed flow recorded under the same live-authoring rules—there is no other fixture mechanism. If safe cleanup is unspecified and would create/delete meaningful user data beyond the test, ask before recording.
+Use `run:` for a dedicated reset/seed flow recorded under the same live-authoring rules — there is no other fixture mechanism. If safe cleanup is unspecified and would create/delete meaningful user data beyond the test, ask before recording.
 
 ### Worked example
 
 Ticket: "On iOS in `com.acme.shop`, from signed-in Home, select the Dark theme in Settings and verify that Settings renders in dark mode, Dark is selected, and Light is not."
 
-| Contract row              | Action                                              | Stable executable evidence                    | Data / side effect                                   |
-| ------------------------- | --------------------------------------------------- | --------------------------------------------- | ---------------------------------------------------- |
-| App and named start state | Restart iOS app `com.acme.shop` from signed-in Home | `home-screen` visible, then `idle`            | Existing signed-in account                           |
-| Reach Settings            | Tap `settings-tab`                                  | `settings-screen` visible, then `idle`        | None                                                 |
-| Select Dark               | Tap `theme-dark-option`                             | `theme-dark-selected` is visible              | Theme becomes Dark; selecting it again is idempotent |
-| Exclude old state         | Inspect the settled Settings screen                 | `theme-light-selected` is hidden              | None                                                 |
-| Render dark appearance    | Compare the stable Settings screen                  | `settings-dark` matches its reviewed snapshot | Dark palette is visible across the screen            |
+| Contract row              | Action                                              | Stable executable evidence                    | Data / side effect                                 |
+| ------------------------- | --------------------------------------------------- | --------------------------------------------- | -------------------------------------------------- |
+| App and named start state | Restart iOS app `com.acme.shop` from signed-in Home | `home-screen` visible, then `idle`            | Existing signed-in account                         |
+| Reach Settings            | Tap `settings-tab`                                  | `settings-screen` visible, then `idle`        | None                                               |
+| Normalized theme baseline | Inspect the settled Settings screen                 | `assert:` `theme-light-selected` is visible   | Fails in setup if an earlier run left Dark         |
+| Select Dark               | Tap `theme-dark-option`                             | `theme-dark-selected` is visible              | Theme becomes Dark                                 |
+| Exclude old state         | Inspect the settled Settings screen                 | `theme-light-selected` is hidden              | None                                               |
+| Render dark appearance    | Compare the stable Settings screen                  | `settings-dark` matches its reviewed snapshot | Dark palette is visible across the screen          |
+| Restore the baseline      | Tap `theme-light-option`                            | `theme-light-selected` is visible             | Theme back to Light, so run N+1 starts where N did |
 
-Two rows carry more weight than they look: `home-screen` proves the named baseline because it exists only in the signed-in state, and `theme-light-selected` is what makes the closing `hidden` check a verdict rather than an unfalsifiable pass.
+Three rows carry more weight than they look. `home-screen` proves the named baseline because it exists only in the signed-in state. The Light-selected `assert:` does double duty: it fails in setup if a previous run left the app Dark, and it establishes `theme-light-selected` so the later `hidden` check is a verdict rather than an unfalsifiable pass. The closing restore is what keeps that baseline true — without it run 2 starts Dark, the tap changes nothing, and every check below it still passes, so the second consecutive pass proves nothing the first did.
 
 ## 2. Record under the QA contract
 
@@ -65,10 +67,10 @@ Record each structural contract verification as soon as its state appears. A `sn
 ## 3. Make each verification discriminating
 
 - **State change:** prove the new state and that the old state is absent when both could otherwise match.
-- **Cancel/persistence:** cross the commit boundary—leave the screen, re-enter it, then verify the stored state.
+- **Cancel/persistence:** cross the commit boundary — leave the screen, re-enter it, then verify the stored state.
 - **Absence/removal:** first prove the correct containing screen/list loaded, then record the trio in order (`visible` → action → `hidden`). Nothing enforces the order for you: a `hidden` whose selector never matched records as a clean pass, flagged only by a note in the tool result. Prefer a positive replacement/empty state alongside. In a scrollable collection `hidden` proves only the loaded/visible tree: use seeded data that fixes the expected row position, a section count/empty state, or other collection-wide evidence instead of claiming global absence from one viewport.
 - **Overlays over the next target:** a `visible` check on the target passes while a toast eats the tap — follow `argent-create-flow`'s [obscured-targets procedure](../argent-create-flow/references/reliability-and-recovery.md#obscured-targets-and-persistent-overlays) whenever a save/follow/delete raises one over the next target.
-- **Repeated controls and section/list membership:** prefer a stable target id; otherwise bind the target/check to its row or card with flow-only `within`. Use `text.in` on a stable container to prove rendered membership, not merely that the same name exists somewhere on screen.
+- **Repeated controls and section/list membership:** prefer a stable target id; otherwise bind the target/check to its row or card with flow-only [`within`](../argent-create-flow/references/flow-yaml.md#relational-scopes), whose containment is geometric. Use `text.in` on a stable container to prove rendered membership, not merely that the same name exists somewhere on screen.
 - **Dynamic content:** assert app chrome or state the flow controls. Use a structural/regex check for unavoidable dynamic values, and disclose any accepted live-data dependency.
 - **Visual appearance:** follow [Flow YAML: Snapshots](../argent-create-flow/references/flow-yaml.md#snapshots-and-standalone-runs). Snapshot only a correct, settled, deterministic state; use full-screen comparison for global changes and `cropOn` for a component.
 
@@ -96,7 +98,7 @@ After the last edit and audit, set the pass streak to zero:
 1. Choose the runner the test will actually use for both passes: `flow-execute` for a local-only flow, or `argent flow run <name> --platform <platform>` for CI. Switching runners resets the streak.
 2. If the flow contains snapshots, seed, review, and freeze their baselines according to `argent-create-flow`. A baseline update does not count as a pass; never use one to dismiss an unexplained diff.
 3. Make the first trial fresh, through the same Argent server as the chosen runner — two warm passes are correlated evidence, because a fixed timing margin can pass twice simply because environment speed did not change. Recycle the services with `stop-all-simulator-servers`, scoped to `devices: [<this flow's device>]` so a shared tool-server's other agents keep theirs: through that MCP connection before two `flow-execute` passes, or `argent run stop-all-simulator-servers` from the same Argent install before two standalone passes. Nothing needs reconnecting: the run establishes its own device and debugger connections, and the reset does not alter app/account data. For Chromium, let the runner boot the declared app path without an explicit `device` pin.
-4. Run the entire flow from its own launch and in-flow setup, without baseline-update mode. Increment the streak only when the run reports `ok: true` and every required acceptance check—including each snapshot comparison—executed. A false `when:` may skip optional setup/interstitial steps only. A run with `errored > 0` neither passes nor fails: fix the environment and rerun, and do not report it as a regression.
+4. Run the entire flow from its own launch and in-flow setup, without baseline-update mode. Increment the streak only when the run reports `ok: true` and every required acceptance check — including each snapshot comparison — executed. A false `when:` may skip optional setup/interstitial steps only. A run with `errored > 0` neither passes nor fails: fix the environment and rerun, and do not report it as a regression.
 
    A passing step that carries a `warning` does not block the streak, but it must be resolved before you finish. An `idle` warning means that screen never stopped moving, and nothing in the report distinguishes intended motion from a load that never completed. Inspect the screen, disclose the cause, and confirm the acceptance checks around it rest on stable elements rather than on stillness.
 

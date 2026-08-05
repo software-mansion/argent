@@ -2,7 +2,13 @@
 
 Read this file before creating or changing a flow. The saved path must be exercised through the recorder as it is discovered; only the final syntax cleanup happens afterward.
 
-[Recorder tools](#recorder-tools) · [Start in the correct order](#start-in-the-correct-order) · [Record the first walkthrough](#record-the-first-walkthrough) · [Finish and polish](#finish-and-polish) · [Worked example](#worked-example) · [Blocking audit](#blocking-audit) · [Replay](#replay)
+- [Recorder tools](#recorder-tools)
+- [Start in the correct order](#start-in-the-correct-order)
+- [Record the first walkthrough](#record-the-first-walkthrough)
+- [Finish and polish](#finish-and-polish)
+- [Worked example](#worked-example)
+- [Blocking audit](#blocking-audit)
+- [Replay](#replay)
 
 ## Recorder tools
 
@@ -143,6 +149,7 @@ Call `flow-finish-recording`, then read the saved YAML. For recorded steps, appl
 | element-seeking swipe/scroll              | `scroll-to:` with target selector, direction, and optional `within` |
 | coordinate `tap`/`long-press`             | strict id/text selector after the coordinate fallback gate          |
 | `tool: gesture-pinch`                     | `pinch: { on: <selector>, scale: endDistance / startDistance }`     |
+| `tool: gesture-rotate`                    | `rotate: { on: <selector>, by: endAngle - startAngle }`             |
 | generic `tool: flow-execute` of a sibling | recorder-captured `run:` directive                                  |
 
 Only three unrecorded insertions are allowed during polish, each where you saw the condition live:
@@ -156,7 +163,7 @@ Preserve a raw form only when conversion would change behavior:
 - Keep `tool: await-ui-element` only when its `pollIntervalMs` or `bundleId` is required. It is unrelated to the fixed `wait:` directive.
 - Keep a raw swipe only for a semantic or velocity-sensitive gesture.
 - For a pinch, derive `scale` from the recorded distances and target the selector under its center.
-- Keep `tool: gesture-pinch` only when it is point-anchored inside a large element or deliberately pans with `endCenterX`/`endCenterY`; the directive would recenter it.
+- Keep `tool: gesture-pinch` only when it is point-anchored inside a large element or deliberately pans with `endCenterX`/`endCenterY`; the directive would recenter it. Keep `tool: gesture-rotate` only when its explicit radius, start angle, or duration is part of the gesture under test; `rotate:` derives all three from the target and the screen edges.
 - Keep raw screenshots for useful human-reviewed before/after or diagnostic evidence. For automated visual verification, add `snapshot:` according to [Flow YAML](flow-yaml.md#snapshots-and-standalone-runs).
 
 See [Flow YAML](flow-yaml.md) for exact syntax.

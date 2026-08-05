@@ -18,12 +18,12 @@ An Argent flow is a replayable sequence in `.argent/flows/<name>.yaml`.
 ## Non-negotiable rules
 
 1. **Record the path live.** The first walkthrough _is_ the recording; never rehearse a path and reconstruct it afterward. [Live authoring](references/live-authoring.md) has the per-platform start order and the discover → echo → `flow-add-step` → inspect cycle.
-2. **Record each check when its state appears** — immediately after the transition or outcome it proves, before the next action. An echo or raw `screenshot` is diagnostic context, not an executable verdict; a reviewed `snapshot:` baseline is for inherently pixel-level requirements. Record absence as a trio in order — `visible` on the selector, the action that removes it, then `hidden` on the same selector; a `hidden` whose selector was never established cannot fail, so it proves nothing.
+2. **Record each check when its state appears** — immediately after the transition or outcome it proves, before the next action. A check is recorded live as an `await-ui-element` call, which polish converts into the `await:`/`assert:` directive; an echo or raw `screenshot` is diagnostic context, not an executable verdict. Record absence as a trio in order — `visible` on the selector, the action that removes it, then `hidden` on the same selector; a `hidden` whose selector was never established cannot fail, so it proves nothing.
 3. **Target semantics, not screen positions.** Prefer strict `{ id: ... }`, then a stable `{ text: ... }` or accessibility label; `scroll-to` for an off-screen target. The recorder converts a `gesture-tap` to a selector whenever it can and **warns when it had to keep the raw point** — stop on that warning and fix the target while the screen is still in front of you, rather than at audit time. Keep a coordinate only after the **coordinate fallback gate** in [Reliability and recovery](references/reliability-and-recovery.md#coordinate-fallback-gate), and report each one.
-4. **After every screen change, prove identity, then readiness** — `await:` on an element that exists _only_ on the destination (never a shared tab bar, a source-screen element, or a positional id), then `await: { idle: true }`. Neither implies the other and a successful tap proves neither. [Live authoring](references/live-authoring.md#record-identity-then-readiness-after-every-navigation) has the procedure; [Flow YAML](references/flow-yaml.md#prove-a-navigation-identity-then-readiness) has why both are needed.
-5. **Polish only what ran.** Rewriting a recorded raw action into an equivalent directive is allowed. Everything else must come from a recorded step; return to the live workflow to execute any missing **action** through the recorder.
+4. **After every screen change, prove identity, then readiness** — `await:` on an element that exists _only_ on the destination (never a shared tab bar, a source-screen element, or a positional id), then `await: { idle: true }`. Neither implies the other and a successful tap proves neither. They also arrive by different routes: identity is recorded live, readiness is a polish insertion (rule 5). [Live authoring](references/live-authoring.md#record-identity-then-readiness-after-every-navigation) has the procedure; [Flow YAML](references/flow-yaml.md#prove-a-navigation-identity-then-readiness) has why both are needed.
+5. **Polish only what ran.** Rewriting a recorded raw step into an equivalent directive is allowed — a recorded `await-ui-element` becomes `await:`/`assert:`, a focus tap plus `tool: keyboard` becomes `type:`. Everything else must come from a recorded step; return to the live workflow to execute any missing **action** through the recorder.
 
-   Exactly three unrecorded insertions are allowed, each only where you saw the condition live — see [Live authoring](references/live-authoring.md#finish-and-polish).
+   Exactly three unrecorded insertions are allowed, each only where you saw the condition live: `snapshot:` for an inherently pixel-level requirement, `await: { idle: true }`, and the Chromium packaging `launch:`. None of the three has a recorder form — see [Live authoring](references/live-authoring.md#finish-and-polish).
 
 6. **Replay the finished file end to end.** A flow is not done because its steps worked separately. `argent-qa-flows` adds the stronger requirement of two consecutive full passes.
 
@@ -45,7 +45,9 @@ During YAML polish, use the frame-based `within`, `after`, and `next` scopes to 
 
 ## Proactive recording
 
-Tell the user and start a flow before re-running any path of three or more interactions for re-testing, profiling comparison, or another attempt. If the path already ran once, it cannot be recorded retroactively; start the recorder before the next execution.
+Before re-running a path of three or more interactions — re-testing it, comparing a profile, or retrying it — tell the user, start the recorder, and record that run instead of repeating the path by hand. Replay it from then on.
+
+A path already walked cannot be recorded retroactively: the recorder has to be running during the execution you want to keep, so the decision has to be made before it, not after.
 
 ## Flow self-improvement
 

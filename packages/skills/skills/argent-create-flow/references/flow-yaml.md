@@ -2,7 +2,15 @@
 
 Read this reference when polishing, manually reviewing, or composing a flow.
 
-[File shape and flow type](#file-shape-and-flow-type) · [Selectors](#selectors) · [Directives](#directives) · [Verification conditions](#verification-conditions) · [Prove a navigation](#prove-a-navigation-identity-then-readiness) · [Optional divergences](#optional-divergences) · [Composition and platform limits](#composition-and-platform-limits) · [Snapshots and standalone runs](#snapshots-and-standalone-runs) · [YAML safety](#yaml-safety)
+- [File shape and flow type](#file-shape-and-flow-type)
+- [Selectors](#selectors)
+- [Directives](#directives)
+- [Verification conditions](#verification-conditions)
+- [Prove a navigation: identity, then readiness](#prove-a-navigation-identity-then-readiness)
+- [Optional divergences](#optional-divergences)
+- [Composition and platform limits](#composition-and-platform-limits)
+- [Snapshots and standalone runs](#snapshots-and-standalone-runs)
+- [YAML safety](#yaml-safety)
 
 ## File shape and flow type
 
@@ -13,7 +21,7 @@ steps:
   - await: { idle: true }
 ```
 
-An e2e flow's first non-echo step is `launch:`, and it must not declare `executionPrerequisite` — the combination is a parse error. Put the named start state in a leading `echo:` instead. A fragment has no leading launch and may declare:
+An e2e flow's first non-echo step is `launch:`, and it must not declare `executionPrerequisite` — the combination is a parse error. Put the named start state in a leading `echo:` instead. A leading `run:` does **not** make a flow e2e even when the composed flow launches: that launch does run inline, but the runner classifies only a literal leading `launch:` as e2e, and on Chromium that classification is what boots the app. A fragment has no leading launch and may declare:
 
 ```yaml
 executionPrerequisite: User is signed in and viewing Settings
@@ -69,7 +77,7 @@ Flow YAML selectors also accept geometric, CSS-like relations. They work in ever
 - tap: { role: Switch, next: { text: Wi-Fi } } # nearest matching follower
 ```
 
-The relations are frame-based because platform flow trees are flattened. `within` means visual containment. `after` and `next` use top-to-bottom/left-to-right reading order. Every anchor must be distinct; the synthetic screen root never counts.
+The relations are frame-based because platform flow trees are flattened. `within` means visual containment, so a child whose frame spills outside its parent's — an overflowing row, a popover anchored to a card — does not match it, however clearly it is that parent's child in the code. `after` and `next` use top-to-bottom/left-to-right reading order. Every anchor must be distinct; the synthetic screen root never counts.
 
 `next` means the nearest **matching** follower, so it deliberately skips wrappers, spacers, and other non-matches. This differs from literal CSS `+`: if a Wi-Fi row has no switch, `{ role: Switch, next: { text: Wi-Fi } }` may find the next row's switch. Prefer `{ role: Switch, within: { id: wifi-row } }`, or assert that row-local control before acting, whenever the control may be absent.
 
