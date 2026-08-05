@@ -160,6 +160,18 @@ describe("swipe: parse/serialize", () => {
     expect(yaml).toContain("settle: true");
   });
 
+  it("bare-direction sugar: a programmatic settle: false still collapses to the bare string", () => {
+    // `settle: false` is the default — the options body only ever emits
+    // `settle: true` and parse normalizes the explicit false away, so a
+    // programmatic step carrying it must not be pushed into the verbose form.
+    const yaml = serializeFlow({
+      executionPrerequisite: "",
+      steps: [{ kind: "swipe", direction: "left", settle: false }],
+    });
+    expect(yaml).toContain("- swipe: left");
+    expect(parseFlow(yaml).steps).toEqual([{ kind: "swipe", direction: "left" }]);
+  });
+
   it("rejects a bare string that is not a direction", () => {
     expect(() => parseFlow("steps:\n  - swipe: Login\n")).toThrow(
       /swipe takes a direction \(up, down, left, right\)/i
