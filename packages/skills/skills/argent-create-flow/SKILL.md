@@ -5,7 +5,7 @@ description: Record a reusable flow (scripted sequence of MCP tool calls) that c
 
 ## Overview
 
-A flow is a sequence of steps saved to a `.yaml` file in the `.argent/flows/` directory. Each recorded step is **executed live** as you add it, so you verify it works before it becomes part of the flow. Replay a finished flow with `flow-execute`, or — for an e2e flow — headlessly with an explicit YAML path such as `argent flow run .argent/flows/checkout.yaml`.
+A flow is a sequence of steps saved to a `.yaml` file in the `.argent/flows/` directory. Each recorded step is **executed live** as you add it, so you verify it works before it becomes part of the flow. Replay a finished flow with `flow-execute`, or — for an e2e flow — headlessly with `argent flow run checkout` (a saved flow's name) or `argent flow run path/to/checkout.yaml`.
 
 Flows store **no device id**: the runner binds a device (the single booted one, or pass `device`/`platform`). A recorded coordinate `gesture-tap` is captured as a portable `tap: { selector }` step whenever the tapped element has stable text/identifier.
 
@@ -14,7 +14,7 @@ Flows store **no device id**: the runner binds a device (the single booted one, 
 - **e2e** — begins with a `launch:` step, which starts that app from scratch (terminate + relaunch), so the flow controls its own start state. No `executionPrerequisite`. May `run:` other flows, and (on iOS/Android) may itself be a `run:` target — when nested, its `launch` runs inline, restarting the app for that sub-scenario. **Chromium is the exception:** the runner boots one Electron app per run (the top-level flow's), so a nested chromium e2e flow's `launch` can't boot its own instance and fails the run — keep chromium e2e flows top-level. Record one by adding a `restart-app` of the app under test as the **first** step — it is captured as the `launch` step.
 - **fragment** — doesn't begin with a launch; runs against the device's current state. May declare an `executionPrerequisite` (a documented entry-state contract). Invoked from other flows via a `run:` step, or directly by you at any time.
 
-Both run via `argent flow run <flow.yaml>` — a fragment simply runs against whatever is on screen (its prerequisite is printed as a reminder). The CLI requires the explicit `.yaml` file path and never resolves a bare saved-flow name. Only e2e flows are meaningful CI/suite entries, since only they give a deterministic verdict from a clean start.
+Both run via `argent flow run <flow|flow.yaml>` — a fragment simply runs against whatever is on screen (its prerequisite is printed as a reminder). A bare name is read from `.argent/flows/<name>.yaml`; anything ending in `.yaml` is a path. Only e2e flows are meaningful CI/suite entries, since only they give a deterministic verdict from a clean start.
 
 ### Step directives
 
@@ -118,7 +118,7 @@ Since a `tv-remote` path is positional (like a coordinate tap), gate each naviga
 
 ### Standalone runner
 
-`argent flow run <flow.yaml> [--device <id>] [--platform ios|android|chromium|vega] [--update-baselines] [--output <dir>] [--json]` runs a flow with no LLM in the loop and exits non-zero on any failure — suitable for CI (e2e flows; a fragment runs against the current device state, useful while authoring). Pass an explicit `.yaml` file path, relative to the current directory or absolute; the CLI does not resolve bare saved-flow names. The filename (minus `.yaml`) names the run's report and artifacts, so it must contain only letters, numbers, `_`, or `-`. `argent flow list` prints runnable paths for flows saved under `.argent/flows/`.
+`argent flow run <flow|flow.yaml> [--device <id>] [--platform ios|android|chromium|vega] [--update-baselines] [--output <dir>] [--json]` runs a flow with no LLM in the loop and exits non-zero on any failure — suitable for CI (e2e flows; a fragment runs against the current device state, useful while authoring). The argument is either a saved flow's name, read from `.argent/flows/<name>.yaml` under the current directory, or a `.yaml` file path (relative to the current directory, or absolute) for a flow kept anywhere else. The two never collide: a name carries no separator and no extension, so an argument ending in `.yaml` is always a path and never falls back to the flows directory. Either way the filename (minus `.yaml`) names the run's report and artifacts, so it must contain only letters, numbers, `_`, or `-`. `argent flow list` prints runnable paths for flows saved under `.argent/flows/` — a nested one is addressable by its path only.
 
 The standalone command uses only the auto-started local tool server. It is unavailable while `ARGENT_TOOLS_URL` or `argent link` routing is active; unset `ARGENT_TOOLS_URL` or run `argent unlink` first. This restriction applies only to the CLI: an agent may continue calling `flow-execute` with `name` and `project_root`, including through a remote tool server — but a remote call uploads the one YAML into a temp directory on the server, and `run:` targets and `__baselines__/` resolve beside that copy, so only a self-contained flow replays remotely (see _Replaying_).
 

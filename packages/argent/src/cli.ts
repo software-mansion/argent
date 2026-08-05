@@ -87,7 +87,7 @@ Commands:
   remove      ${installerHelpEntry("remove")}
   tools       List tools exposed by the tool-server
   run         Invoke a tool by name (use \`argent run <tool> --help\` for flags)
-  flow        Run a YAML flow file (use \`argent flow --help\` for options)
+  flow        Run a flow by name or YAML path (use \`argent flow --help\` for options)
   server      Manage the shared tool-server (start / status / stop / logs)
   lens        Open Argent Lens bound to a fresh coding-agent session (macOS)
   link        Route client requests to a remote tool-server

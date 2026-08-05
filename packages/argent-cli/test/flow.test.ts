@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
@@ -70,6 +71,23 @@ function handle(hostPath?: string): Record<string, unknown> {
  */
 const canDenyRead = process.platform !== "win32" && process.getuid?.() !== 0;
 
+/**
+ * Whether this filesystem folds case (APFS and NTFS do, ext4 does not). Probed
+ * rather than assumed from the platform, since macOS volumes can be formatted
+ * either way. Only where it folds does a mis-cased spelling open a real file
+ * and reach the on-disk-spelling guard, so the cases that need it are skipped
+ * elsewhere instead of passing for the wrong reason.
+ */
+const caseInsensitiveFs = ((): boolean => {
+  const probe = fs.mkdtempSync(path.join(tmpdir(), "argent-cli-case-"));
+  try {
+    fs.writeFileSync(path.join(probe, "probe.yaml"), "");
+    return fs.existsSync(path.join(probe, "PROBE.yaml"));
+  } finally {
+    fs.rmSync(probe, { recursive: true, force: true });
+  }
+})();
+
 function report(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   const steps: StepFixture[] = [{ index: 0, kind: "tap", status: "pass" }];
   return {
@@ -89,7 +107,7 @@ function report(overrides: Record<string, unknown> = {}): Record<string, unknown
 describe("parseRunArgs", () => {
   it("returns documented defaults with just a flow path", () => {
     expect(parseRunArgs(["../flows/checkout.yaml"])).toEqual({
-      flowPath: "../flows/checkout.yaml",
+      flowRef: "../flows/checkout.yaml",
       updateBaselines: false,
       json: false,
     });
@@ -106,7 +124,7 @@ describe("parseRunArgs", () => {
         "--update-baselines",
       ])
     ).toEqual({
-      flowPath: "checkout.yaml",
+      flowRef: "checkout.yaml",
       device: "SIM-1",
       platform: "ios",
       updateBaselines: true,
@@ -139,7 +157,7 @@ describe("parseRunArgs", () => {
     expect(
       parseRunArgs(["checkout.yaml", "--device=SIM-1", "--platform=ios", "--output=dir"])
     ).toEqual({
-      flowPath: "checkout.yaml",
+      flowRef: "checkout.yaml",
       device: "SIM-1",
       platform: "ios",
       output: "dir",
@@ -150,7 +168,7 @@ describe("parseRunArgs", () => {
 
   it("mixes = and space-separated forms freely", () => {
     expect(parseRunArgs(["checkout.yaml", "--device=SIM-1", "--platform", "ios"])).toEqual({
-      flowPath: "checkout.yaml",
+      flowRef: "checkout.yaml",
       device: "SIM-1",
       platform: "ios",
       updateBaselines: false,
@@ -188,7 +206,31 @@ describe("parseRunArgs", () => {
 
   it("rejects extra positional arguments", () => {
     expect(() => parseRunArgs(["checkout.yaml", "extra.yaml"])).toThrow(
-      "flow run accepts one YAML file path"
+      "flow run accepts one flow name or YAML file path"
+    );
+  });
+
+  it("takes everything after -- as the flow, so a name may start with a hyphen", () => {
+    // The flow-name charset admits a leading "-", so without the marker such a
+    // saved flow would be addressable by path only.
+    expect(() => parseRunArgs(["-nightly"])).toThrow(/unknown flag/);
+    expect(parseRunArgs(["--device", "SIM-1", "--", "-nightly"])).toEqual({
+      flowRef: "-nightly",
+      device: "SIM-1",
+      updateBaselines: false,
+      json: false,
+    });
+    // The marker relaxes flag parsing, not the one-positional rule.
+    expect(() => parseRunArgs(["--", "a", "b"])).toThrow(
+      "flow run accepts one flow name or YAML file path"
+    );
+  });
+
+  it("counts an empty positional as the flow, not as a token to skip past", () => {
+    // A truthiness test here would take "extra.yaml" as the flow and run a file
+    // the operator never named at that position.
+    expect(() => parseRunArgs(["", "extra.yaml"])).toThrow(
+      "flow run accepts one flow name or YAML file path"
     );
   });
 });
@@ -215,6 +257,16 @@ describe("argent flow run", () => {
     // faked: a directory that looks like a flow, and an unreadable file.
     bundleDirPath = path.join(tempRoot, "bundle.yaml");
     await fsp.mkdir(bundleDirPath, { recursive: true });
+    // A flow saved where a bare name resolves. Deliberately not named
+    // "checkout": the name-vs-path tests below need a stem that exists under
+    // .argent/flows and nowhere else, so a `run saved.yaml` that fell back to
+    // the flows directory would be caught rather than passing by coincidence.
+    await fsp.mkdir(path.join(tempRoot, ".argent", "flows"), { recursive: true });
+    await fsp.writeFile(
+      path.join(tempRoot, ".argent", "flows", "saved.yaml"),
+      "steps: []\n",
+      "utf8"
+    );
     unreadablePath = path.join(tempRoot, "noperm.yaml");
     await fsp.writeFile(unreadablePath, "steps: []\n", "utf8");
     await fsp.chmod(unreadablePath, 0o000);
@@ -331,17 +383,194 @@ describe("argent flow run", () => {
     expect(errs.join("\n")).toContain("unknown flag");
   });
 
-  it("exits 2 when no flow path is given", async () => {
+  it("exits 2 when no flow name or path is given", async () => {
     await expect(flow(["run"], opts)).rejects.toThrow("process.exit:2");
-    expect(errs.join("\n")).toContain("requires a YAML file path");
+    expect(errs.join("\n")).toContain("requires a flow name or a YAML file path");
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
 
-  it("rejects a saved-flow name with a migration hint", async () => {
-    await expect(flow(["run", "checkout"], opts)).rejects.toThrow("process.exit:2");
+  it("runs a saved flow named on the command line from .argent/flows", async () => {
+    const runRoot = await fsp.realpath(tempRoot);
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(flow(["run", "saved", "--device", "SIM-1"], opts)).rejects.toThrow(
+        "process.exit:0"
+      );
+    } finally {
+      process.chdir(previousCwd);
+    }
 
-    expect(errs.join("\n")).toContain("Saved-flow name lookup is no longer supported");
-    expect(errs.join("\n")).toContain("argent flow run .argent/flows/checkout.yaml");
+    expect(toolsClientMock.callTool).toHaveBeenCalledWith(
+      "flow-execute",
+      {
+        // A name is sent as the path it resolves to, never as a `name` source:
+        // one identity keys the report, __baselines__/, and --output whichever
+        // form the operator typed.
+        flow_path: path.join(runRoot, ".argent", "flows", "saved.yaml"),
+        project_root: runRoot,
+        prerequisiteAcknowledged: true,
+        device: "SIM-1",
+      },
+      { onProgress: expect.any(Function) }
+    );
+  });
+
+  it("resolves a name and its spelled-out path to the same flow_path", async () => {
+    const previousCwd = process.cwd();
+    const sent = async (ref: string): Promise<unknown> => {
+      toolsClientMock.callTool.mockClear();
+      await expect(flow(["run", ref], opts)).rejects.toThrow("process.exit:0");
+      return (toolsClientMock.callTool.mock.calls[0]![1] as { flow_path: string }).flow_path;
+    };
+    try {
+      process.chdir(tempRoot);
+      expect(await sent("saved")).toBe(await sent(path.join(".argent", "flows", "saved.yaml")));
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+
+  it("says where a name looked when no flow is saved under it", async () => {
+    const runRoot = await fsp.realpath(tempRoot);
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(flow(["run", "nosuchflow"], opts)).rejects.toThrow("process.exit:2");
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(errs.join("\n")).toContain(
+      `Flow file not found: ${path.join(runRoot, ".argent", "flows", "nosuchflow.yaml")}`
+    );
+    expect(errs.join("\n")).toContain("argent flow list");
+    expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it("reads a .yaml argument as a path only — never falling back to .argent/flows", async () => {
+    const runRoot = await fsp.realpath(tempRoot);
+    const previousCwd = process.cwd();
+    try {
+      // "saved.yaml" exists under .argent/flows and nowhere else. An argument
+      // carrying an extension is a path, so this must miss: letting it fall
+      // back would make the meaning of a path depend on what happens to be
+      // saved, and a later ./saved.yaml would silently re-point the run.
+      process.chdir(tempRoot);
+      await expect(flow(["run", "saved.yaml"], opts)).rejects.toThrow("process.exit:2");
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(errs.join("\n")).toContain(`Flow file not found: ${path.join(runRoot, "saved.yaml")}`);
+    expect(errs.join("\n")).not.toContain(path.join(".argent", "flows", "saved.yaml"));
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    // Refused, but not blindly: the flow it names is saved one directory down,
+    // so the message points at the name form rather than leaving the operator
+    // to guess why a file they can see was not found.
+    expect(errs.join("\n")).toContain("did you mean: argent flow run saved");
+  });
+
+  it("does not offer the name form for a missing path with no saved flow behind it", async () => {
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(flow(["run", "nosuchflow.yaml"], opts)).rejects.toThrow("process.exit:2");
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(errs.join("\n")).toContain("Flow file not found");
+    // Matched case-insensitively: every other recovery in this file spells the
+    // phrase "Did you mean", so a capitalized hint must fail this too.
+    expect(errs.join("\n")).not.toMatch(/did you mean/i);
+    expect(errs.join("\n")).not.toContain("is saved under");
+  });
+
+  it("offers the on-disk spelling of a mis-cased path, not the one that was typed", async () => {
+    // A hint built from the operator's spelling would say `run Saved` — which
+    // `run`'s own byte-exact spelling check then refuses on a case-folding
+    // filesystem, costing a second failure and pushing them to the path form
+    // for a flow that is perfectly addressable by name. Reading the directory
+    // entry settles the spelling once, on every filesystem.
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(flow(["run", "Saved.yaml"], opts)).rejects.toThrow("process.exit:2");
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(errs.join("\n")).toContain("did you mean: argent flow run saved");
+    expect(errs.join("\n")).not.toContain("run Saved");
+  });
+
+  // Only a case-folding filesystem opens `.argent/flows/Saved.yaml` for an
+  // on-disk `saved.yaml` and so reaches the spelling guard; see caseInsensitiveFs.
+  it.skipIf(!caseInsensitiveFs)(
+    "suggests the name form when a name matched only case-insensitively",
+    async () => {
+      const previousCwd = process.cwd();
+      try {
+        process.chdir(tempRoot);
+        await expect(flow(["run", "Saved"], opts)).rejects.toThrow("process.exit:2");
+      } finally {
+        process.chdir(previousCwd);
+      }
+
+      // The operator typed a name, so the recovery is a name — not a path into a
+      // directory they never spelled out.
+      expect(errs.join("\n")).toContain("Flow path must name the file as it appears on disk");
+      expect(errs.join("\n")).toContain("Did you mean: argent flow run saved");
+      expect(errs.join("\n")).not.toContain(
+        `Did you mean: argent flow run ${path.join(".argent")}`
+      );
+      expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    }
+  );
+
+  it("does not offer a same-stem sibling when the missing path is already in the flows dir", async () => {
+    const previousCwd = process.cwd();
+    try {
+      // A nested miss: `saved.yaml` exists at the top of .argent/flows, but it
+      // is a different flow from the sub/saved.yaml that was asked for, and
+      // the operator plainly knows where flows live.
+      process.chdir(tempRoot);
+      await expect(
+        flow(["run", path.join(".argent", "flows", "sub", "saved.yaml")], opts)
+      ).rejects.toThrow("process.exit:2");
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(errs.join("\n")).toContain("Flow file not found");
+    expect(errs.join("\n")).not.toMatch(/did you mean/i);
+  });
+
+  it("keeps the trailing-separator hint a path when trimming would read as a name", async () => {
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(flow(["run", "saved/"], opts)).rejects.toThrow("process.exit:2");
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    // Trimming leaves "saved", which now addresses .argent/flows/saved.yaml —
+    // a different file from the ./saved this argument names, and one that would
+    // actually run. The recovery must not re-point the operator there.
+    expect(errs.join("\n")).toContain("must not end in a path separator");
+    expect(errs.join("\n")).toContain(`Did you mean: argent flow run .${path.sep}saved`);
+    expect(errs.join("\n")).not.toMatch(/Did you mean: argent flow run saved$/m);
+  });
+
+  it("names the flow-name charset for a bare argument that is neither a name nor a path", async () => {
+    await expect(flow(["run", "my flow"], opts)).rejects.toThrow("process.exit:2");
+
+    expect(errs.join("\n")).toContain(
+      'Flow name must contain only letters, numbers, "_", or "-": my flow'
+    );
     expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });

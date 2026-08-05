@@ -94,19 +94,26 @@ function stepIndent(depth: number | undefined): string {
 function printHelp(): void {
   console.log(`Usage: argent flow <subcommand> [options]
 
-Run a YAML flow file without an LLM in the loop. Paths are resolved from the
-current working directory and may point anywhere on the local filesystem, but
-must not contain ".." segments (pass the resolved path instead); the
-filename (minus .yaml) names the run's report and artifacts, so it must
-contain only letters, numbers, "_", or "-". A flow that begins with a \`launch\`
-step runs its app from scratch; any other flow (a fragment) runs against the
-device's current state — handy while authoring one.
-Runs require the auto-started local tool server;
+Run a YAML flow without an LLM in the loop. \`run\` takes either form:
+
+  a name   A flow saved under .argent/flows — "checkout" runs
+           .argent/flows/checkout.yaml, resolved from the current directory
+  a path   Any .yaml file on the local filesystem, resolved from the current
+           directory. It must not contain ".." segments (pass the resolved
+           path instead); a path is what reaches flows kept elsewhere, and
+           what \`argent flow list\` prints for nested ones
+
+Either way the filename (minus .yaml) names the run's report and artifacts, so
+it must contain only letters, numbers, "_", or "-" — the same charset a name
+must match. A flow that begins with a \`launch\` step runs its app from scratch;
+any other flow (a fragment) runs against the device's current state — handy
+while authoring one. Runs require the auto-started local tool server;
 ARGENT_TOOLS_URL and \`argent link\` routing are not supported.
 
 Subcommands:
-  run <flow.yaml>   Run a YAML file and report pass/fail (exit reflects result)
-  list              List runnable YAML paths in .argent/flows
+  run <flow|flow.yaml>   Run a saved flow by name, or a YAML file by path, and
+                         report pass/fail (exit reflects result)
+  list                   List runnable YAML paths in .argent/flows
 
 Options (run):
   --device <id>          Device id to run against (auto-detected when omitted)
@@ -119,16 +126,23 @@ Options (run):
                          (with a warning), so no flow's evidence is overwritten
   --json                 Print the raw JSON report
   --help, -h             Show this help
+  --                     End of options — only needed for a flow whose name
+                         starts with "-" (\`argent flow run -- -nightly\`)
 
 Examples:
-  argent flow run .argent/flows/checkout.yaml --platform ios
+  argent flow run checkout --platform ios
+  argent flow run .argent/flows/checkout.yaml --output flow-artifacts --json
   argent flow run ~/shared-flows/checkout.yaml --device <UDID> --update-baselines
-  argent flow run /tmp/checkout.yaml --output flow-artifacts --json
 `);
 }
 
 export function parseRunArgs(argv: string[]): {
-  flowPath?: string;
+  /**
+   * The positional argument exactly as supplied — a saved-flow name or a YAML
+   * path. Which of the two it is, is resolveFlowRef's call; this parser only
+   * shuffles tokens and never inspects one.
+   */
+  flowRef?: string;
   device?: string;
   platform?: string;
   output?: string;
@@ -136,15 +150,29 @@ export function parseRunArgs(argv: string[]): {
   json: boolean;
 } {
   const out = { updateBaselines: false, json: false } as ReturnType<typeof parseRunArgs>;
+  // Positionals are collected through one helper so the end-of-options marker
+  // below cannot drift from the ordinary path in what it accepts.
+  const takePositional = (tok: string): void => {
+    if (out.flowRef !== undefined) {
+      throw new FlagParseException(
+        `unexpected argument ${JSON.stringify(tok)}; flow run accepts one flow name or YAML file path`
+      );
+    }
+    out.flowRef = tok;
+  };
   for (let i = 0; i < argv.length; i++) {
     const tok = argv[i]!;
+    // End of options, as flag-parser.ts (`argent run` / `argent tools`) already
+    // honors it. The flow-name charset admits a leading "-", so `-dash` is a
+    // legal saved-flow name that every argv parser reads as a flag; without
+    // this marker such a flow would be addressable by path only, and the "a
+    // name is exactly what the contract accepts" promise would have a hole.
+    if (tok === "--") {
+      for (const rest of argv.slice(i + 1)) takePositional(rest);
+      break;
+    }
     if (!tok.startsWith("-")) {
-      if (out.flowPath) {
-        throw new FlagParseException(
-          `unexpected argument ${JSON.stringify(tok)}; flow run accepts one YAML file path`
-        );
-      }
-      out.flowPath = tok;
+      takePositional(tok);
       continue;
     }
     // Accept `--flag=value` alongside `--flag value`, like the `argent run` /
@@ -289,6 +317,12 @@ const SAFE_ARTIFACT_NAME = FLOW_NAME_PATTERN;
 
 /** The filename stem becomes the runner's internal flow/report name. */
 const SAFE_FLOW_NAME = FLOW_NAME_PATTERN;
+
+/**
+ * Where flows are saved, relative to the current directory: what `flow list`
+ * walks, and what a bare name on `flow run` resolves against.
+ */
+const FLOWS_DIR = path.join(".argent", "flows");
 
 /**
  * Charset every POSIX shell passes through unquoted (shlex.quote's set).
@@ -774,6 +808,102 @@ async function collectRunnableFlowPaths(dir: string, relDir = ""): Promise<strin
   return found;
 }
 
+/**
+ * The YAML path a `flow run` argument addresses: a saved-flow name becomes
+ * `.argent/flows/<name>.yaml`, anything else is already a path and is handed
+ * back untouched.
+ *
+ * The two forms cannot collide, so nothing here has to guess. A name is
+ * exactly what the flow-name contract accepts (SAFE_FLOW_NAME — a charset with
+ * no separator and no dot, so a name can carry no directory and no extension),
+ * while a runnable path must end in `.yaml`. The token that looks ambiguous,
+ * `checkout.yaml`, carries an extension and is therefore a path, resolved from
+ * the current directory like every other one — it does NOT fall back to the
+ * flows directory.
+ *
+ * Deciding this lexically rather than by probing the filesystem is deliberate:
+ * an argument's meaning must not depend on which files happen to exist, or a
+ * stray `./checkout.yaml` appearing next to a CI checkout would silently
+ * re-point a `run checkout` that had been reading `.argent/flows` for months.
+ *
+ * What contains this join is the charset itself, not the guards below: no
+ * string SAFE_FLOW_NAME admits can carry a separator or a dot, so the joined
+ * path cannot leave `.argent/flows` however the guards are later edited. The
+ * rewrite is nevertheless relative and placed before all of them, so a name
+ * takes no shortcut past a check a typed-out path faces. Four of those checks
+ * ("..", trailing separator, extension, stem charset) a name satisfies
+ * vacuously; the two that bite are the filesystem ones — the file must exist
+ * and be readable, and its basename must appear in the directory listing
+ * byte-for-byte, so a name is refused on a case-insensitive filesystem exactly
+ * where a path is (see savedFlowHint, which owes its on-disk spelling to that
+ * same rule).
+ *
+ * Relative also keeps downstream messages quoting something the user can paste
+ * back, and leaves `path.resolve(projectRoot, …)` landing on the very same
+ * absolute file the spelled-out path resolves to. That last part is the point:
+ * the absolute path keys the report, `__baselines__/`, and the `--output`
+ * export directory, so `run checkout` and `run .argent/flows/checkout.yaml`
+ * are one run under one identity, not two that split their baselines and CI
+ * evidence.
+ *
+ * One name shape the CLI cannot address, though the contract admits it: a
+ * leading "-" makes the token a flag to any argv parser, so `-dash` is
+ * reachable only as `-- -dash` (parseRunArgs honors the end-of-options marker)
+ * or by path.
+ */
+function resolveFlowRef(ref: string): { suppliedPath: string; fromName: boolean } {
+  if (!SAFE_FLOW_NAME.test(ref)) return { suppliedPath: ref, fromName: false };
+  return { suppliedPath: path.join(FLOWS_DIR, `${ref}.yaml`), fromName: true };
+}
+
+/**
+ * Recovery for a path that named nothing while a flow of that very stem IS
+ * saved — `argent flow run checkout.yaml` typed at the project root, where the
+ * file actually lives a directory down. It is the mistake the two-form
+ * interface invites, and the one an implicit fallback would have hidden: a
+ * lookup that silently reached into `.argent/flows` would make an argument's
+ * meaning depend on which files exist (see resolveFlowRef), so the fallback
+ * stays refused and only the message improves.
+ *
+ * The name it suggests comes from the directory listing, never from the user's
+ * spelling, and that is the whole subtlety here. A stat-based probe would
+ * match `Checkout.yaml` against an on-disk `checkout.yaml` on any
+ * case-insensitive filesystem (APFS, NTFS — the common dev machines) and hand
+ * back a command `run` itself then refuses at its byte-exact spelling check:
+ * a hint that costs the operator a second failure and pushes them to the path
+ * form for a flow that is perfectly addressable by name. Reading the entry
+ * settles the spelling once, so `run Checkout.yaml` offers `run checkout` and
+ * that command works first try. An entry whose own stem the flow-name contract
+ * refuses (`Upper.YAML`) is no hint at all — it needs a rename, not a command
+ * — and the runnability probe still runs, so the hint can never name something
+ * `run` would reject downstream. A name that clears SAFE_FLOW_NAME is inside
+ * SHELL_SAFE_ARG, so the suggestion needs no quoting.
+ *
+ * Empty when the missing path already points inside the flows directory: the
+ * operator plainly knows where flows live, and a same-stem sibling elsewhere
+ * in the tree (`sub/checkout.yaml` missing, top-level `checkout.yaml` present)
+ * is a different flow, not the one they asked for.
+ */
+async function savedFlowHint(projectRoot: string, missingPath: string): Promise<string> {
+  const dir = path.resolve(projectRoot, FLOWS_DIR);
+  const within = path.relative(dir, missingPath);
+  if (!within.startsWith("..") && !path.isAbsolute(within)) return "";
+  const wanted = `${path.basename(missingPath, ".yaml")}.yaml`;
+  const entries = await fsp.readdir(dir).catch(() => null);
+  if (entries === null) return "";
+  const actual = entries.includes(wanted)
+    ? wanted
+    : entries.find((name) => name.toLowerCase() === wanted.toLowerCase());
+  if (actual === undefined) return "";
+  const name = path.basename(actual, ".yaml");
+  if (!SAFE_FLOW_NAME.test(name)) return "";
+  if (!(await isRunnableFlowFile(path.join(dir, actual)))) return "";
+  return (
+    `\nA flow named "${name}" is saved under ${FLOWS_DIR} — ` +
+    `did you mean: argent flow run ${name}`
+  );
+}
+
 export async function flow(argv: string[], options: FlowCommandOptions): Promise<void> {
   const [sub, ...rest] = argv;
 
@@ -783,14 +913,14 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
   }
 
   if (sub === "list") {
-    const dir = path.join(process.cwd(), ".argent", "flows");
+    const dir = path.join(process.cwd(), FLOWS_DIR);
     try {
       // One final sort over full relative paths, not per-directory: the
       // ordering must be a pure function of the set of paths, never of the
       // walk order.
       const paths = (await collectRunnableFlowPaths(dir))
         .sort()
-        .map((rel) => path.join(".argent", "flows", rel));
+        .map((rel) => path.join(FLOWS_DIR, rel));
       if (paths.length === 0) console.log("No flows found in .argent/flows");
       else console.log(paths.join("\n"));
     } catch {
@@ -823,14 +953,19 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     }
     throw err;
   }
-  if (!args.flowPath) {
-    console.error("argent flow run <flow.yaml> requires a YAML file path.");
+  if (!args.flowRef) {
+    console.error("argent flow run <flow|flow.yaml> requires a flow name or a YAML file path.");
     printHelp();
     return exitAfterFlush(2);
   }
 
   const projectRoot = process.cwd();
-  const suppliedPath = args.flowPath;
+  // A saved-flow name is turned into its `.argent/flows` path here and is
+  // otherwise indistinguishable from a path the user typed: one set of guards,
+  // one resolved identity, one run (see resolveFlowRef). `fromName` survives
+  // only to aim the not-found recovery, since a name resolves somewhere the
+  // user never spelled out.
+  const { suppliedPath, fromName } = resolveFlowRef(args.flowRef);
   // path.resolve collapses ".." lexically, without consulting symlinks, so a
   // ".." following a symlinked directory would make the CLI stat and run a
   // different file than the one the kernel opens for this string. Rejected
@@ -883,29 +1018,44 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
   // through to the extension complaint instead of an empty hint.
   const separatorTrimmedPath = suppliedPath.replace(/[\\/]+$/, "");
   if (separatorTrimmedPath !== suppliedPath && separatorTrimmedPath !== "") {
+    // Trimming "checkout/" leaves a token that now reads as a saved-flow name,
+    // and offering it bare would hand back a command for a DIFFERENT file —
+    // `.argent/flows/checkout.yaml` rather than the `./checkout` this argument
+    // names — which, unlike the error being explained, would run. Keep the
+    // hint in the form the argument was written in; the flows directory is
+    // reached by asking for it, never by a recovery quietly re-pointing there.
+    const hint = SAFE_FLOW_NAME.test(separatorTrimmedPath)
+      ? `.${path.sep}${separatorTrimmedPath}`
+      : separatorTrimmedPath;
     console.error(
       `Flow path must not end in a path separator — the separator claims a directory, ` +
         `which the kernel would refuse to open as a file, so the CLI would run a file ` +
         `this string does not name: ${suppliedPath}\n` +
-        `Did you mean: argent flow run ${shellQuoteArg(separatorTrimmedPath)}`
+        `Did you mean: argent flow run ${shellQuoteArg(hint)}`
     );
     return exitAfterFlush(2);
   }
   if (path.extname(suppliedPath) !== ".yaml") {
-    const isBareSavedName =
+    // A valid name never reaches here — resolveFlowRef already rewrote it to a
+    // .yaml path — so a token still carrying neither a separator nor an
+    // extension is a name the charset refused. Complain about the name it was
+    // meant to be, not about a ".yaml" suffix the user never intended to type.
+    // A bare ".yaml" satisfies this too (path.extname reads it as an
+    // extensionless dotfile), so that arm goes first: naming the missing stem
+    // is the more precise of the two complaints.
+    const looksLikeName =
       !suppliedPath.includes("/") &&
       !suppliedPath.includes("\\") &&
-      path.extname(suppliedPath) === "" &&
-      SAFE_FLOW_NAME.test(suppliedPath);
-    if (isBareSavedName) {
-      console.error(
-        `Expected a YAML file path. Saved-flow name lookup is no longer supported.\n` +
-          `Did you mean: argent flow run .argent/flows/${suppliedPath}.yaml`
-      );
-    } else if (path.basename(suppliedPath).toLowerCase() === ".yaml") {
+      path.extname(suppliedPath) === "";
+    if (path.basename(suppliedPath).toLowerCase() === ".yaml") {
       // path.extname treats a bare ".yaml" as an extensionless dotfile, so name the missing stem.
       console.error(
         `Flow filename must have a non-empty name containing only letters, numbers, "_", or "-": ${suppliedPath}`
+      );
+    } else if (looksLikeName) {
+      console.error(
+        `Flow name must contain only letters, numbers, "_", or "-": ${suppliedPath}\n` +
+          `Names run \`${FLOWS_DIR}/<name>.yaml\`; pass a path ending in .yaml to run a flow file kept elsewhere.`
       );
     } else if (path.extname(suppliedPath).toLowerCase() === ".yaml") {
       // On case-insensitive filesystems the path looks valid to the user, so name the real problem.
@@ -937,7 +1087,20 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     const detail = code === "ENOENT" ? "Flow file not found" : "Could not read flow file";
-    console.error(`${detail}: ${flowPath}`);
+    // Each form misses for its own reason, so each gets its own recovery. A
+    // name is the one form whose file the user never spelled out, so a bare
+    // "not found" leaves them unsure whether the flow is missing or the lookup
+    // went somewhere unexpected: the resolved path in the message settles that,
+    // and the listing enumerates what a name can address. A path that missed
+    // may instead be a saved flow the operator addressed as if it sat in the
+    // current directory — say so when it is.
+    let recovery = "";
+    if (code === "ENOENT") {
+      recovery = fromName
+        ? `\nNo flow named "${args.flowRef}" is saved there — run \`argent flow list\` to see the saved flows.`
+        : await savedFlowHint(projectRoot, flowPath);
+    }
+    console.error(`${detail}: ${flowPath}${recovery}`);
     return exitAfterFlush(2);
   }
 
@@ -965,8 +1128,14 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
       actual !== undefined &&
       path.extname(actual) === ".yaml" &&
       SAFE_FLOW_NAME.test(path.basename(actual, ".yaml"));
+    // Answer in the form the operator used: someone who typed a name gets the
+    // name that works, not a path into a directory they never spelled out.
+    // Both are `run`-accepted spellings of the same file, and the name is
+    // inside SHELL_SAFE_ARG by the check above, so neither needs quoting.
     const recovery = actualRunnable
-      ? `Did you mean: argent flow run ${shellQuoteArg(path.join(path.dirname(suppliedPath), actual!))}`
+      ? fromName
+        ? `Did you mean: argent flow run ${path.basename(actual!, ".yaml")}`
+        : `Did you mean: argent flow run ${shellQuoteArg(path.join(path.dirname(suppliedPath), actual!))}`
       : actual !== undefined
         ? `Rename ${actual} to ${suppliedBase} to run it — flow files must be lowercase .yaml.`
         : "Pass the flow file's name exactly as it appears on disk.";
