@@ -251,6 +251,11 @@ const liveChildren = new Map<number, ChildProcess>();
  * it was booted by an earlier tool-server process) does it fall back to
  * best-effort group signalling on the raw pid. An already-exited process is a
  * no-op, not an error.
+ *
+ * `pid` must be a detached-spawn group leader, since every signal this reaches
+ * targets the whole group led by it ({@link signalGroup}) — a pid discovered
+ * some other way (a CDP-reported browser pid, say) names a group the caller
+ * never spawned.
  */
 export function killChromiumByPort(port: number, pid?: number): void {
   const child = liveChildren.get(port);
@@ -273,6 +278,8 @@ const EXIT_POLL_MS = 50;
  * — the replacement quits on startup and its CDP endpoint never comes up.
  * Best-effort: returns after `timeoutMs` regardless, so a wedged process can't
  * stall a run (the 2s SIGKILL escalation normally lands well inside it).
+ * `pid` carries {@link killChromiumByPort}'s group-leader requirement, and the
+ * exit poll below probes that same group.
  */
 export async function killChromiumByPortAndWait(
   port: number,
