@@ -104,7 +104,7 @@ Classify the result before editing:
 | Silent misfire       | Run reports success but expected final state is wrong                                                        | Restore the screen where the state should have changed and record the missing gate live; do not add it in YAML    |
 | Partial divergence   | An intermediate screenshot/tree disagrees with its echo                                                      | Find the first divergent transition                                                                               |
 | Acceptance failure   | Navigation/actions passed but a requested check fails                                                        | Preserve the check; investigate app/data behavior                                                                 |
-| Never settled        | A passing step carries a ⚠ from `await: { idle: true }`                                                      | Look at that screen: motion by design, or a load that never finished? Gate the next action on a stable element    |
+| Never settled        | A step passed carrying a `warning` from `await: { idle: true }`                                              | Look at that screen: motion by design, or a load that never finished? Gate the next action on a stable element    |
 
 Then:
 
