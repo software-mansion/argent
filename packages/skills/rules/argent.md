@@ -76,7 +76,7 @@ Decision order:
 - Interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot automatically.
   Call `screenshot` separately only for a baseline before any action or after a delay.
 - Always open apps with `launch-app` or `open-url` — never tap home screen icons.
-- If you may record a flow or QA test, do not interact with the app first: load `argent-create-flow` and start the recorder before the first launch or in-app action. A path already walked cannot be recorded retroactively.
+- If there is any chance the task ends in a recorded flow or QA test, do not interact with the app first: load `argent-create-flow` and start the recorder before the first launch or in-app action. A path already walked cannot be recorded retroactively.
 - Always use `run-sequence` when performing multiple sequential device actions where you don't need to observe the screen between steps. More in `argent-device-interact` skill.
 - When the session ends or the user says they are done: call `stop-all-simulator-servers` with `devices: [...]`
   naming the devices this session actually used. One tool-server is shared by every other agent using this
