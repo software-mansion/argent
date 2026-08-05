@@ -1416,6 +1416,30 @@ async function runSwipe(
     }
   } else {
     end = toPoint!;
+    // The start guard's exposure, at the other end of the travel: `to` is the
+    // only spelling whose endpoint can leave the screen, since `direction` ends
+    // on a preset line or a clamped travel from the anchor, and `by` either
+    // lands in-bounds, slides, or fails. Only a SELECTOR endpoint can trip this
+    // — an authored `to: {x, y}`
+    // was already bounded to a finite [0, 1] point by parseTarget — so the
+    // check leaves explicit endpoints author-controlled while still refusing to
+    // lift the finger off-screen when an adapter's viewport clipping regresses.
+    // It runs before the travel gate so an off-screen endpoint is reported as
+    // off-screen rather than as a distance verdict it only incidentally passes
+    // (a far off-screen point clears the floor) or fails.
+    if (
+      !Number.isFinite(end.x) ||
+      end.x < 0 ||
+      end.x > 1 ||
+      !Number.isFinite(end.y) ||
+      end.y < 0 ||
+      end.y > 1
+    ) {
+      return {
+        ok: false,
+        reason: `swipe.to resolved outside the normalized screen: (${end.x}, ${end.y}); both coordinates must be between 0 and 1`,
+      };
+    }
     // A selector endpoint only resolves at run time, so the parser cannot see
     // that it lands within tap range of the start and would dispatch a tap,
     // not a swipe. Gate on the travel VECTOR's magnitude (straight-line
