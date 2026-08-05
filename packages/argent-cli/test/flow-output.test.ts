@@ -8,11 +8,12 @@ import type { MaterializeContext } from "@argent/tools-client";
 import { exportFailureArtifacts, type FlowReport, type StepReport } from "../src/flow.js";
 
 // Spies over the real implementations, not stubs: every test here runs against
-// a real temp filesystem. Only the marker-retry test overrides anything, and
-// only for one read — reproducing the one-syscall window between an O_EXCL
-// create publishing the marker's path and its bytes landing, which racing real
-// calls cannot schedule deterministically. Node builtins can't be spied on
-// in place (their ESM namespace is frozen), so the module is mocked.
+// a real temp filesystem. Only the two marker-window tests override anything,
+// and only reads of the marker itself — reproducing the one-syscall window
+// between an O_EXCL create publishing the marker's path and its bytes landing,
+// which racing real calls cannot schedule deterministically. Node builtins
+// can't be spied on in place (their ESM namespace is frozen), so the module is
+// mocked.
 vi.mock("node:fs/promises", { spy: true });
 
 /**
@@ -977,6 +978,55 @@ describe("exportFailureArtifacts", () => {
       );
       expect(await fs.readdir(outDir)).toEqual(["checkout"]); // no hash sibling
       expect(errSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(fs.readFile).mockRestore();
+      errSpy.mockRestore();
+    }
+  });
+
+  it("treats a marker that never fills in as an unknown owner, not a free directory", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const stemDir = path.join(outDir, "checkout");
+    try {
+      // The far end of that same window: a marker whose bytes never arrive,
+      // because whatever created it died between the O_EXCL open and the write.
+      // No number of retries rescues that, and once they run out the marker is
+      // illegible — which must mean "someone else's", never "free". Something
+      // did claim this directory and may still be filling it, so claiming it
+      // again would overwrite exactly the run the marker was created for. The
+      // fixture leaves nothing else standing in the way: the directory reads
+      // empty, so if the exhausted read reported "no marker" rather than "names
+      // nobody" the emptiness probe would hand the directory straight over.
+      await fs.mkdir(stemDir, { recursive: true });
+      const marker = path.join(stemDir, ".argent-flow-source");
+      let reads = 0;
+      vi.mocked(fs.readFile).mockImplementation((async (file: unknown, options: unknown) => {
+        if (String(file) === marker) {
+          reads++; // every attempt falls inside the window, not just the first
+          return "";
+        }
+        return readFileSync(file as string, options as never);
+      }) as unknown as typeof fs.readFile);
+      const step: StepReport = {
+        index: 0,
+        kind: "snapshot",
+        status: "fail",
+        snapshotKey: "home__ios-390x844",
+        artifacts: { current: await writeFile("c.png", "current-bytes") },
+      };
+
+      await exportFailureArtifacts(mkReport([step]), outDir, flowFile, ctx);
+
+      expect(reads).toBe(5); // MARKER_READ_RETRIES + 1: the retries really ran out
+      const target = path.join(outDir, `checkout-${pathHash(flowFile)}`);
+      expect(step.artifacts?.current).toBe(path.join(target, "home__ios-390x844-current.png"));
+      expect(await fs.readFile(step.artifacts?.current as string, "utf8")).toBe("current-bytes");
+      expect(await fs.readdir(stemDir)).toEqual([]); // not claimed, not written into
+      expect(errSpy).toHaveBeenCalledTimes(1);
+      expect(errSpy).toHaveBeenCalledWith(
+        `warning: ${stemDir} already holds files from an unknown source; ` +
+          `writing this flow's artifacts to ${target} so neither set is overwritten`
+      );
     } finally {
       vi.mocked(fs.readFile).mockRestore();
       errSpy.mockRestore();
