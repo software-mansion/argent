@@ -261,7 +261,9 @@ describe("gesture-drag", () => {
   it("clamps a normalized 1.0 endpoint to the last addressable pixel so the release stays in the viewport", async () => {
     // The flow swipe directive saturates `by` deltas to [0, 1], so a 1.0
     // endpoint is routine — unclamped it maps to pixel == width/height, one
-    // past the viewport, and Chromium delivers no pointerup to the page.
+    // past the viewport, where a release was observed reaching the page
+    // without its pointerup. See the clamp's comment for why that observation
+    // is kept as build-specific rather than a universal Chromium rule.
     const api = fakeChromiumApi();
     const result = await gestureDragTool.execute(
       { chromium: api } as never,

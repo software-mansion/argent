@@ -79,9 +79,17 @@ Pass settle:true for a momentum-free drag that decelerates into the release, so 
     // hidden window services at ~5s per event — minutes per drag.
     await assertChromiumWindowVisible(chromium, "drag", "chromium_drag_window_hidden");
     const vp = chromium.getViewport();
-    // Normalized 1.0 would land one past the last viewport pixel, where
-    // Chromium delivers no pointerup — clamp both endpoints onto the
+    // Normalized 1.0 maps to pixel == viewport size, one past the last
+    // addressable pixel; a drag released there was observed delivering
+    // pointerdown and moves but never a pointerup — routine for flow swipes
+    // whose `by` deltas saturate to 1 — so clamp both endpoints onto the
     // addressable range (interpolated moves between them stay in bounds).
+    // Read that as build-specific rather than a universal Chromium rule: an
+    // E2E review measured an unclamped release at width, and at 2 * width,
+    // arriving in full. The clamp stays because a silently missing pointerup
+    // is a far worse failure than what it costs — one pixel at the extreme
+    // edge, and a deliberate divergence from gesture-tap, which maps 1.0 to
+    // size. Don't align the two without re-testing the release first.
     const clampPx = (px: number, size: number) => Math.min(Math.max(px, 0), size - 1);
     const startPx = {
       x: clampPx(params.fromX * vp.width, vp.width),
