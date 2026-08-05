@@ -101,9 +101,12 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
-// `await: { idle: true }` is the readiness check. Its whole reason to exist is
-// that it FAILS — the `await-screen-idle` tool reports `settled: false` softly,
-// which cannot carry a regression verdict on an unattended replay.
+// `await: { idle: true }` is the readiness check: it returns the moment the
+// screen is still, so the next tap resolves against a screen that has stopped.
+// It never fails a run — a screen that never settles passes with a warning,
+// because readiness is not an acceptance criterion and a screen that keeps
+// moving (a video, a shimmer, live-updating text on Android) is usually a
+// property of the app. Only an unreadable window is a hard stop, as an error.
 describe("await: { idle }", () => {
   it("passes once both the tree and the pixels hold still", async () => {
     await writeFlow(
@@ -140,7 +143,7 @@ steps:
     expect(reads).toBeGreaterThanOrEqual(3);
   });
 
-  it("fails when the tree never stops changing", async () => {
+  it("warns, and does not fail, when the tree never stops changing", async () => {
     let tick = 0;
     currentTree = () => screenWith(`frame ${tick++}`);
     await writeFlow(
@@ -151,16 +154,40 @@ steps:
 `
     );
     const r = await run("ready");
-    expect(r.ok).toBe(false);
+    expect(r.ok).toBe(true);
     const step = r.steps.at(-1)!;
-    expect(step.status).toBe("fail");
-    expect(step.reason).toContain("never held still");
+    expect(step.status).toBe("pass");
+    expect(step.warning).toContain("never held still");
+    // The warning has to say what to do next, not merely that it gave up.
+    expect(step.warning).toContain("stable element");
+  });
+
+  // The point of warning instead of failing: a screen that never stops moving
+  // is usually the app working as built (a video, a shimmer, a carousel, or —
+  // on Android, whose tree carries live text — a ticking timestamp). The run
+  // has to reach the checks that actually carry its verdict.
+  it("lets the rest of the flow run when the screen never settles", async () => {
+    let tick = 0;
+    currentTree = () => screenWith(`frame ${tick++}`);
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, timeout: 600, minStableMs: 300 }
+  - echo: reached
+`
+    );
+    const r = await run("ready");
+    expect(r.ok).toBe(true);
+    expect(r.failed).toBe(0);
+    expect(r.errored).toBe(0);
+    expect(r.steps.at(-1)).toMatchObject({ kind: "echo", status: "pass", message: "reached" });
   });
 
   // The reason this check reads pixels at all: an iOS push or modal dismissal
   // commits its hierarchy up front and then animates a layer for a few hundred
   // milliseconds. The tree is perfectly still the whole time.
-  it("fails when the pixels keep moving under a motionless tree", async () => {
+  it("warns when the pixels keep moving under a motionless tree", async () => {
     let level = 0;
     currentFrame = () => frameAt((level += 60) % 240);
     await writeFlow(
@@ -171,11 +198,10 @@ steps:
 `
     );
     const r = await run("ready");
-    expect(r.ok).toBe(false);
+    expect(r.ok).toBe(true);
     const step = r.steps.at(-1)!;
-    expect(step.status).toBe("fail");
-    expect(step.reason).toContain("never held still");
-    expect(step.reason).toContain("pixels");
+    expect(step.status).toBe("pass");
+    expect(step.warning).toContain("never held still");
   });
 
   // Sub-threshold drift is encoder noise, not motion — treating it as motion
@@ -215,8 +241,8 @@ steps:
 `
     );
     const r = await run("ready");
-    expect(r.ok).toBe(false);
-    expect(r.steps.at(-1)!.reason).toContain("never held still");
+    expect(r.steps.at(-1)!.status).toBe("pass");
+    expect(r.steps.at(-1)!.warning).toContain("never held still");
   });
 
   // `timeout:` is the author's answer to "how long may this take", so it has to
@@ -280,9 +306,10 @@ steps:
 `
     );
     const r = await run("ready");
-    expect(r.ok).toBe(false);
-    expect(r.steps.at(-1)).toMatchObject({ status: "fail" });
-    expect(r.steps.at(-1)!.reason).toContain("never held still");
+    // Passing is fine; claiming the screen SETTLED is not — the warning must
+    // still report the motion, not the tree-only settle.
+    expect(r.steps.at(-1)!.warning).toContain("never held still");
+    expect(r.steps.at(-1)!.warning).not.toContain("UI tree alone");
   });
 
   // One good read early does not license an app verdict drawn from a window
@@ -331,8 +358,7 @@ steps:
 `
     );
     const r = await run("ready");
-    expect(r.steps.at(-1)!.status).toBe("fail");
-    expect(r.steps.at(-1)!.reason).toContain("never held still");
+    expect(r.steps.at(-1)!.warning).toContain("never held still");
   });
 
   // H2: the same latch let a screen that had gone BLANK by the deadline report
@@ -351,7 +377,7 @@ steps:
   - await: { idle: true, timeout: 2500, minStableMs: 0 }
 `
     );
-    expect((await run("ready")).steps.at(-1)!.status).toBe("fail");
+    expect((await run("ready")).steps.at(-1)!.warning).toContain("never held still");
   });
 
   // H3: bounding the tree read by the remaining budget made the LAST read
@@ -360,7 +386,7 @@ steps:
   // the soft `await-screen-idle` tool. A round is not started without a budget
   // to observe it with, and a read that ran out of step budget is the step
   // ending, not the source failing.
-  it("still fails, rather than erroring, when a slow tree source keeps changing", async () => {
+  it("still warns, rather than erroring, when a slow tree source keeps changing", async () => {
     // 300ms per read against a 200ms tail budget: the LAST read runs out of
     // step budget, which is the step ending, not the source failing. Earlier
     // reads landed and saw a moving screen, so the verdict is theirs.
@@ -375,8 +401,8 @@ steps:
 `
     );
     const r = await run("ready");
-    expect(r.steps.at(-1)!.status).toBe("fail");
-    expect(r.steps.at(-1)!.reason).toContain("never held still");
+    expect(r.steps.at(-1)!.status).toBe("pass");
+    expect(r.steps.at(-1)!.warning).toContain("never held still");
   });
 
   // M1: the final round used to begin with no budget left, so its capture was
@@ -393,7 +419,7 @@ steps:
     const r = await run("ready");
     const step = r.steps.at(-1)!;
     // Whatever the verdict, it must not claim the screen could not be captured.
-    expect(step.warning).toBeUndefined();
+    expect(step.warning ?? "").not.toContain("no screenshot");
   });
 
   it("distinguishes a screen that never rendered from one that never settled", async () => {

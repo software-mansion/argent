@@ -190,10 +190,11 @@ export interface StepReport {
   reason?: string;
   /**
    * The step passed, but the WAY it passed weakens it as proof. Rendered as a
-   * "⚠" suffix by the MCP client. Raised by an `await: { idle: true }` whose
-   * captures never produced a comparable pair, so it proved stillness on the
-   * UI tree alone and never saw the presentation-layer motion it exists to
-   * catch.
+   * "⚠" suffix by the MCP client. Raised by `await: { idle: true }`, either
+   * because the screen never settled at all — it waits, then goes ahead — or
+   * because its captures never produced a comparable pair, leaving stillness
+   * proved on the UI tree alone without the presentation-layer motion the
+   * pixel half exists to catch.
    */
   warning?: string;
   /** Underlying tool id for `tool` steps. */
@@ -2126,14 +2127,15 @@ async function execLeafStep(
         // A run cancelled mid-directive is a skip (matching the pre-step guard
         // and `wait`), never a step failure — the app did nothing wrong.
         if (r.aborted) return { ...base, status: "skip", reason: r.reason };
-        // An INDETERMINATE `idle` outcome is not a verdict about the app: the
-        // wait could not run at all (an unreadable or degraded tree, a screen
-        // nobody managed to observe). Reporting it as `fail` makes CI read an
-        // environment problem as a regression and a QA author reset a pass
-        // streak over it. `error` keeps the run non-ok while saying plainly
-        // that the app was never judged. Scoped to `idle`, whose whole verdict
-        // rests on being able to observe the screen; the selector conditions
-        // keep their existing `fail` mapping.
+        // `indeterminate` is `idle`'s only non-passing outcome: a screen that
+        // merely kept moving passes with a warning, so what is left here is a
+        // wait that could not run at all (an unreadable or degraded tree, a
+        // screen nobody managed to observe). Scoring that `fail` would make CI
+        // read an environment problem as a regression and a QA author reset a
+        // pass streak over it. `error` keeps the run non-ok while saying
+        // plainly that the app was never judged. Scoped to `idle`, whose whole
+        // verdict rests on being able to observe the screen; the selector
+        // conditions keep their existing `fail` mapping.
         if (!r.ok && r.indeterminate && step.kind === "idle") {
           return { ...base, status: "error", reason: r.reason };
         }
