@@ -1477,7 +1477,7 @@ describe("argent flow run <dir>", () => {
     const out = logs.join("\n");
     expect(out).toContain("[1/2] a-login.yaml");
     expect(out).toContain("[2/2] b-checkout.yaml");
-    expect(out).toContain("PASS on SIM-1 — 1 passed, 0 failed, 0 errored, 0 skipped");
+    expect(out).toContain("PASS (started on SIM-1) — 1 passed, 0 failed, 0 errored, 0 skipped");
     // Passing steps stay silent in batch mode.
     expect(out).not.toMatch(/✓ {2}1 tap/);
     expect(out).toContain("PASS — 2 flows: 2 passed, 0 failed, 0 skipped");
@@ -1516,7 +1516,7 @@ describe("argent flow run <dir>", () => {
     // The failing step keeps its full-report number; the passing tap is silent.
     expect(out).toMatch(/✗ {2}2 assert — never visible/);
     expect(out).not.toMatch(/✓ {2}1 tap/);
-    expect(out).toContain("FAIL on SIM-1 — 1 passed, 1 failed, 0 errored, 0 skipped");
+    expect(out).toContain("FAIL (started on SIM-1) — 1 passed, 1 failed, 0 errored, 0 skipped");
     expect(out).toContain("FAIL — 2 flows: 1 passed, 1 failed, 0 skipped");
   });
 

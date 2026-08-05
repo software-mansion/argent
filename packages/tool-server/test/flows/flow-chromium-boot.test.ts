@@ -1075,66 +1075,62 @@ describe("flow-execute chromium boot", () => {
     expect(bootElectronApp).not.toHaveBeenCalled();
   });
 
-  it("refuses a leading run: that escapes the flows directory, before anything boots", async () => {
-    // Defence-in-depth on the hoist: the name check must run before the chain
-    // walk reads the file, or `run: ../evil` would boot the caller-chosen app
-    // path that file names — execRunStep's own check runs only after the boot.
-    const top = await writeFlow("steps:\n  - run: ../evil\n");
-    const evil = path.join(path.dirname(top), "..", "evil.yaml");
-    await fs.writeFile(evil, "steps:\n  - launch: { chromium: /abs/evil-app }\n", "utf8");
+  it("follows a leading run: out of the flow's own directory, as the executor does", async () => {
+    // A `..` target is a sanctioned layout (a fragment shared sideways), not an
+    // escape: execRunStep applies no path fence beyond what the tool-server user
+    // can already read. The hoist has to reach exactly as far, or a run the
+    // executor happily launches would start attached to whatever happens to be
+    // up instead of the app its leading chain names.
+    const top = await writeFlow("steps:\n  - run: ../shared\n");
+    const shared = path.join(path.dirname(top), "..", "shared.yaml");
+    await fs.writeFile(shared, "steps:\n  - launch: { chromium: /abs/shared-app }\n", "utf8");
     try {
-      const registry = makeRegistry(async (id: string) =>
-        id === "list-devices" ? { devices: [] } : {}
-      );
+      const registry = makeRegistry();
 
-      // The hoist yields nothing, so device resolution proceeds and finds no
-      // device — the escaped file's launch must never have entered the picture.
-      await expect(
-        runFlow(registry, { name: "escape", project_root: PROJECT_ROOT, flow_file: top })
-      ).rejects.toThrow(/No booted device found/);
-      expect(bootElectronApp).not.toHaveBeenCalled();
+      const result = await runFlow(registry, {
+        name: "sideways",
+        project_root: PROJECT_ROOT,
+        flow_file: top,
+      });
+
+      expect(bootElectronApp).toHaveBeenCalledTimes(1);
+      expect(bootElectronApp.mock.calls[0][0]).toMatchObject({ appPath: "/abs/shared-app" });
+      expect(result.ok).toBe(true);
+      expect(killChromiumByPortAndWait).toHaveBeenCalledWith(12345, 4242);
     } finally {
-      await fs.rm(evil, { force: true });
+      await fs.rm(shared, { force: true });
     }
   });
 
-  it("refuses that escape as a dead end rather than scanning past it to a later launch", async () => {
-    // The escape above can't tell "give up" from "skip this hop": with nothing
-    // after `run: ../evil`, both boot nothing. Put a launch-bearing hop behind
-    // it and they diverge — and the run itself says which is right: the escape
-    // errors step 1 and hard-stops, so e2e's launch never executes. Booting for
-    // it would leave an instance nothing in the run ever launches (and, if the
-    // walk read the escaped file, an app path the flows dir never sanctioned).
-    const top = await writeFlow("steps:\n  - run: ../evil\n  - run: e2e\n");
-    const evil = path.join(path.dirname(top), "..", "evil.yaml");
-    await fs.writeFile(evil, "steps:\n  - launch: { chromium: /abs/evil-app }\n", "utf8");
+  it("treats an unreadable leading run: as a dead end rather than scanning past it", async () => {
+    // The third refusal kind, alongside the cyclic and over-deep pairs above: a
+    // target the executor cannot load errors that step and hard-stops, so e2e's
+    // launch never runs. Treating the missing hop as merely contributing
+    // nothing would boot an instance this run can never launch anything on.
+    const top = await writeFlow("steps:\n  - run: missing\n  - run: e2e\n");
     await writeSiblingFlow(top, "e2e", "steps:\n  - launch: { chromium: ./app }\n");
-    try {
-      const registry = makeRegistry(async (id: string) =>
-        id === "list-devices" ? { devices: [] } : {}
-      );
+    const registry = makeRegistry(async (id: string) =>
+      id === "list-devices" ? { devices: [] } : {}
+    );
 
-      await expect(
-        runFlow(registry, { name: "escape-then-e2e", project_root: PROJECT_ROOT, flow_file: top })
-      ).rejects.toThrow(/No booted device found/);
-      expect(bootElectronApp).not.toHaveBeenCalled();
+    await expect(
+      runFlow(registry, { name: "missing-then-e2e", project_root: PROJECT_ROOT, flow_file: top })
+    ).rejects.toThrow(/No booted device found/);
+    expect(bootElectronApp).not.toHaveBeenCalled();
 
-      // The executor's verdict on the same chain, attached to a device so it
-      // actually runs: errored at the escape, everything after it skipped.
-      const result = await runFlow(registry, {
-        name: "escape-then-e2e",
-        project_root: PROJECT_ROOT,
-        flow_file: top,
-        device: "chromium-cdp-9999",
-      });
+    // The executor's verdict on the same chain, attached to a device so it
+    // actually runs: errored at the missing hop, everything after it skipped.
+    const result = await runFlow(registry, {
+      name: "missing-then-e2e",
+      project_root: PROJECT_ROOT,
+      flow_file: top,
+      device: "chromium-cdp-9999",
+    });
 
-      expect(result.ok).toBe(false);
-      expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:error", "run:skip"]);
-      expect(result.steps[0].reason).toContain('could not load fragment "../evil"');
-      expect(bootElectronApp).not.toHaveBeenCalled();
-    } finally {
-      await fs.rm(evil, { force: true });
-    }
+    expect(result.ok).toBe(false);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:error", "run:skip"]);
+    expect(result.steps[0].reason).toContain('could not load fragment "missing.yaml"');
+    expect(bootElectronApp).not.toHaveBeenCalled();
   });
 
   it("does not boot when a leading run: chain reaches no launch", async () => {

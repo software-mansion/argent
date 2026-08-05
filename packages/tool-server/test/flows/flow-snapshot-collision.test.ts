@@ -71,10 +71,16 @@ function makeRegistry() {
 }
 
 const writtenDirs: string[] = [];
-async function writeFlow(yaml: string): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-snapshot-collision-"));
+// Named after the flow (the file stem IS the run's name and its baseline key)
+// and realpath'd, so the canonical app paths the collision message names match
+// what a test builds from the returned file — macOS's tmpdir lives behind the
+// /var → /private/var symlink.
+async function writeFlow(name: string, yaml: string): Promise<string> {
+  const dir = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "flow-snapshot-collision-"))
+  );
   writtenDirs.push(dir);
-  const file = path.join(dir, "flow.yaml");
+  const file = path.join(dir, `${name}.yaml`);
   await fs.writeFile(file, yaml, "utf8");
   return file;
 }
@@ -88,15 +94,30 @@ async function runFlow(
   registry: Registry,
   params: Record<string, unknown>
 ): Promise<FlowRunResult> {
-  // Upload-marked like a remote client's call (the flow file lives outside
-  // project_root), plus the artifact store runSnapshot requires from ctx.
+  // A co-located explicit flow_path (the flow file lives outside project_root),
+  // plus the artifact store runSnapshot requires from ctx. Not the upload
+  // route: assertUploadSelfContained refuses a snapshot step there, since an
+  // uploaded flow's baselines land in a temp dir no later run can read.
+  const flowPath = String(params.flow_file);
+  const { name: _name, flow_file: _flowFile, ...rest } = params;
   const ctx = {
     fileInputs: {
-      flow_file: { clientPath: String(params.flow_file), presentOnHost: false, viaUpload: true },
+      flow_path: {
+        clientPath: flowPath,
+        presentOnHost: true,
+        viaUpload: false,
+        statVerified: true,
+      },
     },
     artifacts: new ArtifactStore(),
   };
-  return asRun(await createRunFlowTool(registry).execute({}, params as never, ctx as never));
+  return asRun(
+    await createRunFlowTool(registry).execute(
+      {},
+      { ...rest, flow_path: flowPath } as never,
+      ctx as never
+    )
+  );
 }
 
 const baselineDir = (flowFile: string, flowName: string) =>
@@ -123,6 +144,7 @@ afterEach(async () => {
 describe("flow-execute cross-app snapshot collision", () => {
   it("fails the second app's capture of a shared key and keeps the first app's baseline", async () => {
     const flowFile = await writeFlow(
+      "cross-app",
       "steps:\n" +
         "  - launch: { chromium: ./app-a }\n" +
         "  - snapshot: shot\n" +
@@ -160,6 +182,7 @@ describe("flow-execute cross-app snapshot collision", () => {
 
   it("does not fire for a relaunch of the same app, even on a new instance", async () => {
     const flowFile = await writeFlow(
+      "same-app",
       "steps:\n" +
         "  - launch: { chromium: ./app }\n" +
         "  - snapshot: shot\n" +
@@ -189,6 +212,7 @@ describe("flow-execute cross-app snapshot collision", () => {
     // ATTACHES (no boot); the relaunch boots. Both captures are the same app,
     // so the attach-declared path must equal the booted instance's identity.
     const flowFile = await writeFlow(
+      "pinned-same-app",
       "steps:\n" +
         "  - launch: { chromium: ./app }\n" +
         "  - snapshot: shot\n" +
@@ -227,6 +251,7 @@ describe("flow-execute cross-app snapshot collision", () => {
     // app-a, so a later boot of app-b recapturing the key is a real collision
     // and must name the attach-declared app, not the anonymous device id.
     const flowFile = await writeFlow(
+      "pinned-cross-app",
       "steps:\n" +
         "  - launch: { chromium: ./app-a }\n" +
         "  - snapshot: shot\n" +
@@ -262,6 +287,7 @@ describe("flow-execute cross-app snapshot collision", () => {
     // attached identity; the attach then names the app. Attaching restarts
     // nothing — same process, same app — so the recapture must stay legal.
     const flowFile = await writeFlow(
+      "pre-launch",
       "steps:\n" +
         "  - snapshot: shot\n" +
         "  - launch: { chromium: ./app }\n" +
@@ -288,6 +314,7 @@ describe("flow-execute cross-app snapshot collision", () => {
 
   it("does not fire for the same key captured twice without moving", async () => {
     const flowFile = await writeFlow(
+      "repeat",
       "steps:\n" +
         "  - launch: { chromium: ./app }\n" +
         "  - snapshot: shot\n" +

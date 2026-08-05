@@ -957,6 +957,10 @@ returns a notice with the prerequisite instead of running.`,
       const flowsDir = path.dirname(canonicalPath);
       const flow = parseFlow(await fs.readFile(canonicalPath, "utf8"));
       if (viaUpload) assertUploadSelfContained(flow);
+      // One seed for all three `run:` walks — the prerequisite guard, the
+      // chromium hoist, and the executor itself — so none can accept a chain
+      // another refuses.
+      const rootEntry: RunStackEntry = { canonical: canonicalPath, display: flowName };
 
       // Run-time analog of validateFlow's e2e-has-prerequisite rule: parse sees
       // one file, but a leading `run:` chain crosses files — a fragment whose
@@ -977,7 +981,7 @@ returns a notice with the prerequisite instead of running.`,
       // is restart-app, which terminates and relaunches whatever device it is
       // handed, so those stay refused.
       if (flow.executionPrerequisite && !pinnedToChromium(params.device)) {
-        const leading = await leadingLaunch(flow, flowsDir, [params.name]);
+        const leading = await leadingLaunch(flow, [rootEntry]);
         if (leading) {
           // Offer the pin only where it is a real way out (see
           // chromiumPinnable): the guard also fires for unpinned runs of every
@@ -987,7 +991,7 @@ returns a notice with the prerequisite instead of running.`,
             ? ` Or pin the run to a chromium instance you have already brought to that state (--device chromium-cdp-<port>), where the leading launch only attaches.`
             : "";
           throw new FailureError(
-            `A flow whose leading run: chain reaches a launch step must not declare executionPrerequisite — it launches its own app and controls its start state. Drop the leading launch in "${leading.flow}" to make it a fragment, or drop executionPrerequisite from "${params.name}".${pinRemedy}`,
+            `A flow whose leading run: chain reaches a launch step must not declare executionPrerequisite — it launches its own app and controls its start state. Drop the leading launch in "${leading.flow}" to make it a fragment, or drop executionPrerequisite from "${flowName}".${pinRemedy}`,
             {
               error_code: FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE,
               failure_stage: "flow_run_validate",
@@ -1017,7 +1021,15 @@ returns a notice with the prerequisite instead of running.`,
       // Resolve the run device (a run whose leading launch — direct, or reached
       // through a leading run: chain — is chromium boots + owns its own app; see
       // resolveRunDevice). Any instance it booted is torn down in the finally.
-      const resolved = await resolveRunDevice(registry, ctx, flow, params, flowsDir, viaUpload);
+      const resolved = await resolveRunDevice(
+        registry,
+        ctx,
+        flow,
+        params,
+        flowsDir,
+        rootEntry,
+        viaUpload
+      );
       // The device the run STARTS on — `state.device` moves when a chromium
       // launch boots one, so the status-bar restore below must not follow it.
       const device = resolved.device;
@@ -1062,7 +1074,7 @@ returns a notice with the prerequisite instead of running.`,
       let aborted: boolean;
       try {
         await execSteps(state, flow.steps, {
-          runStack: [{ canonical: canonicalPath, display: flowName }],
+          runStack: [rootEntry],
           depth: 0,
         });
       } finally {
@@ -1116,13 +1128,13 @@ async function resolveRunDevice(
   flow: FlowFile,
   params: Params,
   flowDir: string,
+  rootEntry: RunStackEntry,
   viaUpload: boolean
 ): Promise<{ device: DeviceInfo | null; booted: BootedChromium | null }> {
   if (!params.device) {
-    // Seeded with the top flow, exactly like `execRunStep`'s runStack — the two
-    // must accept the same chains, or a boot could precede a run the executor
-    // then refuses for depth.
-    const leading = await leadingLaunch(flow, flowDir, [params.name]);
+    // The executor's own runStack seed, so a boot can never precede a chain it
+    // then refuses.
+    const leading = await leadingLaunch(flow, [rootEntry]);
     const spec = leading && chromiumBootSpec(leading.app, params.platform);
     if (spec) {
       let booted: BootedChromium;
@@ -1215,10 +1227,9 @@ const NO_EXECUTABLE_STEP = "no-executable-step";
  */
 async function leadingLaunch(
   flow: FlowFile,
-  flowsDir: string,
-  seen: string[]
+  stack: RunStackEntry[]
 ): Promise<{ app: Launch; flow: string } | null> {
-  const found = await scanLeadingLaunch(flow, flowsDir, seen);
+  const found = await scanLeadingLaunch(flow, stack);
   return found === NO_EXECUTABLE_STEP ? null : found;
 }
 
@@ -1234,33 +1245,43 @@ async function leadingLaunch(
  * green launch step and all) and the prerequisite guard would wave through a
  * run that destroys the state it just asked the caller to establish.
  *
- * The guards below mirror the executor exactly, because a chain it refuses
- * never reaches its launch: a cyclic or over-deep `run:`, or one whose target
- * is unsafe or unreadable, errors that step and hard-stops the run — so those
- * stay `null` (give up), never transparent. `seen` tracks the ancestor chain
- * only, like `execRunStep`'s runStack: a hop pushes its target for the descent
- * and pops on the way out, so two sibling `run:`s of one echo-only fragment are
- * as legal here as they are at run time.
+ * The walk below IS the executor's, run ahead of time: it takes the same
+ * `runStack` (seeded with the root flow), resolves each hop exactly as
+ * {@link execRunStep} does — anchored at the containing file's canonical
+ * directory, by concatenation so a `..` reaches the kernel uncollapsed — and
+ * applies the same cycle, depth, and on-disk-casing guards. That is not
+ * duplication for its own sake: a chain the executor refuses never reaches its
+ * launch, so any hop it would error on stays `null` (give up) here, never
+ * transparent. Anything unreadable is `null` too — {@link execRunStep} reports
+ * that properly when it executes.
  */
 async function scanLeadingLaunch(
   flow: FlowFile,
-  flowsDir: string,
-  seen: string[]
+  stack: RunStackEntry[]
 ): Promise<{ app: Launch; flow: string } | typeof NO_EXECUTABLE_STEP | null> {
+  const top = stack[stack.length - 1]!;
   for (const step of flow.steps) {
     if (step.kind === "echo") continue;
-    if (step.kind === "launch") return { app: step.app, flow: seen[seen.length - 1]! };
+    if (step.kind === "launch") return { app: step.app, flow: top.display };
     if (step.kind !== "run") return null;
-    if (seen.includes(step.flow) || seen.length >= MAX_RUN_DEPTH) return null;
+    const spelled = path.dirname(top.canonical) + path.sep + step.flow;
     let nested: FlowFile;
+    let canonical: string;
     try {
-      assertSafeFlowName(step.flow);
-      const path_ = path.join(flowsDir, `${step.flow}.yaml`);
-      nested = parseFlow(await fs.readFile(path_, "utf8"));
+      canonical = await canonicalFlowPath(spelled);
+      if (stack.some((entry) => entry.canonical === canonical)) return null;
+      if (stack.length >= MAX_RUN_DEPTH) return null;
+      const supplied = path.posix.basename(step.flow);
+      const spelling = await classifyOnDiskSpelling(path.dirname(spelled), supplied);
+      if (spelling.state === "case_folded") return null;
+      nested = parseFlow(await fs.readFile(canonical, "utf8"));
     } catch {
       return null;
     }
-    const inner = await scanLeadingLaunch(nested, flowsDir, [...seen, step.flow]);
+    const inner = await scanLeadingLaunch(nested, [
+      ...stack,
+      { canonical, display: runDisplayFor(step.flow, stack[0]!.display) },
+    ]);
     if (inner !== NO_EXECUTABLE_STEP) return inner;
   }
   return NO_EXECUTABLE_STEP;
@@ -1566,8 +1587,17 @@ function scopeFlow(scope: StepScope): string {
  * shapes contain a `/`, which FLOW_NAME_PATTERN forbids in the root's name.
  */
 function runDisplayName(target: string, scope: StepScope): string {
+  return runDisplayFor(target, scope.runStack[0]!.display);
+}
+
+/**
+ * {@link runDisplayName} against a root name rather than a scope, so
+ * {@link scanLeadingLaunch} — which walks the same chain before any scope
+ * exists — attributes a hop exactly as the executor will.
+ */
+function runDisplayFor(target: string, rootDisplay: string): string {
   const stem = runTargetName(target);
-  if (stem !== scope.runStack[0]!.display) return stem;
+  if (stem !== rootDisplay) return stem;
   // Parse guarantees the target ends in lowercase ".yaml", so slicing the
   // extension off never truncates a real path segment.
   const spelled = target.slice(0, -".yaml".length);
