@@ -1352,8 +1352,12 @@ async function teardownBootedChromium(registry: Registry, booted: BootedChromium
   } catch {
     /* the kill below frees the real resource regardless */
   }
-  await killChromiumByPortAndWait(booted.port, booted.pid);
-  untrackChromiumPort(booted.port);
+  try {
+    await killChromiumByPortAndWait(booted.port, booted.pid);
+    untrackChromiumPort(booted.port);
+  } catch {
+    /* one unreachable instance must not strand the others the run-end loop still owes */
+  }
 }
 
 /**

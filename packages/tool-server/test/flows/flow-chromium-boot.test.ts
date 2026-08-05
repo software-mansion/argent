@@ -1137,6 +1137,32 @@ describe("flow-execute chromium boot", () => {
     expect(killChromiumByPort).not.toHaveBeenCalled();
   });
 
+  it("reclaims the instances behind one whose teardown throws", async () => {
+    // Teardown is best-effort by contract, and the run-end sweep is a bare loop
+    // — a throw on one instance would strand every instance under it, from
+    // inside a finally that would also mask the run's own outcome.
+    const flowFile = await writeFlow(
+      "steps:\n  - launch: { chromium: ./app-a }\n  - launch: { chromium: ./app-b }\n"
+    );
+    const registry = makeRegistry();
+    killChromiumByPortAndWait.mockImplementationOnce(async () => {
+      throw new Error("kill wedged");
+    });
+
+    const result = await runFlow(registry, {
+      name: "wedged-teardown",
+      project_root: PROJECT_ROOT,
+      flow_file: flowFile,
+    });
+
+    expect(result.ok).toBe(true);
+    // The newest instance's teardown threw; the older one's still ran.
+    expect(killChromiumByPortAndWait.mock.calls).toEqual([
+      [12346, 4243],
+      [12345, 4242],
+    ]);
+  });
+
   it("errors the first launch when it declares no chromium app on a pinned instance", async () => {
     const flowFile = await writeFlow(
       "steps:\n  - launch: { ios: com.acme.app }\n  - echo: after\n"
