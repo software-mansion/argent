@@ -13,8 +13,9 @@ import {
 } from "../src/flow.js";
 
 function mkReport(steps: StepReport[], overrides: Partial<FlowReport> = {}): FlowReport {
-  // Mirror the runner's summarize(): echo narration is not a counted step.
-  const counted = steps.filter((s) => s.kind !== "echo");
+  // Mirror the runner's summarize(): neither echo narration nor a structural
+  // block marker is a counted step.
+  const counted = steps.filter((s) => s.kind !== "echo" && s.structural !== true);
   const passed = counted.filter((s) => s.status === "pass").length;
   const failed = counted.filter((s) => s.status === "fail").length;
   const skipped = counted.filter((s) => s.status === "skip").length;
@@ -45,6 +46,19 @@ const STEPS: StepReport[] = [
     artifacts: { baseline: "/tmp/b.png", diff: "/tmp/d.png" },
   },
   { index: 4, kind: "await", status: "skip", target: 'visible "Done"' },
+];
+
+/**
+ * A `repeat: 2` block over one tap, as the tool-server reports it. The opening
+ * marker carries the bound as its target and no reason: the block has not run,
+ * so a reason could only restate the bound the target already gives.
+ */
+const REPEAT_STEPS: StepReport[] = [
+  { index: 0, kind: "repeat", status: "pass", target: "2 times", structural: true },
+  { index: 1, kind: "repeat", status: "pass", target: "iteration 1/2", depth: 1, structural: true },
+  { index: 2, kind: "tap", status: "pass", target: '"Clear"', depth: 1 },
+  { index: 3, kind: "repeat", status: "pass", target: "iteration 2/2", depth: 1, structural: true },
+  { index: 4, kind: "tap", status: "pass", target: '"Clear"', depth: 1 },
 ];
 
 describe("flow report rendering", () => {
@@ -242,6 +256,76 @@ describe("flow report rendering", () => {
         expect(renderUnderStepLine(step, n, "⚠ w").indexOf("⚠")).toBe(labelCol);
       }
     }
+  });
+
+  it("prints a repeat block's markers unnumbered, without shifting the sequence", () => {
+    // The markers are block structure: they keep the glyph, the depth indent
+    // and the label column so the shape reads, but take no step number — the
+    // numbered lines are the two taps, matching the counts the server sends.
+    const out = renderReport(mkReport(REPEAT_STEPS));
+    expect(out).toBe(
+      [
+        'Flow "checkout" on UDID-1',
+        "  ✓    repeat 2 times",
+        "  ✓      repeat iteration 1/2",
+        '  ✓  1   tap "Clear"',
+        "  ✓      repeat iteration 2/2",
+        '  ✓  2   tap "Clear"',
+        "",
+        "PASS — 2 passed, 0 failed, 0 errored, 0 skipped",
+      ].join("\n")
+    );
+    // The unnumbered lines' labels sit in the same column as the numbered
+    // ones' at the same depth — the block shape is the point of printing them.
+    const lines = out.split("\n");
+    expect(lines[2]!.indexOf("repeat")).toBe(lines[3]!.indexOf("tap"));
+  });
+
+  it("live step lines match the buffered renderer's for a repeat block", () => {
+    const report = mkReport(REPEAT_STEPS);
+    const buffered = renderReport(report).split("\n");
+
+    // Reproduce the live loop: structural markers print unnumbered, so the
+    // live sequence can't drift from the buffered one.
+    const live: string[] = [];
+    let n = 0;
+    for (const s of report.steps) {
+      if (s.structural === true) {
+        live.push(renderStepLine(s, undefined, report.flow));
+        continue;
+      }
+      n++;
+      live.push(renderStepLine(s, n, report.flow));
+    }
+    for (const line of live) expect(buffered).toContain(line);
+  });
+
+  it("numbers a line whose structural flag is not literally true", () => {
+    // Wire data: a bogus value must not quietly pull a real step out of the
+    // sequence — anything but `true` renders exactly as it did before the flag
+    // existed (which is also what a pre-structural tool-server sends).
+    const tap: StepReport = { index: 0, kind: "tap", status: "pass", target: '"A"' };
+    expect(renderStepLine({ ...tap, structural: false }, 1, "f")).toBe('  ✓  1 tap "A"');
+    const hostile = { ...tap, structural: "yes" } as unknown as StepReport;
+    expect(renderReport(mkReport([hostile]))).toContain('  ✓  1 tap "A"');
+  });
+
+  it("renderArtifactLines numbers past a structural marker the same way", () => {
+    const lines = renderArtifactLines(
+      mkReport([
+        { index: 0, kind: "repeat", status: "pass", target: "2 times", structural: true },
+        {
+          index: 1,
+          kind: "snapshot",
+          status: "fail",
+          target: '"home"',
+          artifacts: { diff: "/tmp/d.png" },
+        },
+      ])
+    );
+    // The snapshot is step 1: the marker consumed no number here either, or
+    // the label would disagree with the step line it points at.
+    expect(lines).toEqual(["  snapshot (step 1):", "       diff: /tmp/d.png"]);
   });
 
   it("renderSummary carries the device only when asked (live tail)", () => {

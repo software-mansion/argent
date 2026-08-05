@@ -276,6 +276,37 @@ export function summarizeStep(step: FlowStep, n: number): string {
       return `${n}. rotate: by ${step.by}°${step.selector ? ` on ${selectorLabel(step.selector)}` : ""}`;
     case "snapshot":
       return `${n}. snapshot: ${step.name}`;
+    case "repeat": {
+      // The recorder never emits a repeat block (it records the literal
+      // iterations); this renders a hand-authored one in a re-summarized
+      // flow. Same "(N steps)" tail as when, for the same reason. The count
+      // pluralizes like the run report's own repeat target, and for the
+      // same reason: the bound's range starts at 1, so `repeat: 1` is a
+      // block an author can write and a fixed `times` would summarize it as
+      // `repeat: 1 times`.
+      //
+      // A drain renders its guard alone, deliberately without the `max`
+      // that flow-run's `stepTarget` spells out for the same block. There
+      // `max` is the bound the step FAILS at — the number a run report's
+      // failure line refers to — so a reader needs it. Nothing has run
+      // here: this line says what the flow IS, a loop that drains until the
+      // guard holds, and a cap nothing in this summary can hit would only
+      // stand between the reader and that condition.
+      const bound =
+        step.spec.mode === "times"
+          ? `${step.spec.times} time${step.spec.times === 1 ? "" : "s"}`
+          : `until ${
+              step.spec.until.condition === "text"
+                ? textConditionLabel(
+                    step.spec.until.selector,
+                    step.spec.until.expectedText,
+                    step.spec.until.textMatch
+                  )
+                : `${step.spec.until.condition} ${selectorLabel(step.spec.until.selector)}`
+            }`;
+      const count = step.steps.length;
+      return `${n}. repeat: ${bound} (${count} step${count === 1 ? "" : "s"})`;
+    }
     case "idle":
       return `${n}. await: screen idle`;
     case "tool":

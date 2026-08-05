@@ -29,6 +29,7 @@ import {
   describeTextExpectation,
   getFlowPath,
   isBlockStep,
+  isStructuralBlockMarker,
   parseFlow,
   runTargetName,
   type BlockStep,
@@ -36,6 +37,7 @@ import {
   type FlowSelector,
   type FlowStep,
   type Launch,
+  type UiWhenCondition,
   type WhenCondition,
   LAUNCH_PLATFORMS,
   SELECTOR_RELATIONS,
@@ -249,6 +251,18 @@ export interface StepReport {
    * be reconstructed downstream.
    */
   depth?: number;
+  /**
+   * This line marks block structure — a `repeat:` block's opening line and the
+   * marker before each of its iterations — rather than a step that ran or an
+   * outcome that was evaluated. Excluded from the counts and from the
+   * renderers' step numbering exactly as `echo` is, so `repeat: 3` over one tap
+   * reports the same numbers as those three taps pasted out; counted, the
+   * markers would scale the totals with the iteration count. A block's terminal
+   * line (a drain converged, cap reached, guard errored; either bound
+   * cancelled) is NOT structural — it is the block's verdict, and the cap's
+   * `fail` is the only thing making a drain that never converged report FAIL.
+   */
+  structural?: boolean;
 }
 
 export interface FlowRunResult {
@@ -1127,6 +1141,13 @@ next gesture pay a fresh window, and it warns again if the source is still down.
 A \`when:\` block (condition + \`steps:\`, no else) runs its steps only if the condition holds —
 checked once with the short assert grace — for one-sided divergences like interstitials and coach
 marks; a skipped block reports distinctly and failures inside an entered block are real failures.
+A \`repeat:\` block (bound + \`steps:\`) runs the same steps several times: \`repeat: 3\` is a literal
+count (exactly equivalent to pasting the steps 3 times), \`repeat: { until: <condition>, max?: 10 }\`
+drains until a condition holds — checked BEFORE each iteration, so an already-satisfied guard runs
+zero iterations and passes, and hitting \`max\` with it still unmet FAILS the step. Repeat is NOT
+retry: a failure inside any iteration is a real failure and hard-stops the flow, since re-running a
+side-effecting iteration would double-fire it. \`snapshot\` inside a repeat block is a parse error (one
+baseline, N comparisons). Distinct from \`tap: { times }\`, which is ONE multi-tap gesture.
 A flow that begins with a \`launch\` step is a self-contained e2e flow; one that doesn't runs against the
 device's current state. Device id is injected by the runner (flows store none) — pass \`device\` or
 \`platform\` to pick one, else the single booted device is used. On Chromium a \`launch\` step's value is an
@@ -1663,9 +1684,13 @@ function summarize(
   let skipped = 0;
   let errored = 0;
   for (const s of steps) {
-    // Echo is narration, not a test step — counting it would let the summary
-    // disagree with the renderers' step numbering (which skips echo too).
-    if (s.kind === "echo") continue;
+    // Echo is narration and a `structural` line is block scaffolding (a
+    // `repeat:` block's opening and iteration markers) — neither is a test
+    // step, and counting either would let the summary disagree with the
+    // renderers' step numbering, which skips both. For the markers that also
+    // means the counts hold the directive's promise: `repeat: 3` over one tap
+    // reports what the three pasted taps report, instead of scaling with N.
+    if (s.kind === "echo" || s.structural) continue;
     if (s.status === "pass") passed++;
     else if (s.status === "fail") failed++;
     else if (s.status === "skip") skipped++;
@@ -1766,6 +1791,15 @@ function stepTarget(step: FlowStep): string | undefined {
       return step.condition.kind === "platform"
         ? `platform ${step.condition.platform}`
         : conditionLabel(step.condition, selectorLabel);
+    case "repeat":
+      // `max` is shown for a drain because it is the bound the step FAILS at —
+      // the number a reader needs when the failure line says it was hit. The
+      // count is pluralized because the bound's range starts at 1: `repeat: 1`
+      // is a flow an author can write, and a fixed `times` would render it
+      // `repeat 1 times`.
+      return step.spec.mode === "times"
+        ? `${step.spec.times} time${step.spec.times === 1 ? "" : "s"}`
+        : `until ${conditionLabel(step.spec.until, selectorLabel)} (max ${step.spec.max})`;
     case "scroll-to": {
       const dir = step.direction !== "down" ? ` (${step.direction})` : "";
       return `${selectorLabel(step.target)}${dir}`;
@@ -1910,6 +1944,12 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
         status: "skip",
         flow: stepFlow(step, scope),
         target: stepTarget(step),
+        // A marker that is structure when the block runs is structure when it
+        // is skipped over too: the flag drives the counts and the renderers'
+        // step numbering, so stamping it only on the executing path would give
+        // the same `repeat:` block a step number here and none there, moving
+        // every later step's number between two runs of one flow.
+        ...(isStructuralBlockMarker(step) ? { structural: true } : {}),
         ...depthOf(scope),
         // Carry the echo's message so a skipped narration renders as a skip
         // line rather than vanishing — matching reportBlockSkipped.
@@ -1939,6 +1979,15 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
         target: stepTarget(step),
         ...depthOf(scope),
         reason: `step needs a device but the flow was resolved as device-free — pass an explicit device`,
+        // Deliberately NOT stamped structural, unlike the two skip branches
+        // around it: `summarize` drops a structural line from the counts
+        // whatever its status, and this line's status is `error`. Dropping it
+        // would leave `errored` at zero and hand a green PASS to a run that
+        // could not execute a step at all — far worse than the numbering wobble
+        // it costs. (Unreachable for a `repeat:` today anyway:
+        // `stepRequiresDevice` is true for it, so a flow holding one never
+        // resolves device-free. The comment is here so it stays deliberate if
+        // that ever changes.)
       });
       const inner = blockSteps(step);
       if (inner) reportBlockSkipped(state, inner, childScope(scope));
@@ -1953,6 +2002,9 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
         reason: "run aborted",
         flow: stepFlow(step, scope),
         target: stepTarget(step),
+        // Structure stays structure when the run is called off — the same
+        // numbering invariant the hard-stop branch above spells out.
+        ...(isStructuralBlockMarker(step) ? { structural: true } : {}),
         ...depthOf(scope),
         ...(step.kind === "echo" ? { message: step.message } : {}),
       });
@@ -1983,14 +2035,62 @@ function describeWhenCondition(cond: WhenCondition): string {
 }
 
 /**
- * Report every step of a block directive that will not run as skipped — so a
- * run where the block was skipped (a `when:` guard unmet or errored, a hard
- * stop, a cancellation) produces the same report shape (one line per authored
- * step, at the same depth) as a run where it entered, and reports stay
- * comparable run-to-run. Nested blocks expand (their literal steps are known);
- * a `run:` composition stays one line, matching how post-hard-stop skips report
- * a fragment that was never loaded. `scope` is the scope the steps would have
- * executed in — already the block's child scope, not the marker's.
+ * The four ways a UI guard can come back, shared by `when:`'s single check and
+ * `repeat: { until }`'s per-iteration check. "Indeterminate" is deliberately
+ * NOT folded into "unmet": an unreadable tree is unknown, not false, and both
+ * callers must treat it as an error — silently reading it as false would turn a
+ * guarded dismissal into a green no-op, and would end a drain early while
+ * claiming it converged.
+ */
+type GuardOutcome =
+  | { outcome: "met" | "unmet" | "aborted" }
+  | { outcome: "indeterminate"; reason?: string };
+
+/** Probe a UI guard at the short assert grace and classify the result. */
+async function probeGuard(state: ExecState, cond: UiWhenCondition): Promise<GuardOutcome> {
+  const probe = await probeWhenCondition(deviceEnv(state), cond);
+  if (probe.aborted) return { outcome: "aborted" };
+  if (!probe.ok && probe.indeterminate) {
+    return { outcome: "indeterminate", reason: probe.reason };
+  }
+  return { outcome: probe.ok ? "met" : "unmet" };
+}
+
+/**
+ * Report every step of a block directive that will not run as skipped — one
+ * line per authored step, at the depth it would have run at — so a block that
+ * was skipped (unmet guard, errored guard, hard stop, or cancellation) still
+ * accounts for every step it was going to take instead of dropping out of the
+ * report entirely. Nested block directives expand (their literal steps are
+ * known); a `run:` composition stays one line, matching how post-hard-stop
+ * skips report a fragment that was never loaded. `scope` is the scope the steps
+ * would have executed in — already the block's child scope, not the marker's.
+ *
+ * What this reproduces is the block as AUTHORED, not as executed; how close
+ * that comes to a run where the block entered depends on the directive and on
+ * what is inside it. A `when:` evaluates its guard once and runs its steps
+ * once, so a guarded body of leaf steps skips to the very lines it would have
+ * produced — same kind, same target, same depth, same step number — statuses
+ * and their reasons aside; that equality is what keeps two runs of such a flow
+ * comparable line by line. Lines, not whole reports: the stand-ins below carry
+ * only what a step IS, never what running one yields, so a `snapshot:` — legal
+ * under a `when:`, though not under a `repeat:` — has no `artifacts`
+ * counterpart on this path. A nested `run:` is one line here and the
+ * fragment's steps there. A `repeat:` never matches: an entered one puts an
+ * iteration marker before each pass and reports its body once per pass, and a
+ * drain that reaches a verdict closes with a line for it — so the entered run
+ * always carries extra lines. Whether those extras also move the step numbers
+ * past the block depends on which of them the renderers count, and they count
+ * neither narration nor structure: under a `when:`, `repeat: 3` over one tap
+ * numbers the step after the block 5 where this path numbers it 3, while the
+ * same block over one `echo:` numbers it 2 both ways — three unnumbered passes
+ * of an unnumbered line shift nothing. A drain's verdict is the one extra that
+ * always takes a number: already met over that same `echo:` body, it still
+ * numbers the following step 3 where this path numbers it 2.
+ *
+ * Call this while the block is still open — after the line that opens it and
+ * before any line that closes it — so the stand-in children bracket the way the
+ * executed ones would.
  */
 function reportBlockSkipped(
   state: ExecState,
@@ -2006,6 +2106,20 @@ function reportBlockSkipped(
       reason,
       flow: stepFlow(step, scope),
       target: stepTarget(step),
+      // A marker that is structure when its block runs is structure when the
+      // block is skipped over too, so a nested `repeat:` carries the stamp here
+      // as well — a nested `when:` marker gets it on neither path, its guard
+      // having really been evaluated. The stamped line stays out of the counts
+      // and out of the renderers' step numbers on this path exactly as it does
+      // on the executing one. That is what the stamp buys, and it is worth
+      // buying — unstamped, the same `repeat:` would take a step number here
+      // and none there, an off-by-one added to every line after it. It buys
+      // only that one line, though: the stand-ins below are one per authored
+      // step, while an entered `repeat:` reports its body once per iteration,
+      // so the lines after the block need not line up at all. The docstring
+      // works that through — with the numbers, in one place, so the two cannot
+      // drift into disagreeing.
+      ...(isStructuralBlockMarker(step) ? { structural: true } : {}),
       ...depthOf(scope),
       ...(step.kind === "echo" ? { message: step.message } : {}),
     });
@@ -2021,15 +2135,16 @@ function reportBlockSkipped(
  * leaving the block out of the report entirely, not even its own marker.
  * Preventing execLeafStep's "unsupported step kind" error is the isBlockStep
  * gate's doing, not this arm's - a registered kind never reaches the leaf
- * switch. Binds `step.kind` rather than `step` - while the registry has one
- * entry BlockStep is not a union, so only the discriminant narrows to `never`.
+ * switch.
  */
 async function execBlockStep(state: ExecState, step: BlockStep, scope: StepScope): Promise<void> {
   switch (step.kind) {
     case "when":
       return execWhenStep(state, step, scope);
+    case "repeat":
+      return execRepeatStep(state, step, scope);
     default: {
-      const unhandled: never = step.kind;
+      const unhandled: never = step;
       void unhandled;
     }
   }
@@ -2073,13 +2188,13 @@ async function execWhenStep(
     const platform = guardEnv.device.platform === "ios-remote" ? "ios" : guardEnv.device.platform;
     met = platform === step.condition.platform;
   } else {
-    const probe = await probeWhenCondition(deviceEnv(state), step.condition);
-    if (probe.aborted) {
+    const probe = await probeGuard(state, step.condition);
+    if (probe.outcome === "aborted") {
       pushReport(state, { ...marker, status: "skip", reason: "run aborted" });
       reportBlockSkipped(state, step.steps, inner, "run aborted");
       return;
     }
-    if (!probe.ok && probe.indeterminate) {
+    if (probe.outcome === "indeterminate") {
       pushReport(state, {
         ...marker,
         status: "error",
@@ -2089,7 +2204,7 @@ async function execWhenStep(
       reportBlockSkipped(state, step.steps, inner, "when guard errored");
       return;
     }
-    met = probe.ok;
+    met = probe.outcome === "met";
   }
 
   if (!met) {
@@ -2182,6 +2297,208 @@ function baselineKeyFor(canonicalPath: string, flowName: string): string {
   // nothing) — the pattern rejects that spelling too, so it falls back as well.
   const stem = path.basename(canonicalPath, ".yaml");
   return FLOW_NAME_PATTERN.test(stem) ? stem : flowName;
+}
+
+/**
+ * Execute a `repeat:` block.
+ *
+ * Report shape, identical for both bounds so runs stay comparable: a block
+ * marker at the enclosing depth, then — one level deeper, the same place
+ * `when:` puts its guarded steps — an iteration marker before each pass and
+ * that pass's steps, and finally, back at the enclosing depth, the block's
+ * closing line where it has one (a drain's verdict, either bound's
+ * cancellation). Everything the block emits sits between those two lines,
+ * whatever path it took: a drain that ran zero iterations reports its authored
+ * steps as skips inside that window, not after it. Nothing is padded: a `times`
+ * block cut short by a failure does not emit its remaining iterations as skips
+ * (they are re-runs of steps already reported, not authored steps left undone),
+ * and an `until` drain never pads to `max`.
+ *
+ * Repeat is NOT retry: `execSteps` sets `stopped` on the first failure inside
+ * an iteration and this returns immediately, hard-stopping the flow like any
+ * other directive.
+ */
+async function execRepeatStep(
+  state: ExecState,
+  step: Extract<FlowStep, { kind: "repeat" }>,
+  scope: StepScope
+): Promise<void> {
+  const index = state.reports.length;
+  const marker = {
+    index,
+    kind: "repeat",
+    flow: scopeFlow(scope),
+    // The bound, and nothing more: both pushes below add only a `status`. A
+    // `reason` here could only restate this target — the block has not run, so
+    // there is no outcome yet to report — and the renderers join the two as
+    // `<target> — <reason>`, so the line would state the bound twice, for a
+    // drain in two different selector spellings (`selectorLabel` builds the
+    // target, `describeSelector` the reasons below). `when:`'s marker earns its
+    // reason by carrying the met/not-met that its target cannot.
+    target: stepTarget(step),
+    // The opening line says the block exists and how it is bounded; it asserts
+    // nothing, so it is scaffolding, not a step. The terminal lines below (a
+    // drain's verdict, either mode's cancellation) deliberately carry no
+    // `structural` — those ARE assertions.
+    structural: true,
+    ...depthOf(scope),
+  } as const;
+  const inner = childScope(scope);
+
+  /** An iteration boundary marker: `iteration 2/3`, or `iteration 2` when the count isn't known ahead. */
+  const pushIteration = (n: number, of?: number): void => {
+    pushReport(state, {
+      index: state.reports.length,
+      kind: "repeat",
+      status: "pass",
+      flow: scopeFlow(scope),
+      target: `iteration ${n}${of === undefined ? "" : `/${of}`}`,
+      // One per pass, so counting these would make the block's totals grow
+      // with N — the very equivalence with pasted-out steps that repeat sells.
+      structural: true,
+      ...depthOf(inner),
+    });
+  };
+
+  /**
+   * The block's cancellation line — one shape for every way this block can
+   * notice the run was called off (either bound, at a drain's guard probe or
+   * after an iteration body). Without it a block cut short mid-iteration reads
+   * as an all-pass block headed by a marker promising iterations that never
+   * ran, with nothing inside saying why it ended. A skip, never a fail: the
+   * caller gave up, the steps did nothing wrong — the run-level `aborted`
+   * already keeps the verdict honest. Not `structural`: like the drain's other
+   * terminal lines this is the block's outcome, not scaffolding.
+   *
+   * The one terminal line that repeats the marker's `target`: its reason names
+   * the cancellation and nothing else, so without one it renders as a bare
+   * `repeat — run aborted` that identifies neither the block nor its bound —
+   * and a flow with several repeat blocks would tell them apart only by the
+   * depth indent. The drain's converged / cap / errored lines take no target
+   * for the mirror-image reason: their reasons already spell out the condition.
+   */
+  const pushAborted = (): void => {
+    pushReport(state, {
+      index: state.reports.length,
+      kind: "repeat",
+      status: "skip",
+      flow: scopeFlow(scope),
+      target: stepTarget(step),
+      reason: "run aborted",
+      ...depthOf(scope),
+    });
+  };
+
+  if (step.spec.mode === "times") {
+    const { times } = step.spec;
+    pushReport(state, { ...marker, status: "pass" });
+    for (let n = 1; n <= times; n++) {
+      pushIteration(n, times);
+      await execSteps(state, step.steps, inner);
+      // Both exits end the block here — later iterations do not run and are not
+      // reported: they would duplicate lines, not complete the shape. Only
+      // cancellation adds a line. A failure or error inside the pass is already
+      // explained by the step that reported it (and set `stopped`), so saying
+      // more would be noise; an abort has nothing at this level saying the
+      // block stopped early, so it says so the same way the drain's probe does.
+      // The order is load-bearing, not cheap-check-first: a cancellation caught
+      // with steps still left in the body has ALSO set `stopped` — `execSteps`
+      // skipped those steps as `run aborted` on its own abort branch — so the
+      // abort has to be tested first, or every cancellation except the ones
+      // landing on the body's very last step exits silently again.
+      if (state.signal?.aborted) {
+        pushAborted();
+        return;
+      }
+      if (state.stopped) return;
+    }
+    return;
+  }
+
+  const { until, max } = step.spec;
+  // The guard as the terminal lines below spell it; the opening marker's target
+  // spells the same condition through `selectorLabel`.
+  const label = conditionLabel(until, describeSelector);
+  pushReport(state, { ...marker, status: "pass" });
+
+  let done = 0;
+  for (;;) {
+    // Checked BEFORE each iteration, including the first: an already-satisfied
+    // guard runs zero iterations, which is a pass — the drain converged, there
+    // was simply nothing to drain. Same restore-determinism character as
+    // `when:`: drive the UI to a known state, no-op if already there.
+    const probe = await probeGuard(state, until);
+    if (probe.outcome === "aborted") {
+      // Zero iterations: the authored steps never ran, so they report one skip
+      // line each at the depth they would have run at — and they go BEFORE the
+      // block's closing line, which is where the executing path leaves them
+      // too. A block's children sit between its opening marker and its closing
+      // line in every path: push the verdict first and a run that had nothing
+      // to drain would hang depth-1 lines under a depth-0 line that closes the
+      // block rather than opening it, so the same block would bracket two
+      // different ways depending on whether there was work — exactly the
+      // run-to-run comparison the stand-in skip lines exist to preserve.
+      if (done === 0) reportBlockSkipped(state, step.steps, inner, "run aborted");
+      pushAborted();
+      return;
+    }
+    if (probe.outcome === "indeterminate") {
+      // Same bracketing as the abort above: skips first, then the closing line.
+      if (done === 0) reportBlockSkipped(state, step.steps, inner, "until guard errored");
+      pushReport(state, {
+        index: state.reports.length,
+        kind: "repeat",
+        status: "error",
+        flow: scopeFlow(scope),
+        reason: `could not evaluate until guard (${label}): ${probe.reason}`,
+        ...depthOf(scope),
+      });
+      state.stopped = true;
+      return;
+    }
+    if (probe.outcome === "met") {
+      // Same bracketing as the two branches above: the skip lines stand in for
+      // the pass that never ran, so they belong inside the block, ahead of the
+      // converged verdict that closes it.
+      if (done === 0) reportBlockSkipped(state, step.steps, inner, "already met");
+      pushReport(state, {
+        index: state.reports.length,
+        kind: "repeat",
+        status: "pass",
+        flow: scopeFlow(scope),
+        reason: `${label} after ${done} iteration${done === 1 ? "" : "s"}`,
+        ...depthOf(scope),
+      });
+      return;
+    }
+    if (done >= max) {
+      // The cap is a failure, not a quiet exit: a drain that never converged
+      // asserts nothing if it passes.
+      pushReport(state, {
+        index: state.reports.length,
+        kind: "repeat",
+        status: "fail",
+        flow: scopeFlow(scope),
+        reason: `still not ${label} after ${max} iteration${max === 1 ? "" : "s"} (max)`,
+        ...depthOf(scope),
+      });
+      state.stopped = true;
+      return;
+    }
+    done++;
+    pushIteration(done);
+    await execSteps(state, step.steps, inner);
+    // Same two exits as the `times` loop, reported the same way and tested in
+    // the same order for the same reason: a mid-body cancellation reaches here
+    // with `stopped` already set by `execSteps`, so checking `stopped` first
+    // would drop the line. Caught here it is the identical line the guard probe
+    // above would have pushed on the next turn of the loop.
+    if (state.signal?.aborted) {
+      pushAborted();
+      return;
+    }
+    if (state.stopped) return;
+  }
 }
 
 async function execRunStep(

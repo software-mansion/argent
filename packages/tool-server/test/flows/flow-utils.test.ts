@@ -950,6 +950,16 @@ const BLOCK_DIRECTIVE_FLOWS: Record<
       { kind: "tap", selector: { text: "Buy", loose: true } },
     ],
   },
+  repeat: {
+    yaml:
+      ["steps:", "  - repeat: 2", "    steps:", "      - echo: Again", "      - tap: Next"].join(
+        "\n"
+      ) + "\n",
+    children: [
+      { kind: "echo", message: "Again" },
+      { kind: "tap", selector: { text: "Next", loose: true } },
+    ],
+  },
 };
 
 // Registering a kind in BLOCK_DIRECTIVE_KEYS exempts it from fromYamlStep's
@@ -968,6 +978,12 @@ const BLOCK_DIRECTIVE_SIBLING_REJECTIONS: Record<
         "\n"
       ) + "\n",
     message: "a when step takes exactly { when: <condition>, steps: [...] }",
+  },
+  repeat: {
+    yaml:
+      ["steps:", "  - repeat: 2", "    steps:", "      - echo: hi", "    bogus: 1"].join("\n") +
+      "\n",
+    message: "a repeat step takes exactly { repeat: <count | { until, max? }>, steps: [...] }",
   },
 };
 

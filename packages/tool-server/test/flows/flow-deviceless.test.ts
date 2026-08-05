@@ -206,6 +206,32 @@ describe("a flow that does touch a device still demands one", () => {
     await expectDemandsDevice("platform-guarded");
   });
 
+  it("when a repeat block wraps steps that would each run device-free", async () => {
+    // The expected answer, not a bug — and the sharpest case, because a
+    // `repeat: { times }` has no guard of its own: unlike `when`, nothing here
+    // reads the device. `stepRequiresDevice` gives ONE answer per step kind and
+    // a block directive answers yes without recursing into its body, so
+    // wrapping narration in a repeat block is what makes the run demand a
+    // device — and it is demanded up front, before step 1, naming neither the
+    // block nor the fact that the same steps unwrapped need nothing.
+    const body: FlowStep[] = [
+      { kind: "echo", message: "tick" },
+      { kind: "wait", ms: 1 },
+    ];
+    await writeFlow("looped-narration", [
+      { kind: "repeat", spec: { mode: "times", times: 2 }, steps: body },
+    ]);
+    await expectDemandsDevice("looped-narration");
+
+    // The cost, stated: those same two steps unwrapped run with nothing booted
+    // and are attributed to no device. Only the wrapper changed.
+    await writeFlow("unwrapped", body);
+    const { registry } = mockRegistry({ booted: [] });
+    const result = asRun(await runAuto(registry, "unwrapped"));
+    expect(result.ok).toBe(true);
+    expect(result.device).toBe("");
+  });
+
   it("when it launches an app", async () => {
     await writeFlow("launcher", [{ kind: "launch", app: { ios: "com.example.app" } }]);
     await expectDemandsDevice("launcher");
@@ -249,6 +275,7 @@ describe("stepRequiresDevice", () => {
       "tool": true,
       "run": true,
       "when": true,
+      "repeat": true,
       "launch": true,
       "tap": true,
       "long-press": true,
@@ -267,6 +294,7 @@ describe("stepRequiresDevice", () => {
       "tool": { kind: "tool", name: "tap", args: {} },
       "run": { kind: "run", flow: "other" },
       "when": { kind: "when", condition: { kind: "platform", platform: "ios" }, steps: [] },
+      "repeat": { kind: "repeat", spec: { mode: "times", times: 1 }, steps: [] },
       "launch": { kind: "launch", app: { ios: "com.example" } },
       "tap": { kind: "tap", x: 0, y: 0 },
       "long-press": { kind: "long-press", x: 0, y: 0 },

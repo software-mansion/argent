@@ -179,7 +179,7 @@ describe("when: parse/serialize", () => {
   // registered block directives, so a second one must update this literal
   // consciously. Deriving it from BLOCK_DIRECTIVE_KEYS would move it with the
   // source and pin nothing; restating it per test made that three edits to find.
-  const DEPTH_CAP_MESSAGE = "`when:` blocks nest deeper than 20 levels";
+  const DEPTH_CAP_MESSAGE = "`when:`/`repeat:` blocks nest deeper than 20 levels";
 
   it("rejects a cyclic YAML alias on when steps with a structured error", () => {
     // The yaml library materializes `steps: *s` as a cyclic object; without

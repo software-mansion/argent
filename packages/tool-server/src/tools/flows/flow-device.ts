@@ -221,7 +221,18 @@ export function stepRequiresDevice(registry: Registry, step: FlowStep): boolean 
       return false;
     case "tool":
       return toolRequiresDevice(registry, step.name);
+    // A block directive needs a device unconditionally rather than recursing
+    // into its body to see whether any child does — `when` because its guard
+    // reads the tree, `repeat` by the same blanket answer. A `repeat: { times }`
+    // over only `wait:`/`echo:` steps genuinely needs none, so this is
+    // conservative, and the author pays for it before the run starts: the "yes"
+    // here makes flowRequiresDevice say yes, so resolveRunDevice resolves a
+    // device and throws `No booted device found. Pass a device id or platform
+    // explicitly.` ahead of step 1 — naming neither the repeat nor the fact
+    // that the same steps unwrapped would have run device-free. Kept for one
+    // answer per step kind.
     case "when":
+    case "repeat":
     case "run":
     case "launch":
     case "tap":

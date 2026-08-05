@@ -45,6 +45,14 @@ export interface StepReport {
    * pre-depth tool-server sends none and the report renders flat, as before.
    */
   depth?: number;
+  /**
+   * The line marks block structure (a `repeat:` block's opening and iteration
+   * markers), not a step that ran — so it prints without consuming a step
+   * number, the way echo narration does, and the tool-server leaves it out of
+   * the counts this CLI reports. A pre-structural tool-server sends none and
+   * every line numbers as before.
+   */
+  structural?: boolean;
   /** Baseline key stem (`<name>__<platform>-WxH`) on artifact-bearing snapshot steps. */
   snapshotKey?: string;
   /**
@@ -282,13 +290,33 @@ export function renderEchoLine(s: StepReport): string | undefined {
   return `  ${indent}› ${s.message}`;
 }
 
-export function renderStepLine(s: StepReport, n: number, topFlow: string): string {
+/**
+ * Whether a line marks block structure rather than a step that ran — a
+ * `repeat:` block's opening and per-iteration markers. Such lines print but
+ * take no step number (pass `undefined` to renderStepLine), keeping the CLI's
+ * sequence in step with the counts the tool-server sends, which exclude them.
+ * Untrusted wire data, so only a literal `true` counts: any other value leaves
+ * the line numbered, which is exactly how a pre-structural server's report
+ * reads today.
+ */
+function isStructural(s: StepReport): boolean {
+  return s.structural === true;
+}
+
+/**
+ * A step line. `n` is the step's number, or undefined for a structural marker
+ * — which keeps the glyph, the depth indent and every column, and simply
+ * leaves the number blank: the block/iteration shape IS what these lines
+ * convey, so hiding them (or renumbering around them) would lose it.
+ */
+export function renderStepLine(s: StepReport, n: number | undefined, topFlow: string): string {
   const where = s.flow && s.flow !== topFlow ? ` [${s.flow}]` : "";
   const what = s.tool ?? s.target;
   const label = what ? `${s.kind} ${what}` : s.kind;
   const reason = s.reason ? ` — ${s.reason}` : "";
   const glyph = s.status === "pass" && s.warning ? "⚠" : STATUS_GLYPH[s.status];
-  return `  ${glyph} ${String(n).padStart(2)} ${stepIndent(s.depth)}${label}${where}${reason}`;
+  const num = n === undefined ? "  " : String(n).padStart(2);
+  return `  ${glyph} ${num} ${stepIndent(s.depth)}${label}${where}${reason}`;
 }
 
 /**
@@ -329,7 +357,9 @@ export function renderArtifactLines(report: FlowReport): string[] {
   const lines: string[] = [];
   let n = 0;
   for (const s of report.steps) {
-    if (s.kind === "echo") continue;
+    // Numbering here must match renderReport's, so the two lines that skip a
+    // number there — narration and block structure — skip it here too.
+    if (s.kind === "echo" || isStructural(s)) continue;
     n++;
     if (!s.artifacts || typeof s.artifacts !== "object") continue;
     const entries = Object.entries(s.artifacts).filter(([, v]) => typeof v === "string");
@@ -809,6 +839,13 @@ export function renderReport(report: FlowReport): string {
     if (s.kind === "echo") {
       const line = renderEchoLine(s);
       if (line) lines.push(line);
+      continue;
+    }
+    // Block structure prints in the step column but takes no number, so the
+    // sequence still counts what the summary counts. Nothing hangs under such
+    // a line — warnings and artifacts belong to steps that ran.
+    if (isStructural(s)) {
+      lines.push(renderStepLine(s, undefined, report.flow));
       continue;
     }
     n++;
@@ -1484,6 +1521,12 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     if (s.kind === "echo") {
       const line = renderEchoLine(s);
       if (line) console.log(line);
+      return;
+    }
+    // Block structure: printed as it streams, but unnumbered — the live
+    // sequence has to end up matching the buffered report's.
+    if (isStructural(s)) {
+      console.log(renderStepLine(s, undefined, flowName));
       return;
     }
     liveIndex++;

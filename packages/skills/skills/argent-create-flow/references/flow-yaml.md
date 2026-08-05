@@ -97,7 +97,7 @@ Scopes can combine and nest, with at most six scope keys. Use strict selectors f
 
 ## Directives
 
-Directives stop the flow on failure and skip later steps. `flow-execute` documents their shapes. The available directives are `launch`, `tap`, `long-press`, `type`, `scroll-to`, `pinch`, `rotate`, `await`, `assert`, `wait`, `snapshot`, `run`, `when`, `echo`, and `tool`.
+Directives stop the flow on failure and skip later steps. `flow-execute` documents their shapes. The available directives are `launch`, `tap`, `long-press`, `type`, `scroll-to`, `pinch`, `rotate`, `await`, `assert`, `wait`, `snapshot`, `run`, `when`, `repeat`, `echo`, and `tool`.
 
 Use the launch map for cross-platform flows. A bare launch applies everywhere and becomes an app path on Chromium. The map takes `native:`, `ios:`, `android:`, `vega:`, and `chromium:`. `native:` is one id shared by iOS, Android, and Vega, and a per-platform key overrides it for that platform. `chromium:` accepts a relative or absolute app path. A launch that declares no id for the run's platform is an error, not a cue to switch platforms.
 
@@ -181,6 +181,19 @@ Use `when:` only for optional setup or an interstitial that reconverges:
 ```
 
 The guard accepts one `exists`, `visible`, `hidden`, or `text` condition, or `{ platform: ios|android|chromium|vega }`. UI guards use the short assert grace and reject `timeout`. There is no `else` or per-step `optional`. Put separate behavioral paths in separate flows. Never place a required acceptance check inside `when:`.
+
+## Bounded repetition
+
+`repeat:` blocks compress a repeated step sequence, with a sibling `steps: [...]` list like `when:`. Two bounds, exactly one per block:
+
+- `- repeat: 3` — a literal count (1–100). Precisely equivalent to pasting the block 3 times, down to the report's counts: the block's opening line and its per-iteration lines are structure, not steps, so they are not counted (the same treatment `echo` gets) and `repeat: 3` over one tap reports 3 passed. That equivalence is the point, so the count is always a literal (there is deliberately no loop variable and no parameter).
+- `- repeat: { until: { hidden: "Clear notification" }, max: 15 }` — the drain: keep running the block until the condition holds. `until` takes the same one condition key as a `when:` guard **minus `platform`** (fixed for a run, so the loop would be infinite or empty — parse-rejected), and is checked **before each iteration including the first**, so an already-drained list runs zero iterations and passes. `max` defaults to 10; **reaching it with the condition still unmet fails the step** — a drain that never converged asserts nothing if it passes. A drain's closing line is an evaluated outcome, not structure, so unlike the markers it IS counted — one pass when it converged, one fail at the cap. Each iteration boundary costs the ~1s assert grace, so a long or nested drain is not free.
+
+**`repeat` is not retry.** A failure inside any iteration is a real failure and hard-stops the flow — re-running a side-effecting iteration would double-fire it. "Repeat until it works" is the Maestro habit to unlearn; if a step is flaky, fix the wait (`await:`), don't loop over it.
+
+**`repeat: { times }` is not `tap: { times }`.** `tap: { on: X, times: 2 }` is ONE gesture — two presses inside the OS double-tap window, which is what makes a double-tap register. `repeat: 2` + `steps: [tap: X]` is two independent taps, each resolving the selector against a settled tree.
+
+`snapshot:` inside a repeat block is a **parse error**: a snapshot name maps to one baseline, but the step would compare against it once per iteration, and each iteration's screen legitimately differs. Put the snapshot after the block. (A `snapshot:` reached through a `run:` fragment inside the block is not caught at parse — the same hole a fragment invoked twice by one flow already has.)
 
 ## Composition and platform limits
 

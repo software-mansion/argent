@@ -51,6 +51,21 @@ function between(file: string, start: string, end: string): string {
   return section;
 }
 
+/**
+ * The bounded-repetition section of the flow-yaml reference — the place the
+ * doc spells a repeat bound, now that SKILL.md routes directive shapes here.
+ */
+function repeatDocs(): string {
+  return between(FLOW_YAML, "\n## Bounded repetition", "\n## Composition");
+}
+
+// `…` marks an illustrative fragment (`within: <sel>`, and a deliberately
+// REJECTED spelling a doc contrasts against) — not runnable YAML.
+// `{ times }` is the same thing for a bound: the heading contrasting
+// `repeat: { times }` with `tap: { times }` names the KEY, not a count.
+const runnable = (snippet: string): boolean =>
+  !snippet.includes("…") && !snippet.includes("<sel>") && !snippet.includes("{ times }");
+
 describe("create-flow selector-scope docs", () => {
   it("keeps the core skill concise and routes every relation", () => {
     const section = between(SKILL, "### Flow-only selector scopes", "\n## Workflow");
@@ -153,5 +168,40 @@ describe("create-flow idle docs", () => {
         new RegExp(`at least ${smallest}ms`)
       );
     }
+  });
+});
+
+describe("create-flow repeat snippets", () => {
+  it("every repeat: bound the doc spells parses, in both bounds", () => {
+    // The doc writes the bound and its sibling `steps: [...]` as two separate
+    // snippets, so a bound alone is not a runnable step — supply a body, which
+    // is what an agent copying the pair ends up with.
+    const bounds = [...repeatDocs().matchAll(/`-? ?(repeat: [^`]*)`/g)]
+      .map((m) => m[1]!)
+      .filter(runnable);
+    // Both bounds: the count and the drain.
+    expect(new Set(bounds).size).toBeGreaterThanOrEqual(2);
+    expect(bounds.some((b) => b.includes("until"))).toBe(true);
+    for (const bound of bounds) {
+      expect(
+        () => parseFlow(`steps:\n  - ${bound}\n    steps: [{ tap: A }]\n`),
+        bound
+      ).not.toThrow();
+    }
+  });
+
+  it("the section's two stated parse errors really are parse errors", () => {
+    // Both are claims the doc makes about the parser: if either stopped
+    // holding, the section would be teaching a restriction that isn't one.
+    const docs = repeatDocs();
+    expect(docs).toContain("**minus `platform`**");
+    expect(() =>
+      parseFlow("steps:\n  - repeat: { until: { platform: ios } }\n    steps: [{ tap: A }]\n")
+    ).toThrow(/repeat\.until takes no platform/i);
+
+    expect(docs).toContain("is a **parse error**");
+    expect(() => parseFlow("steps:\n  - repeat: 2\n    steps: [{ snapshot: home }]\n")).toThrow(
+      /cannot run inside a repeat block/i
+    );
   });
 });

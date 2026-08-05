@@ -681,6 +681,33 @@ export type WhenCondition =
     }
   | { kind: "platform"; platform: WhenPlatform };
 
+/** The UI arm of a guard — the only arm a `repeat: { until }` may use. */
+export type UiWhenCondition = Extract<WhenCondition, { kind: "ui" }>;
+
+/**
+ * A `repeat:` block's bound — exactly one of two forms, never both:
+ *
+ * - `times`: a literal iteration count. Statically known, so the block is
+ *   precisely equivalent to pasting its steps N times — which is the whole
+ *   justification for the directive: compression, no new semantic power. The
+ *   run's counts hold that equivalence too: the block and iteration marker
+ *   lines report as structural (see StepReport.structural) and are counted no
+ *   more than `echo` is.
+ * - `until`: drain a UI condition, checked BEFORE each iteration (so an
+ *   already-satisfied guard runs zero iterations), bounded by `max`. Hitting
+ *   `max` with the guard still unmet FAILS: a drain that didn't converge
+ *   asserts nothing if it passes. That terminal line is an evaluated outcome
+ *   rather than structure, so it IS counted — a converged drain's pass, the
+ *   cap's fail.
+ *
+ * `max` is stored resolved (DEFAULT_REPEAT_MAX when the author omitted it) so
+ * the runner never re-derives a default; the serializer drops it again when it
+ * matches, keeping parse/serialize exact inverses.
+ */
+export type RepeatSpec =
+  | { mode: "times"; times: number }
+  | { mode: "until"; until: UiWhenCondition; max: number };
+
 export type FlowStep =
   | { kind: "tool"; name: string; args: Record<string, unknown>; delayMs?: number }
   | { kind: "echo"; message: string }
@@ -688,6 +715,7 @@ export type FlowStep =
   // `flow` is the as-written YAML path, resolved against the containing file's directory.
   | { kind: "run"; flow: string }
   | { kind: "when"; condition: WhenCondition; steps: FlowStep[] }
+  | { kind: "repeat"; spec: RepeatSpec; steps: FlowStep[] }
   | { kind: "tap"; selector?: FlowSelector; x?: number; y?: number; times?: number }
   | { kind: "long-press"; selector?: FlowSelector; x?: number; y?: number; duration?: number }
   | { kind: "type"; into: FlowSelector; text: string; submit?: boolean }
@@ -766,6 +794,29 @@ export function blockSteps(step: FlowStep): FlowStep[] | undefined {
  */
 export function isBlockStep(step: FlowStep): step is BlockStep {
   return isBlockDirectiveKey(step.kind);
+}
+
+/**
+ * Whether a block directive's own marker line is structure rather than a step
+ * that ran (see StepReport.structural) — true for `repeat:`, whose opening line
+ * only says the block exists and how it is bounded, false for `when:`, whose
+ * line records a guard that really was evaluated.
+ *
+ * The companion to {@link blockSteps}: that generalizes "a block's children
+ * expand wherever it does not execute", this generalizes the other per-directive
+ * property of the same line, so a third block directive cannot pick one up and
+ * miss the other. Five sites synthesize a marker — the one that executes the
+ * block, plus the four that report one that never ran (hard stop, device-free
+ * flow, cancellation, an enclosing block skipped) — and the flag decides both
+ * the run's counts and the renderers' step numbering. Stamped by only some of
+ * them, the same `repeat:` block takes a step number when it is skipped over and
+ * none when it runs, sliding every later step's number between two runs of one
+ * flow. `echo` never had that problem: the renderers derive it from `kind`
+ * alone, so every producer gets it right for free. A wire flag has to be stamped
+ * by each producer, and this is the one question they all ask.
+ */
+export function isStructuralBlockMarker(step: FlowStep): boolean {
+  return step.kind === "repeat";
 }
 
 /**
@@ -916,11 +967,19 @@ type YamlScrollBody =
  */
 type YamlWhenBody = YamlWaitCondition | { platform: WhenPlatform };
 
+/**
+ * A `repeat:` bound. The bare integer is sugar for `{ times: N }` and is
+ * unambiguous by construction — an integer can never be a condition map — so it
+ * is the canonical spelling the serializer emits.
+ */
+type YamlRepeatBody = number | { until: YamlWaitCondition; max?: number };
+
 type YamlStep =
   | { echo: string }
   | { launch: Launch }
   | { run: string }
   | { when: YamlWhenBody; steps: YamlStep[] }
+  | { repeat: YamlRepeatBody; steps: YamlStep[] }
   | { tool: string; args?: Record<string, unknown>; delayMs?: number }
   | { tap: TapBody }
   | { "long-press": YamlTarget | { on: YamlTarget; duration?: number } }
@@ -1220,6 +1279,55 @@ function idleToYaml(step: Extract<FlowStep, { kind: "idle" }>): YamlStep {
   return { await: body };
 }
 
+/** parseRepeatCount from the serialize side: a count outside [1,
+ * MAX_REPEAT_ITERATIONS] — or fractional, or not a number at all from an
+ * untyped caller — has no spelling the parser reads back. */
+function assertRepeatCount(count: number, field: "times" | "max"): void {
+  if (!Number.isInteger(count) || count < 1 || count > MAX_REPEAT_ITERATIONS) {
+    throw new Error(
+      `Cannot serialize flow repeat bound: ${field} must be a literal integer between 1 and ${MAX_REPEAT_ITERATIONS}`
+    );
+  }
+}
+
+/**
+ * Sugar a `repeat:` bound for YAML output, rejecting bounds that would
+ * serialize to a flow the parser cannot read back.
+ *
+ * Only the iteration count is checked here — `times`, or a drain's `max`. The
+ * `until` guard is part of the bound too and is NOT checked: a hand-built spec
+ * with a `text` condition and no `expectedText` serializes through
+ * `textWaitToYaml`'s `?? ""` fallback to `contains: ""`, which the parser then
+ * refuses to read back. That hole belongs to every condition the serializer
+ * writes — `when:`, `await` and `assert` spell theirs through the same
+ * `waitToYaml` — and nothing that came out of the parser can reach it (a `text`
+ * condition parses only with a non-empty comparator), so plugging it on this
+ * arm alone would claim a completeness the serializer does not have. The body's
+ * invariants — a non-empty `steps:` list, no `snapshot:` inside — are left out
+ * for that reason and one more: they belong to the block, not to the spec, and
+ * `when:` shares the first verbatim.
+ */
+function repeatSpecToYaml(spec: RepeatSpec): YamlRepeatBody {
+  // Canonical spellings: a count sugars to the bare integer, and a `max` that
+  // matches the default drops out — both so parse ∘ serialize is the identity
+  // on already-canonical input.
+  if (spec.mode === "times") {
+    assertRepeatCount(spec.times, "times");
+    return spec.times;
+  }
+  assertRepeatCount(spec.max, "max");
+  return {
+    until: waitToYaml(
+      spec.until.condition,
+      spec.until.selector,
+      spec.until.expectedText,
+      spec.until.textMatch,
+      undefined
+    ),
+    ...(spec.max !== DEFAULT_REPEAT_MAX ? { max: spec.max } : {}),
+  };
+}
+
 function toYamlStep(step: FlowStep): YamlStep {
   switch (step.kind) {
     case "echo":
@@ -1243,6 +1351,8 @@ function toYamlStep(step: FlowStep): YamlStep {
             );
       return { when, steps: step.steps.map(toYamlStep) };
     }
+    case "repeat":
+      return { repeat: repeatSpecToYaml(step.spec), steps: step.steps.map(toYamlStep) };
     case "tap": {
       // Canonical minimal spelling: the options form appears only when an
       // option is present (`times` is never stored as 1 — see parseTapTimes),
@@ -1630,32 +1740,61 @@ type WaitFields = {
 };
 
 /**
- * Parse the body of an `await`/`assert` step (or a `when:` guard's UI
- * condition) into its condition + selector + optional expected text. The
- * condition is the key and its value is the selector (`{ visible: "Home" }`,
- * `{ text: { in, contains } }`). The `text` check takes exactly one of
- * `contains` (substring), `equals` (exact text), or `matches` (JS regex,
- * validated here so a bad pattern fails at parse, not mid-run). `await`
- * additionally accepts an optional `timeout` sibling key (milliseconds); an
- * `assert` carrying one is rejected rather than silently ignored.
+ * The two directives that take a guard: `when:`'s condition and `repeat:`'s
+ * `until`. They share one vocabulary and one parser — `until` is `when` minus
+ * `platform` — and differ only in how their errors read: the spelling (see
+ * {@link directiveLabel}) and the entry those errors echo back.
  */
-function parseWaitFields(raw: unknown, kind: "await" | "assert" | "when"): WaitFields {
+type GuardDirective = "when" | "until";
+
+/**
+ * How a directive names itself in its own parse errors. `until` is spelled with
+ * its parent because it is not a step of its own: the entry its errors echo back
+ * is the whole `repeat:` step, so a bare `until` would leave the author to work
+ * out which key of it the message is about. Every message a guard can produce
+ * takes its spelling from here, so the two cannot drift apart again.
+ */
+function directiveLabel(kind: "await" | "assert" | GuardDirective): string {
+  return kind === "until" ? "repeat.until" : kind;
+}
+
+/**
+ * Parse the body of an `await`/`assert` step (or a guard's UI condition) into
+ * its condition + selector + optional expected text. The condition is the key
+ * and its value is the selector (`{ visible: "Home" }`, `{ text: { in,
+ * contains } }`). The `text` check takes exactly one of `contains` (substring),
+ * `equals` (exact text), or `matches` (JS regex, validated here so a bad
+ * pattern fails at parse, not mid-run). `await` additionally accepts an
+ * optional `timeout` sibling key (milliseconds); an `assert` carrying one is
+ * rejected rather than silently ignored.
+ */
+function parseWaitFields(
+  raw: unknown,
+  kind: "await" | "assert" | GuardDirective,
+  // The entry the errors echo back. The default puts the body back under its
+  // own directive key, which is how `await`/`assert`/`when` are written;
+  // `until` is the one caller for which that is false, so it passes its own
+  // (see parseWhenCondition).
+  entry: unknown = { [kind]: raw }
+): WaitFields {
+  const label = directiveLabel(kind);
   // What the author is allowed to write, which is NOT the same as what this
   // function parses: a body naming `idle` is routed to parseIdleFields before
   // we get here, so this list is only ever read by an author whose body named
   // no legal condition, or more than one — and omitting `idle` from it left the
   // one condition they may have been reaching for out of the answer. Only
-  // `await` gains it; `assert` and `when:` genuinely have no readiness form.
+  // `await` gains it; `assert` and the guard directives genuinely have no
+  // readiness form.
   const legalKeys = kind === "await" ? [...WAIT_CONDITIONS, IDLE_CONDITION] : WAIT_CONDITIONS;
   if (raw === null || typeof raw !== "object") {
-    badEntry({ [kind]: raw }, `${kind} needs a condition (${legalKeys.join(", ")})`);
+    badEntry(entry, `${label} needs a condition (${legalKeys.join(", ")})`);
   }
   const b = raw as Record<string, unknown>;
 
   // The condition is the key; its value is the selector.
   const present = WAIT_CONDITIONS.filter((c) => c in b);
   if (present.length !== 1) {
-    badEntry({ [kind]: b }, `${kind} needs exactly one condition key (${legalKeys.join(", ")})`);
+    badEntry(entry, `${label} needs exactly one condition key (${legalKeys.join(", ")})`);
   }
   const condition = present[0]!;
 
@@ -1663,21 +1802,21 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert" | "when"): WaitF
   if ("timeout" in b) {
     if (kind === "assert") {
       badEntry(
-        { [kind]: b },
+        entry,
         "assert has no timeout — it is an immediate check; use `await` for a timed wait"
       );
     }
-    timeout = parseAwaitTimeout({ [kind]: b }, b.timeout);
+    timeout = parseAwaitTimeout(entry, b.timeout);
   }
 
   // `await` takes the condition key plus `timeout`; `assert` the condition key
   // only (an explicit assert timeout was already rejected above with the
   // pointed message). Anything else — `timeut`, a stray option — is a typo.
   rejectUnknownKeys(
-    { [kind]: b },
+    entry,
     b,
     kind === "await" ? [...WAIT_CONDITIONS, "timeout"] : WAIT_CONDITIONS,
-    kind
+    label
   );
 
   // `text` locates an element (`in`) and checks its rendered content against
@@ -1686,43 +1825,40 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert" | "when"): WaitF
   if (condition === "text") {
     const t = b.text;
     if (t === null || typeof t !== "object") {
-      badEntry(
-        { [kind]: b },
-        `${kind} text needs { in: <selector>, contains|equals|matches: <string> }`
-      );
+      badEntry(entry, `${label} text needs { in: <selector>, contains|equals|matches: <string> }`);
     }
     const tb = t as Record<string, unknown>;
     if (!Array.isArray(tb)) {
-      rejectUnknownKeys({ [kind]: b }, tb, ["in", ...TEXT_MATCH_MODES], `${kind}.text`);
+      rejectUnknownKeys(entry, tb, ["in", ...TEXT_MATCH_MODES], `${label}.text`);
     }
     const comparators = TEXT_MATCH_MODES.filter((mode) => mode in tb);
     if (comparators.length !== 1) {
       badEntry(
-        { [kind]: b },
-        `${kind} text needs exactly one of \`contains\`, \`equals\`, or \`matches\``
+        entry,
+        `${label} text needs exactly one of \`contains\`, \`equals\`, or \`matches\``
       );
     }
     const textMatch: TextMatchMode = comparators[0]!;
     const expected = tb[textMatch];
     if (typeof expected !== "string" || expected.length === 0) {
-      badEntry({ [kind]: b }, `${kind} text needs a non-empty \`${textMatch}\``);
+      badEntry(entry, `${label} text needs a non-empty \`${textMatch}\``);
     }
     if (textMatch === "matches") {
       // Fail a bad pattern here, deviceless, not mid-run. The pattern reaches
       // the runtime verbatim, so RegExp construction there can never throw on
       // a flow's behalf.
-      validatePattern({ [kind]: b }, expected, `${kind} text`);
+      validatePattern(entry, expected, `${label} text`);
     }
     return {
       condition: "text",
-      selector: parseSelector(tb.in, `${kind}.text.in`),
+      selector: parseSelector(tb.in, `${label}.text.in`),
       expectedText: expected,
       textMatch,
       timeout,
     };
   }
 
-  return { condition, selector: parseSelector(b[condition], `${kind}.${condition}`), timeout };
+  return { condition, selector: parseSelector(b[condition], `${label}.${condition}`), timeout };
 }
 
 /**
@@ -1995,6 +2131,7 @@ const STEP_DIRECTIVE_KEYS: readonly string[] = [
   "launch",
   "run",
   "when",
+  "repeat",
   "tool",
   "tap",
   "long-press",
@@ -2024,7 +2161,10 @@ const STEP_DIRECTIVE_KEYS: readonly string[] = [
  * At parse time these keys are exempt from the single-key sibling check,
  * because their own parser validates their siblings with pointed messages.
  */
-export const BLOCK_DIRECTIVE_KEYS = ["when"] as const satisfies readonly FlowStep["kind"][];
+export const BLOCK_DIRECTIVE_KEYS = [
+  "when",
+  "repeat",
+] as const satisfies readonly FlowStep["kind"][];
 
 /** The step kinds {@link BLOCK_DIRECTIVE_KEYS} names. */
 type BlockDirectiveKind = (typeof BLOCK_DIRECTIVE_KEYS)[number];
@@ -2310,10 +2450,27 @@ function parseRotate(body: unknown, entry: unknown): FlowStep {
  * with the short assert grace, so a skipped block stays cheap on every clean
  * run.
  */
-function parseWhenCondition(raw: unknown): WhenCondition {
-  const conditionKeys = `${WAIT_CONDITIONS.join(", ")}, platform`;
+function parseWhenCondition(
+  raw: unknown,
+  directive: GuardDirective = "when",
+  // The entry the errors echo back. A `when:` step opens with its own key, so
+  // wrapping the condition rebuilds a fragment the author can find in the file;
+  // an `until` lives inside a `repeat:` step, so parseRepeatSpec passes that
+  // step instead of letting the default synthesize a `{ until: … }` entry that
+  // appears nowhere.
+  entry: unknown = { [directive]: raw }
+): WhenCondition {
+  const label = directiveLabel(directive);
+  // `until` is the when-guard vocabulary minus `platform`: the platform is
+  // fixed for a run, so a platform exit test never changes between iterations —
+  // the loop is infinite or empty by construction. Rejected at parse rather
+  // than left to fail at `max`.
+  const allowPlatform = directive === "when";
+  const conditionKeys = allowPlatform
+    ? `${WAIT_CONDITIONS.join(", ")}, platform`
+    : WAIT_CONDITIONS.join(", ");
   if (raw === null || typeof raw !== "object") {
-    badEntry({ when: raw }, `when needs exactly one condition key (${conditionKeys})`);
+    badEntry(entry, `${label} needs exactly one condition key (${conditionKeys})`);
   }
   const b = raw as Record<string, unknown>;
   // A guard asks what is on the screen NOW, so "has it stopped moving yet" is
@@ -2322,35 +2479,45 @@ function parseWhenCondition(raw: unknown): WhenCondition {
   // to infer that the one they did write is not among them.
   if (IDLE_CONDITION in b) {
     badEntry(
-      { when: raw },
-      "when has no idle form — stillness is a wait, and a guard asks what is on the screen now. " +
+      entry,
+      `${label} has no idle form — stillness is a wait, and a guard asks what is on the screen now. ` +
         "Put `await: { idle: true }` before the block instead"
     );
   }
-  const present = [...WAIT_CONDITIONS, "platform"].filter((c) => c in b);
+  if (!allowPlatform && "platform" in b) {
+    badEntry(
+      entry,
+      `${label} takes no platform — the platform never changes between iterations, so the loop would be infinite or empty; put the repeat block inside \`when: { platform: … }\` instead`
+    );
+  }
+  const present = [...WAIT_CONDITIONS, ...(allowPlatform ? ["platform"] : [])].filter(
+    (c) => c in b
+  );
   if (present.length !== 1) {
-    badEntry({ when: raw }, `when needs exactly one condition key (${conditionKeys})`);
+    badEntry(entry, `${label} needs exactly one condition key (${conditionKeys})`);
   }
   if ("timeout" in b) {
     badEntry(
-      { when: raw },
-      "when takes no timeout — the guard is evaluated with the short assert grace so a skipped block never adds a full await wait"
+      entry,
+      allowPlatform
+        ? `${label} takes no timeout — the guard is evaluated with the short assert grace so a skipped block never adds a full await wait`
+        : `${label} takes no timeout — the guard is evaluated with the short assert grace at every iteration boundary, so a long drain never multiplies a full await wait`
     );
   }
   if (present[0] === "platform") {
     if (Object.keys(b).length !== 1) {
-      badEntry({ when: raw }, "when.platform takes no other keys");
+      badEntry(entry, "when.platform takes no other keys");
     }
     const p = b.platform;
     if (typeof p !== "string" || !(LAUNCH_PLATFORMS as readonly string[]).includes(p)) {
-      badEntry({ when: raw }, `when.platform must be one of ${LAUNCH_PLATFORMS.join(", ")}`);
+      badEntry(entry, `when.platform must be one of ${LAUNCH_PLATFORMS.join(", ")}`);
     }
     return { kind: "platform", platform: p as WhenPlatform };
   }
-  // A when guard is the await/assert fields minus `timeout` (rejected above,
-  // so always undefined here) — spread the rest so a future WaitFields
-  // addition reaches when guards the same way it reaches await/assert.
-  const { timeout: _timeout, ...cond } = parseWaitFields(raw, "when");
+  // A guard is the await/assert fields minus `timeout` (rejected above, so
+  // always undefined here) — spread the rest so a future WaitFields addition
+  // reaches guards the same way it reaches await/assert.
+  const { timeout: _timeout, ...cond } = parseWaitFields(raw, directive, entry);
   // `{{secret:NAME}}` resolves only inside the text-entry tools (a `type:`
   // step), never in condition evaluation, so a guard carrying one tests for
   // literal placeholder text that is never on screen: exists/visible/text
@@ -2358,7 +2525,9 @@ function parseWhenCondition(raw: unknown): WhenCondition {
   // `hidden` guard is vacuously true (the block always runs). In an assert
   // that mistake fails loudly on the first run; here the guard silently
   // degenerates into a constant — the same silently-wrong class the per-step
-  // `optional:` rejection exists for, so it fails at parse too.
+  // `optional:` rejection exists for, so it fails at parse too. An `until`
+  // guard degenerates the same way, into the two ends of the drain: never met
+  // (runs to `max` and fails) or vacuously met (zero iterations).
   const { selector, expectedText } = cond;
   // Walk the whole relation tree: a placeholder in a `within`/`after`/`next`
   // scope degrades the guard exactly as one in the target's own fields would.
@@ -2369,8 +2538,8 @@ function parseWhenCondition(raw: unknown): WhenCondition {
   for (const s of guardStrings) {
     if (s !== undefined && s.includes(SECRET_PLACEHOLDER_MARKER)) {
       badEntry(
-        { when: raw },
-        "when takes no {{secret:…}} placeholder — secrets resolve only in text-entry steps (`type:`), never in condition evaluation, so the guard tests literal placeholder text that is never on screen: permanently false (for `hidden`, vacuously true); use the literal on-screen text instead"
+        entry,
+        `${label} takes no {{secret:…}} placeholder — secrets resolve only in text-entry steps (\`type:\`), never in condition evaluation, so the guard tests literal placeholder text that is never on screen: permanently false (for \`hidden\`, vacuously true); use the literal on-screen text instead`
       );
     }
   }
@@ -2565,6 +2734,146 @@ function completeRunExtension(value: string): string {
   return FLOW_FILE_NAME_PATTERN.test(path.posix.basename(candidate)) ? candidate : value;
 }
 
+/**
+ * Default cap on an `until` drain. Overridable (`max:`) — the defaulted-knob
+ * pattern, like `long-press` duration. Requiring an explicit `max` was
+ * considered and rejected as noise on the common case.
+ */
+export const DEFAULT_REPEAT_MAX = 10;
+
+/**
+ * Sanity bound on `times` and `max` alike. Not a semantic limit — a repeat
+ * block emits one marker plus its whole body per iteration, so an unbounded
+ * literal (`repeat: 1000000`) is a hung run and a report no one can read. Every
+ * other count in a flow is capped for the same reason.
+ *
+ * The guarantee is per-block, and only per-block: nested blocks multiply, and
+ * nothing bounds the product. MAX_BLOCK_DEPTH does not — it is there to catch
+ * cyclic aliases, so 19 levels of `repeat: 100` inside each other parse clean.
+ * Two nested is 10^4 body executions, each paying for its own UI tree fetch;
+ * three is 10^6, and since `state.reports` is retained whole in the run's
+ * result the report array grows with the product too, which makes deep enough
+ * an OOM rather than merely a slow run.
+ *
+ * Capping the product was considered and rejected. Flows are hand-authored YAML
+ * in the author's own repo, run by the author — there is no untrusted input
+ * path, so the pathological case is reachable only through author error, where
+ * the fix is the correct input. And there is no principled threshold to pick:
+ * `repeat: 20` inside `repeat: 20` is 400 and entirely legitimate, a drain with
+ * `max: 100` inside `repeat: 20` is 2000 and also legitimate — both sit well
+ * above any cap that would catch the pathological case. Any number chosen
+ * trades a rare self-inflicted hang for common false rejections of valid flows.
+ */
+const MAX_REPEAT_ITERATIONS = 100;
+
+/** Parse `times`/`max`: a literal integer in [1, MAX_REPEAT_ITERATIONS]. */
+function parseRepeatCount(raw: unknown, entry: unknown, field: "times" | "max"): number {
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1 || raw > MAX_REPEAT_ITERATIONS) {
+    badEntry(
+      entry,
+      `repeat.${field} must be a literal integer between 1 and ${MAX_REPEAT_ITERATIONS}`
+    );
+  }
+  return raw;
+}
+
+/**
+ * Parse a `repeat:` bound — the bare-integer sugar or the `until` map. Exactly
+ * one of `times` | `until`, never both and never neither: they are the two
+ * different questions "how many" and "until when", and a block answering both
+ * has no defined meaning.
+ */
+function parseRepeatSpec(raw: unknown, entry: unknown): RepeatSpec {
+  // Bare-integer sugar. Unambiguous by construction: a condition is a map.
+  if (typeof raw === "number") {
+    return { mode: "times", times: parseRepeatCount(raw, entry, "times") };
+  }
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    badEntry(
+      entry,
+      "repeat needs a count (`repeat: 3`) or a drain (`repeat: { until: <condition>, max?: <n> }`)"
+    );
+  }
+  const b = raw as Record<string, unknown>;
+  rejectUnknownKeys(entry, b, ["times", "until", "max"], "repeat");
+  const hasTimes = "times" in b;
+  const hasUntil = "until" in b;
+  if (hasTimes === hasUntil) {
+    badEntry(
+      entry,
+      "repeat takes exactly one of `times` (a literal count) or `until` (a condition to drain to)"
+    );
+  }
+  if (hasTimes) {
+    if ("max" in b) {
+      badEntry(
+        entry,
+        "repeat.max applies only to `until` — a `times` block is already bounded by its count"
+      );
+    }
+    return { mode: "times", times: parseRepeatCount(b.times, entry, "times") };
+  }
+  // Pass the step: every other repeat error already echoes it, and an `until`
+  // error that echoed the guard alone would show a `{ until: … }` entry the
+  // author never wrote.
+  const until = parseWhenCondition(b.until, "until", entry);
+  // parseWhenCondition rejects `platform` for `until`, so the UI arm is the
+  // only one that can reach here — narrow rather than re-test.
+  /* c8 ignore next */
+  if (until.kind !== "ui") badEntry(entry, "repeat.until needs a UI condition");
+  const max = "max" in b ? parseRepeatCount(b.max, entry, "max") : DEFAULT_REPEAT_MAX;
+  return { mode: "until", until, max };
+}
+
+/**
+ * Reject `snapshot:` anywhere inside a repeat body. A snapshot name maps to one
+ * baseline, a step running N times produces N comparisons against it, and
+ * iteration 2's screen legitimately differs — that difference is usually why
+ * the block loops at all. There is deliberately no per-iteration index to
+ * disambiguate names (see the rejected loop-variable), so the only honest
+ * answer is to refuse at parse.
+ *
+ * Walks nested blocks via {@link blockSteps}. A `snapshot:` reached through a
+ * `run:` fragment is invisible here (different file, resolved at run time) —
+ * that is the same hole a fragment invoked twice by one flow already has, and
+ * belongs to flow lint.
+ */
+function assertNoSnapshotInRepeat(steps: FlowStep[], entry: unknown): void {
+  for (const step of steps) {
+    if (step.kind === "snapshot") {
+      badEntry(
+        entry,
+        `snapshot "${step.name}" cannot run inside a repeat block — a snapshot name maps to one baseline, but the step would compare against it once per iteration, and each iteration's screen legitimately differs; move the snapshot after the block`
+      );
+    }
+    const nested = blockSteps(step);
+    if (nested) assertNoSnapshotInRepeat(nested, entry);
+  }
+}
+
+/**
+ * Parse a `repeat` step: `{ repeat: <bound>, steps: [<step>, …] }` — the same
+ * sibling shape as `when:`, so the two nest in each other and around `run:`
+ * for free.
+ *
+ * Repeat is NOT retry. A failure inside any iteration is a real failure and
+ * hard-stops the flow like any other; re-running a side-effecting iteration
+ * would double-fire it. "Repeat until it works" is the Maestro-habit misread.
+ */
+function parseRepeatStep(raw: Record<string, unknown>, depth: number): FlowStep {
+  assertBlockDepth(raw, depth);
+  if (!Object.keys(raw).every((k) => k === "repeat" || k === "steps")) {
+    badEntry(
+      raw,
+      "a repeat step takes exactly { repeat: <count | { until, max? }>, steps: [...] }"
+    );
+  }
+  const spec = parseRepeatSpec(raw.repeat, raw);
+  const steps = parseBlockSteps(raw, depth, "repeat needs a non-empty steps list to run");
+  assertNoSnapshotInRepeat(steps, raw);
+  return { kind: "repeat", spec, steps };
+}
+
 function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
   const entry = raw as Record<string, unknown>;
   // There is deliberately no per-step `optional:` — it would have to be
@@ -2626,6 +2935,7 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
   if ("launch" in raw) return { kind: "launch", app: parseLaunch(raw.launch) };
   if ("run" in raw) return { kind: "run", flow: parseRunTarget(raw, raw.run) };
   if ("when" in raw) return parseWhenStep(entry, blockDepth);
+  if ("repeat" in raw) return parseRepeatStep(entry, blockDepth);
 
   if ("tap" in raw) return parseTap((raw as { tap: unknown }).tap, raw);
 
