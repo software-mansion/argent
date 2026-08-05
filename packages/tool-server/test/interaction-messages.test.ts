@@ -100,6 +100,11 @@ describe("tool interaction messages", () => {
     expect(
       interaction.startedMsg!({ params: { flow_path: "/repo/flows/.yaml", project_root: "/repo" } })
     ).toBe("Running flow .yaml");
+    // Unlike the bare ".yaml" above, this path has an empty basename stem, so
+    // the raw path — not the stem — is what names the flow here.
+    expect(interaction.startedMsg!({ params: { flow_path: "/", project_root: "/repo" } })).toBe(
+      "Running flow /"
+    );
     expect(interaction.startedMsg!({ params: { project_root: "/repo" } })).toBe(
       "Running flow (unspecified)"
     );
