@@ -1,19 +1,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { MaterializeContext } from "@argent/tools-client";
 import { exportFailureArtifacts, type FlowReport, type StepReport } from "../src/flow.js";
 
 // Spies over the real implementations, not stubs: every test here runs against
-// a real temp filesystem. Only the two marker-window tests override anything,
-// and only reads of the marker itself — reproducing the one-syscall window
-// between an O_EXCL create publishing the marker's path and its bytes landing,
-// which racing real calls cannot schedule deterministically. Node builtins
-// can't be spied on in place (their ESM namespace is frozen), so the module is
-// mocked.
+// a real temp filesystem. Only the three marker-window tests override anything,
+// and only the marker's own read or exclusive create — reproducing the
+// one-syscall windows around it: an O_EXCL create publishing the marker's path
+// before its bytes land, and that same create losing to a marker that is gone
+// again by the time the loser reads it. Racing real calls cannot schedule
+// either deterministically. Node builtins can't be spied on in place (their
+// ESM namespace is frozen), so the module is mocked.
 vi.mock("node:fs/promises", { spy: true });
 
 /**
@@ -881,6 +882,67 @@ describe("exportFailureArtifacts", () => {
       // marker is truthful either way, which is what makes it survivable.
       expect(["run1-bytes", "run2-bytes"]).toContain(await fs.readFile(dest, "utf8"));
     } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("escalates when the marker that beat its exclusive create is gone by the time it reads it", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const stemDir = path.join(outDir, "checkout");
+    const marker = path.join(stemDir, ".argent-flow-source");
+    try {
+      // The third way the exclusive create can lose: the marker that beat it is
+      // already gone when the loser goes to read it — a racing claim that was
+      // cleaned up, or died and was swept, inside that window. Nothing then
+      // proves anything about the directory, and an unprovable claim must never
+      // be written into: whoever created that marker may still be filling the
+      // directory, so copying in would leave unowned bytes in a shared one. So
+      // it reads as an occupant with no name and escalates, exactly like an
+      // illegible marker does at classify time. Only the race reaches here —
+      // `mkdir -p` does not EEXIST on a directory that already exists, and the
+      // plain file that would make it EEXIST is diverted to "foreign" by
+      // classifyExportDir before takeExportDir is ever called.
+      let served = false;
+      vi.mocked(fs.writeFile).mockImplementation((async (
+        file: unknown,
+        data: unknown,
+        options: unknown
+      ) => {
+        if (!served && String(file) === marker) {
+          served = true; // only the stem's claim loses; the sibling's really lands
+          throw Object.assign(new Error(`EEXIST: file already exists, open '${marker}'`), {
+            code: "EEXIST",
+          });
+        }
+        return writeFileSync(file as string, data as never, options as never);
+      }) as unknown as typeof fs.writeFile);
+      const step: StepReport = {
+        index: 0,
+        kind: "snapshot",
+        status: "fail",
+        snapshotKey: "home__ios-390x844",
+        artifacts: { current: await writeFile("c.png", "current-bytes") },
+      };
+
+      await exportFailureArtifacts(mkReport([step]), outDir, flowFile, ctx);
+
+      expect(served).toBe(true); // the create really did lose
+      const target = path.join(outDir, `checkout-${pathHash(flowFile)}`);
+      expect(step.artifacts?.current).toBe(path.join(target, "home__ios-390x844-current.png"));
+      expect(await fs.readFile(step.artifacts?.current as string, "utf8")).toBe("current-bytes");
+      expect(await fs.readFile(path.join(target, ".argent-flow-source"), "utf8")).toBe(
+        `${flowFile}\n`
+      );
+      // The stem is bare: created by the mkdir that preceded the lost create,
+      // then stepped past — no marker of ours, and none of this run's bytes.
+      expect(await fs.readdir(stemDir)).toEqual([]);
+      expect(errSpy).toHaveBeenCalledTimes(1);
+      expect(errSpy).toHaveBeenCalledWith(
+        `warning: ${stemDir} already holds files from an unknown source; ` +
+          `writing this flow's artifacts to ${target} so neither set is overwritten`
+      );
+    } finally {
+      vi.mocked(fs.writeFile).mockRestore();
       errSpy.mockRestore();
     }
   });
