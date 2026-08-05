@@ -48,7 +48,18 @@ vi.mock("../../src/tools/flows/flow-actions", async (importOriginal) => ({
   offscreenHint: (await importOriginal<typeof import("../../src/tools/flows/flow-actions")>())
     .offscreenHint,
   settleTree: vi.fn(async () => ({})),
-  invokeOnDevice: vi.fn(async () => ({ image: { hostPath: h.shotPath } })),
+  // Mirrors what the real `screenshot` tool hands back: a handle already tagged
+  // for durable saving under the client's `.argent/screenshots/`. A snapshot's
+  // capture must not inherit that tag, so the tag has to be present here for the
+  // assertions below to mean anything.
+  invokeOnDevice: vi.fn(async () => ({
+    image: {
+      hostPath: h.shotPath,
+      filename: "screenshot-SIM-1785400000000.png",
+      mimeType: "image/png",
+      saveDir: ".argent/screenshots",
+    },
+  })),
   waitForFrame: vi.fn(async () => {
     if (h.cropFrameError) throw h.cropFrameError;
     return h.cropFrame;
@@ -178,6 +189,23 @@ describe("runSnapshot baselines", () => {
     await expect(fs.access(baselinePath())).rejects.toThrow();
     expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
     expect(r.artifacts?.baseline).toBeUndefined();
+  });
+
+  it("keeps a snapshot capture out of the durable screenshots directory", async () => {
+    // The capture comes from the `screenshot` tool, which tags its output to be
+    // saved under the client's `.argent/screenshots/`. Here it is an intermediate
+    // of a comparison, not a screenshot anyone asked for: inheriting the tag
+    // would drop a full-resolution PNG into the user's project on every failing
+    // snapshot step of every run, and the CLI's `--output` export (which
+    // materializes this very handle) would then write the same image twice.
+    const r = await runSnapshot(env, opts());
+
+    expect(r.status).toBe("fail");
+    const current = r.artifacts?.current as { saveDir?: string; filename: string };
+    expect(current.saveDir).toBeUndefined();
+    // Registered under this snapshot's own identity, so a remote client's
+    // download lands beside `baseline` (whose name is `<key>.png`), not on it.
+    expect(current.filename).toBe("home__ios-390x844-current.png");
   });
 
   it("writes a missing baseline and passes under updateBaselines", async () => {
@@ -543,6 +571,7 @@ describe("runSnapshot cropOn", () => {
     // FULL capture is attached as `current` — no crop exists to show.
     expect(r.snapshotKey).toBe(cropKey);
     expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
+    expect((r.artifacts?.current as { saveDir?: string }).saveDir).toBeUndefined();
     // The crop scratch dir (which never received a file) was swept.
     const leftoverCropDirs = (await fs.readdir(os.tmpdir())).filter(
       (e) => e.startsWith("argent-flow-crop-") && !preexistingCropDirs.has(e)

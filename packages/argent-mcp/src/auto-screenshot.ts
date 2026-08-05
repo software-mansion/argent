@@ -7,6 +7,7 @@
  */
 
 import { isFlagEnabled, type FlagsPathOptions } from "@argent/configuration-core";
+import { toMcpContent, type ContentBlock, type ContentContext } from "./content.js";
 
 export const AUTO_SCREENSHOT_TOOLS = new Set([
   "gesture-tap",
@@ -111,6 +112,48 @@ export function normalizeToolName(name: string): string {
 export function shouldAutoScreenshot(toolName: string): boolean {
   const canonical = normalizeToolName(toolName);
   return canonical !== "screenshot" && AUTO_SCREENSHOT_TOOLS.has(canonical);
+}
+
+/**
+ * Content context for rendering the screenshot appended after an interaction.
+ *
+ * `transient` is the load-bearing field: the `screenshot` tool tags its output
+ * to be saved durably under the project's `.argent/screenshots/`, which is what
+ * a caller who asked for a screenshot wants and the opposite of what this one
+ * does. An auto-screenshot rides along on most tool calls in a session and is
+ * shown inline once, never referred to by path again, so persisting it would
+ * accumulate hundreds of PNGs in the user's working tree. The tool-server cannot
+ * make the distinction — an auto-screenshot reaches it as the same
+ * `POST /tools/screenshot` an agent's own call does — so it is drawn here, in
+ * the layer that synthesized the invocation.
+ */
+export function autoScreenshotContext(opts: {
+  toolsUrl: string;
+  authToken?: string;
+  udid: string;
+}): ContentContext {
+  return {
+    toolsUrl: opts.toolsUrl,
+    authToken: opts.authToken,
+    deviceId: opts.udid,
+    transient: true,
+  };
+}
+
+/**
+ * Render the auto-screenshot's tool result into content blocks.
+ *
+ * The rendering is here rather than at the call site so the context above is
+ * the only one this path can be given: a context assembled beside the render
+ * would be a plain object literal in `mcp-server.ts`, where dropping
+ * `transient` costs nothing that any test can see, and the cost of dropping it
+ * is a PNG written into the user's project after every interaction.
+ */
+export function renderAutoScreenshot(
+  result: unknown,
+  opts: { toolsUrl: string; authToken?: string; udid: string }
+): Promise<ContentBlock[]> {
+  return toMcpContent(result, "image", autoScreenshotContext(opts));
 }
 
 export function getAutoScreenshotDelayMs(toolName: string): number {

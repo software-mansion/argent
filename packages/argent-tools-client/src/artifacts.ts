@@ -146,7 +146,10 @@ function durableBaseDir(): string {
  * when a new tool needs a durable home. Stored normalized so the wire value is
  * compared in the same form regardless of separator style.
  */
-const ALLOWED_SAVE_DIRS: ReadonlySet<string> = new Set([normalize(".argent/recordings")]);
+const ALLOWED_SAVE_DIRS: ReadonlySet<string> = new Set([
+  normalize(".argent/recordings"),
+  normalize(".argent/screenshots"),
+]);
 
 /**
  * The wire hint a finished screen recording arrives with. Its *destination* can
@@ -196,10 +199,11 @@ function configuredRecordingsDir(): string | null {
  * (possibly hostile) tool-server announces. A durable artifact is persisted
  * where it survives temp-cache GC, so a remote/compromised `argent link` server
  * must not be able to drive unbounded client memory use or a persistent disk
- * fill under `.argent/recordings/` by streaming a body larger than it claimed.
- * Well above any real recording (600 s cap at device-native h264), so it only
- * ever trips a pathological stream. 2 GiB also stays within Node's `Buffer`
- * limit, since the download is buffered before it is written.
+ * fill under the durable directories by streaming a body larger than it claimed.
+ * Well above any real durable artifact — a recording (600 s cap at device-native
+ * h264) or a full-resolution screenshot — so it only ever trips a pathological
+ * stream. 2 GiB also stays within Node's `Buffer` limit, since the download is
+ * buffered before it is written.
  */
 const MAX_DURABLE_BYTES = 2 * 1024 * 1024 * 1024;
 
@@ -245,9 +249,15 @@ async function readCapped(res: Response, cap: number): Promise<Buffer | null> {
  * alongside as `name (2).ext`, `name (3).ext`, … The write is *exclusive*
  * (`wx` / `COPYFILE_EXCL`), so a collision is detected atomically — two
  * concurrent materializations can't clobber each other, and a tool-server can't
- * silently replace a recording already in `.argent/recordings/` by reusing its
+ * silently replace a file already saved in a durable directory by reusing its
  * name. Returns the final path, or null if no free name is found within the
  * bound (a pathological directory, not a real collision).
+ *
+ * A write that fails part-way (a full disk, a file-size limit) still leaves the
+ * bytes it managed to write, so the failed candidate is removed before the
+ * error propagates. Otherwise a truncated file keeps the artifact's canonical
+ * name for good — unreadable, and pushing every later capture of that name to
+ * `name (2).ext` — which is worse than the failure it records.
  */
 async function writeDurableUnique(
   dir: string,
@@ -264,6 +274,9 @@ async function writeDurableUnique(
       return path;
     } catch (err) {
       if ((err as NodeJS.ErrnoException)?.code === "EEXIST") continue;
+      // Exclusive-create means this path is ours: nothing else can have put a
+      // file here between the attempt and now.
+      await rm(path, { force: true }).catch(() => {});
       throw err;
     }
   }
@@ -299,7 +312,10 @@ export function durableSaveTarget(
   // that would reject the whole `materializeArtifacts` and lose every sibling
   // artifact, instead of this one handle degrading to the temp cache.
   if (typeof handle.saveDir !== "string" || !handle.saveDir || handle.archive) return null;
-  const rel = normalize(handle.saveDir);
+  // `normalize` keeps a trailing separator, so `.argent/screenshots/` would miss
+  // the allowlist and degrade to scratch with nothing to show for it. The two
+  // spellings name the same directory; strip it so they compare equal.
+  const rel = normalize(handle.saveDir).replace(new RegExp(`\\${sep}+$`), "");
   if (
     isAbsolute(rel) ||
     rel === ".." ||
@@ -378,6 +394,21 @@ export interface MaterializeContext {
    * artifact would read as missing. Empty/unset ⇒ unauthenticated server.
    */
   authToken?: string;
+  /**
+   * Treat every artifact in this result as disposable: the `saveDir` hint is
+   * ignored and the bytes go to the temp cache, even for a tool that asks to be
+   * persisted durably.
+   *
+   * Durability is a property of the *request*, not only of the tool: the same
+   * tool serves both an explicit call whose file the caller may open later and
+   * an internally-synthesized one whose image is rendered once and never named
+   * again. The tool-server cannot tell those apart — over HTTP they are the same
+   * `POST /tools/screenshot` — so the caller that synthesized the invocation
+   * marks it here. Without this, the MCP layer's after-every-action
+   * auto-screenshot would write hundreds of PNGs per session into the user's
+   * project directory.
+   */
+  transient?: boolean;
   /** Injectable for tests; defaults to global fetch. */
   fetchImpl?: typeof fetch;
 }
@@ -475,6 +506,102 @@ export async function materializeArtifacts(
     }
   }
 
+  /**
+   * Write one artifact into its durable destination.
+   *
+   * The two ways this fails are not the same failure, and the caller has to
+   * tell them apart:
+   *
+   *  - `"undeliverable"` — something about the *artifact* is untrustworthy: a
+   *    size that can't bound the download, a refused request, a truncated body.
+   *    The caller must not retry through the temp cache, whose download is
+   *    deliberately uncapped for ordinary artifacts; that would hand back the
+   *    unbounded read this path checks the size to prevent.
+   *  - `"scratch"` — something about the *destination*: an unwritable project,
+   *    a `.argent/screenshots` occupied by a file, a symlinked durable
+   *    directory, a full disk. The bytes are fine and nothing was written into
+   *    the durable tree, so the artifact should simply degrade to the temp
+   *    cache rather than be lost.
+   */
+  type DurableOutcome = { path: string; data?: Buffer } | "undeliverable" | "scratch";
+
+  async function saveDurably(
+    saveTarget: NonNullable<ReturnType<typeof durableSaveTarget>>,
+    value: ArtifactHandle,
+    localPath: string | null
+  ): Promise<DurableOutcome> {
+    const filename = basename(saveTarget.path);
+    // Each stage catches for itself, because which verdict a throw deserves is
+    // exactly what the stage it came from decides. One try around the whole
+    // body would answer "destination" for a rejected fetch or a broken response
+    // stream, and the fall-through that answer triggers re-reads the same
+    // artifact with no cap at all — handing any server that can make one
+    // request fail the unbounded read the size check below exists to refuse.
+    try {
+      await mkdir(saveTarget.dir, { recursive: true });
+      // Refuse to write through a symlinked durable directory — the lexical
+      // allowlist and the exclusive leaf write don't cover a symlink at
+      // `.argent/recordings` (or an ancestor) that redirects the whole write
+      // out of the intended tree (e.g. into `.git`).
+      if (!(await confineToRealBase(saveTarget.dir, saveTarget.base, saveTarget.rel))) {
+        return "scratch";
+      }
+    } catch {
+      return "scratch";
+    }
+
+    if (localPath) {
+      try {
+        // Already on this host — copy without buffering the whole file
+        // (recordings can be large); only re-read if it's an inline image.
+        // Exclusive copy so a colliding name never clobbers an existing
+        // durable recording — it lands alongside as `name (2).ext`.
+        const finalPath = await writeDurableUnique(saveTarget.dir, filename, (p) =>
+          copyFile(localPath, p, fsConstants.COPYFILE_EXCL)
+        );
+        return finalPath ? { path: finalPath } : "scratch";
+      } catch {
+        // The bytes are on this host either way, so the temp cache can still
+        // copy them from the same source.
+        return "scratch";
+      }
+    }
+
+    // Remote download. A durable file survives cache GC, so it must have a
+    // known, verified size: refuse anything but a positive integer within
+    // the cap — a `size:0`, absent, NaN, or over-cap value can't bound the
+    // download. (`size` arrives as unvalidated JSON from a possibly hostile
+    // server and `isArtifactHandle` doesn't check it, so a non-numeric size
+    // would make the `readCapped` cap `NaN` and never trip, letting an
+    // unbounded body buffer into client memory — the exact DoS the cap
+    // exists to prevent.) The cap can then be `value.size` directly.
+    if (!Number.isInteger(value.size) || value.size <= 0 || value.size > MAX_DURABLE_BYTES) {
+      return "undeliverable";
+    }
+    let data: Buffer | null;
+    try {
+      const res = await fetchFn(`${ctx.toolsUrl}/artifacts/${value.id}`, {
+        headers: authHeaders,
+      });
+      if (!res.ok) return "undeliverable";
+      data = await readCapped(res, value.size);
+    } catch {
+      // A rejected fetch or a response stream that broke mid-body is a fact
+      // about this artifact and this transport, not about the destination.
+      return "undeliverable";
+    }
+    if (!data || data.length !== value.size) return "undeliverable";
+
+    try {
+      const finalPath = await writeDurableUnique(saveTarget.dir, filename, (p) =>
+        writeFile(p, data, { flag: "wx" })
+      );
+      return finalPath ? { path: finalPath, data } : "scratch";
+    } catch {
+      return "scratch";
+    }
+  }
+
   async function walk(value: unknown): Promise<unknown> {
     if (isArtifactHandle(value)) {
       // Gate: prefer the file already on this host; only download on a miss.
@@ -484,64 +611,25 @@ export async function materializeArtifacts(
       // client's own cwd instead of the disposable temp cache. Copy when the
       // file is already local (co-located server), download otherwise — so an
       // `argent link` recording ends up on the *client* host, not the server.
-      const saveTarget = durableSaveTarget(value);
+      // A `transient` request declines persistence for everything it produced.
+      const saveTarget = ctx.transient ? null : durableSaveTarget(value);
       if (saveTarget) {
-        const filename = basename(saveTarget.path);
-        try {
-          await mkdir(saveTarget.dir, { recursive: true });
-          // Refuse to write through a symlinked durable directory — the lexical
-          // allowlist and the exclusive leaf write don't cover a symlink at
-          // `.argent/recordings` (or an ancestor) that redirects the whole write
-          // out of the intended tree (e.g. into `.git`).
-          if (!(await confineToRealBase(saveTarget.dir, saveTarget.base, saveTarget.rel))) {
-            return null;
-          }
-          if (localPath) {
-            // Already on this host — copy without buffering the whole file
-            // (recordings can be large); only re-read if it's an inline image.
-            // Exclusive copy so a colliding name never clobbers an existing
-            // durable recording — it lands alongside as `name (2).ext`.
-            const finalPath = await writeDurableUnique(saveTarget.dir, filename, (p) =>
-              copyFile(localPath, p, fsConstants.COPYFILE_EXCL)
-            );
-            if (!finalPath) return null;
-            if (value.mimeType.startsWith("image/")) {
-              images.push({
-                localPath: finalPath,
-                data: await readFile(finalPath),
-                mimeType: value.mimeType,
-              });
-            }
-            return finalPath;
-          }
-          // Remote download. A durable file survives cache GC, so it must have a
-          // known, verified size: refuse anything but a positive integer within
-          // the cap — a `size:0`, absent, NaN, or over-cap value can't bound the
-          // download. (`size` arrives as unvalidated JSON from a possibly hostile
-          // server and `isArtifactHandle` doesn't check it, so a non-numeric size
-          // would make the `readCapped` cap `NaN` and never trip, letting an
-          // unbounded body buffer into client memory — the exact DoS the cap
-          // exists to prevent.) The cap can then be `value.size` directly.
-          if (!Number.isInteger(value.size) || value.size <= 0 || value.size > MAX_DURABLE_BYTES) {
-            return null;
-          }
-          const res = await fetchFn(`${ctx.toolsUrl}/artifacts/${value.id}`, {
-            headers: authHeaders,
-          });
-          if (!res.ok) return null;
-          const data = await readCapped(res, value.size);
-          if (!data || data.length !== value.size) return null;
-          const finalPath = await writeDurableUnique(saveTarget.dir, filename, (p) =>
-            writeFile(p, data, { flag: "wx" })
-          );
-          if (!finalPath) return null;
+        const saved = await saveDurably(saveTarget, value, localPath);
+        if (saved === "undeliverable") return null;
+        if (saved !== "scratch") {
           if (value.mimeType.startsWith("image/")) {
-            images.push({ localPath: finalPath, data, mimeType: value.mimeType });
+            images.push({
+              localPath: saved.path,
+              data: saved.data ?? (await readFile(saved.path)),
+              mimeType: value.mimeType,
+            });
           }
-          return finalPath;
-        } catch {
-          return null;
+          return saved.path;
         }
+        // "scratch": the destination was unusable, the bytes were not. Fall
+        // through to the disposable cache rather than dropping the artifact —
+        // durability is an upgrade over the temp copy, so losing it must cost
+        // the caller a shorter-lived file, not the file itself.
       }
 
       if (localPath) {

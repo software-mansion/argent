@@ -66,3 +66,14 @@ packages/argent/README.md
 .opencode/
 opencode.json
 skills-lock.json
+# Fixture dirs a test creates beside the package it runs from (they must sit
+# outside the OS temp dir, which is itself a preview-image root). Cleaned up in
+# afterEach; ignored so a crashed run leaves no apparent working-tree change.
+packages/*/test-variant-image-*/
+# Durable artifacts argent writes into whatever project it is driven from —
+# screenshots and recordings, plus the flags/state files beside them. Driving
+# argent at this repo makes it that project, and nothing here is ever committed.
+# Unanchored: the client resolves the project root to the nearest ancestor with
+# a package.json, which in this monorepo is the individual package, not the
+# repo root.
+.argent/

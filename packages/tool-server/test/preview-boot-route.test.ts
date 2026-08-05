@@ -7,7 +7,10 @@ import type { Registry } from "@argent/registry";
 // it ON by default so this suite tests the route logic deterministically
 // regardless of the machine's real ~/.argent/flags.json; a dedicated test below
 // flips it OFF to assert the gate.
-vi.mock("@argent/configuration-core", () => ({ isFlagEnabled: vi.fn(() => true) }));
+vi.mock("@argent/configuration-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@argent/configuration-core")>()),
+  isFlagEnabled: vi.fn(() => true),
+}));
 
 import { createPreviewRouter } from "../src/preview";
 import { variantProposalStore } from "../src/utils/variant-proposals";

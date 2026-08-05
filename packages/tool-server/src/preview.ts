@@ -22,6 +22,53 @@ import type { DescribeTreeData } from "./tools/describe/contract";
 import { describeIos } from "./tools/describe/platforms/ios";
 import { describeAndroid } from "./tools/describe/platforms/android";
 
+/**
+ * Filesystem roots a variant's local `previewImage` may resolve inside; anything
+ * else 404s and the Argent Lens shows "No preview". Real paths, because the
+ * requested file is realpath'd before the containment check.
+ */
+export function previewImageRoots(): string[] {
+  const roots = new Set<string>();
+  // `/tmp` in addition to os.tmpdir(): on macOS os.tmpdir() is a per-user
+  // `/var/folders/…` path, so agents that drop screenshots under `/tmp`
+  // (a very common choice) would otherwise 404 and show "No preview".
+  for (const r of [os.tmpdir(), process.cwd(), "/tmp"]) {
+    try {
+      roots.add(fs.realpathSync(r));
+    } catch {
+      /* skip unresolvable root */
+    }
+  }
+  return [...roots];
+}
+
+/** Where the `screenshot` tool's output is durably saved, relative to a root. */
+const DURABLE_SCREENSHOTS_DIR = path.join(".argent", "screenshots");
+
+/**
+ * Admit a durably-saved screenshot, which the roots above cannot cover.
+ *
+ * The Lens workflow's whole premise is handing a freshly captured screenshot's
+ * path to `propose_variant`, and `screenshot` now saves under the *client's*
+ * `<project>/.argent/screenshots/` (or `~/.argent/screenshots/`) instead of a
+ * temp dir. A root derived from `process.cwd()` would be this process's answer
+ * to that question, and the tool-server is a machine-global daemon keyed by
+ * install, not by project — `ensureToolsServer` reuses one across sessions
+ * precisely because it "may be healthy and serving another project's session".
+ * Its cwd is whichever project happened to spawn it, so a client working in a
+ * second project would save into a directory this process has never heard of
+ * and every thumbnail would 404.
+ *
+ * So admit by shape instead of by root: a file sitting immediately inside a
+ * directory named `.argent/screenshots` is one argent put there, whichever
+ * project owns it. Tested on the realpath, so a symlink cannot borrow the
+ * shape, and only the immediate parent counts, so a subdirectory below it is
+ * still refused.
+ */
+function isDurableScreenshot(real: string): boolean {
+  return path.dirname(real).endsWith(path.sep + DURABLE_SCREENSHOTS_DIR);
+}
+
 // Resolve a file from the preview-UI directory. Candidate roots (first match
 // wins): (1) bundled `preview-ui/` sibling to the compiled bundle, (2) built
 // tool-server's `packages/ui/`, (3) ts-node `src` run's `packages/ui/`. Used
@@ -612,11 +659,12 @@ export function createPreviewRouter(registry: Registry): Router {
 
   // Streams a variant's local preview-image file (e.g. a screenshot path the
   // agent attached). Only serves a path currently stored on a variant AND
-  // resolving (after symlinks) under an allowlisted root (OS temp dir — where
-  // the screenshot tool writes — or the tool-server cwd), with a known image
-  // extension and a size cap. http(s)/data: previews are used directly by the
-  // browser and never hit this route. This route has no auth and IDs are
-  // enumerable, so the containment check is the real protection.
+  // resolving (after symlinks) either under an allowlisted scratch root or
+  // inside a `.argent/screenshots` directory — where the `screenshot` tool
+  // saves — with a known image extension and a size cap. http(s)/data: previews
+  // are used directly by the browser and never hit this route. This route has
+  // no auth and IDs are enumerable, so the containment check is the real
+  // protection.
   const IMG_MIME: Record<string, string> = {
     ".png": "image/png",
     ".jpg": "image/jpeg",
@@ -625,20 +673,7 @@ export function createPreviewRouter(registry: Registry): Router {
     ".gif": "image/gif",
   };
   const MAX_PREVIEW_BYTES = 25 * 1024 * 1024;
-  const allowedRoots = (() => {
-    const roots = new Set<string>();
-    // `/tmp` in addition to os.tmpdir(): on macOS os.tmpdir() is a per-user
-    // `/var/folders/…` path, so agents that drop screenshots under `/tmp`
-    // (a very common choice) would otherwise 404 and show "No preview".
-    for (const r of [os.tmpdir(), process.cwd(), "/tmp"]) {
-      try {
-        roots.add(fs.realpathSync(r));
-      } catch {
-        /* skip unresolvable root */
-      }
-    }
-    return [...roots];
-  })();
+  const allowedRoots = previewImageRoots();
   router.get("/variant-image/:elementId/:variantId", (req: Request, res: Response) => {
     const v = variantProposalStore.findVariant(
       req.params.elementId as string,
@@ -660,9 +695,9 @@ export function createPreviewRouter(registry: Registry): Router {
       res.status(404).end();
       return;
     }
-    const contained = allowedRoots.some(
-      (root) => real === root || real.startsWith(root + path.sep)
-    );
+    const contained =
+      isDurableScreenshot(real) ||
+      allowedRoots.some((root) => real === root || real.startsWith(root + path.sep));
     const mime = IMG_MIME[path.extname(real).toLowerCase()];
     if (!contained || !mime || size > MAX_PREVIEW_BYTES) {
       res.status(404).end();

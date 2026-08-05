@@ -13,7 +13,10 @@ vi.mock("../src/utils/device-shutdown", () => ({
 // /shutdown is a lens-only route gated behind the argent-lens flag. Mock it ON
 // by default so the suite is deterministic regardless of the machine's real
 // flags.json; one test below flips it OFF to assert the gate.
-vi.mock("@argent/configuration-core", () => ({ isFlagEnabled: vi.fn(() => true) }));
+vi.mock("@argent/configuration-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@argent/configuration-core")>()),
+  isFlagEnabled: vi.fn(() => true),
+}));
 
 import { createPreviewRouter } from "../src/preview";
 import { variantProposalStore } from "../src/utils/variant-proposals";
