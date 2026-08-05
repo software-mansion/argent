@@ -1315,7 +1315,12 @@ async function runSwipe(
     if ("fail" in p) return p.fail;
     start = p;
   } else if (step.direction) {
-    start = SWIPE_GEOMETRY[step.direction].start;
+    // Copied, not aliased: SWIPE_GEOMETRY is a module-level table shared by
+    // every swipe in the process, and the unanchored `by` arm below slides the
+    // local start in place (`start[axis] = …`). Only the branch structure keeps those
+    // two apart today, so the copy is what makes a preset entry impossible to
+    // corrupt for all subsequent steps no matter how the arms are rearranged.
+    start = { ...SWIPE_GEOMETRY[step.direction].start };
   } else {
     start = { x: 0.5, y: 0.5 };
   }
