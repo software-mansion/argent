@@ -535,11 +535,11 @@ describe("flow-execute chromium boot", () => {
     expect(killChromiumByPort).not.toHaveBeenCalled();
   });
 
-  it("marks the instance the run left, not the older one it retired, on a cross-app relaunch", async () => {
+  it("marks the instance the run left and the older one it retired, on a cross-app relaunch", async () => {
     // Relaunching app-a while the run sits on app-b's instance retires app-a's
-    // OLD instance but moves the run off app-b's — the marker must name the
-    // instance the run left, and "retired" would be false for it (it stays
-    // alive until run end).
+    // OLD instance but moves the run off app-b's — "retired" would be false for
+    // the instance the run left (it stays alive until run end), and naming only
+    // the move would leave the kill unreported.
     const flowFile = await writeFlow(
       "steps:\n  - launch: { chromium: ./app-a }\n  - launch: { chromium: ./app-b }\n  - launch: { chromium: ./app-a }\n"
     );
@@ -554,7 +554,8 @@ describe("flow-execute chromium boot", () => {
     expect(result.ok).toBe(true);
     expect(bootElectronApp).toHaveBeenCalledTimes(3);
     expect(result.steps[2]!.reason).toBe(
-      "booted chromium instance chromium-cdp-12347 — run moved off chromium-cdp-12346"
+      "booted chromium instance chromium-cdp-12347 — run moved off chromium-cdp-12346, " +
+        "retired chromium-cdp-12345 (same app relaunched)"
     );
     // app-a's old instance was retired before the third boot; the two the run
     // still owns go down at run end, newest first.

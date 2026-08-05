@@ -178,9 +178,11 @@ export interface StepReport {
    * the `when:` guard marker (`condition met (…)`), snapshot passes (diff
    * percentage, baseline written/updated), and a chromium `launch` whose
    * instance the runner booted and owns (naming it; a mid-run boot appends
-   * `— run moved off <id>`, or `— retired <id> (same app relaunched)` when it
-   * killed the run's previous instance, so the move is marked on its step) —
-   * an attach to an instance the runner does not own reports no reason.
+   * `— run moved off <id>`, or `— retired <id> (same app relaunched)` when the
+   * instance it left was the one killed — and `— run moved off <id>, retired
+   * <id> (same app relaunched)` when the one killed was an older owned
+   * instance instead, so no kill goes unreported) — an attach to an instance
+   * the runner does not own reports no reason.
    */
   reason?: string;
   /** Underlying tool id for `tool` steps. */
@@ -542,11 +544,20 @@ async function bootChromiumForLaunch(state: ExecState, app: Launch): Promise<Dir
 
   await frontChromiumPage(registry, state.device);
   if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
-  // "retired" only when the run's own instance was the one killed — a retire of
-  // an older owned instance, or leaving a live attached one, is just a move.
+  // "retired" only for the instance actually killed: the one the run leaves
+  // stays alive unless the relaunch is of its own app. A relaunch of a
+  // different owned app kills an older instance the run is not on — named
+  // alongside the move, since nothing else in the report accounts for it.
   const move =
     retiredId === prevId ? `retired ${prevId} (same app relaunched)` : `run moved off ${prevId}`;
-  return { ok: true, reason: `booted chromium instance ${booted.deviceId} — ${move}` };
+  const alsoRetired =
+    retiredId !== undefined && retiredId !== prevId
+      ? `, retired ${retiredId} (same app relaunched)`
+      : "";
+  return {
+    ok: true,
+    reason: `booted chromium instance ${booted.deviceId} — ${move}${alsoRetired}`,
+  };
 }
 
 /** Bound on the lock-hint liveness re-probe — an already-failing step must stay quick. */
@@ -920,7 +931,8 @@ switch platforms. Every step hard-stops the flow on failure; later steps are rep
 Returns a structured report ({ flow, device, executionPrerequisite, ok, aborted?, passed, failed,
 skipped, errored, steps }) — \`device\` is the device the run STARTED on; when launches moved it onto
 runner-booted instances, each names its instance in that step's reason and marks the move — \`run moved
-off <id>\`, or \`retired <id> (same app relaunched)\` when the run's previous instance was killed first.
+off <id>\`, or \`retired <id> (same app relaunched)\` when the instance it left was the one killed —
+a relaunch that retired an older owned instance names both.
 
 If a fragment has an execution prerequisite and prerequisiteAcknowledged is not set to true, the tool
 returns a notice with the prerequisite instead of running.`,
