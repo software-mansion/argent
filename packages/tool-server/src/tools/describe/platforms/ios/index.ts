@@ -1,9 +1,10 @@
 import type { DeviceInfo, Registry, ToolDependency } from "@argent/registry";
 import { axServiceRef, AXServiceApi } from "../../../../blueprints/ax-service";
 import {
-  buildAppStateMessage,
+  adviseOnUninjectedApp,
   isInjectableBundleId,
   NON_INJECTABLE_NATIVE_WARNING,
+  UNINJECTED_NATIVE_WARNING,
   nativeDevtoolsRef,
   NativeDevtoolsApi,
 } from "../../../../blueprints/native-devtools";
@@ -54,6 +55,15 @@ const NON_INJECTABLE_HINT =
   "instrumentation — the native view hierarchy is unavailable and restarting the app will NOT " +
   "help. Take a `screenshot` to see the screen and interact by coordinate. " +
   NON_INJECTABLE_NATIVE_WARNING;
+
+// Recovery half of the MEASURED terminal state, for the same reason
+// NON_INJECTABLE_HINT above has its own: this hint is reached only once
+// `describe`'s accessibility path has already returned empty, so the blueprint's
+// wording — which leads with `describe` — would be circular here. Leads with
+// `screenshot` and shares the native-* dead-end warning verbatim with the
+// precheck's version of this state.
+const INJECTION_FAILED_DESCRIBE_RECOVERY =
+  "Take a `screenshot` to see the screen and interact by coordinate. " + UNINJECTED_NATIVE_WARNING;
 
 function emptyTree(): DescribeNode {
   return parseDescribeResult({
@@ -186,8 +196,13 @@ export async function describeIos(
       // recreate, and a `connecting` one is mid-handshake, which exec is what
       // begins — flagging either would rebuild the restart-app → describe loop
       // this gate exists to avoid.
-      const diagnosis = buildAppStateMessage(target.bundleId, state);
-      const merged = hint ? `${hint} ${diagnosis}` : diagnosis;
+      const advice = adviseOnUninjectedApp(
+        nativeApi,
+        target.bundleId,
+        state,
+        INJECTION_FAILED_DESCRIBE_RECOVERY
+      );
+      const merged = hint ? `${hint} ${advice.message}` : advice.message;
       return state === "unregistered" || state === "connecting"
         ? { tree, source: "ax-service", hint: merged }
         : { tree, source: "ax-service", should_restart: true, hint: merged };

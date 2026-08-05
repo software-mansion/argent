@@ -54,6 +54,7 @@ function makeNativeApi(options: {
     envSetup = true;
   });
   const isAppRunning = vi.fn(async () => options.appRunning ?? false);
+  const relaunchAdvised = new Set<string>();
 
   return {
     api: {
@@ -65,6 +66,10 @@ function makeNativeApi(options: {
       isConnected: () => options.connected ?? false,
       isAppRunning,
       listConnectedBundleIds: () => [],
+      noteRelaunchAdvice: (bundleId: string) => {
+        relaunchAdvised.add(bundleId);
+      },
+      wasAdvisedToRelaunch: (bundleId: string) => relaunchAdvised.has(bundleId),
       appConnectionState: async () => {
         if (options.connected) return "connected";
         // Mirrors the real API: the unconnected path re-applies the launchd env

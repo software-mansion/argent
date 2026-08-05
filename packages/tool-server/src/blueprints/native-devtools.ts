@@ -51,6 +51,15 @@ export function isInjectableBundleId(bundleId: string): boolean {
 }
 
 /**
+ * Every app-scoped native-devtools feature tool. Both dead-end warnings below
+ * interpolate this one list, so neither can come to name a different set of
+ * tools than the other.
+ */
+const NATIVE_FEATURE_TOOLS =
+  "native-describe-screen, native-find-views, native-full-hierarchy, native-network-logs, " +
+  "native-view-at-point, native-user-interactable-view-at-point";
+
+/**
  * The invariant half of the non-injectable recovery guidance: which tools NOT
  * to fall back to. Shared VERBATIM by every surface that reports this terminal
  * state to an agent that could otherwise reach for one (this precheck's throw,
@@ -69,10 +78,41 @@ export function isInjectableBundleId(bundleId: string): boolean {
  * and *reports* `injectable: false` rather than throwing — see the precheck.)
  */
 export const NON_INJECTABLE_NATIVE_WARNING =
-  "Do not fall back to the native-devtools feature tools (native-describe-screen, " +
-  "native-find-views, native-full-hierarchy, native-network-logs, native-view-at-point, " +
-  "native-user-interactable-view-at-point) — they run the same injection precheck and fail " +
-  "with the same non-injectable error.";
+  `Do not fall back to the native-devtools feature tools (${NATIVE_FEATURE_TOOLS}) — ` +
+  "they run the same injection precheck and fail with the same non-injectable error.";
+
+/**
+ * The same dead-end warning for the terminal state that is *measured* rather
+ * than read off the bundle id ({@link buildInjectionFailedDiagnosis}). The tool
+ * list is shared with {@link NON_INJECTABLE_NATIVE_WARNING} so neither can drift,
+ * but the tail differs because the outcome does: these tools reach the same
+ * measurement through the precheck and report `injection_failed` rather than
+ * throwing NATIVE_DEVTOOLS_NOT_INJECTABLE.
+ */
+export const UNINJECTED_NATIVE_WARNING =
+  `Do not fall back to the native-devtools feature tools (${NATIVE_FEATURE_TOOLS}) — ` +
+  "they read the same connection state and return the same injection_failed status.";
+
+/**
+ * The two readers that work with no injection at all. Shared by
+ * {@link NON_INJECTABLE_RECOVERY} and {@link INJECTION_FAILED_RECOVERY}; the
+ * trailing space is included so either can append its own dead-end warning.
+ */
+const INJECTION_FREE_READERS =
+  "Use the standard `describe` tool (its accessibility path reads the screen without injection) " +
+  "or `screenshot` (then interact by coordinate). ";
+
+/**
+ * Recovery guidance for the measured terminal state, for a reader that is
+ * choosing an inspection tool and has not yet tried `describe` — the shared
+ * precheck's callers and `native-devtools-status`. The `describe` iOS fallback
+ * and the flow tree reader pass their own, for the same reasons they already
+ * carry their own non-injectable text: `describe` is reached only after its own
+ * accessibility path returned empty, so recommending it there is circular, and a
+ * flow author needs the flow-level remedy rather than a choice of inspection
+ * tool.
+ */
+export const INJECTION_FAILED_RECOVERY = INJECTION_FREE_READERS + UNINJECTED_NATIVE_WARNING;
 
 /**
  * Full recovery guidance for surfaces reached BEFORE `describe` has been tried
@@ -95,10 +135,7 @@ export const NON_INJECTABLE_NATIVE_WARNING =
  * substitutes the sim's re-boot hint for `NON_INJECTABLE_HINT` when the
  * ax-service is degraded — see that call site.)
  */
-export const NON_INJECTABLE_RECOVERY =
-  "Use the standard `describe` tool (its accessibility path reads the screen without injection) " +
-  "or `screenshot` (then interact by coordinate). " +
-  NON_INJECTABLE_NATIVE_WARNING;
+export const NON_INJECTABLE_RECOVERY = INJECTION_FREE_READERS + NON_INJECTABLE_NATIVE_WARNING;
 
 // Max consecutive init failures per service instance before it stops retrying.
 export const MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS = 3;
@@ -222,6 +259,108 @@ export function buildAppStateMessage(
   }
 }
 
+/**
+ * Terminal diagnosis for an app whose relaunch has been prescribed, performed,
+ * and made no difference.
+ *
+ * Reached only from `unregistered` after a `stale_process` hand-out for the same
+ * bundle, and the pair is what makes the opening claim safe. Which side of the
+ * listener a process falls on is fixed at its exec — `listeningSince` and the
+ * endpoint do not move within a service instance, and the two states sit on
+ * opposite sides of the same comparison — so one bundle reading `stale_process`
+ * and then `unregistered` cannot be one process observed twice. The relaunch
+ * happened; the process being measured is its result.
+ *
+ * `connectedPeers` localises what is left. `DYLD_INSERT_LIBRARIES` is set
+ * simulator-wide and this service holds one listener, so any other app connected
+ * on it proves the launchd env, the dylib and the listener all work and narrows
+ * the fault to this app's binary. No peer at all leaves all three in scope —
+ * that is the closest thing to a load confirmation available here, since the
+ * process table can show the insertion but never the load.
+ */
+export function buildInjectionFailedDiagnosis(bundleId: string, connectedPeers: string[]): string {
+  const peers = connectedPeers.filter((peer) => peer !== bundleId);
+  const localisation =
+    peers.length > 0
+      ? `Other apps on this simulator are connected (${peers.join(", ")}), so the launchd environment, the dylib and this service's listener all work — the fault is specific to this app's binary: check that it is a simulator build for this platform and that it does not enforce library validation. `
+      : `No app on this simulator has connected to this tool-server, so a dylib dyld never loads and a listener nothing can reach still read the same. Re-boot the simulator (boot-device with force=true) and confirm argent's native binaries are installed. A tool-server restart is worth at most one attempt: it leaves this app older than the new listener, which is the restart-app prompt again, and landing back here after that relaunch means a second, freshly bound listener saw nothing either. `;
+
+  return (
+    `${bundleId} was told to relaunch, and the process now running is a different one, so the relaunch happened — and it still never connected. ` +
+    `It carries argent's bootstrap dylib pointed at this simulator's devtools endpoint and it started after this service's listener bound, so the launchd environment reached it. That proves the dylib was handed to the process, not that dyld loaded it: dyld skips an inserted library silently when its slice does not match the simulator's platform, when it is unsigned, or when one of its dependencies is missing. Relaunching it again reproduces exactly this reading. ` +
+    localisation
+  );
+}
+
+/**
+ * What to tell an agent about an app that has no live devtools connection: the
+ * measured state's own remedy, or the terminal diagnosis once that remedy has
+ * been prescribed and demonstrably not converged.
+ */
+export interface NativeDevtoolsUninjectedAdvice {
+  /**
+   * True when the guidance prescribes no further action on the app or the
+   * tool-server. Surfaces with a `status` channel report `injection_failed` for
+   * it; the rest carry the message alone, as they already do for every other
+   * state.
+   */
+  terminal: boolean;
+  message: string;
+}
+
+/**
+ * Turn a measured state into the guidance every surface shares, recording the
+ * one hand-out that lets a later reading tell a spent remedy from a fresh one.
+ * Side-effecting on that record: call it exactly where the advice is emitted to
+ * an agent.
+ *
+ * Only `stale_process` and `unregistered` take part. Their remedies are the two
+ * halves of a cycle: `stale_process` prescribes restart-app, which leaves the
+ * app younger than the listener and so reads `unregistered`; `unregistered`
+ * prescribes a tool-server restart, whose new listener is younger than the app
+ * and so reads `stale_process`. An app whose dylib dyld silently skips satisfies
+ * both readings forever, so the second half has to stop being prescribed — and
+ * it is the half that must go, because obeying it discards this record along
+ * with the service instance holding it.
+ *
+ * The other three states are left alone because their remedies do converge.
+ * `connecting` resolves itself: the process ages out of the grace within seconds
+ * and the next reading is a verdict. `not_running` asks for a launch, and an app
+ * that will not stay running is a crash rather than a load failure — nothing
+ * here has seen its process to diagnose. `indeterminate` is the absence of a
+ * reading, so there is no injection to claim anything about, and its message
+ * already bounds itself to one restart; on ios-remote it is the only state a
+ * running app ever reaches, and stranding that host would leave it no reading at
+ * all.
+ *
+ * `indeterminate` also prescribes a relaunch, and it deliberately does NOT
+ * record one: only `stale_process` flipping to `unregistered` proves the process
+ * was replaced. `indeterminate` says the process could not be read at all, so an
+ * `unregistered` after it may be the same process finally becoming readable —
+ * and the terminal diagnosis opens by asserting a relaunch took place.
+ *
+ * `terminalRecovery` is the caller's own dead-end guidance, appended only when
+ * the advice turns terminal — see {@link INJECTION_FAILED_RECOVERY} for the
+ * inspection-tool wording and why two surfaces need their own.
+ */
+export function adviseOnUninjectedApp(
+  api: NativeDevtoolsApi,
+  bundleId: string,
+  state: Exclude<NativeDevtoolsAppState, "connected">,
+  terminalRecovery: string
+): NativeDevtoolsUninjectedAdvice {
+  if (state === "stale_process") {
+    api.noteRelaunchAdvice(bundleId);
+  } else if (state === "unregistered" && api.wasAdvisedToRelaunch(bundleId)) {
+    return {
+      terminal: true,
+      message:
+        buildInjectionFailedDiagnosis(bundleId, api.listConnectedBundleIds()) + terminalRecovery,
+    };
+  }
+  return { terminal: false, message: buildAppStateMessage(bundleId, state) };
+}
+
 export interface NativeDevtoolsInitFailure {
   attempts: number;
   lastError: string;
@@ -248,9 +387,20 @@ export function buildInitFailedResult(
   };
 }
 
+/**
+ * The measured terminal state, reported by every surface that has a `status`
+ * channel. Carries no `state`: the remedies for the state it was measured in
+ * are exactly what this block exists to withhold.
+ */
+export interface NativeDevtoolsInjectionFailedResult {
+  status: "injection_failed";
+  message: string;
+}
+
 // Overloads for proper return-type inference.
 export type NativeDevtoolsPrecheckBlock =
   | NativeDevtoolsInitFailedResult
+  | NativeDevtoolsInjectionFailedResult
   | { status: "restart_required"; message: string }
   | { status: "service_stale"; message: string }
   | { status: "connect_pending"; message: string };
@@ -326,6 +476,8 @@ export async function precheckNativeDevtools(
   });
   if (typeof state !== "string") return state;
   if (state === "connected") return null;
+  const advice = adviseOnUninjectedApp(api, bundleId, state, INJECTION_FAILED_RECOVERY);
+  if (advice.terminal) return { status: "injection_failed", message: advice.message };
   return {
     // Two states must not be reported as restart_required: `unregistered`, which
     // a relaunch provably cannot fix, and `connecting`, where a relaunch aborts
@@ -337,7 +489,7 @@ export async function precheckNativeDevtools(
         : state === "connecting"
           ? "connect_pending"
           : "restart_required",
-    message: buildAppStateMessage(bundleId, state),
+    message: advice.message,
   };
 }
 
@@ -414,6 +566,19 @@ export interface NativeDevtoolsApi {
    * DYLD_INSERT_LIBRARIES was silently cleared.
    */
   appConnectionState(bundleId: string): Promise<NativeDevtoolsAppState>;
+  /**
+   * Record that `bundleId` has been handed `stale_process`'s relaunch remedy, so
+   * a later reading can tell whether the process it is looking at is the result
+   * of one. Prefer {@link adviseOnUninjectedApp}, which pairs this with the
+   * reading that consumes it.
+   */
+  noteRelaunchAdvice(bundleId: string): void;
+  /**
+   * Whether the relaunch remedy has been prescribed for `bundleId` since it last
+   * connected. Connecting clears it: the remedy worked, and the next failure is
+   * a fresh problem rather than the continuation of an old one.
+   */
+  wasAdvisedToRelaunch(bundleId: string): boolean;
   /**
    * Activates NSURLProtocol network interception for a specific app.
    * Idempotent — safe to call multiple times. Sticky: if the app is killed
@@ -560,6 +725,10 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     let inFlight: Promise<void> | null = null;
 
     const activatedBundleIds = new Set<string>();
+    // Bundles handed the relaunch remedy with no connection since. Bounded by
+    // the set of apps ever advised on this simulator, and each entry is dropped
+    // the moment that app completes its handshake.
+    const relaunchAdvised = new Set<string>();
     const events = new TypedEventEmitter<ServiceEvents>();
 
     // Concurrency guard: a single ensureEnv attempt
@@ -695,6 +864,11 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
           }
 
           connections.set(bundleId, { socket, networkLog: [] });
+          // The handshake is the success signal for the relaunch remedy, and the
+          // only moment it is observable — an app can connect and drop again
+          // between two readings, and clearing on a `connected` reading would
+          // miss that and hold a verdict against a process that did register.
+          relaunchAdvised.delete(bundleId);
 
           // Re-activate network inspection if it was previously enabled for this app
           if (activatedBundleIds.has(bundleId)) {
@@ -865,6 +1039,11 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         return "unregistered";
       },
 
+      noteRelaunchAdvice: (bundleId) => {
+        relaunchAdvised.add(bundleId);
+      },
+      wasAdvisedToRelaunch: (bundleId) => relaunchAdvised.has(bundleId),
+
       activateNetworkInspection(bundleId) {
         activatedBundleIds.add(bundleId);
         const conn = connections.get(bundleId);
@@ -950,6 +1129,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         }
         connections.clear();
         activatedBundleIds.clear();
+        relaunchAdvised.clear();
         server.close();
         if (transport === "unix") {
           try {

@@ -45,6 +45,7 @@ const SYSTEM_APP = "com.apple.Preferences";
 // Minimal api satisfying what the real 2-arg precheck consults
 // (getInitFailure + ensureEnvReady); the rest must stay untouched.
 function makeNativeApi(): NativeDevtoolsApi {
+  const relaunchAdvised = new Set<string>();
   return {
     isEnvSetup: () => true,
     socketPath: "/tmp/test.sock",
@@ -54,6 +55,10 @@ function makeNativeApi(): NativeDevtoolsApi {
     isConnected: () => false,
     isAppRunning: async () => false,
     listConnectedBundleIds: () => [],
+    noteRelaunchAdvice: (bundleId: string) => {
+      relaunchAdvised.add(bundleId);
+    },
+    wasAdvisedToRelaunch: (bundleId: string) => relaunchAdvised.has(bundleId),
     appConnectionState: async () => "connected",
     activateNetworkInspection: () => {},
     getNetworkLog: () => [],
