@@ -136,9 +136,10 @@ function runnerSideReadClause(udid: unknown): string {
   if (platform === "chromium") {
     return (
       "No read-only tool exposes the runner's trimmed tree on Chromium — `describe` returns the " +
-      "full DOM the recorder read, including the non-addressable nodes the runner drops — so " +
-      "re-record with a selector an addressable node carries (an id, label, text, or a " +
-      "clickable/focused element), or keep it raw"
+      "full DOM the recorder read, including the nodes the runner drops — so re-record with a " +
+      "selector an addressable node carries (an id, label, text, or a clickable/focused " +
+      "element); if `describe` shows the element with a zero-height frame it is simply " +
+      "off-viewport, and the fix is a `scroll-to` before the check, not a different selector"
     );
   }
   if (platform === "vega") {
@@ -164,9 +165,17 @@ function treeDivergenceFor(udid: unknown): string {
     );
   }
   if (platform === "chromium") {
+    // Both halves of `projectChromiumNode`'s test, not just the first: it keeps
+    // a node only when it is `onScreen && addressable`. Naming addressability
+    // alone reads as a verdict on the SELECTOR, so an author whose element is
+    // merely below the fold — the walker clamps an off-viewport frame to zero
+    // area, and `describe` still lists it — goes hunting for an id it already
+    // has.
     return (
-      "Both read the same DOM, but the flow tree keeps only addressable nodes — an element with " +
-      "no id, label, value, clickable or focused state never reaches the runner."
+      "Both read the same DOM, but the flow tree keeps only addressable nodes that are on " +
+      "screen — an element with no id, label, value, clickable or focused state never reaches " +
+      "the runner, and neither does one whose frame the walker clamped to zero area for being " +
+      "off-viewport."
     );
   }
   if (platform === "android") {

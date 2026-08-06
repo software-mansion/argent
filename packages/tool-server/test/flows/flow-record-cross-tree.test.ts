@@ -466,7 +466,14 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   it("Chromium: warns when the runner's projection drops an off-viewport node", async () => {
     serveTree(
       chromiumRunnerTree([
-        n({ role: "span", value: "Continue", frame: { x: 0.03, y: 1, width: 0.94, height: 0 } }),
+        // Addressable by id AND by text — the node is dropped purely for having
+        // no on-screen frame, so the message must not blame the selector.
+        n({
+          role: "div",
+          identifier: "far",
+          value: "Continue",
+          frame: { x: 0.03, y: 1, width: 0.94, height: 0 },
+        }),
       ]),
       "cdp-dom"
     );
@@ -475,14 +482,22 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     const result = await recordWait("chromium", {
       udid: CHROMIUM,
       condition: "exists",
-      selector: { text: "Continue" },
+      selector: { identifier: "far" },
     });
     const warning = warningOf(result, "chromium");
+
+    // `projectChromiumNode` keeps a node only when it is onScreen AND
+    // addressable. Naming addressability alone reads as a verdict on the
+    // selector, and sends an author whose element is merely below the fold
+    // hunting for an id it already carries.
+    expect(warning).toContain("addressable nodes that are on screen");
+    expect(warning).toContain("off-viewport");
+    expect(warning).toContain("`scroll-to` before the check, not a different selector");
 
     expect(warning).toContain("does NOT hold against the tree the runner resolves");
     // Capitalized, as its own sentence after the divergence sentence's period.
     expect(warning).toContain(
-      "runner. No read-only tool exposes the runner's trimmed tree on Chromium"
+      "off-viewport. No read-only tool exposes the runner's trimmed tree on Chromium"
     );
     expect(warning).not.toContain("native-find-views");
     expect(await recordedSteps("chromium")).toHaveLength(1);
