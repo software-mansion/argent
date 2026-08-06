@@ -37,6 +37,7 @@ import { resolveDevice } from "../../src/utils/device-info";
 import { findAll, type Selector } from "../../src/utils/ui-tree-match";
 import { adaptFullHierarchyToDescribeResult } from "../../src/tools/flows/flow-ios-tree";
 import { adaptFullAndroidHierarchyToDescribeResult } from "../../src/tools/flows/flow-android-tree";
+import { parseUiAutomatorDump } from "../../src/tools/describe/platforms/android/uiautomator-parser";
 import { adaptChromiumTreeForFlows } from "../../src/tools/flows/flow-chromium-tree";
 import { adaptVegaTreeForFlows } from "../../src/tools/flows/flow-vega-tree";
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
@@ -98,22 +99,29 @@ function iosLabel(label: string, extra: Partial<RawIosView> = {}): RawIosView {
 const ANDROID_W = 1080;
 const ANDROID_H = 1920;
 
-/** A `uiautomator` full-hierarchy dump, through the Android adapter. */
-function androidRunnerTree(rows: string): DescribeNode {
-  return adaptFullAndroidHierarchyToDescribeResult(
-    `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+/**
+ * One `android-devtools` getHierarchy dump. Both Android sides read THIS —
+ * `describe`'s default path and the flow tree are two parses of the same XML,
+ * so an Android divergence has to be demonstrated on identical input or it is
+ * not a divergence at all.
+ */
+function androidDump(rows: string): string {
+  return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
 <hierarchy rotation="0">
   <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
     ${rows}
   </node>
-</hierarchy>`,
-    ANDROID_W,
-    ANDROID_H
-  );
+</hierarchy>`;
 }
 
-function androidRow(text: string, attrs = ""): string {
-  return `<node index="0" class="android.widget.TextView" text="${text}" package="com.acme.app" bounds="[40,400][1040,480]" ${attrs} />`;
+/** That dump through the Android FLOW adapter — what the runner resolves. */
+function androidRunnerTree(rows: string): DescribeNode {
+  return adaptFullAndroidHierarchyToDescribeResult(androidDump(rows), ANDROID_W, ANDROID_H);
+}
+
+/** The same dump through the TRIM — what `await-ui-element` read live. */
+function androidRecorderTree(rows: string): DescribeNode {
+  return parseUiAutomatorDump(androidDump(rows), ANDROID_W, ANDROID_H);
 }
 
 /** The CDP DOM walker's own `DescribeNode` output, through the Chromium adapter. */
@@ -567,24 +575,49 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).not.toContain("the element reaches that tree");
   });
 
-  // Android: `projectAndroidNode` skips system chrome with its whole subtree,
-  // so a label served by the system UI package never reaches the runner.
-  it("Android: warns when the runner's projection drops system chrome", async () => {
-    serveTree(
-      androidRunnerTree(
-        `<node index="0" class="android.view.View" resource-id="com.android.systemui:id/status_bar" package="com.android.systemui" bounds="[0,0][1080,60]">
-           ${androidRow("Continue")}
-         </node>`
-      ),
-      "android-devtools"
-    );
+  // Android: a testID'd label inside a testID'd clickable row — an everyday RN
+  // `Pressable testID` wrapping a `Text testID`.
+  //
+  // The TRIM collapses the pair: the row is clickable with no own label, so it
+  // BORROWS its descendant's text and the inner TextView disappears into it —
+  // `describe` shows one node, `id=continue-row label="Continue"`. The FLOW
+  // parse keeps both, and the inner node's own resource-id SHIELDS its text
+  // from hoisting, so the row reaches the runner carrying no text at all. A
+  // `text` check on the row therefore holds live and not for the runner.
+  //
+  // This test USED to model the target inside a `com.android.systemui` node.
+  // That divergence cannot occur: both parses drop system chrome (the flow
+  // adapter's `isSystemChrome`, the trim's `!opts.includeSystem && isSystemChrome`),
+  // so the live wait would have failed too and the recorder would have reported
+  // the unmet-wait warning instead. It only went green because the live tool is
+  // stubbed to succeed — it pinned the Android wording and proved nothing about
+  // Android.
+  const ANDROID_ROW = `<node index="0" class="android.widget.LinearLayout" resource-id="com.acme.app:id/continue-row" clickable="true" package="com.acme.app" bounds="[40,400][1040,480]">
+           <node index="0" class="android.widget.TextView" resource-id="com.acme.app:id/continue-label" text="Continue" package="com.acme.app" bounds="[60,410][600,470]" />
+         </node>`;
+
+  it("Android: warns when the trim's collapse gave the runner's node no text", async () => {
+    const wait: WaitArgs = {
+      udid: ANDROID,
+      condition: "text",
+      selector: { identifier: "com.acme.app:id/continue-row" },
+      expectedText: "Continue",
+    };
+
+    // The premise, on the same dump: the LIVE side really does pass. Without
+    // this the fixture only proves the stub returns success.
+    const recorderTree = androidRecorderTree(ANDROID_ROW);
+    expect(
+      evaluateMatches(
+        wait as Parameters<typeof evaluateMatches>[0],
+        findAll(recorderTree, wait.selector as Selector)
+      )
+    ).toBe(true);
+
+    serveTree(androidRunnerTree(ANDROID_ROW), "android-devtools");
     await startRecording("android");
 
-    const result = await recordWait("android", {
-      udid: ANDROID,
-      condition: "visible",
-      selector: { text: "Continue" },
-    });
+    const result = await recordWait("android", wait);
     const warning = warningOf(result, "android");
 
     expect(warning).toContain("does NOT hold against the tree the runner resolves");
