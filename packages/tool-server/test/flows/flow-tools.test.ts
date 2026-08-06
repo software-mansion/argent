@@ -590,7 +590,7 @@ describe("flow-add-step", () => {
     const tool = createFlowAddStepTool(registry);
 
     await flowStartRecordingTool.execute({}, { name: "launch-rewrite", project_root: tmpDir });
-    await tool.execute(
+    const result = await tool.execute(
       {},
       {
         name: "launch-rewrite",
@@ -606,9 +606,13 @@ describe("flow-add-step", () => {
       bundleId: "com.acme.app",
     });
     // …but recorded the launch directive, making this an e2e flow.
-    expect(parseFlow(await onDisk("launch-rewrite")).steps).toEqual([
-      { kind: "launch", app: "com.acme.app" },
-    ]);
+    const steps = parseFlow(await onDisk("launch-rewrite")).steps;
+    expect(steps).toEqual([{ kind: "launch", app: "com.acme.app" }]);
+    // The rewrite is invisible in the raw result (which echoes restart-app's
+    // own output), so `recorded` is what tells the author a launch was stored
+    // rather than the tool call they made.
+    expect(result.recorded).toBe("1. launch: com.acme.app");
+    expect(result.recorded).toBe(summarizeStep(steps[0], 1));
   });
 
   it("keeps a restart-app with extra args (e.g. activity) as a raw tool step", async () => {
@@ -696,9 +700,12 @@ describe("flow-add-step", () => {
     // Ran the fragment live to set up state…
     expect(result.toolResult).toEqual({ ok: true, steps: [] });
     // …but recorded the portable composition directive, not the raw tool call.
-    expect(parseFlow(await onDisk("compose-test")).steps).toEqual([
-      { kind: "run", flow: "login.yaml" },
-    ]);
+    const steps = parseFlow(await onDisk("compose-test")).steps;
+    expect(steps).toEqual([{ kind: "run", flow: "login.yaml" }]);
+    // Same reason as the launch rewrite: `recorded` is the only place the
+    // author sees that a `run:` went in instead of a raw flow-execute step.
+    expect(result.recorded).toBe("1. run: login.yaml");
+    expect(result.recorded).toBe(summarizeStep(steps[0], 1));
   });
 
   it("records a run: directive when the target is an e2e flow", async () => {
@@ -2688,6 +2695,29 @@ describe("summarizeStep rendering", () => {
     ).toBe('3. long-press: {"text":"Row"} for 1200ms');
     expect(summarizeStep({ kind: "long-press", x: 0.4, y: 0.5 }, 3)).toBe(
       "3. long-press: (0.4, 0.5)"
+    );
+  });
+
+  it("renders a launch step's app, per-platform map included", () => {
+    // `launch` and `run` are the two kinds the recorder builds besides tap and
+    // tool, so both reach the author through `recorded` — yet mutating either
+    // arm to a constant used to fail nothing. A per-platform launch map is not
+    // recorder-reachable (the rewrite only maps a plain bundleId), but it is
+    // the arm's other branch and finish-recording renders it.
+    expect(summarizeStep({ kind: "launch", app: "com.acme.app" }, 1)).toBe(
+      "1. launch: com.acme.app"
+    );
+    expect(
+      summarizeStep({ kind: "launch", app: { ios: "com.acme.app", android: "com.acme" } }, 2)
+    ).toBe('2. launch: {"ios":"com.acme.app","android":"com.acme"}');
+  });
+
+  it("renders a run step's target as the file spells it", () => {
+    // The as-written YAML path, not a resolved absolute one — the summary
+    // quotes the file so a reader can find the line they are being told about.
+    expect(summarizeStep({ kind: "run", flow: "login.yaml" }, 1)).toBe("1. run: login.yaml");
+    expect(summarizeStep({ kind: "run", flow: "../shared/login.yaml" }, 5)).toBe(
+      "5. run: ../shared/login.yaml"
     );
   });
 
