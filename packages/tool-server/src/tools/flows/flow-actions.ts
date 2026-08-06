@@ -43,6 +43,8 @@ import {
   describeTextExpectation,
   IDLE_DEFAULT_MIN_STABLE_MS,
   IDLE_DEFAULT_TIMEOUT_MS,
+  IDLE_MIN_STILL_INTERVALS,
+  IDLE_POLL_MS,
   SELECTOR_RELATIONS,
   type FlowSelector,
   type FlowStep,
@@ -1162,25 +1164,11 @@ async function waitForCondition(
 // passing step, naming what to look at.
 
 /**
- * `idle` poll cadence, matching `await-screen-idle`'s own. The timeout and hold
- * defaults live in flow-utils beside the parser, which needs the timeout to
- * reject a hold that could never fit inside the wait.
+ * The cadence, the interval count and the defaults all live in flow-utils
+ * beside the parser, which needs every one of them to reject a wait that could
+ * never contain the settle it asks for. Aliased here for readability.
  */
-const IDLE_POLL_MS = 200;
-
-/**
- * How many consecutive intervals must read as still before the screen is
- * called settled. Two, not one, because a single agreeing pair of captures is
- * not evidence of stillness: any animation that reverses — a cross-fade, a
- * pulse, a bounce — has a turning point, and two samples straddling it come
- * back identical while the screen is very much moving. Observed on a 3s
- * white/indigo cross-fade, where a default-shaped step passed on roughly one
- * run in three. A second agreeing interval needs a third sample, which the
- * same phase symmetry cannot supply unless the animation's period happens to
- * match the poll — so the aliasing that survives one comparison does not
- * survive two.
- */
-const MIN_STILL_INTERVALS = 2;
+const MIN_STILL_INTERVALS = IDLE_MIN_STILL_INTERVALS;
 
 /**
  * The smallest budget a poll round is allowed to start with. A round begun
@@ -1468,6 +1456,23 @@ async function waitForIdle(
       ok: false,
       indeterminate: true,
       reason: `the UI tree stayed empty for ${timeoutMs}ms — the screen never rendered content`,
+    };
+  }
+  // Too few reads to have judged anything. A settle needs three of them
+  // spanning two intervals, so a step that got fewer has no evidence either
+  // way — and both verdicts below would be claims about an app that was never
+  // observed for long enough to make one. The parser rejects a `timeout:` too
+  // short to fit a settle, so what reaches here is a source slow enough to eat
+  // the wait, which is worth saying rather than dressing up as motion.
+  if (readsSucceeded <= MIN_STILL_INTERVALS) {
+    return {
+      ok: true,
+      warning:
+        `the screen was read ${readsSucceeded} time${readsSucceeded === 1 ? "" : "s"} in ` +
+        `${timeoutMs}ms, and a settle takes ${MIN_STILL_INTERVALS + 1} reads spanning ` +
+        `${MIN_STILL_INTERVALS} ${IDLE_POLL_MS}ms polls — so this step ended without ever being ` +
+        `able to tell whether the screen was moving. Raise its \`timeout:\`, and gate the next ` +
+        `action on a stable element rather than on stillness.`,
     };
   }
   // The tree was settled as of the last read and no pair of captures ever

@@ -1691,12 +1691,47 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert" | "when"): WaitF
 const IDLE_CONDITION = "idle";
 
 /**
- * `idle`'s defaults, spelled here rather than beside the runner because the
- * parser needs the timeout one: a hold that cannot fit inside the wait can
- * never be satisfied, and this file rejects unsatisfiable gates.
+ * `idle`'s defaults and cadence, spelled here rather than beside the runner
+ * because the parser needs all of them: a wait that cannot contain the settle
+ * it asks for can never be satisfied, and this file rejects unsatisfiable
+ * gates. The runner imports them back.
  */
 export const IDLE_DEFAULT_TIMEOUT_MS = 7500;
 export const IDLE_DEFAULT_MIN_STABLE_MS = 250;
+
+/** `idle` poll cadence, matching `await-screen-idle`'s own. */
+export const IDLE_POLL_MS = 200;
+
+/**
+ * How many consecutive intervals must read as still before the screen is
+ * called settled. Two, not one, because a single agreeing pair of captures is
+ * not evidence of stillness: any animation that reverses — a cross-fade, a
+ * pulse, a bounce — has a turning point, and two samples straddling it come
+ * back identical while the screen is very much moving. Observed on a 3s
+ * white/indigo cross-fade, where a default-shaped step passed on roughly one
+ * run in three. A second agreeing interval needs a third sample, which the
+ * same phase symmetry cannot supply unless the animation's period happens to
+ * match the poll — so the aliasing that survives one comparison does not
+ * survive two.
+ */
+export const IDLE_MIN_STILL_INTERVALS = 2;
+
+/**
+ * What a settle costs before any hold is counted: the intervals it is measured
+ * over, plus the budget the round that closes it needs to be allowed to start
+ * ({@link IDLE_POLL_MS} again — see the runner's MIN_ROUND_BUDGET_MS). A
+ * `timeout:` under this cannot produce a clean settle however still the screen
+ * is, so the step would report on a screen it never had the chance to judge.
+ */
+export const IDLE_SETTLE_OVERHEAD_MS = (IDLE_MIN_STILL_INTERVALS + 1) * IDLE_POLL_MS;
+
+/**
+ * Absolute ceiling on the hold, so an obviously wrong unit (seconds, or a
+ * pasted timestamp) is rejected as a number rather than silently becoming a
+ * gate no run can pass. The relationship that actually matters is with
+ * `timeout`, checked separately.
+ */
+const IDLE_MAX_MIN_STABLE_MS = 600_000;
 
 /**
  * The `timeout` sibling key an `await` may carry, spelled once for both the
@@ -1718,18 +1753,9 @@ function parseAwaitTimeout(entry: unknown, value: unknown): number {
 }
 
 /** Bounded non-negative integer option, in milliseconds. */
-function parseBoundedMs(
-  entry: unknown,
-  value: unknown,
-  where: string,
-  max: number,
-  why?: string
-): number {
+function parseBoundedMs(entry: unknown, value: unknown, where: string, max: number): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > max) {
-    badEntry(
-      entry,
-      `${where} needs an integer between 0 and ${max} (milliseconds)${why ? ` — ${why}` : ""}`
-    );
+    badEntry(entry, `${where} needs an integer between 0 and ${max} (milliseconds)`);
   }
   return value as number;
 }
@@ -1761,17 +1787,37 @@ function parseIdleFields(raw: Record<string, unknown>, kind: "await" | "assert")
   const step: Extract<FlowStep, { kind: "idle" }> = { kind: "idle" };
   if ("timeout" in raw) step.timeout = parseAwaitTimeout(entry, raw.timeout);
   if (raw.minStableMs !== undefined) {
-    // A hold as long as the whole wait can never be observed within it, so the
-    // step would spend its full timeout and warn on every run, however still
-    // the screen was — a gate that cannot pass, reported as if the app were at
-    // fault. Caught here, deviceless.
-    const timeoutMs = step.timeout ?? IDLE_DEFAULT_TIMEOUT_MS;
     step.minStableMs = parseBoundedMs(
       entry,
       raw.minStableMs,
       "idle.minStableMs",
-      timeoutMs - 1,
-      `the hold has to fit inside the ${step.timeout === undefined ? "default " : ""}${timeoutMs}ms timeout`
+      IDLE_MAX_MIN_STABLE_MS
+    );
+  }
+
+  // A wait that cannot contain the settle it asks for is a gate that never
+  // passes, however still the screen is — and it does not fail quietly: the
+  // step spends its whole timeout and then reports either that the screen
+  // never stopped moving or that it could not be screenshotted, both of them
+  // claims about an app that did nothing. Which one it picks depends on where
+  // the budget ran out, so the same file yields different verdicts run to run.
+  // Caught here, deviceless.
+  //
+  // Checked against the EFFECTIVE hold, not just a written-out one: the
+  // default is what most steps run with, so leaving it out was the way to get
+  // an unsatisfiable step past the parser (`timeout: 100` was accepted while
+  // the identical `timeout: 100, minStableMs: 250` was rejected).
+  const timeoutMs = step.timeout ?? IDLE_DEFAULT_TIMEOUT_MS;
+  const minStableMs = step.minStableMs ?? IDLE_DEFAULT_MIN_STABLE_MS;
+  const needed = minStableMs + IDLE_SETTLE_OVERHEAD_MS;
+  if (timeoutMs < needed) {
+    badEntry(
+      entry,
+      `idle needs a timeout of at least ${needed}ms to hold still for ` +
+        `${step.minStableMs === undefined ? `the default ` : ``}${minStableMs}ms: a settle is ` +
+        `${IDLE_MIN_STILL_INTERVALS + 1} reads spanning ${IDLE_MIN_STILL_INTERVALS} ` +
+        `${IDLE_POLL_MS}ms polls, and the wait has to contain them as well as the hold. Raise ` +
+        `\`timeout\`${step.minStableMs === undefined ? "" : " or lower `minStableMs`"}`
     );
   }
   return step;
