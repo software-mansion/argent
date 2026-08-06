@@ -137,8 +137,12 @@ describe("condition families are mutually exclusive", () => {
     );
     expect(stray).not.toThrow(/idle/);
 
-    // And `idle` itself is not a guard.
-    expect(guard("{ idle: true }")).toThrow(/when needs exactly one condition key/);
+    // And `idle` itself is not a guard — which is said outright, the way the
+    // assert form is, rather than left to be inferred from a list it is
+    // missing from.
+    expect(guard("{ idle: true }")).toThrow(
+      /when has no idle form .* Put `await: \{ idle: true \}` before the block/
+    );
   });
 
   it("leaves the selector conditions untouched", () => {

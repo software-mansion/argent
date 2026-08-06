@@ -2176,6 +2176,17 @@ function parseWhenCondition(raw: unknown): WhenCondition {
     badEntry({ when: raw }, `when needs exactly one condition key (${conditionKeys})`);
   }
   const b = raw as Record<string, unknown>;
+  // A guard asks what is on the screen NOW, so "has it stopped moving yet" is
+  // not a question it can ask. Say that outright, the way the assert form does,
+  // rather than listing the keys the author could have written and leaving them
+  // to infer that the one they did write is not among them.
+  if (IDLE_CONDITION in b) {
+    badEntry(
+      { when: raw },
+      "when has no idle form — stillness is a wait, and a guard asks what is on the screen now. " +
+        "Put `await: { idle: true }` before the block instead"
+    );
+  }
   const present = [...WAIT_CONDITIONS, "platform"].filter((c) => c in b);
   if (present.length !== 1) {
     badEntry({ when: raw }, `when needs exactly one condition key (${conditionKeys})`);
