@@ -190,13 +190,13 @@ export interface StepReport {
   reason?: string;
   /**
    * The step passed, but the WAY it passed weakens it as proof. Rendered as a
-   * "⚠" suffix by the MCP client. Raised by `await: { idle: true }`: the screen
-   * never settled at all (it waits, then goes ahead); something small on it
-   * never stopped, which is what a spinner looks like; it rendered no content
-   * to settle; the step ran out of reads before it could judge anything; or its
-   * captures never produced a comparable pair, leaving stillness proved on the
-   * UI tree alone without the presentation-layer motion the pixel half exists
-   * to catch.
+   * "⚠" suffix by the MCP client, and under the step line by the CLI. Raised by
+   * `await: { idle: true }`: the screen never settled at all (it waits, then
+   * goes ahead); something small on it never stopped, which is what a spinner
+   * looks like; it rendered no content to settle; too few reads came back with
+   * content for it to judge anything; or its captures never produced a
+   * comparable pair, leaving stillness proved on the UI tree alone without the
+   * presentation-layer motion the pixel half exists to catch.
    */
   warning?: string;
   /** Underlying tool id for `tool` steps. */
@@ -929,8 +929,10 @@ when \`on\` is omitted; distinct from the \`rotate\` tool, which changes device 
 for a UI condition, and additionally takes the one condition that has no selector: \`idle: true\` waits
 until the screen has content and stops moving in BOTH the UI tree and the rendered pixels (it never
 fails a run — a screen that never settles passes carrying a \`warning\`, which is what makes it safe to
-persist; it says nothing about WHICH screen settled — a dropped tap leaves the source screen perfectly
-idle — so pair it with the element check that names the destination); \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
+persist; the one outcome that does stop the run is an \`error\` for a tree source that could not be read
+at all — a broken window rather than a verdict about the app, which leaves the run not-ok and skips
+every later step; it says nothing about WHICH screen settled — a dropped tap leaves the source screen
+perfectly idle — so pair it with the element check that names the destination); \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
 diffs a screenshot — or, with \`cropOn: <selector>\`, one element's cropped region — against a stored
 baseline (a missing baseline fails the step — set updateBaselines to adopt the current screen; a
 cropped element whose size drifted fails on dimensions); \`echo\` annotates; \`run\` executes another flow
