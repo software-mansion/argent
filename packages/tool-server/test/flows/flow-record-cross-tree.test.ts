@@ -460,6 +460,42 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).toContain("re-parses as a LOOSE selector");
   });
 
+  // ── The `text` comparator the recorded step does NOT carry ───────────────
+  //
+  // `await-ui-element` compares with `contains` unless the step passed
+  // `textMatch: equals`, and the recorded YAML omits the field entirely when it
+  // was defaulted — while the `text:` directive has no default and forces the
+  // author to pick one. So the comparator is a polish-time decision the
+  // artifact does not record, and picking the other one fails on the very
+  // screen the probe approved. Pin both readings of one tree: the skill's
+  // conversion rule (no `textMatch` ⇒ `contains:`) is only sound while they
+  // differ this way.
+  it("judges a text wait with the tool's `contains` default, not `equals`", async () => {
+    const totalRow = () => iosRunnerTree([iosLabel("Total: $5.00")]);
+
+    serveTree(totalRow());
+    await startRecording("textdefault");
+    const defaulted = await recordWait("textdefault", {
+      condition: "text",
+      selector: { text: "Total" },
+      expectedText: "$5.00",
+    });
+    expect(warningOf(defaulted, "textdefault")).toBeUndefined();
+
+    serveTree(totalRow());
+    await startRecording("textequals");
+    const exact = await recordWait("textequals", {
+      condition: "text",
+      selector: { text: "Total" },
+      expectedText: "$5.00",
+      textMatch: "equals",
+    });
+    // Same tree, same expectedText — only the comparator differs, and it flips
+    // the verdict. That is exactly the trap when polish converts a defaulted
+    // step to the `equals:` spelling.
+    expect(warningOf(exact, "textequals")).toContain('its text was "Total: $5.00"');
+  });
+
   // ── Per-platform divergences, each produced by that platform's adapter ────
 
   // iOS: `projectIosNode` skips a transparent subtree outright, so a view the
