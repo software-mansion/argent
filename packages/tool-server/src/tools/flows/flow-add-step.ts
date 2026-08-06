@@ -347,9 +347,11 @@ function abortError(): Error {
  * grace window (`DEFAULT_ASSERT_TIMEOUT_MS`, 1s), but that budget bounds
  * only the LOOP: each `fetchFlowTree` inside it is awaited with no time bound
  * and the clock is checked between reads, then one more read fires
- * back-to-back after the deadline. A single read can take 10s on Chromium CDP
- * and up to 20s for an Android `uiautomator dump`, so the nominal 1s window
- * really ceilings at roughly two full reads — measured at 8.3s and 18.9s
+ * back-to-back after the deadline. A single read can take 10s on Chromium CDP,
+ * and on Android it is the devtools `getHierarchy` RPC — bounded by
+ * `LONG_RPC_TIMEOUT_MS`, 15s (NOT a `uiautomator dump`: `flow-android-tree`
+ * refuses to degrade to that fallback and throws instead). So the nominal 1s
+ * window really ceilings at whatever the slowest source takes, measured at 8.3s
  * against a throttled background renderer.
  *
  * The live `await-ui-element` doesn't have this problem because

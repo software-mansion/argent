@@ -912,10 +912,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
   // `probeWhenCondition` budgets its POLL LOOP at the 1s assert grace, but each
   // tree read inside it is awaited unbounded and the clock is only checked
-  // between reads — so a slow source (10s on Chromium CDP, up to 20s for an
-  // Android uiautomator dump) stalls the recorder far past the window the
-  // warning advertises. The probe must be ceilinged, and an overrun reported as
-  // indeterminate rather than as a verdict.
+  // between reads — so a slow source (10s on Chromium CDP, up to the Android
+  // devtools RPC's 15s `getHierarchy` bound) stalls the recorder far past the
+  // window the warning advertises. The probe must be ceilinged, and an overrun
+  // reported as indeterminate rather than as a verdict.
   it("gives up on a tree read that outruns the probe budget, and stops it", async () => {
     // A read the test holds open past the ceiling and then releases — the shape
     // that exposes what "giving up" has to mean. A read that NEVER settles
@@ -946,10 +946,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).toContain("did not answer within");
     // Never a verdict: nothing was compared, so the conversion is UNKNOWN.
     expect(warning).not.toContain("does NOT hold");
-    // The ceiling is 4s; anything near a full Chromium (10s) or uiautomator
-    // (20s) read means the bound is not holding. The timeout below is the only
-    // generous one in the file, and only because this test waits out that
-    // ceiling on purpose.
+    // The ceiling is 4s; anything near a full Chromium (10s) or Android
+    // devtools (15s) read means the bound is not holding. The timeout below is
+    // the only generous one in the file, and only because this test waits out
+    // that ceiling on purpose.
     expect(elapsed).toBeLessThan(6000);
     expect(await recordedSteps("slow")).toHaveLength(1);
     expect(fetchCount).toBe(1);
