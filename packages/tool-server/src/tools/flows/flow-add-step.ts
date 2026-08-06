@@ -146,6 +146,12 @@ function runnerSideReadClause(udid: unknown): string {
       "clickable/focused element), or keep it raw"
     );
   }
+  if (platform === "vega") {
+    return (
+      "`describe` lists the same elements the runner resolves against — only a container's text " +
+      "differs, so check a leaf's own text, or switch an `equals` to `contains`"
+    );
+  }
   return `${treeReaderFor(udid)} reads the runner's side`;
 }
 
@@ -172,6 +178,17 @@ function treeDivergenceFor(udid: unknown): string {
     return (
       "The recorder reads the trimmed accessibility tree and the runner reads the full " +
       "hierarchy including not-important views; each holds elements the other drops."
+    );
+  }
+  if (platform === "vega") {
+    // Vega is the one platform where the two trees hold the SAME elements:
+    // `flow-vega-tree` re-shapes the toolkit page source the recorder read
+    // (flatten + hoist) and drops nothing, so claiming "different projections
+    // of the screen" would overstate it. Only the text on a node differs.
+    return (
+      "Both read the same automation-toolkit page source and the flow tree drops nothing from " +
+      "it, so each holds the same elements — but the flow tree hoists a container's descendant " +
+      "text onto it, so a `text` check against a container reads a different string on each side."
     );
   }
   return "The recorder and the runner read different projections of the screen.";

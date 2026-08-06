@@ -107,6 +107,7 @@ async function recordWait(name: string, selectorText: string, udid: string = DEV
 
 const ANDROID = "emulator-5554"; // adb-serial shape → classifies android
 const CHROMIUM = "chromium-cdp-9222"; // chromium-cdp- prefix → classifies chromium
+const VEGA = "amazon-4a27df03c9777152"; // amazon- prefix → classifies vega
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-cross-tree-"));
@@ -304,6 +305,28 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(result.message).not.toContain("reads the runner's side");
     expect(result.message).not.toContain("native-find-views");
     expect(parseFlow(await onDisk("chromium")).steps).toHaveLength(1);
+  }, 20_000);
+
+  // Vega is the one platform whose two trees hold the SAME elements:
+  // flow-vega-tree re-shapes the very page source `describe` read (flatten +
+  // text hoist) and drops nothing. So the generic "different projections of the
+  // screen" line overstates it, and `describe` really does list what the runner
+  // resolves against — the divergence is confined to a container's text.
+  it("on Vega, does not claim the two trees are different projections", async () => {
+    runnerTree = () => screen(["Proceed"]);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "vega", project_root: tmpDir, executionPrerequisite: "on the form" }
+    );
+
+    const result = await recordWait("vega", "Continue", VEGA);
+
+    expect(result.message).toContain("does NOT hold against the tree the runner resolves");
+    expect(result.message).toContain("the flow tree drops nothing from it");
+    expect(result.message).toContain("`describe` lists the same elements the runner resolves");
+    expect(result.message).not.toContain("different projections of the screen");
+    expect(result.message).not.toContain("reads the runner's side");
+    expect(parseFlow(await onDisk("vega")).steps).toHaveLength(1);
   }, 20_000);
 
   // A `condition: "text"` wait carries an expectedText (and optional textMatch)
