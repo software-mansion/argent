@@ -9,6 +9,7 @@ import {
   identifierMatches,
   includesCI,
   selectorToFrame,
+  textMatches,
 } from "../src/utils/ui-tree-match";
 import type { DescribeNode } from "../src/tools/describe/contract";
 
@@ -92,15 +93,36 @@ describe("foldText", () => {
   it("keeps COMPATIBILITY variants distinct — the eye can see those", () => {
     // NFKC would fold every one of these onto plain ASCII, which made a
     // blackletter display name compare equal to the account it imitates.
+    // Asserted POSITIVELY as well as negatively: a no-op foldText would satisfy
+    // every `not.toBe` here and pin nothing at all.
+    expect(foldText("𝕴𝖓𝖋𝖊𝖗𝖓𝖆𝖙𝖗𝖎𝖝")).toBe("𝕴𝖓𝖋𝖊𝖗𝖓𝖆𝖙𝖗𝖎𝖝".toLowerCase());
     expect(foldText("𝕴𝖓𝖋𝖊𝖗𝖓𝖆𝖙𝖗𝖎𝖝")).not.toBe(foldText("Infernatrix"));
-    expect(foldText("Ａ")).not.toBe(foldText("A")); // fullwidth
-    expect(foldText("ﬁle")).not.toBe(foldText("file")); // ligature
-    expect(foldText("x²")).not.toBe(foldText("x2")); // superscript
+    expect(foldText("Ａ")).toBe("ａ"); // fullwidth survives, lowercased
+    expect(foldText("Ａ")).not.toBe(foldText("A"));
+    expect(foldText("ﬁle")).toBe("ﬁle"); // ligature survives
+    expect(foldText("ﬁle")).not.toBe(foldText("file"));
+    expect(foldText("x²")).toBe("x²"); // superscript survives
+    expect(foldText("x²")).not.toBe(foldText("x2"));
   });
 
   it("leaves visibly different text different", () => {
+    expect(foldText("Save")).toBe("save");
+    expect(foldText("Saved")).toBe("saved");
     expect(foldText("Save")).not.toBe(foldText("Saved"));
+    expect(foldText("PLN 42.00")).toBe("pln 42.00");
     expect(foldText("PLN 42.00")).not.toBe(foldText("PLN 42.0"));
+  });
+
+  it("keeps folding correctly once the cache has been cleared at its cap", () => {
+    // The cache is a plain size cap: at 4096 entries it is blown away wholesale
+    // and refilled. Nothing observed that the clear leaves results intact.
+    const probe = `Amount, PLN${NBSP}42.00`;
+    const before = foldText(probe);
+    for (let i = 0; i < 4200; i++) foldText(`filler-${i}`);
+    expect(foldText(probe)).toBe(before);
+    expect(equalsCI(probe, "Amount, PLN 42.00")).toBe(true);
+    // And a bidi-sensitive string still takes the conditional path afterwards.
+    expect(equalsCI("5‏-3", "5-3")).toBe(false);
   });
 });
 
@@ -158,6 +180,18 @@ describe("literal comparisons fold both sides", () => {
     });
   });
 
+  it("never folds a `matches` (regex) comparison — a pattern carries its precision", () => {
+    // Only the regex exemption from the NOTES was covered; its exemption from
+    // FOLDING was not, and that is the load-bearing half.
+    expect(textMatches(`PLN${NBSP}42`, "PLN 42", "matches")).toBe(false);
+    expect(textMatches(`PLN${NBSP}42`, "PLN 42", "contains")).toBe(true);
+    expect(textMatches("‪@bsky.app‬", "^@bsky\\.app$", "matches")).toBe(false);
+    expect(textMatches("@bsky.app", "^@bsky\\.app$", "matches")).toBe(true);
+    // Case too: the literal modes fold it, `matches` does not.
+    expect(textMatches("HOME", "^Home$", "matches")).toBe(false);
+    expect(textMatches("HOME", "Home", "equals")).toBe(true);
+  });
+
   it("does NOT fold identifiers — a machine key is not read off a screen", () => {
     // Folding is justified by what the eye cannot distinguish; an identifier is
     // never rendered, so two keys that differ by a character are two keys.
@@ -170,6 +204,19 @@ describe("literal comparisons fold both sides", () => {
     expect(identifierMatches("com.example.app:id/submit", "submit")).toBe(true);
     // Substring capture is still refused.
     expect(identifierMatches("autosave-banner", "save")).toBe(false);
+  });
+
+  it("resolves the `:id/` suffix path exactly, including its refusals", () => {
+    // The unqualified-name branch, which no test reached with anything but a
+    // clean input.
+    expect(identifierMatches("com.example.app:id/save-button", "save-button")).toBe(true);
+    expect(identifierMatches("com.example.app:id/Save-Button", "save-button")).toBe(true);
+    // A partial tail must not satisfy it — `:id/` anchors the whole name.
+    expect(identifierMatches("com.example.app:id/save-button", "button")).toBe(false);
+    // Nor may an invisible in the actual id be folded away to make it fit.
+    expect(identifierMatches(`com.example.app:id/save${ZWSP}-button`, "save-button")).toBe(false);
+    // A bare `:id/` names nothing and must not match every resource-id.
+    expect(identifierMatches("com.example.app:id/save-button", " ")).toBe(false);
   });
 });
 

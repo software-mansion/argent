@@ -958,3 +958,99 @@ describe("a `matches` (regex) miss still explains an invisible it cannot see", (
     expect(result.steps[0].reason).not.toMatch(/U\+/);
   });
 });
+
+describe("evidence and tree-source gaps the widened match set now reaches", () => {
+  it("keeps `hidden` unconfirmable once a FOLD-widened selector has matched", async () => {
+    // Characterisation, not a defect: the blind-read guard treats any empty
+    // tree after a match as untrustworthy, and folding enlarged the set of
+    // labels a selector matches — so labels carrying an invisible now reach a
+    // rule that plain ones always did. Verified identical on the pre-fold base
+    // build with a plain "Sign in" label, so the escalation is the guard's, not
+    // the fold's; this pins the interaction so a future change to either half
+    // has to acknowledge the other.
+    let reads = 0;
+    currentFetch = () => {
+      reads++;
+      return {
+        tree:
+          reads === 1
+            ? screen([
+                n({ label: "Sign​ in", frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 } }),
+              ])
+            : screen([]),
+        source: "native-devtools",
+      };
+    };
+
+    await writeFlow("folded-hidden", {
+      executionPrerequisite: "",
+      steps: [{ kind: "assert", condition: "hidden", selector: { text: "Sign in" } }],
+    });
+
+    const result = await run("folded-hidden");
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/could not confirm/);
+  });
+
+  it("still emits the miss note when the FINAL read went blind", async () => {
+    // lastTree is only updated by a TRUSTED read, so a trailing degraded tree
+    // must not wipe out the evidence the note draws on. The blip has to land
+    // inside the dark-tail tolerance (2 poll intervals), or the verdict goes
+    // indeterminate and there is no reason left to annotate — so go blind only
+    // in the window's last stretch, keyed on elapsed time rather than a count.
+    const started = Date.now();
+    currentFetch = () => {
+      if (Date.now() - started < 850) {
+        return {
+          tree: screen([
+            n({
+              label: "Add more languages…",
+              frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.05 },
+            }),
+          ]),
+          source: "native-devtools",
+        };
+      }
+      // Empty AND flagged degraded — a blind read, whatever everMatched says.
+      return { tree: screen([]), source: "native-devtools", hint: "AX is warming up" };
+    };
+
+    await writeFlow("blind-tail-note", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "assert", condition: "visible", selector: { text: "Add more languages..." } },
+      ],
+    });
+
+    const result = await run("blind-tail-note");
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/typographic variant/);
+    expect(result.steps[0].reason).toMatch(/Add more languages…/);
+  });
+
+  it("finds the near-match on a node's VALUE, not only its label", async () => {
+    currentFetch = () => ({
+      tree: screen([
+        n({
+          role: "AXStaticText",
+          value: "Add more languages…",
+          frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.05 },
+        }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("value-near-match", {
+      executionPrerequisite: "",
+      steps: [{ kind: "assert", condition: "exists", selector: { text: "Add more languages..." } }],
+    });
+
+    const result = await run("value-near-match");
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/typographic variant/);
+    expect(result.steps[0].reason).toMatch(/does show "Add more languages…"/);
+  });
+});
