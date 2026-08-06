@@ -79,8 +79,12 @@ const MOTION_FRACTION = 0.002;
 // capture and a full-resolution desktop one.
 //
 // The floor is not zero because a capture pair is not guaranteed byte-identical
-// on every backend; it is two orders of magnitude below the smallest spinner
-// and one below a caret, which is the widest margin that still sees them.
+// on every backend. Measured at CAPTURE_SCALE: two captures of a static iOS
+// screen changed 0 pixels of 237k, while a live spinner on an iPhone 16 Pro
+// changed 50 of 198k and a blinking caret on a Pixel 7 changed 50 of 162k. A
+// floor of ~10 pixels on a phone-sized frame therefore sits well clear of both
+// ends. An indicator smaller than that stays invisible, which is the residual
+// limit of comparing whole frames.
 const LOCALIZED_MOTION_FRACTION = 0.00005;
 
 // `httpScreenshot` may spend its full first-frame wait before it even returns
