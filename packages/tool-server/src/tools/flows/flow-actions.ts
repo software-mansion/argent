@@ -1146,17 +1146,23 @@ async function waitForCondition(
  * "no element matched", which points at nothing. Naming the character on
  * screen turns an unexplainable miss into a one-line fix.
  *
- * Only ever a note about a MISS. Two conditions are therefore exempt, or the
+ * Only ever a note about a MISS. Three cases are therefore exempt, or the
  * advice — "copy the characters the app actually renders" — reads backwards:
  *
  * - `hidden` fails because an element the selector found is STILL on screen.
  *   Copying the rendered characters would make the selector match more, not
  *   fewer; the author wants it gone, not equated.
+ * - `visible` WITH matches failed on zero-area frames, not on a miss: the
+ *   locator worked, and assertReason says exactly that. Advising a rewrite of
+ *   the text blames the wrong thing — and the whole-tree walk will happily
+ *   find a look-alike elsewhere to blame it on. (Reachable on Vega, whose flow
+ *   adapter keeps zero-area nodes; the other platforms prune them.)
  * - `matches` compares a regular expression, not literal text, so `wanted`
  *   would be the pattern. Folding a pattern's code points against a rendered
  *   label describes a mismatch that has nothing to do with the pattern that
  *   failed — the same exemption {@link confusableTextNote} draws, for the same
- *   reason.
+ *   reason. (An invisible in the text it was tested against still gets named;
+ *   see {@link ignorableTextNote}.)
  *
  * And it is scoped by what actually missed. For `exists`/`visible` nothing
  * matched, so the selector's own text is a needle that found nothing and
@@ -1176,6 +1182,8 @@ function compatibilityMissNote(
   matches: ReturnType<typeof findAll>
 ): string {
   if (condition === "hidden" || (condition === "text" && textMatch === "matches")) return "";
+  // `visible` with matches is a visibility failure, not a locator miss.
+  if (condition === "visible" && matches.length > 0) return "";
   let hit: string | undefined;
   if (condition === "text") {
     // The element WAS located; what missed is the expectation, not the locator.

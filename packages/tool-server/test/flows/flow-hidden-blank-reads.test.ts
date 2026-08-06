@@ -665,3 +665,34 @@ describe("text/equals failure notes are wired through the runner and scoped to t
     expect(result.steps[0].reason).toMatch(/Add more languages…/);
   });
 });
+
+describe("compatibility miss note: what it is scoped to", () => {
+  it("stays quiet when `visible` failed on zero-area matches, not on a miss", async () => {
+    // The locator WORKED — assertReason says so ("none was visible"). Appending
+    // "copy the characters the app actually renders" then blames the wrong
+    // thing entirely. Reachable on Vega, whose flow adapter keeps zero-area
+    // nodes; iOS/Android/Chromium prune them.
+    currentFetch = () => ({
+      tree: screen([
+        // The match itself, zero-area.
+        n({ label: "Add more languages...", frame: { x: 0.1, y: 0.1, width: 0, height: 0 } }),
+        // A look-alike elsewhere that the whole-tree walk would seize on.
+        n({ label: "Add more languages…", frame: { x: 0.1, y: 0.3, width: 0.8, height: 0.05 } }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("zero-area-visible", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "assert", condition: "visible", selector: { text: "Add more languages..." } },
+      ],
+    });
+
+    const result = await run("zero-area-visible");
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/none was visible/);
+    expect(result.steps[0].reason).not.toMatch(/typographic variant/);
+  });
+});
