@@ -118,6 +118,11 @@ describe("flag-parser array + -json interleave never throws a raw error", () => 
 // registry advertises for the real tool (zodObjectToJsonSchema over
 // packages/tool-server/src/tools/flows/flow-add-step.ts): recordings are keyed by
 // `name` + `project_root`, so both are required alongside `command`.
+//
+// This fixture is hand-copied: `@argent/cli` does not depend on the tool-server,
+// so it cannot derive the schema. The guard that catches drift lives where the
+// schema does — `flow-tools.test.ts`'s "the flow-add-step schema the CLI tests
+// hand-copy". If that fails, this fixture is what it is telling you to update.
 const flowAddStepSchema: JsonSchema = {
   type: "object",
   properties: {

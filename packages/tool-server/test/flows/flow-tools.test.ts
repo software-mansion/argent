@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Registry, ToolContext } from "@argent/registry";
-import { ArtifactStore } from "@argent/registry";
+import { ArtifactStore, zodObjectToJsonSchema } from "@argent/registry";
 
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
@@ -2464,5 +2464,39 @@ describe("flow-read-prerequisite", () => {
         { name: "gate", project_root: tmpDir, flow_path: path.join(tmpDir, "gate.yaml") }
       )
     ).rejects.toThrow("exactly one flow source");
+  });
+});
+
+describe("the flow-add-step schema the CLI tests hand-copy", () => {
+  // Three CLI test files encode this schema as a fixture — `run-help.test.ts`,
+  // `flag-parser.test.ts` and `run-flow-add-step-payload.test.ts` — because
+  // `@argent/cli` does not depend on the tool-server and so cannot derive it.
+  // That makes drift silent in the direction that matters: relaxing the real
+  // schema here (making `project_root` optional, renaming `args`) leaves all
+  // three green while the CLI's `--args` handling and help output are decided
+  // by a schema nothing resembles any more.
+  //
+  // So the guard lives on this side, where the schema is. If this fails,
+  // update those three fixtures in the same change.
+  const CLI_FIXTURE_PROPERTIES = ["name", "project_root", "command", "args", "delayMs"];
+  const CLI_FIXTURE_REQUIRED = ["name", "project_root", "command"];
+
+  it("still declares exactly the properties and required keys those fixtures encode", () => {
+    const schema = zodObjectToJsonSchema(
+      createFlowAddStepTool({} as unknown as Registry).zodSchema!
+    ) as { properties: Record<string, unknown>; required?: string[] };
+
+    expect(Object.keys(schema.properties).sort()).toEqual([...CLI_FIXTURE_PROPERTIES].sort());
+    expect([...(schema.required ?? [])].sort()).toEqual([...CLI_FIXTURE_REQUIRED].sort());
+    // `parseFlags` branches on this one specifically: a tool that declares its
+    // own `args` must not also advertise the whole-payload `--args <json>`
+    // escape hatch.
+    expect(schema.properties["args"]).toMatchObject({ type: "string" });
+  });
+
+  it("still opens its description with the sentence those fixtures quote verbatim", () => {
+    expect(createFlowAddStepTool({} as unknown as Registry).description).toContain(
+      "Execute a tool call and record it as a step in the flow named by `name` + `project_root`"
+    );
   });
 });

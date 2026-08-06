@@ -50,6 +50,12 @@ function startServer(cap: Captured): Promise<{ url: string; close: () => Promise
               // covered by run-help.test.ts). The array is kept faithful so the
               // fixture stays readable as the real schema, not because dropping
               // an entry would fail here.
+              //
+              // Hand-copied because `@argent/cli` does not depend on the
+              // tool-server. The guard that catches drift lives where the schema
+              // does — flow-tools.test.ts's "the flow-add-step schema the CLI
+              // tests hand-copy"; if that fails, this is one of the fixtures it
+              // is telling you to update.
               inputSchema: {
                 type: "object",
                 properties: {

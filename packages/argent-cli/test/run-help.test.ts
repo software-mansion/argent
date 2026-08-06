@@ -35,6 +35,11 @@ vi.mock("@argent/telemetry", () => telemetryMock);
 // The drift that does pass silently is the opposite one: if the real
 // flow-add-step schema ever relaxes, nothing here notices this fixture went
 // stale.
+//
+// This fixture is hand-copied: `@argent/cli` does not depend on the tool-server,
+// so it cannot derive the schema. The guard that catches drift lives where the
+// schema does — `flow-tools.test.ts`'s "the flow-add-step schema the CLI tests
+// hand-copy". If that fails, this fixture is what it is telling you to update.
 const flowAddStepMeta = {
   name: "flow-add-step",
   // Leading sentence of the real tool description, verbatim.
