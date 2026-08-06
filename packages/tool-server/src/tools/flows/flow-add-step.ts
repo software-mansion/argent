@@ -116,6 +116,16 @@ const UNSUPPORTED_PLATFORM = {
  *
  * Naming any of those three would point the author at the wrong tree under the
  * banner of the runner's — the exact steer this warning exists to prevent.
+ *
+ * On iOS and Android the remedy is to fix the CONVERSION, never to re-record.
+ * "Re-record with a selector a testID'd view carries" contradicts the workflow
+ * the create-flow skill prescribes and this divergence usually comes out of: a
+ * testID the trimmed tree hides can't be waited on live, so you gate on visible
+ * text to get the step recorded and retarget the id at polish. Sending the
+ * author back to the recorder asks for the very step the skill just explained
+ * cannot be recorded, and lands them on the unmet-wait warning instead. The
+ * full hierarchy has complete testID/resource-id coverage, so retargeting the
+ * directive is both the fix and the thing that finishes that workflow.
  */
 function runnerSideReadClause(udid: unknown): string {
   const platform = platformOf(udid);
@@ -125,14 +135,16 @@ function runnerSideReadClause(udid: unknown): string {
       "`native-full-hierarchy` return the RAW view tree, matching `identifier`/`label`/" +
       "`className` exactly (neither takes a substring `text` or a `role`) and keeping the " +
       "hidden, transparent, scroll-clipped and unlabelled container views the runner drops — " +
-      "so re-record with a selector a testID'd or labelled view carries, or keep it raw"
+      "so retarget the DIRECTIVE at an `id` the full hierarchy carries and prove it with " +
+      "`flow-execute`, or keep the step raw"
     );
   }
   if (platform === "android") {
     return (
       "No read-only tool exposes the runner's full hierarchy on Android — `describe` returns the " +
-      "trimmed tree the recorder read, not the runner's — so re-record with a selector an " +
-      "interactable carries, or keep it raw"
+      "trimmed tree the recorder read, not the runner's — so retarget the DIRECTIVE at a " +
+      "`resource-id` the full hierarchy carries and prove it with `flow-execute`, or keep the " +
+      "step raw"
     );
   }
   if (platform === "chromium") {

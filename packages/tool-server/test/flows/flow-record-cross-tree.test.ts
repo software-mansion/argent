@@ -538,6 +538,13 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     // very alpha-0 view — and match identifier/label/className exactly, while a
     // recorded selector's `text`/`role` are substrings.
     expect(warning).toContain("No read-only tool reports the runner's projection on iOS");
+    // Nor may it answer "re-record". The skill's own workflow for a testID the
+    // trimmed tree hides is to gate on visible text and retarget the id at
+    // polish — which is what PRODUCES this divergence — so sending the author
+    // back to the recorder asks for the step the skill just said cannot be
+    // recorded live, and lands them on the unmet-wait warning instead.
+    expect(warning).not.toContain("re-record");
+    expect(warning).toContain("retarget the DIRECTIVE at an `id` the full hierarchy carries");
     expect(await recordedSteps("ios")).toHaveLength(1);
   });
 
@@ -739,7 +746,8 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).toContain("`describe` reads the same source the runner does");
     expect(warning).not.toContain("different projections of the screen");
     // The other three platforms' imperative. Here the selector is fine and the
-    // screen is what moved, so nothing may send the author to re-record it.
+    // screen is what moved, so nothing may send the author to rewrite it.
+    expect(warning).not.toContain("retarget the DIRECTIVE");
     expect(warning).not.toContain("re-record with a selector");
     expect(warning).toContain("re-run the wait");
     expect(await recordedSteps("vega")).toHaveLength(1);
