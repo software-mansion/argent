@@ -733,6 +733,12 @@ function noChromiumAppReason(device: DeviceInfo): string {
 interface ExecState extends Omit<ActionEnv, "device"> {
   device: DeviceInfo | null;
   /**
+   * Whether {@link device} is the one the CALLER named, rather than one
+   * auto-detected from what happens to be booted. Only a named device may
+   * override a scope a recording already carries — see {@link bindDeviceArgs}.
+   */
+  deviceIsExplicit: boolean;
+  /**
    * The ROOT flow file's canonical (realpath'd) directory — the anchor for
    * snapshot baselines and a chromium launch's relative app path, so a
    * symlinked root flow anchors beside its real file. `run:` targets instead
@@ -1057,6 +1063,7 @@ returns a notice with the prerequisite instead of running.`,
         registry,
         ctx,
         device,
+        deviceIsExplicit: Boolean(params.device),
         signal,
         flowsDir,
         viaUpload,
@@ -2138,8 +2145,16 @@ async function execLeafStep(
       // unreachable for those and must stay unreachable: injecting the empty
       // string would not fail the step, it would silently retarget it at no
       // device. A SCOPE key (`devices`) does reach here device-free, which is
-      // the cleanup-flow case `bindDeviceArgs` guards by leaving it unset.
-      const args = bindDeviceArgs(registry, step.name, device?.id ?? "", step.args);
+      // the cleanup-flow case `bindDeviceArgs` guards by keeping whatever the
+      // recording scoped — and, when the run device was only auto-detected, it
+      // keeps that even with a device resolved.
+      const args = bindDeviceArgs(
+        registry,
+        step.name,
+        device?.id ?? "",
+        step.args,
+        state.deviceIsExplicit
+      );
       const outputHint = registry.getTool(step.name)?.outputHint;
       if (step.delayMs && !(await sleepOrAbort(step.delayMs, signal))) {
         return { ...base, status: "skip", tool: step.name, reason: "run aborted during delay" };

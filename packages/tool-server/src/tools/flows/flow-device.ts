@@ -41,18 +41,13 @@ const DEVICE_BIND_KEYS = ["udid", "device_id", "device"] as const;
  * run and a flow that named several would be naming the recording host's.
  *
  * `stop-all-simulator-servers`' `devices` is the only such key. It is a scope
- * rather than a target, but the failure is the same one: kept verbatim, a
- * recorded teardown names the machine it was recorded on, so on any other host
- * it reaps nothing and passes — a stale baked-in id overriding the run target,
- * which is exactly what this binding exists to prevent. The scoped form is what
- * the tool description, the MCP instructions and the skills all now tell agents
- * to call, so it is the form that gets recorded.
- *
- * Binding is unconditional once the tool declares the key, so a recording of
- * the UNSCOPED sweep replays as a stop of the run device. That direction is
- * deliberate: the replayed artifact must not tear down devices another agent is
- * mid-session on, which is the hazard the `devices` scope was added for, and a
- * flow has exactly one resolved device to be talking about.
+ * rather than a target, and that difference decides when it is rebound. A
+ * recording of the UNSCOPED sweep always replays as a stop of the run device:
+ * the replayed artifact must not tear down devices another agent is mid-session
+ * on, which is the hazard the `devices` scope was added for, and binding can
+ * only narrow there. A recorded scope, on the other hand, is the flow's own
+ * statement of what to reap, and is overridden only by an explicit `device` —
+ * see {@link bindDeviceArgs}, which is where the two cases part.
  */
 const DEVICE_BIND_LIST_KEYS = ["devices"] as const;
 
@@ -184,12 +179,15 @@ export function stripDeviceKeys(args: Record<string, unknown>): Record<string, u
 
 /**
  * Bind the resolved device id into a tool's args. The runner is **authoritative**
- * on device: any device id stored in the step is dropped and replaced with the
- * resolved one — so a flow recorded on one device stays portable to another and
- * a stale baked-in udid can't override the run target. The id is injected only
- * for the device-id keys the tool's input schema declares (so `.strict()`
- * schemas stay valid), as a bare id or as a one-element list depending on which
- * set the key is in.
+ * on the device to act ON: any device id stored in the step is dropped and
+ * replaced with the resolved one — so a flow recorded on one device stays
+ * portable to another and a stale baked-in udid can't override the run target.
+ * The id is injected only for the device-id keys the tool's input schema
+ * declares (so `.strict()` schemas stay valid), as a bare id or as a one-element
+ * list depending on which set the key is in.
+ *
+ * It is NOT authoritative on a device SCOPE it did not resolve from the caller;
+ * `deviceIsExplicit` is what tells the two apart. See the loop below.
  *
  * This covers a nested `tool: flow-execute` step too — its own `device` arg is
  * rebound, so a composed run inherits the run device rather than driving the one
@@ -281,7 +279,8 @@ export function bindDeviceArgs(
   registry: Registry,
   toolName: string,
   deviceId: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  deviceIsExplicit = false
 ): Record<string, unknown> {
   const toolDef = registry.getTool(toolName);
   const props = (toolDef?.inputSchema as { properties?: Record<string, unknown> } | undefined)
@@ -290,15 +289,30 @@ export function bindDeviceArgs(
   for (const k of DEVICE_BIND_LIST_KEYS) {
     // Never forward a scope to a tool that does not declare it — a `.strict()`
     // schema would reject the whole call.
-    if (!props || !(k in props)) delete out[k];
-    // The run device wins over anything recorded, so a flow recorded against
-    // one device stays portable. With NO run device (a cleanup flow, see
-    // {@link DEVICE_ARG_KEYS}) the recorded scope is kept rather than dropped:
-    // there is no run target for it to override, and dropping it would widen a
-    // teardown the recording scoped — the one direction that costs another
-    // agent their devices. `[""]` is never bound: an id that owns nothing reaps
-    // nothing and still reports pass.
-    else if (deviceId) out[k] = [deviceId];
+    if (!props || !(k in props)) {
+      delete out[k];
+      continue;
+    }
+    // `[""]` is never bound: an id that owns nothing reaps nothing and still
+    // reports pass.
+    if (!deviceId) continue;
+    // With NO recorded scope the run device NARROWS what the step would
+    // otherwise do — an unscoped `stop-all-simulator-servers` is the
+    // machine-wide sweep — so bind it whatever resolved it. Strictly the safe
+    // direction, and the reason a device is resolved for a cleanup flow at all.
+    if (out[k] === undefined) {
+      out[k] = [deviceId];
+      continue;
+    }
+    // With one recorded, OVERRIDING it is destructive rather than portable: a
+    // flow that named device A would tear down whichever device happened to
+    // resolve, which is precisely the cross-agent teardown the `devices` scope
+    // was added to prevent. Only an explicit `device` overrides — there the
+    // caller named the run target itself, so retargeting the teardown at it is
+    // what they asked for. An auto-resolved device names nobody's intent, so
+    // the recorded ids stand: on another host they reap nothing and come back
+    // in `unmatched`, which is the safe direction and a legible one.
+    if (deviceIsExplicit) out[k] = [deviceId];
   }
   if (props) for (const k of DEVICE_BIND_KEYS) if (k in props) out[k] = deviceId;
   return out;
