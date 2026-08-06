@@ -190,11 +190,13 @@ export interface StepReport {
   reason?: string;
   /**
    * The step passed, but the WAY it passed weakens it as proof. Rendered as a
-   * "⚠" suffix by the MCP client. Raised by `await: { idle: true }`, either
-   * because the screen never settled at all — it waits, then goes ahead — or
-   * because its captures never produced a comparable pair, leaving stillness
-   * proved on the UI tree alone without the presentation-layer motion the
-   * pixel half exists to catch.
+   * "⚠" suffix by the MCP client. Raised by `await: { idle: true }`: the screen
+   * never settled at all (it waits, then goes ahead); something small on it
+   * never stopped, which is what a spinner looks like; it rendered no content
+   * to settle; the step ran out of reads before it could judge anything; or its
+   * captures never produced a comparable pair, leaving stillness proved on the
+   * UI tree alone without the presentation-layer motion the pixel half exists
+   * to catch.
    */
   warning?: string;
   /** Underlying tool id for `tool` steps. */
@@ -925,10 +927,10 @@ reads "inside card inside list", each container's frame inside the next);
 two-finger rotation gesture (\`rotate: { on?, by }\` — degrees, + clockwise, within ±3000°; screen center
 when \`on\` is omitted; distinct from the \`rotate\` tool, which changes device orientation); \`await\` waits
 for a UI condition, and additionally takes the one condition that has no selector: \`idle: true\` waits
-until the screen has content and stops moving in BOTH the UI tree and the rendered pixels (unlike the
-\`await-screen-idle\` tool it FAILS on timeout, so it is safe to persist; it says nothing about WHICH
-screen settled — a dropped tap leaves the source screen perfectly idle — so pair it with the element
-check that names the destination); \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
+until the screen has content and stops moving in BOTH the UI tree and the rendered pixels (it never
+fails a run — a screen that never settles passes carrying a \`warning\`, which is what makes it safe to
+persist; it says nothing about WHICH screen settled — a dropped tap leaves the source screen perfectly
+idle — so pair it with the element check that names the destination); \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
 diffs a screenshot — or, with \`cropOn: <selector>\`, one element's cropped region — against a stored
 baseline (a missing baseline fails the step — set updateBaselines to adopt the current screen; a
 cropped element whose size drifted fails on dimensions); \`echo\` annotates; \`run\` executes another flow
@@ -2128,9 +2130,10 @@ async function execLeafStep(
         // and `wait`), never a step failure — the app did nothing wrong.
         if (r.aborted) return { ...base, status: "skip", reason: r.reason };
         // `indeterminate` is `idle`'s only non-passing outcome: a screen that
-        // merely kept moving passes with a warning, so what is left here is a
-        // wait that could not run at all (an unreadable or degraded tree, a
-        // screen nobody managed to observe). Scoring that `fail` would make CI
+        // merely kept moving passes with a warning, and so does one that
+        // rendered nothing, so what is left here is a wait that could not run
+        // at all — a tree source that failed, or one that answered and then
+        // wedged. Scoring that `fail` would make CI
         // read an environment problem as a regression and a QA author reset a
         // pass streak over it. `error` keeps the run non-ok while saying
         // plainly that the app was never judged. Scoped to `idle`, whose whole
