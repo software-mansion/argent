@@ -355,7 +355,11 @@ describe("two recording keys that resolve to one file", () => {
     // B's take.
     const err = await captureFailure(addEcho(rootA, "checkout", "h1-d"));
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_NO_ACTIVE_RECORDING);
-    expect(formatErrorForAgent(err)).toContain("no longer active");
+    // The guard cannot tell this from the same caller respelling its own root,
+    // so it names the take that holds the key and offers both readings rather
+    // than asserting the destructive one. Here the destructive one is true.
+    expect(formatErrorForAgent(err)).toContain("not registered under that spelling");
+    expect(formatErrorForAgent(err)).toContain("truncated yours");
 
     await addEcho(rootB, "checkout", "h2-a");
     // A's finish reports the same loss, rather than handing back B's take as
@@ -407,6 +411,33 @@ describe("two recording keys that resolve to one file", () => {
 
     const err = await captureFailure(addEcho(root, "Login", "l3"));
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_NO_ACTIVE_RECORDING);
+  });
+
+  it("does not accuse a caller that respelled its own root of destroying a take", async () => {
+    // The other half of the guard's ambiguity, and the common one on macOS:
+    // `/tmp` is a symlink, so any code path that realpaths a root produces the
+    // second spelling. Nothing was truncated, there is no other caller, and the
+    // take is live and intact — so the message must say how to resume it rather
+    // than sending the agent to re-walk the whole flow on the device.
+    const root = await makeRoot("respelled-root");
+    const realRoot = await fs.realpath(root);
+    if (realRoot === root) return; // no symlinked ancestor on this host
+
+    await start(root, "checkout");
+    await addEcho(root, "checkout", "c1");
+
+    const err = await captureFailure(addEcho(realRoot, "checkout", "c2"));
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_NO_ACTIVE_RECORDING);
+    const message = formatErrorForAgent(err);
+    expect(message).toContain("re-address it exactly as you passed it to flow-start-recording");
+    expect(message).toContain("the take is intact and still recording");
+    // The claim that made this a false alarm.
+    expect(message).not.toMatch(/truncated this one/);
+    expect(message).toContain(root);
+
+    // And the take really is resumable under its registered spelling.
+    await addEcho(root, "checkout", "c3");
+    expect(await readMarkers(root, "checkout")).toEqual(["echo:c1", "echo:c3"]);
   });
 
   it("keeps two genuinely distinct flows independent", async () => {

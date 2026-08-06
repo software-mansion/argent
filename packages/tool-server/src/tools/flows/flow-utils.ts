@@ -494,24 +494,36 @@ export async function requireRecordingSession(
     );
   }
   // The key is the file's identity, so a session found under it may have been
-  // registered by a caller who spells that one file differently — a symlink
-  // into a shared vault, a symlinked `.argent/flows`, a name cased two ways on
-  // APFS. Handing it over would silently enrol this caller in the OTHER take:
-  // its steps would land in a file it never addressed, under a prerequisite it
-  // never declared, and its finish would report the other agent's steps as its
-  // own. That collision is what the restart already destroyed this caller's
-  // take for, so report it as the loss it is rather than papering over it. A
-  // root spelled with a trailing slash is not one of these — `getFlowPath`
-  // normalizes both sides before they are compared.
+  // registered under a DIFFERENT spelling of that one file — a symlink into a
+  // shared vault, a symlinked `.argent/flows`, a root spelled `/tmp` vs
+  // `/private/tmp`, a name cased two ways on APFS. Handing it over would risk
+  // silently enrolling this caller in someone else's take: its steps would land
+  // in a file it never addressed, under a prerequisite it never declared, and
+  // its finish would report the other agent's steps as its own. A root spelled
+  // with a trailing slash is not one of these — `getFlowPath` normalizes both
+  // sides before they are compared.
+  //
+  // Which of two situations this is cannot be told apart from here, so the
+  // message must assert neither. It is EITHER the same caller respelling its
+  // own root or name — nothing was truncated, the take is live and intact, and
+  // re-addressing it under the registered spelling resumes it — OR another
+  // caller's restart, which did truncate. Naming the second as fact sent a
+  // caller in the first situation to abandon a healthy recording and re-walk
+  // the whole flow on the device. The advice that recovers both is the same:
+  // use the spelling the session is registered under, which is the one
+  // `flow-start-recording` was given.
   const asked = getFlowPath(projectRoot, name);
   const held = getFlowPath(session.projectRoot, session.name);
   if (asked !== held) {
     throw new FailureError(
-      `Recording of "${name}" in ${projectRoot} is no longer active — ${held} and ${asked} ` +
-        `are the same file on this filesystem (a symlink, or a case-insensitive volume), and ` +
-        `"${session.name}" in ${session.projectRoot} is the take that now holds it. Starting ` +
-        `that recording truncated this one. Record under a name that resolves to its own file, ` +
-        `or coordinate with the other caller — restarting here would destroy their take in turn.`,
+      `Recording of "${name}" in ${projectRoot} is not registered under that spelling — ${held} ` +
+        `and ${asked} are the same file on this filesystem (a symlink, or a case-insensitive ` +
+        `volume), and the live take on it is registered as "${session.name}" in ` +
+        `${session.projectRoot}. If that is your own recording spelled another way, re-address ` +
+        `it exactly as you passed it to flow-start-recording — the take is intact and still ` +
+        `recording. If it is another caller's, their flow-start-recording truncated yours; ` +
+        `record under a name that resolves to its own file rather than restarting here, which ` +
+        `would destroy their take in turn.`,
       {
         error_code: FAILURE_CODES.FLOW_NO_ACTIVE_RECORDING,
         failure_stage: "flow_recording_key_aliased",
