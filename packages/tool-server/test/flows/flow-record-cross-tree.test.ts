@@ -541,6 +541,25 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(await recordedSteps("ios")).toHaveLength(1);
   });
 
+  // What the longer `await:` timeout would be waiting FOR is per condition, and
+  // on `hidden` it is the opposite event: the wait passes when the element
+  // LEAVES. Saying "unless the element reaches that tree" there describes the
+  // one outcome that would keep it failing.
+  it("does not tell a `hidden` wait to wait for the element to arrive", async () => {
+    serveTree(iosRunnerTree([iosLabel("Spinner")]));
+    await startRecording("hiddenaway");
+
+    const result = await recordWait("hiddenaway", {
+      condition: "hidden",
+      selector: { text: "Spinner" },
+    });
+    const warning = warningOf(result, "hiddenaway") ?? "";
+
+    expect(warning).toContain("does NOT hold against the tree the runner resolves");
+    expect(warning).toContain("unless the element LEAVES that tree within its longer timeout");
+    expect(warning).not.toContain("the element reaches that tree");
+  });
+
   // Android: `projectAndroidNode` skips system chrome with its whole subtree,
   // so a label served by the system UI package never reaches the runner.
   it("Android: warns when the runner's projection drops system chrome", async () => {

@@ -251,6 +251,19 @@ function treeDivergenceFor(udid: unknown): string {
 }
 
 /**
+ * What an `await:` would still be waiting FOR, which is not the same event per
+ * condition. "unless the element reaches that tree" is right for
+ * `visible`/`exists` and backwards for `hidden`, where the wait passes when the
+ * element LEAVES — so on the one condition whose whole point is absence, the
+ * longer-timeout escape hatch was described as its own opposite.
+ */
+function awaitStillNeeds(condition: WaitCondition): string {
+  if (condition === "hidden") return "the element LEAVES that tree";
+  if (condition === "text") return "that element's text comes to match on that tree";
+  return "the element reaches that tree";
+}
+
+/**
  * Which SPELLING of the conversion the verdict is about.
  *
  * The probe re-evaluates `args.selector` exactly as the recorded step carries
@@ -456,12 +469,12 @@ async function probeAgainstRunnerTree(
       `directives against (${cappedReason(outcome.reason ?? "no match")}). As the raw ` +
       `\`tool: ${AWAIT_UI_ELEMENT_TOOL_ID}\` step it replays fine — it reads the same tree it ` +
       `just passed against — but an \`assert:\` conversion WILL fail (it reads that tree on ` +
-      `the same short grace this probe just used), and an \`await:\` will too unless the ` +
+      `the same short grace this probe just used), and an \`await:\` will too unless ` +
       // The remedy belongs to the platform clause, not here: "re-record with a
       // selector present in both trees" is right on iOS/Android/Chromium and
       // plainly wrong on Vega, where the two trees hold the same elements and a
       // disagreement means the screen moved, not that the selector is bad.
-      `element reaches that tree within its longer timeout. ` +
+      `${awaitStillNeeds(condition as WaitCondition)} within its longer timeout. ` +
       SPELLING_CLAUSE +
       " " +
       `${treeDivergenceFor(args.udid)} ${runnerSideReadClause(args.udid)}`,
