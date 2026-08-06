@@ -22,9 +22,10 @@ export interface PixelFrame {
 /** What {@link comparePixels} saw between two captures. */
 export type PixelChange = "still" | "localized" | "moving";
 
-// Hard downscale: motion detection only needs to see a large region moving,
-// and a quarter-scale frame decodes ~16x faster. (Chromium without `sharp`
-// ignores the scale and returns full-res — the comparison is scale-agnostic.)
+// Hard downscale: motion detection only needs to see a region of the screen
+// change, and a quarter-scale frame decodes ~16x faster. Every route honours
+// it, including Chromium — which reaches the scale a different way, see
+// captureChromiumPng.
 const CAPTURE_SCALE = 0.25;
 
 // Per-pixel RGB tolerance, owned by this comparison and deliberately NOT
@@ -109,21 +110,53 @@ export function pixelCaptureTimeoutMs(device: ActionEnv["device"], firstCapture:
 }
 
 /**
+ * Chromium's downscale, taken from the compositor rather than from `sharp`.
+ *
+ * The `screenshot` tool's Chromium route resizes the captured PNG with
+ * `sharp`, which is an optional dependency nothing in this repo installs — so
+ * asking it for a quarter-scale frame returned a full-resolution one, and a
+ * settle decoded a 2400x2558 PNG into a 23MB buffer twice a second, blocking
+ * the shared tool-server's event loop for ~79ms of every 200ms round.
+ *
+ * `Page.captureScreenshot`'s own `clip.scale` is applied while rasterizing, so
+ * the small frame is the only one that ever exists: no resize step, no
+ * dependency, and nothing to decode but the quarter-scale image. `clip` is
+ * measured in CSS pixels but its scale composes with the page's device scale
+ * factor, so passing CAPTURE_SCALE straight through lands on a quarter of the
+ * frame this route used to return — the same reduction every other route
+ * applies. Measured on a 900x613 viewport at dpr 2: 1800x1226 and ~25ms of
+ * blocking decode per poll became 450x307 and ~3ms.
+ *
+ * The viewport is the cached one rather than a fresh read: refreshing it costs
+ * a `Runtime.evaluate` per poll, and that call fails outright on a renderer
+ * mid-navigation — which is exactly when this check runs. A window resized
+ * mid-step therefore clips against the previous size for the rest of it, and
+ * registers as content change like anything else that moves.
+ */
+async function captureChromiumPng(env: ActionEnv): Promise<Buffer> {
+  const ref = chromiumCdpRef(env.device);
+  const api = (await env.registry.resolveService(ref.urn, ref.options)) as ChromiumCdpApi;
+  const { width, height } = api.getViewport();
+  const shot = (await api.cdp.send("Page.captureScreenshot", {
+    format: "png",
+    captureBeyondViewport: false,
+    clip: { x: 0, y: 0, width, height, scale: CAPTURE_SCALE },
+  })) as { data?: string };
+  if (!shot.data) throw new Error("Page.captureScreenshot returned no data");
+  return Buffer.from(shot.data, "base64");
+}
+
+/**
  * Capture one downscaled screenshot to a temp file, routed exactly as the
- * `screenshot` tool routes it: Chromium over CDP, tvOS and Vega through their
- * own shells (neither has a simulator-server backend), everything else through
- * the simulator-server both iOS and Android share.
+ * `screenshot` tool routes it: tvOS and Vega through their own shells (neither
+ * has a simulator-server backend), everything else through the simulator-server
+ * both iOS and Android share. Chromium does not appear here — it answers with
+ * bytes, never a file (see captureChromiumPng).
  *
  * The `screenshot` tool itself is deliberately not reused: it registers every
  * capture as an artifact, and a settle takes tens of them per step.
  */
 async function captureFile(env: ActionEnv): Promise<string> {
-  if (env.device.platform === "chromium") {
-    const ref = chromiumCdpRef(env.device);
-    const api = (await env.registry.resolveService(ref.urn, ref.options)) as ChromiumCdpApi;
-    const { path } = await api.captureScreenshot({ scale: CAPTURE_SCALE });
-    return path;
-  }
   if (env.device.platform === "vega") {
     return captureVegaScreenshotPng({ scale: CAPTURE_SCALE });
   }
@@ -147,19 +180,29 @@ async function captureFile(env: ActionEnv): Promise<string> {
 }
 
 /**
+ * One capture as PNG bytes. Every route but Chromium's writes a temp file,
+ * which is scratch and never an artifact — it is removed as soon as it has
+ * been read, whether or not the read worked.
+ */
+async function capturePng(env: ActionEnv): Promise<Buffer> {
+  if (env.device.platform === "chromium") return captureChromiumPng(env);
+  const file = await captureFile(env);
+  try {
+    return await fs.readFile(file);
+  } finally {
+    await fs.rm(file, { force: true }).catch(() => {});
+  }
+}
+
+/**
  * One capture as decoded pixels, or `undefined` when the pixels could not be
  * read (any capture or decode failure). Soft by design — the caller treats it
  * as the ABSENCE of visual evidence, never as evidence of stillness.
  */
 async function capturePixels(env: ActionEnv): Promise<PixelFrame | undefined> {
   try {
-    const file = await captureFile(env);
-    try {
-      const png = PNG.sync.read(await fs.readFile(file));
-      return { width: png.width, height: png.height, data: png.data };
-    } finally {
-      await fs.rm(file, { force: true }).catch(() => {});
-    }
+    const png = PNG.sync.read(await capturePng(env));
+    return { width: png.width, height: png.height, data: png.data };
   } catch {
     return undefined;
   }

@@ -278,6 +278,40 @@ describe("capturePixels routing", () => {
     expect(resolveService).not.toHaveBeenCalled();
   });
 
+  // Chromium is the one route that never touches the filesystem, and the one
+  // that cannot use the `screenshot` tool's scaling: that resizes with `sharp`,
+  // an optional dependency nothing here installs, so asking it for a quarter
+  // scale returned a full-resolution PNG and a settle decoded a 23MB buffer
+  // twice a second. The compositor applies `clip.scale` while rasterizing, so
+  // the small frame is the only one that exists.
+  it("captures Chromium through the compositor's own scale, and never via a file", async () => {
+    const png = new PNG({ width: 2, height: 1 });
+    png.data.set([10, 20, 30, 255, 40, 50, 60, 255]);
+    const send = vi.fn(async () => ({ data: PNG.sync.write(png).toString("base64") }));
+    const device: DeviceInfo = { platform: "chromium", kind: "app", id: "chromium-cdp-9222" };
+    const resolveService = vi.fn(async () => ({
+      cdp: { send },
+      getViewport: () => ({ width: 900, height: 700, devicePixelRatio: 2 }),
+      // The route that WOULD go through sharp. Reaching for it is the bug.
+      captureScreenshot: vi.fn(() => {
+        throw new Error("the sharp-backed capture must not be used for a settle");
+      }),
+    }));
+
+    const pixels = await capture(envFor(device, resolveService));
+
+    expect(pixels).toMatchObject({ width: 2, height: 1 });
+    expect(resolveService).toHaveBeenCalledWith(`ChromiumCdp:${device.id}`, { device });
+    // The clip is the viewport in CSS pixels; its scale composes with the
+    // page's device scale factor, so the plain capture scale lands on a quarter
+    // of the frame this route used to return.
+    expect(send).toHaveBeenCalledWith("Page.captureScreenshot", {
+      format: "png",
+      captureBeyondViewport: false,
+      clip: { x: 0, y: 0, width: 900, height: 700, scale: 0.25 },
+    });
+  });
+
   it("leaves Android on the simulator-server route without an iOS runtime probe", async () => {
     const file = await pngAt(tmpDir, "android.png");
     const resolveService = vi.fn(async () => ({
