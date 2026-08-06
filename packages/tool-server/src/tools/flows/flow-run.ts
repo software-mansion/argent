@@ -1166,12 +1166,20 @@ async function resolveRunDevice(
       // a sweep has an answer to, so run it unscoped rather than failing the
       // flow. Swallowed only here: every other caller genuinely needs the
       // device, and the diagnosis in the error is the useful thing there.
+      //
+      // And swallowed only for THAT answer. `resolveFlowDevice` also reaches
+      // `list-devices` through the registry, so a bare catch also absorbed an
+      // adb/simctl failure, a dead sub-tool, an abort — and the teardown step
+      // then ran unscoped and reported pass, which is the machine-wide sweep
+      // this whole path exists to avoid. Anything that is not the ambiguity
+      // rethrows and fails the run.
       try {
         return {
           device: await resolveFlowDevice(registry, ctx, resolveOpts(params)),
           booted: null,
         };
-      } catch {
+      } catch (err) {
+        if (getFailureSignal(err)?.error_code !== FAILURE_CODES.FLOW_DEVICE_RESOLUTION) throw err;
         return { device: null, booted: null };
       }
     }

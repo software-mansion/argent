@@ -400,6 +400,27 @@ describe("a cleanup flow whose only step is stop-all-simulator-servers", () => {
     expect(invokeTool).toHaveBeenCalledWith("stop-all-simulator-servers", {});
   });
 
+  it("fails the run when list-devices itself breaks, rather than sweeping the machine", async () => {
+    // The opportunistic resolve swallows one answer — "nothing booted, or
+    // several" — and used to swallow every other failure with it: an
+    // adb/simctl error, a dead sub-tool, an abort. The teardown then ran
+    // UNSCOPED and reported pass, which is the machine-wide sweep this path
+    // exists to avoid, on a machine whose device list nobody could even read.
+    await writeFlow("teardownonly", teardownOnly);
+    const { registry, invokeTool } = mockRegistry({ booted: [DEVICE] });
+    vi.mocked(registry.invokeTool).mockImplementation(async (id: string) => {
+      if (id === "list-devices") throw new Error("adb: device offline");
+      return { ok: true };
+    });
+
+    await expect(runAuto(registry, "teardownonly")).rejects.toThrow(/adb: device offline/);
+    expect(invokeTool).not.toHaveBeenCalledWith(
+      "stop-all-simulator-servers",
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
   it("still scopes the teardown when the flow ALSO has a device step", async () => {
     // A flow with a real device step resolves one as it always did, and the
     // teardown is scoped to it — the cross-agent protection the scope exists
