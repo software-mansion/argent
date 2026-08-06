@@ -80,7 +80,7 @@ const zodSchema = z
       .enum(["contains", "equals"])
       .optional()
       .describe(
-        "For condition `text`: how expectedText is compared. `contains` (default) is a case-insensitive substring; `equals` is a case-insensitive full-string match."
+        "For condition `text`: how expectedText is compared. Both fold the text first, so a non-breaking space matches a plain one and an LTR bidi wrapper around left-to-right text is ignored. `contains` (default) is a case-insensitive substring, in which a leading or trailing space is significant and constrains the match; `equals` is a case-insensitive full-string match, trimmed at both ends."
       ),
     bundleId: z
       .string()
@@ -287,6 +287,11 @@ Conditions:
 The selector is { text?, identifier?, role? }; every provided field must match. text and role match as
 case-insensitive substrings of the element's label/value and role; identifier matches exactly (case-insensitive),
 also accepting the unqualified Android resource-id name ('submit' matches 'com.example.app:id/submit').
+text and role are compared on FOLDED text, so a non-breaking space matches a plain one and an LTR bidi wrapper
+around left-to-right text is ignored — but characters that change the rendering are not folded (bidi controls
+that reorder, a soft hyphen, emoji ZWJ/variation selectors), and a leading or trailing space is significant.
+identifier is never folded: it is a machine key, so spell it exactly. A field that is only whitespace or
+invisible characters matches nothing.
 It polls the same accessibility / DOM tree as \`describe\`
 (iOS AXRuntime, Android uiautomator, Chromium CDP, Vega automation toolkit) every pollIntervalMs
 (default ${DEFAULT_POLL_INTERVAL_MS}ms) until timeoutMs (default ${DEFAULT_TIMEOUT_MS}ms).

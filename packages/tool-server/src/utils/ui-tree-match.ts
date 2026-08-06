@@ -49,20 +49,22 @@ export const selectorFieldsSchema = z
           "zero-width characters render as nothing) — select by identifier or role instead",
       })
       .optional()
-      .describe("Case-insensitive substring of the element's visible label or value."),
+      .describe(
+        "Case-insensitive substring of the element's visible label or value. Compared on FOLDED text: a non-breaking space matches a plain one, and an LTR bidi wrapper around otherwise left-to-right text is ignored, so you can type what you see. Characters that change the rendering are NOT folded (bidi controls that reorder, a soft hyphen, emoji ZWJ/variation selectors). A leading or trailing space is significant and constrains the match; a value that is only whitespace or invisible characters matches nothing."
+      ),
     identifier: z
       .string()
       .min(1)
       .optional()
       .describe(
-        "The element's identifier (accessibilityIdentifier / resource-id / testid), matched case-insensitively as the exact identifier or the unqualified resource-id name ('submit' matches 'com.example.app:id/submit')."
+        "The element's identifier (accessibilityIdentifier / resource-id / testid), matched case-insensitively as the exact identifier or the unqualified resource-id name ('submit' matches 'com.example.app:id/submit'). Never folded — an identifier is a machine key, not rendered text — so it must be spelled exactly. A value that is only whitespace matches nothing."
       ),
     role: z
       .string()
       .min(1)
       .optional()
       .describe(
-        "Case-insensitive substring of the element's role (e.g. AXButton, button, TextView)."
+        "Case-insensitive substring of the element's role (e.g. AXButton, button, TextView). Folded like `text`; a value that is only whitespace or invisible characters matches nothing."
       ),
   })
   .strict();
@@ -129,8 +131,11 @@ export type Selector = z.infer<typeof selectorSchema> & {
 export type WaitCondition = "exists" | "visible" | "hidden" | "text";
 
 // How a `text` condition compares the located element's text to the expected
-// string: `contains` (default) is a case-insensitive substring; `equals` is a
-// case-insensitive full-string match (so "1" no longer satisfies "10"). Both
+// string. Both literal modes fold first (see foldText): `contains` (default) is
+// a case-insensitive, folded substring — with a leading/trailing space in the
+// expected string kept significant, so it still works as a word boundary —
+// and `equals` is a case-insensitive, folded full-string match, trimmed at both
+// ends (so "1" no longer satisfies "10"). Both
 // are offered so a caller can assert "shows this somewhere" or "shows exactly
 // this" interchangeably. `matches` treats the expected string as a JS regular
 // expression tested unanchored against the text (the `contains` analog —
