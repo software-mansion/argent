@@ -1208,6 +1208,21 @@ const LOCALIZED_MOTION_WARNING =
   `and stillness cannot tell those apart: look at what is moving, and gate the next action on ` +
   `the element the loading produces rather than on this settle.`;
 
+/**
+ * How long a tree read may go unanswered before the SOURCE is what stopped
+ * working, rather than the step running out of time.
+ *
+ * A read is still given the whole remaining budget — a tree read on a busy
+ * screen genuinely takes seconds, and Android's `uiautomator dump` allows
+ * itself twenty — so this is not a bound on the read. It is the size of the
+ * gap that separates the two reasons a read fails to come back: the last read
+ * of a step routinely times out with a couple of hundred milliseconds to its
+ * name, and that is the step ending. One abandoned with seconds of budget in
+ * hand is a source that has wedged, and no verdict about the app may be drawn
+ * from a window nobody could see through.
+ */
+const HUNG_TREE_READ_MS = 2_000;
+
 /** How the last tree read ended. Only `value` licenses a verdict about the app. */
 type TreeReadOutcome = "value" | "error" | "timeout";
 
@@ -1266,6 +1281,7 @@ async function waitForIdle(
   // and every arm of that round sets it.
   let lastRead!: TreeReadOutcome;
   let treeErrorMessage: string | undefined;
+  let treeReadHung = false;
   let sawContent = false;
   let pixelsEverMoved = false;
   let captureFailed = false;
@@ -1300,6 +1316,11 @@ async function waitForIdle(
       // tree state nor stands in for one, so the hold state is left as it was
       // and the bottom decides what, if anything, it means.
       lastRead = "timeout";
+      // ...except for one thing it does say. A read abandoned with seconds of
+      // budget left is a source that has wedged, not a step that ran out of
+      // time, and the difference decides whether the bottom may describe the
+      // app at all.
+      if (roundBudget >= HUNG_TREE_READ_MS) treeReadHung = true;
     } else if (read.type === "error") {
       // A tree-source blip mid-animation is expected; keep polling. Only its
       // presence on the LAST read is reportable.
@@ -1316,6 +1337,8 @@ async function waitForIdle(
       lastRead = "value";
       readsSucceeded += 1;
       treeErrorMessage = undefined;
+      // It answered, so whatever wedged it has cleared.
+      treeReadHung = false;
       const tree = read.value.tree;
       if (tree.children.length === 0) {
         // Blank or still loading — never "settled", and it resets both holds.
@@ -1422,6 +1445,21 @@ async function waitForIdle(
   // this case — it is the step ending, and the evidence below still stands.)
   if (lastRead === "error" && treeErrorMessage !== undefined) {
     return unreadable(treeErrorMessage);
+  }
+  // The same window going dark the other way: the source answered, then stopped
+  // answering with seconds of budget still in hand. A failing read has a
+  // dedicated error above, but a HANGING one used to fall through to the
+  // motion warning and tell the author a frozen screen was a carousel.
+  if (lastRead === "timeout" && treeReadHung) {
+    return {
+      ok: false,
+      indeterminate: true,
+      reason:
+        `the UI tree source answered and then stopped: a read given at least ` +
+        `${HUNG_TREE_READ_MS}ms never came back, so the screen could not be observed for the ` +
+        `rest of the wait — check the app is still in the foreground and responding (a wedged ` +
+        `app reads the same as a backgrounded one)`,
+    };
   }
   // Readable throughout and never once carrying content: the screen rendered
   // nothing, which is not the same claim as "it never stopped moving".

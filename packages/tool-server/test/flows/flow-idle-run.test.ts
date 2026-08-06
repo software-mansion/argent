@@ -327,6 +327,38 @@ steps:
     expect(step.reason).toContain("never answered within the step's 800ms");
   });
 
+  // The sibling of the case above, and the one that used to slip through: a
+  // source that FAILS is caught by the unreadable-tree error, but one that
+  // HANGS is a different outcome internally, and after any earlier read had
+  // succeeded it fell through to the motion warning — telling the author that
+  // a screen frozen by a wedged renderer was a video or a carousel.
+  it("reports a tree source that wedges mid-wait as indeterminate, not as motion", async () => {
+    let reads = 0;
+    currentTree = () => {
+      reads += 1;
+      // Answer the first read, then wedge for longer than the step can wait.
+      treeDelayMs = 60_000;
+      return screenWith("Home");
+    };
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, timeout: 2500, minStableMs: 0 }
+  - echo: reached
+`
+    );
+    const r = await run("ready");
+    expect(reads).toBe(1);
+    expect(r.ok).toBe(false);
+    const step = r.steps.find((s) => s.kind === "idle")!;
+    expect(step.status).toBe("error");
+    expect(step.reason).toContain("answered and then stopped");
+    expect(step.reason).toContain("foreground");
+    // And it must not be dressed up as a verdict about what was on screen.
+    expect(step.reason).not.toContain("never held still");
+  });
+
   it("settles on the tree alone when no screenshot can be captured, and says so", async () => {
     currentFrame = () => undefined;
     await writeFlow(
