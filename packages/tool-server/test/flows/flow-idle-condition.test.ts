@@ -87,6 +87,15 @@ describe("await { idle }", () => {
     );
   });
 
+  // The one near-miss the docs actively produce: every other condition is
+  // written with a selector beside it, so `await:` comes along for free, while
+  // this one reads like a directive of its own.
+  it("names the spelling when `idle` is written as a step of its own", () => {
+    expect(() => parseSteps(`  - idle: true\n`)).toThrow(
+      /idle is a condition, not a step kind — write it as `await: \{ idle: true \}`/
+    );
+  });
+
   it("rejects a non-positive timeout", () => {
     expect(() => parseSteps(`  - await: { idle: true, timeout: 0 }\n`)).toThrow(/await.timeout/);
     expect(() => parseSteps(`  - await: { idle: true, timeout: "soon" }\n`)).toThrow(

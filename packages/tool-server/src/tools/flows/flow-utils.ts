@@ -2400,6 +2400,14 @@ function fromYamlStep(raw: YamlStep, whenDepth = 0): FlowStep {
   }
   const kinds = STEP_DIRECTIVE_KEYS.filter((k) => k in entry);
   if (kinds.length === 0) {
+    // `idle` is a condition, not a step kind, and it is the one near-miss the
+    // docs actively produce: every other condition is written with a selector
+    // beside it, so `await:` comes along for free, while this one reads like a
+    // directive of its own. Spell the answer rather than reporting that a step
+    // kind nobody wrote is unrecognized.
+    if (IDLE_CONDITION in entry) {
+      badEntry(raw, `idle is a condition, not a step kind — write it as \`await: { idle: true }\``);
+    }
     const hint = Object.keys(entry)
       .map((k) => closestKey(k, STEP_DIRECTIVE_KEYS))
       .find((h) => h !== null);
