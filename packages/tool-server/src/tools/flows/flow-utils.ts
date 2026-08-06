@@ -540,8 +540,18 @@ export async function requireRecordingSession(
   return session;
 }
 
-export async function clearRecordingSession(projectRoot: string, name: string): Promise<void> {
-  recordings.delete(await resolveFlowKey(projectRoot, name));
+/**
+ * Retire a finished recording, by the key the session actually HOLDS rather
+ * than a fresh resolution of its spelling — the same choice
+ * {@link appendStepToFlow} makes, and for the same reason. A key that moved
+ * under the session (a symlinked flow file whose target went away
+ * mid-recording, or a link repointed) re-resolves to something this map does
+ * not hold, so the delete missed silently: the finish reported success while
+ * the session stayed live, unfinishable, and holding the key against its own
+ * restart.
+ */
+export function clearRecordingSession(session: RecordingSession): void {
+  recordings.delete(session.key);
 }
 
 export function __resetRecordingsForTesting(): void {

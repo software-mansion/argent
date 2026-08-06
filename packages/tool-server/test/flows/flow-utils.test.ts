@@ -1153,13 +1153,51 @@ describe("recording sessions", () => {
   it("clearRecordingSession removes only that key", async () => {
     await start("/tmp/proj-a", "my-flow");
     await start("/tmp/proj-a", "other-flow");
-    await clearRecordingSession("/tmp/proj-a", "my-flow");
+    clearRecordingSession(await requireRecordingSession("/tmp/proj-a", "my-flow"));
     expect(await getRecordingSession("/tmp/proj-a", "my-flow")).toBeUndefined();
     await expect(requireRecordingSession("/tmp/proj-a", "my-flow")).rejects.toThrow(
       /No active recording for flow "my-flow"/
     );
     // The unrelated recording is untouched.
     expect((await requireRecordingSession("/tmp/proj-a", "other-flow")).name).toBe("other-flow");
+  });
+
+  it("clearRecordingSession deletes by the key the session HOLDS, not a fresh resolution", async () => {
+    // The same choice appendStepToFlow documents. Re-resolving the spelling
+    // looks up a key the map may no longer hold once the flow file's identity
+    // has moved under the session — a symlink repointed mid-recording — so the
+    // delete missed silently and the finish reported success while the session
+    // stayed live, unfinishable, and holding the key against its own restart.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clear-moved-key-"));
+    try {
+      const root = path.join(dir, "proj");
+      const flows = path.join(root, ".argent", "flows");
+      await fs.mkdir(flows, { recursive: true });
+      const first = path.join(dir, "first.yaml");
+      const second = path.join(dir, "second.yaml");
+      for (const f of [first, second]) await fs.writeFile(f, "steps: []\n", "utf8");
+      const link = path.join(flows, "shared.yaml");
+      await fs.symlink(first, link);
+
+      await startRecordingSession({
+        name: "shared",
+        projectRoot: root,
+        persist: "host",
+        filePath: link,
+        flow: emptyFlow(),
+      });
+      const session = (await getRecordingSession(root, "shared"))!;
+
+      await fs.rm(link);
+      await fs.symlink(second, link);
+      // The spelling now resolves to a different file entirely.
+      expect(await getRecordingSession(root, "shared")).toBeUndefined();
+
+      clearRecordingSession(session);
+      expect(listActiveRecordings()).toEqual([]);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("keeps same-named recordings under different project roots independent", async () => {
@@ -1172,7 +1210,7 @@ describe("recording sessions", () => {
       (await requireRecordingSession("/tmp/proj-b", "my-flow")).flow.executionPrerequisite
     ).toBe("B");
     // Finishing one leaves the other recording.
-    await clearRecordingSession("/tmp/proj-a", "my-flow");
+    clearRecordingSession(await requireRecordingSession("/tmp/proj-a", "my-flow"));
     expect(await getRecordingSession("/tmp/proj-a", "my-flow")).toBeUndefined();
     expect(
       (await requireRecordingSession("/tmp/proj-b", "my-flow")).flow.executionPrerequisite
@@ -1235,7 +1273,7 @@ describe("recording sessions", () => {
       { name: "my-flow", projectRoot: "/tmp/proj-a", steps: 1 },
       { name: "my-flow", projectRoot: "/tmp/proj-b", steps: 0 },
     ]);
-    await clearRecordingSession("/tmp/proj-a", "my-flow");
+    clearRecordingSession(await requireRecordingSession("/tmp/proj-a", "my-flow"));
     expect(listActiveRecordings()).toEqual([
       { name: "my-flow", projectRoot: "/tmp/proj-b", steps: 0 },
     ]);
