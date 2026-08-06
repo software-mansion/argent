@@ -958,30 +958,63 @@ function fullConsumptionRegex(selector: Selector): RegExp | undefined {
     : uiTreeMatchInternals.createRegExp(`^(?:${selector.textMatches})$`);
 }
 
-// How many of the selector's provided fields this node matches exactly
-// (case-insensitive equality; full-string consumption for a regex) rather
-// than merely as a substring / partial hit.
+// Exactness is GRADED, not a yes/no count, and the grades exist because
+// folding erased the distinction ranking depends on.
+//
+// The scale: a field scores LITERAL when the node's text equals the selector's
+// once case is folded and nothing else, FOLDED when it takes the full fold to
+// make them equal, and nothing when it merely contains the needle. Folding is
+// what LOCATES an element the author could not otherwise name (a currency NBSP,
+// a bidi-wrapped handle), but between two elements that both match, the one
+// spelled exactly as asked for is the better answer — and on a real screen the
+// other one is usually a decorative sibling.
+//
+// Ungraded, this retargeted taps. An icon-only 28x28 button labelled
+// "Sign<NBSP>in" used to score 0 here and could never outrank the 420x70 button
+// whose text is literally "Sign in"; once both scored 1 they tied, the tiebreak
+// is "smallest frame wins", and `tap: { text: "Sign in" }` started firing the
+// icon — silently, with the step still reporting pass.
+const EXACT_LITERAL = 2;
+const EXACT_FOLDED = 1;
+
+// The comparison equalsCI made before it folded: case-insensitive and nothing
+// more. Only ranking asks this — a MATCH is still decided by the folded form.
+function literalEqualsCI(actual: string | undefined, expected: string): boolean {
+  return (actual ?? "").toLowerCase() === expected.toLowerCase();
+}
+
+function exactTextScore(actual: string | undefined, expected: string): number {
+  if (!equalsCI(actual, expected)) return 0;
+  return literalEqualsCI(actual, expected) ? EXACT_LITERAL : EXACT_FOLDED;
+}
+
+// How exactly this node matches the selector's provided fields, summed over
+// them: full-string hits rather than substring / partial ones, and among those,
+// literal spellings ahead of ones only the fold equates.
 function exactFieldCount(
   node: DescribeNode,
   selector: Selector,
   fullTextRegex: RegExp | undefined
 ): number {
   let count = 0;
-  if (
-    selector.text !== undefined &&
-    (equalsCI(node.label, selector.text) || equalsCI(node.value, selector.text))
-  ) {
-    count++;
+  if (selector.text !== undefined) {
+    count += Math.max(
+      exactTextScore(node.label, selector.text),
+      exactTextScore(node.value, selector.text)
+    );
   }
   if (
     fullTextRegex !== undefined &&
     (regexMatchesNonEmpty(fullTextRegex, node.label) ||
       regexMatchesNonEmpty(fullTextRegex, node.value))
   ) {
-    count++;
+    // A regex is never folded — consuming the whole string IS the literal grade.
+    count += EXACT_LITERAL;
   }
-  if (selector.identifier !== undefined && equalsCI(node.identifier, selector.identifier)) count++;
-  if (selector.role !== undefined && equalsCI(node.role, selector.role)) count++;
+  if (selector.identifier !== undefined) {
+    count += exactTextScore(node.identifier, selector.identifier);
+  }
+  if (selector.role !== undefined) count += exactTextScore(node.role, selector.role);
   return count;
 }
 

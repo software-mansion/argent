@@ -8,6 +8,7 @@ import {
   foldText,
   identifierMatches,
   includesCI,
+  selectorToFrame,
 } from "../src/utils/ui-tree-match";
 import type { DescribeNode } from "../src/tools/describe/contract";
 
@@ -289,6 +290,67 @@ describe("a needle that folds away to nothing", () => {
     // A bidi-wrapped label still equals its plain form — the guard rejects only
     // an expected that folds to EMPTY, never a real one.
     expect(equalsCI("‪@bsky.app‬", "@bsky.app")).toBe(true);
+  });
+});
+
+describe("ranking prefers the literal spelling over one only the fold equates", () => {
+  // Folding is what LOCATES an element an author cannot otherwise name. But
+  // once two elements both match, ranking has to keep telling them apart, or
+  // the "smallest frame wins" tiebreak elects the decorative one: a 28x28
+  // icon-only button labelled "Sign<NBSP>in" beside the 420x70 button whose
+  // text is literally "Sign in". `tap` fired the icon, and reported pass.
+  const icon: DescribeNode = {
+    role: "button",
+    label: `Sign${NBSP}in`,
+    identifier: "icon",
+    frame: { x: 0, y: 0, width: 0.023, height: 0.041 },
+    children: [],
+  };
+  const cta: DescribeNode = {
+    role: "button",
+    value: "Sign in",
+    identifier: "cta",
+    frame: { x: 0, y: 0.07, width: 0.35, height: 0.102 },
+    children: [],
+  };
+  const screen = (children: DescribeNode[]): DescribeNode => ({
+    role: "ROOT",
+    frame: { x: 0, y: 0, width: 1, height: 1 },
+    children,
+  });
+
+  it("resolves the CTA, not the smaller folded-equal icon", () => {
+    expect(selectorToFrame(screen([icon, cta]), { text: "Sign in" })).toMatchObject({
+      width: 0.35,
+    });
+    // Order-independent: it is the grade that decides, not which came first.
+    expect(selectorToFrame(screen([cta, icon]), { text: "Sign in" })).toMatchObject({
+      width: 0.35,
+    });
+  });
+
+  it("still resolves a folded-only match when it is the ONLY one", () => {
+    // The fold has not been undone — with no literal spelling on screen, the
+    // NBSP label is still found, which is the whole point of folding.
+    expect(selectorToFrame(screen([icon]), { text: "Sign in" })).toMatchObject({
+      width: 0.023,
+    });
+  });
+
+  it("grades identifier and role the same way", () => {
+    const folded: DescribeNode = {
+      ...icon,
+      identifier: `save${ZWSP}`,
+      frame: { x: 0, y: 0, width: 0.02, height: 0.02 },
+    };
+    const literal: DescribeNode = {
+      ...cta,
+      identifier: "save",
+      frame: { x: 0, y: 0.5, width: 0.4, height: 0.08 },
+    };
+    expect(selectorToFrame(screen([folded, literal]), { identifier: "save" })).toMatchObject({
+      width: 0.4,
+    });
   });
 });
 
