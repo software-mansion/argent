@@ -136,12 +136,19 @@ function runnerSideReadClause(udid: unknown): string {
     );
   }
   if (platform === "chromium") {
+    // Every remedy here has to survive the two cases the divergence text now
+    // admits, so none of them may assume the runner dropped the element:
+    // `describe` can show a node the runner keeps under a different name (a
+    // password field) and can omit one the runner has (past its 5000-node
+    // walk). What always settles it is running the conversion.
     return (
-      "No read-only tool exposes the runner's trimmed tree on Chromium — `describe` returns the " +
-      "full DOM the recorder read, including the nodes the runner drops — so re-record with a " +
-      "selector an addressable node carries (an id, label, text, or a clickable/focused " +
-      "element); if `describe` shows the element with a zero-height frame it is simply " +
-      "off-viewport, and the fix is a `scroll-to` before the check, not a different selector"
+      "No read-only tool exposes the runner's trimmed tree on Chromium — `describe` re-reads the " +
+      "same DOM on a shorter walk, so it both lists nodes the runner drops and omits nodes the " +
+      "runner keeps — so settle it by running the conversion: put the directive in a flow and " +
+      "`flow-execute` it. A zero-height frame in `describe` means off-viewport, and the fix " +
+      "there is a `scroll-to` before the check rather than a different selector; a password " +
+      "field reaches the runner under the name `[password]`, so only an `id`/`role` selector " +
+      "can match it"
     );
   }
   if (platform === "vega") {
@@ -154,16 +161,35 @@ function runnerSideReadClause(udid: unknown): string {
 }
 
 /**
+ * The possibility every platform's story shares, and the one none of the tree
+ * explanations can rule out: the probe reads the device a moment after the live
+ * wait returned, so a screen that moved on in between produces this same
+ * verdict with both trees in perfect agreement. Vega states it as its whole
+ * story (there is no other cause there); the rest have to admit it, or an
+ * author whose toast simply expired spends the next ten minutes rewriting a
+ * selector that was never wrong.
+ */
+const SCREEN_MAY_HAVE_MOVED =
+  " A screen that changed between the live wait and this re-probe reads the same way, so rule " +
+  "that out first.";
+
+/**
  * WHY the recorder's tree and the runner's tree can disagree — which is a
  * different story per platform, and stating the iOS one everywhere makes the
  * message false exactly where the author is trying to act on it.
+ *
+ * Each story names what the two projections do differently WITHOUT asserting
+ * which side ended up missing the element: on Chromium both directions are
+ * reachable, and a message that only ever describes the runner dropping
+ * something sends an author to fix the wrong end.
  */
 function treeDivergenceFor(udid: unknown): string {
   const platform = platformOf(udid);
   if (platform === "ios") {
     return (
       "The recorder reads the accessibility tree and the runner reads the full native view " +
-      "hierarchy; they overlap but neither contains the other."
+      "hierarchy; they overlap but neither contains the other." +
+      SCREEN_MAY_HAVE_MOVED
     );
   }
   if (platform === "chromium") {
@@ -173,17 +199,35 @@ function treeDivergenceFor(udid: unknown): string {
     // merely below the fold — the walker clamps an off-viewport frame to zero
     // area, and `describe` still lists it — goes hunting for an id it already
     // has.
+    //
+    // And the runner is not always the side that lost the element. Two
+    // reachable cases where it is not:
+    //   - a password field. `projectChromiumNode` KEEPS it and redacts its
+    //     label to `[password]`, so the node reaches the runner (an `id`
+    //     selector resolves it) while no `text`/label selector ever can. The
+    //     old "an element with no id, label … never reaches the runner" story
+    //     was false here in both halves, and its remedy — re-record with a
+    //     text or label — is unreachable by construction.
+    //   - a dense page. The agent-facing walk stops at DEFAULT_WALK_LIMITS
+    //     (5000 nodes); FLOW_WALK_LIMITS raises it to 12000. Past 5000 it is
+    //     the RECORDER's tree that is short, and `describe` cannot show the
+    //     element at all — which also made "`describe` returns the full DOM the
+    //     recorder read" false exactly when it mattered.
     return (
-      "Both read the same DOM, but the flow tree keeps only addressable nodes that are on " +
-      "screen — an element with no id, label, value, clickable or focused state never reaches " +
-      "the runner, and neither does one whose frame the walker clamped to zero area for being " +
-      "off-viewport."
+      "Both read the same DOM but project it differently, and either side can be the one " +
+      "missing the element: the flow tree keeps only addressable nodes (id, label, value, " +
+      "clickable or focused) whose frame the walker did not clamp to zero area for being " +
+      "off-viewport, and it redacts a password field's name to `[password]` — while the " +
+      "recorder's walk stops at 5000 nodes where the flow tree's goes to 12000, so on a dense " +
+      "page it is the recorder that never saw the element." +
+      SCREEN_MAY_HAVE_MOVED
     );
   }
   if (platform === "android") {
     return (
       "The recorder reads the trimmed accessibility tree and the runner reads the full " +
-      "hierarchy including not-important views; each holds elements the other drops."
+      "hierarchy including not-important views; each holds elements the other drops." +
+      SCREEN_MAY_HAVE_MOVED
     );
   }
   if (platform === "vega") {

@@ -203,6 +203,22 @@ async function recordedSteps(name: string) {
  * that nags on every correctly-recorded wait would sail through. Split the
  * prefix off and require the remainder to be absent instead.
  */
+/**
+ * The probe's own reason, as the determinate warning quotes it back — the only
+ * part of the message carrying screen content, and so the only part the cap
+ * governs. Asserting on the whole warning instead measures the fixed prose
+ * around it, which moves whenever the explanation is reworded.
+ */
+function echoedReasonOf(warning: string): string {
+  const open = "directives against (";
+  const close = "). As the raw";
+  const start = warning.indexOf(open);
+  const end = warning.indexOf(close);
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  return warning.slice(start + open.length, end);
+}
+
 function warningOf(result: { message: string }, name: string): string | undefined {
   const prefix = `Step added to "${name}" flow`;
   expect(result.message.startsWith(prefix)).toBe(true);
@@ -547,10 +563,13 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
     expect(warning).toContain("does NOT hold against the tree the runner resolves");
     // The reader clause is its own sentence after the divergence sentence's
-    // period, so it must start capitalized — not "…drops. no read-only…".
+    // period, so it must start capitalized — not "…first. no read-only…".
     expect(warning).toContain(
-      "drops. No read-only tool exposes the runner's full hierarchy on Android"
+      "first. No read-only tool exposes the runner's full hierarchy on Android"
     );
+    // No tree story rules out the screen having moved on between the live wait
+    // and the re-probe, so every platform's must say so.
+    expect(warning).toContain("changed between the live wait and this re-probe");
     expect(warning).not.toContain("native-find-views");
     expect(await recordedSteps("android")).toHaveLength(1);
   });
@@ -585,17 +604,64 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     // addressable. Naming addressability alone reads as a verdict on the
     // selector, and sends an author whose element is merely below the fold
     // hunting for an id it already carries.
-    expect(warning).toContain("addressable nodes that are on screen");
+    expect(warning).toContain("addressable nodes");
+    expect(warning).toContain("clamp");
     expect(warning).toContain("off-viewport");
-    expect(warning).toContain("`scroll-to` before the check, not a different selector");
+    expect(warning).toContain("`scroll-to` before the check rather than a different selector");
 
     expect(warning).toContain("does NOT hold against the tree the runner resolves");
     // Capitalized, as its own sentence after the divergence sentence's period.
     expect(warning).toContain(
-      "off-viewport. No read-only tool exposes the runner's trimmed tree on Chromium"
+      "first. No read-only tool exposes the runner's trimmed tree on Chromium"
     );
     expect(warning).not.toContain("native-find-views");
     expect(await recordedSteps("chromium")).toHaveLength(1);
+  });
+
+  // Chromium, the OTHER direction: a node the runner KEEPS. `projectChromiumNode`
+  // redacts a password leaf's name to `[password]`, so the element reaches the
+  // runner (an `id` selector resolves it) while no text/label selector ever can.
+  // A message that only knows how to say "the runner dropped it" is false here in
+  // both halves, and its "re-record with a text or label" remedy is unreachable
+  // by construction.
+  it("Chromium: does not claim the runner dropped a password field it kept", async () => {
+    const tree = chromiumRunnerTree([
+      n({
+        role: "input",
+        identifier: "pw-field",
+        label: "Enter your secret",
+        password: true,
+        clickable: true,
+        frame: ROW,
+      }),
+    ]);
+    serveTree(tree, "cdp-dom");
+
+    // The premise, straight off the real adapter: the node is present and
+    // addressable by id, and its name is the redaction — not the placeholder
+    // `describe` shows.
+    expect(findAll(tree, { identifier: "pw-field" })).toHaveLength(1);
+    expect(findAll(tree, { text: "secret" })).toHaveLength(0);
+    expect(findAll(tree, { text: "[password]" })).toHaveLength(1);
+
+    await startRecording("chromiumpw");
+    const result = await recordWait("chromiumpw", {
+      udid: CHROMIUM,
+      condition: "visible",
+      selector: { text: "secret" },
+    });
+    const warning = warningOf(result, "chromiumpw") ?? "";
+
+    expect(warning).toContain("does NOT hold against the tree the runner resolves");
+    // The verdict is right; the explanation must not be the one cause that is
+    // provably not what happened here.
+    expect(warning).not.toContain("never reaches the runner");
+    expect(warning).toContain("`[password]`");
+    expect(warning).toContain("only an `id`/`role` selector");
+    // Nor may it promise `describe` is a superset the author can read the
+    // runner's side off: past its shorter walk it omits nodes the runner keeps.
+    expect(warning).not.toContain("full DOM the recorder read");
+    expect(warning).toContain("omits nodes the runner keeps");
   });
 
   // Vega is the one platform whose runner tree CANNOT disagree on an unchanged
@@ -789,7 +855,14 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).toContain("more chars)");
     // Enough of the text to be actionable, not the whole screen.
     expect(warning).toContain("Lorem ipsum");
-    expect(warning.length).toBeLessThan(wall.length);
+    // Bound the ECHOED REASON, not the whole message: the fixed prose around it
+    // is longer than this fixture, so `warning.length < wall.length` passes or
+    // fails on how much explanation the message carries and says nothing about
+    // the cap. Pin the cap itself — at 200 the kept slice is exactly 200 chars,
+    // and raising the constant would fail here.
+    const echoed = echoedReasonOf(warning);
+    expect(echoed.split("…")[0]).toHaveLength(200);
+    expect(echoed).toMatch(/… \(\d+ more chars\)$/);
   });
 
   // ── Cancellation ─────────────────────────────────────────────────────────
