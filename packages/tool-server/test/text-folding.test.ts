@@ -158,10 +158,17 @@ describe("literal comparisons fold both sides", () => {
     });
   });
 
-  it("folds identifiers, including the unqualified Android resource-id form", () => {
-    expect(identifierMatches(`submit${ZWSP}`, "submit")).toBe(true);
-    expect(identifierMatches("com.example.app:id/submit", `sub${ZWSP}mit`)).toBe(true);
-    // Substring capture is still refused — folding must not loosen this.
+  it("does NOT fold identifiers — a machine key is not read off a screen", () => {
+    // Folding is justified by what the eye cannot distinguish; an identifier is
+    // never rendered, so two keys that differ by a character are two keys.
+    expect(identifierMatches(`submit${ZWSP}`, "submit")).toBe(false);
+    expect(identifierMatches("com.example.app:id/submit", `sub${ZWSP}mit`)).toBe(false);
+    // Merging distinct testids is the concrete harm.
+    expect(identifierMatches("row:id/save ", "row:id/save")).toBe(false);
+    // Case-insensitive exact and the unqualified resource-id form still work.
+    expect(identifierMatches("Submit", "submit")).toBe(true);
+    expect(identifierMatches("com.example.app:id/submit", "submit")).toBe(true);
+    // Substring capture is still refused.
     expect(identifierMatches("autosave-banner", "save")).toBe(false);
   });
 });

@@ -488,15 +488,25 @@ export function equalsCI(actual: string | undefined, expected: string): boolean 
  * identifier names one element, and substring matching lets a short needle
  * capture an unrelated id (`save` must not match `autosave-banner`), which is
  * how a loose flow selector's identifier-first pass could hijack a tap.
+ *
+ * Deliberately NOT folded either, on both sides. Folding is justified by what
+ * the eye cannot distinguish, and an identifier is never rendered: it is a
+ * machine key, copied from source rather than read off a screen, and two keys
+ * that differ by a character are two keys. Folding collapsed them — it made
+ * `row:id/save ` match `row:id/save`, merging distinct testids — while buying
+ * nothing, since there is no screen for an invisible to have crept in from.
  */
 export function identifierMatches(actual: string | undefined, needle: string): boolean {
   if (!actual) return false;
   // Same rule as includesCI: an identifier that folds away to nothing names no
   // element, so it must not match one — neither the blank-identifier nodes that
-  // `equalsCI("", "")` would accept, nor every resource-id via a bare `:id/`.
-  const wanted = foldText(needle);
-  if (wanted === "") return false;
-  return equalsCI(actual, needle) || foldText(actual).endsWith(`:id/${wanted}`);
+  // an empty-vs-empty comparison would accept, nor every resource-id via a bare
+  // `:id/`. The GATE folds (a whitespace-only needle is no constraint however
+  // it is spelled); the comparison below does not.
+  if (foldText(needle) === "") return false;
+  const key = actual.toLowerCase();
+  const wanted = needle.toLowerCase();
+  return key === wanted || key.endsWith(`:id/${wanted}`);
 }
 
 /** @internal A narrow seam for verifying regex compilation lifetime in tests. */
