@@ -5,62 +5,135 @@ import * as path from "node:path";
 import type { Registry } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
 
-// `await-ui-element` evaluates against the ACCESSIBILITY tree; the
-// `await:`/`assert:` directive the flow carries is evaluated against the full
-// native hierarchy. They overlap but neither contains the other — an id in the
-// runner tree can be absent from the AX tree, and a text field's value visible
-// to the recorder can be invisible to the runner. So a check could pass live
-// and fail on every replay, which makes "each step is executed live so you
-// verify it works before it's recorded" untrue exactly where it matters.
+// `await-ui-element` evaluates against the agent-facing describe tree; the
+// `await:`/`assert:` directive that polish converts the step into is evaluated
+// against `fetchFlowTree`'s. On no platform does one contain the other, so a
+// check can pass live and fail once converted — which makes "each step is
+// executed live so you verify it works before it's recorded" untrue exactly
+// where it matters.
 //
 // These tests serve the RUNNER's tree (what `fetchFlowTree` returns) while the
-// await-ui-element tool is stubbed to report success, i.e. the AX tree agreed.
+// await-ui-element tool is stubbed to report success, i.e. the recorder's tree
+// agreed. Every runner tree here is built by the REAL per-platform flow adapter
+// from a raw payload of that platform's own shape, so the divergence each test
+// describes is the one that platform's projection actually produces — not a
+// platform label pinned on one shared fixture.
 
-let runnerTree: () => DescribeNode;
+let fetchCount: number;
 // The whole fetch is the seam, not just the tree it yields: a test that needs
 // the read itself to hang (rather than to throw or to return) replaces this.
 // Reset in beforeEach so no test leaks its implementation into the next.
 let fetchRunnerTree: () => Promise<DescribeTreeData>;
 vi.mock("../../src/tools/flows/flow-tree", () => ({
-  fetchFlowTree: vi.fn((): Promise<DescribeTreeData> => fetchRunnerTree()),
+  fetchFlowTree: vi.fn((): Promise<DescribeTreeData> => {
+    fetchCount += 1;
+    return fetchRunnerTree();
+  }),
 }));
 
-const defaultFetch = async (): Promise<DescribeTreeData> => ({
-  tree: runnerTree(),
-  source: "native-devtools",
-  screen: { width: 390, height: 844 },
-});
-
-import { createAwaitUiElementTool } from "../../src/tools/await-ui-element";
+import { createAwaitUiElementTool, evaluateMatches } from "../../src/tools/await-ui-element";
 import { assertSupported } from "../../src/utils/capability";
 import { resolveDevice } from "../../src/utils/device-info";
+import { findAll, type Selector } from "../../src/utils/ui-tree-match";
+import { adaptFullHierarchyToDescribeResult } from "../../src/tools/flows/flow-ios-tree";
+import { adaptFullAndroidHierarchyToDescribeResult } from "../../src/tools/flows/flow-android-tree";
+import { adaptChromiumTreeForFlows } from "../../src/tools/flows/flow-chromium-tree";
+import { adaptVegaTreeForFlows } from "../../src/tools/flows/flow-vega-tree";
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import { __resetRecordingsForTesting, parseFlow } from "../../src/tools/flows/flow-utils";
+import { n } from "./harness";
 
-const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
-let tmpDir: string;
+const IOS = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
+const ANDROID = "emulator-5554"; // adb-serial shape → classifies android
+const CHROMIUM = "chromium-cdp-9222"; // chromium-cdp- prefix → classifies chromium
+const VEGA = "amazon-4a27df03c9777152"; // amazon- prefix → classifies vega
 
 const FULL: DescribeNode["frame"] = { x: 0, y: 0, width: 1, height: 1 };
+const ROW: DescribeNode["frame"] = { x: 0.1, y: 0.1, width: 0.5, height: 0.05 };
 
-function screen(labels: string[]): DescribeNode {
+let tmpDir: string;
+
+// ── Runner trees, each through its own platform's real flow adapter ──────────
+
+const IOS_SCREEN = { x: 0, y: 0, width: 390, height: 844 };
+const IOS_ROW = { x: 0, y: 100, width: 390, height: 40 };
+
+interface RawIosView {
+  className?: string;
+  label?: string;
+  identifier?: string;
+  alpha?: number;
+  hidden?: boolean;
+  frame?: typeof IOS_ROW;
+  windowFrame?: typeof IOS_ROW;
+  children?: RawIosView[];
+}
+
+/** `ViewHierarchy.getFullHierarchy`'s payload shape, through the iOS adapter. */
+function iosRunnerTree(views: RawIosView[]): DescribeNode {
+  return adaptFullHierarchyToDescribeResult({
+    windows: [
+      {
+        className: "UIWindow",
+        frame: IOS_SCREEN,
+        windowFrame: IOS_SCREEN,
+        children: views,
+      },
+    ],
+  });
+}
+
+function iosLabel(label: string, extra: Partial<RawIosView> = {}): RawIosView {
   return {
-    role: "AXWindow",
-    frame: FULL,
-    children: labels.map((label, i) => ({
-      role: "AXStaticText",
-      label,
-      frame: { x: 0, y: 0.1 * i, width: 1, height: 0.08 },
-      children: [],
-    })),
+    className: "UILabel",
+    label,
+    frame: IOS_ROW,
+    windowFrame: IOS_ROW,
+    children: [],
+    ...extra,
   };
 }
+
+const ANDROID_W = 1080;
+const ANDROID_H = 1920;
+
+/** A `uiautomator` full-hierarchy dump, through the Android adapter. */
+function androidRunnerTree(rows: string): DescribeNode {
+  return adaptFullAndroidHierarchyToDescribeResult(
+    `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    ${rows}
+  </node>
+</hierarchy>`,
+    ANDROID_W,
+    ANDROID_H
+  );
+}
+
+function androidRow(text: string, attrs = ""): string {
+  return `<node index="0" class="android.widget.TextView" text="${text}" package="com.acme.app" bounds="[40,400][1040,480]" ${attrs} />`;
+}
+
+/** The CDP DOM walker's own `DescribeNode` output, through the Chromium adapter. */
+function chromiumRunnerTree(children: DescribeNode[]): DescribeNode {
+  return adaptChromiumTreeForFlows(n({ role: "html", frame: FULL, children }));
+}
+
+/** The Vega toolkit's parsed page source, through the Vega adapter. */
+function vegaRunnerTree(children: DescribeNode[]): DescribeNode {
+  return adaptVegaTreeForFlows(n({ role: "Screen", frame: FULL, children }));
+}
+
+// ── Recording harness ────────────────────────────────────────────────────────
 
 /** A registry whose `await-ui-element` always reports the condition met. */
 function registryWhereWaitSucceeds(): Registry {
   return {
     invokeTool: vi.fn(async (id: string) => {
       if (id === "await-ui-element") return { success: true, elapsed: 120 };
+      if (id === "gesture-tap") return { tapped: true };
       throw new Error(`Tool "${id}" not found`);
     }),
     getTool: vi.fn(() => undefined),
@@ -75,11 +148,7 @@ function registryWhereWaitTimesOut(): Registry {
   return {
     invokeTool: vi.fn(async (id: string) => {
       if (id === "await-ui-element") {
-        return {
-          success: false,
-          elapsed: 1500,
-          note: "no element matched the selector before timeout",
-        };
+        return { success: false, elapsed: 1500, note: "no element matched the selector" };
       }
       throw new Error(`Tool "${id}" not found`);
     }),
@@ -87,36 +156,69 @@ function registryWhereWaitTimesOut(): Registry {
   } as unknown as Registry;
 }
 
-async function onDisk(name: string): Promise<string> {
-  return fs.readFile(path.join(tmpDir, ".argent", "flows", `${name}.yaml`), "utf8");
+type WaitArgs = {
+  udid?: string;
+  condition: "visible" | "hidden" | "exists" | "text";
+  selector: Record<string, unknown>;
+  expectedText?: string;
+  textMatch?: "contains" | "equals";
+};
+
+async function startRecording(name: string): Promise<void> {
+  await flowStartRecordingTool.execute(
+    {},
+    { name, project_root: tmpDir, executionPrerequisite: "on the form" }
+  );
 }
 
-async function recordWait(name: string, selectorText: string, udid: string = DEVICE) {
-  const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
+async function recordWait(
+  name: string,
+  wait: WaitArgs,
+  opts: { registry?: Registry; delayMs?: number; signal?: AbortSignal } = {}
+) {
+  const tool = createFlowAddStepTool(opts.registry ?? registryWhereWaitSucceeds());
   return tool.execute(
     {},
     {
       name,
       project_root: tmpDir,
       command: "await-ui-element",
-      args: JSON.stringify({
-        udid,
-        condition: "visible",
-        selector: { text: selectorText },
-      }),
-    }
+      args: JSON.stringify({ udid: IOS, ...wait }),
+      delayMs: opts.delayMs,
+    },
+    (opts.signal ? { signal: opts.signal } : undefined) as never
   );
 }
 
-const ANDROID = "emulator-5554"; // adb-serial shape → classifies android
-const CHROMIUM = "chromium-cdp-9222"; // chromium-cdp- prefix → classifies chromium
-const VEGA = "amazon-4a27df03c9777152"; // amazon- prefix → classifies vega
+async function recordedSteps(name: string) {
+  const yaml = await fs.readFile(path.join(tmpDir, ".argent", "flows", `${name}.yaml`), "utf8");
+  return parseFlow(yaml).steps;
+}
+
+/**
+ * The warning half of `message`, or undefined when there is none.
+ *
+ * Asserting `message` contains "Step added" proves nothing — that is the
+ * unconditional prefix of EVERY message, warnings included — so a regression
+ * that nags on every correctly-recorded wait would sail through. Split the
+ * prefix off and require the remainder to be absent instead.
+ */
+function warningOf(result: { message: string }, name: string): string | undefined {
+  const prefix = `Step added to "${name}" flow`;
+  expect(result.message.startsWith(prefix)).toBe(true);
+  const rest = result.message.slice(prefix.length);
+  return rest === "" ? undefined : rest.replace(/^ — /, "");
+}
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-cross-tree-"));
   __resetRecordingsForTesting();
-  runnerTree = () => screen(["Continue"]);
-  fetchRunnerTree = defaultFetch;
+  fetchCount = 0;
+  fetchRunnerTree = async () => ({
+    tree: iosRunnerTree([iosLabel("Continue")]),
+    source: "native-devtools",
+    screen: { width: 390, height: 844 },
+  });
 });
 
 afterEach(async () => {
@@ -125,116 +227,383 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
+const serveTree = (tree: DescribeNode, source: DescribeTreeData["source"] = "native-devtools") => {
+  fetchRunnerTree = async () => ({ tree, source });
+};
+
 describe("a recorded wait is re-probed against the runner's tree", () => {
-  it("records the step when both trees agree", async () => {
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "agree", project_root: tmpDir, executionPrerequisite: "on the form" }
-    );
+  it("records the step, with no warning, when both trees agree", async () => {
+    await startRecording("agree");
 
-    const result = await recordWait("agree", "Continue");
+    const result = await recordWait("agree", {
+      condition: "visible",
+      selector: { text: "Continue" },
+    });
 
-    expect(result.message).toContain("Step added");
-    expect(parseFlow(await onDisk("agree")).steps).toHaveLength(1);
+    expect(warningOf(result, "agree")).toBeUndefined();
+    // The whole recorded artifact, not just its count: a step of the wrong
+    // shape (device id left in, condition dropped) would pass a length check.
+    expect(await recordedSteps("agree")).toEqual([
+      {
+        kind: "tool",
+        name: "await-ui-element",
+        args: { condition: "visible", selector: { text: "Continue" } },
+        delayMs: undefined,
+      },
+    ]);
   });
 
+  // ── The evaluators on the two sides must not drift ────────────────────────
+  //
+  // The probe re-evaluates the recorded condition with the flow runner's engine
+  // (flowFindAll + evaluateCondition, inside waitForCondition); the live wait
+  // used await-ui-element's (findAll + evaluateMatches). Nothing else in this
+  // file would notice them drifting apart — the tree is mocked and the live
+  // tool is stubbed — and if they did, the recorder would warn on every
+  // correctly-recorded wait forever while the suite stayed green. So feed the
+  // SAME tree to both engines and require them to agree.
+  const AGREEMENT: Array<{ name: string; wait: WaitArgs; tree: () => DescribeNode }> = [
+    {
+      name: "visible",
+      wait: { condition: "visible", selector: { text: "Continue" } },
+      tree: () => iosRunnerTree([iosLabel("Continue")]),
+    },
+    {
+      name: "exists",
+      wait: { condition: "exists", selector: { identifier: "row" } },
+      tree: () => iosRunnerTree([iosLabel("Continue", { identifier: "row" })]),
+    },
+    {
+      name: "hidden",
+      wait: { condition: "hidden", selector: { text: "Spinner" } },
+      tree: () => iosRunnerTree([iosLabel("Continue")]),
+    },
+    {
+      name: "text/contains",
+      wait: { condition: "text", selector: { text: "Total" }, expectedText: "$5.00" },
+      tree: () => iosRunnerTree([iosLabel("Total: $5.00")]),
+    },
+    {
+      name: "text/equals",
+      wait: {
+        condition: "text",
+        selector: { text: "Total" },
+        expectedText: "Total: $5.00",
+        textMatch: "equals",
+      },
+      tree: () => iosRunnerTree([iosLabel("Total: $5.00")]),
+    },
+    {
+      name: "role selector",
+      wait: { condition: "visible", selector: { role: "StaticText" } },
+      tree: () => iosRunnerTree([iosLabel("Continue")]),
+    },
+  ];
+
+  for (const testCase of AGREEMENT) {
+    it(`agrees with the live evaluator on a \`${testCase.name}\` wait`, async () => {
+      const tree = testCase.tree();
+      serveTree(tree);
+
+      // What await-ui-element's OWN evaluator decides about this very tree.
+      // The fixture is only meaningful if the live side passes: that is the
+      // premise the probe is being asked to confirm.
+      const liveVerdict = evaluateMatches(
+        { udid: IOS, ...testCase.wait } as Parameters<typeof evaluateMatches>[0],
+        findAll(tree, testCase.wait.selector as Selector)
+      );
+      expect(liveVerdict).toBe(true);
+
+      await startRecording("agreecase");
+      const result = await recordWait("agreecase", testCase.wait);
+
+      expect(warningOf(result, "agreecase")).toBeUndefined();
+    });
+  }
+
+  // ── The live wait itself never held ───────────────────────────────────────
+  //
   // `await-ui-element` reports an unmet condition by returning
   // { success: false }, so the recorder's success path records the step. The
   // cross-tree warning must not be attached there: it says the raw step
   // "replays fine — it reads the same tree it just passed against", and this
   // one never passed. At replay an unmet wait fails the step and stops the run.
   it("does not claim a wait that never held replays fine", async () => {
-    // The runner's tree AGREES with the selector, so the cross-tree probe —
-    // had it run — would have found nothing to warn about and the step would
-    // have been narrated as clean.
-    runnerTree = () => screen(["Continue"]);
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "unmet", project_root: tmpDir, executionPrerequisite: "on the form" }
+    // The runner's tree AGREES with the selector, so the probe — had it run —
+    // would have found nothing to warn about and the step would have been
+    // narrated as clean.
+    await startRecording("unmet");
+
+    const result = await recordWait(
+      "unmet",
+      { condition: "visible", selector: { text: "Continue" } },
+      { registry: registryWhereWaitTimesOut() }
     );
-    const tool = createFlowAddStepTool(registryWhereWaitTimesOut());
+
+    const warning = warningOf(result, "unmet");
+    expect(warning).toContain("the wait itself never held");
+    expect(warning).toContain("stops the run there");
+    expect(warning).not.toContain("replays fine");
+    // Nothing was compared, so nothing may blame a tree divergence or send the
+    // author to re-record against "a selector present in both".
+    expect(warning).not.toContain("neither contains the other");
+    expect(warning).not.toContain("present in both");
+    // The probe never ran, so the runner's tree was never read.
+    expect(fetchCount).toBe(0);
+    // Recording the step anyway is the pre-existing behaviour; only the
+    // narration changes.
+    expect(await recordedSteps("unmet")).toHaveLength(1);
+  });
+
+  // ── The probe is gated on the command ─────────────────────────────────────
+  it("does not re-probe a command that is not a wait", async () => {
+    await startRecording("tap");
+    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
 
     const result = await tool.execute(
       {},
       {
-        name: "unmet",
+        name: "tap",
         project_root: tmpDir,
-        command: "await-ui-element",
-        args: JSON.stringify({
-          udid: DEVICE,
-          condition: "visible",
-          selector: { text: "Continue" },
-        }),
+        command: "gesture-tap",
+        args: JSON.stringify({ udid: IOS, x: 0.2, y: 0.15 }),
       }
     );
 
-    expect(result.message).toContain("the wait itself never held");
-    expect(result.message).toContain("stops the run there");
-    expect(result.message).not.toContain("replays fine");
-    // Nothing was compared, so nothing may blame a tree divergence or send the
-    // author to re-record against "a selector present in both".
-    expect(result.message).not.toContain("neither contains the other");
-    expect(result.message).not.toContain("present in both");
-    // Recording the step anyway is the pre-existing behaviour; only the
-    // narration changes.
-    expect(parseFlow(await onDisk("unmet")).steps).toHaveLength(1);
+    expect(warningOf(result, "tap")).toBeUndefined();
+    // Exactly one read — the tap's own selector capture. A second would mean
+    // the cross-tree probe ran on a command that has no condition to re-probe.
+    expect(fetchCount).toBe(1);
   });
 
-  it("warns — but still records — a check the runner's tree cannot see", async () => {
-    // The wait passed against the AX tree and the element the runner reads has
-    // no such text. The step IS recorded, because what the recorder writes is
-    // a raw `tool: await-ui-element` step, and at replay that tool reads the
-    // very tree it just passed against — "it would fail every run" was false.
-    // What the probe really reports is that converting it to `await:`/`assert:`
-    // at polish would not resolve, which is exactly what the warning says.
-    runnerTree = () => screen(["Proceed"]);
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "disagree", project_root: tmpDir, executionPrerequisite: "on the form" }
+  // A wait carrying `delayMs` is still a wait: the delay is a replay-time sleep
+  // before the step, and says nothing about which tree the condition resolves
+  // against. (Contrast the tap and restart-app rewrites, which a delayMs
+  // deliberately opts out of.)
+  it("still re-probes a wait that carries delayMs", async () => {
+    serveTree(iosRunnerTree([iosLabel("Proceed")]));
+    await startRecording("delayed");
+
+    const result = await recordWait(
+      "delayed",
+      { condition: "visible", selector: { text: "Continue" } },
+      { delayMs: 250 }
     );
 
-    const result = await recordWait("disagree", "Continue");
+    expect(warningOf(result, "delayed")).toContain("does NOT hold against the tree the runner");
+    expect(await recordedSteps("delayed")).toEqual([
+      {
+        kind: "tool",
+        name: "await-ui-element",
+        args: { condition: "visible", selector: { text: "Continue" } },
+        delayMs: 250,
+      },
+    ]);
+  });
 
-    expect(result.message).toContain("does NOT hold against the tree the runner resolves");
+  // ── Per-platform divergences, each produced by that platform's adapter ────
+
+  // iOS: `projectIosNode` skips a transparent subtree outright, so a view the
+  // AX tree (and native-find-views) still reports is absent from the runner's
+  // projection entirely.
+  it("iOS: warns when the runner's projection drops a transparent view", async () => {
+    serveTree(iosRunnerTree([iosLabel("Continue", { alpha: 0 })]));
+    await startRecording("ios");
+
+    const result = await recordWait("ios", {
+      condition: "visible",
+      selector: { text: "Continue" },
+    });
+    const warning = warningOf(result, "ios");
+
+    expect(warning).toContain("does NOT hold against the tree the runner resolves");
     // The probe reads on the same short grace an `assert:` uses, so it predicts
-    // that conversion exactly; an `await:` polls longer, so it is only warned as
-    // conditional — not a flat "WILL fail" the probe's 1s window can't prove.
-    expect(result.message).toContain("an `assert:` conversion WILL fail");
-    expect(result.message).toContain("an `await:` will too unless the element reaches that tree");
-    expect(result.message).not.toContain("`await:`/`assert:` at polish WILL fail");
+    // that conversion exactly; an `await:` polls longer, so it is only warned
+    // as conditional — not a flat "WILL fail" the probe's 1s window can't prove.
+    expect(warning).toContain("an `assert:` conversion WILL fail");
+    expect(warning).toContain("an `await:` will too unless the element reaches that tree");
     // iOS must NOT be told a tool "reads the runner's side": the Apple-only
-    // full-hierarchy readers return the RAW view tree (a superset of the
-    // runner's projection) and match identifier/label/className exactly, while
-    // a recorded selector's `text`/`role` are substrings. They would report
-    // elements the runner never sees and miss matches it does make.
-    expect(result.message).toContain("No read-only tool reports the runner's projection on iOS");
-    expect(result.message).not.toContain("reads the runner's side");
-    expect(parseFlow(await onDisk("disagree")).steps).toHaveLength(1);
-  }, 20_000);
+    // full-hierarchy readers return the RAW view tree — which still holds this
+    // very alpha-0 view — and match identifier/label/className exactly, while a
+    // recorded selector's `text`/`role` are substrings.
+    expect(warning).toContain("No read-only tool reports the runner's projection on iOS");
+    expect(await recordedSteps("ios")).toHaveLength(1);
+  });
+
+  // Android: `projectAndroidNode` skips system chrome with its whole subtree,
+  // so a label served by the system UI package never reaches the runner.
+  it("Android: warns when the runner's projection drops system chrome", async () => {
+    serveTree(
+      androidRunnerTree(
+        `<node index="0" class="android.view.View" resource-id="com.android.systemui:id/status_bar" package="com.android.systemui" bounds="[0,0][1080,60]">
+           ${androidRow("Continue")}
+         </node>`
+      ),
+      "android-devtools"
+    );
+    await startRecording("android");
+
+    const result = await recordWait("android", {
+      udid: ANDROID,
+      condition: "visible",
+      selector: { text: "Continue" },
+    });
+    const warning = warningOf(result, "android");
+
+    expect(warning).toContain("does NOT hold against the tree the runner resolves");
+    // The reader clause is its own sentence after the divergence sentence's
+    // period, so it must start capitalized — not "…drops. no read-only…".
+    expect(warning).toContain(
+      "drops. No read-only tool exposes the runner's full hierarchy on Android"
+    );
+    expect(warning).not.toContain("native-find-views");
+    expect(await recordedSteps("android")).toHaveLength(1);
+  });
+
+  // Chromium: `projectChromiumNode` drops a node with no on-screen frame, and
+  // the walker clamps an off-viewport element's frame to zero area. `describe`
+  // still lists it — so `exists` holds live and not for the runner.
+  it("Chromium: warns when the runner's projection drops an off-viewport node", async () => {
+    serveTree(
+      chromiumRunnerTree([
+        n({ role: "span", value: "Continue", frame: { x: 0.03, y: 1, width: 0.94, height: 0 } }),
+      ]),
+      "cdp-dom"
+    );
+    await startRecording("chromium");
+
+    const result = await recordWait("chromium", {
+      udid: CHROMIUM,
+      condition: "exists",
+      selector: { text: "Continue" },
+    });
+    const warning = warningOf(result, "chromium");
+
+    expect(warning).toContain("does NOT hold against the tree the runner resolves");
+    // Capitalized, as its own sentence after the divergence sentence's period.
+    expect(warning).toContain(
+      "runner. No read-only tool exposes the runner's trimmed tree on Chromium"
+    );
+    expect(warning).not.toContain("native-find-views");
+    expect(await recordedSteps("chromium")).toHaveLength(1);
+  });
+
+  // Vega is the one platform whose runner tree CANNOT disagree on an unchanged
+  // screen: `projectVegaNode` skips nothing and emits every node as a leaf, so
+  // membership, frames and visibility are identical, and the only edit is a
+  // hoisted `subtreeText` — which `evaluateCondition` treats as additional
+  // evidence beside a node's own text, never as a replacement. The two
+  // assertions below pin both halves: the hoist never flips a passing check,
+  // and when a warning does fire the message blames the screen, not the trees.
+  it("Vega: the text hoist alone never turns a passing check into a warning", async () => {
+    const parsed = [
+      n({
+        identifier: "totals",
+        label: "Total",
+        frame: ROW,
+        children: [n({ role: "text", label: "$5.00", frame: { ...ROW, y: 0.16 }, children: [] })],
+      }),
+    ];
+    const flowTree = vegaRunnerTree(parsed);
+    serveTree(flowTree, "vega-automation");
+    await startRecording("vegahoist");
+
+    // The container's hoisted text is strictly longer than its own — the
+    // divergence the earlier wording claimed could break an `equals`.
+    expect(findAll(flowTree, { identifier: "totals" })[0]?.subtreeText).toContain("$5.00");
+
+    const result = await recordWait("vegahoist", {
+      udid: VEGA,
+      condition: "text",
+      selector: { identifier: "totals" },
+      expectedText: "Total",
+      textMatch: "equals",
+    });
+
+    expect(warningOf(result, "vegahoist")).toBeUndefined();
+  });
+
+  it("Vega: blames a changed screen, not two different projections", async () => {
+    // The only way a Vega probe disagrees: the screen moved on between the
+    // live wait and the re-probe.
+    serveTree(
+      vegaRunnerTree([n({ role: "text", label: "Proceed", frame: ROW })]),
+      "vega-automation"
+    );
+    await startRecording("vega");
+
+    const result = await recordWait("vega", {
+      udid: VEGA,
+      condition: "visible",
+      selector: { text: "Continue" },
+    });
+    const warning = warningOf(result, "vega");
+
+    expect(warning).toContain("does NOT hold against the tree the runner resolves");
+    expect(warning).toContain("the SCREEN changed between the live wait and this re-probe");
+    expect(warning).toContain("`describe` reads the same source the runner does");
+    expect(warning).not.toContain("different projections of the screen");
+    // The other three platforms' imperative. Here the selector is fine and the
+    // screen is what moved, so nothing may send the author to re-record it.
+    expect(warning).not.toContain("re-record with a selector");
+    expect(warning).toContain("re-run the wait");
+    expect(await recordedSteps("vega")).toHaveLength(1);
+  });
+
+  // Each platform's remedy must be its own. Pinning them only by "does this
+  // string appear" lets a reworded clause collapse two platforms onto one
+  // wording while every negative assertion above still passes.
+  it("gives each platform a distinct remedy", async () => {
+    const warnings = new Map<string, string>();
+    for (const [name, udid] of [
+      ["ios", IOS],
+      ["android", ANDROID],
+      ["chromium", CHROMIUM],
+      ["vega", VEGA],
+    ] as const) {
+      serveTree(iosRunnerTree([iosLabel("Proceed")]));
+      await startRecording(`distinct-${name}`);
+      const result = await recordWait(`distinct-${name}`, {
+        udid,
+        condition: "visible",
+        selector: { text: "Continue" },
+      });
+      warnings.set(name, warningOf(result, `distinct-${name}`) ?? "");
+    }
+
+    expect(new Set(warnings.values()).size).toBe(4);
+    // And none of them may fall through to the unreachable-platform fallback.
+    for (const warning of warnings.values()) {
+      expect(warning).not.toContain("on this platform — keep the step raw");
+    }
+  }, 15_000);
+
+  // ── Indeterminate: unknown must never be dressed up as a verdict ──────────
 
   it("records with a warning when the runner's tree cannot be read at all", async () => {
     // The injection-free case: the runner's tree source is unavailable on this
     // device. Indeterminate is not a verdict, so refusing here would block a
     // form the skill explicitly sanctions.
-    runnerTree = () => {
+    fetchRunnerTree = async () => {
       throw new Error("native devtools is unavailable");
     };
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "blind", project_root: tmpDir, executionPrerequisite: "on the form" }
-    );
+    await startRecording("blind");
 
-    const result = await recordWait("blind", "Continue");
+    const result = await recordWait("blind", {
+      condition: "visible",
+      selector: { text: "Continue" },
+    });
+    const warning = warningOf(result, "blind");
 
-    expect(result.message).toContain("could not be re-verified against the tree the RUNNER reads");
-    expect(result.message).toContain("is UNKNOWN, not known-bad");
+    expect(warning).toContain("could not be re-verified against the tree the RUNNER reads");
+    expect(warning).toContain("is UNKNOWN, not known-bad");
     // Its own rule: nothing was compared, so nothing may claim the two trees
     // differ — nor append the remedy that follows from a comparison.
-    expect(result.message).not.toContain("neither contains the other");
-    expect(result.message).not.toContain("No read-only tool");
-    expect(result.message).not.toContain("re-record");
-    expect(parseFlow(await onDisk("blind")).steps).toHaveLength(1);
-  }, 20_000);
+    expect(warning).not.toContain("neither contains the other");
+    expect(warning).not.toContain("No read-only tool");
+    expect(warning).not.toContain("re-record");
+    expect(await recordedSteps("blind")).toHaveLength(1);
+  });
 
   // "the accessibility tree" is the recorder's tree only on iOS and Android. On
   // Chromium the recorder read the CDP DOM and on Vega the toolkit page source,
@@ -244,155 +613,18 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     fetchRunnerTree = async () => {
       throw new Error("CDP session closed");
     };
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "blindchromium", project_root: tmpDir, executionPrerequisite: "on the form" }
-    );
+    await startRecording("blindchromium");
 
-    const result = await recordWait("blindchromium", "Continue", CHROMIUM);
+    const result = await recordWait("blindchromium", {
+      udid: CHROMIUM,
+      condition: "visible",
+      selector: { text: "Continue" },
+    });
+    const warning = warningOf(result, "blindchromium");
 
-    expect(result.message).toContain("could not be re-verified against the tree the RUNNER reads");
-    expect(result.message).toContain("the tree `await-ui-element` reads");
-    expect(result.message).not.toContain("accessibility tree");
-    expect(parseFlow(await onDisk("blindchromium")).steps).toHaveLength(1);
+    expect(warning).toContain("the tree `await-ui-element` reads");
+    expect(warning).not.toContain("accessibility tree");
   });
-
-  // The reader clause is platform-specific on purpose: no read-only tool reads
-  // Android's runner tree (the full a11y hierarchy — native-find-views /
-  // native-full-hierarchy are Apple-only), and Android `describe` returns the
-  // TRIMMED tree the recorder already read. So the warning must NOT tell an
-  // Android author that `describe` "reads the runner's side" — that would point
-  // them at the recorder's own tree, the exact wrong-tree steer this warns
-  // about. It also must not name the Apple-only `native-find-views`.
-  it("on Android, does not claim `describe` reads the runner's side", async () => {
-    runnerTree = () => screen(["Proceed"]);
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "android", project_root: tmpDir, executionPrerequisite: "on the form" }
-    );
-
-    const result = await recordWait("android", "Continue", ANDROID);
-
-    expect(result.message).toContain("does NOT hold against the tree the runner resolves");
-    // The reader clause is its own sentence after the divergence sentence's
-    // period, so it must start capitalized — not "…drops. no read-only…".
-    expect(result.message).toContain(
-      "drops. No read-only tool exposes the runner's full hierarchy on Android"
-    );
-    expect(result.message).not.toContain("reads the runner's side");
-    expect(result.message).not.toContain("native-find-views");
-    expect(parseFlow(await onDisk("android")).steps).toHaveLength(1);
-  }, 20_000);
-
-  // The Chromium reader clause is special-cased for the same reason Android is:
-  // `describe` on Chromium is the recorder's UN-trimmed DOM (a superset), and it
-  // still shows the very nodes — role-only, non-addressable — that the runner's
-  // addressable-only tree drops. Telling the author `describe` "reads the
-  // runner's side" would send them to a tool that shows the element the runner
-  // can't see, so they'd ship an `assert:` that fails every replay. The warning
-  // must NOT name `describe` as the runner's reader there.
-  it("on Chromium, does not claim `describe` reads the runner's side", async () => {
-    runnerTree = () => screen(["Proceed"]);
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "chromium", project_root: tmpDir, executionPrerequisite: "on the form" }
-    );
-
-    const result = await recordWait("chromium", "Continue", CHROMIUM);
-
-    expect(result.message).toContain("does NOT hold against the tree the runner resolves");
-    // Capitalized, as its own sentence after the divergence sentence's period.
-    expect(result.message).toContain(
-      "runner. No read-only tool exposes the runner's trimmed tree on Chromium"
-    );
-    expect(result.message).not.toContain("reads the runner's side");
-    expect(result.message).not.toContain("native-find-views");
-    expect(parseFlow(await onDisk("chromium")).steps).toHaveLength(1);
-  }, 20_000);
-
-  // Vega is the one platform whose two trees hold the SAME elements:
-  // flow-vega-tree re-shapes the very page source `describe` read (flatten +
-  // text hoist) and drops nothing. So the generic "different projections of the
-  // screen" line overstates it, and `describe` really does list what the runner
-  // resolves against — the divergence is confined to a container's text.
-  it("on Vega, does not claim the two trees are different projections", async () => {
-    runnerTree = () => screen(["Proceed"]);
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "vega", project_root: tmpDir, executionPrerequisite: "on the form" }
-    );
-
-    const result = await recordWait("vega", "Continue", VEGA);
-
-    expect(result.message).toContain("does NOT hold against the tree the runner resolves");
-    expect(result.message).toContain("the SCREEN changed between the live wait and this re-probe");
-    expect(result.message).toContain("`describe` reads the same source the runner does");
-    expect(result.message).not.toContain("different projections of the screen");
-    // The other platforms' imperative: here the selector is fine and the screen
-    // is what moved, so nothing may send the author to re-record it.
-    expect(result.message).not.toContain("re-record with a selector");
-    expect(parseFlow(await onDisk("vega")).steps).toHaveLength(1);
-  }, 20_000);
-
-  // A `condition: "text"` wait carries an expectedText (and optional textMatch)
-  // that the probe must forward into the runner-tree evaluation. If they were
-  // dropped, the probe would score `text` as false unconditionally and warn on
-  // every text wait that actually agrees; if expectedText were ignored, a wrong
-  // value would never warn. These two pin both directions.
-  it("forwards expectedText on a `text` wait: no warning when the value matches", async () => {
-    runnerTree = () => screen(["Total: $5.00"]);
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "textok", project_root: tmpDir, executionPrerequisite: "on the form" }
-    );
-    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
-
-    const result = await tool.execute(
-      {},
-      {
-        name: "textok",
-        project_root: tmpDir,
-        command: "await-ui-element",
-        args: JSON.stringify({
-          udid: DEVICE,
-          condition: "text",
-          selector: { text: "Total" },
-          expectedText: "$5.00",
-        }),
-      }
-    );
-
-    expect(result.message).toContain("Step added");
-    expect(result.message).not.toContain("does NOT hold");
-    expect(parseFlow(await onDisk("textok")).steps).toHaveLength(1);
-  });
-
-  it("evaluates expectedText on a `text` wait: warns when the value is absent", async () => {
-    runnerTree = () => screen(["Total: $3.00"]);
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "textbad", project_root: tmpDir, executionPrerequisite: "on the form" }
-    );
-    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
-
-    const result = await tool.execute(
-      {},
-      {
-        name: "textbad",
-        project_root: tmpDir,
-        command: "await-ui-element",
-        args: JSON.stringify({
-          udid: DEVICE,
-          condition: "text",
-          selector: { text: "Total" },
-          expectedText: "$5.00",
-        }),
-      }
-    );
-
-    expect(result.message).toContain("does NOT hold against the tree the runner resolves");
-    expect(parseFlow(await onDisk("textbad")).steps).toHaveLength(1);
-  }, 20_000);
 
   // `probeWhenCondition` budgets its POLL LOOP at the 1s assert grace, but each
   // tree read inside it is awaited unbounded and the clock is only checked
@@ -404,25 +636,73 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     // A read that never settles at all: the only bound that can end this call
     // is the probe's own ceiling.
     fetchRunnerTree = () => new Promise<DescribeTreeData>(() => {});
-
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "slow", project_root: tmpDir, executionPrerequisite: "on the form" }
-    );
+    await startRecording("slow");
 
     const startedAt = Date.now();
-    const result = await recordWait("slow", "Continue");
+    const result = await recordWait("slow", {
+      condition: "visible",
+      selector: { text: "Continue" },
+    });
     const elapsed = Date.now() - startedAt;
+    const warning = warningOf(result, "slow");
 
-    expect(result.message).toContain("could not be re-verified against the tree the RUNNER reads");
-    expect(result.message).toContain("did not answer within");
+    expect(warning).toContain("could not be re-verified against the tree the RUNNER reads");
+    expect(warning).toContain("did not answer within");
     // Never a verdict: nothing was compared, so the conversion is UNKNOWN.
-    expect(result.message).not.toContain("does NOT hold");
+    expect(warning).not.toContain("does NOT hold");
     // The ceiling is 4s; anything near a full Chromium (10s) or uiautomator
-    // (20s) read means the bound is not holding.
+    // (20s) read means the bound is not holding. The timeout below is the only
+    // generous one in the file, and only because this test waits out that
+    // ceiling on purpose.
     expect(elapsed).toBeLessThan(6000);
-    expect(parseFlow(await onDisk("slow")).steps).toHaveLength(1);
-  }, 30_000);
+    expect(await recordedSteps("slow")).toHaveLength(1);
+  }, 15_000);
+
+  // A `text` reason quotes the matched element's rendered content, and on the
+  // flow tree that content is HOISTED — a container carries every descendant's
+  // text, space-joined. Unbounded, one failed check can paste a whole log pane
+  // into the tool result the agent reads in full. Before this branch a recorded
+  // wait's message carried no screen content at all.
+  it("caps the screen text it echoes back", async () => {
+    const wall = "Lorem ipsum dolor sit amet ".repeat(60); // ~1600 chars
+    serveTree(iosRunnerTree([iosLabel(`Total ${wall}`)]));
+    await startRecording("long");
+
+    const result = await recordWait("long", {
+      condition: "text",
+      selector: { text: "Total" },
+      expectedText: "$5.00",
+    });
+    const warning = warningOf(result, "long") ?? "";
+
+    expect(warning).toContain("does NOT hold against the tree the runner resolves");
+    expect(warning).toContain("more chars)");
+    // Enough of the text to be actionable, not the whole screen.
+    expect(warning).toContain("Lorem ipsum");
+    expect(warning.length).toBeLessThan(wall.length);
+  });
+
+  // ── Cancellation ─────────────────────────────────────────────────────────
+
+  it("throws AbortError when the run is cancelled during the re-probe", async () => {
+    // The live await-ui-element still "passes" (the mock ignores the signal), so
+    // the abort lands in the re-probe — strictly after the recorded tool ran.
+    // The probe must surface that as an abort and record nothing.
+    await startRecording("cancel");
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      recordWait(
+        "cancel",
+        { condition: "visible", selector: { text: "Continue" } },
+        { signal: controller.signal }
+      )
+    ).rejects.toThrow(/aborted while re-probing/);
+
+    // The abort fired before the append, so the flow still has no steps.
+    expect(await recordedSteps("cancel")).toHaveLength(0);
+  });
 
   // The clause tables carry no `ios-remote` arm, and this is why: a remote sim
   // never reaches the probe at all. `await-ui-element` declares no appleRemote
@@ -434,77 +714,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     const tool = createAwaitUiElementTool(registryWhereWaitSucceeds());
     expect(tool.capability?.appleRemote).toBeUndefined();
     expect(() =>
-      assertSupported("await-ui-element", tool.capability, resolveDevice("remote:" + DEVICE))
+      assertSupported("await-ui-element", tool.capability, resolveDevice(`remote:${IOS}`))
     ).toThrow(/not supported on ios-remote/);
-  });
-
-  // A `text` reason quotes the matched element's rendered content, and on the
-  // flow tree that content is HOISTED — a container carries every descendant's
-  // text, space-joined. Unbounded, one failed check can paste a whole log pane
-  // into the tool result the agent reads in full. Before this branch a recorded
-  // wait's message carried no screen content at all.
-  it("caps the screen text it echoes back", async () => {
-    const wall = "Lorem ipsum dolor sit amet ".repeat(60); // ~1600 chars
-    runnerTree = () => screen([`Total ${wall}`]);
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "long", project_root: tmpDir, executionPrerequisite: "on the form" }
-    );
-    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
-
-    const result = await tool.execute(
-      {},
-      {
-        name: "long",
-        project_root: tmpDir,
-        command: "await-ui-element",
-        args: JSON.stringify({
-          udid: DEVICE,
-          condition: "text",
-          selector: { text: "Total" },
-          expectedText: "$5.00",
-        }),
-      }
-    );
-
-    expect(result.message).toContain("does NOT hold against the tree the runner resolves");
-    expect(result.message).toContain("more chars)");
-    // Enough of the text to be actionable, not the whole screen.
-    expect(result.message).toContain("Lorem ipsum");
-    expect(result.message.length).toBeLessThan(wall.length);
-    expect(parseFlow(await onDisk("long")).steps).toHaveLength(1);
-  }, 20_000);
-
-  it("throws AbortError when the run is cancelled during the re-probe", async () => {
-    // The live await-ui-element still "passes" (the mock ignores the signal), so
-    // the abort lands in the re-probe — strictly after the recorded tool ran.
-    // The probe must surface that as an abort and record nothing.
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "cancel", project_root: tmpDir, executionPrerequisite: "on the form" }
-    );
-    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
-    const controller = new AbortController();
-    controller.abort();
-
-    await expect(
-      tool.execute(
-        {},
-        {
-          name: "cancel",
-          project_root: tmpDir,
-          command: "await-ui-element",
-          args: JSON.stringify({
-            udid: DEVICE,
-            condition: "visible",
-            selector: { text: "Continue" },
-          }),
-        },
-        { signal: controller.signal } as never
-      )
-    ).rejects.toThrow(/aborted while re-probing/);
-
-    // The abort fired before the append, so the flow still has no steps.
-    expect(parseFlow(await onDisk("cancel")).steps).toHaveLength(0);
   });
 });
