@@ -76,17 +76,28 @@ export function takeReapedSession(
 }
 
 /**
- * The sentence a tool shows in place of "no active session". Names the cause,
- * says it is not necessarily this agent's own doing (one tool-server serves
- * every agent), and points at whatever survived.
+ * The sentence a tool shows in place of "no active session". Names what
+ * happened, says it is not necessarily this agent's own doing (one tool-server
+ * serves every agent), and points at whatever survived.
+ *
+ * The disposer that leaves a breadcrumb cannot see who triggered it — a
+ * blueprint's `dispose()` is called by `Registry._teardown`, with no caller — so
+ * the message names the family rather than asserting one member.
+ * `stop-all-simulator-servers` is the common one and is named first, but it is
+ * not the only one: `stop-simulator-server` on Chromium cascades into the
+ * debugger through `ChromiumCdp` (its documented behaviour), and
+ * `react-profiler-start { force: true }` disposes the debugger and the profiler
+ * session to reclaim them.
  */
 export function describeReapedSession(entry: ReapedSession, what: string): string {
   const secondsAgo = Math.max(0, Math.round((Date.now() - entry.atMs) / 1000));
   return (
-    `The ${what} for device ${entry.deviceId} was torn down ${secondsAgo}s ago by a ` +
-    `stop-all-simulator-servers, which reaps every service a device owns — one tool-server ` +
-    `serves every agent using this argent install, so this may have been another agent ending ` +
-    `its session. It was not a session that never started.` +
+    `The ${what} for device ${entry.deviceId} was torn down ${secondsAgo}s ago — by a ` +
+    `stop-all-simulator-servers, which reaps every service a device owns, or by another ` +
+    `teardown that reaches the same services (a stop-simulator-server on Chromium, or a ` +
+    `react-profiler-start reclaiming the session with force). One tool-server serves every ` +
+    `agent using this argent install, so this may have been another agent rather than your own ` +
+    `call. It was not a session that never started.` +
     (entry.salvage ? ` ${entry.salvage}` : "")
   );
 }

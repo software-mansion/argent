@@ -63,6 +63,26 @@ describe("the reaped-session key", () => {
     expect(takeReapedSession("screen-recording", UDID)).toBeUndefined();
   });
 
+  it("does not pin the teardown on one caller the disposer cannot have seen", () => {
+    // A blueprint's dispose() is called by Registry._teardown with no caller, so
+    // nothing that writes a breadcrumb knows which tool triggered it.
+    // stop-all-simulator-servers is the common one, but stop-simulator-server on
+    // Chromium cascades into the debugger through ChromiumCdp, and
+    // react-profiler-start { force: true } disposes it to reclaim the session —
+    // so the message names the family rather than asserting one member.
+    recordReapedSession("js-runtime-debugger", UDID);
+
+    const message = describeReapedSession(
+      takeReapedSession("js-runtime-debugger", UDID)!,
+      "JS-runtime debugger session"
+    );
+    expect(message).toContain("stop-all-simulator-servers");
+    expect(message).toContain("stop-simulator-server on Chromium");
+    expect(message).toContain("react-profiler-start");
+    // The claim that made it wrong two ways out of three.
+    expect(message).not.toMatch(/torn down \d+s ago by a stop-all-simulator-servers/);
+  });
+
   it("omits the salvage clause entirely when nothing survived", () => {
     recordReapedSession("native-profiler", UDID);
 
