@@ -17,15 +17,19 @@ import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/co
 // await-ui-element tool is stubbed to report success, i.e. the AX tree agreed.
 
 let runnerTree: () => DescribeNode;
+// The whole fetch is the seam, not just the tree it yields: a test that needs
+// the read itself to hang (rather than to throw or to return) replaces this.
+// Reset in beforeEach so no test leaks its implementation into the next.
+let fetchRunnerTree: () => Promise<DescribeTreeData>;
 vi.mock("../../src/tools/flows/flow-tree", () => ({
-  fetchFlowTree: vi.fn(
-    async (): Promise<DescribeTreeData> => ({
-      tree: runnerTree(),
-      source: "native-devtools",
-      screen: { width: 390, height: 844 },
-    })
-  ),
+  fetchFlowTree: vi.fn((): Promise<DescribeTreeData> => fetchRunnerTree()),
 }));
+
+const defaultFetch = async (): Promise<DescribeTreeData> => ({
+  tree: runnerTree(),
+  source: "native-devtools",
+  screen: { width: 390, height: 844 },
+});
 
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
@@ -108,6 +112,7 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-cross-tree-"));
   __resetRecordingsForTesting();
   runnerTree = () => screen(["Continue"]);
+  fetchRunnerTree = defaultFetch;
 });
 
 afterEach(async () => {
@@ -328,6 +333,36 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(result.message).toContain("does NOT hold against the tree the runner resolves");
     expect(parseFlow(await onDisk("textbad")).steps).toHaveLength(1);
   }, 20_000);
+
+  // `probeWhenCondition` budgets its POLL LOOP at the 1s assert grace, but each
+  // tree read inside it is awaited unbounded and the clock is only checked
+  // between reads — so a slow source (10s on Chromium CDP, up to 20s for an
+  // Android uiautomator dump) stalls the recorder far past the window the
+  // warning advertises. The probe must be ceilinged, and an overrun reported as
+  // indeterminate rather than as a verdict.
+  it("gives up on a tree read that outruns the probe budget", async () => {
+    // A read that never settles at all: the only bound that can end this call
+    // is the probe's own ceiling.
+    fetchRunnerTree = () => new Promise<DescribeTreeData>(() => {});
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "slow", project_root: tmpDir, executionPrerequisite: "on the form" }
+    );
+
+    const startedAt = Date.now();
+    const result = await recordWait("slow", "Continue");
+    const elapsed = Date.now() - startedAt;
+
+    expect(result.message).toContain("could not be re-verified against the tree the RUNNER reads");
+    expect(result.message).toContain("did not answer within");
+    // Never a verdict: nothing was compared, so the conversion is UNKNOWN.
+    expect(result.message).not.toContain("does NOT hold");
+    // The ceiling is 4s; anything near a full Chromium (10s) or uiautomator
+    // (20s) read means the bound is not holding.
+    expect(elapsed).toBeLessThan(6000);
+    expect(parseFlow(await onDisk("slow")).steps).toHaveLength(1);
+  }, 30_000);
 
   it("throws AbortError when the run is cancelled during the re-probe", async () => {
     // The live await-ui-element still "passes" (the mock ignores the signal), so

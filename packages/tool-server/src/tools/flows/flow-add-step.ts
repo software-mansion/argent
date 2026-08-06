@@ -22,10 +22,11 @@ import {
   type RecordingSession,
 } from "./flow-utils";
 import { AWAIT_UI_ELEMENT_TOOL_ID, isUnmetUiWaitResult } from "../await-ui-element";
-import { probeWhenCondition } from "./flow-actions";
+import { probeWhenCondition, type DirectiveOutcome } from "./flow-actions";
 import { summarizeStep } from "./flow-finish-recording";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { resolveDevice } from "../../utils/device-info";
+import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
 import { fetchFlowTree } from "./flow-tree";
 import type { DescribeSource } from "../describe/contract";
@@ -198,6 +199,29 @@ function abortError(): Error {
 }
 
 /**
+ * Hard ceiling on the whole re-probe. `probeWhenCondition` polls on the assert
+ * grace window (`DEFAULT_ASSERT_TIMEOUT_MS`, 1s), but that budget bounds
+ * only the LOOP: each `fetchFlowTree` inside it is awaited with no time bound
+ * and the clock is checked between reads, then one more read fires
+ * back-to-back after the deadline. A single read can take 10s on Chromium CDP
+ * and up to 20s for an Android `uiautomator dump`, so the nominal 1s window
+ * really ceilings at roughly two full reads — measured at 8.3s and 18.9s
+ * against a throttled background renderer.
+ *
+ * The live `await-ui-element` doesn't have this problem because
+ * `pollDescribeTree` races every fetch through `settleWithin`; the flow
+ * runner's copy of the loop doesn't, and its callers (`await:`/`assert:`/
+ * `when:`) run unattended where an overrun costs only time. The recorder is
+ * interactive and this probe is a courtesy check on a step that ALREADY ran,
+ * so bound it here rather than changing the shared loop: an overrun is
+ * reported as indeterminate — "unknown", never "known-bad" — exactly like a
+ * tree source that could not be read.
+ *
+ * The budget is the 1s grace plus enough slack for one in-flight read to land.
+ */
+const PROBE_BUDGET_MS = 4000;
+
+/**
  * The recorder and the runner read DIFFERENT trees. `await-ui-element`
  * evaluates against the accessibility tree; the `await:`/`assert:` DIRECTIVE
  * that polish converts this step into is evaluated against the runner's tree.
@@ -231,17 +255,37 @@ async function probeAgainstRunnerTree(
   } catch {
     return {}; // unresolvable device; the live result stands
   }
-  const outcome = await probeWhenCondition(
-    // The signal rides on ActionEnv separately from `ctx`, so pass it too:
-    // a cancelled flow-add-step must stop this probe rather than polling on.
-    { registry, ctx, device, signal: ctx?.signal },
-    {
-      condition: condition as WaitCondition,
-      selector: selector as FlowSelector,
-      expectedText: typeof args.expectedText === "string" ? args.expectedText : undefined,
-      textMatch: args.textMatch as TextMatchMode | undefined,
-    }
+  // Bounded by PROBE_BUDGET_MS: the loop's own deadline does not bound the
+  // tree reads it awaits, and the recorder must not stall on one.
+  const settled = await settleWithin(
+    probeWhenCondition(
+      // The signal rides on ActionEnv separately from `ctx`, so pass it too:
+      // a cancelled flow-add-step must stop this probe rather than polling on.
+      { registry, ctx, device, signal: ctx?.signal },
+      {
+        condition: condition as WaitCondition,
+        selector: selector as FlowSelector,
+        expectedText: typeof args.expectedText === "string" ? args.expectedText : undefined,
+        textMatch: args.textMatch as TextMatchMode | undefined,
+      }
+    ),
+    PROBE_BUDGET_MS,
+    ctx?.signal
   );
+  if (settled.type === "aborted") throw abortError();
+  // A read that outran the budget, and a probe that threw outright, are both
+  // "the runner's tree did not answer" — indeterminate, never a verdict.
+  const outcome: DirectiveOutcome =
+    settled.type === "value"
+      ? settled.value
+      : {
+          ok: false,
+          indeterminate: true,
+          reason:
+            settled.type === "timeout"
+              ? `the runner's tree did not answer within ${PROBE_BUDGET_MS}ms`
+              : `reading the runner's tree failed: ${settled.error}`,
+        };
   if (outcome.ok) return {};
   if (outcome.aborted) throw abortError();
   if (outcome.indeterminate) {
