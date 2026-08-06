@@ -321,7 +321,16 @@ const UNMET_WAIT_WARNING =
   "recorded, but the wait itself never held — `await-ui-element` reports an unmet condition by " +
   "returning success:false instead of failing, so the step was written to the flow anyway. At " +
   "replay an unmet wait FAILS the step and stops the run there, so re-record it once the " +
-  "condition can actually hold, or delete the step from the .yaml. The cross-tree re-probe was " +
+  // "Delete it from the .yaml" is only unconditionally true in host mode,
+  // where the recorder re-reads the file before each append. Against a remote
+  // client the in-memory copy is authoritative and the next append writes the
+  // step straight back — silently, since nothing reports the restore. The tool
+  // description carries that caveat for mid-recording edits generally; a
+  // warning that tells you to make one has to carry it too.
+  "condition can actually hold, or delete the step from the .yaml — in host (local) mode, where " +
+  "the recorder re-reads the file before each append; against a remote client the in-memory copy " +
+  "is authoritative mid-recording, so delete it after `flow-finish-recording` instead. " +
+  "The cross-tree re-probe was " +
   "skipped: it asks whether a check that PASSED would survive conversion to `await:`/`assert:`, " +
   "and this one did not pass";
 

@@ -372,6 +372,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     // author to re-record against "a selector present in both".
     expect(warning).not.toContain("neither contains the other");
     expect(warning).not.toContain("present in both");
+    // "Delete it from the .yaml" holds in host mode only: against a remote
+    // client the in-memory copy is authoritative mid-recording and the next
+    // append writes the step straight back, with nothing reporting the restore.
+    expect(warning).toContain("after `flow-finish-recording`");
     // The probe never ran, so the runner's tree was never read.
     expect(fetchCount).toBe(0);
     // Recording the step anyway is the pre-existing behaviour; only the
