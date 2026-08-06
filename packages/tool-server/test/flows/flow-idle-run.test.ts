@@ -372,7 +372,15 @@ steps:
   - await: { idle: true, timeout: 2000, minStableMs: 0 }
 `
     );
-    expect((await run("ready")).ok).toBe(true);
+    const r = await run("ready");
+    expect(r.ok).toBe(true);
+    // `ok` alone would hold for every idle outcome but an unreadable tree, so
+    // it says nothing about the threshold. What this case is about is that
+    // +1 per channel settles CLEANLY: no motion warning, and none about a
+    // spinner either — noise must not be reported as something small moving.
+    const step = r.steps.at(-1)!;
+    expect(step).toMatchObject({ kind: "idle", status: "pass" });
+    expect(step.warning).toBeUndefined();
   });
 
   // A reversing animation — a cross-fade, a pulse, a bounce — has a turning
@@ -516,11 +524,69 @@ steps:
     expect(r.ok).toBe(true);
     const step = r.steps.at(-1)!;
     expect(step.status).toBe("pass");
+    // The step has no target beyond the screen itself, and the renderer
+    // already prints the kind — a target here would read "idle screen idle".
+    expect(step.target).toBeUndefined();
     expect(step.warning).toContain("UI tree alone");
     // Attributed to the capture, not to the platform: on a device where
     // screenshots normally work this is a per-capture failure, not a property
     // of the OS.
     expect(step.warning).not.toContain("could not be captured on");
+  });
+
+  // The tree-only report is a claim that the HIERARCHY settled, so it owes the
+  // same hold every other settle does. Every case that reaches it elsewhere
+  // runs with `minStableMs: 0`, where the hold term is vacuous — drop it and
+  // the suite stays green while a tree that had only just stopped moving is
+  // reported as having settled.
+  it("does not report a tree-only settle when the hold was never served", async () => {
+    currentFrame = () => undefined;
+    // The tree keeps changing for the first 700ms, then holds. The last read
+    // lands ~1200ms in, so the hierarchy has been still for well under the
+    // 800ms hold, however many agreeing intervals it managed.
+    const startedAt = Date.now();
+    let churn = 0;
+    currentTree = () => screenWith(Date.now() - startedAt < 700 ? `Loading ${churn++}` : "Settled");
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, timeout: 1400, minStableMs: 800 }
+`
+    );
+    const step = (await run("ready")).steps.at(-1)!;
+    expect(step.status).toBe("pass");
+    expect(step.warning).not.toContain("UI tree alone");
+    expect(step.warning).toContain("never held still for 800ms");
+  });
+
+  // The localized flag describes the hold being REPORTED, so a hold that broke
+  // has to clear it. Without the reset, a spinner that stopped — then a screen
+  // that went still — still told the author something "kept changing the whole
+  // time".
+  it("forgets small motion that stopped before the settle that gets reported", async () => {
+    // Round 1 has no predecessor; 2 moves a spinner's worth; 3 moves the whole
+    // screen, breaking the hold; 4 and 5 are identical, which is the settle.
+    const WHOLE_FRAME = 300 * 600;
+    const frames = [
+      frameWithMovingPixels(0, 0),
+      frameWithMovingPixels(40, 0),
+      frameWithMovingPixels(WHOLE_FRAME, 90),
+      frameWithMovingPixels(WHOLE_FRAME, 90),
+      frameWithMovingPixels(WHOLE_FRAME, 90),
+    ];
+    let i = 0;
+    currentFrame = () => frames[Math.min(i++, frames.length - 1)];
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, minStableMs: 0 }
+`
+    );
+    const step = (await run("ready")).steps.at(-1)!;
+    expect(step).toMatchObject({ kind: "idle", status: "pass" });
+    expect(step.warning).toBeUndefined();
   });
 
   // A capture that goes missing used to cost the settle TWO intervals, not

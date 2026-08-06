@@ -108,6 +108,29 @@ describe("comparePixels", () => {
     expect(comparePixels(solid(30, 30, [0, 0, 0]), solid(30, 31, [0, 0, 0]))).toBe("moving");
   });
 
+  it("reads a frame with no pixels to compare as still, never as motion", () => {
+    // Same dimensions, so the branch above does not catch it, and there is
+    // nothing to count — a decoder that handed back an empty frame must not
+    // manufacture a verdict either way. Also the shape a full-height mask
+    // would take.
+    expect(comparePixels(solid(0, 0, [0, 0, 0]), solid(0, 0, [0, 0, 0]))).toBe("still");
+    expect(comparePixels(solid(30, 30, [0, 0, 0]), solid(30, 30, [255, 255, 255]), 1)).toBe(
+      "still"
+    );
+  });
+
+  it("compares only the bytes both frames actually carry", () => {
+    // Same declared dimensions but a truncated buffer — a partially decoded
+    // capture. Reading past the shorter one would compare against undefined
+    // and count NaN distances, so the loop stops at the shared length.
+    const short = solid(200, 200, [0, 0, 0]);
+    short.data = short.data.subarray(0, 40); // ten pixels' worth
+    expect(comparePixels(solid(200, 200, [0, 0, 0]), short)).toBe("still");
+    // Only those ten differ, and ten of 40k is localized — not the whole
+    // frame a run past the buffer's end would report.
+    expect(comparePixels(solid(200, 200, [255, 255, 255]), short)).toBe("localized");
+  });
+
   it("ignores a sub-threshold per-pixel color drift (encoder / resample noise)", () => {
     // +5 on every channel is well under the per-pixel tolerance, so no pixel
     // counts as changed — two captures of a static screen must read as still.
@@ -576,6 +599,26 @@ describe("capturePixels routing", () => {
     expect(pixelAt(pixels, 0)).toEqual(VISIBLE_BAND_RGB);
   });
 
+  it("reads a Chromium capture that came back with no data as no evidence", async () => {
+    // The compositor answering without `data` is a capture failure like any
+    // other: soft, so the settle records "no visual evidence this round"
+    // rather than failing the step on it.
+    const device: DeviceInfo = { platform: "chromium", kind: "app", id: "chromium-cdp-9222" };
+    const send = vi.fn(async (method: string) =>
+      method === "Page.getLayoutMetrics" ? { cssVisualViewport: { pageX: 0, pageY: 0 } } : {}
+    );
+    const api = { cdp: { send }, getViewport: () => ({ width: 900, height: 700 }) };
+
+    expect(
+      await capture(
+        envFor(
+          device,
+          vi.fn(async () => api)
+        )
+      )
+    ).toBeUndefined();
+  });
+
   it("falls back to the document origin when the layout metrics cannot be read", async () => {
     // A renderer that will not answer the metrics read leaves the capture no
     // worse off than never asking — an unscrolled clip, not a failed settle.
@@ -688,5 +731,16 @@ describe("capturePixelsWithin", () => {
     expect(
       pixelCaptureTimeoutMs({ platform: "chromium", kind: "app", id: "chromium-cdp-9222" }, true)
     ).toBe(PIXEL_CAPTURE_TIMEOUT_MS);
+    // Nor does Vega, which shells out to the emulator console — no stream
+    // either. Untested, this arm could be deleted and only Chromium would tell.
+    expect(pixelCaptureTimeoutMs({ platform: "vega", kind: "vvd", id: "vega-serial" }, true)).toBe(
+      PIXEL_CAPTURE_TIMEOUT_MS
+    );
+    // A tvOS simulator shells out too, but nothing here can tell it from an
+    // iOS one without an async probe, so it keeps the wider bound it will not
+    // spend.
+    expect(pixelCaptureTimeoutMs({ platform: "ios", kind: "simulator", id: "tv-udid" }, true)).toBe(
+      FIRST_PIXEL_CAPTURE_TIMEOUT_MS
+    );
   });
 });
