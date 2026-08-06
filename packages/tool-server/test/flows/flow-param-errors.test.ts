@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { Registry, getFailureSignal, FAILURE_CODES } from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../../src/tools/flows/flow-read-prerequisite";
+import { InvalidToolInputError } from "../../src/utils/capability";
 
 // An agent passed `flow_name` instead of `name` and got back
 //   [{"expected":"string","code":"invalid_type","path":["name"]}]
@@ -108,6 +109,8 @@ describe("flow-execute parameter handling", () => {
   });
 
   it("says which parameter it needs when neither spelling is present", async () => {
+    // Answered by the schema's exactly-one-source rule, whose message was given
+    // the same wording as resolveFlowName's so both reads are one answer.
     await expect(
       registry().invokeTool("flow-execute", {
         project_root: tmpDir,
@@ -116,12 +119,11 @@ describe("flow-execute parameter handling", () => {
     ).rejects.toThrow(/needs the flow's name in `name`.*`flow_name` is accepted as an alias/s);
   });
 
-  it("classifies a name-less call as a client-input VALIDATION error, not an internal fault", async () => {
-    // Because `name` is optional (for the alias), a name-less call passes zod
-    // and is rejected inside execute(). It must still carry a validation signal
-    // so the HTTP boundary maps it to 400 (via InvalidToolInputError) and
-    // telemetry does not log it as ARGENT_UNCLASSIFIED_FAILURE, matching the
-    // sibling validations, and the pre-alias zod-rejection it replaced.
+  it("classifies a source-less call as a client-input VALIDATION error, not an internal fault", async () => {
+    // Whichever check catches it, this must carry a validation signal so the
+    // HTTP boundary maps it to 400 and telemetry does not log it as
+    // ARGENT_UNCLASSIFIED_FAILURE — the classification the pre-alias
+    // zod-rejection it replaced already had.
     let caught: unknown;
     try {
       await registry().invokeTool("flow-execute", {
@@ -134,6 +136,36 @@ describe("flow-execute parameter handling", () => {
     const signal = getFailureSignal(caught);
     expect(signal?.error_kind).toBe("validation");
     expect(signal?.error_code).toBe(FAILURE_CODES.TOOL_INPUT_INVALID);
+  });
+
+  it("reaches resolveFlowName's own rejection for an EMPTY name, and classifies it too", async () => {
+    // The source-less cases above never enter `execute` — the schema's
+    // exactly-one rule fires first, and it was given the same wording, so those
+    // assertions hold whatever resolveFlowName throws (or whether it runs at
+    // all). An empty `name` is a named source as far as that rule is concerned,
+    // so it is the ONE input that reaches the throw: zod passes, execute runs.
+    // Spy on it, or this test drifts back into proving the schema.
+    const r = new Registry();
+    const tool = createRunFlowTool(r);
+    const execute = vi.spyOn(tool, "execute");
+    r.registerTool(tool as never);
+
+    for (const params of [{ name: "" }, { flow_name: "" }, { name: "", flow_name: "" }]) {
+      const caught = await r
+        .invokeTool("flow-execute", { ...params, project_root: tmpDir })
+        .then(() => undefined)
+        .catch((err: unknown) => err);
+
+      // The registry wraps whatever execute throws, so the CLASS the HTTP
+      // boundary maps to 400 has to be found on the cause — a plain Error here
+      // would leave the same call a 500.
+      expect((caught as Error).cause, JSON.stringify(params)).toBeInstanceOf(InvalidToolInputError);
+      expect((caught as Error).message).toContain("needs the flow's name in `name`");
+      const signal = getFailureSignal(caught);
+      expect(signal?.error_kind).toBe("validation");
+      expect(signal?.error_code).toBe(FAILURE_CODES.TOOL_INPUT_INVALID);
+    }
+    expect(execute).toHaveBeenCalledTimes(3);
   });
 
   it("renders a schema failure as a sentence naming what was sent", async () => {
@@ -171,6 +203,34 @@ describe("flow-read-prerequisite parameter handling", () => {
     r.registerTool(flowReadPrerequisiteTool as never);
     return r;
   }
+
+  it("accepts the alias THROUGH the schema, not only via a direct execute()", async () => {
+    // The tool's own alias tests call `.execute()` directly, which bypasses zod
+    // entirely — so the schema could stop accepting `flow_name` (or start
+    // stripping it) and they would all stay green. Go through the registry,
+    // which validates on every dispatch path.
+    await writeFlow("prereq-aliased");
+
+    const result = await prereqRegistry().invokeTool<{
+      flow: string;
+      executionPrerequisite: string;
+    }>("flow-read-prerequisite", { flow_name: "prereq-aliased", project_root: tmpDir });
+
+    expect(result.flow).toBe("prereq-aliased");
+    expect(result.executionPrerequisite).toBe("anywhere");
+  });
+
+  it("advertises both spellings in the oneOf it publishes to MCP and HTTP clients", () => {
+    // superRefine cannot be expressed in JSON Schema, so `oneOf` is the only
+    // machine-readable statement of the rule a client sees. It has to name the
+    // alias, or a client generating calls from the schema never learns of it.
+    for (const tool of [createRunFlowTool(new Registry()), flowReadPrerequisiteTool]) {
+      expect(tool.inputSchema!.oneOf, tool.id).toEqual([
+        { anyOf: [{ required: ["name"] }, { required: ["flow_name"] }] },
+        { required: ["flow_path"] },
+      ]);
+    }
+  });
 
   it("spells out the alias when neither flow source is present", async () => {
     // The documented pre-flight: the skill has agents call this BEFORE the run,

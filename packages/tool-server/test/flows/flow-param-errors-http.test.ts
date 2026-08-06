@@ -10,11 +10,12 @@ import { createRunFlowTool } from "../../src/tools/flows/flow-run";
 // than only through `registry.invokeTool`.
 
 describe("flow param errors over HTTP", () => {
-  it("returns 400 (not 500) for a name-less flow-execute, with the guidance in the body", async () => {
-    // `name` is optional in the schema (to accept the `flow_name` alias), so a
-    // name-less call passes zod and is rejected inside execute(). resolveFlowName
-    // throws an InvalidToolInputError, which the HTTP boundary maps to 400, the
-    // status the pre-alias zod rejection returned. A plain Error would be 500.
+  it("returns 400 for a source-less flow-execute, with the guidance in the body", async () => {
+    // Answered by the SCHEMA: with neither `name` nor `flow_path`, the
+    // exactly-one-source rule fires and `execute` is never entered. Its message
+    // was deliberately given the same wording as resolveFlowName's, so the
+    // caller reads one answer whichever check catches them — which is also why
+    // this case cannot stand in for the resolveFlowName mapping below.
     const registry = new Registry();
     registry.registerTool(createRunFlowTool(registry) as never);
     const { app } = createHttpApp(registry);
@@ -26,6 +27,28 @@ describe("flow param errors over HTTP", () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toContain("needs the flow's name in `name`");
     expect(res.body.error).toContain("`flow_name` is accepted as an alias");
+  });
+
+  it("returns 400 (not 500) when resolveFlowName itself rejects the call", async () => {
+    // The input that actually REACHES the throw: an empty `name` is a named
+    // source as far as the schema's exactly-one rule is concerned, so zod
+    // passes and `execute` runs. `name` is optional (to accept the alias), so
+    // this check no longer lives in zod and has to carry its own
+    // classification: InvalidToolInputError maps to 400, the status the
+    // pre-alias zod rejection returned, where a plain Error would be 500.
+    const registry = new Registry();
+    registry.registerTool(createRunFlowTool(registry) as never);
+    const { app } = createHttpApp(registry);
+
+    for (const body of [{ name: "" }, { flow_name: "" }]) {
+      const res = await request(app)
+        .post("/tools/flow-execute")
+        .send({ ...body, project_root: "/tmp/does-not-matter", prerequisiteAcknowledged: true });
+
+      expect(res.status, JSON.stringify(body)).toBe(400);
+      expect(res.body.error).toContain("needs the flow's name in `name`");
+      expect(res.body.error_kind).toBe("validation");
+    }
   });
 
   it("renders the 400 body as prose that names the caller's own keys, not raw Zod JSON", async () => {

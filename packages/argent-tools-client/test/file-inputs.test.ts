@@ -79,6 +79,17 @@ describe("prepareFileInputs", () => {
       { includeContent: false }
     )) as Record<string, FileInputWire>;
     expect(both.flow_file?.path).toBe(namePath); // name wins the last-write-wins merge
+
+    // The commonest call of all: `name` alone, with the non-interpolating
+    // `${flow_name}` spec now sitting AHEAD of it. That spec must skip
+    // silently — a spec whose params are absent is not a spec that failed —
+    // or adding the alias would have broken every existing caller.
+    const nameOnly = (await prepareFileInputs(
+      specs,
+      { dir: tmpDir, name: "named" },
+      { includeContent: false }
+    )) as Record<string, FileInputWire>;
+    expect(nameOnly.flow_file?.path).toBe(namePath);
   });
 
   it("inlines base64 content when routed to a remote server", async () => {

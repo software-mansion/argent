@@ -1213,6 +1213,30 @@ describe("a flow-directive name points at the tool that records it", () => {
     expect(await recordedSteps("hints")).toEqual([]);
   });
 
+  it("qualifies the step count when the persisted flow can no longer be read", async () => {
+    // The record-nothing paths re-read the file so a mid-recording hand edit is
+    // reflected in the count they report. When that read (or parse) fails, the
+    // count comes from the last valid in-memory snapshot and must SAY so —
+    // otherwise the author reads a confident number for a file that is now
+    // broken. Nothing exercised that branch.
+    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", "hints.yaml"),
+      "steps:\n  - [unclosed",
+      "utf8"
+    );
+
+    const result = await tool.execute(
+      {},
+      { name: "hints", project_root: tmpDir, command: "echo", args: "{}" }
+    );
+
+    expect(result.message).toContain("flow-add-echo");
+    expect(result.message).toContain("The persisted flow could not be read and parsed");
+    expect(result.message).toContain("last valid in-memory snapshot");
+    expect(result.stepCount).toBe(0);
+  });
+
   it("tells the author to call flow-add-echo directly, not through the recorder", async () => {
     const result = await hint("echo");
     expect(result.message).toContain("DIRECTLY");
