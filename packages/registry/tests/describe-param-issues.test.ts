@@ -176,4 +176,51 @@ describe("describeParamIssues", () => {
     expect(msg).toContain("`button` is required");
     expect(msg).not.toContain("; or ");
   });
+
+  it("does not double the full stop of a custom message that already ends in one", () => {
+    // A custom refinement's message survives verbatim and is author-written
+    // prose, so it normally ends in a period — every cross-field rule in the
+    // repo does. Existing assertions use `toContain`, which passes on "..".
+    const schema = z
+      .object({ deltaX: z.number().optional(), deltaY: z.number().optional() })
+      .superRefine((_v, ctx) =>
+        ctx.addIssue({ code: "custom", message: "Pass a non-zero deltaX and/or deltaY.", path: [] })
+      );
+    const msg = describeParamIssues(issuesOf(schema, { deltaY: 0 }), { deltaY: 0 });
+    expect(msg).toContain("Pass a non-zero deltaX and/or deltaY. You sent: `deltaY`.");
+    expect(msg).not.toContain("..");
+  });
+
+  it("keeps a message's own terminal punctuation when it is not a period", () => {
+    const schema = z
+      .object({ a: z.string().optional() })
+      .superRefine((_v, ctx) => ctx.addIssue({ code: "custom", message: "Which one?", path: [] }));
+    const msg = describeParamIssues(issuesOf(schema, {}), {});
+    expect(msg).toContain("Which one?.");
+  });
+
+  it("separates several parts without doubling any of their periods", () => {
+    const schema = z.object({ a: z.string().optional() }).superRefine((_v, ctx) => {
+      ctx.addIssue({ code: "custom", message: "First rule.", path: [] });
+      ctx.addIssue({ code: "custom", message: "Second rule.", path: [] });
+    });
+    const msg = describeParamIssues(issuesOf(schema, {}), {});
+    expect(msg).toContain("First rule; Second rule.");
+    expect(msg).not.toContain("..");
+  });
+
+  it("leaves a multi-sentence message's internal periods alone", () => {
+    // Only the TERMINAL stop is ours to drop — flow-execute's no-source message
+    // is two sentences and the first one's period must survive.
+    const schema = z.object({ a: z.string().optional() }).superRefine((_v, ctx) =>
+      ctx.addIssue({
+        code: "custom",
+        message: "Pass exactly one flow source. It resolves <project_root>/<name>.yaml.",
+        path: [],
+      })
+    );
+    const msg = describeParamIssues(issuesOf(schema, {}), {});
+    expect(msg).toContain("Pass exactly one flow source. It resolves <project_root>/<name>.yaml.");
+    expect(msg).not.toContain("..");
+  });
 });

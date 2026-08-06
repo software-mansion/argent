@@ -570,7 +570,14 @@ export function describeParamIssues(
       : "";
   // Guard the (call-site-unreachable, but exported) empty-issues case so it
   // never renders a bare leading ".".
-  const body = parts.length > 0 ? `${parts.join("; ")}.` : "";
+  //
+  // Drop a part's own trailing full stop before adding this one. A custom
+  // refinement's message survives verbatim and is author-written prose, which
+  // normally ends in a period — so every cross-field rule (both flow tools'
+  // source-count errors, gesture-scroll, gesture-rotate, await-ui-element)
+  // rendered "…/.argent/flows/<name>.yaml.. You sent: …". Only a period is
+  // trimmed: a message ending in "?" or "!" keeps its own punctuation.
+  const body = parts.length > 0 ? `${parts.map((p) => p.replace(/\.$/, "")).join("; ")}.` : "";
   return `${body}${sent}`.trim() || "invalid parameters";
 }
 
