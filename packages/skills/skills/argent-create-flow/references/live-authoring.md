@@ -47,7 +47,7 @@ On iOS, Argent must launch the app for the full selector tree to exist, and only
 
 **Default Chromium window size: `1366 × 768`.** Unless the user or test contract explicitly requires another window size, boot the target with `boot-device`, `electronAppPath`, and `electronArgs: ["--window-size=1366,768"]`. This is the native browser-window size, not page-viewport emulation. Do not record against an already-running target whose window size came from host or session state; launch a fresh target with the explicit size first. If the target cannot honor the requested size, stop and report the blocker instead of recording at a different size.
 
-Call `flow-start-recording` after that boot and before the first in-app action, then record the first-screen wait live. During polish, insert a leading Chromium launch that preserves the same app path and arguments, for example:
+Call `flow-start-recording` after that boot and before the first in-app action, then record the first-screen wait live. `restart-app` has no Chromium support and only successful calls are recorded, so a recorded Chromium flow is always a fragment — its launch is written in during polish rather than captured, and any `executionPrerequisite` the recording declared must go with it (a launch-first flow must not carry one). During polish, insert a leading Chromium launch that preserves the same app path and arguments, for example:
 
 ```yaml
 steps:
@@ -242,6 +242,8 @@ rg -n 'open-url' .argent/flows/<name>.yaml
 ## Replay
 
 Run `flow-execute` on the complete polished flow with the absolute project root. For a fragment, verify its prerequisite and rerun with `prerequisiteAcknowledged: true` when requested. A replay you rescued by hand is not a pass: if you tapped, waited, or reset anything to get the run through, the pass does not count.
+
+`flow-execute` takes exactly one flow source: `name`, for a flow saved under `.argent/flows/`, or `flow_path`, an absolute path to any flow `.yaml`. A flow's `run:` targets and baselines resolve on the **tool server's** filesystem, beside the YAML it actually reads. `flow_path` therefore requires the agent and the tool server to share a filesystem and is refused when they do not; `name` still runs there, but a remote call reaches the server as an upload of that one YAML into a fresh temp directory, so a `run:` target fails as a missing fragment and a `snapshot` fails for a missing baseline. Replay self-contained flows remotely; one that composes or snapshots needs both on one filesystem.
 
 An `errored` step is not a failed one: it could not be evaluated at all — an unreadable tree, focus unconfirmed with nothing to read it from. Fix the environment named in its reason and rerun; it is not a verdict about the app and never counts for or against a pass.
 
