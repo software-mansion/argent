@@ -26,6 +26,7 @@ import {
   isVisible,
   firstInReadingOrder,
   evaluateCondition,
+  confusableTextNote,
 } from "../../utils/ui-tree-match";
 
 // Tool id. Exported so run-sequence can both allow this tool and recognise its
@@ -198,9 +199,25 @@ function timeoutNote(
       // same element the check read, or the two can contradict each other.
       const first = firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches);
       const wanted = params.textMatch === "equals" ? "equal" : "contain";
-      base = first
-        ? `element matched but its text was "${nodeText(first)}" (wanted to ${wanted} "${params.expectedText}")`
-        : "no element matched the selector before timeout";
+      if (!first) {
+        base = "no element matched the selector before timeout";
+        break;
+      }
+      // The two quoted strings can be indistinguishable on screen and still
+      // compare unequal — the same failure the flow runner's assertReason
+      // explains, and the one this tool's own result shape reported when it was
+      // first raised ("its text was X (wanted to equal X)", success: false,
+      // elapsed: 15001). It needs the codepoints just as much. This tool's
+      // textMatch is contains/equals only, so there is no regex spelling to
+      // exempt the way assertReason must.
+      const shown = nodeText(first);
+      const confusable =
+        params.expectedText === undefined
+          ? undefined
+          : confusableTextNote(shown, params.expectedText);
+      base =
+        `element matched but its text was "${shown}" (wanted to ${wanted} "${params.expectedText}")` +
+        (confusable ? ` — ${confusable}` : "");
       break;
     }
     case "hidden":
