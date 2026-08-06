@@ -522,16 +522,48 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
   // ── Per-platform divergences, each produced by that platform's adapter ────
 
-  // iOS: `projectIosNode` skips a transparent subtree outright, so a view the
-  // AX tree (and native-find-views) still reports is absent from the runner's
-  // projection entirely.
-  it("iOS: warns when the runner's projection drops a transparent view", async () => {
-    serveTree(iosRunnerTree([iosLabel("Continue", { alpha: 0 })]));
+  // iOS: an `accessible` container. The AX tree the recorder read merges it
+  // into ONE leaf whose label aggregates its children — this repo says so in
+  // `captureTapSelector`'s own comment ("the AX tree collapses an `accessible`
+  // container into one leaf whose merged label exists on no single view in the
+  // replay hierarchy") and the skill names it as the iOS divergence. So the
+  // author records the merged string and it resolves nothing for the runner:
+  // the flow projection keeps the container as an addressable leaf and hoists
+  // the children's text into `subtreeText`, which `findAll` does not match on.
+  //
+  // This test USED to serve an `alpha: 0` view, on the premise that the AX tree
+  // still reports a fully transparent one. UIKit generally excludes hidden and
+  // transparent views from accessibility, and nothing in this repo re-adds
+  // them, so that premise is a device question the suite cannot settle — while
+  // the merge above is settled by the sources on both sides. (The adapter rule
+  // it was reaching for is asserted directly below, as what it is: a statement
+  // about the projection, not about a divergence.)
+  const IOS_ACCESSIBLE_CONTAINER = [
+    {
+      className: "UIView",
+      identifier: "total-row",
+      frame: IOS_ROW,
+      windowFrame: IOS_ROW,
+      children: [
+        iosLabel("Total", { frame: { x: 0, y: 100, width: 100, height: 40 } }),
+        iosLabel("$5.00", { frame: { x: 120, y: 100, width: 100, height: 40 } }),
+      ],
+    },
+  ];
+
+  it("iOS: warns when the AX tree's merged label exists on no single view", async () => {
+    const tree = iosRunnerTree(IOS_ACCESSIBLE_CONTAINER);
+    // The premise on the runner's side: the merged string names no node, even
+    // though the container is present and carries the pieces as hoisted text.
+    expect(findAll(tree, { text: "Total $5.00" })).toHaveLength(0);
+    expect(findAll(tree, { identifier: "total-row" })[0]?.subtreeText).toBe("Total $5.00");
+
+    serveTree(tree);
     await startRecording("ios");
 
     const result = await recordWait("ios", {
       condition: "visible",
-      selector: { text: "Continue" },
+      selector: { text: "Total $5.00" },
     });
     const warning = warningOf(result, "ios");
 
@@ -542,9 +574,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).toContain("an `assert:` conversion WILL fail");
     expect(warning).toContain("an `await:` will too unless the element reaches that tree");
     // iOS must NOT be told a tool "reads the runner's side": the Apple-only
-    // full-hierarchy readers return the RAW view tree — which still holds this
-    // very alpha-0 view — and match identifier/label/className exactly, while a
-    // recorded selector's `text`/`role` are substrings.
+    // full-hierarchy readers return the RAW view tree — both UILabels included,
+    // and still no view carrying the merged label — and they match
+    // identifier/label/className exactly, while a recorded selector's
+    // `text`/`role` are substrings.
     expect(warning).toContain("No read-only tool reports the runner's projection on iOS");
     // Nor may it answer "re-record". The skill's own workflow for a testID the
     // trimmed tree hides is to gate on visible text and retarget the id at
@@ -554,6 +587,17 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).not.toContain("re-record");
     expect(warning).toContain("retarget the DIRECTIVE at an `id` the full hierarchy carries");
     expect(await recordedSteps("ios")).toHaveLength(1);
+  });
+
+  // The projection rule the transparent-view fixture was reaching for, asserted
+  // as what it actually is. Whether the AX tree still reports an `alpha: 0`
+  // view — and so whether this rule ever produces a cross-tree divergence — is
+  // a device question; that the runner's projection drops one is not.
+  it("iOS: the runner's projection drops a transparent view", () => {
+    expect(findAll(iosRunnerTree([iosLabel("Continue")]), { text: "Continue" })).toHaveLength(1);
+    expect(
+      findAll(iosRunnerTree([iosLabel("Continue", { alpha: 0 })]), { text: "Continue" })
+    ).toHaveLength(0);
   });
 
   // What the longer `await:` timeout would be waiting FOR is per condition, and
