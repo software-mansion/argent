@@ -296,6 +296,21 @@ describe("flow report rendering", () => {
     expect(renderFailedSteps(mkReport([{ index: 0, kind: "tap", status: "pass" }]))).toEqual([]);
   });
 
+  it("renderFailedSteps prints a passing step's warning, which renderSummary counts", () => {
+    // `await: { idle: true }` only ever warns on a step that PASSED, and the
+    // summary counts warnings whatever the status — so a directory run used to
+    // report "1 warning" with the text nowhere on screen.
+    const report = mkReport([
+      { index: 0, kind: "tap", status: "pass" },
+      { index: 1, kind: "idle", status: "pass", warning: "the screen never held still" },
+    ]);
+    expect(renderFailedSteps(report)).toEqual([
+      "  ⚠  2 idle",
+      "       ⚠ the screen never held still",
+    ]);
+    expect(renderSummary(report)).toContain("1 warning");
+  });
+
   it("renderBatchSummary mirrors the step summary's verdict shape", () => {
     expect(renderBatchSummary({ total: 3, passed: 2, failed: 1, skipped: 0 })).toBe(
       "FAIL — 3 flows: 2 passed, 1 failed, 0 skipped"
