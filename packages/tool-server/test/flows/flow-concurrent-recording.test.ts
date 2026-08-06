@@ -1458,46 +1458,71 @@ describe("a restart that lands while a step is still running", () => {
 // ── A finish landing on top of an in-flight append ───────────────────
 
 describe("a finish that lands while a step is still running", () => {
-  it("never reports steps, a summary or YAML the file disagrees with", async () => {
-    // Vary how far the append has progressed when the finish arrives, so both
-    // outcomes are exercised: the append wins the lock (and must be included in
-    // what finish reports) or the finish wins it (and the append must fail).
-    for (const microtasks of [0, 1, 2, 3, 4, 6, 8]) {
-      const root = await makeRoot(`finish-inflight-${microtasks}`);
-      await start(root, "alpha");
-      await addStep(root, "alpha", "a1");
+  /**
+   * The invariant both outcomes share: the whole report is one snapshot of one
+   * file state, and the recording is gone afterwards either way.
+   */
+  async function expectReportMatchesDisk(
+    root: string,
+    report: Awaited<ReturnType<typeof finish>>
+  ): Promise<string[]> {
+    const onDisk = await readMarkers(root, "alpha");
+    expect(markers(parseFlow(report.flowFile).steps)).toEqual(onDisk);
+    expect(report.steps).toBe(onDisk.length);
+    expect(report.summary).toHaveLength(onDisk.length);
+    expect(report.path).toBe(flowPath(root, "alpha"));
+    expect(report.savedTo).toBe(flowPath(root, "alpha"));
+    expect(await getRecordingSession(root, "alpha")).toBeUndefined();
+    return onDisk;
+  }
 
-      const gate = gateNextSubTool();
-      const appending = addStep(root, "alpha", "a2");
-      await gate.reached;
-      gate.release();
-      for (let i = 0; i < microtasks; i++) await Promise.resolve();
+  // Both outcomes are pinned, each by the lock rather than by timing. An
+  // earlier version varied a microtask count instead and only ever produced the
+  // first one: the finish awaits a real `realpath` before joining the lock
+  // queue, so no amount of microtask tuning can make it overtake an append
+  // already queued — the "append rejected" branch simply never ran.
 
-      const [appended, finished] = await Promise.allSettled([appending, finish(root, "alpha")]);
+  it("includes an append that WON the lock in everything it reports", async () => {
+    const root = await makeRoot("finish-inflight-append-wins");
+    await start(root, "alpha");
+    await addStep(root, "alpha", "a1");
 
-      if (finished.status === "rejected") throw finished.reason;
-      const report = finished.value;
-      const onDisk = await readMarkers(root, "alpha");
+    // A parked holder fixes the queue order: append, then finish.
+    const holder = openGate();
+    const held = withFlowFileLock(root, "alpha", () => holder.promise);
+    const appending = addStep(root, "alpha", "a2");
+    await settle();
+    const finishing = finish(root, "alpha");
+    holder.open();
 
-      // The whole report is one snapshot of one file state.
-      expect(markers(parseFlow(report.flowFile).steps)).toEqual(onDisk);
-      expect(report.steps).toBe(onDisk.length);
-      expect(report.summary).toHaveLength(onDisk.length);
-      expect(report.path).toBe(flowPath(root, "alpha"));
-      expect(report.savedTo).toBe(flowPath(root, "alpha"));
+    const [appended, finished] = await Promise.allSettled([appending, finishing]);
+    await held;
 
-      if (appended.status === "rejected") {
-        expect(getFailureSignal(appended.reason)?.error_code).toBe(
-          FAILURE_CODES.FLOW_NO_ACTIVE_RECORDING
-        );
-        expect(onDisk).toEqual(["tool:a1"]);
-      } else {
-        expect(onDisk).toEqual(["tool:a1", "tool:a2"]);
-      }
+    if (appended.status === "rejected") throw appended.reason;
+    if (finished.status === "rejected") throw finished.reason;
+    expect(await expectReportMatchesDisk(root, finished.value)).toEqual(["tool:a1", "tool:a2"]);
+  });
 
-      // Either way the recording is gone, and nothing can be appended to it.
-      expect(await getRecordingSession(root, "alpha")).toBeUndefined();
-    }
+  it("reports the file without an append that LOST, and rejects that append", async () => {
+    const root = await makeRoot("finish-inflight-finish-wins");
+    await start(root, "alpha");
+    await addStep(root, "alpha", "a1");
+
+    // Parked in its LIVE phase, before it has taken the lock — a real step can
+    // sit here for minutes on a device. The finish runs to completion across it.
+    const gate = gateNextSubTool();
+    const appending = addStep(root, "alpha", "a2");
+    await gate.reached;
+
+    const report = await finish(root, "alpha");
+    expect(await expectReportMatchesDisk(root, report)).toEqual(["tool:a1"]);
+
+    gate.release();
+    const appended = await captureFailure(appending);
+    expect(getFailureSignal(appended)?.error_code).toBe(FAILURE_CODES.FLOW_NO_ACTIVE_RECORDING);
+    // The step ran on the device but is in no take, and the file the finish
+    // reported is still exactly what is on disk.
+    expect(await readMarkers(root, "alpha")).toEqual(["tool:a1"]);
   });
 
   it("reads the file back and clears the session only once the lock is free", async () => {
