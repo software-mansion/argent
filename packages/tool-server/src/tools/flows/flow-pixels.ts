@@ -19,6 +19,9 @@ export interface PixelFrame {
   data: Buffer;
 }
 
+/** What {@link comparePixels} saw between two captures. */
+export type PixelChange = "still" | "localized" | "moving";
+
 // Hard downscale: motion detection only needs to see a large region moving,
 // and a quarter-scale frame decodes ~16x faster. (Chromium without `sharp`
 // ignores the scale and returns full-res — the comparison is scale-agnostic.)
@@ -48,11 +51,13 @@ export const PIXEL_THRESHOLD = 0.03;
 const MAX_RGB_DISTANCE_SQUARED = 255 * 255 * 3;
 const PIXEL_THRESHOLD_SQUARED = PIXEL_THRESHOLD * PIXEL_THRESHOLD * MAX_RGB_DISTANCE_SQUARED;
 
-// Captures match when fewer than this fraction of pixels changed — counting
-// only pixels that individually clear the per-pixel gate above. That sits
-// above the noise of a blinking cursor and catches localized motion and moving
-// edges at any speed, plus screen-filling changes whose per-interval rate
-// clears the gate.
+// The screen is MOVING when at least this fraction of pixels changed —
+// counting only pixels that individually clear the per-pixel gate above. It is
+// sized for motion worth waiting out: a transition, a scroll, a fade, a
+// carousel. Anything smaller is reported separately (see below) rather than
+// resetting the settle, because a caret or a spinner never stops, and holding
+// a flow for the full timeout over one is worse than telling the author about
+// it.
 //
 // This fraction is NOT what bounds spatially uniform change (a fade, dim, tint
 // or scrim): such a change clears the per-pixel gate on either 100% of pixels
@@ -60,6 +65,22 @@ const PIXEL_THRESHOLD_SQUARED = PIXEL_THRESHOLD * PIXEL_THRESHOLD * MAX_RGB_DIST
 // deciding term. What remains is the rate floor described above, a property of
 // the gate alone; loosening this fraction does not widen that blind spot.
 const MOTION_FRACTION = 0.002;
+
+// Below MOTION_FRACTION but at or above this one, the change is LOCALIZED: too
+// small to be the screen moving, too large to be capture noise. A stock 40pt
+// spinner measures 0.03-0.15% of a phone screen and a text caret about 0.01%,
+// both under MOTION_FRACTION — which is how a still-loading screen used to
+// report as settled with nothing said about it.
+//
+// Both fractions are of frame AREA, which makes them resolution-independent:
+// an object of a fixed on-screen size covers the same fraction of the frame
+// whatever the capture scale, so the same numbers hold on a 158k-pixel Pixel
+// capture and a full-resolution desktop one.
+//
+// The floor is not zero because a capture pair is not guaranteed byte-identical
+// on every backend; it is two orders of magnitude below the smallest spinner
+// and one below a caret, which is the widest margin that still sees them.
+const LOCALIZED_MOTION_FRACTION = 0.00005;
 
 // `httpScreenshot` may spend its full first-frame wait before it even returns
 // a file path. Leave a separate completion margin for reading, decoding, and
@@ -164,18 +185,26 @@ export async function capturePixelsWithin(
 }
 
 /**
- * Did the screen move between two captures? Different dimensions count as
- * motion; otherwise the changed-pixel fraction is compared against
- * {@link MOTION_FRACTION}. Alpha is ignored — a screen capture is opaque.
+ * How much of the screen changed between two captures.
  *
- * The dimension branch covers a resized window (Chromium). It is NOT how a
- * device rotation is caught: the Android capture keeps its portrait shape
- * across one, so rotation registers through content change like anything else.
+ * - `moving` — the screen is in motion and has not settled.
+ * - `localized` — something small never stopped: a spinner, a caret, a
+ *   progress dot. Not enough to call the screen unsettled, but the caller
+ *   reports it, because a spinner means the screen never finished loading and
+ *   nothing else here can see the difference.
+ * - `still`.
+ *
+ * Alpha is ignored — a screen capture is opaque.
+ *
+ * Different dimensions count as motion. That branch covers a resized window
+ * (Chromium). It is NOT how a device rotation is caught: the Android capture
+ * keeps its portrait shape across one, so rotation registers through content
+ * change like anything else.
  */
-export function pixelsDiffer(a: PixelFrame, b: PixelFrame): boolean {
-  if (a.width !== b.width || a.height !== b.height) return true;
+export function comparePixels(a: PixelFrame, b: PixelFrame): PixelChange {
+  if (a.width !== b.width || a.height !== b.height) return "moving";
   const total = a.width * a.height;
-  if (total === 0) return false;
+  if (total === 0) return "still";
   const limit = Math.min(a.data.length, b.data.length);
   let changed = 0;
   for (let o = 0; o + 2 < limit; o += 4) {
@@ -184,5 +213,7 @@ export function pixelsDiffer(a: PixelFrame, b: PixelFrame): boolean {
     const db = a.data[o + 2] - b.data[o + 2];
     if (dr * dr + dg * dg + db * db > PIXEL_THRESHOLD_SQUARED) changed++;
   }
-  return changed / total > MOTION_FRACTION;
+  const fraction = changed / total;
+  if (fraction > MOTION_FRACTION) return "moving";
+  return fraction >= LOCALIZED_MOTION_FRACTION ? "localized" : "still";
 }

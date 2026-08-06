@@ -64,6 +64,23 @@ function frameAt(level: number): PixelFrame {
   return { width: 10, height: 10, data };
 }
 
+/**
+ * A capture-sized frame (180k pixels, the order a real one has at
+ * CAPTURE_SCALE) that is still apart from `movingPixels` of it. Sized so a
+ * spinner's share of a screen can be expressed at all: on the 10x10 frames
+ * above, one pixel is already 1% of the screen.
+ */
+function frameWithMovingPixels(movingPixels: number, level: number): PixelFrame {
+  const [width, height] = [300, 600];
+  const data = Buffer.alloc(width * height * 4, 255);
+  for (let i = 0; i < movingPixels; i++) {
+    data[i * 4] = level;
+    data[i * 4 + 1] = level;
+    data[i * 4 + 2] = level;
+  }
+  return { width, height, data };
+}
+
 function mockRegistry(): Registry {
   return {
     invokeTool: vi.fn(async (id: string) => {
@@ -202,6 +219,47 @@ steps:
     const step = r.steps.at(-1)!;
     expect(step.status).toBe("pass");
     expect(step.warning).toContain("never held still");
+  });
+
+  // A spinner is the reason this warning exists. It is far too small to move
+  // the screen (a stock one covers ~0.1% of a phone display) and it does not
+  // move the tree either — it spins in a layer whose box never changes — so
+  // both halves of the check call the screen settled while it is still
+  // loading. The step still passes, because waiting out a caret or a spinner
+  // that never stops is worse than saying so, but it must SAY so.
+  it("warns when the screen settles with something small still moving on it", async () => {
+    let tick = 0;
+    // 40 of 180_000 pixels (0.022%) alternating: an order of magnitude under
+    // the motion fraction, an order above the noise floor.
+    currentFrame = () => frameWithMovingPixels(40, tick++ % 2 === 0 ? 0 : 40);
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, minStableMs: 0 }
+  - echo: reached
+`
+    );
+    const r = await run("ready");
+    expect(r.ok).toBe(true);
+    const step = r.steps.at(-2)!;
+    expect(step).toMatchObject({ kind: "idle", status: "pass" });
+    expect(step.warning).toContain("small part of it kept changing");
+    expect(step.warning).toContain("spinner");
+    // The warning is about how the settle was reached, not a refusal to settle.
+    expect(step.warning).not.toContain("never held still");
+  });
+
+  it("says nothing about small motion when the screen is genuinely still", async () => {
+    currentFrame = () => frameWithMovingPixels(0, 0);
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, minStableMs: 0 }
+`
+    );
+    expect((await run("ready")).steps.at(-1)!.warning).toBeUndefined();
   });
 
   // Sub-threshold drift is encoder noise, not motion — treating it as motion

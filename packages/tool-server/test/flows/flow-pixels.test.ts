@@ -10,7 +10,7 @@ import {
   FIRST_PIXEL_CAPTURE_TIMEOUT_MS,
   PIXEL_CAPTURE_TIMEOUT_MS,
   PIXEL_THRESHOLD,
-  pixelsDiffer,
+  comparePixels,
   pixelCaptureTimeoutMs,
   type PixelFrame,
 } from "../../src/tools/flows/flow-pixels";
@@ -73,13 +73,13 @@ function withAlpha(base: PixelFrame, alpha: number): PixelFrame {
   return base;
 }
 
-describe("pixelsDiffer", () => {
+describe("comparePixels", () => {
   it("reports no motion for two identical frames", () => {
-    expect(pixelsDiffer(solid(30, 30, [10, 20, 30]), solid(30, 30, [10, 20, 30]))).toBe(false);
+    expect(comparePixels(solid(30, 30, [10, 20, 30]), solid(30, 30, [10, 20, 30]))).toBe("still");
   });
 
   it("reports motion when the whole frame changes", () => {
-    expect(pixelsDiffer(solid(30, 30, [0, 0, 0]), solid(30, 30, [255, 255, 255]))).toBe(true);
+    expect(comparePixels(solid(30, 30, [0, 0, 0]), solid(30, 30, [255, 255, 255]))).toBe("moving");
   });
 
   it.each<[string, [number, number, number]]>([
@@ -90,7 +90,7 @@ describe("pixelsDiffer", () => {
     // Motion that lives in a single channel must clear the per-pixel gate on
     // that channel's term alone — the other two contribute zero, so dropping
     // any one term from the distance goes blind to exactly one of these.
-    expect(pixelsDiffer(solid(30, 30, [0, 0, 0]), solid(30, 30, color))).toBe(true);
+    expect(comparePixels(solid(30, 30, [0, 0, 0]), solid(30, 30, color))).toBe("moving");
   });
 
   it("ignores a change confined to the alpha channel (a screen capture is opaque)", () => {
@@ -99,19 +99,19 @@ describe("pixelsDiffer", () => {
     // a comparator that read o+3 (alpha) where it meant o+2 (blue) would count
     // every pixel here as changed.
     expect(
-      pixelsDiffer(solid(30, 30, [10, 20, 30]), withAlpha(solid(30, 30, [10, 20, 30]), 0))
-    ).toBe(false);
+      comparePixels(solid(30, 30, [10, 20, 30]), withAlpha(solid(30, 30, [10, 20, 30]), 0))
+    ).toBe("still");
   });
 
   it("treats a dimension change as motion (a resized window)", () => {
-    expect(pixelsDiffer(solid(30, 30, [0, 0, 0]), solid(30, 31, [0, 0, 0]))).toBe(true);
+    expect(comparePixels(solid(30, 30, [0, 0, 0]), solid(30, 31, [0, 0, 0]))).toBe("moving");
   });
 
   it("ignores a sub-threshold per-pixel color drift (encoder / resample noise)", () => {
     // +5 on every channel is well under the per-pixel tolerance, so no pixel
     // counts as changed — two captures of a static screen must read as still.
-    expect(pixelsDiffer(solid(30, 30, [100, 100, 100]), solid(30, 30, [105, 105, 105]))).toBe(
-      false
+    expect(comparePixels(solid(30, 30, [100, 100, 100]), solid(30, 30, [105, 105, 105]))).toBe(
+      "still"
     );
   });
 
@@ -120,10 +120,12 @@ describe("pixelsDiffer", () => {
     // distance of ~12.1 (just under) and +8 is ~13.9 (just over), so this pair
     // pins the constant tightly: loosening it trips the second expectation and
     // tightening it trips the first.
-    expect(pixelsDiffer(solid(30, 30, [100, 100, 100]), solid(30, 30, [107, 107, 107]))).toBe(
-      false
+    expect(comparePixels(solid(30, 30, [100, 100, 100]), solid(30, 30, [107, 107, 107]))).toBe(
+      "still"
     );
-    expect(pixelsDiffer(solid(30, 30, [100, 100, 100]), solid(30, 30, [108, 108, 108]))).toBe(true);
+    expect(comparePixels(solid(30, 30, [100, 100, 100]), solid(30, 30, [108, 108, 108]))).toBe(
+      "moving"
+    );
   });
 
   it("registers two consecutive samples of a slow uniform cross-fade as motion", () => {
@@ -136,7 +138,9 @@ describe("pixelsDiffer", () => {
     // screenshot-diff's baseline-sized 0.1 imposes, where the settle would
     // count zero pixels and report stillness while the overlay was still
     // painted and still hit-testing.
-    expect(pixelsDiffer(solid(30, 30, [165, 128, 193]), solid(30, 30, [149, 105, 181]))).toBe(true);
+    expect(comparePixels(solid(30, 30, [165, 128, 193]), solid(30, 30, [149, 105, 181]))).toBe(
+      "moving"
+    );
   });
 
   it("keeps its tolerance pinned, and stricter than a stored-baseline one", () => {
@@ -148,11 +152,56 @@ describe("pixelsDiffer", () => {
   });
 
   it("ignores a handful of changed pixels below the motion fraction", () => {
-    // 900 px, fraction 0.002 → ~1.8 px budget: one changed pixel stays "still"
-    // (a blinking cursor), three tips it over into motion.
+    // 900 px, fraction 0.002 → ~1.8 px budget: one changed pixel is not the
+    // screen moving, three is.
     const base = solid(30, 30, [0, 0, 0]);
-    expect(pixelsDiffer(base, withChangedPixels(solid(30, 30, [0, 0, 0]), 1, 255))).toBe(false);
-    expect(pixelsDiffer(base, withChangedPixels(solid(30, 30, [0, 0, 0]), 3, 255))).toBe(true);
+    expect(comparePixels(base, withChangedPixels(solid(30, 30, [0, 0, 0]), 1, 255))).not.toBe(
+      "moving"
+    );
+    expect(comparePixels(base, withChangedPixels(solid(30, 30, [0, 0, 0]), 3, 255))).toBe("moving");
+  });
+
+  // Every case above runs on a 30x30 frame, where the motion budget is 1.8
+  // pixels and anything visible trips it. A real capture at CAPTURE_SCALE is
+  // 158k-198k pixels, and at that size the small-but-permanent movers a
+  // readiness check exists to notice — a spinner above all — sit two orders of
+  // magnitude below the same fraction. Measured on real captures taken at the
+  // scale the check uses: a stock spinner moved 66 pixels of an iPhone 16 Pro
+  // frame (302x656) and 57 of a Pixel 5 one (270x585).
+  describe("at a real capture size", () => {
+    const IPHONE = [302, 656] as const; // 198k px: 396 px of motion budget
+    const PIXEL5 = [270, 585] as const; // 158k px: 316 px of motion budget
+
+    function changed([w, h]: readonly [number, number], count: number): [PixelFrame, PixelFrame] {
+      return [
+        solid(w, h, [255, 255, 255]),
+        withChangedPixels(solid(w, h, [255, 255, 255]), count, 0),
+      ];
+    }
+
+    it.each([
+      ["iPhone 16 Pro", IPHONE, 66],
+      ["Pixel 5", PIXEL5, 57],
+    ] as const)("sees a spinner on a %s frame", (_device, size, spinnerPixels) => {
+      // Under the motion fraction, so the screen is not called unsettled — but
+      // never "still", which is what let a still-loading screen report ready
+      // with nothing said about it.
+      expect(comparePixels(...changed(size, spinnerPixels))).toBe("localized");
+    });
+
+    it("still calls a real transition motion at that size", () => {
+      // 1% of the frame — a sheet edge, a scrolling row, a moving cursor bar.
+      expect(comparePixels(...changed(IPHONE, Math.round(IPHONE[0] * IPHONE[1] * 0.01)))).toBe(
+        "moving"
+      );
+    });
+
+    it("keeps a few stray pixels below even the localized floor", () => {
+      // The floor exists so a backend that is not bit-exact between two
+      // captures of a static screen does not warn on every settle. Three
+      // pixels of 198k is an order of magnitude under a caret.
+      expect(comparePixels(...changed(IPHONE, 3))).toBe("still");
+    });
   });
 });
 
