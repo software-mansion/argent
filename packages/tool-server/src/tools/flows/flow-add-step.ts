@@ -101,9 +101,11 @@ const UNSUPPORTED_PLATFORM = {
  *
  * Android's runner tree is the full accessibility hierarchy, and Android
  * `describe` returns the TRIMMED interactables tree the recorder already read.
- * Chromium's runner tree keeps only addressable nodes, yet `describe` returns
- * the FULL DOM the recorder read — a superset that still shows the very nodes
- * the runner drops. iOS is the same trap in the other direction: the Apple-only
+ * Chromium's runner tree keeps only addressable nodes that are on screen, yet
+ * `describe` returns the FULL DOM the recorder read — a superset that still
+ * shows the very nodes the runner drops, including the off-viewport ones whose
+ * frame it reports clamped to zero area. iOS is the same trap in the other
+ * direction: the Apple-only
  * full-hierarchy readers see the raw UIView tree, which is a superset of what
  * `queryFullHierarchyTree` projects (it drops hidden, transparent,
  * scroll-clipped and unlabelled container views), AND they match `identifier` /
