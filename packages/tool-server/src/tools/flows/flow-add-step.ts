@@ -90,36 +90,47 @@ function platformOf(udid: unknown): string | undefined {
 
 /**
  * The read-only tool that reads the tree the RUNNER resolves against, for the
- * platforms where one exists. Android is deliberately routed elsewhere (see
- * {@link runnerSideReadClause}): no read-only tool exposes its runner tree, so
- * this helper is only ever called here for iOS / Chromium / Vega.
- *
- * `native-find-views` declares Apple capability only, so it is named for iOS
- * alone; iOS `describe` is the AX tree — the RECORDER's side — so it is NOT
- * listed here, where the point is to name the runner's reader.
+ * platforms where one exists. iOS, Android and Chromium are all routed
+ * elsewhere (see {@link runnerSideReadClause}): on none of the three does a
+ * read-only tool report the runner's projection.
  */
 function treeReaderFor(udid: unknown): string {
   const platform = platformOf(udid);
-  if (platform === "ios" || platform === "ios-remote") return "`native-find-views`";
   if (platform === "chromium") return "`describe` (this platform's DOM walker)";
   return "`describe`";
 }
 
 /**
  * The clause naming how to read the tree the RUNNER resolves against — or, on
- * Android and Chromium, that no read-only tool does. Android's runner tree is
- * the full accessibility hierarchy; the only full-hierarchy readers
- * (`native-find-views` / `native-full-hierarchy`) are Apple-only, and Android
+ * iOS, Android and Chromium, that no read-only tool does.
+ *
+ * Android's runner tree is the full accessibility hierarchy, and Android
  * `describe` returns the TRIMMED interactables tree the recorder already read.
  * Chromium's runner tree keeps only addressable nodes, yet `describe` returns
  * the FULL DOM the recorder read — a superset that still shows the very nodes
- * the runner drops. So naming `describe` on either platform would point the
- * author at the recorder's own tree under the banner of the runner's — the
- * exact wrong-tree steer this warning exists to prevent. iOS (and the remaining
- * platforms) have a reader that genuinely sees the runner's side.
+ * the runner drops. iOS is the same trap in the other direction: the Apple-only
+ * full-hierarchy readers see the raw UIView tree, which is a superset of what
+ * `queryFullHierarchyTree` projects (it drops hidden, transparent,
+ * scroll-clipped and unlabelled container views), AND they match `identifier` /
+ * `label` / `className` EXACTLY — a recorded selector's `text` is a
+ * case-insensitive SUBSTRING of a label or value and its `role` a substring of
+ * a derived role name, neither of which those tools accept. So they report
+ * elements the runner never sees and miss substring matches it does make.
+ *
+ * Naming any of those three would point the author at the wrong tree under the
+ * banner of the runner's — the exact steer this warning exists to prevent.
  */
 function runnerSideReadClause(udid: unknown): string {
   const platform = platformOf(udid);
+  if (platform === "ios" || platform === "ios-remote") {
+    return (
+      "No read-only tool reports the runner's projection on iOS — `native-find-views` and " +
+      "`native-full-hierarchy` return the RAW view tree, matching `identifier`/`label`/" +
+      "`className` exactly (neither takes a substring `text` or a `role`) and keeping the " +
+      "hidden, transparent, scroll-clipped and unlabelled container views the runner drops — " +
+      "so re-record with a selector a testID'd or labelled view carries, or keep it raw"
+    );
+  }
   if (platform === "android") {
     return (
       "No read-only tool exposes the runner's full hierarchy on Android — `describe` returns the " +

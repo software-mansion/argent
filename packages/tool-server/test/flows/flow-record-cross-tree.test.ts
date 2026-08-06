@@ -198,7 +198,13 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(result.message).toContain("an `assert:` conversion WILL fail");
     expect(result.message).toContain("an `await:` will too unless the element reaches that tree");
     expect(result.message).not.toContain("`await:`/`assert:` at polish WILL fail");
-    expect(result.message).toContain("native-find-views");
+    // iOS must NOT be told a tool "reads the runner's side": the Apple-only
+    // full-hierarchy readers return the RAW view tree (a superset of the
+    // runner's projection) and match identifier/label/className exactly, while
+    // a recorded selector's `text`/`role` are substrings. They would report
+    // elements the runner never sees and miss matches it does make.
+    expect(result.message).toContain("No read-only tool reports the runner's projection on iOS");
+    expect(result.message).not.toContain("reads the runner's side");
     expect(parseFlow(await onDisk("disagree")).steps).toHaveLength(1);
   }, 20_000);
 
