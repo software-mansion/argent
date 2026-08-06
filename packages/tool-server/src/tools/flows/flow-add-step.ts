@@ -381,13 +381,23 @@ async function probeAgainstRunnerTree(
   // platform with no flow tree lands in `fetchFlowTree`'s not-supported throw
   // instead, which the probe already reports as indeterminate.
   const device = resolveDevice(args.udid);
+  // Giving up on the probe has to STOP it, not just stop waiting for it.
+  // `settleWithin` only abandons the promise: the poll loop it walked away from
+  // is still awaiting a tree read, and when that read finally lands the loop
+  // finds itself past its deadline and fires one more full read back-to-back
+  // (`finalPoll`) — against a device the recorder has already returned from, so
+  // the stall the ceiling was meant to remove just reappears under whichever
+  // step runs next. Abort the loop the moment the ceiling decides, and its
+  // per-iteration signal check ends it before that read.
+  const giveUp = new AbortController();
+  const probeSignal = ctx?.signal ? AbortSignal.any([ctx.signal, giveUp.signal]) : giveUp.signal;
   // Bounded by PROBE_BUDGET_MS: the loop's own deadline does not bound the
   // tree reads it awaits, and the recorder must not stall on one.
   const settled = await settleWithin(
     probeWhenCondition(
       // The signal rides on ActionEnv separately from `ctx`, so pass it too:
       // a cancelled flow-add-step must stop this probe rather than polling on.
-      { registry, ctx, device, signal: ctx?.signal },
+      { registry, ctx, device, signal: probeSignal },
       {
         condition: condition as WaitCondition,
         selector: selector as FlowSelector,
@@ -398,6 +408,9 @@ async function probeAgainstRunnerTree(
     PROBE_BUDGET_MS,
     ctx?.signal
   );
+  // Whichever way it settled, this call is done with the loop — and on the
+  // timeout path the loop is the thing still holding the device.
+  giveUp.abort();
   if (settled.type === "aborted") throw abortError();
   // A read that outran the budget, and a probe that threw outright, are both
   // "the runner's tree did not answer" — indeterminate, never a verdict.

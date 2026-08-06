@@ -808,10 +808,22 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   // Android uiautomator dump) stalls the recorder far past the window the
   // warning advertises. The probe must be ceilinged, and an overrun reported as
   // indeterminate rather than as a verdict.
-  it("gives up on a tree read that outruns the probe budget", async () => {
-    // A read that never settles at all: the only bound that can end this call
-    // is the probe's own ceiling.
-    fetchRunnerTree = () => new Promise<DescribeTreeData>(() => {});
+  it("gives up on a tree read that outruns the probe budget, and stops it", async () => {
+    // A read the test holds open past the ceiling and then releases — the shape
+    // that exposes what "giving up" has to mean. A read that NEVER settles
+    // would prove the bound and nothing else: the loop stays parked on it, so
+    // it could not have issued a second read whether or not it was stopped.
+    let releaseRead: () => void = () => {};
+    const readLanded = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    fetchRunnerTree = async () => {
+      await readLanded;
+      // A tree that does NOT satisfy the condition. One that did would end the
+      // loop on the spot and prove nothing: the post-deadline read only fires
+      // when the read that landed left the condition unmet.
+      return { tree: iosRunnerTree([iosLabel("Proceed")]), source: "native-devtools" };
+    };
     await startRecording("slow");
 
     const startedAt = Date.now();
@@ -832,6 +844,16 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     // ceiling on purpose.
     expect(elapsed).toBeLessThan(6000);
     expect(await recordedSteps("slow")).toHaveLength(1);
+    expect(fetchCount).toBe(1);
+
+    // Now let the abandoned read land. Past its own deadline the poll loop
+    // takes one more full read (`finalPoll`) unless it has been stopped — which
+    // would put a second device read behind whatever step the recorder runs
+    // next, relocating the stall the ceiling exists to remove instead of
+    // removing it.
+    releaseRead();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(fetchCount).toBe(1);
   }, 15_000);
 
   // A `text` reason quotes the matched element's rendered content, and on the
