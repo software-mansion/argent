@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Registry } from "@argent/registry";
+import type { Registry, ToolContext } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
 import type { PixelFrame } from "../../src/tools/flows/flow-pixels";
 
@@ -21,20 +21,34 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
   }),
 }));
 
-// Stub only the capture; the real `pixelsDiffer` decides whether two frames
+// Stub only the capture; the real `comparePixels` decides whether two frames
 // moved, so the comparison the check depends on is the one under test.
 let currentFrame: () => PixelFrame | undefined;
+/** Every `firstCapture` flag the runner passed, in order. */
+const captureFirstFlags: boolean[] = [];
 vi.mock("../../src/tools/flows/flow-pixels", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/tools/flows/flow-pixels")>();
   return {
     ...actual,
-    // Honours `deadline` exactly as the real one does — it returns undefined
-    // without capturing once the budget is gone. A stub that ignored it hid
-    // the case where the runner judges a screen on a round it had no time to
-    // observe, which is where a missing frame used to read as stillness.
+    // Carries the same three inputs the real one has, so nothing the runner
+    // hands it can go unexercised:
+    //  - `deadline`, which it honours by returning undefined without capturing
+    //    once the budget is gone. A stub that ignored it hid the case where the
+    //    runner judges a screen on a round it had no time to observe, which is
+    //    where a missing frame used to read as stillness.
+    //  - the abort signal, which the real capture is abandoned on.
+    //  - `firstCapture`, which buys a cold stream's first frame a wider bound
+    //    and must be true exactly once per step.
     capturePixelsWithin: vi.fn(
-      async (_env: unknown, deadline: number): Promise<PixelFrame | undefined> =>
-        Date.now() >= deadline ? undefined : currentFrame()
+      async (
+        env: { signal?: AbortSignal },
+        deadline: number,
+        firstCapture: boolean
+      ): Promise<PixelFrame | undefined> => {
+        captureFirstFlags.push(firstCapture);
+        if (env.signal?.aborted) return undefined;
+        return Date.now() >= deadline ? undefined : currentFrame();
+      }
     ),
   };
 });
@@ -99,9 +113,14 @@ async function writeFlow(name: string, yaml: string): Promise<void> {
   await fs.writeFile(path.join(dir, `${name}.yaml`), yaml, "utf8");
 }
 
-async function run(name: string): Promise<FlowRunResult> {
+async function run(name: string, signal?: AbortSignal): Promise<FlowRunResult> {
   const tool = createRunFlowTool(mockRegistry());
-  const result = await tool.execute({}, { name, project_root: tmpDir, device: DEVICE }, undefined);
+  const result = await tool.execute(
+    {},
+    { name, project_root: tmpDir, device: DEVICE },
+    // Only the signal matters here; the runner does not touch the rest.
+    signal ? ({ signal } as unknown as ToolContext) : undefined
+  );
   if (!("steps" in result)) throw new Error("expected a run result");
   return result;
 }
@@ -111,6 +130,7 @@ beforeEach(async () => {
   currentTree = () => screenWith("Home");
   currentFrame = () => frameAt(120);
   treeDelayMs = 0;
+  captureFirstFlags.length = 0;
 });
 
 afterEach(async () => {
@@ -157,7 +177,33 @@ steps:
 `
     );
     expect((await run("ready")).ok).toBe(true);
-    expect(reads).toBeGreaterThanOrEqual(3);
+    // Exactly three, pinned from both sides: two would settle on a single
+    // agreeing pair (the aliasing case below), four would make every settle a
+    // poll slower than it needs to be.
+    expect(reads).toBe(3);
+    // And only the first capture of the step may claim the cold-stream bound.
+    expect(captureFirstFlags).toEqual([true, false, false]);
+  });
+
+  // `minStableMs` is a clock, not a label: a screen that is still from the
+  // first read must still be held for it before the step returns. Without that
+  // the option means nothing, since three reads take about 400ms whatever it
+  // is set to.
+  it("holds a still screen for the whole requested hold before passing", async () => {
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, timeout: 2500, minStableMs: 800 }
+`
+    );
+    const started = Date.now();
+    const r = await run("ready");
+    const elapsed = Date.now() - started;
+    expect(r.steps.at(-1)).toMatchObject({ kind: "idle", status: "pass" });
+    expect(r.steps.at(-1)!.warning).toBeUndefined();
+    expect(elapsed).toBeGreaterThanOrEqual(750);
+    expect(elapsed).toBeLessThan(2_400);
   });
 
   it("warns, and does not fail, when the tree never stops changing", async () => {
@@ -449,6 +495,122 @@ steps:
     // still report the motion, not the tree-only settle.
     expect(r.steps.at(-1)!.warning).toContain("never held still");
     expect(r.steps.at(-1)!.warning).not.toContain("UI tree alone");
+  });
+
+  // The default hold is what nearly every step runs with, so it is worth
+  // pinning somewhere the number is actually used rather than only in a parser
+  // message.
+  it("holds for 250ms by default", async () => {
+    let tick = 0;
+    currentTree = () => screenWith(`frame ${tick++}`);
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, timeout: 900 }
+`
+    );
+    expect((await run("ready")).steps.at(-1)!.warning).toContain(
+      "never held still for 250ms within 900ms"
+    );
+  });
+
+  // A tree source that never answers at all: no read succeeded, so there is
+  // nothing to reason from and the advice is about the window, not the app.
+  // The existing mid-wait case lets the first read land, so this branch — the
+  // one that produces the foreground advice from a standing start — was never
+  // taken.
+  it("reports a tree source that never answered as unreadable, naming the underlying error", async () => {
+    currentTree = () => {
+      throw new Error("native-devtools is not connected");
+    };
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, timeout: 900, minStableMs: 0 }
+  - echo: unreachable
+`
+    );
+    const r = await run("ready");
+    expect(r.ok).toBe(false);
+    const step = r.steps.find((s) => s.kind === "idle")!;
+    expect(step.status).toBe("error");
+    expect(step.reason).toContain("could not read the UI tree");
+    expect(step.reason).toContain("foreground");
+    expect(step.reason).toContain("native-devtools is not connected");
+    // An indeterminate readiness check stops the run rather than recording a
+    // regression the app never had.
+    expect(r.steps.at(-1)!.status).toBe("skip");
+  });
+
+  // A blip mid-settle is expected — the hold restarts from the next good read
+  // rather than the step giving up or carrying its pre-blip state across.
+  it("restarts the hold after a failed read, and still settles", async () => {
+    let reads = 0;
+    currentTree = () => {
+      reads += 1;
+      if (reads === 2) throw new Error("transient describe failure");
+      return screenWith("Home");
+    };
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, minStableMs: 0 }
+`
+    );
+    const step = (await run("ready")).steps.at(-1)!;
+    expect(step.status).toBe("pass");
+    expect(step.warning).toBeUndefined();
+    // 1 ok, 2 failed, 3 is a fresh start (nothing to compare against), 4 and 5
+    // are the two agreeing intervals. Three would mean the blip was ignored.
+    expect(reads).toBe(5);
+  });
+
+  // The same for a screen that goes blank in the middle: an observation that
+  // resets both holds, not a gap and not a reason to give up.
+  it("restarts the hold after the screen goes blank, and still settles", async () => {
+    let reads = 0;
+    currentTree = () => {
+      reads += 1;
+      return reads === 2 ? n({ role: "AXWindow", frame: FULL, children: [] }) : screenWith("Home");
+    };
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, minStableMs: 0 }
+`
+    );
+    const step = (await run("ready")).steps.at(-1)!;
+    expect(step.status).toBe("pass");
+    expect(step.warning).toBeUndefined();
+    expect(reads).toBe(5);
+  });
+
+  // Cancelling a run is not a verdict about the screen. The check has to stop
+  // promptly and report a skip, never a pass, a warning or an error.
+  it("stops on abort without judging the screen", async () => {
+    let tick = 0;
+    currentTree = () => screenWith(`frame ${tick++}`); // never settles
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 300);
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, timeout: 7500 }
+  - echo: unreachable
+`
+    );
+    const started = Date.now();
+    const r = await run("ready", controller.signal);
+    expect(Date.now() - started).toBeLessThan(3_000);
+    const step = r.steps.find((s) => s.kind === "idle")!;
+    expect(step.status).toBe("skip");
+    expect(step.reason).toContain("aborted");
+    expect(step.warning).toBeUndefined();
   });
 
   // One good read early does not license an app verdict drawn from a window
