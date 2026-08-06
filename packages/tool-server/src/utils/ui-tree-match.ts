@@ -296,6 +296,26 @@ const FOLD_CACHE_MAX = 4096;
  * when the string carries no {@link BIDI_SENSITIVE} content to be reordered.
  */
 export function foldText(value: string): string {
+  return foldLoose(value).trim();
+}
+
+/**
+ * {@link foldText} without the trim — leading and trailing whitespace survive
+ * as a single space each.
+ *
+ * A substring test needs this. A boundary space is the standard low-tech word
+ * boundary (`contains: "Taps: 3"` is also satisfied by "Taps: 30", so an author
+ * writes `"Taps: 3 "`), and trimming BOTH sides silently discarded exactly the
+ * constraint they added: `contains "Save "` started matching "Saved
+ * successfully", and `contains " OK"` matched "NOTOK". A regex needle is exempt
+ * from folding because "a pattern carries its own precision"; a boundary space
+ * is the same claim in the literal modes, and gets the same protection.
+ *
+ * Trimming still belongs on an EQUALS comparison, where a label's incidental
+ * outer whitespace is noise rather than a boundary — so {@link foldText} keeps
+ * it, and only {@link includesCI} reaches past it.
+ */
+function foldLoose(value: string): string {
   const hit = foldCache.get(value);
   if (hit !== undefined) return hit;
   // Strip invisibles BEFORE composing: an invisible sitting between a base
@@ -310,7 +330,6 @@ export function foldText(value: string): string {
     .normalize("NFC")
     .replace(SPACE_LIKE, " ")
     .replace(/\s+/g, " ")
-    .trim()
     .toLowerCase();
   // Trees are re-read on every poll, so the same strings recur constantly.
   // A plain size cap (rather than an LRU) is enough: the working set is one
@@ -377,7 +396,6 @@ export function confusableTextNote(actual: string, expected: string): string | u
 
 export function includesCI(haystack: string | undefined, needle: string): boolean {
   if (!haystack) return false;
-  const wanted = foldText(needle);
   // A needle that folds away to nothing is not a weak constraint, it is NO
   // constraint: `"".includes()` is true of every string, so `{ role: " " }`
   // matched every element on the screen and the check could never fail — the
@@ -385,8 +403,14 @@ export function includesCI(haystack: string | undefined, needle: string): boolea
   // through a selector field instead. `text` was already covered by
   // hasVisibleText; `role` and `identifier` were not, so refuse it here where
   // every literal comparison passes through.
-  if (wanted === "") return false;
-  return foldText(haystack).includes(wanted);
+  //
+  // The emptiness test is the TRIMMED fold, deliberately: a needle of pure
+  // whitespace folds loosely to " ", which is not empty and would then match
+  // every label containing a space — the very gate this is.
+  if (foldText(needle) === "") return false;
+  // Both sides UNTRIMMED, so a boundary space in the needle survives to
+  // constrain the match. See {@link foldLoose}.
+  return foldLoose(haystack).includes(foldLoose(needle));
 }
 
 export function equalsCI(actual: string | undefined, expected: string): boolean {

@@ -118,6 +118,46 @@ describe("literal comparisons fold both sides", () => {
     expect(includesCI("Save", "Saved")).toBe(false);
   });
 
+  describe("a boundary space in a `contains` needle still constrains", () => {
+    // The standard low-tech word boundary: `contains: "Taps: 3"` is also
+    // satisfied by "Taps: 30", so an author writes a trailing space. Folding
+    // trimmed BOTH sides and threw that constraint away.
+    it("does not let a trailing space match a longer word", () => {
+      expect(includesCI("Saved successfully", "Save ")).toBe(false);
+      expect(includesCI("Taps: 30", "Taps: 3 ")).toBe(false);
+    });
+
+    it("does not let a leading space match mid-word", () => {
+      expect(includesCI("NOTOK", " OK")).toBe(false);
+    });
+
+    it("still matches when the boundary is really there", () => {
+      expect(includesCI("Save Changes", "Save ")).toBe(true);
+      expect(includesCI("Taps: 3 times", "Taps: 3 ")).toBe(true);
+      expect(includesCI("NOT OK", " OK")).toBe(true);
+      // Including across the fold's own substitutions.
+      expect(includesCI(`Taps:${NBSP}3${NBSP}times`, "Taps: 3 ")).toBe(true);
+    });
+
+    it("still ignores the label's own incidental outer whitespace", () => {
+      expect(includesCI("  Save   Changes \n", "Save Changes")).toBe(true);
+      // ...and a needle whose boundary sits at the label's own edge.
+      expect(includesCI("  Save   Changes \n", "Changes ")).toBe(true);
+    });
+
+    it("keeps trimming an EQUALS comparison, where outer space is noise", () => {
+      expect(equalsCI("  Save   Changes \n", "Save Changes")).toBe(true);
+      expect(foldText("  Save   Changes \n")).toBe("save changes");
+    });
+
+    it("still refuses a needle that is nothing BUT whitespace", () => {
+      // Loosely folded, " " is not empty — without the trimmed emptiness gate
+      // it would match every label containing a space.
+      expect(includesCI("Save Changes", " ")).toBe(false);
+      expect(includesCI("Save Changes", "\t\n ")).toBe(false);
+    });
+  });
+
   it("folds identifiers, including the unqualified Android resource-id form", () => {
     expect(identifierMatches(`submit${ZWSP}`, "submit")).toBe(true);
     expect(identifierMatches("com.example.app:id/submit", `sub${ZWSP}mit`)).toBe(true);
