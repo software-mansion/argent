@@ -165,6 +165,41 @@ describe("flow-execute parameter handling", () => {
   });
 });
 
+describe("flow-read-prerequisite parameter handling", () => {
+  function prereqRegistry(): Registry {
+    const r = new Registry();
+    r.registerTool(flowReadPrerequisiteTool as never);
+    return r;
+  }
+
+  it("spells out the alias when neither flow source is present", async () => {
+    // The documented pre-flight: the skill has agents call this BEFORE the run,
+    // so a caller who named the flow under a key zod stripped meets this tool
+    // first. A bare "Pass exactly one flow source" leaves them with nothing
+    // saying which spellings are accepted, while the run itself would say.
+    await expect(
+      prereqRegistry().invokeTool("flow-read-prerequisite", { project_root: tmpDir })
+    ).rejects.toThrow(/needs the flow's name in `name`.*`flow_name` is accepted as an alias/s);
+  });
+
+  it("stays terse when the caller named BOTH sources", async () => {
+    // Two sources named is not a spelling problem — the caller has to drop one,
+    // and the alias hint would only be noise.
+    let message = "";
+    try {
+      await prereqRegistry().invokeTool("flow-read-prerequisite", {
+        name: "a",
+        flow_path: path.join(tmpDir, "b.yaml"),
+        project_root: tmpDir,
+      });
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain("Pass exactly one flow source: name or flow_path.");
+    expect(message).not.toContain("is accepted as an alias");
+  });
+});
+
 describe("flow-file file-input spec order", () => {
   it("puts the `${flow_name}` spec before the `${name}` spec so `name` wins the client merge", () => {
     // The client interpolates each spec and merges last-write-wins on `target`,
