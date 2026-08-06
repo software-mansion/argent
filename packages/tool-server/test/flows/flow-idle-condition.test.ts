@@ -96,6 +96,18 @@ describe("await { idle }", () => {
     );
   });
 
+  // The hold is validated as an integer while the timeout is not, so a
+  // fractional timeout used to be turned into a bound for the hold and asked
+  // for "an integer between 0 and -0.5". Nothing is derived from it now: the
+  // two are checked against each other as a sum, which has an answer whatever
+  // the timeout is.
+  it("rejects a timeout too small to settle in without inventing a range", () => {
+    const parse = (): FlowStep[] =>
+      parseSteps(`  - await: { idle: true, timeout: 0.5, minStableMs: 0 }\n`);
+    expect(parse).toThrow(/idle needs a timeout of at least 600ms/);
+    expect(parse).not.toThrow(/between 0 and -/);
+  });
+
   it("rejects a non-positive timeout", () => {
     expect(() => parseSteps(`  - await: { idle: true, timeout: 0 }\n`)).toThrow(/await.timeout/);
     expect(() => parseSteps(`  - await: { idle: true, timeout: "soon" }\n`)).toThrow(
