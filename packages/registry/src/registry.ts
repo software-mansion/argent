@@ -17,8 +17,10 @@ import {
   ServiceInitializationError,
   ToolNotFoundError,
   ToolExecutionError,
+  FailureError,
   getFailureSignalOrFallback,
 } from "./errors";
+import { FAILURE_CODES } from "./failure-codes";
 import { parseURN } from "./urn";
 import { zodObjectToJsonSchema } from "./zod-to-json-schema";
 import { randomUUID } from "node:crypto";
@@ -126,8 +128,20 @@ export class Registry {
       if (definition.zodSchema) {
         const parsed = definition.zodSchema.safeParse(params ?? {});
         if (!parsed.success) {
-          throw new Error(
-            `Invalid params for tool "${id}": ${describeParamIssues(parsed.error, params)}`
+          // A schema miss is a client-input error wherever it is caught. The
+          // same rejection can land here or inside a tool (a cross-field rule
+          // zod cannot express, a field left optional so an alias is accepted),
+          // and telemetry must not read those two as different kinds of
+          // failure — an unsignalled Error buckets as ARGENT_UNCLASSIFIED,
+          // i.e. as an internal fault the caller could not have avoided.
+          throw new FailureError(
+            `Invalid params for tool "${id}": ${describeParamIssues(parsed.error, params)}`,
+            {
+              error_code: FAILURE_CODES.TOOL_INPUT_INVALID,
+              failure_stage: "tool_params_parse",
+              failure_area: "tool_server",
+              error_kind: "validation",
+            }
           );
         }
         effectiveParams = parsed.data;
@@ -503,6 +517,12 @@ export function describeParamIssues(
     // NOT undefined, so it still falls to the per-issue wording below.
     // Nested paths get the same treatment: `steps.0.tool` is every bit as
     // missing as a top-level field.
+    // A custom refinement's message is author-written for exactly this
+    // situation — a cross-field rule ("exactly one of name / flow_path") that
+    // no per-field wording can express — so it survives verbatim. Without this,
+    // the missing-value branch below rewrites it into "`flow_path` is required",
+    // naming a field the caller may have omitted quite deliberately.
+    if (issue.code === "custom") return issue.message;
     if (valueAtPath(params, issue.path) === undefined) {
       const expected = (issue as { expected?: unknown }).expected;
       const kind = typeof expected === "string" ? ` (${expected})` : "";

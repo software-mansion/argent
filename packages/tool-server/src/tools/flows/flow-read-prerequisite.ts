@@ -124,7 +124,7 @@ Fails if the flow file does not exist.`,
         ? resolveFlowName(params, "flow-read-prerequisite")
         : undefined;
     const { filePath, flowName } = await resolveFlowSource(
-      { ...params, name: named },
+      named === undefined ? params : { ...params, name: named },
       ctx?.fileInputs?.flow_file,
       ctx?.fileInputs?.flow_path
     );
