@@ -382,15 +382,30 @@ export function compatibilityVariantIn(haystack: string, needle: string): boolea
 }
 
 /**
- * Characters that draw no glyph of their own but BUILD one in sequence, so a
- * string that has them does not look like the same string without them: ZWNJ,
- * ZWJ, both variation-selector blocks, and the emoji tag characters. Exactly
- * the set the fold deliberately keeps — see the DELIBERATELY NOT FOLDED block.
+ * Does this character draw no glyph of its own but BUILD one in sequence — so
+ * that a string carrying it does not look like the same string without it?
+ * ZWNJ, ZWJ, both variation-selector blocks and the emoji tag characters:
+ * exactly the set the fold deliberately keeps (see DELIBERATELY NOT FOLDED).
+ *
+ * A code-point predicate rather than a regex character class, because a class
+ * spelling this set is what `no-misleading-character-class` exists to reject —
+ * and it is right to: a class holding ZWJ and the variation selectors reads as
+ * though it matched the sequences they build, when it matches the single units.
+ * Here that IS the intent, so it is written in a form that cannot be misread.
  */
-const SEQUENCE_BUILDING = /[‌‍︀-️\u{e0020}-\u{e007f}\u{e0100}-\u{e01ef}]/u;
+function isSequenceBuilding(ch: string): boolean {
+  const cp = ch.codePointAt(0) ?? 0;
+  return (
+    cp === 0x200c ||
+    cp === 0x200d ||
+    (cp >= 0xfe00 && cp <= 0xfe0f) ||
+    (cp >= 0xe0020 && cp <= 0xe007f) ||
+    (cp >= 0xe0100 && cp <= 0xe01ef)
+  );
+}
 
 /** The directional controls: no glyph of their own, but they REORDER text. */
-const DIRECTIONAL = /[؜‎‏‪-‮⁦-⁩]/u;
+const DIRECTIONAL = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
 /** {@link DIRECTIONAL}, global — for {@link quoteScreenText}'s replace. */
 const DIRECTIONAL_G = new RegExp(DIRECTIONAL.source, "gu");
 
@@ -404,16 +419,23 @@ const DIRECTIONAL_G = new RegExp(DIRECTIONAL.source, "gu");
  * `Cf` test entirely despite being exactly the kind of unexplainable invisible
  * this note exists for.
  */
-const IGNORABLE_AND_INERT = new RegExp(
-  `(?!${SEQUENCE_BUILDING.source})\\p{Default_Ignorable_Code_Point}`,
-  "gu"
-);
+const DEFAULT_IGNORABLE = /\p{Default_Ignorable_Code_Point}/gu;
+
+/** Every inert ignorable in `text`, in order, sequence-builders excluded. */
+function inertIgnorables(text: string): string[] {
+  return (text.match(DEFAULT_IGNORABLE) ?? []).filter((ch) => !isSequenceBuilding(ch));
+}
+
+/** `text` with every inert ignorable removed — what the eye is left with. */
+function withoutInertIgnorables(text: string): string {
+  return text.replace(DEFAULT_IGNORABLE, (ch) => (isSequenceBuilding(ch) ? ch : ""));
+}
 
 /** Which ignorable characters occur a DIFFERENT number of times in each string? */
 function differingIgnorables(actual: string, expected: string): string[] {
   const tally = (s: string): Map<string, number> => {
     const counts = new Map<string, number>();
-    for (const ch of s.match(IGNORABLE_AND_INERT) ?? []) {
+    for (const ch of inertIgnorables(s)) {
       counts.set(ch, (counts.get(ch) ?? 0) + 1);
     }
     return counts;
@@ -461,7 +483,7 @@ export function confusableTextNote(actual: string, expected: string): string | u
   // The literal comparators already fold both, so a pair differing only that
   // way passes and never reaches this note; a regex comparison is
   // case-sensitive by design and must not be told otherwise.
-  const visible = (s: string): string => s.replace(IGNORABLE_AND_INERT, "");
+  const visible = withoutInertIgnorables;
   if (visible(actual) !== visible(expected)) return undefined;
   const codepoints = (s: string): string =>
     Array.from(s)
@@ -509,7 +531,7 @@ export function quoteScreenText(text: string): string {
  * Returns undefined when the text holds no such character.
  */
 export function ignorableTextNote(text: string): string | undefined {
-  const found = text.match(IGNORABLE_AND_INERT) ?? [];
+  const found = inertIgnorables(text);
   if (found.length === 0) return undefined;
   const names = [...new Set(found)]
     .map((ch) => `U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`)
