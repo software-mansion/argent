@@ -25,20 +25,15 @@ import {
   assertValidProjectRoot,
   chromiumLaunchSpec,
   classifyOnDiskSpelling,
-  describeSelector,
-  describeTextExpectation,
   getFlowPath,
   parseFlow,
   runTargetName,
   type FlowFile,
-  type FlowSelector,
   type FlowStep,
   type Launch,
-  type WhenCondition,
   LAUNCH_PLATFORMS,
-  SELECTOR_RELATIONS,
 } from "./flow-utils";
-import type { TextMatchMode, WaitCondition } from "../../utils/ui-tree-match";
+import { describeWhenCondition, stepTarget } from "./flow-step-definitions";
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { isUnmetUiWaitResult } from "../await-ui-element";
@@ -1476,91 +1471,6 @@ function pushReport(state: ExecState, report: StepReport): void {
   state.onStepReport?.(report);
 }
 
-function selectorLabel(sel: FlowSelector): string {
-  const parts: string[] = [];
-  // The universal selector prints as CSS spells it, so a scope-only target
-  // never renders as an empty label.
-  if (sel.any) parts.push("*");
-  if (sel.text !== undefined) parts.push(`"${sel.text}"`);
-  if (sel.textMatches !== undefined) parts.push(`/${sel.textMatches}/`);
-  if (sel.identifier) parts.push(`id=${sel.identifier}`);
-  if (sel.role) parts.push(`role=${sel.role}`);
-  // Each relational scope renders after the fields, parenthesized and
-  // recursive, so two steps that differ only by scope don't collapse to the
-  // same target label in the report — mirroring `describeSelector`'s
-  // reason-string spelling so the two surfaces stay in lockstep (see
-  // `conditionLabel`).
-  for (const relation of SELECTOR_RELATIONS) {
-    const scope = sel[relation];
-    if (scope !== undefined) parts.push(`${relation} (${selectorLabel(scope)})`);
-  }
-  return parts.join(" ");
-}
-
-/**
- * One template for rendering an await/assert/when-guard UI condition,
- * parameterized by selector spelling — {@link selectorLabel} for report
- * targets, `describeSelector` for reason strings — so the two surfaces share
- * a single shape and cannot drift.
- */
-function conditionLabel(
-  cond: {
-    condition: WaitCondition;
-    selector: FlowSelector;
-    expectedText?: string;
-    textMatch?: TextMatchMode;
-  },
-  renderSelector: (sel: FlowSelector) => string
-): string {
-  const sel = renderSelector(cond.selector);
-  // A text condition checks expectedText against the element the selector
-  // locates; the other conditions are about the selector itself.
-  if (cond.condition === "text") {
-    return `${sel} ${describeTextExpectation(cond.expectedText, cond.textMatch)}`;
-  }
-  return `${cond.condition} ${sel}`;
-}
-
-/** Display-only "what this step acts on" for {@link StepReport.target}. */
-function stepTarget(step: FlowStep): string | undefined {
-  switch (step.kind) {
-    case "tap":
-    case "long-press":
-      if (step.selector) return selectorLabel(step.selector);
-      if (step.x !== undefined && step.y !== undefined) return `(${step.x}, ${step.y})`;
-      return undefined;
-    case "type":
-      return `into ${selectorLabel(step.into)}`;
-    case "await":
-    case "assert":
-      return conditionLabel(step, selectorLabel);
-    case "when":
-      return step.condition.kind === "platform"
-        ? `platform ${step.condition.platform}`
-        : conditionLabel(step.condition, selectorLabel);
-    case "scroll-to": {
-      const dir = step.direction !== "down" ? ` (${step.direction})` : "";
-      return `${selectorLabel(step.target)}${dir}`;
-    }
-    case "pinch": {
-      const scale = `scale ${step.scale}`;
-      return step.selector ? `${selectorLabel(step.selector)} (${scale})` : scale;
-    }
-    case "rotate": {
-      const by = `by ${step.by}°`;
-      return step.selector ? `${selectorLabel(step.selector)} (${by})` : by;
-    }
-    case "snapshot":
-      return step.cropOn ? `"${step.name}" cropOn ${selectorLabel(step.cropOn)}` : `"${step.name}"`;
-    case "run":
-      // The as-written path, so a report line shows exactly what the flow
-      // references (`run ../shared/login.yaml`), not just the attribution stem.
-      return step.flow;
-    default:
-      return undefined;
-  }
-}
-
 /**
  * One `run:` chain entry: the cycle guard compares canonical (realpath'd)
  * paths; error messages render the human-readable display names.
@@ -1726,12 +1636,6 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
     pushReport(state, report);
     if (report.status === "fail" || report.status === "error") state.stopped = true;
   }
-}
-
-/** A compact rendering of a when guard for report reasons. */
-function describeWhenCondition(cond: WhenCondition): string {
-  if (cond.kind === "platform") return `platform ${cond.platform}`;
-  return conditionLabel(cond, describeSelector);
 }
 
 /**

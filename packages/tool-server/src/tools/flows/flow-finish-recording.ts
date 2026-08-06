@@ -8,38 +8,9 @@ import {
   clientFileDirective,
   parseFlow,
   serializeFlow,
-  selectorToYaml,
-  type FlowFile,
   type FlowSavedTo,
-  type FlowSelector,
 } from "./flow-utils";
-import type { TextMatchMode } from "../../utils/ui-tree-match";
-
-// Quote selectors in the step summary the way the flow FILE spells them
-// (`id`, bare string for loose, no internal `loose` flag) — the summary is what
-// gets read before hand-editing the YAML, so the spellings must agree.
-function selectorLabel(sel: FlowSelector): string {
-  return JSON.stringify(selectorToYaml(sel));
-}
-
-// Render a text condition for the summary, one spelling for every step kind
-// that carries one (await/assert/when): the comparator is preserved — regex
-// patterns as `matches /…/`, exact text as `== "…"`, substrings as
-// `contains "…"` — and literals use JSON quoting so embedded quotes and
-// control characters stay unambiguous.
-function textConditionLabel(
-  sel: FlowSelector,
-  expectedText: string | undefined,
-  textMatch: TextMatchMode | undefined
-): string {
-  const selector = selectorLabel(sel);
-  const expected = expectedText ?? "";
-  return textMatch === "matches"
-    ? `text ${selector} matches /${expected}/`
-    : textMatch === "equals"
-      ? `text ${selector} == ${JSON.stringify(expected)}`
-      : `text ${selector} contains ${JSON.stringify(expected)}`;
-}
+import { summarizeSteps } from "./flow-step-definitions";
 
 const zodSchema = z.object({
   name: z
@@ -116,7 +87,7 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
         // step bodies the parser does not fully constrain, and nothing that can
         // throw may run after the session is destroyed. The one known thrower
         // there — `JSON.stringify` on a cyclic `args` anchor — is guarded in
-        // {@link renderToolArgs}; keeping the order is what makes the next one
+        // flow-step-definitions; keeping the order is what makes the next one
         // recoverable rather than fatal.
         const summary = summarizeSteps(flow);
         await clearRecordingSession(params.project_root, params.name);
@@ -135,88 +106,3 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
     };
   },
 };
-
-/**
- * A `tool:` step's `args` is the one step body the parser does not constrain, so
- * a cyclic YAML alias in a hand-edited file reaches here as a cyclic object and
- * `JSON.stringify` throws on it. Fall back to a marker, the way `parseFlow`
- * already does for the same input class (see `badEntry` in flow-utils) — the
- * summary of a recording that is otherwise fine should not fail on one
- * unrenderable step.
- *
- * The body interpolates rather than returning `JSON.stringify(args)` directly,
- * because `JSON.stringify(undefined)` is the VALUE `undefined`, not a string,
- * and would leave through a `string`-typed signature uncaught (TypeScript does
- * not flag it — `JSON.stringify`'s overload is declared to return `string`).
- * No reachable input is undefined today: every caller comes through
- * {@link summarizeSteps}, which is only ever handed `parseFlow` output, and
- * `fromYamlStep` normalises a missing/`null` `args:` to `{}` on the way
- * through. It is the `default:` arm of that switch this guards — a step kind
- * added without its own `case` lands there and is rendered as a `tool:` step,
- * with no `args` field to read.
- */
-function renderToolArgs(args: unknown): string {
-  try {
-    return `${JSON.stringify(args)}`;
-  } catch {
-    return "[cyclic args]";
-  }
-}
-
-/** One human-readable line per recorded step, in the flow file's own spellings. */
-function summarizeSteps(flow: FlowFile): string[] {
-  return flow.steps.map((step, i) => {
-    const n = i + 1;
-    switch (step.kind) {
-      case "echo":
-        return `${n}. echo: ${step.message}`;
-      case "launch":
-        return `${n}. launch: ${typeof step.app === "string" ? step.app : JSON.stringify(step.app)}`;
-      case "run":
-        return `${n}. run: ${step.flow}`;
-      case "tap":
-      case "long-press":
-        return `${n}. ${step.kind}: ${step.selector ? selectorLabel(step.selector) : `(${step.x}, ${step.y})`}`;
-      case "type":
-        return `${n}. type: ${selectorLabel(step.into)} ← "${step.text}"`;
-      case "await":
-      case "assert": {
-        const tail =
-          step.condition === "text"
-            ? textConditionLabel(step.selector, step.expectedText, step.textMatch)
-            : `${step.condition} ${selectorLabel(step.selector)}`;
-        return `${n}. ${step.kind}: ${tail}`;
-      }
-      case "wait":
-        return `${n}. wait: ${step.ms}ms`;
-      case "when": {
-        // Mirror the await/assert rendering above — selectorLabel spelling,
-        // same comparator tail for text guards.
-        const cond =
-          step.condition.kind === "platform"
-            ? `platform ${step.condition.platform}`
-            : step.condition.condition === "text"
-              ? textConditionLabel(
-                  step.condition.selector,
-                  step.condition.expectedText,
-                  step.condition.textMatch
-                )
-              : `${step.condition.condition} ${selectorLabel(step.condition.selector)}`;
-        // Pluralize like flow-run's skip reason so the two surfaces agree.
-        const count = step.steps.length;
-        return `${n}. when: ${cond} (${count} step${count === 1 ? "" : "s"})`;
-      }
-      case "scroll-to":
-        return `${n}. scroll-to: ${selectorLabel(step.target)} (${step.direction})`;
-      case "pinch":
-        return `${n}. pinch: scale ${step.scale}${step.selector ? ` on ${selectorLabel(step.selector)}` : ""}`;
-      case "rotate":
-        return `${n}. rotate: by ${step.by}°${step.selector ? ` on ${selectorLabel(step.selector)}` : ""}`;
-      case "snapshot":
-        return `${n}. snapshot: ${step.name}`;
-      case "tool":
-      default:
-        return `${n}. tool: ${step.name} ${renderToolArgs(step.args)}`;
-    }
-  });
-}
