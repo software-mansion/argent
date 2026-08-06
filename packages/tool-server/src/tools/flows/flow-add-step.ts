@@ -807,8 +807,8 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
 
       const toolResult = await invokeSubTool(registry, ctx, params.command, args);
 
-      // A recorded wait that HELD against the accessibility tree gets asked the
-      // tree the runner resolves DIRECTIVES against too, so the author learns
+      // A recorded wait that HELD against the tree await-ui-element reads gets
+      // asked the tree the runner resolves DIRECTIVES against too, so the author learns
       // now — rather than after polish — whether the conversion is safe. One
       // that never held is a step failure at replay and is reported as such
       // instead (see {@link UNMET_WAIT_WARNING}).
