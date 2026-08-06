@@ -1451,11 +1451,21 @@ async function waitForIdle(
   }
   // Readable throughout and never once carrying content: the screen rendered
   // nothing, which is not the same claim as "it never stopped moving".
+  //
+  // A warning, not a stop. The tree read back fine — this is an observation
+  // about the app, and readiness is never this step's to fail a run over. It
+  // also is not always the app's fault: a screen legitimately renders no
+  // accessible content (a bare canvas, a video surface, a splash image), and
+  // stopping the flow there took every later step with it, including the
+  // element check that would have said what was actually wrong.
   if (!sawContent) {
     return {
-      ok: false,
-      indeterminate: true,
-      reason: `the UI tree stayed empty for ${timeoutMs}ms — the screen never rendered content`,
+      ok: true,
+      warning:
+        `the UI tree stayed empty for ${timeoutMs}ms — the screen never rendered content, so ` +
+        `there was nothing to settle. If the screen is meant to render accessible content, this ` +
+        `is where it did not; if it is a canvas or a video surface, it has none to read. Gate ` +
+        `the next action on an element check either way.`,
     };
   }
   // Too few reads to have judged anything. A settle needs three of them
