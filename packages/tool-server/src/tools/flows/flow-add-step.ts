@@ -22,6 +22,7 @@ import {
   type RecordingSession,
 } from "./flow-utils";
 import { AWAIT_UI_ELEMENT_TOOL_ID, isUnmetUiWaitResult } from "../await-ui-element";
+import { RUN_SEQUENCE_TOOL_ID } from "./flow-nested-outcome";
 import { runSequenceFailure } from "../run-sequence";
 import { probeWhenCondition, type DirectiveOutcome } from "./flow-actions";
 import { summarizeStep } from "./flow-finish-recording";
@@ -802,9 +803,17 @@ function flowExecuteRecordBlock(result: unknown): { reason: string } | null {
   if (typeof result !== "object" || result === null) return null;
   const value = result as {
     ok?: unknown;
+    aborted?: unknown;
     notice?: unknown;
     executionPrerequisite?: unknown;
   };
+  // A cancelled run folds the abort into its verdict (`ok` is false whenever
+  // `aborted` is set), so the abort has to be read FIRST or every cancellation
+  // reports as a composed flow that failed. Same precedence the runner applies
+  // to a nested flow-execute, and to its own steps when the signal fires.
+  if (value.aborted === true) {
+    return { reason: "flow-execute was cancelled" };
+  }
   if (value.ok === false) {
     return { reason: "flow-execute returned ok: false" };
   }
@@ -1356,6 +1365,33 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
         }
       }
 
+      // run-sequence honours cancellation between nested steps by returning a
+      // partial result rather than throwing. A post-invoke guard is therefore
+      // required: otherwise that partial sequence would be recorded as if all
+      // nested actions had run successfully.
+      //
+      // Checked BEFORE the failure verdict, the order the runner uses. A nested
+      // tool cancelled mid-flight reports itself either by returning (a
+      // cancelled `await-ui-element` returns unmet) or by rejecting, and
+      // run-sequence turns both into an ordinary error entry — so reading the
+      // verdict first files a cancellation as "a failed nested step", and the
+      // recorder and the runner then classify one event two different ways.
+      if (params.command === RUN_SEQUENCE_TOOL_ID && ctx?.signal?.aborted) {
+        const { stepCount, note } = await activeFlowState(session);
+        const progress = runSequenceProgress(toolResult);
+        const mutationWarning = nestedStepAttempted(toolResult)
+          ? ` ${partialMutationWarning("run-sequence")}`
+          : "";
+        return {
+          message:
+            `run-sequence was cancelled${progress ? ` with ${progress}` : ""} — step NOT recorded.` +
+            `${mutationWarning}${note ? ` ${note}` : ""}`,
+          toolResult,
+          stepCount,
+          savedTo: session.filePath,
+        };
+      }
+
       const sequenceFailure = runSequenceFailure(params.command, toolResult);
       if (sequenceFailure) {
         const { stepCount, note } = await activeFlowState(session);
@@ -1365,26 +1401,6 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
         return {
           message:
             `run-sequence stopped on a failed nested step: ${sequenceFailure} — step NOT recorded.` +
-            `${mutationWarning}${note ? ` ${note}` : ""}`,
-          toolResult,
-          stepCount,
-          savedTo: session.filePath,
-        };
-      }
-
-      // run-sequence honours cancellation between nested steps by returning a
-      // partial result rather than throwing. A post-invoke guard is therefore
-      // required: otherwise that partial sequence would be recorded as if all
-      // nested actions had run successfully.
-      if (params.command === "run-sequence" && ctx?.signal?.aborted) {
-        const { stepCount, note } = await activeFlowState(session);
-        const progress = runSequenceProgress(toolResult);
-        const mutationWarning = nestedStepAttempted(toolResult)
-          ? ` ${partialMutationWarning("run-sequence")}`
-          : "";
-        return {
-          message:
-            `run-sequence was cancelled${progress ? ` with ${progress}` : ""} — step NOT recorded.` +
             `${mutationWarning}${note ? ` ${note}` : ""}`,
           toolResult,
           stepCount,

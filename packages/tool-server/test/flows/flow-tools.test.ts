@@ -920,6 +920,102 @@ describe("flow-add-step", () => {
     expect(parseFlow(await onDisk("sequence-cancelled")).steps).toEqual([]);
   });
 
+  it("reports a cancel that landed INSIDE a nested step as a cancellation", async () => {
+    // A cancelled `await-ui-element` reports itself by returning unmet, which
+    // run-sequence turns into an ordinary error entry. Reading the verdict
+    // before the signal files that as "a failed nested step" — the opposite of
+    // what the runner calls the same event.
+    const controller = new AbortController();
+    const registry = {
+      invokeTool: vi.fn(async () => {
+        controller.abort();
+        return {
+          completed: 1,
+          total: 3,
+          steps: [
+            { tool: "gesture-tap", result: { tapped: true } },
+            { tool: "await-ui-element", error: "await-ui-element condition not met" },
+          ],
+        };
+      }),
+      getTool: vi.fn(() => undefined),
+    } as unknown as Registry;
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "sequence-cancelled-in-step", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "sequence-cancelled-in-step",
+        project_root: tmpDir,
+        command: "run-sequence",
+        args: JSON.stringify({
+          udid: "ABC",
+          steps: [
+            { tool: "gesture-tap", args: { x: 0.5, y: 0.3 } },
+            {
+              tool: "await-ui-element",
+              args: { condition: "visible", selector: { text: "Home" } },
+            },
+            { tool: "gesture-tap", args: { x: 0.5, y: 0.4 } },
+          ],
+        }),
+      },
+      { signal: controller.signal } as never
+    );
+
+    expect(result.message).toContain("was cancelled");
+    expect(result.message).not.toContain("failed nested step");
+    expect(result.message).toContain("step NOT recorded");
+    expect(parseFlow(await onDisk("sequence-cancelled-in-step")).steps).toEqual([]);
+  });
+
+  it("reports a cancelled composed flow as a cancellation, not as ok: false", async () => {
+    // `summarize` folds the abort into the verdict — `ok` is false whenever
+    // `aborted` is set — so reading `ok` first renames every cancellation into
+    // a composed flow that failed.
+    const registry = createMockRegistry({
+      "flow-execute": {
+        result: {
+          flow: "login",
+          device: "ABC",
+          executionPrerequisite: "",
+          ok: false,
+          aborted: true,
+          passed: 1,
+          failed: 0,
+          skipped: 1,
+          errored: 0,
+          steps: [
+            { index: 0, kind: "tap", status: "pass" },
+            { index: 1, kind: "tap", status: "skip", reason: "run aborted" },
+          ],
+        },
+      },
+    });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute({}, { name: "compose-cancelled", project_root: tmpDir });
+    await writeSiblingFlow("login", "steps:\n  - echo: hi\n");
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "compose-cancelled",
+        project_root: tmpDir,
+        command: "flow-execute",
+        args: JSON.stringify({ name: "login", project_root: tmpDir, device: "ABC" }),
+      }
+    );
+
+    expect(result.message).toContain("was cancelled");
+    expect(result.message).not.toContain("ok: false");
+    expect(result.message).toContain("NOT recorded");
+    expect(parseFlow(await onDisk("compose-cancelled")).steps).toEqual([]);
+  });
+
   it("does not record run: when flow-execute returned ok: false", async () => {
     const registry = createMockRegistry({
       "flow-execute": {
