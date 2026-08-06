@@ -325,10 +325,12 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     const result = await recordWait("vega", "Continue", VEGA);
 
     expect(result.message).toContain("does NOT hold against the tree the runner resolves");
-    expect(result.message).toContain("the flow tree drops nothing from it");
-    expect(result.message).toContain("`describe` lists the same elements the runner resolves");
+    expect(result.message).toContain("the SCREEN changed between the live wait and this re-probe");
+    expect(result.message).toContain("`describe` reads the same source the runner does");
     expect(result.message).not.toContain("different projections of the screen");
-    expect(result.message).not.toContain("reads the runner's side");
+    // The other platforms' imperative: here the selector is fine and the screen
+    // is what moved, so nothing may send the author to re-record it.
+    expect(result.message).not.toContain("re-record with a selector");
     expect(parseFlow(await onDisk("vega")).steps).toHaveLength(1);
   }, 20_000);
 

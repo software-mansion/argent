@@ -143,8 +143,8 @@ function runnerSideReadClause(udid: unknown): string {
   }
   if (platform === "vega") {
     return (
-      "`describe` lists the same elements the runner resolves against — only a container's text " +
-      "differs, so check a leaf's own text, or switch an `equals` to `contains`"
+      "`describe` reads the same source the runner does, so re-run the wait rather than " +
+      "re-recording the selector"
     );
   }
   return UNSUPPORTED_PLATFORM.read;
@@ -176,14 +176,20 @@ function treeDivergenceFor(udid: unknown): string {
     );
   }
   if (platform === "vega") {
-    // Vega is the one platform where the two trees hold the SAME elements:
-    // `flow-vega-tree` re-shapes the toolkit page source the recorder read
-    // (flatten + hoist) and drops nothing, so claiming "different projections
-    // of the screen" would overstate it. Only the text on a node differs.
+    // Vega is the one platform where the runner's tree cannot disagree on an
+    // unchanged screen. `flow-vega-tree` re-shapes the very page source the
+    // recorder read: `projectVegaNode` skips nothing and emits every node as a
+    // leaf, so membership, frames and visibility are identical; the only edit
+    // is a hoisted `subtreeText`, and `evaluateCondition` accepts a node's own
+    // text as well as its hoisted text, so the hoist can only ever make a
+    // `text` check MORE likely to hold. So "different projections of the
+    // screen" would be plainly wrong here, and so would sending the author to
+    // rewrite the selector.
     return (
-      "Both read the same automation-toolkit page source and the flow tree drops nothing from " +
-      "it, so each holds the same elements — but the flow tree hoists a container's descendant " +
-      "text onto it, so a `text` check against a container reads a different string on each side."
+      "Both read the same automation-toolkit page source, and the flow tree only re-shapes it — " +
+      "it drops no element and its text hoist can only add matches — so on this platform a " +
+      "disagreement means the SCREEN changed between the live wait and this re-probe, not that " +
+      "the two trees differ."
     );
   }
   return UNSUPPORTED_PLATFORM.divergence;
@@ -357,8 +363,11 @@ async function probeAgainstRunnerTree(
       `\`tool: ${AWAIT_UI_ELEMENT_TOOL_ID}\` step it replays fine — it reads the same tree it ` +
       `just passed against — but an \`assert:\` conversion WILL fail (it reads that tree on ` +
       `the same short grace this probe just used), and an \`await:\` will too unless the ` +
+      // The remedy belongs to the platform clause, not here: "re-record with a
+      // selector present in both trees" is right on iOS/Android/Chromium and
+      // plainly wrong on Vega, where the two trees hold the same elements and a
+      // disagreement means the screen moved, not that the selector is bad.
       `element reaches that tree within its longer timeout. ` +
-      `Either keep it raw deliberately, or re-record the wait with a selector present in both. ` +
       `${treeDivergenceFor(args.udid)} ${runnerSideReadClause(args.udid)}`,
   };
 }
