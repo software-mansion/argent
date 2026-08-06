@@ -67,25 +67,30 @@ const PIXEL_THRESHOLD_SQUARED = PIXEL_THRESHOLD * PIXEL_THRESHOLD * MAX_RGB_DIST
 // the gate alone; loosening this fraction does not widen that blind spot.
 const MOTION_FRACTION = 0.002;
 
-// Below MOTION_FRACTION but at or above this one, the change is LOCALIZED: too
-// small to be the screen moving, too large to be capture noise. A stock 40pt
-// spinner measures 0.03-0.15% of a phone screen and a text caret about 0.01%,
-// both under MOTION_FRACTION — which is how a still-loading screen used to
-// report as settled with nothing said about it.
+// Below MOTION_FRACTION but at or above this many CHANGED PIXELS, the change
+// is LOCALIZED: too small to be the screen moving, too large to be capture
+// noise. A spinner and a caret both sit in that gap — which is how a
+// still-loading screen used to report as settled with nothing said about it.
 //
-// Both fractions are of frame AREA, which makes them resolution-independent:
-// an object of a fixed on-screen size covers the same fraction of the frame
-// whatever the capture scale, so the same numbers hold on a 158k-pixel Pixel
-// capture and a full-resolution desktop one.
+// A COUNT, not a fraction, because what these indicators have in common is a
+// size in captured pixels rather than a share of the frame. Measured at
+// CAPTURE_SCALE: a live spinner changed 50-66 pixels on an iPhone 16 Pro
+// (302x656) and 57 on a Pixel 5 (270x585), and a blinking caret 50 on a
+// Pixel 7 (162k pixels) — all within a factor of two of each other across
+// three frame sizes. Expressed as a fraction those numbers only held at
+// phone size: 0.005% of a desktop-sized Chromium window is ~46 pixels, above
+// every indicator measured here, so the warning was silently off on exactly
+// the windows that are largest.
 //
 // The floor is not zero because a capture pair is not guaranteed byte-identical
-// on every backend. Measured at CAPTURE_SCALE: two captures of a static iOS
-// screen changed 0 pixels of 237k, while a live spinner on an iPhone 16 Pro
-// changed 50 of 198k and a blinking caret on a Pixel 7 changed 50 of 162k. A
-// floor of ~10 pixels on a phone-sized frame therefore sits well clear of both
-// ends. An indicator smaller than that stays invisible, which is the residual
-// limit of comparing whole frames.
-const LOCALIZED_MOTION_FRACTION = 0.00005;
+// on every backend; two captures of a static iOS screen changed 0 pixels of
+// 237k. Ten sits an order of magnitude under the smallest indicator measured
+// and clear of that noise. One smaller than ten pixels stays invisible, which
+// is the residual limit of comparing whole frames.
+//
+// MOTION_FRACTION above stays a fraction: a transition, a scroll or a
+// carousel moves a share of the screen, which is what scales with it.
+const LOCALIZED_MOTION_MIN_PIXELS = 10;
 
 // Top band excluded from the comparison on a device with a system status bar,
 // as a fraction of frame height. The same 6% screenshot-diff ignores
@@ -367,5 +372,5 @@ export function comparePixels(a: PixelFrame, b: PixelFrame, maskTopFraction = 0)
   }
   const fraction = changed / total;
   if (fraction > MOTION_FRACTION) return "moving";
-  return fraction >= LOCALIZED_MOTION_FRACTION ? "localized" : "still";
+  return changed >= LOCALIZED_MOTION_MIN_PIXELS ? "localized" : "still";
 }

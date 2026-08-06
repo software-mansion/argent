@@ -204,6 +204,19 @@ describe("comparePixels", () => {
       expect(comparePixels(...changed(IPHONE, 3))).toBe("still");
     });
 
+    // The floor is a pixel COUNT, not a share of the frame: a spinner and a
+    // caret are the same handful of captured pixels whatever window they sit
+    // in. As a fraction it only held at phone size — on a desktop-sized
+    // Chromium window the same 0.005% is ~46 pixels, above every indicator
+    // ever measured, so the warning was silently off on the largest windows.
+    it("still sees a caret on a desktop-sized window", () => {
+      const DESKTOP = [1200, 767] as const; // 920k px, where the old floor was ~46
+      expect(comparePixels(...changed(DESKTOP, 10))).toBe("localized");
+      expect(comparePixels(...changed(DESKTOP, 45))).toBe("localized");
+      // And the floor still holds at that size: noise stays noise.
+      expect(comparePixels(...changed(DESKTOP, 9))).toBe("still");
+    });
+
     // The two frames below are the ones the runner was actually caught
     // comparing on a static iPhone 16 Pro screen: the run-level status-bar pin
     // lands a few hundred milliseconds AFTER the run starts, so frame A holds
