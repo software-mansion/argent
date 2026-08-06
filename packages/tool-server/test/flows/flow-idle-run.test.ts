@@ -539,6 +539,11 @@ steps:
     expect(step.warning).toBeUndefined();
   });
 
+  // A tree that reads back fine and is empty is an observation about the app,
+  // not a window that could not be read — so it warns like any other screen
+  // that did not settle, and the flow goes on to the checks that carry its
+  // verdict. Stopping there used to take every later step with it, including
+  // the element check that would have named what was actually wrong.
   it("distinguishes a screen that never rendered from one that never settled", async () => {
     currentTree = () => n({ role: "AXWindow", frame: FULL, children: [] });
     await writeFlow(
@@ -546,10 +551,16 @@ steps:
       `executionPrerequisite: ""
 steps:
   - await: { idle: true, timeout: 900 }
+  - echo: reached
 `
     );
     const r = await run("ready");
-    expect(r.steps.at(-1)!.status).toBe("error");
-    expect(r.steps.at(-1)!.reason).toContain("never rendered content");
+    expect(r.ok).toBe(true);
+    expect(r.errored).toBe(0);
+    const step = r.steps.find((s) => s.kind === "idle")!;
+    expect(step.status).toBe("pass");
+    expect(step.warning).toContain("never rendered content");
+    expect(step.warning).not.toContain("never held still");
+    expect(r.steps.at(-1)).toMatchObject({ kind: "echo", status: "pass" });
   });
 });
