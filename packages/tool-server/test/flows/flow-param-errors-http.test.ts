@@ -77,4 +77,40 @@ describe("flow param errors over HTTP", () => {
     expect(res.body.issues[0]).toMatchObject({ code: "invalid_type", path: ["count"] });
     expect(typeof res.body.issues[0].message).toBe("string");
   });
+
+  it("answers a NESTED tool's schema miss with 400, matching the direct call", async () => {
+    // The registry validates every dispatch path, so a mistyped argument to a
+    // sub-tool (a flow-add-step command, a run-sequence step) is caught there
+    // rather than by the HTTP layer's own copy — where the outer call's params
+    // parsed fine. It carries `error_kind: "validation"`, so answering 500 had
+    // the body contradicting its own status, and the same mistake reading as a
+    // client error directly and an internal fault one level in.
+    const registry = new Registry();
+    registry.registerTool({
+      id: "inner",
+      zodSchema: z.object({ count: z.number() }),
+      services: () => ({}),
+      async execute() {
+        return { ok: true };
+      },
+    } as never);
+    registry.registerTool({
+      id: "outer",
+      zodSchema: z.object({ pass: z.unknown() }),
+      services: () => ({}),
+      async execute(_s: unknown, params: { pass: unknown }) {
+        return registry.invokeTool("inner", params.pass);
+      },
+    } as never);
+    const { app } = createHttpApp(registry);
+
+    const res = await request(app)
+      .post("/tools/outer")
+      .send({ pass: { countt: 5 } });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error_kind).toBe("validation");
+    expect(res.body.error).toContain("`count` is required");
+    expect(res.body.error).toContain("You sent: `countt`");
+  });
 });

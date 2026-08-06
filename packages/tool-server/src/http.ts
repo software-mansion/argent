@@ -994,6 +994,18 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           res.status(400).json({ error: invalidInputErr.message, ...errorSignalFields(err) });
           return;
         }
+        // A schema miss the REGISTRY caught, rather than the HTTP layer's own
+        // copy of the same check above. It reaches here only through a NESTED
+        // invoke — a flow-add-step sub-tool, a run-sequence step — where the
+        // outer call's own params parsed fine, so the same mistyped argument
+        // was a 400 sent directly and a 500 sent inside a recording. The
+        // failure already carries `error_kind: "validation"`, so a 500 has the
+        // body contradicting its own status; this is the classification the
+        // registry's signal was given, applied at the boundary that reads it.
+        if (getFailureSignal(err)?.error_code === FAILURE_CODES.TOOL_INPUT_INVALID) {
+          res.status(400).json({ error: formatErrorForAgent(err), ...errorSignalFields(err) });
+          return;
+        }
         const notImplementedErr = findErrorInCauseChain(err, NotImplementedOnPlatformError);
         if (notImplementedErr) {
           res.status(501).json({
