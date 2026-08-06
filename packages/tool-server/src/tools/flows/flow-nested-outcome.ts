@@ -124,7 +124,11 @@ function runSequenceOutcome(result: Record<string, unknown>): NestedOutcome | un
   const failed = steps.find((s) => isRecord(s) && typeof s.error === "string");
   if (failed && isRecord(failed)) {
     const tool = typeof failed.tool === "string" ? failed.tool : "step";
-    const why = failed.error ? String(failed.error) : "failed without an error message";
+    // Re-narrowed rather than coerced: `find` proved it is a string, but that
+    // does not survive into `failed`, and coercing an object here would render
+    // "[object Object]" into the report.
+    const message = typeof failed.error === "string" ? failed.error : "";
+    const why = message || "failed without an error message";
     return {
       status: "fail",
       reason:
