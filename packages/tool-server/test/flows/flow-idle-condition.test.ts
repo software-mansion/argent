@@ -51,6 +51,16 @@ describe("await { idle }", () => {
     expect(() => parseSteps(`  - await: { idle: true, minStableMs: 1.5 }\n`)).toThrow(
       /idle.minStableMs/
     );
+    // And from above, so a hold written in the wrong unit (seconds, a pasted
+    // timestamp) is rejected as a number rather than becoming a gate no run
+    // can pass. The ceiling is ten minutes; a `timeout` wide enough to contain
+    // it is what the case below checks separately.
+    expect(() => parseSteps(`  - await: { idle: true, minStableMs: 600001 }\n`)).toThrow(
+      /between 0 and 600000/
+    );
+    expect(parseSteps(`  - await: { idle: true, minStableMs: 600000, timeout: 600600 }\n`)).toEqual(
+      [{ kind: "idle", minStableMs: 600000, timeout: 600600 }]
+    );
   });
 
   // A wait that cannot contain the settle it asks for is a gate that fails on
