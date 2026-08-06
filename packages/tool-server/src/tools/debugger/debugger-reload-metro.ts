@@ -4,9 +4,10 @@ import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/regist
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 import { DISABLE_LOGBOX_SCRIPT } from "../../utils/debugger/scripts/disable-logbox";
 import { RN_ONLY_TOOL_CAPABILITY } from "./debugger-service-ref";
+import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port"),
+  port: metroPortField,
   device_id: z
     .string()
     .describe(
@@ -42,7 +43,7 @@ Use when you want to apply code changes or reset JS state. Returns { reloaded, p
   // want that on Chromium later, it deserves its own tool.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
-    debugger: `JsRuntimeDebugger:${params.port}:${canonicalDeviceId(params.device_id)}`,
+    debugger: `JsRuntimeDebugger:${metroPort(params)}:${canonicalDeviceId(params.device_id)}`,
   }),
   async execute(services, _params) {
     const api = services.debugger as JsRuntimeDebuggerApi;

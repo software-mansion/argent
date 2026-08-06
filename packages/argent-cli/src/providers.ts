@@ -132,6 +132,24 @@ async function checkDevices(devices: ProviderDevice[], findings: Finding[]): Pro
       }
     }
 
+    if (device.capabilities.includes("js-debugger")) {
+      if (device.metroPort === undefined) {
+        findings.push(
+          warn(
+            `${label}: declares 'js-debugger' with no metroPort — argent will fall back to 8081, ` +
+              `which is correct only if this device's Metro really listens there`
+          )
+        );
+      } else if (!(await isReachable(`http://127.0.0.1:${device.metroPort}/status`))) {
+        findings.push(
+          warn(
+            `${label}: nothing is answering Metro's /status on port ${device.metroPort} — ` +
+              `every debugger-* call for this device would fail until it is`
+          )
+        );
+      }
+    }
+
     if (device.platform === "android" && device.capabilities.includes("simctl")) {
       findings.push(error(`${label}: 'simctl' is an iOS-only capability`));
     }

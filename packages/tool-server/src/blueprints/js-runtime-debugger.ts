@@ -6,6 +6,7 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { discoverMetro } from "../utils/debugger/discovery";
+import { publishedMetroPort } from "../utils/debugger/metro-port";
 import { classifyDevice } from "../utils/device-info";
 import { assertExternalCapability } from "../utils/external-devices";
 import { proxyStart } from "../utils/sim-remote";
@@ -189,7 +190,21 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
      */
     await assertExternalCapability(JS_RUNTIME_DEBUGGER_NAMESPACE, deviceId, "js-debugger");
 
-    const metro = await discoverMetro(port);
+    const metro = await discoverMetro(port).catch((error: unknown) => {
+      /**
+       * An explicit `port` outranks the one a provider publishes, so a caller
+       * that passed `8081` out of habit lands here with no way to guess why.
+       */
+      const published = publishedMetroPort(deviceId, port);
+
+      if (published !== undefined && error instanceof FailureError) {
+        error.message +=
+          ` The provider offering this device publishes Metro on port ${published} — ` +
+          `omit the 'port' parameter to use it.`;
+      }
+
+      throw error;
+    });
     const selected = selectTarget(metro.targets, port, {
       ...options,
       deviceId,

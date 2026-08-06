@@ -283,7 +283,13 @@ export const providerDeviceSchema = z
      */
     deviceSet: z.string().min(1).max(4096).optional(),
     kind: z.enum(["simulator", "emulator", "device"]),
-    /** Reserved for the JS-debugger roadmap: the Metro port serving this device. */
+    /**
+     * The Metro port serving this device, used as the default by every tool
+     * that speaks CDP to the app's JS runtime. An explicit port still wins.
+     *
+     * Independent of the `js-debugger` capability: this says where Metro is,
+     * that says whether Argent may attach.
+     */
     metroPort: z.number().int().min(1).max(65535).optional(),
     name: z.string().min(1).max(128),
     nativeId: z.string().min(1).max(256).regex(SAFE_NATIVE_ID),
