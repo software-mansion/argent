@@ -1192,15 +1192,22 @@ const MIN_STILL_INTERVALS = IDLE_MIN_STILL_INTERVALS;
 const MIN_ROUND_BUDGET_MS = IDLE_POLL_MS;
 
 /**
- * The screen settled, but something small on it never stopped. A spinner is the
- * case that matters: it is far too small to move the screen (a stock one covers
- * ~0.1% of a phone display) and it does not move the tree either, since it
+ * The screen settled, but something small on it moved while it did. A spinner
+ * is the case that matters: it is far too small to move the screen (a stock one
+ * measured 50-66 changed pixels of a phone capture — see
+ * LOCALIZED_MOTION_MIN_PIXELS) and it does not move the tree either, since it
  * spins in a layer without its box ever changing — so both halves of the check
  * agree the screen is at rest while it is still loading. This is the only place
  * that difference is visible, so it is said outright.
+ *
+ * The claim is deliberately about the settle being reported and not about the
+ * whole step: the flag is set by ANY interval of the winning hold and cleared
+ * with the hold, so what it promises is that something small moved inside the
+ * stretch of stillness this step is passing on — not that it moved from the
+ * first read to the last.
  */
 const LOCALIZED_MOTION_WARNING =
-  `the screen settled, but a small part of it kept changing the whole time — a spinner, a ` +
+  `the screen settled, but a small part of it was still changing while it did — a spinner, a ` +
   `caret, a progress dot. If it is a loading spinner then the screen had not finished loading, ` +
   `and stillness cannot tell those apart: look at what is moving, and gate the next action on ` +
   `the element the loading produces rather than on this settle.`;

@@ -1826,7 +1826,9 @@ function parseIdleFields(raw: Record<string, unknown>, kind: "await" | "assert")
       `idle needs a timeout of at least ${needed}ms to hold still for ` +
         `${step.minStableMs === undefined ? `the default ` : ``}${minStableMs}ms: a settle is ` +
         `${IDLE_MIN_STILL_INTERVALS + 1} reads spanning ${IDLE_MIN_STILL_INTERVALS} ` +
-        `${IDLE_POLL_MS}ms polls, and the wait has to contain them as well as the hold. Raise ` +
+        `${IDLE_POLL_MS}ms polls, plus the ${IDLE_POLL_MS}ms of budget the closing round has to ` +
+        `have left to be allowed to start, and the wait has to contain all of that as well as ` +
+        `the hold. Raise ` +
         `\`timeout\`${step.minStableMs === undefined ? "" : " or lower `minStableMs`"}`
     );
   }

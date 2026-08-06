@@ -309,7 +309,7 @@ steps:
     expect(r.ok).toBe(true);
     const step = r.steps.at(-2)!;
     expect(step).toMatchObject({ kind: "idle", status: "pass" });
-    expect(step.warning).toContain("small part of it kept changing");
+    expect(step.warning).toContain("small part of it was still changing");
     expect(step.warning).toContain("spinner");
     // The warning is about how the settle was reached, not a refusal to settle.
     expect(step.warning).not.toContain("never held still");
