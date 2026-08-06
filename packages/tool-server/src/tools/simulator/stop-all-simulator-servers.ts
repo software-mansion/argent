@@ -1,7 +1,13 @@
 import { z } from "zod";
 import { ServiceState, isLiveServiceState } from "@argent/registry";
 import type { Registry, ToolDefinition } from "@argent/registry";
-import { DEVICE_OWNED_NAMESPACES, deviceIdOwningUrn, isDeviceServiceUrn } from "./device-services";
+import {
+  DEVICE_OWNED_NAMESPACES,
+  PORT_KEYED_NAMESPACES,
+  deviceIdOwningUrn,
+  isDeviceServiceUrn,
+  unnameableSessionUrns,
+} from "./device-services";
 
 const zodSchema = z
   .object({
@@ -27,7 +33,10 @@ const zodSchema = z
 
 export function createStopAllSimulatorServersTool(
   registry: Registry
-): ToolDefinition<z.infer<typeof zodSchema>, { stopped: string[]; unmatched?: string[] }> {
+): ToolDefinition<
+  z.infer<typeof zodSchema>,
+  { stopped: string[]; unmatched?: string[]; left_running?: string[] }
+> {
   return {
     id: "stop-all-simulator-servers",
     interaction: {
@@ -48,16 +57,30 @@ export function createStopAllSimulatorServersTool(
         // that — "Stopped 0 simulator servers" for a teardown that reaped
         // nothing because every id was wrong.
         const unmatched = result.unmatched;
-        return unmatched?.length
-          ? `${base} (${unmatched.length} supplied ${unmatched.length === 1 ? "id" : "ids"} matched no service)`
-          : base;
+        const notes: string[] = [];
+        if (unmatched?.length) {
+          notes.push(
+            `${unmatched.length} supplied ${unmatched.length === 1 ? "id" : "ids"} matched no service`
+          );
+        }
+        // Same reason as `unmatched`: a debugger session keyed by an id no
+        // device scope can name is still a session left holding a CDP socket
+        // and a bound port, and silence about it reads as a clean machine.
+        const left = result.left_running;
+        if (left?.length) {
+          notes.push(
+            `${left.length} debugger ${left.length === 1 ? "session" : "sessions"} left running`
+          );
+        }
+        return notes.length ? `${base} (${notes.join("; ")})` : base;
       },
       failedMsg: ({ failureSignal }) =>
         `Failed to stop simulator servers: ${failureSignal.error_code}`,
     },
     description: `Stop the services a device owns - simulator-server processes (iOS + Android), native devtools, the iOS accessibility service, TV-control daemons, Chromium CDP sessions, screen recordings, native profiler sessions, and JS-runtime debugger sessions along with the network inspectors and React profiler sessions that ride on them - freeing their spawned processes, sockets and ports. Call this when your session ends or the user says they are done.
 PASS \`devices\` with the device ids this session used — one tool-server serves every agent, subagent and CLI call using this argent install, and an unscoped call tears down THEIR devices too (a mid-recording devtools teardown degrades another agent's flow to brittle coordinate taps; that agent is warned, but its recorded steps are already the worse kind). Omit \`devices\` only when a machine-wide cleanup is what you actually want. Passing an EMPTY array scopes to nothing and stops nothing - it is not a way to ask for the machine-wide sweep.
-Returns { stopped } - the URNs of the services that were actually live and got shut down; an ERROR node is disposed too but never appears there, so an empty \`stopped\` only means nothing was still running. { unmatched } lists supplied ids that own no service here, so a mistyped id - or a device NAME passed where an id was expected - does not read as a clean machine. It is NOT proof the id is wrong: a Vega device is driven through CLI/adb shell-outs, so one you only booted and drove with the remote registers no service and always lands here — as does a real device of any platform this session never started anything on. Present ONLY when \`devices\` was supplied AND at least one id matched nothing - absent on an unscoped call and when every id matched. Stopping the same device twice does not report it unmatched: ownership counts regardless of service state. Past the schema - which rejects an unknown key outright, so the \`udids\` slip is an error rather than a silent machine-wide sweep - the call always succeeds; reaping nothing is a result, not a failure.`,
+A JS-runtime debugger session is keyed by the id you called \`debugger-connect\` with. On a Metro serving two or more devices that id is not a udid or serial - connect refuses those and tells you to re-target with the \`logicalDeviceId\` it returns - so a scope built from \`list-devices\` ids cannot reach that session. Pass any such \`logicalDeviceId\` in \`devices\` ALONGSIDE the device id; { left_running } names the ones you missed.
+Returns { stopped } - the URNs of the services that were actually live and got shut down; an ERROR node is disposed too but never appears there, so an empty \`stopped\` only means nothing was still running. { unmatched } lists supplied ids that own no service here, so a mistyped id - or a device NAME passed where an id was expected - does not read as a clean machine. { left_running } lists live debugger sessions (and the network inspectors / React profiler sessions riding on them) whose id no device scope can name - re-call with that id to reap them. It is NOT proof the id is wrong: a Vega device is driven through CLI/adb shell-outs, so one you only booted and drove with the remote registers no service and always lands here — as does a real device of any platform this session never started anything on. Present ONLY when \`devices\` was supplied AND at least one id matched nothing - absent on an unscoped call and when every id matched. Stopping the same device twice does not report it unmatched: ownership counts regardless of service state. Past the schema - which rejects an unknown key outright, so the \`udids\` slip is an error rather than a silent machine-wide sweep - the call always succeeds; reaping nothing is a result, not a failure.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {
@@ -69,6 +92,10 @@ Returns { stopped } - the URNs of the services that were actually live and got s
       const snapshot = registry.getSnapshot();
       const stopped: string[] = [];
       const matchedIds = new Set<string>();
+      // Live device-owned services this scope did NOT claim. Only the port-keyed
+      // ones are ever reported (see `unnameableSessionUrns`) — the rest are
+      // other agents' devices, which a scoped stop leaves alone by design.
+      const survivors: string[] = [];
       for (const [urn, entry] of snapshot.services) {
         const matchedId = scoped
           ? deviceIdOwningUrn(urn, DEVICE_OWNED_NAMESPACES, devices)
@@ -90,6 +117,12 @@ Returns { stopped } - the URNs of the services that were actually live and got s
           const wasLive = isLiveServiceState(entry.state);
           await registry.disposeService(urn);
           if (wasLive) stopped.push(urn);
+        } else if (
+          scoped &&
+          isLiveServiceState(entry.state) &&
+          isDeviceServiceUrn(urn, PORT_KEYED_NAMESPACES)
+        ) {
+          survivors.push(urn);
         }
       }
       if (!scoped) return { stopped };
@@ -107,7 +140,18 @@ Returns { stopped } - the URNs of the services that were actually live and got s
         seen.add(key);
         return true;
       });
-      return unmatched.length > 0 ? { stopped, unmatched } : { stopped };
+      // A debugger session opened against a multi-device Metro is keyed by the
+      // `logicalDeviceId` Metro echoed, which no `list-devices` id equals — so
+      // no `devices` scope can reap it, and the ids that DID match keep it out
+      // of `unmatched`. Name it, so the caller can pass that id (which does
+      // reap it) instead of reading silence as a clean machine.
+      const leftRunning = unnameableSessionUrns(survivors);
+      const result: { stopped: string[]; unmatched?: string[]; left_running?: string[] } = {
+        stopped,
+      };
+      if (unmatched.length > 0) result.unmatched = unmatched;
+      if (leftRunning.length > 0) result.left_running = leftRunning;
+      return result;
     },
   };
 }

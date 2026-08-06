@@ -11,6 +11,7 @@ import { NATIVE_PROFILER_SESSION_NAMESPACE } from "../../blueprints/native-profi
 import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../blueprints/js-runtime-debugger";
 import { NETWORK_INSPECTOR_NAMESPACE } from "../../blueprints/network-inspector";
 import { REACT_PROFILER_SESSION_NAMESPACE } from "../../blueprints/react-profiler-session";
+import { isLogicalKeyedDevice } from "../../utils/debugger/device-alias";
 
 /**
  * Which services one device id owns — the single definition of that mapping,
@@ -57,7 +58,7 @@ const URN_SUFFIXES = ["", ":tcp"] as const;
  * wireless adb serial (`JsRuntimeDebugger:8081:192.168.1.5:5555`) still
  * resolves to `192.168.1.5:5555` and not to `192.168.1.5`.
  */
-const PORT_KEYED_NAMESPACES: readonly string[] = [
+export const PORT_KEYED_NAMESPACES: readonly string[] = [
   JS_RUNTIME_DEBUGGER_NAMESPACE,
   // Both declare `getDependencies -> JsRuntimeDebugger:<payload>`, so neither
   // can be in a snapshot without it and neither adds any ownership the debugger
@@ -224,4 +225,44 @@ export function deviceIdOwningUrn(
 /** Whether `urn` belongs to any of `namespaces`, regardless of which device. */
 export function isDeviceServiceUrn(urn: string, namespaces: readonly string[]): boolean {
   return namespaces.some((ns) => urn.startsWith(`${ns}:`));
+}
+
+/**
+ * The device-id portion of `urn` under whichever of `namespaces` owns it, in
+ * that namespace's own URN shape — the same reading {@link deviceIdOwningUrn}
+ * matches against, minus the caller's id list. Undefined when no namespace in
+ * the set prefixes it.
+ */
+export function deviceIdOfUrn(urn: string, namespaces: readonly string[]): string | undefined {
+  for (const namespace of namespaces) {
+    const portion = deviceIdPortion(urn, namespace);
+    if (portion !== undefined) return portion;
+  }
+  return undefined;
+}
+
+/**
+ * Of `urns`, the port-keyed sessions no device-scoped teardown could ever name,
+ * whatever ids it was given.
+ *
+ * `JsRuntimeDebugger`'s URN embeds the id the caller CONNECTED with, and on a
+ * Metro serving two or more devices that cannot be a UDID or serial:
+ * `selectTarget` refuses to guess which target a device id means and instructs
+ * the caller to re-target with the `logicalDeviceId` Metro echoed — an opaque
+ * per-connection handle `list-devices` never mints, and the only id that then
+ * resolves the session. A teardown scoped to real device ids therefore leaves
+ * that session holding its CDP socket to Metro, a bound loopback console
+ * server and a log file handle; and because the caller's serial still matches
+ * that device's OTHER services, the serial is not reported `unmatched` either,
+ * so the whole thing reads as a clean machine.
+ *
+ * Which ids those are is not inferred from the URN — it is recorded by the
+ * connect that minted it, the one place both ids are known at once (see
+ * {@link isLogicalKeyedDevice}). A session another agent opened with its own
+ * serial is therefore NOT reported: that id is one `list-devices` hands out, so
+ * a scope could have named it, and a session left on someone else's device is
+ * that agent's business rather than a scope that cannot express itself.
+ */
+export function unnameableSessionUrns(urns: readonly string[]): string[] {
+  return urns.filter((urn) => isLogicalKeyedDevice(deviceIdOfUrn(urn, PORT_KEYED_NAMESPACES)));
 }

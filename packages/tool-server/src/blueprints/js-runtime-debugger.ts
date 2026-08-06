@@ -9,7 +9,12 @@ import { discoverMetro } from "../utils/debugger/discovery";
 import { classifyDevice } from "../utils/device-info";
 import { proxyStart } from "../utils/sim-remote";
 import { selectTarget } from "../utils/debugger/target-selection";
-import { rememberDeviceAlias, forgetDeviceAlias } from "../utils/debugger/device-alias";
+import {
+  rememberDeviceAlias,
+  forgetDeviceAlias,
+  rememberLogicalKeyedDevice,
+  forgetLogicalKeyedDevice,
+} from "../utils/debugger/device-alias";
 import { recordReapedSession } from "../utils/reaped-sessions";
 import { CDPClient, type ConsoleAPICalledParams } from "../utils/debugger/cdp-client";
 import { createSourceResolver, type SourceResolver } from "../utils/debugger/source-resolver";
@@ -266,6 +271,13 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     // logicalDeviceId canonicalizes back to this instance instead of opening a
     // second connection. See utils/debugger/device-alias.ts.
     rememberDeviceAlias(api.logicalDeviceId, deviceId);
+    // The other half of that comparison: when the two ids are the SAME string
+    // the caller connected with the logicalDeviceId itself, which is what
+    // `selectTarget` demands once a second device shares this Metro. Nothing
+    // then joins this session to a udid or serial, so `stop-all-simulator-servers`
+    // cannot reap it from a `list-devices`-derived scope — note it so that
+    // teardown can report the session instead of leaving it silently open.
+    rememberLogicalKeyedDevice(api.logicalDeviceId, deviceId);
 
     const events = new TypedEventEmitter<ServiceEvents>();
 
@@ -310,6 +322,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
           }
         }
         forgetDeviceAlias(api.logicalDeviceId);
+        forgetLogicalKeyedDevice(deviceId);
         await consoleServer.close();
         logWriter.close();
         await cdp.disconnect();

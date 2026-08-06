@@ -27,6 +27,8 @@ All tools accept `port` (default 8081) AND `device_id` (the iOS Simulator UDID, 
 
 One Metro port can serve multiple connected devices (e.g. two simulators on `localhost:8081`, or an iOS simulator alongside an Android emulator with `adb reverse` set up). `device_id` pins every debugger/network/profiler call to a specific device so sessions do not collide.
 
+With two or more devices on one Metro, `debugger-connect` refuses a udid/serial and hands back the `logicalDeviceId` to re-target with. That id then keys the session — including for teardown. **Pass it in `stop-all-simulator-servers`' `devices` alongside the device id**, or the session survives your session end holding its CDP socket, console server and log file. The teardown reports what it could not reach in `left_running`; re-call with the id it names.
+
 ### Connect & diagnostics
 
 | Tool               | Purpose                                                                                                                                                                                                                                                                                                                                                                |

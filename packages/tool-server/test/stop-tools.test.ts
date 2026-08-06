@@ -1,4 +1,9 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  forgetLogicalKeyedDevice,
+  rememberLogicalKeyedDevice,
+  resetDeviceAliases,
+} from "../src/utils/debugger/device-alias";
 import type { z } from "zod";
 import { Registry, ServiceState, zodObjectToJsonSchema } from "@argent/registry";
 import { createStopSimulatorServerTool } from "../src/tools/simulator/stop-simulator-server";
@@ -1103,6 +1108,158 @@ describe("stop-all-simulator-servers unmatched ids", () => {
   });
 });
 
+describe("stop-all-simulator-servers left_running", () => {
+  // With two or more devices on one Metro, `debugger-connect` refuses a udid /
+  // serial and instructs the caller to re-target with the `logicalDeviceId`
+  // Metro echoed. That id keys the session's URN, and no `list-devices` id
+  // equals it — so no `devices` scope can reap the CDP socket, the bound
+  // loopback console server or the log file handle it holds. Worse, the
+  // caller's real serial DOES match that device's other services, so it never
+  // lands in `unmatched` and the teardown reads as a clean machine.
+  const LOGICAL = "b5f2c1e0-7a44-4d8e-9c31-metro-logical";
+
+  // What the JsRuntimeDebugger factory records when the id it was resolved with
+  // IS the logicalDeviceId Metro echoed — the one place both ids are compared.
+  beforeEach(() => {
+    resetDeviceAliases();
+    rememberLogicalKeyedDevice(LOGICAL, LOGICAL);
+  });
+  afterEach(() => resetDeviceAliases());
+
+  it("names a logicalDeviceId-keyed debugger session the scope could not reach", async () => {
+    const services = new Map([
+      [`AndroidDevtools:${MINE}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [`JsRuntimeDebugger:8081:${LOGICAL}`, { state: ServiceState.RUNNING, dependents: [] }],
+    ]);
+    const registry = createMockRegistry(services);
+    const tool = createStopAllSimulatorServersTool(registry);
+
+    const result = await tool.execute!({}, { devices: [MINE] });
+
+    expect(result).toEqual({
+      stopped: [`AndroidDevtools:${MINE}`],
+      left_running: [`JsRuntimeDebugger:8081:${LOGICAL}`],
+    });
+    // The serial matched a service, so it is not a typo — the point is that
+    // `unmatched` cannot be the thing that reports this.
+    expect(result).not.toHaveProperty("unmatched");
+    expect(registry.disposeService).not.toHaveBeenCalledWith(`JsRuntimeDebugger:8081:${LOGICAL}`);
+  });
+
+  it("names the network inspector and React profiler riding on that session too", async () => {
+    const services = new Map([
+      [`AndroidDevtools:${MINE}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [
+        `JsRuntimeDebugger:8081:${LOGICAL}`,
+        {
+          state: ServiceState.RUNNING,
+          dependents: [`NetworkInspector:8081:${LOGICAL}`, `ReactProfilerSession:8081:${LOGICAL}`],
+        },
+      ],
+      [`NetworkInspector:8081:${LOGICAL}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [`ReactProfilerSession:8081:${LOGICAL}`, { state: ServiceState.RUNNING, dependents: [] }],
+    ]);
+    const tool = createStopAllSimulatorServersTool(createMockRegistry(services));
+
+    const result = await tool.execute!({}, { devices: [MINE] });
+
+    expect(result.left_running).toEqual([
+      `JsRuntimeDebugger:8081:${LOGICAL}`,
+      `NetworkInspector:8081:${LOGICAL}`,
+      `ReactProfilerSession:8081:${LOGICAL}`,
+    ]);
+  });
+
+  it("reaps rather than reports the session once the logicalDeviceId is supplied", async () => {
+    // The documented recovery, and the proof the id is the whole gap: pass it
+    // alongside the serial and the session is stopped like anything else.
+    const services = new Map([
+      [`AndroidDevtools:${MINE}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [`JsRuntimeDebugger:8081:${LOGICAL}`, { state: ServiceState.RUNNING, dependents: [] }],
+    ]);
+    const registry = createMockRegistry(services);
+    const tool = createStopAllSimulatorServersTool(registry);
+
+    const result = await tool.execute!({}, { devices: [MINE, LOGICAL] });
+
+    expect(result).toEqual({
+      stopped: [`AndroidDevtools:${MINE}`, `JsRuntimeDebugger:8081:${LOGICAL}`],
+    });
+    expect(result).not.toHaveProperty("left_running");
+  });
+
+  it("stays silent about another agent's serial-keyed session", async () => {
+    // `THEIRS` connected by serial (one device on that Metro), so it is an id
+    // `list-devices` hands out and a scope COULD have named it. A session left
+    // on it is that agent's business, not a scope that cannot express itself —
+    // reporting it would invite exactly the cross-agent teardown the `devices`
+    // scope exists to prevent.
+    const services = new Map([
+      [`SimulatorServer:${MINE}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [`JsRuntimeDebugger:8081:${THEIRS}`, { state: ServiceState.RUNNING, dependents: [] }],
+    ]);
+    const tool = createStopAllSimulatorServersTool(createMockRegistry(services));
+
+    const result = await tool.execute!({}, { devices: [MINE] });
+
+    expect(result).toEqual({ stopped: [`SimulatorServer:${MINE}`] });
+  });
+
+  it("stops reporting the session once its debugger connection is disposed", async () => {
+    // The marker is dropped in the blueprint's dispose alongside the alias, so a
+    // stale one cannot make a later teardown accuse a session that is gone.
+    forgetLogicalKeyedDevice(LOGICAL);
+    const services = new Map([
+      [`AndroidDevtools:${MINE}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [`JsRuntimeDebugger:8081:${LOGICAL}`, { state: ServiceState.RUNNING, dependents: [] }],
+    ]);
+    const tool = createStopAllSimulatorServersTool(createMockRegistry(services));
+
+    expect(await tool.execute!({}, { devices: [MINE] })).toEqual({
+      stopped: [`AndroidDevtools:${MINE}`],
+    });
+  });
+
+  it("reports nothing on an unscoped sweep, which reaps every namespace anyway", async () => {
+    const services = new Map([
+      [`JsRuntimeDebugger:8081:${LOGICAL}`, { state: ServiceState.RUNNING, dependents: [] }],
+    ]);
+    const tool = createStopAllSimulatorServersTool(createMockRegistry(services));
+
+    const result = await tool.execute!({}, {});
+
+    expect(result).toEqual({ stopped: [`JsRuntimeDebugger:8081:${LOGICAL}`] });
+  });
+
+  it("ignores an IDLE session, which holds nothing left to leave running", async () => {
+    const services = new Map([
+      [`AndroidDevtools:${MINE}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [`JsRuntimeDebugger:8081:${LOGICAL}`, { state: ServiceState.IDLE, dependents: [] }],
+    ]);
+    const tool = createStopAllSimulatorServersTool(createMockRegistry(services));
+
+    const result = await tool.execute!({}, { devices: [MINE] });
+
+    expect(result).toEqual({ stopped: [`AndroidDevtools:${MINE}`] });
+  });
+
+  it("matches the marker case-insensitively, as every other id comparison here does", async () => {
+    const services = new Map([
+      [
+        `JsRuntimeDebugger:8081:${LOGICAL.toUpperCase()}`,
+        { state: ServiceState.RUNNING, dependents: [] },
+      ],
+    ]);
+    const tool = createStopAllSimulatorServersTool(createMockRegistry(services));
+
+    expect(await tool.execute!({}, { devices: [MINE] })).toEqual({
+      stopped: [],
+      unmatched: [MINE],
+      left_running: [`JsRuntimeDebugger:8081:${LOGICAL.toUpperCase()}`],
+    });
+  });
+});
+
 describe("stop-all-simulator-servers interaction messages", () => {
   // Both formatters previously had no coverage at all — flattening either to
   // an unconditional string left the whole suite green. Pin the exact wording
@@ -1168,6 +1325,40 @@ describe("stop-all-simulator-servers interaction messages", () => {
         result: { stopped: [], unmatched: ["GHOST-1", "GHOST-2"] },
       })
     ).toBe("Stopped 0 simulator servers (2 supplied ids matched no service)");
+  });
+
+  it("completedMsg appends the left_running clause, singular and plural", () => {
+    const completedMsg = tool().interaction!.completedMsg!;
+    expect(
+      completedMsg({
+        params: { devices: [MINE] },
+        result: {
+          stopped: [`SimulatorServer:${MINE}`],
+          left_running: ["JsRuntimeDebugger:8081:L"],
+        },
+      })
+    ).toBe("Stopped 1 simulator server (1 debugger session left running)");
+    expect(
+      completedMsg({
+        params: { devices: [MINE] },
+        result: {
+          stopped: [],
+          left_running: ["JsRuntimeDebugger:8081:L", "NetworkInspector:8081:L"],
+        },
+      })
+    ).toBe("Stopped 0 simulator servers (2 debugger sessions left running)");
+  });
+
+  it("completedMsg reports both clauses when a call hits both", () => {
+    const completedMsg = tool().interaction!.completedMsg!;
+    expect(
+      completedMsg({
+        params: { devices: ["GHOST-1"] },
+        result: { stopped: [], unmatched: ["GHOST-1"], left_running: ["JsRuntimeDebugger:8081:L"] },
+      })
+    ).toBe(
+      "Stopped 0 simulator servers (1 supplied id matched no service; 1 debugger session left running)"
+    );
   });
 });
 
