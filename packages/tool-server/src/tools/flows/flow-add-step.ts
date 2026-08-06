@@ -301,11 +301,12 @@ async function probeAgainstRunnerTree(
   if (outcome.aborted) throw abortError();
   if (outcome.indeterminate) {
     return {
-      // No trailing period: the caller joins this with ". " and a second one
-      // renders as "..". And no claim that the two trees DIFFER — nothing was
-      // compared. The runner's tree could not be read at all, which is an
-      // environment failure; reporting it as a known divergence sends the
-      // author to rewrite a selector that may be perfectly good.
+      // Deliberately NOT joined with treeDivergenceFor/runnerSideReadClause.
+      // Nothing was compared here — the runner's tree could not be read at all,
+      // which is an environment failure. Appending the divergence explanation
+      // would claim the two trees differ, and its remedy ("re-record with a
+      // selector present in both") would send the author to rewrite a selector
+      // that may be perfectly good.
       warning:
         `this check could not be re-verified against the tree the RUNNER reads ` +
         `(${outcome.reason}), so it passed against the accessibility tree only. Whether it ` +
@@ -313,6 +314,9 @@ async function probeAgainstRunnerTree(
         `tree source is back before trusting the conversion`,
     };
   }
+  // Determinate: the trees really were compared and really do disagree, so this
+  // is the one warning that may explain the divergence and name how to read the
+  // runner's side.
   return {
     warning:
       `recorded, but this condition does NOT hold against the tree the runner resolves ` +
@@ -321,7 +325,8 @@ async function probeAgainstRunnerTree(
       `just passed against — but an \`assert:\` conversion WILL fail (it reads that tree on ` +
       `the same short grace this probe just used), and an \`await:\` will too unless the ` +
       `element reaches that tree within its longer timeout. ` +
-      `Either keep it raw deliberately, or re-record the wait with a selector present in both`,
+      `Either keep it raw deliberately, or re-record the wait with a selector present in both. ` +
+      `${treeDivergenceFor(args.udid)} ${runnerSideReadClause(args.udid)}`,
   };
 }
 
@@ -758,10 +763,7 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
         if (isUnmetUiWaitResult(params.command, toolResult)) {
           crossTreeWarning = UNMET_WAIT_WARNING;
         } else {
-          const probe = await probeAgainstRunnerTree(registry, ctx, args);
-          crossTreeWarning = probe.warning
-            ? `${probe.warning}. ${treeDivergenceFor(args.udid)} ${runnerSideReadClause(args.udid)}`
-            : undefined;
+          crossTreeWarning = (await probeAgainstRunnerTree(registry, ctx, args)).warning;
         }
       }
 

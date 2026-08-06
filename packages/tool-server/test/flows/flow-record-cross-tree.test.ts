@@ -222,8 +222,13 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
     const result = await recordWait("blind", "Continue");
 
-    expect(result.message).toContain("Step added");
     expect(result.message).toContain("could not be re-verified against the tree the RUNNER reads");
+    expect(result.message).toContain("is UNKNOWN, not known-bad");
+    // Its own rule: nothing was compared, so nothing may claim the two trees
+    // differ — nor append the remedy that follows from a comparison.
+    expect(result.message).not.toContain("neither contains the other");
+    expect(result.message).not.toContain("No read-only tool");
+    expect(result.message).not.toContain("re-record");
     expect(parseFlow(await onDisk("blind")).steps).toHaveLength(1);
   }, 20_000);
 
