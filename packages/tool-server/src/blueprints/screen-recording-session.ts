@@ -13,9 +13,10 @@ import { waitForChildExit } from "../utils/profiler-shared/lifecycle";
 import { clearActiveScreenRecording } from "../utils/screen-recording-reminder";
 
 // Session for the `screen-recording-*` tools. One shape for every platform:
-// frames come from simulator-server's MJPEG stream and are paced into an ffmpeg
-// child that writes the mp4 host-side, so there is nothing device-side to clean
-// up. Mirrors the native-profiler session shape.
+// frames come from simulator-server — paced out of its MJPEG stream locally,
+// pushed off its MoQ video track for a remote sim — into an ffmpeg child that
+// writes the mp4 host-side, so there is nothing device-side to clean up.
+// Mirrors the native-profiler session shape.
 export const SCREEN_RECORDING_SESSION_NAMESPACE = "ScreenRecordingSession";
 
 type ScreenRecordingSessionFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
@@ -29,7 +30,7 @@ export function screenRecordingSessionRef(device: DeviceInfo): ServiceRef {
 
 export interface ScreenRecordingSessionApi {
   deviceId: string;
-  platform: "ios" | "android";
+  platform: "ios" | "android" | "ios-remote";
   /** True from a successful start until stop / cap / unexpected exit. */
   recordingActive: boolean;
   /**
@@ -82,7 +83,12 @@ export interface ScreenRecordingSessionApi {
   pumpTimer: NodeJS.Timeout | null;
   /** Drop unchanged frames past a short grace so dead stretches don't pad the video. */
   trimStatic: boolean;
-  /** Frames the pump has fed the encoder; the output video's length in frames. */
+  /**
+   * Frames handed to the encoder. On the paced path that is the output video's
+   * length in frames, which is what `trimStatic` derives its duration from. On
+   * the pushed path it counts access units instead, and duration comes from
+   * `lastFrameWrittenMs` — the two are not interchangeable.
+   */
   framesWritten: number;
   /** Whether trimming ever collapsed a static stretch (crossed the grace and dropped frames). */
   trimmedAnyFrames: boolean;
@@ -90,6 +96,20 @@ export interface ScreenRecordingSessionApi {
   pointerDisable: (() => Promise<void>) | null;
   /** The touch visualizer was requested but simulator-server would not enable it. */
   pointerFailed: boolean;
+  /**
+   * The touch visualizer was requested on a `sim-remote` recording, where it is
+   * not available (the MoQ control channel carries no pointer command). Distinct
+   * from `pointerFailed` so `stop` can explain the remote limitation accurately.
+   */
+  remoteTouchesUnsupported: boolean;
+  /**
+   * Wall-clock time the last frame reached the encoder, on a source that pushes
+   * frames rather than pacing them. `-fps_mode cfr` can only hold a picture up
+   * to the next packet, so a screen that goes still ends the video there while
+   * the recording keeps running — this is where it actually ended. Null on the
+   * paced path, whose video is wall-clock length by construction.
+   */
+  lastFrameWrittenMs: number | null;
   wallClockStartMs: number | null;
   /** When the capture stopped producing frames (cap fired, process exited, stop signaled). */
   wallClockEndMs: number | null;
@@ -120,6 +140,8 @@ function clearLiveState(state: ScreenRecordingSessionApi): void {
   state.lastFrameStreamError = null;
   state.pointerDisable = null;
   state.pointerFailed = false;
+  state.remoteTouchesUnsupported = false;
+  state.lastFrameWrittenMs = null;
   state.recordingTimedOut = false;
   state.recordingExitedUnexpectedly = false;
   state.lastExitInfo = null;
@@ -150,7 +172,11 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       );
     }
     const { device } = opts;
-    if (device.platform !== "ios" && device.platform !== "android") {
+    if (
+      device.platform !== "ios" &&
+      device.platform !== "android" &&
+      device.platform !== "ios-remote"
+    ) {
       throw new FailureError(
         `${SCREEN_RECORDING_SESSION_NAMESPACE}: unsupported platform "${device.platform}" for device '${device.id}'.`,
         {
@@ -182,6 +208,8 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       trimmedAnyFrames: false,
       pointerDisable: null,
       pointerFailed: false,
+      remoteTouchesUnsupported: false,
+      lastFrameWrittenMs: null,
       wallClockStartMs: null,
       wallClockEndMs: null,
       timeLimitSeconds: null,

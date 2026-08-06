@@ -1167,6 +1167,52 @@ describe("screen recording stop", () => {
     await fs.rm(outputFile, { force: true });
   });
 
+  it("reports the video's real length, not wall clock, when the screen went still early", async () => {
+    // A pushed source (the MoQ transport) sends nothing while the screen is
+    // still, and `-fps_mode cfr` can hold a picture only up to the next packet
+    // — so the file ends at the last change. Reporting wall clock there claims
+    // seconds of video that are not in the file.
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    await startAndSettle(api, { timeLimitSeconds: 60 });
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    api.lastFrameWrittenMs = Date.now(); // screen goes still here
+    await vi.advanceTimersByTimeAsync(8_000); // recording keeps running
+    await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+    const outputFile = api.outputFile!;
+
+    const result = await stopCapture(api);
+
+    expect(result.durationMs).toBeGreaterThanOrEqual(1_500);
+    expect(result.durationMs).toBeLessThan(3_000);
+    expect(result.warning).toContain("stopped changing");
+    await fs.rm(outputFile, { force: true });
+  });
+
+  it("keeps reporting wall clock for a paced source, which fills its own timeline", async () => {
+    // The local path re-emits the last frame on a timer, so its video really is
+    // wall-clock length and `lastFrameWrittenMs` stays null.
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    await startAndSettle(api, { timeLimitSeconds: 60, trimStatic: false });
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+    const outputFile = api.outputFile!;
+
+    expect(api.lastFrameWrittenMs).toBeNull();
+    const result = await stopCapture(api);
+
+    expect(result.durationMs).toBeGreaterThanOrEqual(3_500);
+    expect(result.warning ?? "").not.toContain("stopped changing");
+    await fs.rm(outputFile, { force: true });
+  });
+
   it("recovers the video when ffmpeg died before stop, with a warning", async () => {
     const api = await makeSession(iosDevice);
     fakeStream();

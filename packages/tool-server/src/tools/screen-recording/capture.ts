@@ -55,8 +55,8 @@ export const OUTPUT_FPS = 30;
 const FRAME_INTERVAL_MS = 1000 / OUTPUT_FPS;
 /** Cap a catch-up burst so a stalled pipe cannot trigger a write storm. */
 const MAX_CATCHUP_FRAMES = 5;
-/** Skip a tick while ffmpeg is this far behind rather than buffering in Node. */
-const MAX_BUFFERED_BYTES = 32 * 1024 * 1024;
+/** Stop writing while ffmpeg is this far behind rather than buffering in Node. */
+export const MAX_BUFFERED_BYTES = 32 * 1024 * 1024;
 /**
  * How long a screen may sit unchanged before trimming kicks in. The first
  * second of every still stretch is kept so pauses read naturally; past it the
@@ -65,7 +65,7 @@ const MAX_BUFFERED_BYTES = 32 * 1024 * 1024;
  */
 const STATIC_GRACE_MS = 1_000;
 const STREAM_CONNECT_TIMEOUT_MS = 10_000;
-const FIRST_FRAME_TIMEOUT_MS = 10_000;
+export const FIRST_FRAME_TIMEOUT_MS = 10_000;
 /** Hold briefly after spawn so bad args fail the start instead of the stop. */
 const START_FAILFAST_GRACE_MS = 800;
 /** ffmpeg finalizes on stdin EOF (typically <100ms); bound the wait anyway. */
@@ -394,11 +394,57 @@ async function startCaptureLocked(
   registerActiveScreenRecording(api.deviceId, api.wallClockStartMs, params.timeLimitSeconds);
   startPump(api, stream);
 
-  // Arm the exit handler BEFORE the pointer-enable await below. readiness
+  // Arm the cap + exit handler BEFORE the pointer-enable await below. readiness
   // already removed its own 'exit' listener, so if the encoder dies during that
   // await the death would go unobserved (Node never replays an 'exit' fired with
   // no listener) — a later stop would then hand back a truncated file with no
   // warning and the cap would misread the crash as a clean time-limit finish.
+  superviseCapture(api, child, params.timeLimitSeconds);
+
+  if (params.pointer) {
+    // Arm the touch visualizer before returning, so the very first interaction
+    // is already drawn into the recording. Store the teardown first so a
+    // shutdown racing this await still restores the overlay. Best-effort: a
+    // failure only costs the touch markers, surfaced as a warning at stop.
+    api.pointerDisable = params.pointer.disable;
+    api.pointerFailed = !(await params.pointer.enable());
+  }
+
+  return {
+    status: "recording",
+    timeLimitSeconds: params.timeLimitSeconds,
+    outputFile,
+  };
+}
+
+/**
+ * Arm the auto-stop cap and the unexpected-exit handler for a live capture.
+ * Shared by the MJPEG pump path and the MoQ push path: both handlers finalize
+ * ffmpeg and update session state, and release the frame source through
+ * `finalizeCapture` / `stopPump` rather than knowing which kind it is. Both
+ * carry an ownership guard so a superseded capture can't clobber a newer one.
+ */
+export function superviseCapture(
+  api: ScreenRecordingSessionApi,
+  child: ReturnType<typeof spawn>,
+  timeLimitSeconds: number
+): void {
+  api.recordingTimeout = setTimeout(() => {
+    api.recordingTimeout = null;
+    // Ownership guard: if a newer capture stamped the session, this timer is
+    // stale and must not touch shared state.
+    if (api.captureProcess !== child) return;
+    api.recordingTimedOut = true;
+    // Flip active BEFORE finalizing so the exit handler reads this as the cap,
+    // not an unexpected death.
+    api.recordingActive = false;
+    api.wallClockEndMs = Date.now();
+    api.pendingRetrieval = true;
+    markScreenRecordingFinalized(api.deviceId, `it hit its ${timeLimitSeconds}s time limit`);
+    finalizeCapture(api);
+    void disablePointer(api);
+  }, timeLimitSeconds * 1_000);
+
   child.on("exit", (code, signal) => {
     // Ownership guard: after this capture is superseded, its exit must not
     // clobber the newer capture's session state.
@@ -420,37 +466,6 @@ async function startCaptureLocked(
       markScreenRecordingFinalized(api.deviceId, "the recording process exited unexpectedly");
     }
   });
-
-  if (params.pointer) {
-    // Arm the touch visualizer before returning, so the very first interaction
-    // is already drawn into the recording. Store the teardown first so a
-    // shutdown racing this await still restores the overlay. Best-effort: a
-    // failure only costs the touch markers, surfaced as a warning at stop.
-    api.pointerDisable = params.pointer.disable;
-    api.pointerFailed = !(await params.pointer.enable());
-  }
-
-  api.recordingTimeout = setTimeout(() => {
-    api.recordingTimeout = null;
-    // Ownership guard: if a newer capture stamped the session, this timer is
-    // stale and must not touch shared state.
-    if (api.captureProcess !== child) return;
-    api.recordingTimedOut = true;
-    // Flip active BEFORE finalizing so the exit handler reads this as the cap,
-    // not an unexpected death.
-    api.recordingActive = false;
-    api.wallClockEndMs = Date.now();
-    api.pendingRetrieval = true;
-    markScreenRecordingFinalized(api.deviceId, `it hit its ${params.timeLimitSeconds}s time limit`);
-    finalizeCapture(api);
-    void disablePointer(api);
-  }, params.timeLimitSeconds * 1_000);
-
-  return {
-    status: "recording",
-    timeLimitSeconds: params.timeLimitSeconds,
-    outputFile,
-  };
 }
 
 /**
@@ -458,7 +473,7 @@ async function startCaptureLocked(
  * silent on a good start, so "did not die within the grace" is the signal;
  * a bad filter graph or unwritable output dies immediately and fails the start.
  */
-function waitForEncoderReady(
+export function waitForEncoderReady(
   child: ReturnType<typeof spawn>,
   stderrRef: { text: string }
 ): Promise<void> {
@@ -531,6 +546,7 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
   const streamError = api.frameStream?.error ?? api.lastFrameStreamError ?? null;
   const watermarkSkipped = api.watermarkSkipped;
   const pointerFailed = api.pointerFailed;
+  const remoteTouchesUnsupported = api.remoteTouchesUnsupported;
   let warning: string | undefined;
 
   try {
@@ -597,6 +613,14 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
         .filter(Boolean)
         .join(" ");
     }
+    if (remoteTouchesUnsupported) {
+      warning = [
+        warning,
+        "The touch visualizer is not available over the remote (MoQ) transport, so touches are not shown in this video.",
+      ]
+        .filter(Boolean)
+        .join(" ");
+    }
 
     const size = await statNonEmptyOutput(outputFile, "screen_recording_stop");
     // Wall-clock capture length: after the cap fires (or the encoder dies) the
@@ -606,9 +630,17 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
     // durationMs is the length of the video the caller actually gets. With
     // trimming that is shorter than the wall clock — it counts only the frames
     // that survived (each output frame is 1/OUTPUT_FPS of a second).
+    // A pushed source stops producing when the screen stops changing, and cfr
+    // holds the last picture only until the next packet — so the video ends at
+    // the final frame, not at stop. Report that, rather than a wall clock the
+    // file does not cover.
+    const lastFrameMs =
+      startedAtMs === null || api.lastFrameWrittenMs === null
+        ? null
+        : Math.max(0, api.lastFrameWrittenMs - startedAtMs);
     const durationMs = trimStatic
       ? Math.round((api.framesWritten / OUTPUT_FPS) * 1_000)
-      : wallClockMs;
+      : (lastFrameMs ?? wallClockMs);
     // Only surface the trim-only fields when trimming actually collapsed a
     // static stretch. Without this guard a continuously-animating recording
     // still reports a phantom trimmedMs of a frame or two purely from the
@@ -618,6 +650,16 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
       trimStatic && wallClockMs !== null && api.trimmedAnyFrames
         ? Math.max(0, wallClockMs - durationMs!)
         : undefined;
+    // Say so when the video is materially shorter than the time recorded, so a
+    // caller comparing the two does not read it as a lost or truncated capture.
+    if (lastFrameMs !== null && wallClockMs !== null && wallClockMs - lastFrameMs > 1_000) {
+      warning = [
+        warning,
+        `The screen stopped changing ${Math.round((wallClockMs - lastFrameMs) / 1_000)}s before the recording was stopped, and this transport sends nothing while it is still, so the video ends there.`,
+      ]
+        .filter(Boolean)
+        .join(" ");
+    }
     return {
       outputFile,
       sizeBytes: size,
@@ -654,6 +696,8 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
     api.logoFile = null;
     api.watermarkSkipped = null;
     api.pointerFailed = false;
+    api.remoteTouchesUnsupported = false;
+    api.lastFrameWrittenMs = null;
     api.framesWritten = 0;
     api.trimmedAnyFrames = false;
     api.wallClockStartMs = null;

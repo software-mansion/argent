@@ -91,7 +91,25 @@ export async function openMoqClient(udid: string): Promise<MoqClient> {
   return openMoqClientFromInfo(info);
 }
 
-export async function openMoqClientFromInfo(info: MoqInfo): Promise<MoqClient> {
+/** A live MoQ connection (as returned by `Moq.Connection.connect`). */
+type MoqConnection = Awaited<ReturnType<typeof Moq.Connection.connect>>;
+
+/** A live MoQ session plus a consumer of the server's "simulator" broadcast. */
+export interface MoqSimulatorSession {
+  /** The underlying connection — close it to tear the session down. */
+  connection: MoqConnection;
+  /** Consumer of the "simulator" broadcast (catalog/video/screenshot tracks). */
+  simulator: ReturnType<MoqConnection["consume"]>;
+}
+
+/**
+ * Establish a MoQ session to the simulator-server behind `info` and return a
+ * consumer of its "simulator" broadcast. Shared by the request/response client
+ * ({@link openMoqClientFromInfo}) and the recording video stream, so the
+ * WebTransport handshake, cert pinning and lease-token handling live in one
+ * place. The caller owns the returned connection and must `close()` it.
+ */
+export async function establishMoqSimulator(info: MoqInfo): Promise<MoqSimulatorSession> {
   await ensurePolyfill();
   const url = new URL(info.url);
   // sim-server rejects MoQ sessions without the lease token; the relay
@@ -99,9 +117,9 @@ export async function openMoqClientFromInfo(info: MoqInfo): Promise<MoqClient> {
   if (info.token) url.searchParams.set("token", info.token);
   const fingerprint = decodeHexFingerprint(info.fingerprint);
 
-  let established;
+  let connection;
   try {
-    established = await Moq.Connection.connect(url, {
+    connection = await Moq.Connection.connect(url, {
       webtransport: {
         serverCertificateHashes: [{ algorithm: "sha-256", value: fingerprint }],
       },
@@ -114,8 +132,13 @@ export async function openMoqClientFromInfo(info: MoqInfo): Promise<MoqClient> {
     throw unwrapMoqConnectError(err, info.url);
   }
 
-  // --- Server-published "simulator" broadcast (catalog/video/screenshot) ---
-  const simulator = established.consume(Moq.Path.from("simulator"));
+  // Server-published "simulator" broadcast (catalog/video/screenshot tracks).
+  const simulator = connection.consume(Moq.Path.from("simulator"));
+  return { connection, simulator };
+}
+
+export async function openMoqClientFromInfo(info: MoqInfo): Promise<MoqClient> {
+  const { connection: established, simulator } = await establishMoqSimulator(info);
   const screenshotTrack = simulator.subscribe("screenshot", 0);
 
   // --- Client-published "argent" broadcast (control) ---
