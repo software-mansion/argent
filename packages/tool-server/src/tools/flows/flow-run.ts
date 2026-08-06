@@ -356,8 +356,8 @@ const POST_LAUNCH_SETTLE_MS = 1500;
  * start would fail the first directive with a raw tree-source error; gating
  * the launch step reports the problem where it belongs, with a relaunch hint.
  */
-const NATIVE_READY_TIMEOUT_MS = 8000;
-const NATIVE_READY_POLL_MS = 250;
+export const NATIVE_READY_TIMEOUT_MS = 8000;
+export const NATIVE_READY_POLL_MS = 250;
 
 /**
  * Poll until native-devtools is connected for `bundleId`. Returns true once

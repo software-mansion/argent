@@ -10,8 +10,18 @@ import {
   type ToolDefinition,
 } from "@argent/registry";
 import {
+  isInjectableBundleId,
+  nativeDevtoolsRef,
+  type NativeDevtoolsApi,
+} from "../../blueprints/native-devtools";
+import {
+  chooseFrontmostConnectedApp,
+  inspectConnectedNativeApps,
+} from "../../utils/native-target-app";
+import {
   requireRecordingSession,
   appendStepToFlow,
+  appIdForPlatform,
   parseFlow,
   assertSafeFlowName,
   classifyOnDiskSpelling,
@@ -25,8 +35,10 @@ import {
 import { AWAIT_UI_ELEMENT_TOOL_ID } from "../await-ui-element";
 import { runSequenceFailure } from "../run-sequence";
 import { probeWhenCondition } from "./flow-actions";
+import { NATIVE_READY_POLL_MS, NATIVE_READY_TIMEOUT_MS } from "./flow-run";
 import { summarizeStep } from "./flow-finish-recording";
 import { invokeSubTool } from "../../utils/sub-invoke";
+import { settleWithin, sleepOrAbort } from "../../utils/timing";
 import { resolveDevice } from "../../utils/device-info";
 import { stripDeviceKeys } from "./flow-device";
 import { fetchFlowTree } from "./flow-tree";
@@ -79,6 +91,128 @@ function fallbackSourceWarning(source: DescribeSource, platform: string): string
   const expected = REPLAY_TREE_SOURCES[platform];
   if (!expected || source === expected) return undefined;
   return `selector captured from the fallback ${source} tree (${expected} unavailable) — replay resolves against the full hierarchy, which may not match it`;
+}
+
+/**
+ * Recording has no counterpart to replay's launch readiness gate
+ * (`waitForNativeDevtools` in flow-run.ts): a live `restart-app` returns before
+ * the injected dylib dials back, so a tap recorded right after it would read
+ * the tree before the app has connected and silently keep coordinates. Ride
+ * out that window: when the recording has a launch, poll that (most recent)
+ * launch's exact bundle's synchronous connection bit (the same check replay
+ * uses); otherwise poll until auto-targeting finds one connected, foreground-like
+ * app. Stop when the budget lapses, then let the single tree read report
+ * whatever is really there. The budget mirrors replay's NATIVE_READY_TIMEOUT_MS:
+ * a cold start the replay gate would ride out, recording rides out too. When the
+ * app was never Argent-launched this adds one budget's worth of latency before
+ * the (accurate) capture warning; that beats silently downgrading a post-launch
+ * tap.
+ */
+type CaptureReadiness = "ready" | "unavailable" | "timed-out" | "aborted";
+
+// A third-party app started outside Argent can never connect during the active
+// recording. Remember one exhausted/unavailable readiness probe per device and
+// session so a 20-tap walkthrough does not pay the full budget 20 times. A
+// successful tree read below or a successful app launch/restart clears the
+// entry, allowing recovery when instrumentation becomes available later.
+const captureReadinessMisses = new WeakMap<RecordingSession, Set<string>>();
+
+function readinessMissesFor(session: RecordingSession): Set<string> {
+  let misses = captureReadinessMisses.get(session);
+  if (!misses) {
+    misses = new Set<string>();
+    captureReadinessMisses.set(session, misses);
+  }
+  return misses;
+}
+
+async function awaitIosDevtoolsTarget(
+  registry: Registry,
+  device: DeviceInfo,
+  bundleId?: string,
+  signal?: AbortSignal
+): Promise<CaptureReadiness> {
+  if (signal?.aborted) return "aborted";
+  let api: NativeDevtoolsApi;
+  try {
+    const ndRef = nativeDevtoolsRef(device);
+    api = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
+  } catch {
+    return signal?.aborted ? "aborted" : "unavailable";
+  }
+  const deadline = Date.now() + NATIVE_READY_TIMEOUT_MS;
+  for (;;) {
+    if (signal?.aborted) return "aborted";
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return "timed-out";
+
+    if (bundleId) {
+      try {
+        if (api.isConnected(bundleId)) return "ready";
+      } catch {
+        // Treat a transient connection read as not-ready and keep polling.
+      }
+    } else {
+      // Fragment auto-targeting must inspect app state, whose RPC can itself
+      // wedge. Race it against the remaining budget so the advertised
+      // 8-second gate stays a hard cap rather than 8 seconds between
+      // potentially multi-second getAppState calls.
+      const inspected = await settleWithin(inspectConnectedNativeApps(api), remaining, signal);
+      if (inspected.type === "aborted") return "aborted";
+      if (inspected.type === "timeout") return "timed-out";
+      if (inspected.type === "value" && chooseFrontmostConnectedApp(inspected.value)) {
+        return "ready";
+      }
+    }
+
+    const delayMs = Math.min(NATIVE_READY_POLL_MS, deadline - Date.now());
+    if (delayMs <= 0) return "timed-out";
+    if (!(await sleepOrAbort(delayMs, signal))) return "aborted";
+  }
+}
+
+/**
+ * The most recent `launch` step recorded so far — the app the walkthrough is
+ * currently driving, which is what the gate must wait on. Keying on the LEADING
+ * launch instead misfires on a recording that relaunches a second app mid-flow
+ * (`restart A` … `restart B` … tap): `restart-app B` never clears A's connection
+ * bit, so polling A returns ready at once and B's own connect window is never
+ * ridden out — exactly the downgrade this gate exists to prevent. Replay gates
+ * each launch step on its own bundle for the same reason. Reduces to the leading
+ * launch for the common single-launch flow.
+ */
+function mostRecentLaunch(session: RecordingSession): Extract<FlowStep, { kind: "launch" }> | null {
+  for (let i = session.flow.steps.length - 1; i >= 0; i--) {
+    const step = session.flow.steps[i];
+    if (step.kind === "launch") return step;
+  }
+  return null;
+}
+
+function recordedLaunchApp(session: RecordingSession, platform: string): string | null {
+  const launch = mostRecentLaunch(session);
+  return launch ? appIdForPlatform(launch.app, platform) : null;
+}
+
+function invalidateReadinessMissAfterAppStart(
+  session: RecordingSession,
+  command: string,
+  args: Record<string, unknown>,
+  result: unknown
+): void {
+  const didStart =
+    typeof result === "object" &&
+    result !== null &&
+    ((command === "restart-app" && (result as { restarted?: unknown }).restarted === true) ||
+      (command === "launch-app" && (result as { launched?: unknown }).launched === true));
+  if (!didStart) return;
+
+  const misses = readinessMissesFor(session);
+  // Both tools require a device id, but clearing all misses is the safe fallback
+  // for older/custom registry adapters that omit it: a successful app start is
+  // fresh evidence and another bounded probe is preferable to a stale miss.
+  if (typeof args.udid === "string") misses.delete(args.udid);
+  else misses.clear();
 }
 
 function platformOf(udid: unknown): string | undefined {
@@ -352,12 +486,34 @@ function replayReproducesTap(
  */
 async function captureTapSelector(
   registry: Registry,
+  session: RecordingSession,
   udid: string,
-  point: { x: number; y: number }
+  point: { x: number; y: number },
+  signal?: AbortSignal
 ): Promise<{ selector?: Selector; warning?: string; ambiguous?: boolean; container?: boolean }> {
   try {
     const device = resolveDevice(udid);
+    // iOS's tree source connects asynchronously after launch — absorb the
+    // post-restart-app window replay's launch gate covers (see above). Apple
+    // system apps can never connect, and an exhausted probe is cached for this
+    // recording session so later taps do not each wait another full budget.
+    if (device.platform === "ios") {
+      const misses = readinessMissesFor(session);
+      const launchApp = recordedLaunchApp(session, device.platform);
+      if (!misses.has(device.id) && (!launchApp || isInjectableBundleId(launchApp))) {
+        const readiness = await awaitIosDevtoolsTarget(
+          registry,
+          device,
+          launchApp ?? undefined,
+          signal
+        );
+        if (readiness === "aborted") throw abortError();
+        if (readiness !== "ready") misses.add(device.id);
+      }
+    }
+    if (signal?.aborted) throw abortError();
     const { tree, source } = await fetchFlowTree(registry, device);
+    readinessMissesFor(session).delete(device.id);
     const node = nodeAtPoint(tree, point);
     if (!node) return { warning: "no element found under the tap" };
     const selector = deriveSelector(node);
@@ -416,6 +572,7 @@ async function captureTapSelector(
     }
     return { selector, warning: fallbackSourceWarning(source, device.platform) };
   } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") throw err;
     return {
       warning: `selector capture failed (${err instanceof Error ? err.message : String(err)})`,
     };
@@ -1132,11 +1289,21 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
         | { selector?: Selector; warning?: string; ambiguous?: boolean; container?: boolean }
         | undefined;
       if (isTap) {
-        captured = await captureTapSelector(registry, args.udid as string, {
-          x: args.x as number,
-          y: args.y as number,
-        });
+        captured = await captureTapSelector(
+          registry,
+          session,
+          args.udid as string,
+          {
+            x: args.x as number,
+            y: args.y as number,
+          },
+          ctx?.signal
+        );
       }
+
+      // A disconnect during the readiness poll must cancel the live action,
+      // not merely stop polling and execute the tap anyway.
+      if (ctx?.signal?.aborted) throw abortError();
 
       let toolResult: unknown;
       try {
@@ -1159,6 +1326,7 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
           savedTo: session.filePath,
         };
       }
+      invalidateReadinessMissAfterAppStart(session, params.command, args, toolResult);
 
       // The wait held against the accessibility tree. Ask the tree the runner
       // resolves DIRECTIVES against too, so the author learns now — rather than
