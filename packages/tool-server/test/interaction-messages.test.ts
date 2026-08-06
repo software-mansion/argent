@@ -218,6 +218,26 @@ describe("tool interaction messages", () => {
     }
   });
 
+  it("does not announce a recorded step on the paths that record nothing", () => {
+    // The guidance paths (a nested recorder tool as `command`, a flow-directive
+    // name) return SUCCESSFULLY and append nothing, so the completion line fires
+    // — and used to read "Added echo step to flow hints" in the same log where
+    // the result body says "Nothing was executed and no step was recorded".
+    const completedMsg =
+      definitionsById(createRegistry()).get("flow-add-step")!.interaction!.completedMsg!;
+    const params = { name: "checkout", project_root: "/tmp/proj", command: "echo" };
+
+    expect(
+      completedMsg({ params, result: { message: "", toolResult: undefined, stepCount: 0 } })
+    ).toBe("Recorded no echo step in flow checkout");
+    expect(
+      completedMsg({
+        params,
+        result: { message: "", toolResult: undefined, stepCount: 1, recorded: "1. echo: hi" },
+      })
+    ).toBe("Added echo step to flow checkout");
+  });
+
   it("does not expose sensitive inputs", () => {
     const definitions = definitionsById(createRegistry());
     const secret = "INTERACTION_MESSAGE_SECRET";
