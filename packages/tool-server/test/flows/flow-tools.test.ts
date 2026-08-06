@@ -411,6 +411,42 @@ describe("flow-add-step", () => {
     );
   });
 
+  it("reports stepCount as a running total, numbering each recorded line with it", async () => {
+    // Only flow-add-echo's running total was pinned; add-step's was asserted
+    // only at the value 1, so hardcoding `stepCount: 1` in its return passed
+    // the whole suite. stepCount is the recorder's only per-step size signal
+    // now that the growing YAML is gone, and it doubles as the line number
+    // `recorded` is rendered with — so drift here misnumbers both surfaces.
+    const registry = createMockRegistry({ tap: { result: { tapped: true } } });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "running-total", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const counts: number[] = [];
+    for (const y of [0.1, 0.2, 0.3]) {
+      const result = await tool.execute(
+        {},
+        {
+          name: "running-total",
+          project_root: tmpDir,
+          command: "tap",
+          args: JSON.stringify({ x: 0.5, y }),
+        }
+      );
+      counts.push(result.stepCount);
+      // The number `recorded` opens with IS the reported count, so the author
+      // cannot be shown "3." while being told the flow holds one step.
+      expect(result.recorded.startsWith(`${result.stepCount}. `)).toBe(true);
+    }
+
+    expect(counts).toEqual([1, 2, 3]);
+    // …and the total tracks the file, not just itself.
+    expect(parseFlow(await onDisk("running-total")).steps).toHaveLength(3);
+  });
+
   it("records a double-tap's clickCount as `times`, surfaced in the recorded line", async () => {
     // The clickCount→times rewrite (so a recorded double-tap replays as one,
     // not a single tap) only fires on a `gesture-tap` command, so the raw-tool
