@@ -11,6 +11,7 @@ import {
 import {
   requireRecordingSession,
   appendStepToFlow,
+  assertSessionStillLive,
   parseFlow,
   assertSafeFlowName,
   classifyOnDiskSpelling,
@@ -610,10 +611,23 @@ async function captureTapSelector(
  * call made the recorder the single largest consumer of a session's context,
  * and that pressure was observed removing checks from tests. The full file
  * comes back once, from `flow-finish-recording`.
+ *
+ * Liveness is asserted first, for the same reason the append path asserts it:
+ * these callers resolved their session BEFORE running a tool that can take
+ * minutes, so the recording may have been finished, restarted or evicted in the
+ * meantime. Without the check the file is re-read off `session.filePath` and the
+ * refusal reports another take's step count as this recording's — the one
+ * number the caller relies on to know where its own take stands.
+ *
+ * `ranOnDevice` says whether the tool call this return is refusing to RECORD had
+ * already been executed, which decides what the liveness error tells the author
+ * to undo.
  */
 async function activeFlowState(
-  session: RecordingSession
+  session: RecordingSession,
+  ranOnDevice: boolean
 ): Promise<{ stepCount: number; note?: string }> {
+  assertSessionStillLive(session, ranOnDevice);
   if (session.persist === "host") {
     try {
       session.flow = parseFlow(await fs.readFile(session.filePath, "utf8"));
@@ -646,7 +660,7 @@ async function recordNothing(
   stepCount: number;
   savedTo: FlowSavedTo;
 }> {
-  const { stepCount, note } = await activeFlowState(session);
+  const { stepCount, note } = await activeFlowState(session, false);
   return {
     message: `${guidance} Nothing was executed and no step was recorded.${note ? ` ${note}` : ""}`,
     toolResult: undefined,
@@ -1368,7 +1382,7 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
         ctx?.signal?.aborted === true
       );
       if (refusal) {
-        const { stepCount, note } = await activeFlowState(session);
+        const { stepCount, note } = await activeFlowState(session, true);
         const mutationWarning = refusal.mayHaveMutated
           ? ` ${partialMutationWarning(
               params.command === RUN_TARGET_COMMAND ? "flow-execute" : "run-sequence"

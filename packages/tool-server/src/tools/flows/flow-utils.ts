@@ -2913,8 +2913,17 @@ export type FlowSavedTo = string | ClientFileDirective;
  * therefore drop this session between the check and the write. That race is
  * benign — the step still lands in the file it was recorded for, and only the
  * NEXT call on the key reports the recording gone.
+ *
+ * Also called by the returns that record NOTHING, which have the same window
+ * and the same stake: the count and file path they report would otherwise be a
+ * different take's. Those callers run outside the lock, which only widens the
+ * benign race above — a takeover they miss is reported by the next call.
+ *
+ * `ranOnDevice` picks the recovery clause: the caller knows whether the action
+ * was actually performed, and telling an author that a step they never ran
+ * "already ran on the device" sends them undoing something that never happened.
  */
-function assertSessionStillLive(session: RecordingSession, step: FlowStep): void {
+export function assertSessionStillLive(session: RecordingSession, ranOnDevice: boolean): void {
   const current = recordings.get(session.key);
   if (current === session) return;
   // A key that is occupied by a DIFFERENT session was restarted; an empty key
@@ -2942,9 +2951,9 @@ function assertSessionStillLive(session: RecordingSession, step: FlowStep): void
       `it unconditionally, so re-record under a fresh name rather than restarting this one.`;
   const recovery =
     `Nothing was added to the flow file` +
-    (step.kind === "echo"
-      ? ". "
-      : ", but the step itself already ran on the device — repeating it repeats that action. ") +
+    (ranOnDevice
+      ? ", but the step itself already ran on the device — repeating it repeats that action. "
+      : ". ") +
     whatIsAtStake;
   throw new FailureError(
     `Recording of "${session.name}" in ${session.projectRoot} is no longer active — ${why}. ` +
@@ -2975,7 +2984,7 @@ export async function appendStepToFlow(
   // mid-recording) would let the append hold one lock while asserting about
   // another.
   return withFlowLock(session.key, async () => {
-    assertSessionStillLive(session, step);
+    assertSessionStillLive(session, step.kind !== "echo");
     session.lastTouchedSeq = touch();
     if (session.persist === "host") {
       const flowFile = await appendStep(session.filePath, step);
