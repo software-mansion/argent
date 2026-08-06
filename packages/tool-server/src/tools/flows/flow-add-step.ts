@@ -234,20 +234,20 @@ const PROBE_BUDGET_MS = 4000;
 
 /**
  * The recorder and the runner read DIFFERENT trees. `await-ui-element`
- * evaluates against the accessibility tree; the `await:`/`assert:` DIRECTIVE
- * that polish converts this step into is evaluated against the runner's tree.
- * They overlap but neither contains the other — an id present in one can be
- * absent from the other, and on iOS even the role vocabularies are disjoint.
- * So a check can pass live and fail once converted, which makes "each step is
+ * evaluates against the agent-facing describe tree — the AX hierarchy on
+ * iOS/Android, the CDP DOM on Chromium, the toolkit page source on Vega; the
+ * `await:`/`assert:` DIRECTIVE that polish converts this step into is evaluated
+ * against `fetchFlowTree`'s. Which way the two diverge is per platform (see
+ * {@link treeDivergenceFor}), but on none of them does one contain the other,
+ * so a check can pass live and fail once converted — which makes "each step is
  * executed live so you verify it works" untrue exactly where it matters.
  *
  * Re-probe the same condition against the runner's tree and report the answer.
  * It is a WARNING, never a refusal: the step is recorded as a raw
- * `tool: await-ui-element`, and at replay that tool reads the SAME
- * accessibility tree it just passed against — so "it would fail every run" was
- * false for the form actually written. What the probe really tells the author
- * is whether the conversion is safe, which is a polish-time decision, and the
- * blocking audit is where a flow is held to it.
+ * `tool: await-ui-element`, and at replay that tool reads the SAME tree it just
+ * passed against — so "it would fail every run" was false for the form actually
+ * written. What the probe really tells the author is whether the conversion is
+ * safe, which is a polish-time decision.
  */
 async function probeAgainstRunnerTree(
   registry: Registry,
@@ -307,11 +307,15 @@ async function probeAgainstRunnerTree(
       // would claim the two trees differ, and its remedy ("re-record with a
       // selector present in both") would send the author to rewrite a selector
       // that may be perfectly good.
+      // "the tree `await-ui-element` reads", not "the accessibility tree": the
+      // recorder's tree is the AX hierarchy only on iOS/Android. On Chromium it
+      // is the CDP DOM and on Vega the automation toolkit's page source, so
+      // naming the AX tree there describes a source neither side read.
       warning:
         `this check could not be re-verified against the tree the RUNNER reads ` +
-        `(${outcome.reason}), so it passed against the accessibility tree only. Whether it ` +
-        `would convert to \`await:\`/\`assert:\` is UNKNOWN, not known-bad — re-probe once that ` +
-        `tree source is back before trusting the conversion`,
+        `(${outcome.reason}), so it passed against the tree \`${AWAIT_UI_ELEMENT_TOOL_ID}\` ` +
+        `reads and nothing else. Whether it would convert to \`await:\`/\`assert:\` is UNKNOWN, ` +
+        `not known-bad — re-probe once that tree source is back before trusting the conversion`,
     };
   }
   // Determinate: the trees really were compared and really do disagree, so this

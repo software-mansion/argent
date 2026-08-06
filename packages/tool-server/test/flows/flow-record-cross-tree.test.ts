@@ -232,6 +232,27 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(parseFlow(await onDisk("blind")).steps).toHaveLength(1);
   }, 20_000);
 
+  // "the accessibility tree" is the recorder's tree only on iOS and Android. On
+  // Chromium the recorder read the CDP DOM and on Vega the toolkit page source,
+  // so the indeterminate message must name the READER, not a tree source
+  // neither side touched.
+  it("does not call the recorder's tree the accessibility tree on Chromium", async () => {
+    fetchRunnerTree = async () => {
+      throw new Error("CDP session closed");
+    };
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "blindchromium", project_root: tmpDir, executionPrerequisite: "on the form" }
+    );
+
+    const result = await recordWait("blindchromium", "Continue", CHROMIUM);
+
+    expect(result.message).toContain("could not be re-verified against the tree the RUNNER reads");
+    expect(result.message).toContain("the tree `await-ui-element` reads");
+    expect(result.message).not.toContain("accessibility tree");
+    expect(parseFlow(await onDisk("blindchromium")).steps).toHaveLength(1);
+  });
+
   // The reader clause is platform-specific on purpose: no read-only tool reads
   // Android's runner tree (the full a11y hierarchy — native-find-views /
   // native-full-hierarchy are Apple-only), and Android `describe` returns the
