@@ -327,8 +327,12 @@ describe("stepRequiresDevice", () => {
 
 describe("a cleanup flow whose only step is stop-all-simulator-servers", () => {
   const teardownOnly: FlowStep[] = [
-    // What the recorder writes for a `stop-all-simulator-servers`: the
-    // `devices` key is stripped at record time and re-injected at replay.
+    // What the recorder writes for an UNSCOPED `stop-all-simulator-servers`.
+    // A scoped one keeps its `devices` in the YAML — `stripDeviceKeys` touches
+    // only the target keys, and `flow-tools.test.ts`'s "keeps the devices list
+    // when recording a scoped teardown" pins that — so the empty args here are
+    // the recording of the machine-wide sweep, which replay then NARROWS onto
+    // the run device.
     { kind: "tool", name: "stop-all-simulator-servers", args: {} },
   ];
 
