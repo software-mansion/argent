@@ -1264,14 +1264,16 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
       // Name the flow: recordings are concurrent, so several of these lines can
       // interleave in one log and "the recorded flow" would not identify which.
       startedMsg: ({ params }) => `Adding ${params.command} step to flow ${params.name}`,
-      // The guidance paths return SUCCESSFULLY and record nothing, so an
-      // unconditional "Added …" line contradicts the result body it belongs to
-      // ("Nothing was executed and no step was recorded") in the same log.
-      // `recorded` is the discriminator: absent exactly when no line was
-      // appended.
+      // Several returns are success-SHAPED but deliberately record nothing (a
+      // refused directive command, a nested orchestrator that failed or was
+      // cancelled). Logging "Added …" for those makes the event log assert the
+      // opposite of the message in the same result, and the log is what an agent
+      // scrolls back through to reconstruct what a take actually contains.
+      // `recorded` is the documented discriminator — it is absent exactly when
+      // no line was appended.
       completedMsg: ({ params, result }) =>
         result.recorded === undefined
-          ? `Recorded no ${params.command} step in flow ${params.name}`
+          ? `Did NOT add ${params.command} step to flow ${params.name} (see the returned message)`
           : `Added ${params.command} step to flow ${params.name}`,
       failedMsg: ({ params, failureSignal }) =>
         `Failed to add ${params.command} step to flow ${params.name}: ${failureSignal.error_code}`,
