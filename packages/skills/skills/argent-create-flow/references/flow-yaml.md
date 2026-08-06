@@ -160,6 +160,8 @@ The guard may be one `exists`/`visible`/`hidden`/`text` condition or `{ platform
 
 ## Composition and platform limits
 
+A `run:` target is a YAML path resolved against the directory of the flow file that contains the step, so `../shared/login.yaml` reaches a sibling directory rather than the project root. The `.yaml` suffix is optional: `run: login` and `run: login.yaml` both name `login.yaml` beside the flow.
+
 - iOS/Android e2e flows may run fragments or other e2e flows inline; a nested e2e launch restarts its app.
 - Chromium boots one Electron app for the top-level run. Do not nest a Chromium e2e flow with its own launch; make it top-level or turn the nested flow into a fragment. `pinch` is rejected there — drive the app's own zoom controls instead.
 - Vega is remote-driven. Touch directives (`tap`, `long-press`, `type`, `scroll-to`, `pinch`) are unsupported; record `tool: tv-remote` and raw `tool: keyboard`, then gate every focus/navigation result with `await`.
