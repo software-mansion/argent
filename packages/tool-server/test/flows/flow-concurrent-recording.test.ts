@@ -482,6 +482,41 @@ describe("two recording keys that resolve to one file", () => {
     expect((await fs.lstat(flowPath(rootA, "checkout"))).isSymbolicLink()).toBe(true);
   });
 
+  it("keeps a recording reachable when its vault target is deleted mid-take", async () => {
+    // The link is still there and still names the same file, so the recording's
+    // identity has not moved — it is only the target that is momentarily
+    // absent. Resolving that back to the link's own path made the key move,
+    // orphaning the live session behind a generic "no active recording".
+    const vault = await makeRoot("deleted-target-vault");
+    const root = await makeRoot("deleted-target-proj");
+    const target = path.join(vault, "checkout.yaml");
+    await fs.mkdir(path.dirname(flowPath(root, "checkout")), { recursive: true });
+    await fs.symlink(target, flowPath(root, "checkout"));
+
+    await start(root, "checkout");
+    await addEcho(root, "checkout", "c1");
+    await fs.rm(target);
+
+    // Still addressable under the spelling it was started with.
+    expect((await getRecordingSession(root, "checkout"))?.name).toBe("checkout");
+
+    // The append does fail — its file really is gone — but as the missing file
+    // it is, not as a recording that was never started. The distinction is the
+    // whole point: the second answer sends the agent to flow-start-recording,
+    // which truncates.
+    const err = await captureFailure(addEcho(root, "checkout", "c2"));
+    expect(getFailureSignal(err)?.error_code).not.toBe(FAILURE_CODES.FLOW_NO_ACTIVE_RECORDING);
+    expect((err as Error).message).toMatch(/ENOENT/);
+
+    // And restoring the target resumes the same take.
+    await fs.writeFile(target, "steps: []\n", "utf8");
+    await addEcho(root, "checkout", "c3");
+    const finished = await finish(root, "checkout");
+    expect(markers(parseFlow(finished.flowFile).steps)).toEqual(["echo:c3"]);
+    expect((await fs.lstat(flowPath(root, "checkout"))).isSymbolicLink()).toBe(true);
+    expect(await getRecordingSession(root, "checkout")).toBeUndefined();
+  });
+
   it("keeps two genuinely distinct flows independent", async () => {
     // The control: no symlink, no case variance, so nothing is canonicalized
     // together and the isolation guarantee holds exactly as stated.
