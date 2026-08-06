@@ -357,7 +357,8 @@ function abortError(): Error {
 const PROBE_BUDGET_MS = 4000;
 
 /**
- * Length cap on the probe's own reason before it is quoted back to the agent.
+ * Length cap on the probe's own reason before it is quoted back to the agent —
+ * applied ONLY to a determinate verdict's reason.
  *
  * `assertReason`'s `text` arm quotes the matched element's rendered content,
  * and on the flow tree that content is HOISTED — a container's text is every
@@ -365,13 +366,32 @@ const PROBE_BUDGET_MS = 4000;
  * carry an entire card, list section or log pane, and this warning is appended
  * to `message` on a tool whose result the agent reads in full. The reason has
  * to name enough of what it saw to be actionable, not reproduce the screen.
+ *
+ * An INDETERMINATE reason is a different kind of string and is quoted whole:
+ * it is an environment error ("could not read the UI tree: …"), it carries no
+ * screen content on any branch that produces it, and its TAIL is routinely the
+ * recovery instruction — on a real iOS run against a non-injected app the cap
+ * cut "…use screenshot to inspect visible Home/…" ten characters from the end.
  */
 const MAX_PROBE_REASON_CHARS = 200;
 
+/**
+ * How much of the kept budget goes to the END of an over-long reason.
+ *
+ * Head-only truncation drops whatever the reason closes with, and
+ * `waitForCondition` closes a determinate reason with the note recording that
+ * its final poll went dark ("(the final poll could not read the UI tree: …)").
+ * That note qualifies the verdict the whole warning is built on, so eliding the
+ * MIDDLE keeps it while still refusing to reproduce the screen.
+ */
+const PROBE_REASON_TAIL_CHARS = 60;
+
 function cappedReason(reason: string): string {
-  return reason.length <= MAX_PROBE_REASON_CHARS
-    ? reason
-    : `${reason.slice(0, MAX_PROBE_REASON_CHARS)}… (${reason.length - MAX_PROBE_REASON_CHARS} more chars)`;
+  if (reason.length <= MAX_PROBE_REASON_CHARS) return reason;
+  const head = reason.slice(0, MAX_PROBE_REASON_CHARS - PROBE_REASON_TAIL_CHARS);
+  const tail = reason.slice(reason.length - PROBE_REASON_TAIL_CHARS);
+  const dropped = reason.length - MAX_PROBE_REASON_CHARS;
+  return `${head}… (${dropped} more chars) …${tail}`;
 }
 
 /**
@@ -464,9 +484,14 @@ async function probeAgainstRunnerTree(
       // recorder's tree is the AX hierarchy only on iOS/Android. On Chromium it
       // is the CDP DOM and on Vega the automation toolkit's page source, so
       // naming the AX tree there describes a source neither side read.
+      //
+      // Quoted WHOLE, not through `cappedReason`: this reason is an environment
+      // error, it never carries screen content, and its tail is routinely the
+      // instruction for getting the tree source back (see
+      // MAX_PROBE_REASON_CHARS).
       warning:
         `this check could not be re-verified against the tree the RUNNER reads ` +
-        `(${cappedReason(outcome.reason ?? "no reason given")}), so it passed against the tree ` +
+        `(${outcome.reason ?? "no reason given"}), so it passed against the tree ` +
         `\`${AWAIT_UI_ELEMENT_TOOL_ID}\` ` +
         `reads and nothing else. Whether it would convert to \`await:\`/\`assert:\` is UNKNOWN, ` +
         `not known-bad — re-probe once that tree source is back before trusting the conversion`,

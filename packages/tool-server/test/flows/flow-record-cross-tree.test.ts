@@ -907,11 +907,84 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     // Bound the ECHOED REASON, not the whole message: the fixed prose around it
     // is longer than this fixture, so `warning.length < wall.length` passes or
     // fails on how much explanation the message carries and says nothing about
-    // the cap. Pin the cap itself — at 200 the kept slice is exactly 200 chars,
-    // and raising the constant would fail here.
+    // the cap. Pin the cap itself — 200 chars kept, split head/tail — so raising
+    // the constant fails here.
     const echoed = echoedReasonOf(warning);
-    expect(echoed.split("…")[0]).toHaveLength(200);
-    expect(echoed).toMatch(/… \(\d+ more chars\)$/);
+    const [head, tail] = echoed.split(/… \(\d+ more chars\) …/);
+    expect(head).toHaveLength(140);
+    expect(tail).toHaveLength(60);
+  });
+
+  // The cap only ever ELIDES THE MIDDLE, because `waitForCondition` puts the
+  // note recording that its final poll went dark at the END of the reason —
+  // and that note qualifies the very verdict the warning is built on. Head-only
+  // truncation dropped it silently.
+  it("keeps the tail of an over-long reason, where the final-poll note lives", async () => {
+    const wall = "Lorem ipsum dolor sit amet ".repeat(60);
+    // Trusted reads that leave the condition false right up to the deadline,
+    // then a source that dies on the last poll. That is the blip tier: the dark
+    // tail is inside CONDITION_DARK_TAIL_TOLERANCE_MS, so the verdict stays
+    // determinate and `waitForCondition` appends the failed final read to the
+    // reason rather than discarding the window.
+    const probeStartedAt = Date.now();
+    fetchRunnerTree = async () => {
+      if (Date.now() - probeStartedAt > 900) throw new Error("native devtools went away");
+      return { tree: iosRunnerTree([iosLabel(`Total ${wall}`)]), source: "native-devtools" };
+    };
+    await startRecording("tail");
+
+    const result = await recordWait("tail", {
+      condition: "text",
+      selector: { text: "Total" },
+      expectedText: "$5.00",
+    });
+    const warning = warningOf(result, "tail") ?? "";
+
+    expect(warning).toContain("does NOT hold against the tree the runner resolves");
+    expect(warning).toContain("Lorem ipsum");
+    expect(warning).toContain("more chars)");
+    // The note the head-only cap threw away.
+    expect(warning).toContain("native devtools went away");
+  });
+
+  // Two boundary cases the "wall of text" fixture cannot reach.
+  it("quotes a reason at or under the cap verbatim", async () => {
+    serveTree(iosRunnerTree([iosLabel("Proceed")]));
+    await startRecording("short");
+
+    const result = await recordWait("short", {
+      condition: "visible",
+      selector: { text: "Continue" },
+    });
+
+    // Well under 200 chars, so nothing may be elided and nothing appended.
+    expect(echoedReasonOf(warningOf(result, "short") ?? "")).toBe(
+      'no element matched selector text="Continue"'
+    );
+  });
+
+  it("does not truncate the reason when the runner's tree cannot be read", async () => {
+    // An environment error carries no screen content, and its TAIL is the
+    // recovery instruction — the case where a cap costs the reader the fix.
+    const advice =
+      "native devtools is unavailable on this device — the app was not launched through " +
+      "argent, so the injected helper never attached; relaunch it with `launch-app` (or " +
+      "`restart-app`) and re-record the step, or use screenshot to inspect visible Home/Settings";
+    expect(advice.length).toBeGreaterThan(200);
+    fetchRunnerTree = async () => {
+      throw new Error(advice);
+    };
+    await startRecording("blindlong");
+
+    const result = await recordWait("blindlong", {
+      condition: "visible",
+      selector: { text: "Continue" },
+    });
+    const warning = warningOf(result, "blindlong") ?? "";
+
+    expect(warning).toContain("could not be re-verified against the tree the RUNNER reads");
+    expect(warning).toContain(advice);
+    expect(warning).not.toContain("more chars)");
   });
 
   // ── Cancellation ─────────────────────────────────────────────────────────
