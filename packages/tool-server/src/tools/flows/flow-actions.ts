@@ -1223,9 +1223,14 @@ function compatibilityMissNote(
     // step whose locator missed.
     const wanted = selector.text;
     if (tree === undefined || wanted === undefined || wanted === "") return "";
+    // Label and value ONLY — deliberately not the hoisted `subtreeText`. A
+    // selector's `text` is compared against a node's own label/value (see
+    // matchNodeWithRegex), so suggesting a multi-child hoisted string sends the
+    // author to a selector that still matches nothing. The advice has to be
+    // text the locator can actually read.
     const walk = (node: DescribeNode): void => {
       if (hit !== undefined) return;
-      for (const candidate of [node.label, node.value, node.subtreeText]) {
+      for (const candidate of [node.label, node.value]) {
         if (candidate && compatibilityVariantOf(candidate, wanted)) {
           hit = candidate;
           return;

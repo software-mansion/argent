@@ -727,4 +727,80 @@ describe("compatibility miss note: what it is scoped to", () => {
     expect(result.steps[0].reason).toMatch(/typographic variant/);
     expect(result.steps[0].reason).toMatch(/Add more languages…/);
   });
+
+  it("never suggests hoisted subtree text, which no `text` selector can match", async () => {
+    // The card's hoisted string is a compat variant of the needle; no single
+    // node's label is. A selector's `text` is compared against label/value
+    // only, so quoting the hoisted string sent the author to a rewritten
+    // selector that still matched nothing. Silence beats advice that cannot
+    // work.
+    currentFetch = () => ({
+      tree: screen([
+        n({
+          identifier: "card",
+          subtreeText: "Add more languages… now",
+          frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.2 },
+          children: [
+            n({
+              label: "Add more languages…",
+              frame: { x: 0.1, y: 0.1, width: 0.4, height: 0.05 },
+            }),
+            n({ label: "now", frame: { x: 0.5, y: 0.1, width: 0.2, height: 0.05 } }),
+          ],
+        }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("subtree-suggestion", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "assert",
+          condition: "visible",
+          selector: { text: "Add more languages... now" },
+        },
+      ],
+    });
+
+    const result = await run("subtree-suggestion");
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).not.toMatch(/Add more languages… now/);
+  });
+
+  it("still suggests a LEAF label on the same tree shape", async () => {
+    // The other half: the hoisted string is not what makes the note useful,
+    // the leaf's own label is — and that one a `text` selector can match.
+    currentFetch = () => ({
+      tree: screen([
+        n({
+          identifier: "card",
+          subtreeText: "Add more languages… now",
+          frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.2 },
+          children: [
+            n({
+              label: "Add more languages…",
+              frame: { x: 0.1, y: 0.1, width: 0.4, height: 0.05 },
+            }),
+            n({ label: "now", frame: { x: 0.5, y: 0.1, width: 0.2, height: 0.05 } }),
+          ],
+        }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("leaf-suggestion", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "assert", condition: "visible", selector: { text: "Add more languages..." } },
+      ],
+    });
+
+    const result = await run("leaf-suggestion");
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/typographic variant/);
+    expect(result.steps[0].reason).toMatch(/does show "Add more languages…"/);
+  });
 });
