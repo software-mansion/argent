@@ -167,6 +167,18 @@ describe("stop-simulator-server", () => {
     expect(registry.disposeService).toHaveBeenCalledWith("ChromiumCdp:chromium-cdp-9222");
   });
 
+  it("names the device and the error code in failedMsg", () => {
+    // The one formatter with no coverage — flattening it to a constant left the
+    // suite green, and it is the line an agent reads when a teardown fails.
+    const tool = createStopSimulatorServerTool(createMockRegistry(new Map()));
+    expect(
+      tool.interaction!.failedMsg!({
+        params: { udid: "AAAA-BBBB" },
+        failureSignal: { error_code: "REGISTRY_TOOL_EXECUTION_FAILED" },
+      } as never)
+    ).toBe("Failed to stop simulator server for AAAA-BBBB: REGISTRY_TOOL_EXECUTION_FAILED");
+  });
+
   // Both stop tools resolve "which services does this device own" through the
   // one shared matcher in device-services.ts, so a given udid — whatever its
   // case — reaches the same services through either. Case-insensitivity is the
@@ -763,6 +775,25 @@ describe("stop-all-simulator-servers unmatched ids", () => {
   // an empty string would all read as success while the services they were
   // meant to reap (on tvOS, two spawned --timeout 3600 daemons) stayed running.
   // `unmatched` names them, so scoping cannot fail silently.
+
+  it("owns no device from a port-keyed URN missing its device half", async () => {
+    // `<ns>:<port>` with nothing after the port is malformed — the device
+    // portion is what follows the FIRST colon, and there is none. Reading the
+    // tail as the device id instead would let the literal Metro port `8081`
+    // claim it, so a `devices: ["8081"]` typo would silently reap a debugger
+    // session and report a clean scope.
+    const services = new Map([
+      ["JsRuntimeDebugger:8081", { state: ServiceState.RUNNING, dependents: [] }],
+    ]);
+    const registry = createMockRegistry(services);
+    const tool = createStopAllSimulatorServersTool(registry);
+
+    expect(await tool.execute!({}, { devices: ["8081"] })).toEqual({
+      stopped: [],
+      unmatched: ["8081"],
+    });
+    expect(registry.disposeService).not.toHaveBeenCalled();
+  });
 
   it("names an unknown id in unmatched while still stopping the live device", async () => {
     const services = new Map([
@@ -1460,6 +1491,18 @@ describe("stop-all-simulator-servers interaction messages", () => {
         },
       })
     ).toBe("Stopped 0 simulator servers (2 debugger sessions left running)");
+  });
+
+  it("failedMsg names the error code", () => {
+    // The one formatter of the three with no coverage — flattening it to a
+    // constant left the suite green.
+    const failedMsg = tool().interaction!.failedMsg!;
+    expect(
+      failedMsg({
+        params: {},
+        failureSignal: { error_code: "REGISTRY_TOOL_EXECUTION_FAILED" },
+      } as never)
+    ).toBe("Failed to stop simulator servers: REGISTRY_TOOL_EXECUTION_FAILED");
   });
 
   it("completedMsg reports both clauses when a call hits both", () => {

@@ -428,6 +428,9 @@ describe("two recording keys that resolve to one file", () => {
 
     const err = await captureFailure(addEcho(realRoot, "checkout", "c2"));
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_NO_ACTIVE_RECORDING);
+    // Its own stage, so telemetry can tell an aliased key from a key that was
+    // never started — the two share an error code and want different fixes.
+    expect(getFailureSignal(err)?.failure_stage).toBe("flow_recording_key_aliased");
     const message = formatErrorForAgent(err);
     expect(message).toContain("re-address it exactly as you passed it to flow-start-recording");
     expect(message).toContain("the take is intact and still recording");

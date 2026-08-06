@@ -1863,6 +1863,43 @@ describe("writeFlowFile failure hints", () => {
     expect(message).not.toMatch(/is a symlink/);
   });
 
+  it("blames the name length, not the directory, on ENAMETOOLONG", async () => {
+    // The arm the hint was split for: an over-long flow name comes out of
+    // `rename` (the scratch name is short), and reporting it as a
+    // directory-permissions problem sent the reader looking for one that is not
+    // there.
+    const flowsDir = path.join(root, ".argent", "flows");
+    await fs.mkdir(flowsDir, { recursive: true });
+
+    const err = await writeNewFlowFile(
+      path.join(flowsDir, `${"n".repeat(400)}.yaml`),
+      "steps: []\n"
+    ).catch((e: unknown) => e);
+
+    const message = (err as Error).message;
+    expect(message).toContain("(ENAMETOOLONG)");
+    expect(message).toContain("use a shorter name");
+    expect(message).not.toContain("must be writable");
+  });
+
+  it("names the missing VAULT directory when the link points into one", async () => {
+    // ENOENT out of the scratch write, in the directory the swap actually uses.
+    // Naming `.argent/flows` here would point at a directory that exists.
+    const flowsDir = path.join(root, ".argent", "flows");
+    await fs.mkdir(flowsDir, { recursive: true });
+    const absentVault = path.join(root, "no-such-vault");
+    await fs.symlink(path.join(absentVault, "shared.yaml"), path.join(flowsDir, "shared.yaml"));
+
+    const err = await writeNewFlowFile(path.join(flowsDir, "shared.yaml"), "steps: []\n").catch(
+      (e: unknown) => e
+    );
+
+    const message = (err as Error).message;
+    expect(message).toContain("(ENOENT)");
+    expect(message).toContain(`${absentVault} does not exist`);
+    expect(message).toContain("shared.yaml is a symlink");
+  });
+
   it("still points at the vault when the flow file really is a symlink", async () => {
     // The case the clause exists for: naming `.argent/flows` here would send the
     // reader to a directory that is already writable while the vault, the only
@@ -1952,5 +1989,71 @@ describe("flow file permissions across an atomic append", () => {
     const file = path.join(root, "fresh.yaml");
     await writeNewFlowFile(file, "steps: []\n");
     expect(await fs.readFile(file, "utf8")).toBe("steps: []\n");
+  });
+});
+
+describe("mkdirFailureHint arms", () => {
+  // The flows-directory half of writeNewFlowFile's classification. Only its
+  // wrapping was covered; each errno arm names a different cause, and the
+  // ENOTDIR one — a `project_root` that names a FILE — is the mistake the hint
+  // exists for.
+  let root: string;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "flow-mkdir-hint-"));
+  });
+
+  afterEach(async () => {
+    await fs.chmod(root, 0o755).catch(() => {});
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("blames a project_root that names a file, not a directory", async () => {
+    const asFile = path.join(root, "notadir");
+    await fs.writeFile(asFile, "", "utf8");
+    const flows = path.join(asFile, ".argent", "flows");
+
+    const err = await writeNewFlowFile(path.join(flows, "x.yaml"), "steps: []\n").catch(
+      (e: unknown) => e
+    );
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_FILE_WRITE_FAILED);
+    expect(getFailureSignal(err)?.failure_stage).toBe("flow_dir_create");
+    expect((err as Error).message).toContain("(ENOTDIR)");
+    expect((err as Error).message).toContain(
+      "check that project_root names a directory rather than a file"
+    );
+  });
+
+  it("blames the nearest existing parent when it is not writable", async () => {
+    await fs.chmod(root, 0o555);
+    if (
+      await fs.access(root, fsConstants.W_OK).then(
+        () => true,
+        () => false
+      )
+    )
+      return;
+    const flows = path.join(root, ".argent", "flows");
+
+    const err = await writeNewFlowFile(path.join(flows, "x.yaml"), "steps: []\n").catch(
+      (e: unknown) => e
+    );
+
+    expect((err as Error).message).toMatch(/\((EACCES|EPERM)\)/);
+    expect((err as Error).message).toContain("nearest existing parent");
+  });
+
+  it("blames the name length when the path is too long for the filesystem", async () => {
+    // ENAMETOOLONG out of mkdir -p, which must not read as a permissions
+    // problem the user would then go and not find.
+    const tooLong = path.join(root, "d".repeat(512), ".argent", "flows");
+
+    const err = await writeNewFlowFile(path.join(tooLong, "x.yaml"), "steps: []\n").catch(
+      (e: unknown) => e
+    );
+
+    expect((err as Error).message).toContain("(ENAMETOOLONG)");
+    expect((err as Error).message).toContain("longer than this filesystem allows");
   });
 });
