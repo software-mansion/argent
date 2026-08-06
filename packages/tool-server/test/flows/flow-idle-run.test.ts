@@ -167,7 +167,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 600, minStableMs: 300 }
+  - await: { idle: true, timeout: 900, minStableMs: 300 }
 `
     );
     const r = await run("ready");
@@ -190,7 +190,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 600, minStableMs: 300 }
+  - await: { idle: true, timeout: 900, minStableMs: 300 }
   - echo: reached
 `
     );
@@ -359,6 +359,28 @@ steps:
     expect(step.reason).not.toContain("never held still");
   });
 
+  // A settle is three reads spanning two intervals. A step that got fewer has
+  // no evidence either way, and both of the verdicts it used to reach for —
+  // "the screen never stopped moving", "no screenshot could be read" — are
+  // claims about an app nobody observed for long enough to make one.
+  it("says it ran out of looks rather than judging a screen it barely read", async () => {
+    treeDelayMs = 700; // two of these do not fit in the wait
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, timeout: 1200 }
+`
+    );
+    const step = (await run("ready")).steps.at(-1)!;
+    expect(step.status).toBe("pass");
+    expect(step.warning).toContain("read 1 time in 1200ms");
+    expect(step.warning).toContain("`timeout:`");
+    // The screen was static the whole time; it must not be described as moving.
+    expect(step.warning).not.toContain("never held still");
+    expect(step.warning).not.toContain("no pair of screenshots");
+  });
+
   it("settles on the tree alone when no screenshot can be captured, and says so", async () => {
     currentFrame = () => undefined;
     await writeFlow(
@@ -479,7 +501,9 @@ steps:
   it("still warns, rather than erroring, when a slow tree source keeps changing", async () => {
     // 300ms per read against a 200ms tail budget: the LAST read runs out of
     // step budget, which is the step ending, not the source failing. Earlier
-    // reads landed and saw a moving screen, so the verdict is theirs.
+    // reads landed and saw a moving screen, so the verdict is theirs — and the
+    // budget the last read was given is what separates this from a source that
+    // wedged (see the case above).
     treeDelayMs = 300;
     let tick = 0;
     currentTree = () => screenWith(`frame ${tick++}`);
@@ -487,7 +511,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 1200, minStableMs: 0 }
+  - await: { idle: true, timeout: 2000, minStableMs: 0 }
 `
     );
     const r = await run("ready");
@@ -495,21 +519,24 @@ steps:
     expect(r.steps.at(-1)!.warning).toContain("never held still");
   });
 
-  // M1: the final round used to begin with no budget left, so its capture was
-  // skipped — and that skip was recorded as "this device cannot be
-  // screenshotted", warning about a capture path that had worked every round.
-  it("does not blame the capture when only the step's budget ran out", async () => {
+  // A step whose budget is spent mid-settle must not invent a verdict out of
+  // what it did not manage to observe. It has three ways to do that — blaming
+  // the capture, blaming motion, or claiming a settle — so this pins the
+  // outcome exactly rather than ruling one wording out.
+  it("reaches a real settle rather than a verdict about the budget that ran out", async () => {
     await writeFlow(
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 1000, minStableMs: 900 }
+  - await: { idle: true, timeout: 1600, minStableMs: 900 }
 `
     );
     const r = await run("ready");
     const step = r.steps.at(-1)!;
-    // Whatever the verdict, it must not claim the screen could not be captured.
-    expect(step.warning ?? "").not.toContain("no screenshot");
+    // A still screen and a working capture path: the only honest outcome is a
+    // clean settle, reached before the hold could exhaust the wait.
+    expect(step.status).toBe("pass");
+    expect(step.warning).toBeUndefined();
   });
 
   it("distinguishes a screen that never rendered from one that never settled", async () => {
@@ -518,7 +545,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 500 }
+  - await: { idle: true, timeout: 900 }
 `
     );
     const r = await run("ready");

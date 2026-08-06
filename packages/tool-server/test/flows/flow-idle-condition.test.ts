@@ -53,26 +53,37 @@ describe("await { idle }", () => {
     );
   });
 
-  // A hold that cannot fit inside the wait is a gate that fails on every run —
-  // and fails blaming the app, which is the one thing it is not evidence
-  // about. Caught at parse, deviceless, rather than against a live screen.
-  it("rejects a hold that could never fit inside the timeout", () => {
+  // A wait that cannot contain the settle it asks for is a gate that fails on
+  // every run — and fails blaming the app, which is the one thing it is not
+  // evidence about. Caught at parse, deviceless, rather than against a live
+  // screen. The settle costs 600ms before any hold is counted: three reads
+  // spanning two 200ms polls, plus the budget the closing round has to start
+  // with.
+  it("rejects a wait that could never contain the settle it asks for", () => {
     expect(() =>
       parseSteps(`  - await: { idle: true, timeout: 500, minStableMs: 1000 }\n`)
-    ).toThrow(
-      /idle.minStableMs needs an integer between 0 and 499 .* fit inside the 500ms timeout/
+    ).toThrow(/idle needs a timeout of at least 1600ms to hold still for 1000ms/);
+    // With no explicit hold the DEFAULT is what has to fit — the spelling that
+    // slipped through, since leaving `minStableMs` out was the way past the
+    // check that only looked at a written-out one.
+    expect(() => parseSteps(`  - await: { idle: true, timeout: 100 }\n`)).toThrow(
+      /idle needs a timeout of at least 850ms to hold still for the default 250ms/
     );
-    // With no explicit timeout the default is what it has to fit inside, and
-    // the message says which number it is measuring against.
+    // Which is the same step as writing the default out, so it is rejected the
+    // same way.
+    expect(() => parseSteps(`  - await: { idle: true, timeout: 100, minStableMs: 250 }\n`)).toThrow(
+      /idle needs a timeout of at least 850ms/
+    );
+    // With no explicit timeout the default is what the hold has to fit inside.
     expect(() => parseSteps(`  - await: { idle: true, minStableMs: 9000 }\n`)).toThrow(
-      /fit inside the default 7500ms timeout/
+      /idle needs a timeout of at least 9600ms/
     );
     // The boundary itself is legal on both sides.
-    expect(parseSteps(`  - await: { idle: true, timeout: 500, minStableMs: 499 }\n`)).toEqual([
-      { kind: "idle", timeout: 500, minStableMs: 499 },
+    expect(parseSteps(`  - await: { idle: true, timeout: 900, minStableMs: 300 }\n`)).toEqual([
+      { kind: "idle", timeout: 900, minStableMs: 300 },
     ]);
-    expect(() => parseSteps(`  - await: { idle: true, timeout: 500, minStableMs: 500 }\n`)).toThrow(
-      /idle.minStableMs/
+    expect(() => parseSteps(`  - await: { idle: true, timeout: 899, minStableMs: 300 }\n`)).toThrow(
+      /idle needs a timeout of at least 900ms/
     );
   });
 
