@@ -19,6 +19,7 @@ import {
   getFlowPath,
   appIdForPlatform,
   chromiumLaunchSpec,
+  writeNewFlowFile,
   type FlowFile,
 } from "../../src/tools/flows/flow-utils";
 
@@ -1773,5 +1774,74 @@ describe("countStepsOnDisk", () => {
     const asDir = path.join(dir, "flow-dir.yaml");
     await fs.mkdir(asDir);
     expect(await countStepsOnDisk(asDir)).toBeUndefined();
+  });
+});
+
+describe("writeFlowFile failure hints", () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "flow-write-hint-"));
+  });
+
+  afterEach(async () => {
+    // Restore write permission first, or the recursive rm cannot descend.
+    for (const dir of [path.join(root, "vault"), path.join(root, ".argent", "flows")]) {
+      await fs.chmod(dir, 0o755).catch(() => {});
+    }
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  /** Whether this process can be denied by mode bits at all (root cannot). */
+  async function modeBitsBite(dir: string): Promise<boolean> {
+    await fs.chmod(dir, 0o555);
+    const probe = path.join(dir, ".probe");
+    const denied = await fs
+      .writeFile(probe, "x", "utf8")
+      .then(() => false)
+      .catch(() => true);
+    if (!denied) await fs.rm(probe, { force: true });
+    return denied;
+  }
+
+  it("does not call the flow file a symlink when only an ANCESTOR is one", async () => {
+    // On macOS the temp dir is reached through /var -> /private/var, so the
+    // resolved swap directory differs from the spelled one for a flow file that
+    // is a perfectly ordinary regular file. Comparing the two spellings made
+    // every such failure claim a symlink and then contrast one directory with
+    // itself.
+    const flowsDir = path.join(root, ".argent", "flows");
+    await fs.mkdir(flowsDir, { recursive: true });
+    if (!(await modeBitsBite(flowsDir))) return;
+
+    const err = await writeNewFlowFile(path.join(flowsDir, "x.yaml"), "steps: []\n").catch(
+      (e: unknown) => e
+    );
+
+    const message = (err as Error).message;
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_FILE_WRITE_FAILED);
+    expect(message).toContain("must be writable");
+    expect(message).not.toMatch(/is a symlink/);
+  });
+
+  it("still points at the vault when the flow file really is a symlink", async () => {
+    // The case the clause exists for: naming `.argent/flows` here would send the
+    // reader to a directory that is already writable while the vault, the only
+    // unwritable thing in the picture, went unmentioned.
+    const flowsDir = path.join(root, ".argent", "flows");
+    const vault = path.join(root, "vault");
+    await fs.mkdir(flowsDir, { recursive: true });
+    await fs.mkdir(vault, { recursive: true });
+    await fs.writeFile(path.join(vault, "shared.yaml"), "steps: []\n", "utf8");
+    await fs.symlink(path.join(vault, "shared.yaml"), path.join(flowsDir, "shared.yaml"));
+    if (!(await modeBitsBite(vault))) return;
+
+    const err = await writeNewFlowFile(path.join(flowsDir, "shared.yaml"), "steps: []\n").catch(
+      (e: unknown) => e
+    );
+
+    const message = (err as Error).message;
+    expect(message).toContain("shared.yaml is a symlink, so the write lands in");
+    expect(message).toContain(await fs.realpath(vault));
   });
 });

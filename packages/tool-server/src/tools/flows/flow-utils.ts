@@ -2509,7 +2509,12 @@ let flowWriteSeq = 0;
  * (`ENAMETOOLONG` out of `rename`) into a report of a directory-permissions
  * problem the user would then go and not find.
  */
-function writeFailureHint(code: string | undefined, filePath: string, target: string): string {
+function writeFailureHint(
+  code: string | undefined,
+  filePath: string,
+  target: string,
+  resolvedDir: string
+): string {
   // The directory the swap actually uses — `dirname(realpath(filePath))`, not
   // `dirname(filePath)`. For a flow file that is a symlink into a shared vault
   // those are different directories, and only the first one can be the cause:
@@ -2517,11 +2522,17 @@ function writeFailureHint(code: string | undefined, filePath: string, target: st
   // writable while the vault, the only unwritable thing in the picture, went
   // unmentioned. Say so when they differ, since "your flows dir is fine, the
   // link target is not" is the whole diagnosis there.
+  //
+  // Compared against the RESOLVED flows dir, not the spelled one. Every
+  // symlinked ANCESTOR moves the target too — which on macOS is every `/tmp`
+  // and `/var/folders` path — so comparing against the spelling accused a flow
+  // file that is a perfectly ordinary regular file of being a symlink, and
+  // contrasted two names for one directory.
   const dir = path.dirname(target);
   const via =
-    dir === path.dirname(filePath)
+    dir === resolvedDir
       ? ""
-      : ` (${path.basename(filePath)} is a symlink, so the write lands in ${dir}, not in ${path.dirname(filePath)})`;
+      : ` (${path.basename(filePath)} is a symlink, so the write lands in ${dir}, not in ${resolvedDir})`;
   switch (code) {
     case "EACCES":
     case "EPERM":
@@ -2577,12 +2588,22 @@ function scrubTempPath(err: unknown, tmpPath: string, filePath: string): Error {
  *
  * Shared with {@link resolveFlowKey}, so the identity a recording is keyed by
  * and the file its steps land in can never disagree.
+ *
+ * `dir` — the flows directory as the filesystem sees it — is returned alongside,
+ * because it is the only thing a caller can compare `target`'s directory against
+ * to tell "the flow FILE is a symlink" from "some ancestor of it is". Comparing
+ * against the spelled `path.dirname(filePath)` cannot: on macOS every `/tmp` and
+ * `/var/folders` path has a symlinked ancestor.
  */
-async function canonicalFlowPath(filePath: string): Promise<string> {
+async function canonicalFlowTarget(filePath: string): Promise<{ dir: string; target: string }> {
   const dir = await fs.realpath(path.dirname(filePath)).catch(() => path.dirname(filePath));
   const real = await fs.realpath(filePath).catch(() => null);
-  if (real !== null) return real;
-  return followDanglingLink(path.join(dir, path.basename(filePath)));
+  if (real !== null) return { dir, target: real };
+  return { dir, target: await followDanglingLink(path.join(dir, path.basename(filePath))) };
+}
+
+async function canonicalFlowPath(filePath: string): Promise<string> {
+  return (await canonicalFlowTarget(filePath)).target;
 }
 
 /**
@@ -2667,7 +2688,7 @@ async function followDanglingLink(linkPath: string): Promise<string> {
  * it does not survive an append.
  */
 async function writeFlowFile(filePath: string, content: string): Promise<void> {
-  const target = await canonicalFlowPath(filePath);
+  const { dir: resolvedDir, target } = await canonicalFlowTarget(filePath);
   const tmpPath = path.join(
     path.dirname(target),
     `.argent-flow-${process.pid}-${++flowWriteSeq}.tmp`
@@ -2695,7 +2716,7 @@ async function writeFlowFile(filePath: string, content: string): Promise<void> {
     const errno = err instanceof Error ? (err as NodeJS.ErrnoException) : undefined;
     const code = typeof errno?.code === "string" ? errno.code : undefined;
     throw new FailureError(
-      `Failed to write flow file ${filePath}${code ? ` (${code})` : ""} — ${writeFailureHint(code, filePath, target)}`,
+      `Failed to write flow file ${filePath}${code ? ` (${code})` : ""} — ${writeFailureHint(code, filePath, target, resolvedDir)}`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_WRITE_FAILED,
         failure_stage: "flow_file_write",
