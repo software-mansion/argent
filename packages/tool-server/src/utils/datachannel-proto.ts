@@ -2,9 +2,9 @@
  * Encoders for the `datachannel.DataChannelCommand` messages simulator-server
  * reads off the MoQ control track.
  *
- * These now live in `@swmansion/argent-cloud-sdk`, alongside the canonical `.proto`
- * and a test that checks the encoder against it, so argent and the radon-cloud
- * webui can no longer drift apart. Re-exported here so the existing import
+ * These now live in `@swmansion/argent-cloud-sdk`, alongside the canonical
+ * `.proto` and a test that checks the encoder against it, so the clients of this
+ * protocol can no longer drift apart. Re-exported here so the existing import
  * sites keep working.
  */
 

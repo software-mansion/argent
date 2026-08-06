@@ -1,10 +1,10 @@
 /**
  * MoQ client used by the remote simulator-server blueprint.
  *
- * The protocol lives in `@swmansion/argent-cloud-sdk`, shared with the radon-cloud
- * webui; this module only supplies the pieces specific to argent — resolving
- * the endpoint through `sim-remote moq-info`, installing the Node WebTransport
- * polyfill, and handing screenshots back as `Buffer`.
+ * The protocol lives in `@swmansion/argent-cloud-sdk`, shared with the other
+ * clients of the same backend; this module only supplies the pieces specific to
+ * argent — resolving the endpoint through `sim-remote moq-info`, installing the
+ * Node WebTransport polyfill, and handing screenshots back as `Buffer`.
  */
 
 import { MoqDeviceSession, connectMoq } from "@swmansion/argent-cloud-sdk";
