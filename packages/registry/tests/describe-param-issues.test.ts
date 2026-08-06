@@ -132,4 +132,48 @@ describe("describeParamIssues", () => {
     expect(msg).toContain("`toString` is required (string) and was not provided");
     expect(msg).not.toContain("received function");
   });
+
+  it("enumerates a UNION's branches instead of Zod's bare 'Invalid input'", () => {
+    // A union's own message carries nothing — the alternatives live in a nested
+    // per-branch array. `tv-remote`'s `button` is this exact shape, and it is
+    // the parameter a caller most often gets wrong, so losing the 16-value
+    // enumeration would make this message worse than the JSON it replaced.
+    const schema = z.object({
+      button: z.union([
+        z.enum(["up", "down", "select"]),
+        z.array(z.enum(["up", "down", "select"])),
+      ]),
+    });
+    const value = { button: "OK" };
+    const msg = describeParamIssues(issuesOf(schema, value), value);
+    expect(msg).toContain("`button`");
+    expect(msg).toContain('expected one of "up"|"down"|"select"');
+    expect(msg).toContain("expected array");
+    expect(msg).not.toBe("`button`: Invalid input. You sent: `button`.");
+    expect(msg).not.toContain('"code"');
+  });
+
+  it("path-qualifies a union branch's own nested issue", () => {
+    const schema = z.object({
+      target: z.union([z.string(), z.object({ id: z.string() })]),
+    });
+    const value = { target: { id: 7 } };
+    const msg = describeParamIssues(issuesOf(schema, value), value);
+    expect(msg).toContain("target.id:");
+    expect(msg).toContain("expected string");
+  });
+
+  it("says a union branch's reason once when two branches fail identically", () => {
+    const schema = z.object({ mode: z.union([z.enum(["a"]), z.enum(["a"])]) });
+    const value = { mode: "z" };
+    const msg = describeParamIssues(issuesOf(schema, value), value);
+    expect(msg.match(/expected "a"/g)?.length).toBe(1);
+  });
+
+  it("still reports an OMITTED union field as missing, not as a branch list", () => {
+    const schema = z.object({ button: z.union([z.enum(["up"]), z.array(z.enum(["up"]))]) });
+    const msg = describeParamIssues(issuesOf(schema, {}), {});
+    expect(msg).toContain("`button` is required");
+    expect(msg).not.toContain("; or ");
+  });
 });

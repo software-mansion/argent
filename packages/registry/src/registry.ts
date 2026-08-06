@@ -538,6 +538,30 @@ export function describeParamIssues(
       const at = issue.path.length > 0 ? `${issue.path.join(".")}.` : "";
       return `unknown parameter${keys.length === 1 ? "" : "s"} ${keys.map((k) => `\`${at}${k}\``).join(", ")}`;
     }
+    // A union's own message is the bare "Invalid input" — everything the caller
+    // needs sits in the per-branch issue arrays underneath, which the fallback
+    // never reads. That loses the most actionable text a schema produces: the
+    // parameter a caller most often gets wrong IS the union one (`tv-remote`'s
+    // `button` enumerates 16 legal values, `view-network-logs`' `pageIndex` a
+    // number or "latest"), and dropping the enumeration makes the new message
+    // strictly worse than the raw JSON it replaced. Render every branch's
+    // reason instead, so the alternatives are back on screen.
+    if (issue.code === "invalid_union") {
+      const branches = (issue as { errors?: readonly (readonly ZodIssue[])[] }).errors ?? [];
+      const alternatives: string[] = [];
+      for (const branch of branches) {
+        for (const inner of branch) {
+          // Inner paths are relative to the union's own path, so qualify them
+          // rather than print a bare tail that reads as a top-level key.
+          const innerAt = inner.path.length > 0 ? `${at}.${inner.path.join(".")}: ` : "";
+          const text = `${innerAt}${inner.message}`;
+          // Two branches can fail identically (a union of enums over the same
+          // values); saying it twice is noise, not a second alternative.
+          if (!alternatives.includes(text)) alternatives.push(text);
+        }
+      }
+      if (alternatives.length > 0) return `\`${at}\`: ${alternatives.join("; or ")}`;
+    }
     return `\`${at}\`: ${issue.message}`;
   });
   const sent =
