@@ -89,11 +89,16 @@ const zodSchema = z
       .describe(
         'Name of a saved flow to run from `.argent/flows` (e.g. "settings-explore"). Omit when flow_path is set; otherwise required, via `name` or its `flow_name` alias. Optional in the schema only so the alias is accepted.'
       ),
-    flow_name: z.string().optional().describe("Alias for `name`."),
+    flow_name: z
+      .string()
+      .optional()
+      .describe(
+        "Alias for `name` — same meaning, same `.argent/flows/<value>.yaml` resolution. If both are sent, `name` wins (the file-input specs are ordered to match), so send only one."
+      ),
     project_root: z
       .string()
       .describe(
-        "Absolute path to the calling agent's project root — the cwd it is working in. With name, the saved flow is read from `.argent/flows/<name>.yaml` under this root; with flow_path, the flow, its run: siblings, and baselines all resolve beside the YAML instead, so pass the agent's cwd."
+        "Absolute path to the calling agent's project root — the cwd it is working in. With name (or its flow_name alias), the saved flow is read from `.argent/flows/<name>.yaml` under this root; with flow_path, the flow, its run: siblings, and baselines all resolve beside the YAML instead, so pass the agent's cwd."
       ),
     flow_file: z
       .string()
@@ -985,6 +990,9 @@ export function createRunFlowTool(
         `Failed to run flow ${displayFlowName(params)}: ${failureSignal.error_code}`,
     },
     description: `Run a saved flow from the .argent/flows/ directory, or an explicit boundary-managed flow_path.
+Name exactly ONE source: the flow's name in \`name\` (\`flow_name\` is accepted as an alias; \`name\` wins if
+both are sent), which resolves <project_root>/.argent/flows/<name>.yaml — or \`flow_path\`. Both, or
+neither, is refused.
 Steps run in order: \`launch\` starts an app from scratch (terminate + relaunch) and waits until it is
 ready; \`tool\` calls dispatch through the registry; \`tap\`/\`long-press\`/\`type\` resolve a selector to an
 element and act on it (\`tap: { on, times: 2 }\` double-taps; \`long-press: { on, duration }\` presses and

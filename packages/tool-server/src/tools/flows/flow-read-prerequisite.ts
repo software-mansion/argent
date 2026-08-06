@@ -13,11 +13,16 @@ const zodSchema = z
       .describe(
         'Name of a saved flow to inspect from `.argent/flows` (e.g. "settings-explore"). Omit when flow_path is set; otherwise required, via `name` or its `flow_name` alias. Optional in the schema only so the alias is accepted.'
       ),
-    flow_name: z.string().optional().describe("Alias for `name`."),
+    flow_name: z
+      .string()
+      .optional()
+      .describe(
+        "Alias for `name` — same meaning, same `.argent/flows/<value>.yaml` resolution. If both are sent, `name` wins (the file-input specs are ordered to match), so send only one."
+      ),
     project_root: z
       .string()
       .describe(
-        "Absolute path to the calling agent's project root — the cwd it is working in. With name, the saved flow is read from `.argent/flows/<name>.yaml` under this root; with flow_path, the prerequisite is read from that YAML instead, so pass the agent's cwd."
+        "Absolute path to the calling agent's project root — the cwd it is working in. With name (or its flow_name alias), the saved flow is read from `.argent/flows/<name>.yaml` under this root; with flow_path, the prerequisite is read from that YAML instead, so pass the agent's cwd."
       ),
     flow_file: z
       .string()
@@ -116,8 +121,10 @@ export const flowReadPrerequisiteTool: ToolDefinition<
   description: `Read the execution prerequisite of a flow without running it — a saved flow from the .argent/flows/ directory, or an explicit boundary-managed flow_path.
 Returns the prerequisite description so you can verify the required state is met before calling flow-execute.
 Use when you need to check what app/simulator state is required before executing a flow; pass the same flow
-source (name or flow_path) you will pass to flow-execute, so the prerequisite you read is the contract of
-the flow that will actually run.
+source you will pass to flow-execute, so the prerequisite you read is the contract of the flow that will
+actually run. Name exactly ONE: the flow's name in \`name\` (\`flow_name\` is accepted as an alias; \`name\`
+wins if both are sent), which resolves <project_root>/.argent/flows/<name>.yaml — or \`flow_path\`. Both,
+or neither, is refused.
 Fails if the flow file does not exist.`,
   zodSchema,
   inputSchema,
