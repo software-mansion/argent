@@ -137,8 +137,14 @@ export interface FileInputSpec {
    * erase the caller's mistake and silently run the other source). Unwrapping
    * hands zod both params as plain strings. Clients ignore this field: they
    * still wrap `target` whenever it is set, which is the wire this handles.
+   *
+   * A LIST when the alternate source has more than one accepted spelling (e.g.
+   * flow-execute's `name` and its `flow_name` alias): any one of them being set
+   * is a dual-source call, so any one of them must suppress the resolution.
+   * Naming only the canonical spelling would send the alias down the resolve
+   * path and diagnose it by whether an unused file happens to exist.
    */
-  unwrapWhenSet?: string;
+  unwrapWhenSet?: string | string[];
 }
 
 /** Per-target resolution outcome, passed to the tool via `ctx.fileInputs`. */

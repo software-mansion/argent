@@ -219,7 +219,12 @@ const fileInputs: FileInputSpec[] = [
     path: "${flow_path}",
     kind: "file",
     optional: true,
-    unwrapWhenSet: "name",
+    // Both spellings, because both name a flow: an alias-only caller who also
+    // sent a flow_path made the same dual-source mistake, and naming only
+    // `name` would have the boundary resolve their flow_path and answer with a
+    // 422 about a file the call never needed instead of the 400 that names the
+    // real mistake.
+    unwrapWhenSet: ["name", "flow_name"],
   },
   // Two specs, one target: the client interpolates whichever spelling the
   // caller sent, so the alias survives the file-input boundary. Without the

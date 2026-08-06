@@ -70,7 +70,10 @@ const fileInputs: FileInputSpec[] = [
     path: "${flow_path}",
     kind: "file",
     optional: true,
-    unwrapWhenSet: "name",
+    // Both spellings, matching flow-execute: the alias names a flow too, so a
+    // flow_name + flow_path call must reach zod's exactly-one rule rather than
+    // a 422 about the flow_path file.
+    unwrapWhenSet: ["name", "flow_name"],
   },
   // Two specs, one target — the alias survives the file-input boundary the same
   // way flow-execute's does (the `name` spec is LAST so it wins the client's
