@@ -32,6 +32,7 @@ function makeApi(wallClockStartMs: number | null): NativeProfilerSessionApi {
     // null exporter paths → checkExportFileMissing short-circuits (no fs access);
     // the freshness note still renders in the all-clear header regardless.
     exportedFiles: { cpu: null, hangs: null, leaks: null },
+    disposed: false,
     profilingActive: false,
     wallClockStartMs,
     parsedData: null,

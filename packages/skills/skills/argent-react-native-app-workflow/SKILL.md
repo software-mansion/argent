@@ -137,17 +137,17 @@ Once you discover the correct build/run workflow for a project, **save it to pro
 
 ### 3.5 Device Control
 
-| Action                     | Tool / Command                                                         |
-| -------------------------- | ---------------------------------------------------------------------- |
-| List devices               | `list-devices` tool (iOS + Android)                                    |
-| Boot an iOS simulator      | `boot-device` tool with `udid`                                         |
-| Boot an Android emulator   | `boot-device` tool with `avdName`                                      |
-| Launch an app              | `launch-app` tool (pass device id + bundle id / package name)          |
-| Restart an app             | `restart-app` tool (pass device id + bundle id / package name)         |
-| Open a URL / deep link     | `open-url` tool (pass device id + URL)                                 |
-| Rotate device              | `rotate` tool                                                          |
-| Stop simulator server      | `stop-simulator-server` tool (iOS UDID or Android serial — one device) |
-| Stop all simulator servers | `stop-all-simulator-servers` tool (iOS + Android)                      |
+| Action                     | Tool / Command                                                                                                                                                                                             |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| List devices               | `list-devices` tool (iOS + Android)                                                                                                                                                                        |
+| Boot an iOS simulator      | `boot-device` tool with `udid`                                                                                                                                                                             |
+| Boot an Android emulator   | `boot-device` tool with `avdName`                                                                                                                                                                          |
+| Launch an app              | `launch-app` tool (pass device id + bundle id / package name)                                                                                                                                              |
+| Restart an app             | `restart-app` tool (pass device id + bundle id / package name)                                                                                                                                             |
+| Open a URL / deep link     | `open-url` tool (pass device id + URL)                                                                                                                                                                     |
+| Rotate device              | `rotate` tool                                                                                                                                                                                              |
+| Stop simulator server      | `stop-simulator-server` tool (iOS UDID or Android serial — one device)                                                                                                                                     |
+| Stop all simulator servers | `stop-all-simulator-servers` tool — pass `devices: [...]` to scope the teardown to this session's devices (an unscoped call also tears down other agents' devices; use it only for a machine-wide cleanup) |
 
 For full simulator setup workflow, refer to the `argent-ios-simulator-setup` skill.
 

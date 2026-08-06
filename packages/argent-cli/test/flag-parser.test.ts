@@ -114,15 +114,25 @@ describe("flag-parser array + -json interleave never throws a raw error", () => 
 });
 
 // A tool (like flow-add-step) whose schema declares its own `args` field — a
-// JSON string holding the recorded step's tool arguments.
+// JSON string holding the recorded step's tool arguments. Mirrors the schema the
+// registry advertises for the real tool (zodObjectToJsonSchema over
+// packages/tool-server/src/tools/flows/flow-add-step.ts): recordings are keyed by
+// `name` + `project_root`, so both are required alongside `command`.
+//
+// This fixture is hand-copied: `@argent/cli` does not depend on the tool-server,
+// so it cannot derive the schema. The guard that catches drift lives where the
+// schema does — `flow-tools.test.ts`'s "the flow-add-step schema the CLI tests
+// hand-copy". If that fails, this fixture is what it is telling you to update.
 const flowAddStepSchema: JsonSchema = {
   type: "object",
   properties: {
+    name: { type: "string" },
+    project_root: { type: "string" },
     command: { type: "string" },
     args: { type: "string" },
     delayMs: { type: "integer" },
   },
-  required: ["command"],
+  required: ["name", "project_root", "command"],
 };
 
 // A tool (like gesture-tap) with NO `args` field — here `--args` must stay the
@@ -138,6 +148,43 @@ const gestureTapSchema: JsonSchema = {
 };
 
 describe("parseFlags — schema-aware --args", () => {
+  it("routes the recording identity through the plain scalar path", () => {
+    const result = parseFlags(
+      [
+        "--name",
+        "checkout-e2e",
+        "--project_root",
+        "/Users/dev/My Projects/demo-app",
+        "--command",
+        "gesture-tap",
+        "--args",
+        '{"udid":"X"}',
+      ],
+      flowAddStepSchema
+    );
+    expect(result.args.name).toBe("checkout-e2e");
+    // `project_root` is the only schema field carrying an underscore, so it pins
+    // that flag names reach the payload verbatim — a parser that normalised them
+    // to camel/kebab case would file the value under the wrong key and the server
+    // would reject the step for a missing `project_root`. The value also holds a
+    // space: argv arrives already split, so it must survive whole.
+    expect(result.args.project_root).toBe("/Users/dev/My Projects/demo-app");
+    expect(result.args.command).toBe("gesture-tap");
+    expect(result.args.args).toBe('{"udid":"X"}');
+    expect(result.rawArgs).toBeNull();
+  });
+
+  it("routes the recording identity through the inline --field=<value> form too", () => {
+    const result = parseFlags(
+      ["--name=checkout-e2e", "--project_root=/Users/dev/demo-app", "--command=screenshot"],
+      flowAddStepSchema
+    );
+    expect(result.args.name).toBe("checkout-e2e");
+    expect(result.args.project_root).toBe("/Users/dev/demo-app");
+    expect(result.args.command).toBe("screenshot");
+    expect(result.rawArgs).toBeNull();
+  });
+
   it("treats --args as the tool's own string field (space-separated form)", () => {
     const result = parseFlags(
       ["--command", "gesture-tap", "--args", '{"udid":"X","x":0.5}'],

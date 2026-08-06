@@ -12,6 +12,7 @@ import { SourceMapsRegistry } from "../utils/debugger/source-maps";
 import type { SourceResolver } from "../utils/debugger/source-resolver";
 import { LogFileWriter } from "../utils/debugger/log-file-writer";
 import { consoleTimestampToIso } from "../utils/debugger/console-timestamp";
+import { recordReapedSession } from "../utils/reaped-sessions";
 import {
   type ConsoleLogEntry,
   type ConsoleLogEvents,
@@ -246,6 +247,28 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
         cdp.events.off("consoleAPICalled", onConsoleAPI);
         cdp.events.off("disconnected", onDisconnected);
         await consoleServer.close();
+        // Same breadcrumb the Hermes blueprint leaves, for the same reason:
+        // `logWriter.close()` unlinks the log file, and since
+        // `ChromiumJsRuntimeDebugger` joined `DEVICE_OWNED_NAMESPACES` this
+        // dispose is routinely triggered by another agent's
+        // `stop-all-simulator-servers`. Without it `debugger-log-registry`
+        // reports `totalEntries: 0` with no note — and its description promises
+        // that, absent the note, empty means the app logged nothing. That
+        // promise covers V8 as much as Hermes, so this side has to keep it too.
+        //
+        // One id, unlike Hermes: a chromium device's `logicalDeviceId` IS its
+        // `device.id` (set from it in the api above), so there is no second key
+        // to write.
+        const captured = logWriter.getStats().totalEntries;
+        if (captured > 0) {
+          recordReapedSession(
+            "js-runtime-debugger",
+            device.id,
+            `The ${captured} captured console ${captured === 1 ? "entry" : "entries"} went with ` +
+              `it — the log file is deleted on teardown, so this registry starts empty rather ` +
+              `than the app having logged nothing.`
+          );
+        }
         logWriter.close();
         // Do NOT disconnect the cdp — it belongs to the ChromiumCdp service.
         // Disposing this blueprint must leave the underlying CDP session alive

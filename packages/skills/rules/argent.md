@@ -77,7 +77,10 @@ Decision order:
   Call `screenshot` separately only for a baseline before any action or after a delay.
 - Always open apps with `launch-app` or `open-url` — never tap home screen icons.
 - Always use `run-sequence` when performing multiple sequential device actions where you don't need to observe the screen between steps. More in `argent-device-interact` skill.
-- When the session ends or the user says they are done: call `stop-all-simulator-servers`.
+- When the session ends or the user says they are done: call `stop-all-simulator-servers` with `devices: [...]`
+  naming the devices this session actually used. One tool-server is shared by every other agent using this
+  argent install, so an unscoped call tears down their devices too; reserve that form for a deliberate
+  machine-wide cleanup.
   If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
 - If tools provided by mcp-server are not sufficient and action can be done using `xcrun`, `adb`, or other commands, use the command. Examples: changing device options, performing a device action such as lock, shake, etc.
 - When waiting for an action, do not call `screenshot` repeatedly without a proper wait mechanism. Use the `await-ui-element` tool to block until the UI settles (e.g. wait for an element to become `visible`/`hidden`, or to contain expected `text`) instead of polling.
