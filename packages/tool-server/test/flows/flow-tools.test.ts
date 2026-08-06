@@ -19,6 +19,7 @@ import {
   type FlowPrerequisiteNotice,
 } from "../../src/tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../../src/tools/flows/flow-read-prerequisite";
+import { createRunSequenceTool } from "../../src/tools/run-sequence";
 import {
   __resetRecordingsForTesting,
   flowsDirFor,
@@ -784,6 +785,113 @@ describe("flow-add-step", () => {
     ]);
   });
 
+  it("records a clean run-sequence as an ordinary tool step", async () => {
+    // The positive control for the refusals below. Every one of them asserts
+    // that NOTHING was recorded, so a regression making the failure check
+    // truthy for a passing sequence would break run-sequence recording outright
+    // and leave the suite green.
+    const registry = createMockRegistry({
+      "run-sequence": {
+        result: {
+          completed: 2,
+          total: 2,
+          steps: [
+            { tool: "gesture-tap", result: { tapped: true } },
+            { tool: "keyboard", result: { typed: true } },
+          ],
+        },
+      },
+    });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "sequence-clean", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "sequence-clean",
+        project_root: tmpDir,
+        command: "run-sequence",
+        args: JSON.stringify({
+          udid: "ABC",
+          steps: [
+            { tool: "gesture-tap", args: { x: 0.5, y: 0.3 } },
+            { tool: "keyboard", args: { text: "hi" } },
+          ],
+        }),
+      }
+    );
+
+    expect(result.message).toContain("Step added");
+    expect(result.recorded).toBeDefined();
+    expect(result.stepCount).toBe(1);
+    const steps = parseFlow(await onDisk("sequence-clean")).steps;
+    expect(steps).toHaveLength(1);
+    expect(steps[0]).toMatchObject({ kind: "tool", name: "run-sequence" });
+  });
+
+  it("refuses a REAL run-sequence result, not just a hand-written one", async () => {
+    // Every other case here feeds the recorder a mock of what run-sequence is
+    // believed to return, across a registry boundary that types results as
+    // `unknown` — so drift between RunSequenceResult and the shape the recorder
+    // reads is undetectable by construction. Drive the actual tool once: an
+    // unmet await-ui-element is its most common real failure, and it is the path
+    // that turns a soft "condition not met" return into an `error` entry.
+    const inner = {
+      invokeTool: vi.fn(async (id: string) => {
+        if (id === "gesture-tap") return { tapped: true, timestampMs: 1 };
+        return { success: false, elapsed: 5000, note: "no element matched the selector" };
+      }),
+      getTool: vi.fn(() => ({})),
+    } as unknown as Registry;
+    const runSequence = createRunSequenceTool(inner);
+    const registry = {
+      invokeTool: vi.fn(async (id: string, args: unknown) =>
+        id === "run-sequence"
+          ? runSequence.execute({}, args as never)
+          : Promise.reject(new Error(`Tool "${id}" not found`))
+      ),
+      getTool: vi.fn(() => undefined),
+    } as unknown as Registry;
+
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "sequence-real", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "sequence-real",
+        project_root: tmpDir,
+        command: "run-sequence",
+        args: JSON.stringify({
+          udid: "ABC",
+          steps: [
+            { tool: "gesture-tap", args: { x: 0.5, y: 0.3 }, delayMs: 0 },
+            {
+              tool: "await-ui-element",
+              args: { condition: "visible", selector: { text: "Home" } },
+              delayMs: 0,
+            },
+            { tool: "gesture-tap", args: { x: 0.5, y: 0.4 }, delayMs: 0 },
+          ],
+        }),
+      }
+    );
+
+    expect(result.message).toContain("run-sequence stopped at await-ui-element after 1 of 3 steps");
+    expect(result.message).toContain("await-ui-element condition not met");
+    expect(result.message).toContain("step NOT recorded");
+    expect(result.recorded).toBeUndefined();
+    expect(parseFlow(await onDisk("sequence-real")).steps).toEqual([]);
+    // The third step never ran — the denominator has to show that.
+    expect(inner.invokeTool).toHaveBeenCalledTimes(2);
+  });
+
   it("does not record a run-sequence whose nested step failed", async () => {
     const registry = createMockRegistry({
       "run-sequence": {
@@ -1150,6 +1258,71 @@ describe("flow-add-step", () => {
     expect(result.message).toContain("NOT recorded");
     expect(result.message).toContain("Prior composed steps may already have");
     expect(parseFlow(await onDisk("compose-failed-first")).steps).toEqual([]);
+  });
+
+  it("warns on a failed composed flow whose result carries no step list", async () => {
+    // The unknown/short-shape fallback: `ok: false` with nothing to read a step
+    // list from. Nothing can be proved about the device, so the warning fires —
+    // the branch has to default to warning, not to silence.
+    const registry = createMockRegistry({ "flow-execute": { result: { ok: false } } });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute({}, { name: "compose-shapeless", project_root: tmpDir });
+    await writeSiblingFlow("login", "steps:\n  - echo: hi\n");
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "compose-shapeless",
+        project_root: tmpDir,
+        command: "flow-execute",
+        args: JSON.stringify({ name: "login", project_root: tmpDir, device: "ABC" }),
+      }
+    );
+
+    expect(result.message).toContain("NOT recorded");
+    expect(result.message).toContain("Prior composed steps may already have");
+    expect(parseFlow(await onDisk("compose-shapeless")).steps).toEqual([]);
+  });
+
+  it("stays silent when every composed step was skipped", async () => {
+    // The cancel landed before the first step, so the runner reported all of
+    // them as skips: none was reached and none could have moved the device.
+    const registry = createMockRegistry({
+      "flow-execute": {
+        result: {
+          flow: "login",
+          device: "ABC",
+          executionPrerequisite: "",
+          ok: false,
+          aborted: true,
+          passed: 0,
+          failed: 0,
+          skipped: 2,
+          errored: 0,
+          steps: [
+            { index: 0, kind: "tap", status: "skip", reason: "run aborted" },
+            { index: 1, kind: "tap", status: "skip", reason: "run aborted" },
+          ],
+        },
+      },
+    });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute({}, { name: "compose-all-skipped", project_root: tmpDir });
+    await writeSiblingFlow("login", "steps:\n  - echo: hi\n");
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "compose-all-skipped",
+        project_root: tmpDir,
+        command: "flow-execute",
+        args: JSON.stringify({ name: "login", project_root: tmpDir, device: "ABC" }),
+      }
+    );
+
+    expect(result.message).toContain("NOT recorded");
+    expect(result.message).not.toContain("may already have");
+    expect(parseFlow(await onDisk("compose-all-skipped")).steps).toEqual([]);
   });
 
   it("omits the mutation warning only when no nested step was reached", async () => {
