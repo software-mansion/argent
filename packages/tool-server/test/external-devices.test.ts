@@ -28,6 +28,7 @@ import {
   revalidateExternalDevice,
 } from "../src/utils/external-devices";
 import { classifyDevice, resolveDevice } from "../src/utils/device-info";
+import { adbArgv } from "../src/utils/adb";
 import {
   deviceSetForUdid,
   simctlArgsForUdid,
@@ -906,6 +907,34 @@ describe("simctl argv for a provider device", () => {
     });
   });
 
+  /** Every shape that yields `simctl` argv checks the same grant. */
+  it("gates the pair and sync forms exactly like the single-call form", async () => {
+    useDescriptors(await liveDescriptor({}, { capabilities: ["simulator-server"] }));
+    const deviceId = makeExternalId("acme-3f2a9c", IOS_UDID);
+
+    await expect(simctlTargetForUdid(deviceId)).rejects.toThrow(/'simctl' capability/);
+    expect(() => simctlTargetForUdidSync(deviceId)).toThrow(/'simctl' capability/);
+    expect(() => simctlArgsForUdidSync(deviceId, ["spawn", deviceId, "launchctl", "list"])).toThrow(
+      /'simctl' capability/
+    );
+  });
+
+  /**
+   * Blueprints whose mechanism is implemented with `simctl` spawns
+   * (`ax-service`, `native-profiler`) name their own grant instead.
+   */
+  it("lets the granted mechanism stand in for simctl where it is the implementation", async () => {
+    useDescriptors(await liveDescriptor({}, { capabilities: ["ax-service"] }));
+    const deviceId = makeExternalId("acme-3f2a9c", IOS_UDID);
+
+    expect(simctlTargetForUdidSync(deviceId, { granted: "ax-service" })).toEqual({
+      nativeId: IOS_UDID,
+      prefix: ["simctl", "--set", "/tmp/acme/Devices/iOS"],
+    });
+
+    await expect(simctlTargetForUdid(deviceId)).rejects.toThrow(/'simctl' capability/);
+  });
+
   it("leaves an ordinary udid and the default set untouched", async () => {
     await expect(simctlTargetForUdid(IOS_UDID)).resolves.toEqual({
       nativeId: IOS_UDID,
@@ -929,6 +958,62 @@ describe("simctl argv for a provider device", () => {
     useDescriptors(await liveDescriptor({}, { deviceSet: undefined }));
     const deviceId = makeExternalId("acme-3f2a9c", IOS_UDID);
     await expect(deviceSetForUdid(deviceId)).resolves.toBeNull();
+  });
+});
+
+describe("adb argv for a provider device", () => {
+  async function androidDescriptor(deviceOverrides: Record<string, unknown> = {}): Promise<string> {
+    const simulatorServer = await startSimulatorServer();
+
+    return writeDescriptor("acme-android.json", {
+      devices: [
+        androidDevice({
+          simulatorServer: {
+            apiUrl: simulatorServer.apiUrl,
+            streamUrl: simulatorServer.streamUrl,
+          },
+          ...deviceOverrides,
+        }),
+      ],
+      id: "acme-3f2a9c",
+      name: "Acme IDE",
+      schemaVersion: 1,
+    });
+  }
+
+  it("substitutes the serial when the provider granted adb", async () => {
+    useDescriptors(await androidDescriptor());
+    const deviceId = makeExternalId("acme-3f2a9c", ANDROID_SERIAL);
+
+    expect(adbArgv(["-s", deviceId, "shell", "ls"])).toEqual(["-s", ANDROID_SERIAL, "shell", "ls"]);
+  });
+
+  /**
+   * Refusing the substitution refuses the mechanism: `adb` itself has never
+   * heard of an `ext:` id.
+   */
+  it("refuses to reveal the serial when the provider withheld adb", async () => {
+    useDescriptors(await androidDescriptor({ capabilities: ["simulator-server"] }));
+    const deviceId = makeExternalId("acme-3f2a9c", ANDROID_SERIAL);
+
+    expect(() => adbArgv(["-s", deviceId, "shell", "ls"])).toThrow(/'adb' capability/);
+  });
+
+  it("refuses a device that is no longer offered, rather than passing the ext: id through", async () => {
+    useDescriptors();
+    const deviceId = makeExternalId("acme-3f2a9c", ANDROID_SERIAL);
+
+    expect(() => adbArgv(["-s", deviceId, "shell", "ls"])).toThrow(/No device provider/);
+  });
+
+  it("leaves an ordinary argv alone without any lookup", () => {
+    useDescriptors();
+    expect(adbArgv(["-s", ANDROID_SERIAL, "shell", "ls"])).toEqual([
+      "-s",
+      ANDROID_SERIAL,
+      "shell",
+      "ls",
+    ]);
   });
 });
 

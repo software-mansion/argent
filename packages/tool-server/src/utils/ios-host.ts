@@ -109,7 +109,11 @@ async function ensureAccessibilityEnabled(udid: string): Promise<void> {
   // in the simulator's defaults for SwiftUI to populate the accessibility tree.
   // Without these flags, all UIAccessibility APIs return nil/0 for SwiftUI views.
   const flags = ["AccessibilityEnabled", "ApplicationAccessibilityEnabled"];
-  const { nativeId, prefix } = await simctlTargetForUdid(udid);
+  /**
+   * Only reached from {@linkcode setupNativeDevtoolsEnvLocal}, so the
+   * native-devtools grant covers these spawns.
+   */
+  const { nativeId, prefix } = await simctlTargetForUdid(udid, { granted: "native-devtools" });
   await Promise.all(
     flags.map((flag) =>
       execFileAsync(
@@ -143,7 +147,11 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
       ? bootstrapDylibPathTcp()
       : bootstrapDylibPath();
 
-  const { nativeId, prefix } = await simctlTargetForUdid(udid);
+  /**
+   * These spawns install the injection env, so the native-devtools grant
+   * covers them.
+   */
+  const { nativeId, prefix } = await simctlTargetForUdid(udid, { granted: "native-devtools" });
 
   // Read from launchctl inside the simulator (via simctl spawn) instead of
   // `simctl getenv`. The latter silently truncates values longer than 127 bytes,
@@ -260,7 +268,8 @@ function spawnAxDaemonLocal(udid: string, endpoint: IosEndpoint): ChildProcess {
 
   // Synchronous by contract (returns the ChildProcess), so use the cached
   // device-set verdict — `bootstrapAx` has always resolved it by this point.
-  const axTarget = simctlTargetForUdidSync(udid);
+  // The ax-service grant covers the spawn that starts the daemon.
+  const axTarget = simctlTargetForUdidSync(udid, { granted: "ax-service" });
 
   const proc = execFile(
     "xcrun",

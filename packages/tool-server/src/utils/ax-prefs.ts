@@ -11,16 +11,24 @@ const execFileAsync = promisify(execFile);
 export async function ensureAutomationEnabled(udid: string): Promise<void> {
   await execFileAsync(
     "xcrun",
-    await simctlArgsForUdid(udid, [
-      "spawn",
+    /**
+     * On an external device this is only reached from ax-service contexts,
+     * so that grant covers the spawn.
+     */
+    await simctlArgsForUdid(
       udid,
-      "defaults",
-      "write",
-      "com.apple.Accessibility",
-      "AutomationEnabled",
-      "-bool",
-      "true",
-    ]),
+      [
+        "spawn",
+        udid,
+        "defaults",
+        "write",
+        "com.apple.Accessibility",
+        "AutomationEnabled",
+        "-bool",
+        "true",
+      ],
+      { granted: "ax-service" }
+    ),
     { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
   );
 }
@@ -40,14 +48,19 @@ export async function isEntitlementBypassActive(udid: string): Promise<boolean> 
   try {
     const { stdout } = await execFileAsync(
       "xcrun",
-      await simctlArgsForUdid(udid, [
-        "spawn",
+      /** Same reasoning as {@linkcode ensureAutomationEnabled}. */
+      await simctlArgsForUdid(
         udid,
-        "defaults",
-        "read",
-        "com.apple.Accessibility",
-        "IgnoreAXServerEntitlements",
-      ]),
+        [
+          "spawn",
+          udid,
+          "defaults",
+          "read",
+          "com.apple.Accessibility",
+          "IgnoreAXServerEntitlements",
+        ],
+        { granted: "ax-service" }
+      ),
       { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
     );
     return stdout.trim() === "1";

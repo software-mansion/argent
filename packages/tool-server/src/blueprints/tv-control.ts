@@ -120,13 +120,15 @@ async function sendJson(socketPath: string, command: string, timeoutMs?: number)
 function spawnAxDaemon(udid: string, socketPath: string): ChildProcess {
   // Sync by contract (returns the ChildProcess); the factory's device-list
   // validation has already learned the UDID's device set, so the cached view
-  // is warm here.
+  // is warm here. Spawning the AX reader is the ax-service mechanism, so that
+  // grant covers it.
+  const axTarget = simctlTargetForUdidSync(udid, { granted: "ax-service" });
   const proc = execFile(
     "xcrun",
     [
-      ...simctlTargetForUdidSync(udid).prefix,
+      ...axTarget.prefix,
       "spawn",
-      simctlTargetForUdidSync(udid).nativeId,
+      axTarget.nativeId,
       tvosAxServiceBinaryPath(),
       "--socket",
       socketPath,

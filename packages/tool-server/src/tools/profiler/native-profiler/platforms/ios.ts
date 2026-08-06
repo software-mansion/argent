@@ -112,7 +112,9 @@ export function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: nu
   try {
     launchctlOutput = execFileSync(
       "xcrun",
-      simctlArgsForUdidSync(udid, ["spawn", udid, "launchctl", "list"]),
+      simctlArgsForUdidSync(udid, ["spawn", udid, "launchctl", "list"], {
+        granted: "native-profiler",
+      }),
       {
         encoding: "utf-8",
         timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
@@ -253,11 +255,15 @@ function getInstalledApps(udid: string): Record<string, AppInfo> {
     // is ever interpolated into a shell. Each stage buffers its full stdout in Node
     // rather than the OS pipe, so both raise maxBuffer to run-with-timeout.ts's 256 MiB;
     // Node's 1 MiB default would throw ENOBUFS on a well-populated simulator.
-    const listAppsPlist = execFileSync("xcrun", simctlArgsForUdidSync(udid, ["listapps", udid]), {
-      encoding: "utf-8",
-      timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
-      maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
-    });
+    const listAppsPlist = execFileSync(
+      "xcrun",
+      simctlArgsForUdidSync(udid, ["listapps", udid], { granted: "native-profiler" }),
+      {
+        encoding: "utf-8",
+        timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+        maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
+      }
+    );
     listAppsOutput = execFileSync("plutil", ["-convert", "json", "-o", "-", "--", "-"], {
       input: listAppsPlist,
       encoding: "utf-8",
@@ -288,7 +294,9 @@ function getAppBundlePath(udid: string, bundleId: string): string {
   try {
     appPath = execFileSync(
       "xcrun",
-      simctlArgsForUdidSync(udid, ["get_app_container", udid, bundleId, "app"]),
+      simctlArgsForUdidSync(udid, ["get_app_container", udid, bundleId, "app"], {
+        granted: "native-profiler",
+      }),
       {
         encoding: "utf-8",
         timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
@@ -582,11 +590,11 @@ export async function startNativeProfilerIos(
     try {
       execFileSync(
         "xcrun",
-        simctlArgsForUdidSync(params.device_id, [
-          "terminate",
+        simctlArgsForUdidSync(
           params.device_id,
-          info.CFBundleIdentifier,
-        ]),
+          ["terminate", params.device_id, info.CFBundleIdentifier],
+          { granted: "native-profiler" }
+        ),
         {
           timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
           stdio: "ignore",
@@ -746,11 +754,11 @@ export async function startNativeProfilerIos(
       try {
         execFileSync(
           "xcrun",
-          simctlArgsForUdidSync(params.device_id, [
-            "launch",
+          simctlArgsForUdidSync(
             params.device_id,
-            mallocRelaunchBundleId,
-          ]),
+            ["launch", params.device_id, mallocRelaunchBundleId],
+            { granted: "native-profiler" }
+          ),
           {
             timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
             stdio: "ignore",

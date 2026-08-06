@@ -23,10 +23,11 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { getAdditionalIosDeviceSets } from "@argent/configuration-core";
 import { SIMCTL_KILL_SIGNAL } from "./simctl-config";
 import {
-  assertExternalCapability,
+  assertExternalCapabilitySync,
   externalNativeId,
   findExternalDevice,
   isExternalId,
+  type ExternalCapability,
 } from "./external-devices";
 
 const execFileAsync = promisify(execFile);
@@ -146,17 +147,34 @@ export function simctlPrefix(deviceSet: DeviceSetPath): string[] {
  * Callers that issue several simctl commands for one device can instead
  * resolve `deviceSetForUdid` once and build argv with `simctlPrefix`.
  */
-export async function simctlArgsForUdid(udid: string, args: readonly string[]): Promise<string[]> {
-  if (isExternalId(udid)) {
-    /**
-     * Running simctl against somebody else's simulator needs an explicit
-     * grant. Checking at this choke point rather than at each call site means
-     * a provider that withholds `simctl` denies all of them at once,
-     * including tools added later.
-     */
-    await assertExternalCapability("simctl", udid, "simctl");
-  }
+export async function simctlArgsForUdid(
+  udid: string,
+  args: readonly string[],
+  options?: SimctlEntitlement
+): Promise<string[]> {
+  /**
+   * Running simctl against somebody else's simulator needs an explicit
+   * grant. Checking at this choke point rather than at each call site means
+   * a provider that withholds `simctl` denies all of them at once,
+   * including tools added later.
+   */
+  assertSimctlEntitlement(udid, options);
   return [...simctlPrefix(await deviceSetForUdid(udid)), ...nativeArgs(udid, args)];
+}
+
+/**
+ * Which grant entitles a caller to build `simctl` argv for an external device.
+ * Defaults to `simctl`. Blueprints whose granted mechanism is itself
+ * implemented with `simctl` spawns (`ax-service`, `native-devtools`,
+ * `native-profiler`) name that mechanism instead, so it doesn't additionally
+ * require the general-purpose `simctl` grant.
+ */
+type SimctlEntitlement = { granted?: ExternalCapability };
+
+function assertSimctlEntitlement(udid: string, options?: SimctlEntitlement): void {
+  if (!isExternalId(udid)) return;
+  const capability = options?.granted ?? "simctl";
+  assertExternalCapabilitySync(capability, udid, capability);
 }
 
 /**
@@ -167,17 +185,26 @@ export async function simctlArgsForUdid(udid: string, args: readonly string[]): 
  * purpose: an external device needs BOTH the provider's `--set` and its real
  * UDID, and taking only the prefix (the shape this replaced) silently passes
  * the `ext:` id straight to simctl.
+ *
+ * Gated like {@linkcode simctlArgsForUdid} — the pair form is not a way
+ * around the choke point.
  */
 export async function simctlTargetForUdid(
-  udid: string
+  udid: string,
+  options?: SimctlEntitlement
 ): Promise<{ nativeId: string; prefix: string[] }> {
+  assertSimctlEntitlement(udid, options);
   return { nativeId: externalNativeId(udid), prefix: simctlPrefix(await deviceSetForUdid(udid)) };
 }
 
 /**
  * Synchronous sibling of {@linkcode simctlTargetForUdid}, from the cached verdict.
  */
-export function simctlTargetForUdidSync(udid: string): { nativeId: string; prefix: string[] } {
+export function simctlTargetForUdidSync(
+  udid: string,
+  options?: SimctlEntitlement
+): { nativeId: string; prefix: string[] } {
+  assertSimctlEntitlement(udid, options);
   return { nativeId: externalNativeId(udid), prefix: simctlPrefix(cachedDeviceSetForUdid(udid)) };
 }
 
@@ -187,11 +214,15 @@ export function simctlTargetForUdidSync(udid: string): { nativeId: string; prefi
  * verdict. Callers must warm the cache first with an `await
  * deviceSetForUdid(udid)` at their async entry point.
  */
-export function simctlArgsForUdidSync(udid: string, args: readonly string[]): string[] {
+export function simctlArgsForUdidSync(
+  udid: string,
+  args: readonly string[],
+  options?: SimctlEntitlement
+): string[] {
   /**
    * A withdrawn external device must not fall back to the default set: simctl
    * would report a baffling "device not found" instead of naming the real
-   * problem. The async form gets this from `assertExternalCapability`.
+   * problem. The async form gets this from its entitlement assertion.
    */
   if (isExternalId(udid) && !findExternalDevice(udid)) {
     throw new FailureError(
@@ -205,6 +236,7 @@ export function simctlArgsForUdidSync(udid: string, args: readonly string[]): st
       }
     );
   }
+  assertSimctlEntitlement(udid, options);
   return [...simctlPrefix(cachedDeviceSetForUdid(udid)), ...nativeArgs(udid, args)];
 }
 
