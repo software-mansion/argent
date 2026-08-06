@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ToolInvocationError } from "@argent/tools-client";
 import { run } from "../src/run.js";
 
 const toolsClientMock = vi.hoisted(() => ({
@@ -155,13 +156,30 @@ describe("argent run input validation", () => {
     expect(stderr()).not.toContain("missing required");
   });
 
-  describe("a value the tool rejects", () => {
-    beforeEach(() => {
-      toolsClientMock.callTool.mockRejectedValue(
+  // Built the way a live tool-server answers today: prose in the message, the
+  // issue list beside it. A fixture that only stringifies the issues into the
+  // message tests a wire no server sends any more, and would stay green while
+  // every server-side rejection fell through to a bare error dump.
+  describe.each([
+    [
+      "a modern server (prose message + issues)",
+      () =>
+        new ToolInvocationError("`x`: Too big: expected <=1. You sent: `udid`, `x`, `y`.", {
+          errorCode: "HTTP_ZOD_VALIDATION_FAILED",
+          errorKind: "validation",
+          issues: [{ code: "too_big", path: ["x"], message: "Too big: expected <=1" }],
+        }),
+    ],
+    [
+      "a pre-prose server (the issue list WAS the message)",
+      () =>
         new Error(
           JSON.stringify([{ code: "too_big", path: ["x"], message: "Too big: expected <=1" }])
-        )
-      );
+        ),
+    ],
+  ])("a value the tool rejects, reported by %s", (_label, buildError) => {
+    beforeEach(() => {
+      toolsClientMock.callTool.mockRejectedValue(buildError());
     });
 
     it("is reported against its flag instead of as a raw issue list", async () => {
@@ -214,7 +232,14 @@ describe("argent run input validation", () => {
 
     it("carries the tool's own issue list when the tool rejected a value", async () => {
       const issues = [{ code: "too_big", path: ["x"], message: "Too big: expected <=1" }];
-      toolsClientMock.callTool.mockRejectedValue(new Error(JSON.stringify(issues)));
+      // The live wire: the envelope a script parses must survive the server
+      // answering with prose, which is all `error` carries now.
+      toolsClientMock.callTool.mockRejectedValue(
+        new ToolInvocationError("`x`: Too big: expected <=1. You sent: `udid`, `x`, `y`.", {
+          errorKind: "validation",
+          issues,
+        })
+      );
 
       await expect(
         invoke(["gesture-tap", "--json", "--udid", "X", "--x", "99", "--y", "0.5"])

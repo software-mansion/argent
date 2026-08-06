@@ -52,4 +52,29 @@ describe("flow param errors over HTTP", () => {
     expect(res.body.error).toContain("You sent: `countt`");
     expect(res.body.error).not.toContain('"code"');
   });
+
+  it("carries the machine-readable issue list beside the prose", async () => {
+    // Prose is for the agent reading the message; `argent run` needs the PATHS,
+    // to name the flag its own user typed (`--count`, not `count`), print the
+    // tool's help block and exit 2. It used to read the issue list out of the
+    // message; moving the message to prose without this field takes that away
+    // and every server-side rejection falls through to a bare error dump.
+    const registry = new Registry();
+    registry.registerTool({
+      id: "validated-thing",
+      zodSchema: z.object({ count: z.number() }),
+      services: () => ({}),
+      async execute() {
+        throw new Error("execute should have been skipped");
+      },
+    } as never);
+    const { app } = createHttpApp(registry);
+
+    const res = await request(app).post("/tools/validated-thing").send({ count: "x" });
+
+    expect(res.status).toBe(400);
+    expect(Array.isArray(res.body.issues)).toBe(true);
+    expect(res.body.issues[0]).toMatchObject({ code: "invalid_type", path: ["count"] });
+    expect(typeof res.body.issues[0].message).toBe("string");
+  });
 });

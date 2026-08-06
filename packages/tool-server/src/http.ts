@@ -749,7 +749,19 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           // Not `parseResult.error.message`: that is the raw issue JSON, which
           // names the parameter the tool wanted and never the one the caller
           // actually sent. See describeParamIssues.
-          res.status(400).json({ error: describeParamIssues(parseResult.error, bodyArgs) });
+          //
+          // `issues` carries the machine-readable form alongside it. Prose is
+          // right for the agent reading the message, but a programmatic client
+          // needs the paths: `argent run` maps each issue back to the FLAG the
+          // user typed (`--x`, not `x`), prints the tool's help block under it,
+          // and exits 2 — none of which it can do from a sentence. It used to
+          // read the issue list out of the message body; a separate field lets
+          // the message be prose without taking that away, and lets the client
+          // recognize input validation STRUCTURALLY rather than by wording.
+          res.status(400).json({
+            error: describeParamIssues(parseResult.error, bodyArgs),
+            issues: parseResult.error.issues,
+          });
           return;
         }
         parsedData = parseResult.data;

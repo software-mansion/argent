@@ -140,6 +140,33 @@ describe("callTool progress streaming", () => {
     expect((err as ToolInvocationError).errorKind).toBe("validation");
   });
 
+  it("carries a 400's schema issue list beside its prose message", async () => {
+    // The message is a sentence, so it is the `issues` field that lets a caller
+    // map a rejected field back to the flag its own user typed.
+    const issues = [{ code: "too_big", path: ["x"], message: "Too big: expected <=1" }];
+    await startServer((_req, res) => {
+      res.statusCode = 400;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: "`x`: Too big: expected <=1. You sent: `x`.", issues }));
+    });
+
+    const { callTool } = createToolsClient();
+    const err = await callTool("streamy", {}).catch((e: unknown) => e);
+    expect((err as ToolInvocationError).issues).toEqual(issues);
+  });
+
+  it("leaves `issues` undefined when the body carries none, or a non-list", async () => {
+    await startServer((_req, res) => {
+      res.statusCode = 400;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: "boom", issues: "not a list" }));
+    });
+
+    const { callTool } = createToolsClient();
+    const err = await callTool("streamy", {}).catch((e: unknown) => e);
+    expect((err as ToolInvocationError).issues).toBeUndefined();
+  });
+
   it("rejects when the stream ends without a terminal line (connection lost)", async () => {
     await startServer((_req, res) => {
       res.writeHead(200, { "Content-Type": "application/x-ndjson" });
