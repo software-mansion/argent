@@ -25,6 +25,7 @@ import {
   getRecordingSession,
   parseFlow,
   serializeFlow,
+  type FlowFile,
   type FlowStep,
 } from "../../src/tools/flows/flow-utils";
 
@@ -72,6 +73,19 @@ function createMockRegistry(
 
 async function readFlowFile(name: string, projectRoot: string = tmpDir): Promise<string> {
   return fs.readFile(path.join(projectRoot, ".argent", "flows", `${name}.yaml`), "utf8");
+}
+
+/**
+ * Replace the active recording's file on disk. Host-mode recording re-reads the
+ * file on every append and on finish (so a manual edit mid-recording survives),
+ * which is the same door an author uses to hand-write a `requires:` block.
+ */
+async function overwriteFlowFile(name: string, flow: FlowFile): Promise<void> {
+  await fs.writeFile(
+    path.join(tmpDir, ".argent", "flows", `${name}.yaml`),
+    serializeFlow(flow),
+    "utf8"
+  );
 }
 
 const PREREQ = "App on home screen";
@@ -1692,6 +1706,75 @@ describe("flow-finish-recording", () => {
     await expect(
       flowFinishRecordingTool.execute({}, { name: "not-recording", project_root: tmpDir })
     ).rejects.toThrow("No active recording");
+  });
+
+  it("asks about a requires block, since a flow without one runs against every target", async () => {
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "unrestricted", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    await flowInsertEchoTool.execute(
+      {},
+      { name: "unrestricted", project_root: tmpDir, message: "Step 1" }
+    );
+
+    const result = await flowFinishRecordingTool.execute(
+      {},
+      { name: "unrestricted", project_root: tmpDir }
+    );
+
+    expect(result.requiresPrompt).toContain("declares no `requires:` block");
+    expect(result.requiresPrompt).toContain("Ask the user");
+    // Nothing to suggest: a launch-free flow says nothing about its platforms.
+    expect(result.requiresPrompt).not.toContain("likely answer");
+  });
+
+  it("suggests the platforms the recorded launch already limits the flow to", async () => {
+    await flowStartRecordingTool.execute({}, { name: "ios-launch", project_root: tmpDir });
+    await overwriteFlowFile("ios-launch", {
+      executionPrerequisite: "",
+      steps: [{ kind: "launch", app: { ios: "com.example.app" } }],
+    });
+
+    const result = await flowFinishRecordingTool.execute(
+      {},
+      { name: "ios-launch", project_root: tmpDir }
+    );
+
+    expect(result.requiresPrompt).toContain("`requires: { platform: [ios] }` is the likely answer");
+  });
+
+  it("suggests nothing when the launch names every platform", async () => {
+    // A bare app id runs anywhere, so it narrows nothing and must not be
+    // dressed up as a recommendation.
+    await flowStartRecordingTool.execute({}, { name: "any-launch", project_root: tmpDir });
+    await overwriteFlowFile("any-launch", {
+      executionPrerequisite: "",
+      steps: [{ kind: "launch", app: "com.example.app" }],
+    });
+
+    const result = await flowFinishRecordingTool.execute(
+      {},
+      { name: "any-launch", project_root: tmpDir }
+    );
+
+    expect(result.requiresPrompt).not.toContain("likely answer");
+  });
+
+  it("does not ask once the flow already declares one", async () => {
+    await flowStartRecordingTool.execute({}, { name: "restricted", project_root: tmpDir });
+    await overwriteFlowFile("restricted", {
+      executionPrerequisite: "",
+      requires: { platform: ["ios"] },
+      steps: [{ kind: "echo", message: "hi" }],
+    });
+
+    const result = await flowFinishRecordingTool.execute(
+      {},
+      { name: "restricted", project_root: tmpDir }
+    );
+
+    expect(result.requiresPrompt).toBeUndefined();
   });
 
   it("handles empty flow", async () => {

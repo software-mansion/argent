@@ -720,9 +720,46 @@ export type FlowStep =
   | { kind: "rotate"; selector?: FlowSelector; by: number }
   | { kind: "snapshot"; name: string; maxMismatch?: number; cropOn?: FlowSelector };
 
+/**
+ * The form factors a `requires.runtimeKind` may name — the vocabulary
+ * `list-devices` already surfaces, spelled once here. "tv" is a focus-driven
+ * remote environment (Apple TV, Android TV / leanback, Fire TV); "mobile" is
+ * its complement — every target driven by touch or pointer, which on the
+ * chromium side means a desktop window rather than anything handheld.
+ */
+export const RUNTIME_KINDS = ["mobile", "tv"] as const;
+
+export type FlowRuntimeKind = (typeof RUNTIME_KINDS)[number];
+
+/**
+ * What a flow demands of the target it runs on. Absent means "runs anywhere",
+ * so every flow written before this key existed keeps running everywhere.
+ *
+ * Every key is a fact the runner can resolve BEFORE the first step, and the
+ * keys are ANDed: `{ platform: [ios, android], runtimeKind: tv }` is Apple TV
+ * or Android TV and excludes Fire TV, which `{ runtimeKind: tv }` alone would
+ * admit. Deliberately a closed vocabulary rather than a free-form capability
+ * list — a name the runner cannot check is a name that silently passes.
+ *
+ * Requirements do more than gate: they narrow device auto-detection
+ * (`resolveFlowDevice`), so an ios-only flow picks the booted simulator
+ * instead of erroring on the emulator sitting beside it.
+ */
+export type FlowRequires = {
+  /**
+   * Platforms the flow may run on. Non-empty when present; `ios` covers a
+   * remote simulator too, matching how the `when: { platform }` guard folds
+   * `ios-remote` into `ios`.
+   */
+  platform?: WhenPlatform[];
+  runtimeKind?: FlowRuntimeKind;
+};
+
 export type FlowFile = {
   /** Fragments only: documented entry-state contract. "" when unset. */
   executionPrerequisite: string;
+  /** Target contract; absent when the flow runs anywhere. */
+  requires?: FlowRequires;
   steps: FlowStep[];
 };
 
@@ -935,6 +972,7 @@ type YamlStep =
 
 type YamlFlowFile = {
   executionPrerequisite?: string;
+  requires?: FlowRequires;
   steps: YamlStep[];
 };
 
@@ -1927,6 +1965,75 @@ export const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
 // Keys a launch map accepts: the platforms plus the `native` shared-id shorthand.
 const LAUNCH_MAP_KEYS = ["native", ...LAUNCH_PLATFORMS] as const;
 
+// Keys a `requires:` block accepts — the closed vocabulary of FlowRequires.
+const REQUIRES_KEYS = ["platform", "runtimeKind"] as const;
+
+/**
+ * Parse `requires.platform`: one platform or a list of them, normalized to a
+ * list. The two spellings mean the same thing (unlike a selector, where bare
+ * string vs map is semantic), so normalizing here costs nothing — serialize
+ * emits the list form and re-parsing it yields the same value.
+ */
+function parseRequiredPlatforms(raw: unknown, value: unknown): WhenPlatform[] {
+  const list = Array.isArray(value) ? value : [value];
+  const oneOf = `one of ${LAUNCH_PLATFORMS.join(", ")}`;
+  if (list.length === 0) {
+    badEntry({ requires: raw }, `requires.platform must name at least ${oneOf}`);
+  }
+  const out: WhenPlatform[] = [];
+  for (const p of list) {
+    if (typeof p !== "string" || !(LAUNCH_PLATFORMS as readonly string[]).includes(p)) {
+      badEntry({ requires: raw }, `requires.platform must be ${oneOf} (or a list of them)`);
+    }
+    // A repeat narrows nothing, so it is a copy/paste slip rather than an
+    // intent — and rejecting it keeps the parsed list a faithful image of the
+    // file, which the serialize/parse identity relies on.
+    if (out.includes(p as WhenPlatform)) {
+      badEntry({ requires: raw }, `requires.platform lists "${p}" twice`);
+    }
+    out.push(p as WhenPlatform);
+  }
+  return out;
+}
+
+/**
+ * Parse the top-level `requires:` block. Same strictness as a directive body:
+ * an unknown key is a typo, and dropping it silently would turn a constraint
+ * the author wrote into a flow that runs everywhere — the exact failure this
+ * block exists to prevent.
+ */
+function parseRequires(raw: unknown): FlowRequires {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    badEntry({ requires: raw }, `requires must be a map of ${REQUIRES_KEYS.join(" / ")}`);
+  }
+  const b = raw as Record<string, unknown>;
+  rejectUnknownKeys({ requires: raw }, b, REQUIRES_KEYS, "requires");
+
+  const out: FlowRequires = {};
+  if (b.platform !== undefined) out.platform = parseRequiredPlatforms(raw, b.platform);
+  if (b.runtimeKind !== undefined) {
+    const kind = b.runtimeKind;
+    if (typeof kind !== "string" || !(RUNTIME_KINDS as readonly string[]).includes(kind)) {
+      badEntry(
+        { requires: raw },
+        `requires.runtimeKind must be one of ${RUNTIME_KINDS.join(", ")}`
+      );
+    }
+    out.runtimeKind = kind as FlowRuntimeKind;
+  }
+  // An empty block reads as a constraint that isn't there — far likelier a
+  // half-written edit than an intent, and "runs anywhere" already has a
+  // spelling: no block at all.
+  if (Object.keys(out).length === 0) {
+    badEntry(
+      { requires: raw },
+      `requires must declare at least one of: ${REQUIRES_KEYS.join(", ")} ` +
+        `(omit the block entirely for a flow that runs anywhere)`
+    );
+  }
+  return out;
+}
+
 /**
  * Parse a chromium launch value: an app path (bare string) or `{ path, args? }`.
  * Returns null when the shape is invalid (caller reports the launch error).
@@ -2801,6 +2908,7 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
 export function serializeFlow(flow: FlowFile): string {
   const doc: YamlFlowFile = { steps: flow.steps.map(toYamlStep) };
   if (flow.executionPrerequisite) doc.executionPrerequisite = flow.executionPrerequisite;
+  if (flow.requires) doc.requires = flow.requires;
   // blockQuote: false — a block scalar is not round-trip-safe for our free-text
   // fields: whitespace-only lines inside a multi-line value are silently
   // stripped on re-parse (" \n" comes back as "\n"), and a block scalar at the
@@ -2812,8 +2920,86 @@ export function serializeFlow(flow: FlowFile): string {
   return yamlStringify(doc, { blockQuote: false });
 }
 
+/**
+ * Whether a platform can ever present a given runtime kind. Vega is Fire TV, so
+ * it is only ever a TV; chromium is a desktop window, so it is only ever the
+ * non-TV complement. iOS and Android come in both.
+ */
+function platformCanPresent(platform: WhenPlatform, kind: FlowRuntimeKind): boolean {
+  if (platform === "vega") return kind === "tv";
+  if (platform === "chromium") return kind === "mobile";
+  return true;
+}
+
+/**
+ * Every `launch` step paired with the platforms that can still be the run's
+ * platform where it sits. A `when: { platform: X }` narrows that set for its
+ * body, so an ios-only launch guarded by an ios guard is not a contradiction
+ * inside a flow that also allows android — and a block whose guard the
+ * requirements already exclude is dead code, so its launches are not checked
+ * at all.
+ */
+function* launchesInScope(
+  steps: FlowStep[],
+  allowed: readonly WhenPlatform[]
+): Generator<{ app: Launch; allowed: readonly WhenPlatform[] }> {
+  for (const step of steps) {
+    if (step.kind === "launch") {
+      yield { app: step.app, allowed };
+    } else if (step.kind === "when") {
+      const cond = step.condition;
+      const inner = cond.kind === "platform" ? allowed.filter((p) => p === cond.platform) : allowed;
+      if (inner.length > 0) yield* launchesInScope(step.steps, inner);
+    }
+  }
+}
+
+function unsatisfiable(detail: string): FailureError {
+  return new FailureError(`This flow's requires block can never be satisfied: ${detail}`, {
+    error_code: FAILURE_CODES.FLOW_REQUIRES_UNSATISFIABLE,
+    failure_stage: "flow_file_validate",
+    failure_area: "tool_server",
+    error_kind: "validation",
+  });
+}
+
+/**
+ * Cross-field checks on a `requires` block. These are validity checks, not
+ * policy: each one names a file that no target anywhere could run, which is
+ * always an authoring mistake and always cheaper to learn at parse than as a
+ * whole suite quietly skipping itself.
+ */
+function validateRequires(flow: FlowFile): void {
+  const requires = flow.requires;
+  if (!requires) return;
+  const { platform, runtimeKind } = requires;
+
+  if (platform && runtimeKind && !platform.some((p) => platformCanPresent(p, runtimeKind))) {
+    throw unsatisfiable(
+      `no platform it names (${platform.join(", ")}) is ever "${runtimeKind}" — ` +
+        `vega is always tv and chromium never is`
+    );
+  }
+
+  if (!platform) return;
+  // A launch declaring no id for the run's platform is a run-time error
+  // (flow-run's runLaunch), so a launch missing an id for a platform the flow
+  // claims to support is that same error, decidable here without a device.
+  for (const { app, allowed } of launchesInScope(flow.steps, platform)) {
+    const missing = allowed.filter((p) => appIdForPlatform(app, p) === null);
+    if (missing.length > 0) {
+      throw unsatisfiable(
+        `a launch step declares no app id for ${missing.join(", ")}, which requires.platform ` +
+          `says the flow supports — add the missing launch ${missing.length > 1 ? "entries" : "entry"}, ` +
+          `or narrow requires.platform`
+      );
+    }
+  }
+}
+
 /** Validate cross-field invariants that are checkable without other files. */
 export function validateFlow(flow: FlowFile): void {
+  validateRequires(flow);
   if (isE2eFlow(flow) && flow.executionPrerequisite) {
     throw new FailureError(
       "A flow that starts with a launch step must not declare executionPrerequisite — it launches its own app and controls its start state. Drop the leading launch to make it a fragment, or drop executionPrerequisite.",
@@ -2866,9 +3052,10 @@ export function parseFlow(content: string): FlowFile {
     });
   }
 
-  // Same strictness as step bodies: the file has exactly two top-level keys,
-  // so a misspelled `executionPrerequisite` must not silently become "".
-  const topKeys: readonly string[] = ["executionPrerequisite", "steps"];
+  // Same strictness as step bodies: the file has exactly three top-level keys,
+  // so a misspelled `executionPrerequisite` must not silently become "" — nor
+  // a misspelled `requires` become a flow that runs anywhere.
+  const topKeys: readonly string[] = ["executionPrerequisite", "requires", "steps"];
   const unknownTop = Object.keys(parsed).filter((k) => !topKeys.includes(k));
   if (unknownTop.length > 0) {
     throw new FailureError(
@@ -2890,6 +3077,9 @@ export function parseFlow(content: string): FlowFile {
 
   const flow: FlowFile = {
     executionPrerequisite: parsed.executionPrerequisite ?? "",
+    ...(parsed.requires === undefined
+      ? {}
+      : { requires: parseRequires(parsed.requires as unknown) }),
     steps,
   };
   validateFlow(flow);

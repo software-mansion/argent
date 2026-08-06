@@ -318,9 +318,17 @@ describe("flow report rendering", () => {
     expect(renderBatchSummary({ total: 1, passed: 1, failed: 0, skipped: 0 })).toBe(
       "PASS — 1 flow: 1 passed, 0 failed, 0 skipped"
     );
-    // Skips only ever follow a failure, so they never turn the verdict alone.
+    // A skip beside a pass does not turn the verdict — a requires-filtered
+    // flow is not a fault, and something did run.
     expect(renderBatchSummary({ total: 2, passed: 1, failed: 0, skipped: 1 })).toBe(
       "PASS — 2 flows: 1 passed, 0 failed, 1 skipped"
+    );
+    // Nothing ran at all: neither PASS nor FAIL, matching the exit code.
+    expect(renderBatchSummary({ total: 2, passed: 0, failed: 0, skipped: 2 })).toBe(
+      "NONE RAN — 2 flows: 0 passed, 0 failed, 2 skipped"
+    );
+    expect(renderBatchSummary({ total: 0, passed: 0, failed: 0, skipped: 0 })).toBe(
+      "PASS — 0 flows: 0 passed, 0 failed, 0 skipped"
     );
   });
 });

@@ -2,7 +2,7 @@ import * as fsp from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { createHash } from "node:crypto";
 import * as path from "node:path";
-import { FLOW_NAME_PATTERN } from "@argent/registry";
+import { FAILURE_CODES, FLOW_NAME_PATTERN } from "@argent/registry";
 import {
   createToolsClient,
   getResolvedToolsUrl,
@@ -125,6 +125,12 @@ A directory run prints only failing steps plus a final flow summary;
 --recursive walks subdirectories too (dot-directories and node_modules are
 skipped). An invalid flow file fails alone and the batch continues; an infra
 error stops the batch and counts the remaining flows skipped.
+
+A flow may declare a \`requires:\` block (platform / runtimeKind) naming the
+targets it supports. In a directory run a flow the target does not satisfy is
+skipped, so one command runs a mixed suite; running that same flow on its own
+is an error instead, since you asked for it by name. A run where every flow was
+skipped exits 2 — nothing ran, which is not a pass.
 
 Runs require the auto-started local tool server;
 ARGENT_TOOLS_URL and \`argent link\` routing are not supported.
@@ -368,14 +374,21 @@ export function renderFailedSteps(report: FlowReport): string[] {
   return lines;
 }
 
-/** Flow-level verdict of a directory run, mirroring renderSummary's shape. */
+/**
+ * Flow-level verdict of a directory run, mirroring renderSummary's shape. A
+ * batch that found flows but ran none of them — every one filtered out by its
+ * `requires:` — is neither PASS nor FAIL: nothing proved anything, so it gets
+ * its own word rather than a "PASS" that contradicts the non-zero exit.
+ */
 export function renderBatchSummary(counts: {
   total: number;
   passed: number;
   failed: number;
   skipped: number;
 }): string {
-  return `${counts.failed === 0 ? "PASS" : "FAIL"} — ${counts.total} flow${counts.total === 1 ? "" : "s"}: ${counts.passed} passed, ${counts.failed} failed, ${counts.skipped} skipped`;
+  const verdict =
+    counts.failed > 0 ? "FAIL" : counts.total > 0 && counts.passed === 0 ? "NONE RAN" : "PASS";
+  return `${verdict} — ${counts.total} flow${counts.total === 1 ? "" : "s"}: ${counts.passed} passed, ${counts.failed} failed, ${counts.skipped} skipped`;
 }
 
 /**
@@ -1086,7 +1099,18 @@ interface BatchFlowResult {
   status: "pass" | "fail" | "skip";
   report?: FlowReport;
   error?: string;
+  /** Why a skipped flow was skipped — its unmet `requires`, or the batch stop. */
+  skipReason?: string;
 }
+
+/**
+ * The failure a flow raises when its `requires:` block excludes the run's
+ * target. A directory run turns exactly this into a per-flow skip: a mixed
+ * suite is meant to hold flows for platforms this run is not on, so filtering
+ * them out is the feature, not a fault. Every other validation rejection stays
+ * a failure — those are broken files.
+ */
+const REQUIREMENTS_UNMET_CODE: string = FAILURE_CODES.FLOW_REQUIREMENTS_UNMET;
 
 /**
  * Run every discovered flow in `dir` sequentially. Reports failures only (no
@@ -1127,7 +1151,7 @@ async function runFlowDirectory(
   for (const [i, rel] of flows.entries()) {
     if (!args.json) console.log(`[${i + 1}/${flows.length}] ${rel}`);
     if (stopped) {
-      results.push({ path: rel, status: "skip" });
+      results.push({ path: rel, status: "skip", skipReason: "batch stopped" });
       if (!args.json) console.log(`  ${STATUS_GLYPH.skip} not run (batch stopped)`);
       continue;
     }
@@ -1144,6 +1168,11 @@ async function runFlowDirectory(
       if (data && typeof data === "object" && "steps" in data) report = data;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      if (err instanceof ToolInvocationError && err.errorCode === REQUIREMENTS_UNMET_CODE) {
+        results.push({ path: rel, status: "skip", skipReason: message });
+        if (!args.json) console.log(`  ${STATUS_GLYPH.skip} skipped — ${message}`);
+        continue;
+      }
       console.error(message);
       results.push({ path: rel, status: "fail", error: message });
       const rejectedThisFlowOnly =
@@ -1179,11 +1208,25 @@ async function runFlowDirectory(
     failed: results.filter((r) => r.status === "fail").length,
     skipped: results.filter((r) => r.status === "skip").length,
   };
+  // A batch where nothing ran is not a pass. Every flow being filtered out is
+  // as easily a mistyped `requires` (or a target nobody meant to run against)
+  // as a deliberate no-op, and "PASS — 12 flows: 0 passed" reads as success
+  // either way, so the exit code has to disagree.
+  const ranNothing = counts.passed === 0 && counts.failed === 0 && counts.total > 0;
   if (args.json) {
-    console.log(JSON.stringify({ ok: counts.failed === 0, ...counts, flows: results }, null, 2));
+    console.log(
+      JSON.stringify({ ok: counts.failed === 0 && !ranNothing, ...counts, flows: results }, null, 2)
+    );
   } else {
     console.log(`\n${renderBatchSummary(counts)}`);
+    if (ranNothing) {
+      console.error(
+        `No flow ran: every flow in ${dir} was skipped. Check the requires: blocks against ` +
+          `the target this run selected.`
+      );
+    }
   }
+  if (ranNothing) return exitAfterFlush(2);
   return exitAfterFlush(counts.failed === 0 ? 0 : 1);
 }
 

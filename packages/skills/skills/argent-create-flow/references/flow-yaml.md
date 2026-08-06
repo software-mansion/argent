@@ -3,6 +3,7 @@
 Read this reference when polishing, composing, or manually reviewing a flow.
 
 - [File shape and flow type](#file-shape-and-flow-type)
+- [Target requirements](#target-requirements)
 - [Selectors](#selectors)
 - [Directives](#directives)
 - [Verification conditions](#verification-conditions)
@@ -32,9 +33,29 @@ executionPrerequisite: User is signed in and viewing Settings
 steps: []
 ```
 
+Either type can also declare a [`requires:`](#target-requirements) block.
+
 Flows never store a device id. The runner binds the device. `launch:` restarts the process but does not clear app, account, or backend data.
 
 The one exception is a device _scope_ rather than a target: `stop-all-simulator-servers`' `devices` list **is** kept in the YAML, because without it the step means the machine-wide sweep and would tear down devices other agents are mid-session on. Replay rebinds a recorded scope only when you pass `device` explicitly — an auto-detected device would retarget the teardown at a device the flow never named. So the recorded ids are what run when you replay without `device`; on another host they reap nothing and come back in `unmatched`, so re-record the cleanup flow there or pass `device`. A step that recorded no scope is narrowed onto the run's device **only when the run resolved one**. A cleanup flow whose only step is that teardown needs no device, so with none or several booted it resolves none, replays as the machine-wide sweep, and still reports a pass. Record the scope, or pass `device` at replay, whenever the sweep must stay confined.
+
+## Target requirements
+
+`requires:` names the targets a flow supports:
+
+```yaml
+requires:
+  platform: [ios, android]
+  runtimeKind: tv
+```
+
+`platform` takes one platform or a list, and `ios` covers a remote simulator. `runtimeKind` is `tv` — a focus-driven remote environment, so Apple TV, Android TV, or Fire TV — or `mobile`, which is everything else, Chromium included. The keys are ANDed, so the block above means Apple TV or Android TV and excludes Fire TV, which `runtimeKind: tv` alone would admit.
+
+**No block means the flow runs anywhere**, so every existing flow is unaffected. Requirements also narrow device auto-detection: an ios-only flow picks the booted simulator instead of failing as ambiguous when an emulator is up beside it.
+
+On a target that does not satisfy them, `argent flow run <dir>` **skips** the flow — that is the point, one command over a mixed suite. Running that flow on its own is an **error**, and so is a `run:` fragment the run device cannot satisfy: a composed fragment silently not running would leave a green report for a scenario that only half happened. Use `when:` when you mean "optionally".
+
+Combinations nothing could satisfy are rejected at parse: `runtimeKind: tv` with `platform: [chromium]`, or a `launch` step declaring no app id for a platform `requires.platform` claims. A `launch` inside a `when: { platform: … }` guard is judged against that guard's platform only.
 
 ## Selectors
 

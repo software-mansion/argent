@@ -2,6 +2,7 @@ import { z } from "zod";
 import * as fs from "node:fs/promises";
 import type { ToolDefinition } from "@argent/registry";
 import {
+  appIdForPlatform,
   requireRecordingSession,
   clearRecordingSession,
   withFlowFileLock,
@@ -9,12 +10,68 @@ import {
   parseFlow,
   serializeFlow,
   selectorToYaml,
+  LAUNCH_PLATFORMS,
   type FlowFile,
   type FlowStep,
   type FlowSavedTo,
   type FlowSelector,
+  type WhenPlatform,
 } from "./flow-utils";
 import type { TextMatchMode } from "../../utils/ui-tree-match";
+
+/** The first `launch` step anywhere in the flow, including inside a `when:` block. */
+function firstLaunch(steps: FlowStep[]): Extract<FlowStep, { kind: "launch" }> | undefined {
+  for (const step of steps) {
+    if (step.kind === "launch") return step;
+    if (step.kind === "when") {
+      const nested = firstLaunch(step.steps);
+      if (nested) return nested;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The platforms a recorded `launch` already limits the flow to, or null when it
+ * limits nothing (a bare app id, or no launch at all). A launch declaring no id
+ * for the run's platform is a run-time error, so this is the one part of the
+ * answer the file already knows — worth offering rather than making the agent
+ * re-derive it.
+ */
+function launchPlatforms(flow: FlowFile): WhenPlatform[] | null {
+  const launch = firstLaunch(flow.steps);
+  if (!launch) return null;
+  const named = LAUNCH_PLATFORMS.filter((p) => appIdForPlatform(launch.app, p) !== null);
+  return named.length > 0 && named.length < LAUNCH_PLATFORMS.length ? [...named] : null;
+}
+
+/**
+ * The question to put to the user once a recording is done: should this flow be
+ * restricted to some targets? Asked here, and only here, because this is the
+ * moment the whole flow first exists — every earlier tool sees one step. A flow
+ * with no block runs everywhere, which is right for most of them and wrong
+ * silently for the rest, so the default is offered rather than assumed. Absent
+ * once the flow declares a block: the question has been answered.
+ */
+function requiresPrompt(flow: FlowFile): string | undefined {
+  if (flow.requires) return undefined;
+  const platforms = launchPlatforms(flow);
+  const hint = platforms
+    ? ` Its launch step declares an app id only for ${platforms.join(", ")}, so ` +
+      `\`requires: { platform: [${platforms.join(", ")}] }\` is the likely answer.`
+    : "";
+  return (
+    `This flow declares no \`requires:\` block, so it will run against any target — including ` +
+    `ones it was never recorded on. Ask the user whether it should be restricted, and if so add ` +
+    `the block to the YAML yourself (there is no tool for it):\n` +
+    `  requires:\n` +
+    `    platform: [ios, android]   # one platform or a list; ios covers a remote simulator\n` +
+    `    runtimeKind: tv            # tv (Apple TV / Android TV / Fire TV), or mobile for everything else\n` +
+    `Both keys are optional and ANDed. Leaving the block out is the right answer for a genuinely ` +
+    `portable flow; restrict it when the scenario is platform-specific (a platform-only screen, an ` +
+    `OS settings flow) or form-factor-specific (focus/remote navigation rather than touch).${hint}`
+  );
+}
 
 // Quote selectors in the step summary the way the flow FILE spells them
 // (`id`, bare string for loose, no internal `loose` flag) — the summary is what
@@ -63,6 +120,8 @@ export const flowFinishRecordingTool: ToolDefinition<
     summary: string[];
     flowFile: string;
     savedTo: FlowSavedTo;
+    /** Present only while the flow declares no `requires:` block — see {@link requiresPrompt}. */
+    requiresPrompt?: string;
   }
 > = {
   id: "flow-finish-recording",
@@ -78,8 +137,9 @@ export const flowFinishRecordingTool: ToolDefinition<
     failedMsg: ({ params, failureSignal }) =>
       `Failed to finish recording of flow ${params.name}: ${failureSignal.error_code}`,
   },
-  description: `Finish recording the flow named by \`name\` + \`project_root\`, leaving recordings under any other key untouched. Returns { message, path, executionPrerequisite, steps, summary, flowFile, savedTo } - a summary of all recorded steps plus the final YAML. Use when you have added all desired steps and want to finalize the flow file. Fails if that flow has no recording in progress.
-You can still edit the .yaml file directly afterwards to remove or reorder steps.`,
+  description: `Finish recording the flow named by \`name\` + \`project_root\`, leaving recordings under any other key untouched. Returns { message, path, executionPrerequisite, steps, summary, flowFile, savedTo, requiresPrompt? } - a summary of all recorded steps plus the final YAML. Use when you have added all desired steps and want to finalize the flow file. Fails if that flow has no recording in progress.
+You can still edit the .yaml file directly afterwards to remove or reorder steps.
+When the finished flow declares no \`requires:\` block, the result carries a \`requiresPrompt\` — put that question to the user (should this flow be restricted to some platforms / to a TV?) and write the block into the YAML yourself if they say yes. This is the moment to ask: it is the first time the whole flow exists, and a flow with no block runs against every target.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {
@@ -87,7 +147,7 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
     // Host mode's `await fs.readFile` is a yield, and an append that lands in it
     // would be on disk while the summary and step count reported here — taken
     // from the pre-append read — say otherwise.
-    const { filePath, flowFile, savedTo, flow, summary } = await withFlowFileLock(
+    const { filePath, flowFile, savedTo, flow, summary, prompt } = await withFlowFileLock(
       params.project_root,
       params.name,
       async () => {
@@ -120,8 +180,11 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
         // {@link renderToolArgs}; keeping the order is what makes the next one
         // recoverable rather than fatal.
         const summary = summarizeSteps(flow);
+        // Ahead of the clear for the same reason as the summary: it walks step
+        // bodies, and nothing that can throw may run once the session is gone.
+        const prompt = requiresPrompt(flow);
         clearRecordingSession(session);
-        return { filePath, flowFile, savedTo, flow, summary };
+        return { filePath, flowFile, savedTo, flow, summary, prompt };
       }
     );
 
@@ -133,6 +196,7 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
       summary,
       flowFile,
       savedTo,
+      ...(prompt ? { requiresPrompt: prompt } : {}),
     };
   },
 };
