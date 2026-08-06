@@ -35,7 +35,7 @@ export function createStopAllSimulatorServersTool(
   registry: Registry
 ): ToolDefinition<
   z.infer<typeof zodSchema>,
-  { stopped: string[]; unmatched?: string[]; left_running?: string[] }
+  { stopped: string[]; unmatched?: string[]; left_running?: string[]; aborted?: true }
 > {
   return {
     id: "stop-all-simulator-servers",
@@ -80,10 +80,10 @@ export function createStopAllSimulatorServersTool(
     description: `Stop the services a device owns - simulator-server processes (iOS + Android), native devtools, the iOS accessibility service, TV-control daemons, Chromium CDP sessions, screen recordings, native profiler sessions, and JS-runtime debugger sessions along with the network inspectors and React profiler sessions that ride on them - freeing their spawned processes, sockets and ports. Call this when your session ends or the user says they are done.
 PASS \`devices\` with the device ids this session used — one tool-server serves every agent, subagent and CLI call using this argent install, and an unscoped call tears down THEIR devices too (a mid-recording devtools teardown degrades another agent's flow to brittle coordinate taps; that agent is warned, but its recorded steps are already the worse kind). Omit \`devices\` only when a machine-wide cleanup is what you actually want. Passing an EMPTY array scopes to nothing and stops nothing - it is not a way to ask for the machine-wide sweep.
 A JS-runtime debugger session is keyed by the id you called \`debugger-connect\` with. On a Metro serving two or more devices that id is not a udid or serial - connect refuses those and tells you to re-target with the \`logicalDeviceId\` it returns - so a scope built from \`list-devices\` ids cannot reach that session. Pass any such \`logicalDeviceId\` in \`devices\` ALONGSIDE the device id; { left_running } names the ones you missed.
-Returns { stopped } - the URNs of the services that were actually live and got shut down; an ERROR node is disposed too but never appears there, so an empty \`stopped\` only means nothing was still running. { unmatched } lists supplied ids that own no service here, so a mistyped id - or a device NAME passed where an id was expected - does not read as a clean machine. { left_running } lists live debugger sessions (and the network inspectors / React profiler sessions riding on them) whose id no device scope can name - re-call with that id to reap them. It is NOT proof the id is wrong: a Vega device is driven through CLI/adb shell-outs, so one you only booted and drove with the remote registers no service and always lands here — as does a real device of any platform this session never started anything on. Present ONLY when \`devices\` was supplied AND at least one id matched nothing - absent on an unscoped call and when every id matched. Stopping the same device twice does not report it unmatched: ownership counts regardless of service state. Past the schema - which rejects an unknown key outright, so the \`udids\` slip is an error rather than a silent machine-wide sweep - the call always succeeds; reaping nothing is a result, not a failure.`,
+Returns { stopped } - the URNs of the services that were actually live and got shut down; an ERROR node is disposed too but never appears there, so an empty \`stopped\` only means nothing was still running. { unmatched } lists supplied ids that own no service here, so a mistyped id - or a device NAME passed where an id was expected - does not read as a clean machine. It is NOT proof the id is wrong: a Vega device is driven through CLI/adb shell-outs, so one you only booted and drove with the remote registers no service and always lands here — as does a real device of any platform this session never started anything on. Present ONLY when \`devices\` was supplied AND at least one id matched nothing - absent on an unscoped call and when every id matched. Stopping the same device twice does not report it unmatched: ownership counts regardless of service state. { left_running } lists live debugger sessions (and the network inspectors / React profiler sessions riding on them) whose id no device scope can name - re-call with that id to reap them. { aborted: true } means the caller cancelled the request part-way, so the rest of the machine was left untouched and neither of the other two fields was computed. Past the schema - which rejects an unknown key outright, so the \`udids\` slip is an error rather than a silent machine-wide sweep - the call always succeeds; reaping nothing is a result, not a failure.`,
     zodSchema,
     services: () => ({}),
-    async execute(_services, params) {
+    async execute(_services, params, ctx) {
       const devices = params.devices;
       // Present-but-empty scopes to nothing rather than falling back to the
       // machine-wide sweep: a caller that computed a device list and got none
@@ -96,7 +96,19 @@ Returns { stopped } - the URNs of the services that were actually live and got s
       // ones are ever reported (see `unnameableSessionUrns`) — the rest are
       // other agents' devices, which a scoped stop leaves alone by design.
       const survivors: string[] = [];
+      let aborted = false;
       for (const [urn, entry] of snapshot.services) {
+        // A sweep is a loop of awaited disposals — thirteen namespaces, each
+        // reaping spawned processes and sockets — so a caller that has given up
+        // (an MCP client timing out, a cancelled CLI run) would otherwise be
+        // billed for the whole of it. Checked between disposals rather than
+        // inside one: a dispose already under way finishes, since abandoning a
+        // blueprint mid-teardown is what leaks the handles this tool exists to
+        // free.
+        if (ctx?.signal?.aborted) {
+          aborted = true;
+          break;
+        }
         const matchedId = scoped
           ? deviceIdOwningUrn(urn, DEVICE_OWNED_NAMESPACES, devices)
           : undefined;
@@ -125,6 +137,11 @@ Returns { stopped } - the URNs of the services that were actually live and got s
           survivors.push(urn);
         }
       }
+      // An abort left the rest of the snapshot untouched, so neither `unmatched`
+      // nor `left_running` can be computed — an id whose only service the sweep
+      // never reached would read as a typo, and every namespace past the break
+      // would read as unreachable. Report the partial teardown as partial.
+      if (aborted) return { stopped, aborted: true };
       if (!scoped) return { stopped };
       // A scoped stop that named an id owning nothing is indistinguishable from
       // a clean machine unless we say so — and when that id is a typo, or a

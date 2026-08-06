@@ -1108,6 +1108,72 @@ describe("stop-all-simulator-servers unmatched ids", () => {
   });
 });
 
+describe("stop-all-simulator-servers abort", () => {
+  // A sweep is a loop of awaited disposals across thirteen namespaces, each
+  // reaping spawned processes and sockets. Ignoring the request signal billed a
+  // caller who had already given up — an MCP client timing out, a cancelled CLI
+  // run — for the whole of it.
+
+  it("stops sweeping once the request is aborted, and says the teardown is partial", async () => {
+    const services = new Map([
+      [`SimulatorServer:${MINE}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [`NativeDevtools:${MINE}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [`AXService:${MINE}`, { state: ServiceState.RUNNING, dependents: [] }],
+    ]);
+    const registry = createMockRegistry(services);
+    const controller = new AbortController();
+    // Abort as soon as the first disposal has happened.
+    vi.mocked(registry.disposeService).mockImplementationOnce(async (urn: string) => {
+      services.get(urn)!.state = ServiceState.IDLE;
+      controller.abort();
+    });
+    const tool = createStopAllSimulatorServersTool(registry);
+
+    const result = await tool.execute!({}, { devices: [MINE] }, {
+      signal: controller.signal,
+    } as never);
+
+    expect(result).toEqual({ stopped: [`SimulatorServer:${MINE}`], aborted: true });
+    expect(registry.disposeService).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not report `unmatched` for a partial sweep it never finished reading", async () => {
+    // The id may well own a service further down the snapshot, so calling it a
+    // typo here would be a guess — and `left_running` would name every
+    // namespace past the break.
+    const services = new Map([
+      [`SimulatorServer:${THEIRS}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [`SimulatorServer:${MINE}`, { state: ServiceState.RUNNING, dependents: [] }],
+    ]);
+    const registry = createMockRegistry(services);
+    const controller = new AbortController();
+    controller.abort();
+    const tool = createStopAllSimulatorServersTool(registry);
+
+    const result = await tool.execute!({}, { devices: [MINE] }, {
+      signal: controller.signal,
+    } as never);
+
+    expect(result).toEqual({ stopped: [], aborted: true });
+    expect(registry.disposeService).not.toHaveBeenCalled();
+  });
+
+  it("sweeps to completion when no signal is supplied", async () => {
+    const services = new Map([
+      [`SimulatorServer:${MINE}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [`NativeDevtools:${MINE}`, { state: ServiceState.RUNNING, dependents: [] }],
+    ]);
+    const registry = createMockRegistry(services);
+    const tool = createStopAllSimulatorServersTool(registry);
+
+    const result = await tool.execute!({}, { devices: [MINE] });
+
+    expect(result).toEqual({
+      stopped: [`SimulatorServer:${MINE}`, `NativeDevtools:${MINE}`],
+    });
+  });
+});
+
 describe("stop-all-simulator-servers left_running", () => {
   // With two or more devices on one Metro, `debugger-connect` refuses a udid /
   // serial and instructs the caller to re-target with the `logicalDeviceId`
