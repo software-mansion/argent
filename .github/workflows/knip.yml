@@ -1,0 +1,59 @@
+name: Dead Code
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  knip:
+    name: Knip
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          # Matches what lint, lockfile and repo-hygiene pin; the other eight PR
+          # workflows are on 20, e2e-device-smoke by inheriting the
+          # start-tool-server composite action's default. knip's own floor,
+          # engines.node >=18.18.0, is below both.
+          node-version: "24"
+
+      # Knip reads package.json and source only, so every install script here is
+      # pure cost to it. Seven are native, and fsevents is darwin-only, so six
+      # reach this runner: five try a prebuilt binary before compiling, and
+      # dtrace-provider always runs node-gyp but ends in
+      # `|| node suppress-error.js`. Off mac/solaris/freebsd its binding.gyp
+      # picks a stub target with no sources, so on this runner node-gyp builds
+      # nothing and node-pty is the only one that reaches a compiler at all —
+      # an optionalDependency, whose failure npm tolerates. What skipping them
+      # buys is immunity to a bump that leaves a package with no prebuild for
+      # the runner — the case dependabot.yml holds tree-sitter's minor and major
+      # updates back from, where the compile breaks `npm ci` outright.
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      # Knip analyzes source directly (it maps each package's dist entry back to
+      # src), so no workspace build is required. `npm run knip` reports the
+      # enforced classes on their own and only reaches the parked exports/types
+      # backlog once that pass is clean, so a failure never lands underneath it.
+      - name: Knip
+        id: knip
+        run: npm run knip
+
+      # A first-pass finding announces its class in a section header. A breach
+      # of the second pass's ceiling announces nothing — knip just exits 1,
+      # under 200+ parked findings that name files and symbols exactly like a
+      # real one. The section headers are the only thing that tells them apart,
+      # so key the message on those; it fires on any knip failure.
+      - name: Explain the failure
+        if: failure() && steps.knip.outcome == 'failure'
+        run: |
+          echo "::error::Dead Code failed. If the only sections above are the parked ones — unused exports, unused exported types, unused exported class members, or either of their in-used-namespace variants — the second pass exceeded the --max-issues ceiling in package.json, and knip exits on that silently; knip.jsonc explains the ceiling and why it must be counted against a tree with no build output. Any other section is a first-pass finding, and names what to change."

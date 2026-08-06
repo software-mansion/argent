@@ -7,7 +7,6 @@ import {
 } from "@argent/registry";
 import { createRegistry } from "../src/utils/setup-registry";
 import { pasteTool } from "../src/tools/paste";
-import { simulatorServerTool } from "../src/tools/simulator/simulator-server";
 import { createProposeVariantTool } from "../src/tools/variants/propose-variant";
 import { awaitUserSelectionTool } from "../src/tools/variants/await-user-selection";
 
@@ -29,16 +28,15 @@ function definitionsById(registry: Registry): Map<string, ToolDefinition<any, an
   definitions.set("propose_variant", createProposeVariantTool(registry));
   definitions.set("await_user_selection", awaitUserSelectionTool);
 
-  // These definitions intentionally exist outside createRegistry.
+  // This definition intentionally exists outside createRegistry.
   definitions.set("paste", pasteTool);
-  definitions.set("simulator-server", simulatorServerTool);
   return definitions;
 }
 
 describe("tool interaction messages", () => {
   it("defines all three formatters for every tool", () => {
     const definitions = definitionsById(createRegistry());
-    expect(definitions.size).toBe(77);
+    expect(definitions.size).toBe(76);
 
     for (const [id, definition] of definitions) {
       expect(definition.interaction?.startedMsg, `${id}.startedMsg`).toBeTypeOf("function");
