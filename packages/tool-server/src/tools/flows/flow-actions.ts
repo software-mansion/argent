@@ -1164,14 +1164,20 @@ async function waitForCondition(
  *   reason. (An invisible in the text it was tested against still gets named;
  *   see {@link ignorableTextNote}.)
  *
- * And it is scoped by what actually missed. For `exists`/`visible` nothing
- * matched, so the selector's own text is a needle that found nothing and
- * searching the WHOLE tree for its near-match is right. For `text` the element
- * WAS located, so it looks only at THAT element's text: searching the tree for
- * a `text` miss let an UNRELATED node that merely happened to render a compat
- * variant of the expected string hijack the note — telling an author whose
- * element is simply in the wrong state to "copy the rendered characters" of a
- * look-alike elsewhere on screen, which sends them down a dead end.
+ * And it is scoped by what actually missed, which is a question about the
+ * MATCH SET rather than about the condition:
+ *
+ * - Nothing matched, so the selector's own text is a needle that found
+ *   nothing: search the WHOLE tree for what it nearly matched. That is every
+ *   `exists` miss, and equally a `text` step whose LOCATOR missed — the same
+ *   selector on the same screen must not be explained under `exists` and left
+ *   bare under `text`.
+ * - Something matched but its text was wrong: look only at THAT element's
+ *   text. Searching the tree here let an UNRELATED node that merely happened
+ *   to render a compat variant of the expected string hijack the note —
+ *   telling an author whose element is simply in the wrong state to "copy the
+ *   rendered characters" of a look-alike elsewhere on screen, which sends them
+ *   down a dead end.
  */
 function compatibilityMissNote(
   tree: DescribeNode | undefined,
@@ -1185,13 +1191,16 @@ function compatibilityMissNote(
   // `visible` with matches is a visibility failure, not a locator miss.
   if (condition === "visible" && matches.length > 0) return "";
   let hit: string | undefined;
-  if (condition === "text") {
+  const located =
+    condition === "text"
+      ? (firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches))
+      : undefined;
+  if (located !== undefined) {
     // The element WAS located; what missed is the expectation, not the locator.
     // Scope strictly to the located element's own text — the very node
     // assertReason quotes — so an unrelated look-alike cannot hijack the note.
     if (expectedText === undefined || expectedText === "") return "";
-    const first = firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches);
-    if (first === undefined) return "";
+    const first = located;
     const shown = assertText(first);
     const own = nodeText(first);
     // Defer to the confusable (invisible-character) note assertReason already
@@ -1208,8 +1217,10 @@ function compatibilityMissNote(
     }
     hit = [shown, own].find((text) => text !== "" && compatibilityVariantOf(text, expectedText));
   } else {
-    // exists/visible: nothing matched, so the selector's own text is the needle
-    // that found nothing — search the whole tree for what it nearly matched.
+    // Nothing was located, so the selector's own text is the needle that found
+    // nothing — search the whole tree for what it nearly matched. Reached by
+    // every `exists` miss, by `visible` with no matches at all, and by a `text`
+    // step whose locator missed.
     const wanted = selector.text;
     if (tree === undefined || wanted === undefined || wanted === "") return "";
     const walk = (node: DescribeNode): void => {

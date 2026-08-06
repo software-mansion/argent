@@ -695,4 +695,36 @@ describe("compatibility miss note: what it is scoped to", () => {
     expect(result.steps[0].reason).toMatch(/none was visible/);
     expect(result.steps[0].reason).not.toMatch(/typographic variant/);
   });
+
+  it("fires for a `text` condition whose LOCATOR missed, as `exists` already does", async () => {
+    // Same selector, same screen: `exists` explained the miss and `text` said
+    // nothing. The docstring justified the silence with "for `text` the element
+    // WAS located" — which is exactly what did not happen here.
+    currentFetch = () => ({
+      tree: screen([
+        n({ label: "Add more languages…", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.05 } }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("text-locator-miss", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "assert",
+          condition: "text",
+          selector: { text: "Add more languages..." },
+          expectedText: "Add more languages...",
+          textMatch: "equals",
+        },
+      ],
+    });
+
+    const result = await run("text-locator-miss");
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/no element matched/);
+    expect(result.steps[0].reason).toMatch(/typographic variant/);
+    expect(result.steps[0].reason).toMatch(/Add more languages…/);
+  });
 });
