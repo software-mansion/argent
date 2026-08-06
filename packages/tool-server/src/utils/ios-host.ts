@@ -64,11 +64,15 @@ export interface IosHost {
   stopProxy(udid: string, port: number): Promise<void>;
 }
 
-/** Current bootstrap filename; `libInjectionBootstrap.dylib` is legacy (pre-rename) and still stripped when merging env. */
-const ARGENT_BOOTSTRAP_DYLIB_BASENAMES = new Set([
-  "libArgentInjectionBootstrap.dylib",
-  "libInjectionBootstrap.dylib",
-]);
+/**
+ * Argent's own bootstrap basename, always stripped before the active path is
+ * re-appended. The pre-rename name (`libInjectionBootstrap.dylib`) is
+ * deliberately not listed. It is generic and a live file carrying it could be
+ * another tool's injection bootstrap, which stripping would silently disable
+ * for the rest of the simulator's session. Stale pre-rename Argent entries
+ * still age out via the exists-on-disk rule below.
+ */
+const ARGENT_BOOTSTRAP_DYLIB_BASENAMES = new Set(["libArgentInjectionBootstrap.dylib"]);
 
 function splitDyldInsertLibraries(value: string): string[] {
   return value
@@ -78,9 +82,9 @@ function splitDyldInsertLibraries(value: string): string[] {
 }
 
 /**
- * Strips Argent bootstrap dylibs (by basename, including the legacy pre-rename name)
- * and entries that don't exist on disk (truncated artifacts from the simctl getenv
- * 127-byte bug, stale paths from old installs, etc.).
+ * Strips Argent's own bootstrap dylib (by basename) and entries that don't
+ * exist on disk (truncated artifacts from the `simctl getenv` 127-byte bug,
+ * stale paths from old installs).
  * Entries starting with '@' (loader-path references) are always preserved.
  * Third-party dylibs present on disk (e.g. SimCam) are kept verbatim.
  */
