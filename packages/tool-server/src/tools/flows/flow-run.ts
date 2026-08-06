@@ -2339,6 +2339,7 @@ function errMsg(err: unknown): string {
 export async function resolveFlowSource(
   params: {
     name?: string;
+    flow_name?: string;
     project_root: string;
     flow_file?: string;
     flow_path?: string;
@@ -2346,10 +2347,17 @@ export async function resolveFlowSource(
   fileInput?: ResolvedFileInput,
   flowPathInput?: ResolvedFileInput
 ): Promise<{ filePath: string; flowName: string; viaUpload: boolean }> {
+  // Both spellings, matching the schemas: a direct caller who named the flow
+  // via the alias HAS named a source. Reading `name` alone, a `flow_name` +
+  // `flow_path` call looks single-source, falls into the flow_path branch, and
+  // complains about the file-input boundary instead of the two sources it was
+  // given. The tool's own execute() folds the alias in before calling, so this
+  // only ever fires for the direct callers the check exists for.
+  const named = params.name ?? params.flow_name;
   // The schemas' superRefine already enforces this for flow-execute and
   // flow-read-prerequisite; this copy covers direct execute() callers (tests,
-  // in-process invocations) and keeps the params.name! below sound.
-  if ((params.name === undefined) === (params.flow_path === undefined)) {
+  // in-process invocations) and keeps the `named!` below sound.
+  if ((named === undefined) === (params.flow_path === undefined)) {
     throw new FailureError("Pass exactly one flow source: name or flow_path.", {
       error_code: FAILURE_CODES.FLOW_FILE_INVALID,
       failure_stage: "flow_source",
@@ -2535,7 +2543,7 @@ export async function resolveFlowSource(
     return { filePath: params.flow_path, flowName, viaUpload: false };
   }
 
-  const flowName = params.name!;
+  const flowName = named!;
   assertSafeFlowName(flowName);
   const expected = getFlowPath(params.project_root, flowName);
   // A path the boundary materialized from uploaded content is a fresh temp

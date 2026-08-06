@@ -1590,7 +1590,23 @@ describe("flow-add-step", () => {
     const parsed = createRunFlowTool(registry as unknown as Registry).zodSchema!.safeParse(nested);
     expect(parsed.success).toBe(false);
     expect(JSON.stringify(parsed.error?.issues)).toContain("Pass exactly one flow source");
+    // …and the in-process copy of that rule, which covers direct execute()
+    // callers, must reach the same verdict rather than complaining about the
+    // file-input boundary as if only flow_path had been given.
+    await expect(resolveFlowSource(nested)).rejects.toThrow("Pass exactly one flow source");
     expect(parseFlow(await readFlowFile("compose-alias")).steps).toEqual([]);
+  });
+
+  it("resolves a direct execute() caller's flow_name the way it resolves name", async () => {
+    // The alias is folded in before resolveFlowSource for every call that comes
+    // through the tool, so the fold has to exist here too — otherwise a direct
+    // in-process caller passing only `flow_name` is told to pass a source it
+    // just passed.
+    await fs.mkdir(path.join(tmpDir, ".argent", "flows"), { recursive: true });
+    await writeSiblingFlow("aliased-direct", "steps:\n  - echo: hi\n");
+    const resolved = await resolveFlowSource({ flow_name: "aliased-direct", project_root: tmpDir });
+    expect(resolved.flowName).toBe("aliased-direct");
+    expect(resolved.filePath).toBe(path.join(tmpDir, ".argent", "flows", "aliased-direct.yaml"));
   });
 
   it("throws on invalid JSON in args", async () => {
