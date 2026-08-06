@@ -131,7 +131,7 @@ The standalone command uses only the auto-started local tool server. It is unava
 | Tool                     | Purpose                                                                                                                                                 |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `flow-start-recording`   | Start recording — takes `name` + `project_root` and (fragments only) an optional `executionPrerequisite`; creates the file, truncating any existing one |
-| `flow-add-step`          | Execute a tool call live and record it if it succeeds                                                                                                   |
+| `flow-add-step`          | Execute a tool call live and record it if the call returns without failing — read the returned `message` for warnings about what was recorded           |
 | `flow-add-echo`          | Add a label/comment that prints during replay                                                                                                           |
 | `flow-finish-recording`  | Stop recording and get a summary                                                                                                                        |
 | `flow-read-prerequisite` | Read a flow's execution prerequisite without running it (same `name`/`flow_path` sources)                                                               |
