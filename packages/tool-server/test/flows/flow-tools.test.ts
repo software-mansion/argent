@@ -287,6 +287,11 @@ describe("flow-add-echo", () => {
     // The whole growing YAML is deliberately no longer echoed per step; the
     // file on disk is the assertion surface, and `flowFile` must be gone.
     expect(result).not.toHaveProperty("flowFile");
+    // With `flowFile` gone, `savedTo` is the only field naming the destination,
+    // so it has to be the real path — returning a bogus one used to pass the
+    // whole suite. Pinned here and on flow-add-step, the two callers of
+    // appendStepToFlow's host branch.
+    expect(result.savedTo).toBe(path.join(flowsDirFor(tmpDir), "echo-test.yaml"));
     const flow = parseFlow(await onDisk("echo-test"));
     expect(flow.steps).toEqual([{ kind: "echo", message: "Hello world" }]);
   });
@@ -409,6 +414,9 @@ describe("flow-add-step", () => {
     expect(result.recorded).toBe(
       summarizeStep(parseFlow(await onDisk("recorded-line")).steps[0], 1)
     );
+    // In host mode `savedTo` is the path the YAML actually landed at, and with
+    // `flowFile` gone it is the only field naming it. See the add-echo case.
+    expect(result.savedTo).toBe(path.join(flowsDirFor(tmpDir), "recorded-line.yaml"));
   });
 
   it("reports stepCount as a running total, numbering each recorded line with it", async () => {
