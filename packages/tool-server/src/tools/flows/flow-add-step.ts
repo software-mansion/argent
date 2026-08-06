@@ -207,6 +207,32 @@ function treeDivergenceFor(udid: unknown): string {
 }
 
 /**
+ * Which SPELLING of the conversion the verdict is about.
+ *
+ * The probe re-evaluates `args.selector` exactly as the recorded step carries
+ * it — a strict selector, matched on its own fields. The directive grammar has
+ * a second spelling that looks like the obvious conversion and is not the same
+ * check: a bare string (`await: { visible: Continue }`) parses as a LOOSE
+ * selector, which the runner resolves identifier-first and only falls back to
+ * text (see `selectorAlternatives`). On a screen where some node's id equals
+ * the recorded text — `<button id="Continue">Proceed</button>`, or an Android
+ * `@+id/continue` under a "Continue" label — the two spellings resolve
+ * DIFFERENT elements, so this verdict would be wrong in whichever direction
+ * they disagree.
+ *
+ * Rather than predict both, say which one was judged. The strict map form is
+ * also a mechanical copy of the recorded `selector:` map, and it is the same
+ * doctrine the recorder already applies to a captured `tap:` — it emits
+ * `tap: { text: General }`, never the bare string, because a bare string
+ * re-parses as loose and routes through a fallback the recorder never checked.
+ */
+const SPELLING_CLAUSE =
+  "Both of those are about the selector exactly as recorded, so convert it in the strict map " +
+  "spelling (`{ text: … }` / `{ id: … }`, a straight copy of the step's `selector:`): a " +
+  "bare-string conversion (`{ visible: Continue }`) re-parses as a LOOSE selector — " +
+  "identifier first, text only as a fallback — which is a different check this probe never made.";
+
+/**
  * `await-ui-element` reports a condition that never came true by returning
  * `{ success: false }` rather than throwing, so the recorder's success path
  * records the step regardless — the same shape `run-sequence` and `flow-run`
@@ -379,6 +405,8 @@ async function probeAgainstRunnerTree(
       // plainly wrong on Vega, where the two trees hold the same elements and a
       // disagreement means the screen moved, not that the selector is bad.
       `element reaches that tree within its longer timeout. ` +
+      SPELLING_CLAUSE +
+      " " +
       `${treeDivergenceFor(args.udid)} ${runnerSideReadClause(args.udid)}`,
   };
 }
@@ -773,7 +801,7 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
         `Failed to add ${params.command} step to flow ${params.name}: ${failureSignal.error_code}`,
     },
     description: `Execute a tool call and record it as a step in the flow named by \`name\` + \`project_root\` (the recording must already be open — see flow-start-recording). Use when recording a flow and you want to run and capture each action. A coordinate \`gesture-tap\` is recorded as a portable \`tap: { selector }\` step when the tapped element has stable text/identifier (otherwise coordinates are kept with a warning); a \`restart-app\` is recorded as a \`launch\` step (record one FIRST to make the flow a self-contained e2e flow; restart-app has no chromium support, so a chromium flow records as a fragment — add the \`launch: { chromium: <app path> }\` line to the YAML afterward, deleting the executionPrerequisite line if one was recorded: a flow that starts with a launch must not declare it).
-A recorded \`await-ui-element\` is re-probed against the tree the RUNNER resolves \`await:\`/\`assert:\` directives against, which is NOT the tree the live call read; when the two disagree the step is still recorded and \`message\` carries a warning saying the conversion would fail. \`message\` also warns when the live wait never held — that tool reports an unmet condition by returning \`{ success: false }\` rather than failing, so the step is recorded and will stop the run at replay.
+A recorded \`await-ui-element\` is re-probed against the tree the RUNNER resolves \`await:\`/\`assert:\` directives against, which is NOT the tree the live call read; when the two disagree the step is still recorded and \`message\` carries a warning saying the conversion would fail. The probe judges the selector exactly as recorded, so write the conversion in the strict map spelling (\`{ visible: { text: Continue } }\`, copying the step's \`selector:\`) — the bare-string spelling (\`{ visible: Continue }\`) re-parses as a loose selector that resolves identifier-first and falls back to text, which is a different check. \`message\` also warns when the live wait never held — that tool reports an unmet condition by returning \`{ success: false }\` rather than failing, so the step is recorded and will stop the run at replay.
 Returns { message, toolResult, stepCount, recorded, savedTo } - \`message\` is \`Step added to "<name>" flow\` plus any warning about what was recorded (read it; a warning never means the step was skipped); \`recorded\` is a one-line SUMMARY of the step just appended, numbered and in the flow file's own spellings (e.g. \`1. tap: {"id":"PLACARD"}\`), not the YAML that was written; \`stepCount\` is how many steps the flow now has, and the number \`recorded\` opens with. Read \`recorded\` to confirm WHAT was stored — a step is not always recorded as the tool call you made (see the tap and restart-app rewrites above). The flow's full YAML is deliberately NOT returned per step; read it back from \`flow-finish-recording\`. \`savedTo\` is where the YAML landed: a host path, or, against a remote client, the directive that has the client write it (the only field naming the destination in that mode). If it fails an error is returned and nothing is recorded.
 If a step was recorded by mistake, edit the .yaml to remove it. In host (local) mode the recorder re-reads the file before each append, so an edit made between steps is kept — but the append re-parses and re-validates the WHOLE file, so an edit that no longer parses makes the next step fail instead of being kept; repair the file and retry. Against a remote client, edit after \`flow-finish-recording\` because the in-memory copy is authoritative there and can overwrite a mid-recording edit.`,
     zodSchema,

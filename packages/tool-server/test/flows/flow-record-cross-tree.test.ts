@@ -401,6 +401,65 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     ]);
   });
 
+  // ── Which SPELLING of the conversion the verdict is about ────────────────
+  //
+  // The probe evaluates `args.selector` strictly, as the recorded step carries
+  // it. The directive grammar's bare-string sugar is a LOOSE selector, which
+  // the runner resolves identifier-first and only falls back to text — so on a
+  // screen where some node's id equals the recorded text the two spellings
+  // resolve different elements and the verdict flips. These two pin the strict
+  // reading and the clause that names it; the skill's polish step prescribes
+  // the strict map spelling for the same reason.
+  //
+  // Both trees below are the live Chromium repro's shape:
+  // `<button id="Continue">Proceed</button>`.
+  const CONTINUE_BUTTON = () =>
+    chromiumRunnerTree([
+      n({ role: "button", identifier: "Continue", value: "Proceed", frame: ROW, children: [] }),
+    ]);
+
+  it("judges the recorded selector strictly, not as the loose bare string", async () => {
+    const tree = CONTINUE_BUTTON();
+    serveTree(tree, "cdp-dom");
+
+    // The premise: the two spellings really do disagree on this tree. The
+    // identifier pass — the bare string's FIRST alternative — matches the
+    // button, while the strict `text` the step recorded matches nothing.
+    expect(findAll(tree, { identifier: "Continue" })).toHaveLength(1);
+    expect(findAll(tree, { text: "Continue" })).toHaveLength(0);
+
+    await startRecording("strictclean");
+    const result = await recordWait("strictclean", {
+      udid: CHROMIUM,
+      condition: "hidden",
+      selector: { text: "Continue" },
+    });
+
+    // Strict reading: nothing matches `text=Continue`, so `hidden` holds and
+    // there is nothing to warn about. Were the probe to adopt the bare
+    // string's loose fallback it would find the button and warn here — and
+    // then be wrong about the spelling the skill prescribes.
+    expect(warningOf(result, "strictclean")).toBeUndefined();
+  });
+
+  it("names the strict spelling the verdict is about when it warns", async () => {
+    serveTree(CONTINUE_BUTTON(), "cdp-dom");
+    await startRecording("strictwarn");
+
+    const result = await recordWait("strictwarn", {
+      udid: CHROMIUM,
+      condition: "visible",
+      selector: { text: "Continue" },
+    });
+    const warning = warningOf(result, "strictwarn") ?? "";
+
+    expect(warning).toContain("does NOT hold against the tree the runner resolves");
+    // Without this clause the author converts to `{ visible: Continue }`, whose
+    // identifier pass resolves the button — a check the probe never made.
+    expect(warning).toContain("convert it in the strict map spelling");
+    expect(warning).toContain("re-parses as a LOOSE selector");
+  });
+
   // ── Per-platform divergences, each produced by that platform's adapter ────
 
   // iOS: `projectIosNode` skips a transparent subtree outright, so a view the
