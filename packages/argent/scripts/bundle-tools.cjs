@@ -54,8 +54,11 @@ const ALIASES = {
   "@argent/telemetry": TELEMETRY_ENTRY,
 };
 
-// Build-time constants for @argent/telemetry. The PostHog project token is a
-// checked-in public write-only key; only version metadata needs esbuild defines.
+// Build-time constants for @argent/telemetry: the CLI version stamped into every
+// event, and the OTLP ingest token used to authenticate against the collector.
+// The token is read from the environment at release time (ARGENT_OTEL_INGEST_TOKEN);
+// an unset/dev build defines it as "", which leaves the telemetry client
+// unconstructed and telemetry inert (see packages/telemetry/src/otel.ts).
 const TELEMETRY_CLI_VERSION = (() => {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
@@ -65,8 +68,11 @@ const TELEMETRY_CLI_VERSION = (() => {
   }
 })();
 
+const TELEMETRY_OTEL_INGEST_TOKEN = process.env.ARGENT_OTEL_INGEST_TOKEN ?? "";
+
 const TELEMETRY_DEFINE = {
   ARGENT_CLI_VERSION: JSON.stringify(TELEMETRY_CLI_VERSION),
+  ARGENT_OTEL_INGEST_TOKEN: JSON.stringify(TELEMETRY_OTEL_INGEST_TOKEN),
 };
 
 // esbuild on platform:"node" defaults mainFields to ["main","module"], which

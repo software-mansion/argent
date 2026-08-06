@@ -11,7 +11,7 @@ import { PLATFORMS, type EventName, type EventPropertyMap } from "./events.js";
 import { AI_CLIENTS } from "./ai-identity.js";
 
 // Per-event property allowlist and validators. Unknown keys and invalid values
-// are dropped before anything reaches PostHog.
+// are dropped before anything reaches the OTLP collector.
 
 export type Validator = (v: unknown) => unknown | undefined;
 

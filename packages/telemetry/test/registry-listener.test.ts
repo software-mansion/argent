@@ -14,7 +14,7 @@ describe("attachRegistryTelemetry", () => {
     telemetry.init("tool_server");
     // Reset the in-memory consent cache so each test starts fresh.
     telemetry.markEnabled();
-    (globalThis as Record<string, unknown>).__ARGENT_POSTHOG_KEY_TEST = "";
+    (globalThis as Record<string, unknown>).__ARGENT_OTEL_TOKEN_TEST = "";
   });
 
   afterEach(() => {
