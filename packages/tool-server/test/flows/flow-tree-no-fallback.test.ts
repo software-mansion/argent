@@ -89,7 +89,7 @@ describe("fetchFlowTree without a full-hierarchy source", () => {
     );
 
     expect(result.ok).toBe(false);
-    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["assert:fail"]);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["assert:error"]);
     // The report names the outage — not a misleading "no element matched".
     expect(result.steps[0].reason).toMatch(/could not read the UI tree/);
     expect(result.steps[0].reason).toMatch(/native devtools is unavailable/);

@@ -94,7 +94,8 @@ describe("hidden assert against a no-windows target (end-to-end)", () => {
     // Every poll's fetch rejects with the guard's message, so the assert never
     // gets a trusted read and must report the outage, quoting the guard.
     expect(result.ok).toBe(false);
-    expect(result.steps[0].status).toBe("fail");
+    // `error`, not `fail`: an unreadable window is not a verdict about the app.
+    expect(result.steps[0].status).toBe("error");
     expect(result.steps[0].reason).toMatch(/could not read the UI tree/);
     expect(result.steps[0].reason).toMatch(/returned no windows for com\.example\.app/);
     expect(result.steps[0].reason).toMatch(/not injectable/);
