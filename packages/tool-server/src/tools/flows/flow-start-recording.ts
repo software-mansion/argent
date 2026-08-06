@@ -98,7 +98,11 @@ executionPrerequisite instead. Use flow-add-echo to add labels. Call
 flow-finish-recording when done.
 
 If a recorded step turns out to be wrong, you can edit the .yaml file directly
-to remove or reorder steps.`,
+to remove or reorder steps. In host (local) mode the recorder re-reads the file
+before each append, so an edit made between steps is kept — but it must still
+parse, or the NEXT step fails on it rather than the edit being silently kept.
+Against a remote client, edit after flow-finish-recording: the in-memory copy is
+authoritative there and can overwrite a mid-recording edit.`,
   zodSchema,
   fileInputs,
   services: () => ({}),
