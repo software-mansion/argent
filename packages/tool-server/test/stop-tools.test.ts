@@ -32,7 +32,11 @@ function createMockRegistry(services: Map<string, { state: ServiceState; depende
     // stop-one-then-stop-the-rest tests below exist to pin.
     disposeService: vi.fn(async function dispose(urn: string) {
       const node = services.get(urn);
-      if (!node || node.state === ServiceState.IDLE) return;
+      // `Registry._teardown` early-returns for IDLE **and TERMINATING** — a node
+      // already being torn down is not disposed a second time. The mock used to
+      // recurse into a TERMINATING node, which production never does.
+      if (!node || node.state === ServiceState.IDLE || node.state === ServiceState.TERMINATING)
+        return;
       // …and it recurses into dependents BEFORE clearing the node
       // (Registry._teardown), so a service whose dependency is disposed goes
       // down with it. Mirror that too, or a test cannot tell a namespace this
@@ -312,6 +316,8 @@ describe("stop-all-simulator-servers", () => {
   // the answer must not depend on which happened.
   const CDP = "ChromiumCdp:chromium-cdp-9222";
   const CHROMIUM_DEBUGGER = "ChromiumJsRuntimeDebugger:chromium-cdp-9222";
+  /** A second Electron instance, belonging to somebody else. */
+  const OTHER_CDP = "ChromiumCdp:chromium-cdp-9333";
   const live = () => ({ state: ServiceState.RUNNING, dependents: [] as string[] });
   const cdpWithDependent = () => ({
     state: ServiceState.RUNNING,
@@ -327,9 +333,14 @@ describe("stop-all-simulator-servers", () => {
       // Both URNs carry the device id, so each is matched DIRECTLY; the
       // cascade is incidental here and this case is about insertion order not
       // changing membership. What the cascade alone decides is pinned below.
-      const services = new Map(
-        order.map((urn) => [urn, urn === CDP ? cdpWithDependent() : live()] as const)
-      );
+      //
+      // A second chromium instance is the control: with only the target's URNs
+      // in the snapshot an always-match matcher passes this case, and
+      // `ChromiumJsRuntimeDebugger` is a namespace nothing else here scopes.
+      const services = new Map([
+        ...order.map((urn) => [urn, urn === CDP ? cdpWithDependent() : live()] as const),
+        [OTHER_CDP, live()] as const,
+      ]);
       const registry = createMockRegistry(services);
       const tool = createStopAllSimulatorServersTool(registry);
 
@@ -340,22 +351,28 @@ describe("stop-all-simulator-servers", () => {
         [CDP, CHROMIUM_DEBUGGER].sort()
       );
       expect(result).not.toHaveProperty("unmatched");
-      expect(services.get(CHROMIUM_DEBUGGER)?.state).toBe(ServiceState.IDLE);
-      expect(services.get(CDP)?.state).toBe(ServiceState.IDLE);
+      expect(registry.disposeService).not.toHaveBeenCalledWith(OTHER_CDP);
     }
   );
 
-  it("takes a non-device dependent down with its dependency without claiming to have reaped it", async () => {
-    // The distinction the mock's recursion exists for, and the one the case
-    // above cannot make: a dependent this tool does NOT match by device. It
-    // still dies — the registry cascades — but it is somebody else's
-    // dependent, not something the teardown reaped by name, so it must not
-    // appear in `stopped`. Reporting it there would tell an agent a
-    // device-scoped teardown deliberately killed its Metro session.
-    const METRO = "Metro:8081";
+  it("does not credit `stopped` with a dependent that was already IDLE", async () => {
+    // The distinction the case above cannot make. `ChromiumJsRuntimeDebugger`
+    // declares `ChromiumCdp` as its dependency, so the transport's teardown
+    // takes it down as a dependent — but it was already IDLE, so it was not a
+    // running service this call shut down and must not be named. `stopped`
+    // reports what this teardown found LIVE, not everything the graph touched;
+    // naming it would tell an agent a session it had already stopped was still
+    // up a moment ago.
+    //
+    // The earlier version of this case fabricated a `Metro:8081` node to stand
+    // in for a non-device dependent. There is no such thing: every namespace a
+    // blueprint declares as a dependency is itself in DEVICE_OWNED_NAMESPACES,
+    // and `Metro:8081` is not a registry namespace at all — so what it asserted
+    // (`services.get(METRO)?.state`) was the mock's own recursion, which no
+    // production line reads.
     const services = new Map([
-      [CDP, { state: ServiceState.RUNNING, dependents: [METRO] }],
-      [METRO, { state: ServiceState.RUNNING, dependents: [] as string[] }],
+      [CDP, { state: ServiceState.RUNNING, dependents: [CHROMIUM_DEBUGGER] }],
+      [CHROMIUM_DEBUGGER, { state: ServiceState.IDLE, dependents: [] as string[] }],
     ]);
     const registry = createMockRegistry(services);
     const tool = createStopAllSimulatorServersTool(registry);
@@ -363,7 +380,25 @@ describe("stop-all-simulator-servers", () => {
     const result = await tool.execute!({}, { devices: ["chromium-cdp-9222"] });
 
     expect(result).toEqual({ stopped: [CDP] });
-    expect(services.get(METRO)?.state).toBe(ServiceState.IDLE);
+    // Matched, so not a mistyped id — the device owns both URNs either way.
+    expect(result).not.toHaveProperty("unmatched");
+  });
+
+  it("disposes a TERMINATING node without reporting it as stopped", async () => {
+    // A node already being torn down is not live, so `isLiveServiceState` keeps
+    // it out of `stopped` — but it is not IDLE either, so the sweep still calls
+    // `disposeService` on it (which the real `_teardown` then no-ops). Both
+    // halves are production lines; neither had coverage.
+    const services = new Map([
+      [`SimulatorServer:${MINE}`, { state: ServiceState.TERMINATING, dependents: [] }],
+    ]);
+    const registry = createMockRegistry(services);
+    const tool = createStopAllSimulatorServersTool(registry);
+
+    const result = await tool.execute!({}, { devices: [MINE] });
+
+    expect(result).toEqual({ stopped: [] });
+    expect(registry.disposeService).toHaveBeenCalledWith(`SimulatorServer:${MINE}`);
   });
 
   it("returns empty list when no simulators are running", async () => {
@@ -834,8 +869,12 @@ describe("stop-all-simulator-servers unmatched ids", () => {
     // case). `AXService` is a device-owned namespace holding the in-sim ax
     // daemon (spawned --timeout 3600), so a scoped stop reaps it AND does not
     // report the correct UDID as unmatched: it owns a real service, not a typo.
+    // A second device's AXService is the control: without it an always-match
+    // matcher passes this case, and AXService is one of the namespaces nothing
+    // else here scopes.
     const services = new Map([
       [`AXService:${MINE}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [`AXService:${THEIRS}`, { state: ServiceState.RUNNING, dependents: [] }],
     ]);
     const registry = createMockRegistry(services);
     const tool = createStopAllSimulatorServersTool(registry);
@@ -845,6 +884,7 @@ describe("stop-all-simulator-servers unmatched ids", () => {
     expect(result).toEqual({ stopped: [`AXService:${MINE}`] });
     expect(result).not.toHaveProperty("unmatched");
     expect(registry.disposeService).toHaveBeenCalledWith(`AXService:${MINE}`);
+    expect(registry.disposeService).not.toHaveBeenCalledWith(`AXService:${THEIRS}`);
   });
 
   it("scopes the tcp-transport AXService URN to its own device", async () => {
@@ -873,8 +913,11 @@ describe("stop-all-simulator-servers unmatched ids", () => {
     // cascades to it. It is a device-owned namespace, so a session that ran
     // screen-recording-start is correctly reaped by a scoped stop and its
     // serial is not reported as a mistyped id.
+    // Second device as the control — an always-match matcher would otherwise
+    // pass, and nothing else here scopes this namespace.
     const services = new Map([
       [`ScreenRecordingSession:${MINE}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [`ScreenRecordingSession:${THEIRS}`, { state: ServiceState.RUNNING, dependents: [] }],
     ]);
     const registry = createMockRegistry(services);
     const tool = createStopAllSimulatorServersTool(registry);
@@ -883,6 +926,7 @@ describe("stop-all-simulator-servers unmatched ids", () => {
 
     expect(result).toEqual({ stopped: [`ScreenRecordingSession:${MINE}`] });
     expect(result).not.toHaveProperty("unmatched");
+    expect(registry.disposeService).not.toHaveBeenCalledWith(`ScreenRecordingSession:${THEIRS}`);
   });
 
   it("owns and stops a device whose only service is a native profiler session", async () => {
@@ -890,6 +934,8 @@ describe("stop-all-simulator-servers unmatched ids", () => {
     // its trace file on Android.
     const services = new Map([
       [`NativeProfilerSession:${MINE}`, { state: ServiceState.RUNNING, dependents: [] }],
+      // Control, as above.
+      [`NativeProfilerSession:${THEIRS}`, { state: ServiceState.RUNNING, dependents: [] }],
     ]);
     const registry = createMockRegistry(services);
     const tool = createStopAllSimulatorServersTool(registry);
@@ -898,6 +944,7 @@ describe("stop-all-simulator-servers unmatched ids", () => {
 
     expect(result).toEqual({ stopped: [`NativeProfilerSession:${MINE}`] });
     expect(result).not.toHaveProperty("unmatched");
+    expect(registry.disposeService).not.toHaveBeenCalledWith(`NativeProfilerSession:${THEIRS}`);
   });
 
   it("scopes the port-keyed debugger URNs to the right device", async () => {
