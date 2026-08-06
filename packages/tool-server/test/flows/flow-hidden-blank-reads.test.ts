@@ -830,4 +830,58 @@ describe("compatibility miss note: what it is scoped to", () => {
     expect(result.steps[0].status).toBe("fail");
     expect(result.steps[0].reason).toMatch(/typographic variant/);
   });
+
+  it("neutralises a directional override in the SCREEN text it quotes", async () => {
+    // An unbalanced U+202E in a label reverses every character printed after
+    // it, so quoting screen text verbatim reverses the ~300 characters of
+    // advice that follow. The label survives the fold on purpose — a control
+    // that reorders is exactly what must not be stripped — so the message has
+    // to defuse it instead. The selector here is plain, to isolate the quoted
+    // SCREEN text as the source.
+    currentFetch = () => ({
+      tree: screen([
+        n({
+          label: "Add more languages…‮",
+          frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.05 },
+        }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("rlo-quote", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "assert", condition: "visible", selector: { text: "Add more languages..." } },
+      ],
+    });
+
+    const result = await run("rlo-quote");
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/typographic variant/);
+    expect(result.steps[0].reason).not.toContain("‮");
+    // Defused AND named, so the author can see what is in their label.
+    expect(result.steps[0].reason).toMatch(/<U\+202E>/);
+  });
+
+  it("leaves ordinary quoted text alone, so it stays copy-pasteable", async () => {
+    currentFetch = () => ({
+      tree: screen([
+        n({ label: "Add more languages…", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.05 } }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("plain-quote", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "assert", condition: "visible", selector: { text: "Add more languages..." } },
+      ],
+    });
+
+    const result = await run("plain-quote");
+
+    expect(result.steps[0].reason).toMatch(/does show "Add more languages…"/);
+    expect(result.steps[0].reason).not.toMatch(/<U\+/);
+  });
 });

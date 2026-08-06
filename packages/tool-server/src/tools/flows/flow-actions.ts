@@ -18,6 +18,7 @@ import {
   confusableTextNote,
   compatibilityVariantOf,
   compatibilityVariantIn,
+  quoteScreenText,
   type Selector,
   type WaitCondition,
   type TextMatchMode,
@@ -1248,7 +1249,7 @@ function compatibilityMissNote(
   }
   return hit === undefined
     ? ""
-    : ` — the screen does show "${hit}", which differs only by a typographic variant ` +
+    : ` — the screen does show "${quoteScreenText(hit)}", which differs only by a typographic variant ` +
         `(a rendered "…" is ONE character, not three dots; likewise ligatures and fullwidth ` +
         `forms). Those are not folded together, because doing so would also equate a styled ` +
         `display name with the plain one it imitates. Copy the characters the app actually renders.`;

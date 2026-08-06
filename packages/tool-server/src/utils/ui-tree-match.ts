@@ -386,6 +386,8 @@ const SEQUENCE_BUILDING = /[‌‍︀-️\u{e0020}-\u{e007f}\u{e0100}-\u{e01ef}]
 
 /** The directional controls: no glyph of their own, but they REORDER text. */
 const DIRECTIONAL = /[؜‎‏‪-‮⁦-⁩]/u;
+/** {@link DIRECTIONAL}, global — for {@link quoteScreenText}'s replace. */
+const DIRECTIONAL_G = new RegExp(DIRECTIONAL.source, "gu");
 
 /**
  * Every default-ignorable code point EXCEPT the sequence-building ones — the
@@ -465,6 +467,23 @@ export function confusableTextNote(actual: string, expected: string): string | u
       "REORDERS the characters around it, so the screen does not read the way the text does"
     : "the two strings differ only in invisible characters";
   return `${lead} — actual [${codepoints(actual)}] vs expected [${codepoints(expected)}]`;
+}
+
+/**
+ * Screen text, made safe to embed in a failure message.
+ *
+ * A label carrying an unbalanced U+202E survives the fold (it is exactly the
+ * kind of character the fold must not remove) and, quoted verbatim, reverses
+ * every character printed after it — turning the rest of the report into
+ * mojibake. Spell the directional controls out instead, which both defuses them
+ * and names the culprit; everything else is left alone so the quoted text stays
+ * copy-pasteable, which is the whole point of quoting it.
+ */
+export function quoteScreenText(text: string): string {
+  return text.replace(
+    DIRECTIONAL_G,
+    (ch) => `<U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}>`
+  );
 }
 
 export function includesCI(haystack: string | undefined, needle: string): boolean {
