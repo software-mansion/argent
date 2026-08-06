@@ -825,8 +825,10 @@ describe("flow-add-step", () => {
     expect(result.message).toContain("failed nested step");
     expect(result.message).toContain("await-ui-element condition not met");
     expect(result.message).toContain("step NOT recorded");
-    expect(result.message).toContain("Prior nested steps may already have mutated device state");
-    expect(result.message).toContain("state produced by the recorded prefix");
+    expect(result.message).toContain("Prior nested steps may already have changed the device");
+    // A check, not a restore: relaunching would not reproduce the prefix.
+    expect(result.message).toContain("state the recorded prefix leaves it in");
+    expect(result.message).not.toContain("Restore the device");
     expect(parseFlow(await onDisk("sequence-failed")).steps).toEqual([]);
   });
 
@@ -911,8 +913,10 @@ describe("flow-add-step", () => {
     expect(result.message).toContain("was cancelled");
     expect(result.message).toContain("1/2 nested steps completed");
     expect(result.message).toContain("step NOT recorded");
-    expect(result.message).toContain("Prior nested steps may already have mutated device state");
-    expect(result.message).toContain("state produced by the recorded prefix");
+    expect(result.message).toContain("Prior nested steps may already have changed the device");
+    // A check, not a restore: relaunching would not reproduce the prefix.
+    expect(result.message).toContain("state the recorded prefix leaves it in");
+    expect(result.message).not.toContain("Restore the device");
     expect(parseFlow(await onDisk("sequence-cancelled")).steps).toEqual([]);
   });
 
@@ -946,9 +950,53 @@ describe("flow-add-step", () => {
 
     expect(result.message).toContain("ok: false");
     expect(result.message).toContain("NOT recorded");
-    expect(result.message).toContain("Prior composed steps may already have mutated device state");
-    expect(result.message).toContain("state produced by the recorded prefix");
+    expect(result.message).toContain("Prior composed steps may already have changed the device");
+    expect(result.message).toContain("state the recorded prefix leaves it in");
     expect(parseFlow(await onDisk("compose-failed")).steps).toEqual([]);
+  });
+
+  it("advises a check rather than a restore when the composed flow was read-only", async () => {
+    // A flow of nothing but asserts reached a step, so the warning fires even
+    // though nothing could have moved — mutation is not decidable from the
+    // result, and over-firing is the safe direction. That makes the ADVICE the
+    // thing that has to be safe: telling this author to "restore the device"
+    // invites a relaunch, which lands on the start screen rather than on the
+    // state the recorded prefix produces, destroying the recording's premise.
+    const registry = createMockRegistry({
+      "flow-execute": {
+        result: {
+          flow: "checks",
+          device: "ABC",
+          executionPrerequisite: "",
+          ok: false,
+          passed: 1,
+          failed: 1,
+          skipped: 0,
+          errored: 0,
+          steps: [
+            { index: 0, kind: "assert", status: "pass" },
+            { index: 1, kind: "assert", status: "fail", reason: "Home not visible" },
+          ],
+        },
+      },
+    });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute({}, { name: "compose-readonly", project_root: tmpDir });
+    await writeSiblingFlow("checks", "steps:\n  - echo: hi\n");
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "compose-readonly",
+        project_root: tmpDir,
+        command: "flow-execute",
+        args: JSON.stringify({ name: "checks", project_root: tmpDir, device: "ABC" }),
+      }
+    );
+
+    expect(result.message).toContain("Check the device against the state the recorded prefix");
+    expect(result.message).toContain("relaunching the app does NOT reproduce that prefix");
+    expect(result.message).not.toContain("Restore the device");
   });
 
   it("still warns when the composed flow failed with NO step passing", async () => {

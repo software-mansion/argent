@@ -826,12 +826,24 @@ function flowExecuteRecordBlock(result: unknown): { reason: string } | null {
   return null;
 }
 
+/**
+ * The advice deliberately asks for a CHECK, not a restore.
+ *
+ * Whether a step that was attempted actually moved the device is not decidable
+ * from the result (see {@link nestedStepAttempted}), so this fires on read-only
+ * nested runs too — a composed flow of nothing but `assert`s reaches a step and
+ * therefore trips it. "Restore the device" is the wrong instruction to hand
+ * someone in that position: its obvious execution is a relaunch, and a relaunch
+ * puts the app at its start screen, not at the state the recorded prefix leaves
+ * it in — destroying the very thing the warning is protecting.
+ */
 function partialMutationWarning(command: "flow-execute" | "run-sequence"): string {
   const stepKind = command === "flow-execute" ? "composed" : "nested";
   return (
-    `Prior ${stepKind} steps may already have mutated device state. ` +
-    "Restore the device to the state produced by the recorded prefix before adding another " +
-    "step, or the remaining recording may not be reproducible."
+    `Prior ${stepKind} steps may already have changed the device — a step can act and then fail, ` +
+    "so the result cannot rule it out. Check the device against the state the recorded prefix " +
+    "leaves it in before adding the next step, and put it back by hand if it has moved; " +
+    "relaunching the app does NOT reproduce that prefix."
   );
 }
 
