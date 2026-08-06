@@ -436,6 +436,43 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     ).toThrow(/not supported on ios-remote/);
   });
 
+  // A `text` reason quotes the matched element's rendered content, and on the
+  // flow tree that content is HOISTED — a container carries every descendant's
+  // text, space-joined. Unbounded, one failed check can paste a whole log pane
+  // into the tool result the agent reads in full. Before this branch a recorded
+  // wait's message carried no screen content at all.
+  it("caps the screen text it echoes back", async () => {
+    const wall = "Lorem ipsum dolor sit amet ".repeat(60); // ~1600 chars
+    runnerTree = () => screen([`Total ${wall}`]);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "long", project_root: tmpDir, executionPrerequisite: "on the form" }
+    );
+    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "long",
+        project_root: tmpDir,
+        command: "await-ui-element",
+        args: JSON.stringify({
+          udid: DEVICE,
+          condition: "text",
+          selector: { text: "Total" },
+          expectedText: "$5.00",
+        }),
+      }
+    );
+
+    expect(result.message).toContain("does NOT hold against the tree the runner resolves");
+    expect(result.message).toContain("more chars)");
+    // Enough of the text to be actionable, not the whole screen.
+    expect(result.message).toContain("Lorem ipsum");
+    expect(result.message.length).toBeLessThan(wall.length);
+    expect(parseFlow(await onDisk("long")).steps).toHaveLength(1);
+  }, 20_000);
+
   it("throws AbortError when the run is cancelled during the re-probe", async () => {
     // The live await-ui-element still "passes" (the mock ignores the signal), so
     // the abort lands in the re-probe — strictly after the recorded tool ran.

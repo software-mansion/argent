@@ -245,6 +245,24 @@ function abortError(): Error {
 const PROBE_BUDGET_MS = 4000;
 
 /**
+ * Length cap on the probe's own reason before it is quoted back to the agent.
+ *
+ * `assertReason`'s `text` arm quotes the matched element's rendered content,
+ * and on the flow tree that content is HOISTED — a container's text is every
+ * descendant's, space-joined. So the reason for one failed `text` check can
+ * carry an entire card, list section or log pane, and this warning is appended
+ * to `message` on a tool whose result the agent reads in full. The reason has
+ * to name enough of what it saw to be actionable, not reproduce the screen.
+ */
+const MAX_PROBE_REASON_CHARS = 200;
+
+function cappedReason(reason: string): string {
+  return reason.length <= MAX_PROBE_REASON_CHARS
+    ? reason
+    : `${reason.slice(0, MAX_PROBE_REASON_CHARS)}… (${reason.length - MAX_PROBE_REASON_CHARS} more chars)`;
+}
+
+/**
  * The recorder and the runner read DIFFERENT trees. `await-ui-element`
  * evaluates against the agent-facing describe tree — the AX hierarchy on
  * iOS/Android, the CDP DOM on Chromium, the toolkit page source on Vega; the
@@ -323,7 +341,8 @@ async function probeAgainstRunnerTree(
       // naming the AX tree there describes a source neither side read.
       warning:
         `this check could not be re-verified against the tree the RUNNER reads ` +
-        `(${outcome.reason}), so it passed against the tree \`${AWAIT_UI_ELEMENT_TOOL_ID}\` ` +
+        `(${cappedReason(outcome.reason ?? "no reason given")}), so it passed against the tree ` +
+        `\`${AWAIT_UI_ELEMENT_TOOL_ID}\` ` +
         `reads and nothing else. Whether it would convert to \`await:\`/\`assert:\` is UNKNOWN, ` +
         `not known-bad — re-probe once that tree source is back before trusting the conversion`,
     };
@@ -334,7 +353,7 @@ async function probeAgainstRunnerTree(
   return {
     warning:
       `recorded, but this condition does NOT hold against the tree the runner resolves ` +
-      `directives against (${outcome.reason ?? "no match"}). As the raw ` +
+      `directives against (${cappedReason(outcome.reason ?? "no match")}). As the raw ` +
       `\`tool: ${AWAIT_UI_ELEMENT_TOOL_ID}\` step it replays fine — it reads the same tree it ` +
       `just passed against — but an \`assert:\` conversion WILL fail (it reads that tree on ` +
       `the same short grace this probe just used), and an \`await:\` will too unless the ` +
