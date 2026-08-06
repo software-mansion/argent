@@ -22,7 +22,9 @@ interface SentCall {
 }
 
 function fakeDebuggerApi(sent: SentCall[]): JsRuntimeDebuggerApi {
-  const events = new TypedEventEmitter<Record<string, (...args: never[]) => void>>();
+  // The CDP event map is not exported; nothing here subscribes, the emitter only
+  // has to exist for the factory's `cdp.events.on(...)` calls.
+  const events = new TypedEventEmitter<Record<string, (...args: unknown[]) => void>>();
   const cdp = {
     events,
     send: async (method: string, params?: Record<string, unknown>) => {
