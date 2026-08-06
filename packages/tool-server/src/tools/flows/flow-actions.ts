@@ -23,7 +23,12 @@ import { settleWithin, sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree } from "./flow-tree";
-import { capturePixelsWithin, comparePixels, type PixelFrame } from "./flow-pixels";
+import {
+  capturePixelsWithin,
+  comparePixels,
+  statusBarMaskFraction,
+  type PixelFrame,
+} from "./flow-pixels";
 import {
   buildAxisCandidate,
   decomposePinch,
@@ -1251,6 +1256,9 @@ async function waitForIdle(
 ): Promise<DirectiveOutcome> {
   const timeoutMs = step.timeout ?? IDLE_DEFAULT_TIMEOUT_MS;
   const minStableMs = step.minStableMs ?? IDLE_DEFAULT_MIN_STABLE_MS;
+  // Resolved once: it depends only on the device, and on iOS it costs a
+  // runtime probe the capture path memoizes anyway.
+  const maskTopFraction = await statusBarMaskFraction(env.device);
   const deadline = Date.now() + timeoutMs;
 
   // Two hold clocks, because the tree can settle while the pixels have not.
@@ -1374,7 +1382,7 @@ async function waitForIdle(
           captureFailed = true;
         } else {
           if (previousFrame !== undefined) {
-            const change = comparePixels(previousFrame, frame);
+            const change = comparePixels(previousFrame, frame, maskTopFraction);
             if (change === "moving") pixelsEverMoved = true;
             else {
               pixelsHeld = true;

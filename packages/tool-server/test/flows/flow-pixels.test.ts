@@ -12,6 +12,7 @@ import {
   PIXEL_THRESHOLD,
   comparePixels,
   pixelCaptureTimeoutMs,
+  statusBarMaskFraction,
   type PixelFrame,
 } from "../../src/tools/flows/flow-pixels";
 import { isTvOsSimulator } from "../../src/utils/ios-devices";
@@ -202,6 +203,103 @@ describe("comparePixels", () => {
       // pixels of 198k is an order of magnitude under a caret.
       expect(comparePixels(...changed(IPHONE, 3))).toBe("still");
     });
+
+    // The two frames below are the ones the runner was actually caught
+    // comparing on a static iPhone 16 Pro screen: the run-level status-bar pin
+    // lands a few hundred milliseconds AFTER the run starts, so frame A holds
+    // the real clock and frame B the pinned one. Both changes sit inside the
+    // top band, which is why masking it is what fixes them.
+    describe("with the status bar masked", () => {
+      const MASK = 0.06;
+
+      /** Change `count` pixels confined to rows [top, bottom] of an iPhone frame. */
+      function changedInRows(count: number, top: number): [PixelFrame, PixelFrame] {
+        const before = solid(IPHONE[0], IPHONE[1], [255, 255, 255]);
+        const after = solid(IPHONE[0], IPHONE[1], [255, 255, 255]);
+        for (let i = 0; i < count; i++) {
+          const o = (top * IPHONE[0] + i) * 4;
+          after.data[o] = 0;
+          after.data[o + 1] = 0;
+          after.data[o + 2] = 0;
+        }
+        return [before, after];
+      }
+
+      it("stops the pin's own clock repaint from reading as a moving screen", () => {
+        // 408 changed pixels at y[19..29] — over the 396-pixel motion budget,
+        // so unmasked this static screen was judged to be in motion.
+        const frames = changedInRows(408, 19);
+        expect(comparePixels(...frames)).toBe("moving");
+        expect(comparePixels(...frames, MASK)).toBe("still");
+      });
+
+      it("stops the pin's battery-fill tail from reading as a spinner", () => {
+        // The same repaint a moment later: 13 pixels at y[19..25], which is
+        // over the localized floor and became "a spinner, a caret, a progress
+        // dot ... the screen had not finished loading" on a loaded screen.
+        const frames = changedInRows(13, 19);
+        expect(comparePixels(...frames)).toBe("localized");
+        expect(comparePixels(...frames, MASK)).toBe("still");
+      });
+
+      it("still sees a spinner just below the masked band", () => {
+        // The mask must cost the check only the system's own band. 39 rows of
+        // 656 are masked, so a spinner at row 40 is still fully visible.
+        expect(comparePixels(...changedInRows(66, 40), MASK)).toBe("localized");
+      });
+
+      it("still sees a transition below the masked band", () => {
+        const frames = changedInRows(0, 0);
+        for (let i = 0; i < Math.round(IPHONE[0] * IPHONE[1] * 0.01); i++) {
+          const o = (39 * IPHONE[0] + i) * 4;
+          frames[1].data[o] = 0;
+          frames[1].data[o + 1] = 0;
+          frames[1].data[o + 2] = 0;
+        }
+        expect(comparePixels(...frames, MASK)).toBe("moving");
+      });
+
+      it("takes its fractions against the unmasked area, not the whole frame", () => {
+        // 1% of the REMAINING rows must still read as motion; measuring against
+        // the full frame would quietly raise every threshold by the mask.
+        const visible = IPHONE[0] * (IPHONE[1] - 39);
+        expect(comparePixels(...changedInRows(Math.round(visible * 0.0025), 39), MASK)).toBe(
+          "moving"
+        );
+      });
+    });
+  });
+});
+
+describe("statusBarMaskFraction", () => {
+  // Only iOS and Android paint a status bar into the capture. Masking a
+  // Chromium window's top band would hide page content, and Vega / tvOS render
+  // full-screen with no system chrome at all.
+  it("masks the band on Android", async () => {
+    await expect(
+      statusBarMaskFraction({ platform: "android", kind: "emulator", id: "emulator-5554" })
+    ).resolves.toBe(0.06);
+  });
+
+  it("masks the band on an iOS simulator", async () => {
+    vi.mocked(isTvOsSimulator).mockResolvedValue(false);
+    await expect(
+      statusBarMaskFraction({ platform: "ios", kind: "simulator", id: "ios-udid" })
+    ).resolves.toBe(0.06);
+  });
+
+  it("masks nothing on a tvOS simulator, which shares the iOS platform tag", async () => {
+    vi.mocked(isTvOsSimulator).mockResolvedValue(true);
+    await expect(
+      statusBarMaskFraction({ platform: "ios", kind: "simulator", id: "tv-udid" })
+    ).resolves.toBe(0);
+  });
+
+  it.each(["chromium", "vega"] as const)("masks nothing on %s", async (platform) => {
+    await expect(
+      statusBarMaskFraction({ platform, kind: "unknown", id: "some-device" })
+    ).resolves.toBe(0);
+    expect(isTvOsSimulator).not.toHaveBeenCalled();
   });
 });
 
