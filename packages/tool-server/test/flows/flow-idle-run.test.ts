@@ -472,11 +472,35 @@ steps:
     );
     const step = (await run("ready")).steps.at(-1)!;
     expect(step.status).toBe("pass");
-    expect(step.warning).toContain("read 1 time in 1200ms");
+    expect(step.warning).toContain("content on 1 read in 1200ms");
     expect(step.warning).toContain("`timeout:`");
     // The screen was static the whole time; it must not be described as moving.
     expect(step.warning).not.toContain("never held still");
     expect(step.warning).not.toContain("no pair of screenshots");
+  });
+
+  // A blank read is an observation — it resets both holds — but it measures no
+  // interval, so it is not one of the three a settle takes. Counting it let a
+  // window blank for all but its last two reads slip past the guard above and
+  // reach for the motion verdict instead, telling the author that "something on
+  // it never stops" on the strength of one measured interval.
+  it("does not count a blank read as a look at the screen", async () => {
+    let reads = 0;
+    // A 250ms read plus a 200ms poll fits three rounds in 1200ms; the first
+    // comes back blank, so only one interval could ever be measured.
+    treeDelayMs = 250;
+    currentTree = () => (reads++ < 1 ? n({ role: "AXWindow", frame: FULL }) : screenWith("Home"));
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, timeout: 1200, minStableMs: 0 }
+`
+    );
+    const step = (await run("ready")).steps.at(-1)!;
+    expect(step.status).toBe("pass");
+    expect(step.warning).toContain("content on 2 reads in 1200ms");
+    expect(step.warning).not.toContain("never held still");
   });
 
   it("settles on the tree alone when no screenshot can be captured, and says so", async () => {

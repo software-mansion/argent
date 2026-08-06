@@ -1277,6 +1277,11 @@ async function waitForIdle(
   let localizedMotionDuringHold = false;
 
   let readsSucceeded = 0;
+  // Reads that came back with a tree AND something in it. Only these can
+  // measure an interval, so this — not readsSucceeded — is what the
+  // "too few reads to judge" guard at the bottom counts. A blank read is an
+  // observation (it resets both holds) but never evidence about motion.
+  let contentReads = 0;
   // Definitely assigned: the loop below always completes at least one round,
   // and every arm of that round sets it.
   let lastRead!: TreeReadOutcome;
@@ -1354,6 +1359,7 @@ async function waitForIdle(
         stillIntervals = 0;
       } else {
         sawContent = true;
+        contentReads += 1;
         const signature = treeFingerprint(tree);
         const now = Date.now();
 
@@ -1493,16 +1499,24 @@ async function waitForIdle(
   // way — and both verdicts below would be claims about an app that was never
   // observed for long enough to make one. The parser rejects a `timeout:` too
   // short to fit a settle, so what reaches here is a source slow enough to eat
-  // the wait, which is worth saying rather than dressing up as motion.
-  if (readsSucceeded <= MIN_STILL_INTERVALS) {
+  // the wait, or a window blank for most of it, either of which is worth
+  // saying rather than dressing up as motion.
+  //
+  // Counted in reads that CARRIED CONTENT, not in reads that answered: a blank
+  // one resets both holds and measures no interval. Counting it let a window
+  // that was blank for all but its last two reads sail past this guard and
+  // assert instead that "the screen never held still ... something on it never
+  // stops" — a claim about motion drawn from a single measured interval.
+  if (contentReads <= MIN_STILL_INTERVALS) {
     return {
       ok: true,
       warning:
-        `the screen was read ${readsSucceeded} time${readsSucceeded === 1 ? "" : "s"} in ` +
-        `${timeoutMs}ms, and a settle takes ${MIN_STILL_INTERVALS + 1} reads spanning ` +
-        `${MIN_STILL_INTERVALS} ${IDLE_POLL_MS}ms polls — so this step ended without ever being ` +
-        `able to tell whether the screen was moving. Raise its \`timeout:\`, and gate the next ` +
-        `action on a stable element rather than on stillness.`,
+        `the screen came back with content on ${contentReads} read` +
+        `${contentReads === 1 ? "" : "s"} in ${timeoutMs}ms, and a settle takes ` +
+        `${MIN_STILL_INTERVALS + 1} of them spanning ${MIN_STILL_INTERVALS} ${IDLE_POLL_MS}ms ` +
+        `polls — so this step ended without ever being able to tell whether the screen was ` +
+        `moving. Raise its \`timeout:\`, and gate the next action on a stable element rather ` +
+        `than on stillness.`,
     };
   }
   // The tree was settled as of the last read and no pair of captures ever
