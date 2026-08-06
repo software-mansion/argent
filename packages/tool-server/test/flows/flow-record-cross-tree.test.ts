@@ -1180,6 +1180,39 @@ describe("a flow-directive name points at the tool that records it", () => {
     expect(await recordedSteps("hints")).toEqual([]);
   });
 
+  it("still answers a directive name when `args` is malformed", async () => {
+    // The hint fires from the sub-invoke catch, which a JSON syntax error never
+    // reaches — the same failure the recorder-tool guard sits above the parse to
+    // avoid. An author who wrote `command: "echo"` needs to hear that echo is a
+    // directive, not that a payload which was never going to run is unparseable.
+    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
+    for (const command of ["echo", "wait", "tap", "run"]) {
+      const result = await tool.execute(
+        {},
+        { name: "hints", project_root: tmpDir, command, args: "{not json" }
+      );
+      expect(result.message, command).toContain("is a flow directive");
+      expect(result.message, command).toContain("no step was recorded");
+      expect(result.stepCount, command).toBe(0);
+    }
+    expect(await recordedSteps("hints")).toEqual([]);
+  });
+
+  it("lets a REGISTERED command's malformed `args` fail as the syntax error it is", async () => {
+    // The gate is the registry, not the hint table: a command the registry
+    // knows is not a directive the author misspelled, whatever it is named, so
+    // its unparseable payload must surface as itself.
+    const registryWhereTapIsRegistered = {
+      invokeTool: vi.fn(async () => ({ ok: true })),
+      getTool: vi.fn((id: string) => (id === "tap" ? ({ id } as never) : undefined)),
+    } as unknown as Registry;
+    const tool = createFlowAddStepTool(registryWhereTapIsRegistered);
+    await expect(
+      tool.execute({}, { name: "hints", project_root: tmpDir, command: "tap", args: "{not json" })
+    ).rejects.toThrow(SyntaxError);
+    expect(await recordedSteps("hints")).toEqual([]);
+  });
+
   it("tells the author to call flow-add-echo directly, not through the recorder", async () => {
     const result = await hint("echo");
     expect(result.message).toContain("DIRECTLY");

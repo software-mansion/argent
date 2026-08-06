@@ -621,6 +621,32 @@ async function activeFlowState(
 }
 
 /**
+ * The shared return for every path that answers with GUIDANCE and deliberately
+ * runs nothing: `guidance`, then the invariant those paths all promise, then
+ * the unchanged step count so the caller can see its take was left alone.
+ *
+ * A success rather than a throw — the caller asked a reasonable question and
+ * got the answer — but a success that records no line, so `recorded` is absent.
+ */
+async function recordNothing(
+  session: RecordingSession,
+  guidance: string
+): Promise<{
+  message: string;
+  toolResult: undefined;
+  stepCount: number;
+  savedTo: FlowSavedTo;
+}> {
+  const { stepCount, note } = await activeFlowState(session);
+  return {
+    message: `${guidance} Nothing was executed and no step was recorded.${note ? ` ${note}` : ""}`,
+    toolResult: undefined,
+    stepCount,
+    savedTo: session.filePath,
+  };
+}
+
+/**
  * `command` names an MCP tool, but the names an author has in mind while
  * recording are the flow file's own directives — so `command: "echo"` reaches
  * here and the registry answers "Tool not found", which says nothing about
@@ -1134,17 +1160,29 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
       const nested = Object.hasOwn(NESTED_RECORDER_TOOLS, params.command)
         ? NESTED_RECORDER_TOOLS[params.command]
         : undefined;
-      if (nested) {
-        const { stepCount, note } = await activeFlowState(session);
-        return {
-          message: `${nested} Nothing was executed and no step was recorded.${note ? ` ${note}` : ""}`,
-          toolResult: undefined,
-          stepCount,
-          savedTo: session.filePath,
-        };
-      }
+      if (nested) return recordNothing(session, nested);
 
-      const args: Record<string, unknown> = params.args ? JSON.parse(params.args) : {};
+      let args: Record<string, unknown>;
+      try {
+        args = params.args ? JSON.parse(params.args) : {};
+      } catch (err) {
+        // The directive hint normally fires from the sub-invoke catch below, so
+        // a malformed `args` payload would pre-empt it with a bare JSON syntax
+        // error — the same failure the recorder-tool guard is placed above this
+        // parse to avoid. An author who wrote `command: "echo"` needs to hear
+        // that echo is a directive, not that their payload is unparseable: the
+        // payload was never going to run either way.
+        //
+        // Gated on the REGISTRY, not on the hint table alone, so the property
+        // `isToolNotFound` protects holds here too — a tool one day registered
+        // under a directive name reports its own error rather than a hint. Only
+        // consulted on this path, where there is no invocation to ask.
+        if (registry.getTool(params.command) === undefined) {
+          const hint = directiveCommandHint(params.command);
+          if (hint) return recordNothing(session, hint);
+        }
+        throw err;
+      }
 
       // A nested flow-execute must never carry a raw flow_path into the live
       // invoke — it has no boundary metadata there and would be rejected.
@@ -1182,13 +1220,7 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
           ? directiveCommandHint(params.command)
           : undefined;
         if (!hint) throw err;
-        const { stepCount, note } = await activeFlowState(session);
-        return {
-          message: `${hint} Nothing was executed and no step was recorded.${note ? ` ${note}` : ""}`,
-          toolResult: undefined,
-          stepCount,
-          savedTo: session.filePath,
-        };
+        return recordNothing(session, hint);
       }
 
       // A recorded wait that HELD against the tree await-ui-element reads gets
