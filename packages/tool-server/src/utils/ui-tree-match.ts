@@ -173,35 +173,80 @@ export function assertText(node: DescribeNode): string {
 // removes distinctions the eye cannot see; `matches` (regex) is deliberately
 // exempt, because a pattern carries its own precision.
 //
-// Note what is therefore NOT folded, and must not be added to the list above:
-// emoji ZWJ/variation-selector sequences and fullwidth CJK forms all render
-// differently from their unfolded spellings, so equating them would hide a
-// real rendering regression. The two blocks below say which is which.
+// "Invisible" is NOT the same as "renders identically", and that gap is the
+// whole design of the three blocks below. Zero advance width is universal
+// across this area — measured per character with Range.getBoundingClientRect
+// in Chromium, every one of these controls is 0 px wide — so a width test
+// alone calls the dangerous ones safe. What decides is whether removing the
+// character can change the GLYPHS drawn or their ORDER:
+//
+//   - A bidi control reorders the text around it, in plain ASCII under
+//     dir="ltr", with no RTL content anywhere. "5" + U+200F + "-3" renders
+//     `53-`, and U+202E turns `report<RLO>txt.exe` into `reportexe.txt`.
+//     Folding those let an assertion pass against a screen that plainly reads
+//     something else — the silently-wrong green this module rates worse than a
+//     flake, arriving through the fold itself.
+//   - A soft hyphen paints a real hyphen when the line breaks there.
+//   - U+180E suppresses Arabic cursive joining exactly as ZWNJ does.
+//
+// So the set is split three ways: always safe, safe only while the string has
+// no bidi content, and never.
 
 /** Space-like codepoints that are not U+0020. NBSP, narrow NBSP, ideographic, en/em quad, etc. */
 const SPACE_LIKE = /[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]/gu;
+
 /**
- * Zero-width and other invisible formatting: soft hyphen, the Arabic letter
- * mark (U+061C) and Mongolian vowel separator (U+180E), ZWSP, the LRM/RLM
- * marks, word joiner and invisible operators, deprecated format controls, BOM
- * — plus the bidi EMBEDDINGS (U+202A-U+202E) and ISOLATES (U+2066-U+2069).
- * NOT ZWNJ/ZWJ or the variation selectors: the regex jumps U+200B → U+200E to
- * skip them because they are load-bearing in sequence and deliberately kept
- * (see the DELIBERATELY NOT FOLDED block below).
+ * Invisible formatting that cannot change a glyph or its position in ANY
+ * context: ZWSP, word joiner, the invisible math operators, the deprecated
+ * format controls, BOM. The most any of these does is offer or forbid a
+ * line-break opportunity, which moves where a line wraps but never what
+ * characters are drawn, or in what order.
  *
- * U+061C is the zero-width bidi mark for RTL text, the Arabic analog of the
- * LRM/RLM already listed - an app that wraps an Arabic display name with it
- * must fold exactly as one wrapped with LRM/RLM does, or the same on-screen
- * text stays unmatchable for RTL scripts. U+180E renders as nothing since
- * Unicode 6.3 reclassified it from a space to a zero-width format control.
- *
- * The bidi wrappers are not a theoretical case: an app that renders
- * user-supplied names wraps every one of them, and a census of four Bluesky
- * web screens found 367 U+202A/U+202C pairs and not a single NBSP. Omitting
- * them left the most common real instance of this bug unfixed.
+ * NOT ZWNJ/ZWJ or the variation selectors — the class starts at U+200B and
+ * jumps to U+2060 to skip them, because they are load-bearing in sequence (see
+ * the DELIBERATELY NOT FOLDED block below). U+2065 is unassigned, so the
+ * invisible-operator run stops at U+2064 and resumes at the deprecated
+ * controls, U+206A.
  */
-const INVISIBLE =
-  /[\u00ad\u061c\u180e\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff]/gu;
+const INVISIBLE = /[\u200b\u2060-\u2064\u206a-\u206f\ufeff]/gu;
+
+/**
+ * The LTR-forcing directional controls — LRM, LRE, PDF, LRO, LRI, FSI, PDI —
+ * folded ONLY when {@link BIDI_SENSITIVE} finds nothing in the string that
+ * could give the bidi algorithm a non-trivial order to produce. In a string
+ * whose strong characters are all left-to-right, every one of these resolves
+ * to "lay this out left to right", which is already what happens, so removing
+ * them provably cannot move a glyph.
+ *
+ * This is what keeps the common real case working. An app that renders
+ * user-supplied names wraps every one of them: a census of four Bluesky web
+ * screens found 367 U+202A/U+202C pairs and not a single NBSP, and what they
+ * wrap is overwhelmingly a plain Latin handle. Those still fold. What no
+ * longer folds is the same wrapper around text it actually reorders.
+ *
+ * Their RTL counterparts are deliberately absent, and live in
+ * {@link BIDI_SENSITIVE} instead: RLM, ALM, RLE, RLO and RLI impose a
+ * right-to-left order on the neutrals around them even in otherwise-ASCII
+ * text, so they are never foldable. A string containing one is also, by that
+ * very membership, bidi-sensitive — which is why the LTR controls in it stay
+ * too. Folding half of a directional pair would rewrite the string without
+ * rewriting what it renders as.
+ */
+const LTR_BIDI = /[\u200e\u202a\u202c\u202d\u2066\u2068\u2069]/gu;
+
+/**
+ * Does this string contain anything that makes the bidi algorithm's output
+ * depend on more than logical order — a strong RTL or Arabic-number character,
+ * or one of the RTL-imposing controls? Deliberately over-inclusive (whole
+ * script blocks, rather than the exact Bidi_Class membership JS regex cannot
+ * express): a false positive only means folding less, which is always safe,
+ * while a false negative is the defect this exists to prevent.
+ *
+ * Not global, and only ever used with `.test`, so there is no `lastIndex` to
+ * reset between calls.
+ */
+const BIDI_SENSITIVE =
+  /[\u061c\u200f\u202b\u202e\u2067\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufefc\u{10800}-\u{10fff}\u{1e800}-\u{1efff}]/u;
 
 // DELIBERATELY NOT FOLDED, for the same reason NFKC is not used: these are
 // invisible ALONE but LOAD-BEARING in sequence, so removing them changes what
@@ -214,6 +259,18 @@ const INVISIBLE =
 //   sequence — a real rendering regression — became invisible to every check.
 // - U+200C ZERO WIDTH NON-JOINER suppresses ligatures in Arabic, Persian and
 //   Indic scripts, where its presence or absence is a spelling difference.
+// - U+180E MONGOLIAN VOWEL SEPARATOR does ZWNJ's job: it suppresses Arabic
+//   cursive joining (ببببب goes from one connected run at 135 px to two at
+//   173 px), so by the criterion above it belongs here beside it — however
+//   much its Unicode 6.3 reclassification from a space to a zero-width format
+//   control makes it look like a member of the INVISIBLE block.
+// - U+00AD SOFT HYPHEN is invisible only while the line does NOT break there.
+//   When it does, it paints a real hyphen: `kraft<SHY>fahrzeug` displays
+//   `kraft-`, so folding it onto `kraftfahrzeug` asserts text the screen does
+//   not show.
+// - The RTL directional controls (U+061C, U+200F, U+202B, U+202E, U+2067) and,
+//   in any string carrying bidi content, their LTR counterparts too. See
+//   {@link LTR_BIDI} and {@link BIDI_SENSITIVE}.
 
 const foldCache = new Map<string, string>();
 const FOLD_CACHE_MAX = 4096;
@@ -233,16 +290,23 @@ const FOLD_CACHE_MAX = 4096;
  * exactly what this module's doctrine calls worse than a flake. The invariant
  * is that folding only ever removes distinctions the eye cannot see, and NFKC
  * breaks it.
+ *
+ * The directional half of that invariant is conditional, which is why the
+ * strip runs in two passes: {@link INVISIBLE} always, {@link LTR_BIDI} only
+ * when the string carries no {@link BIDI_SENSITIVE} content to be reordered.
  */
 export function foldText(value: string): string {
   const hit = foldCache.get(value);
   if (hit !== undefined) return hit;
-  const folded = value
-    // Strip invisibles BEFORE composing: an invisible sitting between a base
-    // letter and its combining mark blocks NFC from composing them, so a
-    // later strip would leave a decomposed grapheme that no longer equals its
-    // precomposed twin. Removing it first lets the NFC pass compose the pair.
-    .replace(INVISIBLE, "")
+  // Strip invisibles BEFORE composing: an invisible sitting between a base
+  // letter and its combining mark blocks NFC from composing them, so a later
+  // strip would leave a decomposed grapheme that no longer equals its
+  // precomposed twin. Removing it first lets the NFC pass compose the pair.
+  let stripped = value.replace(INVISIBLE, "");
+  // The bidi test reads the string as it stands: none of the controls it looks
+  // for is in the INVISIBLE class, so all of them survive that first pass.
+  if (!BIDI_SENSITIVE.test(stripped)) stripped = stripped.replace(LTR_BIDI, "");
+  const folded = stripped
     .normalize("NFC")
     .replace(SPACE_LIKE, " ")
     .replace(/\s+/g, " ")

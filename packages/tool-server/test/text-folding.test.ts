@@ -39,9 +39,25 @@ describe("foldText", () => {
   it("strips invisible formatting", () => {
     expect(foldText(`a${ZWSP}b`)).toBe("ab");
     expect(foldText(`${BOM}ab`)).toBe("ab");
-    expect(foldText(`so${SOFT_HYPHEN}ft`)).toBe("soft");
-    // Mongolian vowel separator: a zero-width format control since Unicode 6.3.
-    expect(foldText("a᠎b")).toBe("ab");
+    expect(foldText("a⁠b")).toBe("ab"); // word joiner
+    expect(foldText("a⁤b")).toBe("ab"); // invisible plus
+    expect(foldText("a⁯b")).toBe("ab"); // deprecated format control
+  });
+
+  it("keeps a soft hyphen, which PAINTS at a line break", () => {
+    // Invisible only while the line does not break there. When it does, the
+    // screen reads "kraft-", so folding it onto the unhyphenated spelling
+    // asserts text the app does not display.
+    expect(foldText(`so${SOFT_HYPHEN}ft`)).not.toBe("soft");
+    expect(equalsCI(`kraft${SOFT_HYPHEN}fahrzeug`, "kraftfahrzeug")).toBe(false);
+  });
+
+  it("keeps U+180E, which suppresses Arabic cursive joining as ZWNJ does", () => {
+    // Unicode 6.3 reclassified it from a space to a zero-width format control,
+    // which makes it LOOK inert; between two Arabic letters it breaks the
+    // connected run in two, exactly as U+200C does.
+    expect(foldText("a᠎b")).not.toBe("ab");
+    expect(equalsCI("ب᠎ب", "بب")).toBe(false);
   });
 
   it("composes a grapheme even when an invisible sat between base and combining mark", () => {
@@ -122,15 +138,63 @@ describe("bidi wrappers", () => {
     expect(equalsCI(`${LRE}@bsky.app${PDF}`, "@bsky.app")).toBe(true);
     expect(equalsCI(`${LRI}@bsky.app${PDI}`, "@bsky.app")).toBe(true);
     expect(includesCI(`${LRE}Jane Doe${PDF} posted`, "Jane Doe")).toBe(true);
-    // U+061C ARABIC LETTER MARK: the zero-width RTL analog of LRM/RLM, wrapping
-    // an RTL name the same way. It must fold exactly as the LTR embeddings do.
-    expect(equalsCI("؜@bsky.app؜", "@bsky.app")).toBe(true);
+    // LRO and FSI resolve to "lay this out left to right" over LTR content too.
+    expect(equalsCI("‭@bsky.app‬", "@bsky.app")).toBe(true);
+    expect(equalsCI("⁨@bsky.app⁩", "@bsky.app")).toBe(true);
   });
 
   it("does not swallow the narrow no-break space next to that range", () => {
     // U+202F sits one codepoint past the embeddings; it is a SPACE, not a
     // formatting control, and must fold to " " rather than vanish.
     expect(foldText(`a${NARROW_NBSP}b`)).toBe("a b");
+  });
+
+  // The other half of the rule, and the reason the LTR set is conditional: a
+  // control that imposes a RIGHT-to-left order rewrites what the screen shows,
+  // in plain ASCII under dir="ltr". Every string below was rendered in Chromium
+  // and photographed; the comment records what it actually reads as.
+  describe("never folds a control that reorders the glyphs", () => {
+    const RLM = "‏"; // U+200F
+    const ALM = "؜"; // U+061C
+    const RLO = "‮"; // U+202E
+    const RLE = "‫"; // U+202B
+    const RLI = "⁧"; // U+2067
+
+    it("leaves a bidi mark that moves plain ASCII digits", () => {
+      expect(equalsCI(`5${RLM}-3`, "5-3")).toBe(false); // renders `53-`
+      expect(equalsCI(`5${ALM}-3`, "5-3")).toBe(false); // renders `53-`
+      expect(equalsCI(`v1${RLM}.2.3`, "v1.2.3")).toBe(false); // renders `v12.3.`
+    });
+
+    it("leaves an override that reverses a filename extension", () => {
+      // The classic spoof: what is on screen is `reportexe.txt`.
+      expect(equalsCI(`report${RLO}txt.exe`, "reporttxt.exe")).toBe(false);
+      expect(includesCI(`report${RLO}txt.exe`, "reporttxt.exe")).toBe(false);
+    });
+
+    it("leaves a balanced RTL wrapper, which renders reversed", () => {
+      expect(equalsCI(`${RLO}abc${PDF}`, "abc")).toBe(false); // renders `cba`
+      expect(equalsCI(`${RLE}abc${PDF}`, "abc")).toBe(false);
+      expect(equalsCI(`${RLI}abc${PDI}`, "abc")).toBe(false);
+    });
+
+    it("stops folding the LTR controls too once the string carries RTL text", () => {
+      // An LRE/PDF wrapper around RTL content is not inert — it forces an LTR
+      // base direction the content would not otherwise have, so the words
+      // render in a different order than the plain spelling does.
+      expect(equalsCI(`${LRE}عمر Smith 2024${PDF}`, "عمر Smith 2024")).toBe(false);
+      expect(equalsCI(`${LRI}שלום${PDI}`, "שלום")).toBe(false);
+      // Folding half of a directional pair would rewrite the string without
+      // rewriting what it renders as, so a PDF next to an RLE stays put.
+      expect(equalsCI(`${RLE}abc${PDF}def`, "abcdef")).toBe(false);
+    });
+
+    it("still folds an LTR wrapper around text that merely LOOKS exotic", () => {
+      // No strong-RTL character anywhere, so the wrapper is provably inert and
+      // the common Bluesky case keeps working.
+      expect(equalsCI(`${LRE}Ελένη Παπαδοπούλου${PDF}`, "Ελένη Παπαδοπούλου")).toBe(true);
+      expect(equalsCI(`${LRE}日本語のなまえ${PDF}`, "日本語のなまえ")).toBe(true);
+    });
   });
 });
 
