@@ -223,6 +223,82 @@ function capture(env: ActionEnv): Promise<PixelFrame | undefined> {
   return capturePixelsWithin(env, Date.now() + 30_000, false);
 }
 
+/** What the fake page below paints inside the rendered window. */
+const VISIBLE_BAND_RGB: [number, number, number] = [200, 30, 10];
+/** What Chrome hands back for a clip rectangle outside the rendered window. */
+const OFF_SCREEN_RGB: [number, number, number] = [255, 255, 255];
+
+/** The RGB triple of one pixel of a decoded frame. */
+function pixelAt(frame: PixelFrame | undefined, index: number): [number, number, number] {
+  if (!frame) throw new Error("expected a decoded frame");
+  const o = index * 4;
+  return [frame.data[o], frame.data[o + 1], frame.data[o + 2]];
+}
+
+interface Clip {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  scale: number;
+}
+
+/**
+ * A Chromium page that answers `Page.captureScreenshot` the way the compositor
+ * does: `clip` is in DOCUMENT coordinates, and with `captureBeyondViewport`
+ * false only the rendered window has pixels — a rectangle outside it comes back
+ * blank white. That is what makes a wrong clip origin visible as a colour here
+ * rather than only as an argument.
+ */
+function fakeChromiumPage(opts: { metricsError?: Error } = {}): {
+  api: unknown;
+  scrollTo(y: number): void;
+  lastClip(): Clip | undefined;
+} {
+  const viewport = { width: 900, height: 700, devicePixelRatio: 2 };
+  let scrollY = 0;
+  let lastClip: Clip | undefined;
+
+  const send = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+    if (method === "Page.getLayoutMetrics") {
+      if (opts.metricsError) throw opts.metricsError;
+      return {
+        cssVisualViewport: {
+          pageX: 0,
+          pageY: scrollY,
+          clientWidth: viewport.width,
+          clientHeight: viewport.height,
+        },
+      };
+    }
+    if (method !== "Page.captureScreenshot") throw new Error(`unexpected CDP call ${method}`);
+    lastClip = params?.clip as Clip;
+    const insideWindow =
+      lastClip !== undefined &&
+      lastClip.y >= scrollY &&
+      lastClip.y + lastClip.height <= scrollY + viewport.height;
+    const [r, g, b] = insideWindow ? VISIBLE_BAND_RGB : OFF_SCREEN_RGB;
+    const png = new PNG({ width: 2, height: 1 });
+    png.data.set([r, g, b, 255, r, g, b, 255]);
+    return { data: PNG.sync.write(png).toString("base64") };
+  });
+
+  return {
+    api: {
+      cdp: { send },
+      getViewport: () => viewport,
+      // The route that WOULD go through sharp. Reaching for it is the bug.
+      captureScreenshot: vi.fn(() => {
+        throw new Error("the sharp-backed capture must not be used for a settle");
+      }),
+    },
+    scrollTo(y: number) {
+      scrollY = y;
+    },
+    lastClip: () => lastClip,
+  };
+}
+
 describe("capturePixels routing", () => {
   // Every platform argent can screenshot has a route here, and each one is a
   // different backend — sending a device down the wrong one silently costs the
@@ -285,18 +361,9 @@ describe("capturePixels routing", () => {
   // twice a second. The compositor applies `clip.scale` while rasterizing, so
   // the small frame is the only one that exists.
   it("captures Chromium through the compositor's own scale, and never via a file", async () => {
-    const png = new PNG({ width: 2, height: 1 });
-    png.data.set([10, 20, 30, 255, 40, 50, 60, 255]);
-    const send = vi.fn(async () => ({ data: PNG.sync.write(png).toString("base64") }));
     const device: DeviceInfo = { platform: "chromium", kind: "app", id: "chromium-cdp-9222" };
-    const resolveService = vi.fn(async () => ({
-      cdp: { send },
-      getViewport: () => ({ width: 900, height: 700, devicePixelRatio: 2 }),
-      // The route that WOULD go through sharp. Reaching for it is the bug.
-      captureScreenshot: vi.fn(() => {
-        throw new Error("the sharp-backed capture must not be used for a settle");
-      }),
-    }));
+    const page = fakeChromiumPage();
+    const resolveService = vi.fn(async () => page.api);
 
     const pixels = await capture(envFor(device, resolveService));
 
@@ -305,11 +372,70 @@ describe("capturePixels routing", () => {
     // The clip is the viewport in CSS pixels; its scale composes with the
     // page's device scale factor, so the plain capture scale lands on a quarter
     // of the frame this route used to return.
-    expect(send).toHaveBeenCalledWith("Page.captureScreenshot", {
-      format: "png",
-      captureBeyondViewport: false,
-      clip: { x: 0, y: 0, width: 900, height: 700, scale: 0.25 },
-    });
+    expect(page.lastClip()).toMatchObject({ width: 900, height: 700, scale: 0.25 });
+  });
+
+  // `clip` is measured from the top of the DOCUMENT. Pinning its origin at
+  // (0, 0) therefore aimed the capture at the top of the page rather than at
+  // the window, and on a scrolled document Chrome rasterizes that off-screen
+  // rectangle as blank white. Two blank captures compare as identical, so the
+  // pixel half of the settle voted "still" on every interval of a visibly
+  // animating screen — and voted it silently, because the capture succeeded.
+  //
+  // The mock below is the compositor's actual behaviour rather than an
+  // argument matcher: it serves whatever the clip rectangle overlaps in the
+  // rendered window, and white for anything outside it. A capture aimed at the
+  // wrong origin therefore comes back the wrong COLOR, which is the thing the
+  // comparison acts on.
+  it("captures the scrolled window, not the top of the document", async () => {
+    const device: DeviceInfo = { platform: "chromium", kind: "app", id: "chromium-cdp-9222" };
+    const page = fakeChromiumPage();
+    page.scrollTo(1839);
+
+    const pixels = await capture(
+      envFor(
+        device,
+        vi.fn(async () => page.api)
+      )
+    );
+
+    expect(page.lastClip()).toMatchObject({ x: 0, y: 1839 });
+    // The visible band, not the blank rectangle above the fold.
+    expect(pixelAt(pixels, 0)).toEqual(VISIBLE_BAND_RGB);
+    expect(pixelAt(pixels, 0)).not.toEqual(OFF_SCREEN_RGB);
+  });
+
+  it("still clips at the document origin for an unscrolled page", async () => {
+    const device: DeviceInfo = { platform: "chromium", kind: "app", id: "chromium-cdp-9222" };
+    const page = fakeChromiumPage();
+
+    const pixels = await capture(
+      envFor(
+        device,
+        vi.fn(async () => page.api)
+      )
+    );
+
+    expect(page.lastClip()).toMatchObject({ x: 0, y: 0 });
+    expect(pixelAt(pixels, 0)).toEqual(VISIBLE_BAND_RGB);
+  });
+
+  it("falls back to the document origin when the layout metrics cannot be read", async () => {
+    // A renderer that will not answer the metrics read leaves the capture no
+    // worse off than never asking — an unscrolled clip, not a failed settle.
+    const device: DeviceInfo = { platform: "chromium", kind: "app", id: "chromium-cdp-9222" };
+    const page = fakeChromiumPage({ metricsError: new Error("renderer is navigating") });
+    page.scrollTo(1839);
+
+    const pixels = await capture(
+      envFor(
+        device,
+        vi.fn(async () => page.api)
+      )
+    );
+
+    expect(page.lastClip()).toMatchObject({ x: 0, y: 0 });
+    expect(pixels).toMatchObject({ width: 2, height: 1 });
   });
 
   it("leaves Android on the simulator-server route without an iOS runtime probe", async () => {

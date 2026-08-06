@@ -131,23 +131,70 @@ export function pixelCaptureTimeoutMs(device: ActionEnv["device"], firstCapture:
  * applies. Measured on a 900x613 viewport at dpr 2: 1800x1226 and ~25ms of
  * blocking decode per poll became 450x307 and ~3ms.
  *
- * The viewport is the cached one rather than a fresh read: refreshing it costs
- * a `Runtime.evaluate` per poll, and that call fails outright on a renderer
- * mid-navigation — which is exactly when this check runs. A window resized
- * mid-step therefore clips against the previous size for the rest of it, and
- * registers as content change like anything else that moves.
+ * A `clip` is measured from the top of the DOCUMENT, not of the window, so its
+ * origin has to follow the scroll — `{ x: 0, y: 0 }` names the top of the page,
+ * which on a scrolled document is off-screen and rasterizes as a blank
+ * rectangle. Two blank rectangles compare as identical, so that origin made the
+ * pixel half of the check vote "still" on every interval of a visibly animating
+ * screen, and vote it silently: the capture succeeded, so nothing warned. The
+ * offset comes from `Page.getLayoutMetrics`, which is a browser-side read of
+ * the frame's own layout — unlike the `Runtime.evaluate` behind the cached
+ * viewport, it does not depend on a live main world, so it survives the
+ * mid-navigation renderer this check runs against. A page whose scrolling lives
+ * in an inner element reports no document scroll and clips at the origin, which
+ * is already the right rectangle for it.
+ *
+ * The viewport SIZE is still the cached one: refreshing it does cost a
+ * `Runtime.evaluate` per poll. A window resized mid-step therefore clips
+ * against the previous size for the rest of it, and registers as content
+ * change like anything else that moves.
  */
 async function captureChromiumPng(env: ActionEnv): Promise<Buffer> {
   const ref = chromiumCdpRef(env.device);
   const api = (await env.registry.resolveService(ref.urn, ref.options)) as ChromiumCdpApi;
   const { width, height } = api.getViewport();
+  const { x, y } = await chromiumScrollOffset(api);
   const shot = (await api.cdp.send("Page.captureScreenshot", {
     format: "png",
     captureBeyondViewport: false,
-    clip: { x: 0, y: 0, width, height, scale: CAPTURE_SCALE },
+    clip: { x, y, width, height, scale: CAPTURE_SCALE },
   })) as { data?: string };
   if (!shot.data) throw new Error("Page.captureScreenshot returned no data");
   return Buffer.from(shot.data, "base64");
+}
+
+/** What `Page.getLayoutMetrics` reports about where the window sits in the page. */
+interface CssViewportMetrics {
+  pageX?: number;
+  pageY?: number;
+}
+
+/**
+ * Where the window's top-left corner sits in document coordinates, in CSS
+ * pixels — the origin {@link captureChromiumPng} must clip from.
+ *
+ * `cssVisualViewport` is preferred because it also carries a pinch-zoom offset;
+ * `cssLayoutViewport` is the fallback for a protocol that predates it. A read
+ * that fails or answers with nothing usable falls back to the document origin,
+ * which is the unscrolled answer and no worse than not asking.
+ */
+async function chromiumScrollOffset(api: ChromiumCdpApi): Promise<{ x: number; y: number }> {
+  try {
+    const metrics = (await api.cdp.send("Page.getLayoutMetrics")) as {
+      cssVisualViewport?: CssViewportMetrics;
+      cssLayoutViewport?: CssViewportMetrics;
+      layoutViewport?: CssViewportMetrics;
+    };
+    const vp = metrics.cssVisualViewport ?? metrics.cssLayoutViewport ?? metrics.layoutViewport;
+    const x = vp?.pageX;
+    const y = vp?.pageY;
+    return {
+      x: typeof x === "number" && Number.isFinite(x) ? x : 0,
+      y: typeof y === "number" && Number.isFinite(y) ? y : 0,
+    };
+  } catch {
+    return { x: 0, y: 0 };
+  }
 }
 
 /**
