@@ -1,13 +1,7 @@
 import { z } from "zod";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import {
-  FAILURE_CODES,
-  FailureError,
-  type DeviceInfo,
-  type Registry,
-  type ToolDefinition,
-} from "@argent/registry";
+import { FAILURE_CODES, FailureError, type Registry, type ToolDefinition } from "@argent/registry";
 import {
   requireRecordingSession,
   appendStepToFlow,
@@ -79,13 +73,12 @@ function fallbackSourceWarning(source: DescribeSource, platform: string): string
   return `selector captured from the fallback ${source} tree (${expected} unavailable) — replay resolves against the full hierarchy, which may not match it`;
 }
 
+// `resolveDevice` classifies by SHAPE (`classifyDevice` is a pure string test
+// with no throw path and no total it can fail on), so there is nothing to
+// guard: every string resolves, and a non-string never gets here in practice —
+// `probeAgainstRunnerTree` returns before composing a warning without one.
 function platformOf(udid: unknown): string | undefined {
-  try {
-    if (typeof udid === "string") return resolveDevice(udid).platform;
-  } catch {
-    // Unresolvable device — callers fall back to platform-neutral wording.
-  }
-  return undefined;
+  return typeof udid === "string" ? resolveDevice(udid).platform : undefined;
 }
 
 /**
@@ -279,12 +272,10 @@ async function probeAgainstRunnerTree(
     return {};
   }
   if (typeof args.udid !== "string") return {}; // nothing to probe against
-  let device: DeviceInfo;
-  try {
-    device = resolveDevice(args.udid);
-  } catch {
-    return {}; // unresolvable device; the live result stands
-  }
+  // No try/catch: resolveDevice is a pure shape classifier. An id it maps to a
+  // platform with no flow tree lands in `fetchFlowTree`'s not-supported throw
+  // instead, which the probe already reports as indeterminate.
+  const device = resolveDevice(args.udid);
   // Bounded by PROBE_BUDGET_MS: the loop's own deadline does not bound the
   // tree reads it awaits, and the recorder must not stall on one.
   const settled = await settleWithin(
