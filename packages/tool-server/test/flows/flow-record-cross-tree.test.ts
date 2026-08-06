@@ -1301,13 +1301,13 @@ describe("a recorded flow-execute honors the flow_name alias", () => {
     expect(result.message).not.toContain("had no flow name");
     const steps = await recordedSteps("wrapper");
     expect(steps).toHaveLength(1);
-    expect(steps[0]).toEqual({ kind: "run", flow: "helper" });
+    expect(steps[0]).toEqual({ kind: "run", flow: "helper.yaml" });
   });
 
   it("still captures `run: <name>` for the canonical `name` (no regression)", async () => {
     await recordRun({ name: "helper", project_root: tmpDir, device: IOS });
     const steps = await recordedSteps("wrapper");
     expect(steps).toHaveLength(1);
-    expect(steps[0]).toEqual({ kind: "run", flow: "helper" });
+    expect(steps[0]).toEqual({ kind: "run", flow: "helper.yaml" });
   });
 });

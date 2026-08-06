@@ -70,6 +70,7 @@ import {
 import { bootElectronApp, killChromiumByPortAndWait } from "../devices/boot-electron";
 import { untrackChromiumPort } from "../../utils/chromium-discovery";
 import { parseChromiumCdpPort, resolveDevice } from "../../utils/device-info";
+import { InvalidToolInputError } from "../../utils/capability";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
 import { describeVega } from "../describe/platforms/vega";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
@@ -138,7 +139,13 @@ const zodSchema = z
     if (named === (params.flow_path !== undefined)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "Pass exactly one flow source: name or flow_path.",
+        // A call with NO source at all is the one that needs the alias spelled
+        // out: the caller may well have named the flow under a key zod stripped.
+        message: named
+          ? "Pass exactly one flow source: name or flow_path."
+          : "Pass exactly one flow source: name or flow_path. flow-execute needs the flow's " +
+            "name in `name` (`flow_name` is accepted as an alias) — it resolves " +
+            "<project_root>/.argent/flows/<name>.yaml.",
         path: ["flow_path"],
       });
     }
@@ -1030,7 +1037,7 @@ returns a notice with the prerequisite instead of running.`,
       // reject it for the missing name it is not supposed to have.
       const named = params.flow_path === undefined ? resolveFlowName(params) : undefined;
       const { filePath, flowName, viaUpload } = await resolveFlowSource(
-        { ...params, name: named },
+        named === undefined ? params : { ...params, name: named },
         ctx?.fileInputs?.flow_file,
         ctx?.fileInputs?.flow_path
       );

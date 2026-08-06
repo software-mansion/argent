@@ -505,7 +505,10 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
         name: { type: "string" },
         flow_path: { type: "string" },
       },
-      oneOf: [{ required: ["name"] }, { required: ["flow_path"] }],
+      oneOf: [
+        { anyOf: [{ required: ["name"] }, { required: ["flow_name"] }] },
+        { required: ["flow_path"] },
+      ],
     });
   });
 
