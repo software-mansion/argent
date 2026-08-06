@@ -798,23 +798,15 @@ function directiveCommandHint(command: string): string | undefined {
   );
 }
 
-function flowExecuteRecordBlock(
-  result: unknown
-): { reason: string; mayHaveMutated: boolean } | null {
+function flowExecuteRecordBlock(result: unknown): { reason: string } | null {
   if (typeof result !== "object" || result === null) return null;
   const value = result as {
     ok?: unknown;
     notice?: unknown;
     executionPrerequisite?: unknown;
-    passed?: unknown;
   };
   if (value.ok === false) {
-    // Only warn about mutation when a prior composed step actually ran to
-    // completion. A flow-execute that failed on its first step (passed: 0)
-    // mutated nothing, so "restore the recorded prefix" would name a prefix
-    // that does not exist. Unknown shape ⇒ assume mutation is possible.
-    const mayHaveMutated = typeof value.passed === "number" ? value.passed > 0 : true;
-    return { reason: "flow-execute returned ok: false", mayHaveMutated };
+    return { reason: "flow-execute returned ok: false" };
   }
   if (Object.prototype.hasOwnProperty.call(value, "notice")) {
     // The notice string only carries the generic handshake ("re-call with
@@ -829,7 +821,6 @@ function flowExecuteRecordBlock(
         typeof value.notice === "string"
           ? `flow-execute returned a prerequisite notice: ${value.notice}${prereq}`
           : `flow-execute returned a prerequisite notice without executing steps${prereq}`,
-      mayHaveMutated: false,
     };
   }
   return null;
@@ -852,15 +843,39 @@ function runSequenceProgress(result: unknown): string | null {
     : null;
 }
 
-// Whether any nested step ran to completion before a run-sequence stopped or was
-// cancelled. When nothing completed (`completed: 0` — the failure/abort landed on
-// or before the first step), no prior state was mutated, so the mutation warning
-// would name a recorded prefix that does not exist. Unknown shape ⇒ assume a
-// mutation is possible (we cannot prove otherwise).
-function nestedStepsRan(result: unknown): boolean {
+/**
+ * Whether the nested run got as far as ATTEMPTING a step — the trigger for
+ * warning the author that the device may no longer be where the recorded prefix
+ * leaves it.
+ *
+ * Deliberately not "did any step succeed". A step routinely acts on the device
+ * and THEN fails: a `scroll-to` scrolls to the end of the list before reporting
+ * it never found its target, a leading `launch` terminates and relaunches the
+ * app before failing its readiness gate, a `keyboard` fires part of its input
+ * before throwing. Every one of those leaves `passed`/`completed` at 0 while the
+ * screen has moved, so a success count proves nothing about device state and
+ * reading one as proof suppressed the warning in exactly the cases it exists
+ * for. What the result does settle is whether a step was reached at all.
+ *
+ * Over-firing is the safe direction here (the message says "may", and its advice
+ * is a check, not a restore); staying silent is the one that leaves the author
+ * recording the next step against a screen the prefix can no longer reach.
+ */
+function nestedStepAttempted(result: unknown): boolean {
   if (typeof result !== "object" || result === null) return true;
-  const completed = (result as { completed?: unknown }).completed;
-  return typeof completed === "number" ? completed > 0 : true;
+  const steps = (result as { steps?: unknown }).steps;
+  if (!Array.isArray(steps)) {
+    // flow-execute's prerequisite notice is the one shape that carries no step
+    // list BECAUSE it ran nothing; any other unrecognised shape must assume a
+    // step ran, since it cannot prove otherwise.
+    return !Object.prototype.hasOwnProperty.call(result, "notice");
+  }
+  // run-sequence appends one entry per step it ATTEMPTED and stops there, so
+  // every entry is an attempt. The flow runner reports one entry per declared
+  // step and marks the ones it never reached `skip`.
+  return steps.some(
+    (s) => typeof s !== "object" || s === null || (s as { status?: unknown }).status !== "skip"
+  );
 }
 
 // Replaying a fragment to set up state during recording is done by running it
@@ -1332,7 +1347,7 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
       const sequenceFailure = runSequenceFailure(params.command, toolResult);
       if (sequenceFailure) {
         const { stepCount, note } = await activeFlowState(session);
-        const mutationWarning = nestedStepsRan(toolResult)
+        const mutationWarning = nestedStepAttempted(toolResult)
           ? ` ${partialMutationWarning("run-sequence")}`
           : "";
         return {
@@ -1352,7 +1367,7 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
       if (params.command === "run-sequence" && ctx?.signal?.aborted) {
         const { stepCount, note } = await activeFlowState(session);
         const progress = runSequenceProgress(toolResult);
-        const mutationWarning = nestedStepsRan(toolResult)
+        const mutationWarning = nestedStepAttempted(toolResult)
           ? ` ${partialMutationWarning("run-sequence")}`
           : "";
         return {
@@ -1369,7 +1384,7 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
         const recordBlock = flowExecuteRecordBlock(toolResult);
         if (recordBlock) {
           const { stepCount, note } = await activeFlowState(session);
-          const mutationWarning = recordBlock.mayHaveMutated
+          const mutationWarning = nestedStepAttempted(toolResult)
             ? ` ${partialMutationWarning("flow-execute")}`
             : "";
           return {
