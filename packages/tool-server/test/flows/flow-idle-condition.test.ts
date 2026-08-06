@@ -123,6 +123,25 @@ describe("condition families are mutually exclusive", () => {
     );
   });
 
+  // The same mix under `assert` used to cost two round trips: it reported the
+  // mixing first, and the split the author was told to write —
+  // `assert: { idle: true }` — is not valid either. One error has to end it.
+  it("sends an assert body that mixes the two straight to the form it needs", () => {
+    let message = "";
+    try {
+      parseSteps(`  - assert: { idle: true, visible: { id: x } }\n`);
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain("idle has no assert form");
+    expect(message).toContain("await: { idle: true }");
+    expect(message).toContain("`visible`");
+    // And what it tells the author to write must itself parse.
+    expect(() =>
+      parseSteps(`  - await: { idle: true }\n  - assert: { visible: { id: x } }\n`)
+    ).not.toThrow();
+  });
+
   it("rejects a stray key rather than ignoring it", () => {
     expect(() => parseSteps(`  - await: { idle: true, settleMs: 500 }\n`)).toThrow(/settleMs/);
   });
