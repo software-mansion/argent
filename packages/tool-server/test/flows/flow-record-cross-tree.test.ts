@@ -31,6 +31,9 @@ const defaultFetch = async (): Promise<DescribeTreeData> => ({
   screen: { width: 390, height: 844 },
 });
 
+import { createAwaitUiElementTool } from "../../src/tools/await-ui-element";
+import { assertSupported } from "../../src/utils/capability";
+import { resolveDevice } from "../../src/utils/device-info";
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import { __resetRecordingsForTesting, parseFlow } from "../../src/tools/flows/flow-utils";
@@ -418,6 +421,20 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(elapsed).toBeLessThan(6000);
     expect(parseFlow(await onDisk("slow")).steps).toHaveLength(1);
   }, 30_000);
+
+  // The clause tables carry no `ios-remote` arm, and this is why: a remote sim
+  // never reaches the probe at all. `await-ui-element` declares no appleRemote
+  // capability, so assertSupported throws while the step is still executing
+  // live and flow-add-step returns no warning. If that capability is ever
+  // added, both tables need an ios-remote arm — the AX-vs-full-hierarchy story
+  // is the iOS one, not the generic fallback they would otherwise get.
+  it("cannot be reached on ios-remote: await-ui-element refuses the device", () => {
+    const tool = createAwaitUiElementTool(registryWhereWaitSucceeds());
+    expect(tool.capability?.appleRemote).toBeUndefined();
+    expect(() =>
+      assertSupported("await-ui-element", tool.capability, resolveDevice("remote:" + DEVICE))
+    ).toThrow(/not supported on ios-remote/);
+  });
 
   it("throws AbortError when the run is cancelled during the re-probe", async () => {
     // The live await-ui-element still "passes" (the mock ignores the signal), so

@@ -89,16 +89,18 @@ function platformOf(udid: unknown): string | undefined {
 }
 
 /**
- * The read-only tool that reads the tree the RUNNER resolves against, for the
- * platforms where one exists. iOS, Android and Chromium are all routed
- * elsewhere (see {@link runnerSideReadClause}): on none of the three does a
- * read-only tool report the runner's projection.
+ * The floor under both clause tables below. Nothing reaches it: they are
+ * consulted only for a DETERMINATE verdict, which needs `fetchFlowTree` to have
+ * answered — and it answers on exactly ios / android / chromium / vega, each of
+ * which has its own arm. The one remaining classification, `ios-remote`, cannot
+ * get this far either: `await-ui-element` declares no `appleRemote` capability,
+ * so `assertSupported` throws while the step is still executing live and
+ * flow-add-step never returns a warning at all.
  */
-function treeReaderFor(udid: unknown): string {
-  const platform = platformOf(udid);
-  if (platform === "chromium") return "`describe` (this platform's DOM walker)";
-  return "`describe`";
-}
+const UNSUPPORTED_PLATFORM = {
+  divergence: "The recorder and the runner read different projections of the screen.",
+  read: "No read-only tool is known to report the runner's projection on this platform — keep the step raw",
+} as const;
 
 /**
  * The clause naming how to read the tree the RUNNER resolves against — or, on
@@ -122,7 +124,7 @@ function treeReaderFor(udid: unknown): string {
  */
 function runnerSideReadClause(udid: unknown): string {
   const platform = platformOf(udid);
-  if (platform === "ios" || platform === "ios-remote") {
+  if (platform === "ios") {
     return (
       "No read-only tool reports the runner's projection on iOS — `native-find-views` and " +
       "`native-full-hierarchy` return the RAW view tree, matching `identifier`/`label`/" +
@@ -152,7 +154,7 @@ function runnerSideReadClause(udid: unknown): string {
       "differs, so check a leaf's own text, or switch an `equals` to `contains`"
     );
   }
-  return `${treeReaderFor(udid)} reads the runner's side`;
+  return UNSUPPORTED_PLATFORM.read;
 }
 
 /**
@@ -162,7 +164,7 @@ function runnerSideReadClause(udid: unknown): string {
  */
 function treeDivergenceFor(udid: unknown): string {
   const platform = platformOf(udid);
-  if (platform === "ios" || platform === "ios-remote") {
+  if (platform === "ios") {
     return (
       "The recorder reads the accessibility tree and the runner reads the full native view " +
       "hierarchy; they overlap but neither contains the other."
@@ -191,7 +193,7 @@ function treeDivergenceFor(udid: unknown): string {
       "text onto it, so a `text` check against a container reads a different string on each side."
     );
   }
-  return "The recorder and the runner read different projections of the screen.";
+  return UNSUPPORTED_PLATFORM.divergence;
 }
 
 /**
