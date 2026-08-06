@@ -1771,9 +1771,19 @@ function parseIdleFields(raw: Record<string, unknown>, kind: "await" | "assert")
   const entry = { [kind]: raw };
 
   if (kind !== "await") {
+    // Name the other condition's home too when the body carries one. Reporting
+    // the mixing error first sent the author to a second round trip: splitting
+    // `assert: { idle: true, visible: X }` as instructed yields
+    // `assert: { idle: true }`, which has no assert form either.
+    const mixed = WAIT_CONDITIONS.filter((c) => c in raw);
     badEntry(
       entry,
-      "idle has no assert form — it waits for the screen to stop changing, which is an `await`"
+      "idle has no assert form — it waits for the screen to stop changing, which is an `await`" +
+        (mixed.length > 0
+          ? `. Give it its own step as \`await: { idle: true }\` and leave \`${mixed.join(
+              "`, `"
+            )}\` in the assert — a step checks exactly one condition`
+          : "")
     );
   }
   rejectUnknownKeys(entry, raw, ["idle", "minStableMs", "timeout"], kind);
@@ -1832,6 +1842,10 @@ function isIdleCondition(raw: unknown, kind: "await" | "assert"): boolean {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return false;
   const body = raw as Record<string, unknown>;
   if (!(IDLE_CONDITION in body)) return false;
+  // An `assert` body naming idle is wrong however it is spelled, so let
+  // parseIdleFields raise the one error that ends the matter — it folds the
+  // mixing advice in rather than making the author earn it on a second run.
+  if (kind === "assert") return true;
   const selectorConditions = WAIT_CONDITIONS.filter((c) => c in body);
   if (selectorConditions.length > 0) {
     badEntry(
