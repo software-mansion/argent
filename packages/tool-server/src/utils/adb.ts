@@ -11,7 +11,7 @@ import {
 } from "@argent/registry";
 import { resolveAndroidBinary } from "./android-binary";
 import { formatSubprocessFailure } from "./subprocess-error";
-import { externalNativeId } from "./external-devices";
+import { assertExternalCapabilitySync, externalNativeId, isExternalId } from "./external-devices";
 
 const execFileAsync = promisify(execFile);
 
@@ -154,13 +154,23 @@ function describeAdbFailure(args: string[], err: unknown): Error {
  * than threading a device-aware helper through dozens of functions. It is safe
  * because only a device id can carry the prefix.
  *
+ * This is also the gate for the `adb` capability. The real serial is only
+ * revealed when the provider granted it, which covers every adb call site at
+ * once.
+ *
  * {@linkcode runAdb} applies it, so anything routed through there is covered.
  * It is exported for the callers that cannot: a long-running `adb` whose
  * stdin and stdout are the protocol has to spawn for itself, and must map its
  * own argv or hand `adb` an `ext:` id it has never heard of.
  */
 export function adbArgv(args: string[]): string[] {
-  return args.map(externalNativeId);
+  return args.map((argument) => {
+    if (isExternalId(argument)) {
+      assertExternalCapabilitySync("adb", argument, "adb");
+    }
+
+    return externalNativeId(argument);
+  });
 }
 
 /**

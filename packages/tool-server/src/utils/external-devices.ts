@@ -766,6 +766,11 @@ function unknownDeviceError(detail: string): FailureError {
  * its lookup picks up the new port, with no reconnection code anywhere.
  */
 export async function lookupExternalDevice(id: string): Promise<ExternalDevice> {
+  return lookupExternalDeviceNow(id);
+}
+
+/** Synchronous body of {@linkcode lookupExternalDevice}: same reads, same errors. */
+function lookupExternalDeviceNow(id: string): ExternalDevice {
   const parsed = parseExternalId(id);
 
   if (!parsed) {
@@ -811,11 +816,23 @@ export async function assertExternalCapability(
   device: DeviceInfo | string,
   capability: ExternalCapability
 ): Promise<void> {
+  assertExternalCapabilitySync(namespace, device, capability);
+}
+
+/**
+ * {@linkcode assertExternalCapability} for the argv builders that cannot
+ * await. Every read is a local file read, so the answer is just as current.
+ */
+export function assertExternalCapabilitySync(
+  namespace: string,
+  device: DeviceInfo | string,
+  capability: ExternalCapability
+): void {
   const id = typeof device === "string" ? device : device.id;
 
   if (!isExternalId(id)) return;
 
-  const externalDevice = await lookupExternalDevice(id);
+  const externalDevice = lookupExternalDeviceNow(id);
 
   if (externalDevice.capabilities.has(capability)) return;
 
