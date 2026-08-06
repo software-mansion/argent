@@ -23,7 +23,7 @@ import { settleWithin, sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree } from "./flow-tree";
-import { capturePixelsWithin, pixelsDiffer, type PixelFrame } from "./flow-pixels";
+import { capturePixelsWithin, comparePixels, type PixelFrame } from "./flow-pixels";
 import {
   buildAxisCandidate,
   decomposePinch,
@@ -1194,6 +1194,20 @@ const MIN_STILL_INTERVALS = 2;
  */
 const MIN_ROUND_BUDGET_MS = IDLE_POLL_MS;
 
+/**
+ * The screen settled, but something small on it never stopped. A spinner is the
+ * case that matters: it is far too small to move the screen (a stock one covers
+ * ~0.1% of a phone display) and it does not move the tree either, since it
+ * spins in a layer without its box ever changing — so both halves of the check
+ * agree the screen is at rest while it is still loading. This is the only place
+ * that difference is visible, so it is said outright.
+ */
+const LOCALIZED_MOTION_WARNING =
+  `the screen settled, but a small part of it kept changing the whole time — a spinner, a ` +
+  `caret, a progress dot. If it is a loading spinner then the screen had not finished loading, ` +
+  `and stillness cannot tell those apart: look at what is moving, and gate the next action on ` +
+  `the element the loading produces rather than on this settle.`;
+
 /** How the last tree read ended. Only `value` licenses a verdict about the app. */
 type TreeReadOutcome = "value" | "error" | "timeout";
 
@@ -1242,6 +1256,10 @@ async function waitForIdle(
   let previousFrame: PixelFrame | undefined;
   let bothSince = 0;
   let stillIntervals = 0;
+  // Small, persistent motion seen across the intervals that produced the
+  // current hold. Cleared with the hold, so it only ever describes the settle
+  // actually being reported.
+  let localizedMotionDuringHold = false;
 
   let readsSucceeded = 0;
   // Definitely assigned: the loop below always completes at least one round,
@@ -1336,22 +1354,31 @@ async function waitForIdle(
         // stillness. Letting it stand in for "the pixels held" is what turned a
         // screen that never stopped moving into a pass.
         let pixelsHeld = false;
+        let localizedThisInterval = false;
         if (frame === undefined) {
           captureFailed = true;
         } else if (previousFrame !== undefined) {
-          if (pixelsDiffer(previousFrame, frame)) pixelsEverMoved = true;
-          else pixelsHeld = true;
+          const change = comparePixels(previousFrame, frame);
+          if (change === "moving") pixelsEverMoved = true;
+          else {
+            pixelsHeld = true;
+            localizedThisInterval = change === "localized";
+          }
         }
         previousFrame = frame;
 
         if (treeHeld && pixelsHeld) {
           stillIntervals += 1;
+          if (localizedThisInterval) localizedMotionDuringHold = true;
           if (stillIntervals >= MIN_STILL_INTERVALS && now - bothSince >= minStableMs) {
-            return { ok: true };
+            return localizedMotionDuringHold
+              ? { ok: true, warning: LOCALIZED_MOTION_WARNING }
+              : { ok: true };
           }
         } else {
           bothSince = now;
           stillIntervals = 0;
+          localizedMotionDuringHold = false;
         }
       }
     }
