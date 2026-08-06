@@ -135,10 +135,14 @@ export function getFlowPath(projectRoot: string, name: string): string {
  * minting a second session that silently truncates the first.
  *
  * This is the same resolution {@link writeFlowFile} performs before its swap,
- * deliberately: the key and the write agree by construction, so wherever the
- * filesystem declines to answer (a dangling symlink, a flows dir that does not
- * exist yet) both fall back to the same pure-path spelling and the two remain
- * two — which is correct, because two files is what the write then produces.
+ * deliberately: the key and the write agree by construction. Where the
+ * filesystem declines to answer at all — a flows dir that does not exist yet —
+ * both fall back to the same pure-path spelling and two spellings remain two,
+ * which is correct, because two files is what the write then produces. Where it
+ * declines only because the target is missing — a dangling vault symlink — both
+ * follow the link by hand ({@link followDanglingLink}), so the two spellings
+ * become one key, which is equally correct: one file is what the write produces
+ * there.
  *
  * It costs one `realpath` pair per recording tool call, on a path already doing
  * file I/O.
@@ -2566,12 +2570,60 @@ function scrubTempPath(err: unknown, tmpPath: string, filePath: string): Error {
  * first swap and the rest would disagree wherever an ancestor is itself a
  * symlink, which is the default for the temp dir on macOS.
  *
+ * A DANGLING link is the case `realpath` cannot express — it fails on the whole
+ * path rather than answering with the target — and that failure would put the
+ * link's own spelling back in front of `rename`, i.e. exactly the swap this
+ * exists to prevent. {@link followDanglingLink} resolves it by hand.
+ *
  * Shared with {@link resolveFlowKey}, so the identity a recording is keyed by
  * and the file its steps land in can never disagree.
  */
 async function canonicalFlowPath(filePath: string): Promise<string> {
   const dir = await fs.realpath(path.dirname(filePath)).catch(() => path.dirname(filePath));
-  return await fs.realpath(filePath).catch(() => path.join(dir, path.basename(filePath)));
+  const real = await fs.realpath(filePath).catch(() => null);
+  if (real !== null) return real;
+  return followDanglingLink(path.join(dir, path.basename(filePath)));
+}
+
+/**
+ * How deep a chain of not-yet-existing symlinks {@link followDanglingLink}
+ * walks. A backstop against a link cycle, which `readlink` alone cannot detect;
+ * far past any real vault layout, which is one hop.
+ */
+const MAX_DANGLING_LINK_HOPS = 32;
+
+/**
+ * Where a link whose TARGET does not exist actually points.
+ *
+ * `realpath` fails outright on a dangling symlink, so the fallback above would
+ * hand back the link's own path — and `rename(2)` replaces the path it is
+ * given, so the first write of a recording would swap the symlink for a regular
+ * file. That is the shared-vault setup's normal starting state: the link is
+ * created before the first recording, or its target is removed by a branch
+ * switch or a `git clean`. The vault copy is then never created, the project is
+ * permanently detached from the vault, and any sibling project linked to the
+ * same target is left dangling — with the tool reporting success.
+ *
+ * So resolve the link by hand, one hop at a time, canonicalizing each target's
+ * DIRECTORY the way {@link canonicalFlowPath} does so the result agrees with
+ * what a later append (by then a plain `realpath`) will compute. A path that is
+ * not a link — the ordinary "flow file does not exist yet" case — comes back
+ * unchanged on the first probe.
+ */
+async function followDanglingLink(linkPath: string): Promise<string> {
+  let current = linkPath;
+  for (let hop = 0; hop < MAX_DANGLING_LINK_HOPS; hop++) {
+    const target = await fs.readlink(current).catch(() => null);
+    if (target === null) return current;
+    const resolved = path.resolve(path.dirname(current), target);
+    // The rest of the chain may well exist — only the last hop has to dangle
+    // for `realpath` to have refused the whole path.
+    const real = await fs.realpath(resolved).catch(() => null);
+    if (real !== null) return real;
+    const targetDir = await fs.realpath(path.dirname(resolved)).catch(() => path.dirname(resolved));
+    current = path.join(targetDir, path.basename(resolved));
+  }
+  return current;
 }
 
 /**

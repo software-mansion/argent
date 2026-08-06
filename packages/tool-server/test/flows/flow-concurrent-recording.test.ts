@@ -440,6 +440,48 @@ describe("two recording keys that resolve to one file", () => {
     expect(await readMarkers(root, "checkout")).toEqual(["echo:c1", "echo:c3"]);
   });
 
+  it("writes THROUGH a dangling vault symlink instead of replacing it", async () => {
+    // The shared-vault workflow's normal starting state: the link is created
+    // before the first recording, or the vault copy is removed by a branch
+    // switch or a `git clean`. `realpath` fails on the whole path there, so the
+    // swap used to rename onto the link's own spelling — replacing the symlink
+    // with a regular file, never creating the vault target, and permanently
+    // detaching the project from the vault while reporting success.
+    const vault = await makeRoot("dangling-vault");
+    const root = await makeRoot("dangling-proj");
+    const target = path.join(vault, "shared.yaml");
+    await fs.mkdir(path.dirname(flowPath(root, "shared")), { recursive: true });
+    await fs.symlink(target, flowPath(root, "shared"));
+
+    await start(root, "shared");
+    await addEcho(root, "shared", "s1");
+
+    expect((await fs.lstat(flowPath(root, "shared"))).isSymbolicLink()).toBe(true);
+    expect(markers(parseFlow(await fs.readFile(target, "utf8")).steps)).toEqual(["echo:s1"]);
+  });
+
+  it("keys two projects onto one dangling vault target, as one file", async () => {
+    // The key follows the same resolution as the write, so two projects linking
+    // the same not-yet-created vault file are one recording — matching what the
+    // write then produces, rather than two sessions racing onto one output.
+    const vault = await makeRoot("dangling-shared-vault");
+    const rootA = await makeRoot("dangling-a");
+    const rootB = await makeRoot("dangling-b");
+    const target = path.join(vault, "checkout.yaml");
+    for (const root of [rootA, rootB]) {
+      await fs.mkdir(path.dirname(flowPath(root, "checkout")), { recursive: true });
+      await fs.symlink(target, flowPath(root, "checkout"));
+    }
+
+    await start(rootA, "checkout");
+    await addEcho(rootA, "checkout", "a1");
+
+    const restarted = await start(rootB, "checkout");
+    expect(restarted.restarted).toBe(true);
+    expect(restarted.discardedSteps).toBe(1);
+    expect((await fs.lstat(flowPath(rootA, "checkout"))).isSymbolicLink()).toBe(true);
+  });
+
   it("keeps two genuinely distinct flows independent", async () => {
     // The control: no symlink, no case variance, so nothing is canonicalized
     // together and the isolation guarantee holds exactly as stated.
