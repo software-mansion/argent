@@ -71,6 +71,30 @@ export async function startNativeProfilerAndroid(
     timestamp,
   });
 
+  // See the iOS twin: a `stop-all-simulator-servers` that landed while
+  // `startPerfetto` was in flight has already destroyed this session, and
+  // stamping state onto a dead api would report a recording whose owner's stop
+  // answers "call native-profiler-start first". The daemon is this attempt's to
+  // reap — the teardown never saw it, since `capturePid` is only handed over
+  // below.
+  if (api.disposed) {
+    const { adbShell } = await import("../../../../utils/adb");
+    await adbShell(params.device_id, `kill -KILL ${pid}`).catch(() => {});
+    await adbShell(params.device_id, `rm -f ${onDeviceTracePath}`).catch(() => {});
+    throw new FailureError(
+      `The native profiling session for ${api.deviceId} was torn down by a ` +
+        `stop-all-simulator-servers while perfetto was starting, so nothing was recorded — ` +
+        `one tool-server serves every agent using this argent install, so this may have been ` +
+        `another agent ending its session. Call native-profiler-start again.`,
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_SESSION_TORN_DOWN,
+        failure_stage: "android_native_profiler_start",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      }
+    );
+  }
+
   // Perfetto is up — this capture now owns the session; stamp its descriptors
   // and clear any prior capture's recovery flags (superseded on success only).
   api.recordingTimedOut = false;

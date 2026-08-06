@@ -87,6 +87,19 @@ export interface NativeProfilerSessionApi {
    * Null when unknown — before any stop, on Android, or after a load.
    */
   mallocStackLogging: boolean | null;
+  /**
+   * Whether this session has been torn down. Set by `dispose()` and never
+   * cleared: `Registry._teardown` nulls the node's instance, so the next
+   * resolve builds a fresh api rather than reviving this one.
+   *
+   * Read by `native-profiler-start`, which spawns its capture child and then
+   * awaits a readiness handshake. A teardown arriving inside that window
+   * destroys the session the start is about to report success for — leaving a
+   * `status: "recording"` against a session the registry no longer has, whose
+   * owner's `native-profiler-stop` then answers "call native-profiler-start
+   * first". Start checks this before returning and fails instead.
+   */
+  disposed: boolean;
   recordingTimeout: NodeJS.Timeout | null;
   recordingTimedOut: boolean;
   recordingExitedUnexpectedly: boolean;
@@ -164,6 +177,7 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
       cpuFilterPid: null,
       recordingMallocStackLogging: null,
       mallocStackLogging: null,
+      disposed: false,
       recordingTimeout: null,
       recordingTimedOut: false,
       recordingExitedUnexpectedly: false,
@@ -176,6 +190,11 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
     return {
       api: state,
       dispose: async () => {
+        // Before anything else, and read by a start still inside its readiness
+        // handshake: from here on this session no longer exists, so a start
+        // that resumes must fail rather than report a recording nothing can
+        // reach. See {@link NativeProfilerSessionApi.disposed}.
+        state.disposed = true;
         if (state.recordingTimeout) {
           clearTimeout(state.recordingTimeout);
           state.recordingTimeout = null;
@@ -191,7 +210,13 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
         if (state.platform === "ios") {
           const child = state.captureProcess;
           try {
-            if (state.profilingActive && child) {
+            // Whether or not the run has been declared active: `attemptStart`
+            // hands the child over BEFORE awaiting xctrace's readiness
+            // handshake, so a teardown inside that window sees `profilingActive`
+            // still false while a spawned xctrace is very much running. Gating
+            // the kill on the flag left it behind, recording into a trace
+            // nobody would ever stop.
+            if (child) {
               try {
                 child.kill("SIGKILL");
               } catch {

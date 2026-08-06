@@ -756,6 +756,35 @@ export async function startNativeProfilerIos(
   }
   const { child: xctraceProcess, pid: xctracePid } = started;
 
+  // A `stop-all-simulator-servers` that landed inside the readiness handshake
+  // above has already destroyed this session — `Registry._teardown` nulled the
+  // node's instance, so nothing can resolve `api` again and the owner's
+  // `native-profiler-stop` would answer "call native-profiler-start first".
+  // Reporting `status: "recording"` here would hand back a session that does
+  // not exist, with a trace file on disk and no way to reach it. Reap what this
+  // attempt spawned and say what happened instead.
+  if (api.disposed) {
+    try {
+      xctraceProcess.kill("SIGKILL");
+    } catch {
+      // already dead
+    }
+    resetStartState(api);
+    throw new FailureError(
+      `The native profiling session for ${api.deviceId} was torn down by a ` +
+        `stop-all-simulator-servers while this start was waiting for xctrace to become ` +
+        `ready, so nothing was recorded — one tool-server serves every agent using this ` +
+        `argent install, so this may have been another agent ending its session. Call ` +
+        `native-profiler-start again.`,
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_SESSION_TORN_DOWN,
+        failure_stage: "native_profiler_xctrace_start",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      }
+    );
+  }
+
   // Stamp the per-capture descriptors only now, on SUCCESS: a failed start
   // must leave the previous capture's still-loaded exports fully described
   // for analyze (trace name, all-processes filter PID, capture mode). The
