@@ -177,6 +177,81 @@ steps:
     });
     expect(result.ok).toBe(false);
   });
+
+  it("keeps a nested orchestrator's own abort wording and payload on the skip", async () => {
+    // A nested run-sequence honours the cancel by returning a PARTIAL result,
+    // and knows how far it got. The generic "run aborted during tool" wording
+    // would throw that progress away, and a skip without `result`/`args` leaves
+    // the partial sequence unreadable in the report.
+    const flowFile = await writeFlow(`executionPrerequisite: ""
+steps:
+  - tool: run-sequence
+    args:
+      steps:
+        - tool: gesture-tap
+          args: { x: 0.5, y: 0.5 }
+        - tool: gesture-tap
+          args: { x: 0.5, y: 0.6 }
+`);
+    const controller = new AbortController();
+    const registry = makeRegistry(async () => {
+      controller.abort();
+      return {
+        completed: 1,
+        total: 2,
+        steps: [{ tool: "gesture-tap", result: { tapped: true } }],
+      };
+    });
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile, device: "X" },
+        { signal: controller.signal } as never
+      )
+    );
+
+    expect(result.steps[0]).toMatchObject({
+      kind: "tool",
+      tool: "run-sequence",
+      status: "skip",
+      reason: "run-sequence was aborted after 1 of 2 steps",
+      result: { completed: 1, total: 2 },
+    });
+    expect(result.steps[0]!.args).toBeDefined();
+  });
+
+  it("falls back to the generic abort wording for a plain tool", async () => {
+    // Only the two nested orchestrators report their own progress; anything else
+    // has no abort verdict of its own, so the runner supplies the wording.
+    const flowFile = await writeFlow(`executionPrerequisite: ""
+steps:
+  - tool: gesture-tap
+    args:
+      udid: X
+      x: 0.5
+      y: 0.5
+`);
+    const controller = new AbortController();
+    const registry = makeRegistry(async () => {
+      controller.abort();
+      return { tapped: true };
+    });
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile, device: "X" },
+        { signal: controller.signal } as never
+      )
+    );
+
+    expect(result.steps[0]).toMatchObject({
+      status: "skip",
+      reason: "run aborted during tool",
+      result: { tapped: true },
+    });
+  });
 });
 
 describe("flow-execute with a nested run-sequence step", () => {
