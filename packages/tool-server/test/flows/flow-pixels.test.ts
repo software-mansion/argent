@@ -434,8 +434,53 @@ describe("capturePixels routing", () => {
       width: 2,
       height: 1,
     });
-    expect(tvScreenshot).toHaveBeenCalledWith("tv-udid", 0.25, undefined);
+    expect(tvScreenshot).toHaveBeenCalledWith("tv-udid", 0.25, expect.any(AbortSignal));
     expect(resolveService).not.toHaveBeenCalled();
+  });
+
+  // `tvScreenshot` forwards its signal to `execFileAsync`. Without one, a
+  // wedged `xcrun simctl io screenshot` is never killed and the next poll
+  // 200ms later spawns another, so one stuck subprocess becomes a pile of
+  // them — the round abandons the promise, but nothing abandons the process.
+  it("kills a wedged tvOS capture when its budget runs out", async () => {
+    vi.mocked(isTvOsSimulator).mockResolvedValue(true);
+    let signal: AbortSignal | undefined;
+    vi.mocked(tvScreenshot).mockImplementation(
+      (_udid, _scale, sig) =>
+        new Promise<string>((_resolve, reject) => {
+          signal = sig;
+          sig?.addEventListener("abort", () => reject(new Error("aborted")));
+        })
+    );
+    const env = envFor({ platform: "ios", kind: "simulator", id: "tv-udid" });
+
+    expect(await capturePixelsWithin(env, Date.now() + 50, false)).toBeUndefined();
+    // The budget bounds the round and the subprocess with the same deadline,
+    // so which of the two timers lands first is not fixed — only that the
+    // capture does not outlive the round it belonged to.
+    await vi.waitFor(() => expect(signal?.aborted).toBe(true));
+  });
+
+  it("kills a tvOS capture when the run itself is cancelled", async () => {
+    vi.mocked(isTvOsSimulator).mockResolvedValue(true);
+    const controller = new AbortController();
+    let signal: AbortSignal | undefined;
+    vi.mocked(tvScreenshot).mockImplementation(
+      (_udid, _scale, sig) =>
+        new Promise<string>((_resolve, reject) => {
+          signal = sig;
+          sig?.addEventListener("abort", () => reject(new Error("aborted")));
+        })
+    );
+    const env = { ...envFor({ platform: "ios", kind: "simulator", id: "tv-udid" }) } as ActionEnv;
+    (env as { signal?: AbortSignal }).signal = controller.signal;
+
+    const pending = capturePixelsWithin(env, Date.now() + 30_000, false);
+    await vi.waitFor(() => expect(signal).toBeDefined());
+    controller.abort();
+
+    expect(await pending).toBeUndefined();
+    expect(signal?.aborted).toBe(true);
   });
 
   it("routes Vega to the emulator console, and never probes the iOS runtime for it", async () => {
