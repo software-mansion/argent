@@ -259,12 +259,59 @@ describe("confusableTextNote", () => {
   // The note is the safety net for an invisible character the fold's explicit
   // classes do NOT list — anything the fold handles compares equal, so the
   // check passes and there is no message to annotate.
-  const UNHANDLED_FORMAT = "\u{110BD}"; // KAITHI NUMBER SIGN, category Cf
+  const CGJ = "͏"; // U+034F COMBINING GRAPHEME JOINER
 
   it("names the differing codepoints when the strings only look equal", () => {
-    const note = confusableTextNote(`PLN 42${UNHANDLED_FORMAT}`, "PLN 42")!;
+    const note = confusableTextNote(`PLN 42${CGJ}`, "PLN 42")!;
     expect(note).toContain("differ only in invisible characters");
-    expect(note).toContain("U+110BD");
+    expect(note).toContain("U+034F");
+  });
+
+  it("catches U+034F, which is Mn and so escaped a category-Cf test", () => {
+    // Genuinely zero-width and unpainted, deliberately NOT folded (it blocks
+    // canonical reordering), and category Mn — so the old Cf-keyed note stayed
+    // silent and reproduced the exact unexplainable message the note exists to
+    // remove: two identical-looking strings, quoted, declared unequal.
+    expect(equalsCI(`Save${CGJ}`, "Save")).toBe(false);
+    expect(confusableTextNote(`Save${CGJ}`, "Save")).toContain("U+034F");
+  });
+
+  it("stays silent for a prepended concatenation mark, which is NOT ignorable", () => {
+    // U+110BD KAITHI NUMBER SIGN is category Cf but changes how the digits
+    // after it render, so calling it invisible would be a false explanation.
+    expect(confusableTextNote("PLN 42\u{110BD}", "PLN 42")).toBeUndefined();
+  });
+
+  it("does not call a ZWJ emoji sequence an invisible difference", () => {
+    // The module's flagship counter-example. The fold correctly refuses to
+    // equate a trans flag (ONE glyph) with the two separate glyphs of a broken
+    // sequence — and then this note called that difference invisible noise, so
+    // an author who believed it would "fix" the flow by copying the rendered
+    // text and mask a real rendering regression forever.
+    const FLAG = "\u{1F3F3}️‍⚧️";
+    const BROKEN = "\u{1F3F3}️⚧️";
+    expect(confusableTextNote(FLAG, BROKEN)).toBeUndefined();
+    // Nor a variation selector or a ZWNJ, for the same reason.
+    expect(confusableTextNote(`ok${VARIATION_SELECTOR_16}`, "ok")).toBeUndefined();
+    expect(confusableTextNote("a‌b", "ab")).toBeUndefined();
+  });
+
+  it("says a directional difference REORDERS rather than calling it invisible", () => {
+    // U+200F draws nothing, so "invisible" is true of the character and false
+    // of the string: `5<RLM>-3` renders `53-`. Telling an author to copy what
+    // the app renders would be the same trap the emoji case sets.
+    const note = confusableTextNote("5‏-3", "5-3")!;
+    expect(note).toContain("REORDERS");
+    expect(note).not.toContain("differ only in invisible characters");
+    expect(note).toContain("U+200F");
+  });
+
+  it("still calls a shared directional wrapper's OTHER difference invisible", () => {
+    // Both sides carry the same LRE/PDF pair, so the directional characters are
+    // not what differs — the ZWSP is, and that one really is inert.
+    const note = confusableTextNote("‪Save​‬", "‪Save‬")!;
+    expect(note).toContain("differ only in invisible characters");
+    expect(note).toContain("U+200B");
   });
 
   it("says nothing when the strings are equal, or visibly different", () => {

@@ -445,8 +445,8 @@ describe("compatibility miss note is scoped to a MISS", () => {
 
 describe("text/equals failure notes are wired through the runner and scoped to the element", () => {
   it("names the differing invisible codepoints when the two strings look identical", async () => {
-    // U+110BD (KAITHI NUMBER SIGN, category Cf) is not one of the fold's
-    // explicit classes, so it does NOT fold away — the check fails against two
+    // U+034F (COMBINING GRAPHEME JOINER) is not one of the fold's explicit
+    // classes, so it does NOT fold away — the check fails against two
     // strings that read identically on screen. The reason must say which
     // codepoints differ, not quote the same text twice (confusableTextNote,
     // reached only through assertReason, which nothing else exercised end-to-end).
@@ -454,7 +454,7 @@ describe("text/equals failure notes are wired through the runner and scoped to t
       tree: screen([
         n({
           identifier: "amount",
-          label: "PLN 42\u{110BD}",
+          label: "PLN 42\u034F",
           frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
         }),
       ]),
@@ -478,12 +478,12 @@ describe("text/equals failure notes are wired through the runner and scoped to t
 
     expect(result.steps[0].status).toBe("fail");
     expect(result.steps[0].reason).toMatch(/differ only in invisible characters/);
-    expect(result.steps[0].reason).toMatch(/U\+110BD/);
+    expect(result.steps[0].reason).toMatch(/U\+034F/);
   });
 
   it("emits only ONE note when own text and subtree text miss in different ways", async () => {
     // A pathological node: its OWN text differs from "file" by an invisible
-    // (U+110BD), while its hoisted SUBTREE text differs by a ligature ("ﬁle").
+    // (U+034F), while its hoisted SUBTREE text differs by a ligature ("ﬁle").
     // The invisible-codepoint note (from assertReason) and the typographic
     // variant note would both fire and print two conflicting explanations of one
     // failure. The codepoint note is more precise, so the compat note stands down.
@@ -491,7 +491,7 @@ describe("text/equals failure notes are wired through the runner and scoped to t
       tree: screen([
         n({
           identifier: "x",
-          label: "file\u{110BD}",
+          label: "file\u034F",
           subtreeText: "ﬁle",
           frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
         }),
@@ -516,19 +516,19 @@ describe("text/equals failure notes are wired through the runner and scoped to t
 
     expect(result.steps[0].status).toBe("fail");
     expect(result.steps[0].reason).toMatch(/differ only in invisible characters/);
-    expect(result.steps[0].reason).toMatch(/U\+110BD/);
+    expect(result.steps[0].reason).toMatch(/U\+034F/);
     expect(result.steps[0].reason).not.toMatch(/typographic variant/);
   });
 
   it("names the invisible codepoints via the own-text fallback when subtree text differs visibly", async () => {
     // The hoisted subtree text is a visibly different string, so the confusable
     // note falls through to the node's OWN text, which differs from the expected
-    // only by an invisible U+110BD. Exercises the second operand of the `??`.
+    // only by an invisible U+034F. Exercises the second operand of the `??`.
     currentFetch = () => ({
       tree: screen([
         n({
           identifier: "amt",
-          label: "PLN 42\u{110BD}",
+          label: "PLN 42\u034F",
           subtreeText: "Total due now",
           frame: { x: 0.1, y: 0.1, width: 0.6, height: 0.05 },
         }),
@@ -553,11 +553,11 @@ describe("text/equals failure notes are wired through the runner and scoped to t
 
     expect(result.steps[0].status).toBe("fail");
     expect(result.steps[0].reason).toMatch(/differ only in invisible characters/);
-    expect(result.steps[0].reason).toMatch(/U\+110BD/);
+    expect(result.steps[0].reason).toMatch(/U\+034F/);
   });
 
   it("does not add the invisible-codepoint note to a regex `matches` failure", async () => {
-    // The label carries an invisible U+110BD; an anchored pattern fails on it.
+    // The label carries an invisible U+034F; an anchored pattern fails on it.
     // In `matches` mode the expected string is a pattern, not text, so the
     // confusable note must not compare their codepoints (the same exemption the
     // compat note draws, but for the confusable note reached via assertReason).
@@ -565,7 +565,7 @@ describe("text/equals failure notes are wired through the runner and scoped to t
       tree: screen([
         n({
           identifier: "amt",
-          label: "PLN 42\u{110BD}",
+          label: "PLN 42\u034F",
           frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
         }),
       ]),

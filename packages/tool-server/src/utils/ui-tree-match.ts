@@ -360,38 +360,94 @@ export function compatibilityVariantOf(actual: string, expected: string): boolea
 }
 
 /**
- * A note naming the invisible difference between two strings that LOOK equal.
+ * Characters that draw no glyph of their own but BUILD one in sequence, so a
+ * string that has them does not look like the same string without them: ZWNJ,
+ * ZWJ, both variation-selector blocks, and the emoji tag characters. Exactly
+ * the set the fold deliberately keeps — see the DELIBERATELY NOT FOLDED block.
+ */
+const SEQUENCE_BUILDING = /[‌‍︀-️\u{e0020}-\u{e007f}\u{e0100}-\u{e01ef}]/u;
+
+/** The directional controls: no glyph of their own, but they REORDER text. */
+const DIRECTIONAL = /[؜‎‏‪-‮⁦-⁩]/u;
+
+/**
+ * Every default-ignorable code point EXCEPT the sequence-building ones — the
+ * characters whose removal genuinely leaves the string looking the same.
+ * `Default_Ignorable_Code_Point` rather than category `Cf`, in both directions:
+ * it excludes the prepended concatenation marks (U+0600-0605, U+110BD and kin),
+ * which are `Cf` but do affect how the digits after them render, and it
+ * includes U+034F COMBINING GRAPHEME JOINER, which is `Mn` and so escaped a
+ * `Cf` test entirely despite being exactly the kind of unexplainable invisible
+ * this note exists for.
+ */
+const IGNORABLE_AND_INERT = new RegExp(
+  `(?!${SEQUENCE_BUILDING.source})\\p{Default_Ignorable_Code_Point}`,
+  "gu"
+);
+
+/** Which ignorable characters occur a DIFFERENT number of times in each string? */
+function differingIgnorables(actual: string, expected: string): string[] {
+  const tally = (s: string): Map<string, number> => {
+    const counts = new Map<string, number>();
+    for (const ch of s.match(IGNORABLE_AND_INERT) ?? []) {
+      counts.set(ch, (counts.get(ch) ?? 0) + 1);
+    }
+    return counts;
+  };
+  const a = tally(actual);
+  const b = tally(expected);
+  return [...new Set([...a.keys(), ...b.keys()])].filter(
+    (ch) => (a.get(ch) ?? 0) !== (b.get(ch) ?? 0)
+  );
+}
+
+/**
+ * A note naming the difference between two strings that LOOK equal but are not.
  *
  * This fires only where the FOLD did not already handle it. Folding-equal
- * strings compare equal, so the check passes and no message is produced at
- * all; the note therefore has to key on a strictly wider notion of "looks the
- * same" than {@link foldText} — here, equality once every Unicode format
- * character (category Cf) is removed. That makes it the safety net for
- * invisible characters the fold's explicit classes do not list, which is
- * precisely the failure that is otherwise unexplainable: two identical-looking
- * strings, quoted side by side, declared unequal.
+ * strings compare equal, so the check passes and no message is produced at all;
+ * the note therefore has to key on a strictly wider notion of "looks the same"
+ * than {@link foldText} — here, equality once every INERT default-ignorable is
+ * removed. That makes it the safety net for invisible characters the fold's
+ * explicit classes do not list, which is precisely the failure that is
+ * otherwise unexplainable: two identical-looking strings, quoted side by side,
+ * declared unequal.
+ *
+ * What it must never do is call a REAL rendering difference invisible, because
+ * the advice that follows such a note is "copy what the app renders" and an
+ * author who takes it masks the regression permanently:
+ *
+ * - The {@link SEQUENCE_BUILDING} characters are excluded outright. The fold
+ *   keeps ZWJ so a trans flag (U+1F3F3 VS16 ZWJ U+26A7 VS16, ONE glyph) cannot
+ *   equal the two separate glyphs of a broken sequence — and then this note
+ *   described that very difference as invisible noise, so the module's own
+ *   flagship counter-example came with advice to defeat it.
+ * - A {@link DIRECTIONAL} difference is reported as what it is: those draw no
+ *   glyph, but they move the ones around them, so "invisible" would be just as
+ *   false a story about a `53-` that was asked to equal `5-3`.
  *
  * Returns undefined when the strings are equal, or differ visibly — the quoted
  * strings already say that.
  */
 export function confusableTextNote(actual: string, expected: string): string | undefined {
   if (actual === expected) return undefined;
-  // Format characters ONLY. Lowercasing or NFKC-folding here would call a
-  // plain case difference — or a compatibility variant like "ﬁ" vs "fi" —
-  // "invisible", which is false: those differ in characters the eye reads
-  // perfectly well. The literal comparators already fold both, so a pair
-  // differing only that way passes and never reaches this note; a regex
-  // comparison is case-sensitive by design and must not be told otherwise.
-  const visible = (s: string): string => s.replace(/\p{Cf}/gu, "");
+  // Ignorables ONLY. Lowercasing or NFKC-folding here would call a plain case
+  // difference — or a compatibility variant like "ﬁ" vs "fi" — "invisible",
+  // which is false: those differ in characters the eye reads perfectly well.
+  // The literal comparators already fold both, so a pair differing only that
+  // way passes and never reaches this note; a regex comparison is
+  // case-sensitive by design and must not be told otherwise.
+  const visible = (s: string): string => s.replace(IGNORABLE_AND_INERT, "");
   if (visible(actual) !== visible(expected)) return undefined;
   const codepoints = (s: string): string =>
     Array.from(s)
       .map((ch) => `U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`)
       .join(" ");
-  return (
-    `the two strings differ only in invisible characters — actual [${codepoints(actual)}] ` +
-    `vs expected [${codepoints(expected)}]`
-  );
+  const lead = differingIgnorables(actual, expected).some((ch) => DIRECTIONAL.test(ch))
+    ? "the two strings differ only in directional formatting, which draws nothing itself but " +
+      "REORDERS the characters around it, so the screen does not read the way the text does"
+    : "the two strings differ only in invisible characters";
+  return `${lead} — actual [${codepoints(actual)}] vs expected [${codepoints(expected)}]`;
 }
 
 export function includesCI(haystack: string | undefined, needle: string): boolean {
