@@ -86,6 +86,65 @@ describe("a native profiling session reaped by stop-all-simulator-servers", () =
     expect(message).toContain("no trace survived");
   });
 
+  it("iOS: still explains a capped capture, and does not call its bundle half-written", async () => {
+    // The 10-minute cap SIGINTs xctrace and clears `profilingActive` while
+    // leaving the trace recoverable — `native-profiler-stop` has a whole branch
+    // for exporting it. Gating the breadcrumb on `profilingActive` sent the
+    // owner of such a capture back to "you never started one", and the
+    // mid-capture salvage text would have been wrong there too: that arm's
+    // bundle went through a finalize pass.
+    const instance = await session(iosDevice);
+    const api = instance.api as NativeProfilerSessionApi;
+    api.profilingActive = false;
+    api.recordingTimedOut = true;
+    api.traceFile = "/tmp/argent-capped.trace";
+
+    await instance.dispose();
+
+    const fresh = (await session(iosDevice)).api as NativeProfilerSessionApi;
+    const err = await stopNativeProfilerIos(fresh).catch((e: unknown) => e);
+
+    const message = (err as Error).message;
+    expect(message).not.toMatch(/Call native-profiler-start first/);
+    expect(message).toContain("/tmp/argent-capped.trace");
+    expect(message).toContain("already ended before this teardown");
+    expect(message).not.toMatch(/without its finalize pass/);
+  });
+
+  it("iOS: explains a capture that exited on its own the same way", async () => {
+    const instance = await session(iosDevice);
+    const api = instance.api as NativeProfilerSessionApi;
+    api.recordingExitedUnexpectedly = true;
+    api.traceFile = "/tmp/argent-crashed.trace";
+
+    await instance.dispose();
+
+    const fresh = (await session(iosDevice)).api as NativeProfilerSessionApi;
+    const err = await stopNativeProfilerIos(fresh).catch((e: unknown) => e);
+
+    expect((err as Error).message).toContain("already ended before this teardown");
+  });
+
+  it("Android: says the capped trace is still on the device, not that none survived", async () => {
+    // The Android cap sends SIGTERM and clears `profilingActive`, so dispose's
+    // `rm -f` branch never runs — the on-device .pftrace really is still there.
+    const instance = await session(androidDevice);
+    const api = instance.api as NativeProfilerSessionApi;
+    api.recordingTimedOut = true;
+    api.traceFile = "/tmp/host.pftrace";
+    api.androidOnDeviceTracePath = "/data/misc/perfetto-traces/capped.pftrace";
+
+    await instance.dispose();
+
+    const fresh = (await session(androidDevice)).api as NativeProfilerSessionApi;
+    const err = await stopNativeProfilerAndroid(fresh).catch((e: unknown) => e);
+
+    const message = (err as Error).message;
+    expect(message).toContain("/data/misc/perfetto-traces/capped.pftrace");
+    expect(message).toContain("left in place");
+    expect(message).not.toMatch(/no trace survived/);
+  });
+
   it("leaves a plain absence alone when the disposed session was idle", async () => {
     // Disposing a session nobody was profiling with is routine cleanup. If that
     // left a breadcrumb, the next honest "you never started one" would accuse a
