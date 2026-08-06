@@ -1368,15 +1368,23 @@ async function waitForIdle(
         let localizedThisInterval = false;
         if (frame === undefined) {
           captureFailed = true;
-        } else if (previousFrame !== undefined) {
-          const change = comparePixels(previousFrame, frame);
-          if (change === "moving") pixelsEverMoved = true;
-          else {
-            pixelsHeld = true;
-            localizedThisInterval = change === "localized";
+        } else {
+          if (previousFrame !== undefined) {
+            const change = comparePixels(previousFrame, frame);
+            if (change === "moving") pixelsEverMoved = true;
+            else {
+              pixelsHeld = true;
+              localizedThisInterval = change === "localized";
+            }
           }
+          // Only a frame that arrived replaces the reference. A missed capture
+          // used to overwrite it with `undefined`, which cost the NEXT round its
+          // comparison too — one slow capture blinded two intervals, so a
+          // backend that is merely intermittently slow ended up reported as one
+          // that could not be screenshotted at all. Holding the last good frame
+          // asks the same question across the gap, over a longer interval.
+          previousFrame = frame;
         }
-        previousFrame = frame;
 
         if (treeHeld && pixelsHeld) {
           stillIntervals += 1;
@@ -1496,9 +1504,10 @@ async function waitForIdle(
     return {
       ok: true,
       warning:
-        `settled on the UI tree alone — no screenshot of this screen could be read, so animation ` +
-        `that moves pixels without moving nodes (a push, a fade, a dismissing modal) was not ` +
-        `waited out. Follow this with the element check the next step actually needs.`,
+        `settled on the UI tree alone — this screen could not be screenshotted on enough polls ` +
+        `to compare a pair of them, so animation that moves pixels without moving nodes (a push, ` +
+        `a fade, a dismissing modal) was not waited out. Follow this with the element check the ` +
+        `next step actually needs.`,
     };
   }
   return {
