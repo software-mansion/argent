@@ -115,14 +115,21 @@ function runSequenceOutcome(result: Record<string, unknown>): NestedOutcome | un
   const steps = result.steps;
   if (!Array.isArray(steps)) return undefined;
 
+  // A nested step failed iff it carries an `error` KEY — success pushes
+  // `{ tool, result }` and never sets one. Keyed on presence rather than on a
+  // non-empty message: a tool that throws `new Error("")` records `error: ""`,
+  // and skipping that would re-open the very hole this reader closes (a failed
+  // step scored, or recorded, as a pass). An empty message is named as such
+  // instead, so the report never trails off after the colon.
   const failed = steps.find((s) => isRecord(s) && typeof s.error === "string");
   if (failed && isRecord(failed)) {
     const tool = typeof failed.tool === "string" ? failed.tool : "step";
+    const why = failed.error ? String(failed.error) : "failed without an error message";
     return {
       status: "fail",
       reason:
         `run-sequence stopped at ${tool} after ${count(result.completed)} of ` +
-        `${count(result.total)} steps: ${String(failed.error)}`,
+        `${count(result.total)} steps: ${why}`,
     };
   }
 

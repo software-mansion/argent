@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { z } from "zod";
 import type { Registry, ToolContext } from "@argent/registry";
-import { createRunSequenceTool, runSequenceFailure } from "../src/tools/run-sequence";
+import { createRunSequenceTool } from "../src/tools/run-sequence";
 
 // A minimal registry stub: records every invokeTool call and returns a marker.
 function makeMockRegistry() {
@@ -402,66 +402,5 @@ describe("run-sequence", () => {
       expect((result.steps[0] as { error?: string }).error).toBeUndefined();
       expect(registry.invokeTool).toHaveBeenCalledTimes(1);
     });
-  });
-});
-
-// Orchestrators (flow-execute, the recorder) read a nested failure back out of
-// an untyped result. A sequence of identical steps produces identical error
-// text for each of them, so the message has to say WHICH one stopped.
-describe("runSequenceFailure", () => {
-  it("names the failed step's position and tool against the DECLARED total", () => {
-    // run-sequence halts at the first failure and returns only the steps up to
-    // it, so `steps.length` is 2 here — but the caller declared `total: 3`, and
-    // the denominator reports that so a dropped third step is not hidden.
-    expect(
-      runSequenceFailure("run-sequence", {
-        completed: 1,
-        total: 3,
-        steps: [
-          { tool: "gesture-swipe", result: { swiped: true } },
-          { tool: "gesture-swipe", error: "swipe failed: device not reachable" },
-        ],
-      })
-    ).toBe("step 2/3 (gesture-swipe): swipe failed: device not reachable");
-  });
-
-  it("flags a nested failure even when its error message is empty", () => {
-    // A tool that throws `new Error("")` records `error: ""`. Keying on a
-    // non-empty message would skip it and let the failed sequence record as a
-    // pass — the exact hole this guard closes.
-    expect(
-      runSequenceFailure("run-sequence", {
-        completed: 0,
-        total: 1,
-        steps: [{ tool: "keyboard", error: "" }],
-      })
-    ).toBe("step 1/1 (keyboard): failed without an error message");
-  });
-
-  it("reports the first failure, not a later one", () => {
-    expect(
-      runSequenceFailure("run-sequence", {
-        steps: [
-          { tool: "keyboard", error: "first" },
-          { tool: "gesture-tap", error: "second" },
-        ],
-      })
-    ).toBe("step 1/2 (keyboard): first");
-  });
-
-  it("still places a step whose tool name is missing", () => {
-    expect(runSequenceFailure("run-sequence", { steps: [null, { error: "boom" }] })).toBe(
-      "step 2/2: boom"
-    );
-  });
-
-  it("is silent for a clean sequence, another tool's result, or a foreign shape", () => {
-    expect(runSequenceFailure("run-sequence", { steps: [{ tool: "keyboard", result: {} }] })).toBe(
-      null
-    );
-    // Same shape from a different tool is not a nested sequence failure.
-    expect(runSequenceFailure("gesture-tap", { steps: [{ tool: "x", error: "e" }] })).toBe(null);
-    expect(runSequenceFailure("run-sequence", { steps: "nope" })).toBe(null);
-    expect(runSequenceFailure("run-sequence", null)).toBe(null);
   });
 });

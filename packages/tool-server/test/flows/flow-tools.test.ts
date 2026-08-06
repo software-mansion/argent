@@ -822,7 +822,8 @@ describe("flow-add-step", () => {
       }
     );
 
-    expect(result.message).toContain("failed nested step");
+    // The runner's wording, from the reader both sides now share.
+    expect(result.message).toContain("run-sequence stopped at await-ui-element after 1 of 2 steps");
     expect(result.message).toContain("await-ui-element condition not met");
     expect(result.message).toContain("step NOT recorded");
     expect(result.message).toContain("Prior nested steps may already have changed the device");
@@ -868,7 +869,7 @@ describe("flow-add-step", () => {
       }
     );
 
-    expect(result.message).toContain("failed nested step");
+    expect(result.message).toContain("run-sequence stopped at keyboard after 0 of 2 steps");
     expect(result.message).toContain("step NOT recorded");
     expect(result.message).toContain("Prior nested steps may already have");
     expect(parseFlow(await onDisk("sequence-failed-first")).steps).toEqual([]);
@@ -910,8 +911,9 @@ describe("flow-add-step", () => {
       { signal: controller.signal } as never
     );
 
-    expect(result.message).toContain("was cancelled");
-    expect(result.message).toContain("1/2 nested steps completed");
+    // A cancel BETWEEN nested steps is the shared reader's own abort branch,
+    // and it carries the progress the sequence made.
+    expect(result.message).toContain("run-sequence was aborted after 1 of 2 steps");
     expect(result.message).toContain("step NOT recorded");
     expect(result.message).toContain("Prior nested steps may already have changed the device");
     // A check, not a restore: relaunching would not reproduce the prefix.
@@ -1010,22 +1012,27 @@ describe("flow-add-step", () => {
       }
     );
 
-    expect(result.message).toContain("was cancelled");
-    expect(result.message).not.toContain("ok: false");
+    expect(result.message).toContain('flow "login" was aborted');
+    expect(result.message).not.toContain("failed:");
     expect(result.message).toContain("NOT recorded");
     expect(parseFlow(await onDisk("compose-cancelled")).steps).toEqual([]);
   });
 
-  it("does not record run: when flow-execute returned ok: false", async () => {
+  it("does not record run: when the composed flow failed, and names the failing step", async () => {
     const registry = createMockRegistry({
       "flow-execute": {
         result: {
+          flow: "login",
+          device: "ABC",
+          executionPrerequisite: "",
           ok: false,
           passed: 1,
           failed: 1,
+          skipped: 0,
+          errored: 0,
           steps: [
-            { kind: "tap", status: "pass" },
-            { kind: "assert", status: "fail", reason: "Home not visible" },
+            { index: 0, kind: "tap", status: "pass" },
+            { index: 1, kind: "assert", status: "fail", reason: "Home not visible" },
           ],
         },
       },
@@ -1044,7 +1051,9 @@ describe("flow-add-step", () => {
       }
     );
 
-    expect(result.message).toContain("ok: false");
+    // Names WHICH composed step failed and why — not merely that the flow did.
+    expect(result.message).toContain('flow "login" failed: 1 passed, 1 failed, 0 errored');
+    expect(result.message).toContain("assert: Home not visible");
     expect(result.message).toContain("NOT recorded");
     expect(result.message).toContain("Prior composed steps may already have changed the device");
     expect(result.message).toContain("state the recorded prefix leaves it in");
@@ -1209,11 +1218,14 @@ describe("flow-add-step", () => {
       }
     );
 
-    expect(result.message).toContain("prerequisite notice");
-    // Names the actual prerequisite, not just the generic handshake text.
+    expect(result.message).toContain('flow "login" did not run');
+    // Names the actual prerequisite, not just the generic handshake text, and
+    // the recovery — both of which the shared reader already renders.
     expect(result.message).toContain("On login screen");
+    expect(result.message).toContain("prerequisiteAcknowledged: true");
     expect(result.message).toContain("NOT recorded");
-    expect(result.message).not.toContain("mutated device state");
+    // Provably nothing ran, so no warning: a notice carries no step list.
+    expect(result.message).not.toContain("may already have");
     expect(parseFlow(await onDisk("compose-notice")).steps).toEqual([]);
   });
 

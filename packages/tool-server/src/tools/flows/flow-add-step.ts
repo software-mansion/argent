@@ -22,8 +22,7 @@ import {
   type RecordingSession,
 } from "./flow-utils";
 import { AWAIT_UI_ELEMENT_TOOL_ID, isUnmetUiWaitResult } from "../await-ui-element";
-import { RUN_SEQUENCE_TOOL_ID } from "./flow-nested-outcome";
-import { runSequenceFailure } from "../run-sequence";
+import { nestedOrchestratorOutcome } from "./flow-nested-outcome";
 import { probeWhenCondition, type DirectiveOutcome } from "./flow-actions";
 import { summarizeStep } from "./flow-finish-recording";
 import { invokeSubTool } from "../../utils/sub-invoke";
@@ -799,40 +798,46 @@ function directiveCommandHint(command: string): string | undefined {
   );
 }
 
-function flowExecuteRecordBlock(result: unknown): { reason: string } | null {
-  if (typeof result !== "object" || result === null) return null;
-  const value = result as {
-    ok?: unknown;
-    aborted?: unknown;
-    notice?: unknown;
-    executionPrerequisite?: unknown;
-  };
-  // A cancelled run folds the abort into its verdict (`ok` is false whenever
-  // `aborted` is set), so the abort has to be read FIRST or every cancellation
-  // reports as a composed flow that failed. Same precedence the runner applies
-  // to a nested flow-execute, and to its own steps when the signal fires.
-  if (value.aborted === true) {
-    return { reason: "flow-execute was cancelled" };
-  }
-  if (value.ok === false) {
-    return { reason: "flow-execute returned ok: false" };
-  }
-  if (Object.prototype.hasOwnProperty.call(value, "notice")) {
-    // The notice string only carries the generic handshake ("re-call with
-    // prerequisiteAcknowledged"); name the actual prerequisite alongside it so
-    // the author learns WHAT to satisfy without re-reading the returned result.
-    const prereq =
-      typeof value.executionPrerequisite === "string" && value.executionPrerequisite.length > 0
-        ? ` (unmet prerequisite: ${value.executionPrerequisite})`
-        : "";
-    return {
-      reason:
-        typeof value.notice === "string"
-          ? `flow-execute returned a prerequisite notice: ${value.notice}${prereq}`
-          : `flow-execute returned a prerequisite notice without executing steps${prereq}`,
-    };
-  }
-  return null;
+/**
+ * Whether this step must be refused rather than recorded, and why.
+ *
+ * `flow-execute` and `run-sequence` are the two tools that run other tools and
+ * report a failed, cancelled or never-run nested run in their RESULT instead of
+ * by throwing — so the recorder has to read that result, or a composition that
+ * failed everything is written into the flow as a step that passed.
+ *
+ * The verdict is read with {@link nestedOrchestratorOutcome}, the same reader
+ * the RUNNER scores a nested step with. That is not merely reuse: a step the
+ * recorder declines to write is exactly a step the runner would not have passed,
+ * so the two must agree by construction rather than by two parsers of one shape
+ * staying in step. It also settles the wording — one event had grown three
+ * fraction spellings ("step 2/3", "after 1 of 3 steps", "1/2 nested steps
+ * completed") — and it names WHICH composed step failed, which the recorder's
+ * own reader never did.
+ *
+ * `undefined` from that reader means the nested run finished cleanly, including
+ * a run whose cancellation landed in the trailing inter-step delay after every
+ * declared step had already succeeded: that step ran in full and is recorded.
+ */
+function nestedRecordRefusal(
+  command: string,
+  result: unknown,
+  aborted: boolean
+): { reason: string; mayHaveMutated: boolean } | null {
+  const outcome = nestedOrchestratorOutcome(command, result);
+  if (!outcome) return null;
+  // A cancellation is not a failure. `run-sequence` has no abort field of its
+  // own — a nested tool cancelled mid-flight reports itself either by returning
+  // (a cancelled `await-ui-element` returns unmet) or by rejecting, and both
+  // become an ordinary error entry — so a verdict-first read files a user
+  // cancellation as "a failed nested step". Signal first, verdict second, the
+  // order the runner uses; `skip` already IS the reader's own abort branch, and
+  // the verdict is kept alongside rather than thrown away.
+  const reason =
+    aborted && outcome.status !== "skip"
+      ? `${command} was cancelled (${outcome.reason})`
+      : outcome.reason;
+  return { reason, mayHaveMutated: nestedStepAttempted(result) };
 }
 
 /**
@@ -854,14 +859,6 @@ function partialMutationWarning(command: "flow-execute" | "run-sequence"): strin
     "leaves it in before adding the next step, and put it back by hand if it has moved; " +
     "relaunching the app does NOT reproduce that prefix."
   );
-}
-
-function runSequenceProgress(result: unknown): string | null {
-  if (typeof result !== "object" || result === null) return null;
-  const { completed, total } = result as { completed?: unknown; total?: unknown };
-  return typeof completed === "number" && typeof total === "number"
-    ? `${completed}/${total} nested steps completed`
-    : null;
 }
 
 /**
@@ -1365,65 +1362,24 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
         }
       }
 
-      // run-sequence honours cancellation between nested steps by returning a
-      // partial result rather than throwing. A post-invoke guard is therefore
-      // required: otherwise that partial sequence would be recorded as if all
-      // nested actions had run successfully.
-      //
-      // Checked BEFORE the failure verdict, the order the runner uses. A nested
-      // tool cancelled mid-flight reports itself either by returning (a
-      // cancelled `await-ui-element` returns unmet) or by rejecting, and
-      // run-sequence turns both into an ordinary error entry — so reading the
-      // verdict first files a cancellation as "a failed nested step", and the
-      // recorder and the runner then classify one event two different ways.
-      if (params.command === RUN_SEQUENCE_TOOL_ID && ctx?.signal?.aborted) {
+      const refusal = nestedRecordRefusal(
+        params.command,
+        toolResult,
+        ctx?.signal?.aborted === true
+      );
+      if (refusal) {
         const { stepCount, note } = await activeFlowState(session);
-        const progress = runSequenceProgress(toolResult);
-        const mutationWarning = nestedStepAttempted(toolResult)
-          ? ` ${partialMutationWarning("run-sequence")}`
+        const mutationWarning = refusal.mayHaveMutated
+          ? ` ${partialMutationWarning(
+              params.command === RUN_TARGET_COMMAND ? "flow-execute" : "run-sequence"
+            )}`
           : "";
         return {
-          message:
-            `run-sequence was cancelled${progress ? ` with ${progress}` : ""} — step NOT recorded.` +
-            `${mutationWarning}${note ? ` ${note}` : ""}`,
+          message: `${refusal.reason} — step NOT recorded.${mutationWarning}${note ? ` ${note}` : ""}`,
           toolResult,
           stepCount,
           savedTo: session.filePath,
         };
-      }
-
-      const sequenceFailure = runSequenceFailure(params.command, toolResult);
-      if (sequenceFailure) {
-        const { stepCount, note } = await activeFlowState(session);
-        const mutationWarning = nestedStepAttempted(toolResult)
-          ? ` ${partialMutationWarning("run-sequence")}`
-          : "";
-        return {
-          message:
-            `run-sequence stopped on a failed nested step: ${sequenceFailure} — step NOT recorded.` +
-            `${mutationWarning}${note ? ` ${note}` : ""}`,
-          toolResult,
-          stepCount,
-          savedTo: session.filePath,
-        };
-      }
-
-      if (params.command === RUN_TARGET_COMMAND) {
-        const recordBlock = flowExecuteRecordBlock(toolResult);
-        if (recordBlock) {
-          const { stepCount, note } = await activeFlowState(session);
-          const mutationWarning = nestedStepAttempted(toolResult)
-            ? ` ${partialMutationWarning("flow-execute")}`
-            : "";
-          return {
-            message:
-              `${recordBlock.reason} — step NOT recorded.${mutationWarning}` +
-              `${note ? ` ${note}` : ""}`,
-            toolResult,
-            stepCount,
-            savedTo: session.filePath,
-          };
-        }
       }
 
       // Running a fragment via flow-execute mid-recording is recorded as a

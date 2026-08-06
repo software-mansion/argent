@@ -63,46 +63,6 @@ type RunSequenceResult = {
   steps: StepResult[];
 };
 
-/**
- * Return the first nested failure from a run-sequence result. Orchestrators
- * call run-sequence through the untyped registry boundary, so the helper owns
- * the result-shape check and prevents a partial sequence from becoming a
- * passing outer flow step merely because the tool returned instead of threw.
- */
-export function runSequenceFailure(tool: string, result: unknown): string | null {
-  if (tool !== "run-sequence" || typeof result !== "object" || result === null) return null;
-  const steps = (result as { steps?: unknown }).steps;
-  if (!Array.isArray(steps)) return null;
-  // Position the failure within the count of steps the caller DECLARED (`total`),
-  // not the partial `steps` array run-sequence returns. It halts at the first
-  // failure, so that array always ends on the failing step — reporting
-  // `steps.length` as the denominator makes the fraction always read "N/N" and
-  // hides that later declared steps never ran ("2/2" for a 3-step sequence that
-  // stopped at step 2). Fall back to `steps.length` for a foreign/short shape.
-  const total = (result as { total?: unknown }).total;
-  const denom = typeof total === "number" && total >= steps.length ? total : steps.length;
-  for (let i = 0; i < steps.length; i++) {
-    const step = steps[i];
-    if (typeof step !== "object" || step === null) continue;
-    // A nested step failed iff it carries an `error` key — success pushes
-    // `{ tool, result }` and never sets `error`. Key on the field's PRESENCE,
-    // not on a non-empty message: a tool that throws `new Error("")` yields an
-    // empty error string, and skipping it would re-open the very hole this
-    // guard closes (a failed step recorded/scored as a pass).
-    const error = (step as { error?: unknown }).error;
-    if (typeof error === "string") {
-      // Name WHICH nested step failed. The index is the only thing that can
-      // tell three identical `gesture-swipe` steps apart, and without it the
-      // author has to re-derive it from a message that may be identical for
-      // every one of them.
-      const tool = (step as { tool?: unknown }).tool;
-      const which = typeof tool === "string" && tool.length > 0 ? ` (${tool})` : "";
-      return `step ${i + 1}/${denom}${which}: ${error || "failed without an error message"}`;
-    }
-  }
-  return null;
-}
-
 // run-sequence is platform-neutral by construction: every step is dispatched
 // through `registry.invokeTool`, and each step's tool runs its own
 // `dispatchByPlatform` against `params.udid`. The capability here just gates
