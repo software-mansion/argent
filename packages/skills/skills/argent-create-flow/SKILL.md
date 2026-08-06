@@ -85,11 +85,18 @@ This condition-as-key form is the only spelling. `await` also accepts an optiona
 
 For a custom poll interval or bundleId, drop to an explicit `- tool: await-ui-element` step — but the raw tool polls the trimmed `describe` tree, so a testID it reports as not found can still resolve fine as an `await:` directive (see Selectors). Prefer the directive.
 
-**`await: { idle: true }` — the one condition with no selector.** It waits until the screen has content and stops moving in **both** the UI tree and the rendered pixels. Options: `minStableMs` (how long stillness must hold, default 250 — it has to be shorter than the timeout, or the gate could never pass) and `timeout` (default 7500). Reach for it when a transition's motion is invisible to the tree — an iOS push or modal dismissal commits its hierarchy up front and then animates a layer for a few hundred milliseconds, and a cross-fade or scrim moves no node at all — which is exactly when an element `await:` returns while the screen is still sliding, and the next tap lands on a moving target.
+**`await: { idle: true }` — the one condition with no selector.** It waits until the screen has content and stops moving in **both** the UI tree and the rendered pixels. Options: `minStableMs` (how long stillness must hold, default 250) and `timeout` (default 7500, and it has to leave room for the hold plus the 600ms a settle costs — three reads spanning two 200ms polls — or the parser rejects the step). Reach for it when a transition's motion is invisible to the tree — an iOS push or modal dismissal commits its hierarchy up front and then animates a layer for a few hundred milliseconds, and a cross-fade or scrim moves no node at all — which is exactly when an element `await:` returns while the screen is still sliding, and the next tap lands on a moving target.
 
-It **never fails a run.** A screen that never settles spends the timeout, then passes with a `warning` on the step: readiness is not an acceptance criterion, and plenty of healthy screens never stop (a video, a shimmer, a carousel, live-updating text). Read that warning rather than stepping over it — a stuck spinner looks exactly the same, and it means the screen never finished loading. Only an unreadable tree stops the run, as an `error`.
+It **never fails a run.** Readiness is not an acceptance criterion, so every outcome short of a clean settle passes carrying a `warning` on the step — read it rather than stepping over it:
 
-It is **not** a screen check either: a dropped tap leaves the source screen perfectly idle. Put it **after** the element `await:` that names the destination, never instead of one.
+- **the screen never held still** — it spent the timeout and went ahead. Plenty of healthy screens never stop (a video, a shimmer, a carousel, live-updating text); a screen that never finished loading looks the same from here.
+- **a small part of it kept changing** — a spinner, a caret, a progress dot. Too small to be the screen moving, so the settle completed anyway; if it is a loading spinner, the screen was still loading when this step returned.
+- **the tree stayed empty** — the screen rendered no accessible content. Sometimes the app (a canvas, a video surface), sometimes a screen that never arrived.
+- **settled on the UI tree alone** — the screen could not be screenshotted often enough to compare a pair, so presentation-layer motion (a push, a fade, a dismissing modal) was not waited out.
+
+Only a tree source that cannot be read stops the run, as an `error` — one that fails outright, or one that answers and then wedges. That is a broken window, not a verdict about the app.
+
+It is **not** a screen check either: a dropped tap leaves the source screen perfectly idle. Put it **after** the element `await:` that names the destination, never instead of one. There is no `assert` form (waiting is the whole point), no `when:` form, and the recorder cannot emit one — every `idle` step is hand-written. Do not sprinkle it after every step: each one costs a settle, and it cannot fail, so a flow full of them is slower without being stricter.
 
 ### `type` and `scroll-to`
 

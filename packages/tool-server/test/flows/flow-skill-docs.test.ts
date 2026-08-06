@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
+import type { Registry } from "@argent/registry";
 import { parseFlow } from "../../src/tools/flows/flow-utils";
+import { createRunFlowTool } from "../../src/tools/flows/flow-run";
 
 /**
  * The create-flow skill is the agent-facing reference for selector scopes, so
@@ -40,6 +42,24 @@ describe("create-flow SKILL.md scope snippets", () => {
     for (const map of maps) {
       expect(() => parseFlow(`steps:\n  - tap: ${map}\n`), map).not.toThrow();
     }
+  });
+
+  // The two agent-facing descriptions of `idle` have to agree with what it
+  // does. The commit that turned its timeout from a failure into a warning
+  // updated the skill, the comments and the tests, and left the tool
+  // description — the surface an authoring agent actually reads — saying the
+  // opposite, with "so it is safe to persist" hung off the claim that was now
+  // backwards.
+  it("the flow-execute description and the skill agree that idle warns rather than fails", () => {
+    const description = createRunFlowTool({} as unknown as Registry).description;
+    expect(description).toContain("idle: true");
+    expect(description).toMatch(/never\s+fails a run/);
+    expect(description).not.toMatch(/FAILS on timeout/i);
+
+    const skill = readFileSync(SKILL, "utf8");
+    expect(skill).toContain("It **never fails a run.**");
+    // The one outcome that does stop a run is the window, never the app.
+    expect(skill).toMatch(/Only a tree source that cannot be read stops the run/);
   });
 
   it("the paragraph's rejected `any` spelling really is rejected", () => {

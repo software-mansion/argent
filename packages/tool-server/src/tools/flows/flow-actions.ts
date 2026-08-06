@@ -1171,11 +1171,15 @@ async function waitForCondition(
 const MIN_STILL_INTERVALS = IDLE_MIN_STILL_INTERVALS;
 
 /**
- * The smallest budget a poll round is allowed to start with. A round begun
- * with nothing left cannot capture and cannot read, and both absences were
- * being recorded as facts about the device: the skipped capture latched
- * "captures do not work here", and the abandoned read latched "the tree source
- * is not answering". Neither was true — the step had simply run out of time.
+ * How much budget must be left for another round to be worth STARTING — which
+ * is checked before the poll sleep, so it is spent on the sleep and the round
+ * that follows begins with whatever is left. It is a floor on the wait, not on
+ * the round: what it rules out is starting a round in the last few
+ * milliseconds of the step, where the capture is skipped and the read is
+ * abandoned, and both absences used to be recorded as facts about the device —
+ * "captures do not work here", "the tree source is not answering" — when the
+ * step had simply run out of time.
+ *
  * The first round always runs, so an unusually short `timeout:` still buys one
  * honest look, and ending up to one round early is strictly better than
  * judging a screen nobody managed to observe.
@@ -1515,9 +1519,9 @@ async function waitForIdle(
     warning:
       `the screen never held still for ${minStableMs}ms within ${timeoutMs}ms, so this step went ` +
       `ahead without waiting it out. Either something on it never stops (a video, a looping ` +
-      `animation, a carousel, live-updating text) or the screen never finished loading — a stuck ` +
-      `spinner looks like both. Look at what is moving, and make sure the next action is gated on ` +
-      `a stable element rather than on stillness.`,
+      `animation, a carousel, live-updating text) or the screen never finished loading. Look at ` +
+      `what is moving, and make sure the next action is gated on a stable element rather than on ` +
+      `stillness.`,
   };
 }
 

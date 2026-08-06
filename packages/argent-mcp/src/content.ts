@@ -211,9 +211,13 @@ export type FlowStepResult = {
   status?: "pass" | "fail" | "skip" | "error";
   reason?: string;
   /**
-   * Legacy: older tool-servers passed a snapshot that adopted a missing
-   * baseline and annotated it with this caveat (a missing baseline now fails
-   * the step). Rendered for wire compat with a not-yet-updated server.
+   * A step that passed in a way that weakens it as proof — raised today by
+   * `await: { idle: true }`, which never fails a run and says here what its
+   * green actually bought (see StepReport.warning in the tool-server's
+   * flow-run). Also carries the caveat older tool-servers put on a snapshot
+   * that adopted a missing baseline, which now fails the step instead. Live
+   * either way: dropping the field would silently delete the only thing the
+   * readiness check reports.
    */
   warning?: string;
   tool?: string;
