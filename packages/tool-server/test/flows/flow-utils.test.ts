@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
@@ -1881,5 +1882,75 @@ describe("writeFlowFile failure hints", () => {
     const message = (err as Error).message;
     expect(message).toContain("shared.yaml is a symlink, so the write lands in");
     expect(message).toContain(await fs.realpath(vault));
+  });
+});
+
+describe("flow file permissions across an atomic append", () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "flow-mode-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  /** Whether mode bits can refuse this process at all (root ignores them). */
+  async function modeBitsBite(file: string): Promise<boolean> {
+    return fs
+      .access(file, fsConstants.W_OK)
+      .then(() => false)
+      .catch(() => true);
+  }
+
+  it("carries the flow file's mode across the swap", async () => {
+    // The scratch file is created under the process umask and rename carries
+    // ITS mode over, so without preserving it every append quietly rewrote the
+    // flow file's permissions to 0644.
+    const file = path.join(root, "flow.yaml");
+    await fs.writeFile(file, "steps: []\n", "utf8");
+    await fs.chmod(file, 0o600);
+
+    await writeNewFlowFile(file, "steps: []\n");
+
+    expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
+  });
+
+  it("refuses to overwrite a read-only flow file", async () => {
+    // The swap needs permission on the DIRECTORY, so it would replace a
+    // `chmod 0444` file regardless — turning a plain write's EACCES into a
+    // silent success that also relaxed the mode.
+    const file = path.join(root, "flow.yaml");
+    await fs.writeFile(file, "steps: []\nkeep: me\n", "utf8");
+    await fs.chmod(file, 0o444);
+    if (!(await modeBitsBite(file))) return;
+
+    const err = await writeNewFlowFile(file, "steps: []\n").catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_FILE_WRITE_FAILED);
+    expect((err as Error).message).toMatch(/not writable \(mode 0444\)/);
+    // And it really did not touch the file.
+    expect(await fs.readFile(file, "utf8")).toContain("keep: me");
+  });
+
+  it("leaves no scratch file behind when it refuses", async () => {
+    const flows = path.join(root, ".argent", "flows");
+    await fs.mkdir(flows, { recursive: true });
+    const file = path.join(flows, "flow.yaml");
+    await fs.writeFile(file, "steps: []\n", "utf8");
+    await fs.chmod(file, 0o444);
+    if (!(await modeBitsBite(file))) return;
+
+    await writeNewFlowFile(file, "steps: []\n").catch(() => {});
+
+    expect(await fs.readdir(flows)).toEqual(["flow.yaml"]);
+  });
+
+  it("still creates a flow file that does not exist yet", async () => {
+    // The control: nothing to preserve and nothing to be refused by.
+    const file = path.join(root, "fresh.yaml");
+    await writeNewFlowFile(file, "steps: []\n");
+    expect(await fs.readFile(file, "utf8")).toBe("steps: []\n");
   });
 });

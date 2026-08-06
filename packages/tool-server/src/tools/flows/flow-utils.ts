@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { stringify as yamlStringify, parse as yamlParse } from "yaml";
 import {
@@ -2657,6 +2658,14 @@ async function followDanglingLink(linkPath: string): Promise<string> {
   return current;
 }
 
+/** Whether this process may write `filePath` — its mode as the kernel reads it. */
+async function isWritable(filePath: string): Promise<boolean> {
+  return fs.access(filePath, fsConstants.W_OK).then(
+    () => true,
+    () => false
+  );
+}
+
 /**
  * Replace a flow file's contents so no reader can ever observe it half-written.
  *
@@ -2692,19 +2701,49 @@ async function followDanglingLink(linkPath: string): Promise<string> {
  * tool-server (a different install bundle) that could be writing the same
  * directory.
  *
- * The swap costs two things a write-through would have kept, both accepted for
- * the atomicity: it needs write permission on the DIRECTORY rather than on the
- * file, and it replaces the inode, so a chmod on the flow file or a hardlink to
- * it does not survive an append.
+ * The swap costs one thing a write-through would have kept, accepted for the
+ * atomicity: it needs write permission on the DIRECTORY rather than on the
+ * file, and it replaces the inode, so a hardlink to the flow file does not
+ * survive an append. The file's own MODE is not among the costs — see below.
  */
 async function writeFlowFile(filePath: string, content: string): Promise<void> {
   const { dir: resolvedDir, target } = await canonicalFlowTarget(filePath);
+  // Null when the flow file does not exist yet (the first write of a recording),
+  // which has no mode to preserve and nothing to be refused by.
+  const previousMode = await fs.stat(target).then(
+    (s) => s.mode & 0o7777,
+    () => null
+  );
+  if (previousMode !== null && !(await isWritable(target))) {
+    // The swap needs permission on the directory, not on the file, so it would
+    // replace a `chmod 0444` flow file regardless — turning a plain write's
+    // EACCES into a silent success that also relaxed the mode to the umask
+    // default. Refuse instead, so a read-only flow file goes on meaning what it
+    // meant before the write became atomic.
+    throw new FailureError(
+      `Failed to write flow file ${filePath} (EACCES) — ${target} is not writable ` +
+        `(mode ${previousMode.toString(8).padStart(4, "0")}). An append replaces the file via a ` +
+        `sibling temp file and rename, which needs permission on the directory rather than on ` +
+        `the file — so this is refused explicitly rather than quietly overwriting a flow you ` +
+        `made read-only. chmod it writable to record over it.`,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_WRITE_FAILED,
+        failure_stage: "flow_file_write",
+        failure_area: "tool_server",
+        error_kind: "unknown",
+      }
+    );
+  }
   const tmpPath = path.join(
     path.dirname(target),
     `.argent-flow-${process.pid}-${++flowWriteSeq}.tmp`
   );
   try {
     await fs.writeFile(tmpPath, content, "utf8");
+    // The scratch file was created under this process's umask, and rename
+    // carries ITS mode over — so without this every append would quietly
+    // rewrite the flow file's permissions to 0644.
+    if (previousMode !== null) await fs.chmod(tmpPath, previousMode);
     // Atomic within a filesystem, and the temp file is a sibling of the target,
     // so it is always the same one.
     await fs.rename(tmpPath, target);
