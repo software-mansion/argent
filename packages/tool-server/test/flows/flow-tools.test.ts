@@ -696,7 +696,9 @@ describe("flow-add-step", () => {
     // Ran the fragment live to set up state…
     expect(result.toolResult).toEqual({ ok: true, steps: [] });
     // …but recorded the portable composition directive, not the raw tool call.
-    expect(parseFlow(await onDisk("compose-test")).steps).toEqual([{ kind: "run", flow: "login.yaml" }]);
+    expect(parseFlow(await onDisk("compose-test")).steps).toEqual([
+      { kind: "run", flow: "login.yaml" },
+    ]);
   });
 
   it("records a run: directive when the target is an e2e flow", async () => {
@@ -816,7 +818,7 @@ describe("flow-add-step", () => {
       await fs.realpath(path.join(tmpDir, ".argent", "flows", "twin.yaml"))
     );
     expect(result.message).toMatch(/would replay a different flow/);
-    expect(parseFlow(result.flowFile).steps).toEqual([
+    expect(parseFlow(await onDisk("compose-twin")).steps).toEqual([
       { kind: "tool", name: "flow-execute", args },
     ]);
   });
@@ -853,7 +855,7 @@ describe("flow-add-step", () => {
     // step is kept and the warning hands back the recordable spelling.
     expect(result.message).toContain('case-insensitively to "frag.yaml"');
     expect(result.message).toContain('re-run it as name "frag" to record it');
-    expect(parseFlow(result.flowFile).steps).toEqual([
+    expect(parseFlow(await onDisk("compose-name-casing")).steps).toEqual([
       { kind: "tool", name: "flow-execute", args },
     ]);
   });
@@ -889,7 +891,7 @@ describe("flow-add-step", () => {
       'rename "frag.YAML" to "frag.yaml" to record it — flow files must be lowercase .yaml'
     );
     expect(result.message).not.toContain("re-run it as name");
-    expect(parseFlow(result.flowFile).steps).toEqual([
+    expect(parseFlow(await onDisk("compose-name-rename")).steps).toEqual([
       { kind: "tool", name: "flow-execute", args },
     ]);
   });
@@ -905,7 +907,7 @@ describe("flow-add-step", () => {
     await flowStartRecordingTool.execute({}, { name: "compose-name-mixed", project_root: tmpDir });
     await writeSiblingFlow("MixedCase", "steps:\n  - echo: hi\n");
 
-    const result = await tool.execute(
+    await tool.execute(
       {},
       {
         name: "compose-name-mixed",
@@ -915,7 +917,9 @@ describe("flow-add-step", () => {
       }
     );
 
-    expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "run", flow: "MixedCase.yaml" }]);
+    expect(parseFlow(await onDisk("compose-name-mixed")).steps).toEqual([
+      { kind: "run", flow: "MixedCase.yaml" },
+    ]);
   });
 
   // A root the recorder cannot anchor is not a root it can check the name
@@ -955,7 +959,7 @@ describe("flow-add-step", () => {
       );
 
       expect(result.message).toContain(`project_root must be an absolute path ${detail}`);
-      expect(parseFlow(result.flowFile).steps).toEqual([
+      expect(parseFlow(await onDisk("compose-unanchored")).steps).toEqual([
         { kind: "tool", name: "flow-execute", args },
       ]);
     } finally {
@@ -1021,7 +1025,9 @@ describe("flow-add-step", () => {
     // Anchored beside the symlink's spelling this would miss the fragment and
     // demote a perfectly replayable composition to a raw tool step.
     expect(result.message).not.toMatch(/could not resolve/i);
-    expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "run", flow: "frag.yaml" }]);
+    expect(parseFlow(await onDisk("rec", base)).steps).toEqual([
+      { kind: "run", flow: "frag.yaml" },
+    ]);
   });
 
   it("keeps the raw step when the sibling exists only beside the symlink's spelling", async () => {
@@ -1052,7 +1058,7 @@ describe("flow-add-step", () => {
     );
 
     expect(result.message).toMatch(/could not resolve/i);
-    expect(parseFlow(result.flowFile).steps).toEqual([
+    expect(parseFlow(await onDisk("rec", base)).steps).toEqual([
       { kind: "tool", name: "flow-execute", args: { name: "frag", project_root: base } },
     ]);
   });
@@ -1089,7 +1095,7 @@ describe("flow-add-step", () => {
     );
 
     expect(result.message).toMatch(/not the file the live flow-execute ran/i);
-    expect(parseFlow(result.flowFile).steps).toEqual([
+    expect(parseFlow(await onDisk("rec", base)).steps).toEqual([
       { kind: "tool", name: "flow-execute", args: { name: "frag", project_root: base } },
     ]);
   });
@@ -1104,7 +1110,7 @@ describe("flow-add-step", () => {
     await writeSiblingFlow("login", "steps:\n  - echo: hi\n");
     const sibling = path.join(tmpDir, ".argent", "flows", "login.yaml");
 
-    const result = await tool.execute(
+    await tool.execute(
       {},
       {
         name: "compose-path",
@@ -1114,7 +1120,9 @@ describe("flow-add-step", () => {
       }
     );
 
-    expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "run", flow: "login.yaml" }]);
+    expect(parseFlow(await onDisk("compose-path")).steps).toEqual([
+      { kind: "run", flow: "login.yaml" },
+    ]);
     // The live sub-invoke gets no file-input boundary, so it must run the
     // sibling by name…
     const nested = (registry.invokeTool as any).mock.calls[0][1];
