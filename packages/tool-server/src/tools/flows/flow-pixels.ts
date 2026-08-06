@@ -240,14 +240,23 @@ async function chromiumScrollOffset(api: ChromiumCdpApi): Promise<{ x: number; y
  * The `screenshot` tool itself is deliberately not reused: it registers every
  * capture as an artifact, and a settle takes tens of them per step.
  */
-async function captureFile(env: ActionEnv): Promise<string> {
+async function captureFile(env: ActionEnv, budgetMs: number): Promise<string> {
   if (env.device.platform === "vega") {
     return captureVegaScreenshotPng({ scale: CAPTURE_SCALE });
   }
   // Shape alone cannot tell tvOS from iOS — both are 8-4-4-4-12 UUIDs tagged
   // `platform: "ios"` — so ask the runtime, which is memoized per UDID.
   if (env.device.platform === "ios" && (await isTvOsSimulator(env.device.id))) {
-    return tvScreenshot(env.device.id, CAPTURE_SCALE, undefined);
+    // This one DOES take the signal, unlike the simulator-server arm below.
+    // `tvScreenshot` forwards it to `execFileAsync`, and without it a wedged
+    // `xcrun simctl io screenshot` is never killed — the round abandons the
+    // promise and the next poll 200ms later spawns another, so a stuck
+    // subprocess becomes a growing pile of them. The `screenshot` tool's own
+    // tvOS route has always bounded it the same way. Nothing is orphaned that
+    // is not already: on a severed capture the temp path never comes back, but
+    // the file is a deterministic one under tmpdir and the alternative is an
+    // unbounded process.
+    return tvScreenshot(env.device.id, CAPTURE_SCALE, captureAbortSignal(env, budgetMs));
   }
   const ref = simulatorServerRef(env.device);
   const api = (await env.registry.resolveService(ref.urn, ref.options)) as SimulatorServerApi;
@@ -268,9 +277,9 @@ async function captureFile(env: ActionEnv): Promise<string> {
  * which is scratch and never an artifact — it is removed as soon as it has
  * been read, whether or not the read worked.
  */
-async function capturePng(env: ActionEnv): Promise<Buffer> {
+async function capturePng(env: ActionEnv, budgetMs: number): Promise<Buffer> {
   if (env.device.platform === "chromium") return captureChromiumPng(env);
-  const file = await captureFile(env);
+  const file = await captureFile(env, budgetMs);
   try {
     return await fs.readFile(file);
   } finally {
@@ -283,9 +292,9 @@ async function capturePng(env: ActionEnv): Promise<Buffer> {
  * read (any capture or decode failure). Soft by design — the caller treats it
  * as the ABSENCE of visual evidence, never as evidence of stillness.
  */
-async function capturePixels(env: ActionEnv): Promise<PixelFrame | undefined> {
+async function capturePixels(env: ActionEnv, budgetMs: number): Promise<PixelFrame | undefined> {
   try {
-    const png = PNG.sync.read(await capturePng(env));
+    const png = PNG.sync.read(await capturePng(env, budgetMs));
     return { width: png.width, height: png.height, data: png.data };
   } catch {
     return undefined;
@@ -307,8 +316,18 @@ export async function capturePixelsWithin(
 ): Promise<PixelFrame | undefined> {
   const budget = Math.min(deadline - Date.now(), pixelCaptureTimeoutMs(env.device, firstCapture));
   if (budget <= 0) return undefined;
-  const result = await settleWithin(capturePixels(env), budget, env.signal);
+  const result = await settleWithin(capturePixels(env, budget), budget, env.signal);
   return result.type === "value" ? result.value : undefined;
+}
+
+/**
+ * The signal a shell-out capture is bounded by: the run's own abort, plus this
+ * capture's budget, so the subprocess dies with the round that stopped waiting
+ * for it rather than outliving the whole step.
+ */
+function captureAbortSignal(env: ActionEnv, budgetMs: number): AbortSignal {
+  const bound = AbortSignal.timeout(budgetMs);
+  return env.signal ? AbortSignal.any([env.signal, bound]) : bound;
 }
 
 /**
