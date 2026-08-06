@@ -17,6 +17,7 @@ import {
   treeFingerprint,
   confusableTextNote,
   compatibilityVariantOf,
+  compatibilityVariantIn,
   type Selector,
   type WaitCondition,
   type TextMatchMode,
@@ -1215,7 +1216,10 @@ function compatibilityMissNote(
     ) {
       return "";
     }
-    hit = [shown, own].find((text) => text !== "" && compatibilityVariantOf(text, expectedText));
+    // Match the comparator the step actually used: `equals` asks about the
+    // whole string, `contains` (the default) about a substring.
+    const nearMiss = textMatch === "equals" ? compatibilityVariantOf : compatibilityVariantIn;
+    hit = [shown, own].find((text) => text !== "" && nearMiss(text, expectedText));
   } else {
     // Nothing was located, so the selector's own text is the needle that found
     // nothing — search the whole tree for what it nearly matched. Reached by
@@ -1228,10 +1232,12 @@ function compatibilityMissNote(
     // matchNodeWithRegex), so suggesting a multi-child hoisted string sends the
     // author to a selector that still matches nothing. The advice has to be
     // text the locator can actually read.
+    // A selector's `text` is a SUBSTRING test, so the near-miss question is
+    // "does this label contain a compat variant of the needle", not "is it one".
     const walk = (node: DescribeNode): void => {
       if (hit !== undefined) return;
       for (const candidate of [node.label, node.value]) {
-        if (candidate && compatibilityVariantOf(candidate, wanted)) {
+        if (candidate && compatibilityVariantIn(candidate, wanted)) {
           hit = candidate;
           return;
         }

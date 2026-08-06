@@ -803,4 +803,31 @@ describe("compatibility miss note: what it is scoped to", () => {
     expect(result.steps[0].reason).toMatch(/typographic variant/);
     expect(result.steps[0].reason).toMatch(/does show "Add more languages…"/);
   });
+
+  it("fires on a PARTIAL miss, the default comparator's own shape", async () => {
+    // `contains` and a selector's `text` are substring tests, but the note only
+    // ever asked whether the WHOLE strings were compat-variants — so under the
+    // default comparator it could never fire.
+    currentFetch = () => ({
+      tree: screen([
+        n({
+          label: "Settings — Add more languages… now",
+          frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.05 },
+        }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("partial-compat", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "assert", condition: "visible", selector: { text: "Add more languages..." } },
+      ],
+    });
+
+    const result = await run("partial-compat");
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/typographic variant/);
+  });
 });

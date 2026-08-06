@@ -360,6 +360,23 @@ export function compatibilityVariantOf(actual: string, expected: string): boolea
 }
 
 /**
+ * The substring analog of {@link compatibilityVariantOf}: does `haystack`
+ * CONTAIN a compatibility variant of `needle`, while not containing the needle
+ * itself?
+ *
+ * Both `contains` and a selector's own `text` are substring tests, so asking
+ * only whether the WHOLE strings are variants meant the note could never fire
+ * for them — which is to say never at all under the default comparator, the
+ * one most misses arrive through.
+ */
+export function compatibilityVariantIn(haystack: string, needle: string): boolean {
+  if (includesCI(haystack, needle)) return false;
+  if (foldText(needle) === "") return false;
+  const compat = (s: string): string => foldLoose(s.normalize("NFKC"));
+  return compat(haystack).includes(compat(needle));
+}
+
+/**
  * Characters that draw no glyph of their own but BUILD one in sequence, so a
  * string that has them does not look like the same string without them: ZWNJ,
  * ZWJ, both variation-selector blocks, and the emoji tag characters. Exactly
