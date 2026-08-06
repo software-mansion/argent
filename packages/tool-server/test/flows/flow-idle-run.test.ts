@@ -6,6 +6,15 @@ import type { Registry, ToolContext } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
 import type { PixelFrame } from "../../src/tools/flows/flow-pixels";
 
+// The status-bar mask asks the iOS runtime whether this UDID is a tvOS
+// simulator. These UDIDs are fabricated, so a real probe would shell out to
+// `xcrun simctl list` on every step and answer "unknown" each time — pin it to
+// the mobile answer the cases are written against.
+vi.mock("../../src/utils/ios-devices", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/utils/ios-devices")>()),
+  isTvOsSimulator: vi.fn(async () => false),
+}));
+
 // Serve the flow tree directly (see flow-when.test.ts) — `idle` polls it.
 let currentTree: () => DescribeNode;
 /** Simulates a tree source that is slow, or wedged when it exceeds the step. */
@@ -88,12 +97,22 @@ function frameWithMovingPixels(movingPixels: number, level: number): PixelFrame 
   const [width, height] = [300, 600];
   const data = Buffer.alloc(width * height * 4, 255);
   for (let i = 0; i < movingPixels; i++) {
-    data[i * 4] = level;
-    data[i * 4 + 1] = level;
-    data[i * 4 + 2] = level;
+    const o = (STATUS_BAR_ROWS * width + i) * 4;
+    data[o] = level;
+    data[o + 1] = level;
+    data[o + 2] = level;
   }
   return { width, height, data };
 }
+
+/**
+ * The first row of a 600-row frame the comparison actually looks at: the
+ * comparator masks the top 6% on a device with a system status bar, so motion
+ * a case means to be SEEN has to be placed below it. Frames that move
+ * everywhere (frameAt) are unaffected, as is a 10-row one, where 6% floors to
+ * no rows at all.
+ */
+const STATUS_BAR_ROWS = Math.floor(600 * 0.06);
 
 function mockRegistry(): Registry {
   return {
@@ -294,6 +313,39 @@ steps:
     expect(step.warning).toContain("spinner");
     // The warning is about how the settle was reached, not a refusal to settle.
     expect(step.warning).not.toContain("never held still");
+  });
+
+  // The runner pins the status bar for the whole run, but the pin lands a few
+  // hundred milliseconds AFTER the run starts and a nested `tool: flow-execute`
+  // clears it for the rest of the outer run — so this step regularly compared a
+  // real clock against a pinned one, or against a ticking one, and reported a
+  // static screen as moving or as carrying a spinner. The band is masked.
+  it("ignores the system status bar the run's own pin repaints", async () => {
+    let tick = 0;
+    // 400 pixels — over the motion budget for this frame — confined to the
+    // masked band, which is where the measured clock repaint landed.
+    currentFrame = () => {
+      const level = tick++ % 2 === 0 ? 0 : 255;
+      const [width, height] = [300, 600];
+      const data = Buffer.alloc(width * height * 4, 255);
+      for (let i = 0; i < 400; i++) {
+        const o = (width + i) * 4; // row 1, inside the status bar
+        data[o] = level;
+        data[o + 1] = level;
+        data[o + 2] = level;
+      }
+      return { width, height, data };
+    };
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, minStableMs: 0 }
+`
+    );
+    const step = (await run("ready")).steps.at(-1)!;
+    expect(step).toMatchObject({ kind: "idle", status: "pass" });
+    expect(step.warning).toBeUndefined();
   });
 
   it("says nothing about small motion when the screen is genuinely still", async () => {

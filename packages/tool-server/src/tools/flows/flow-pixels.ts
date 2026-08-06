@@ -87,6 +87,39 @@ const MOTION_FRACTION = 0.002;
 // limit of comparing whole frames.
 const LOCALIZED_MOTION_FRACTION = 0.00005;
 
+// Top band excluded from the comparison on a device with a system status bar,
+// as a fraction of frame height. The same 6% screenshot-diff ignores
+// (DEFAULT_IGNORE_TOP_NORMALIZED_Y), which the `snapshot` step opts into and
+// the Android flow tree matches by stripping com.android.systemui outright —
+// this comparison was the one place in the repo that looked at system chrome.
+//
+// It has to be masked here rather than left to the run-level `pinStatusBar`,
+// which is not enough on its own for two reasons, both measured. The pin lands
+// AFTER the run starts — the simulator repaints the clock and animates the
+// battery fill 100-450ms in — so a fragment whose first step is this one
+// compares a real clock against a pinned one and calls a static screen moving
+// (23 false spinner warnings in 43 runs on an iPhone 16 Pro; 0 in 10 when the
+// same step followed a `wait: 2000`). And a nested `tool: flow-execute` clears
+// the pin on its way out without the outer run ever re-pinning, leaving every
+// later step of that run comparing against a live, ticking clock.
+const STATUS_BAR_MASK_FRACTION = 0.06;
+
+/**
+ * The fraction of the frame {@link comparePixels} must ignore for this device,
+ * because the system paints it and the app does not.
+ *
+ * Only iOS and Android put a status bar in the capture. A Chromium window's top
+ * band is page content, and Vega and tvOS render full-screen with no system
+ * chrome, so masking any of those would blind the check to real motion for
+ * nothing. tvOS shares iOS's platform tag and is only distinguishable by the
+ * runtime probe, which is memoized per UDID and already paid by the capture.
+ */
+export async function statusBarMaskFraction(device: ActionEnv["device"]): Promise<number> {
+  if (device.platform === "android") return STATUS_BAR_MASK_FRACTION;
+  if (device.platform !== "ios") return 0;
+  return (await isTvOsSimulator(device.id)) ? 0 : STATUS_BAR_MASK_FRACTION;
+}
+
 // `httpScreenshot` may spend its full first-frame wait before it even returns
 // a file path. Leave a separate completion margin for reading, decoding, and
 // removing that PNG. Warm captures get the tighter bound below.
@@ -290,18 +323,24 @@ export async function capturePixelsWithin(
  *
  * Alpha is ignored — a screen capture is opaque.
  *
- * Different dimensions count as motion. That branch covers a resized window
- * (Chromium). It is NOT how a device rotation is caught: the Android capture
- * keeps its portrait shape across one, so rotation registers through content
- * change like anything else.
+ * `maskTopFraction` excludes that fraction of rows at the top of the frame,
+ * both from the count and from the total the fractions are taken against — see
+ * {@link statusBarMaskFraction} for which devices need it and why.
+ *
+ * Different dimensions count as motion. It is NOT how a device rotation is
+ * caught: the Android capture keeps its portrait shape across one, so rotation
+ * registers through content change like anything else. On Chromium the branch
+ * is effectively unreachable — the clip is built from the cached viewport, so a
+ * resize does not change the captured dimensions until something refreshes it.
  */
-export function comparePixels(a: PixelFrame, b: PixelFrame): PixelChange {
+export function comparePixels(a: PixelFrame, b: PixelFrame, maskTopFraction = 0): PixelChange {
   if (a.width !== b.width || a.height !== b.height) return "moving";
-  const total = a.width * a.height;
-  if (total === 0) return "still";
+  const maskedRows = Math.min(a.height, Math.floor(a.height * maskTopFraction));
+  const total = a.width * (a.height - maskedRows);
+  if (total <= 0) return "still";
   const limit = Math.min(a.data.length, b.data.length);
   let changed = 0;
-  for (let o = 0; o + 2 < limit; o += 4) {
+  for (let o = maskedRows * a.width * 4; o + 2 < limit; o += 4) {
     const dr = a.data[o] - b.data[o];
     const dg = a.data[o + 1] - b.data[o + 1];
     const db = a.data[o + 2] - b.data[o + 2];
