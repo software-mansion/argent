@@ -31,6 +31,7 @@ import {
   runTargetName,
   setActiveProjectRoot,
   type FlowFile,
+  type FlowRequires,
   type FlowSelector,
   type FlowStep,
   type Launch,
@@ -44,6 +45,8 @@ import { invokeSubTool } from "../../utils/sub-invoke";
 import { isUnmetUiWaitResult } from "../await-ui-element";
 import {
   resolveFlowDevice,
+  assertDeviceMeetsRequires,
+  assertPlatformMeetsRequires,
   bindDeviceArgs,
   flowRequiresDevice,
   stepRequiresDevice,
@@ -916,7 +919,13 @@ A \`when:\` block (condition + \`steps:\`, no else) runs its steps only if the c
 checked once with the short assert grace — for one-sided divergences like interstitials and coach
 marks; a skipped block reports distinctly and failures inside an entered block are real failures.
 A flow that begins with a \`launch\` step is a self-contained e2e flow; one that doesn't runs against the
-device's current state. Device id is injected by the runner (flows store none) — pass \`device\` or
+device's current state. A top-level \`requires:\` block (\`platform: [ios, android]\`, \`runtimeKind: tv|mobile\`,
+ANDed) names the targets the flow supports; no block means it runs anywhere. Requirements narrow device
+auto-detection, so an ios-only flow picks the booted simulator rather than failing as ambiguous, and a run
+pointed at a target they exclude fails with FLOW_REQUIREMENTS_UNMET (the CLI turns that into a skip when
+running a whole directory). A \`run:\` fragment whose requirements the run device does not meet ERRORS the
+step — a composed fragment silently not running would leave a green report for a scenario that half
+happened. Device id is injected by the runner (flows store none) — pass \`device\` or
 \`platform\` to pick one, else the single booted device is used. On Chromium a \`launch\` step's value is an
 Electron app path ({ chromium: <path> | { path, args } }) the runner boots (on the tool-server host) rather
 than an installed app id it relaunches. With no explicit \`device\`, a run whose leading launch is
@@ -961,6 +970,15 @@ returns a notice with the prerequisite instead of running.`,
       // chromium hoist, and the executor itself — so none can accept a chain
       // another refuses.
       const rootEntry: RunStackEntry = { canonical: canonicalPath, display: flowName };
+
+      // The half of the flow's requirements decidable from the call alone, run
+      // before anything else touches a device: the caller named a platform (or
+      // a device, whose platform is its id's shape) the flow does not support.
+      // Sits ahead of the prerequisite handshake so a caller is never asked to
+      // establish state for a run that cannot happen, and ahead of the chromium
+      // hoist so no app is booted for one. The runtimeKind half needs a device
+      // and lands with the resolution below.
+      assertParamsMeetRequires(params, flow.requires);
 
       // Run-time analog of validateFlow's e2e-has-prerequisite rule: parse sees
       // one file, but a leading `run:` chain crosses files — a fragment whose
@@ -1137,6 +1155,17 @@ async function resolveRunDevice(
     const leading = await leadingLaunch(flow, [rootEntry]);
     const spec = leading && chromiumBootSpec(leading.app, params.platform);
     if (spec) {
+      // The hoist commits the run to chromium, so its requirements are
+      // decidable here — and must be decided BEFORE the boot: the instance is
+      // only registered for teardown once this function returns, so a refusal
+      // after booting would strand a live Electron process. Parse-time
+      // validation does not cover this (a `requires` naming only a runtimeKind
+      // constrains no launch), which is why the check belongs on this path.
+      assertPlatformMeetsRequires(
+        "chromium",
+        flow.requires,
+        "the chromium app its leading launch boots"
+      );
       let booted: BootedChromium;
       try {
         booted = await bootChromiumForFlow(spec, flowDir, viaUpload);
@@ -1148,14 +1177,34 @@ async function resolveRunDevice(
     // Checked after the chromium boot path, which only applies to a flow led by
     // a `launch` step — and a launch needs a device, so the two never compete.
     if (!flowRequiresDevice(registry, flow.steps)) {
+      // Only the auto-detect path gets here, and it has no target to judge:
+      // resolving a device purely to refuse one would fail a run that touches
+      // nothing. A caller-named platform or device is judged at the tool's
+      // entry, by {@link assertParamsMeetRequires}.
       return { device: null, booted: null };
     }
   }
   const device = await resolveFlowDevice(registry, ctx, {
     device: params.device,
     platform: params.platform as FlowPlatform | undefined,
+    requires: flow.requires,
   });
   return { device, booted: null };
+}
+
+/**
+ * Refuse a run whose caller-named target the flow's `requires` already
+ * excludes — decidable with no device listing and no boot, from the `platform`
+ * param or the shape of an explicit `device` id (which is the whole of what
+ * `resolveDevice` reads). The device-bearing half of the check (runtimeKind,
+ * and the platform of an auto-detected device) belongs to
+ * {@link resolveFlowDevice}; this is only the part worth knowing earlier.
+ */
+function assertParamsMeetRequires(params: Params, requires: FlowRequires | undefined): void {
+  if (!requires) return;
+  const named = params.device ? resolveDevice(params.device).platform : params.platform;
+  if (!named) return; // nothing named — auto-detection judges it later
+  assertPlatformMeetsRequires(named, requires, `the ${named} target this run was pointed at`);
 }
 
 /**
@@ -2011,6 +2060,24 @@ async function execRunStep(
     fragment = parseFlow(await fs.readFile(canonical, "utf8"));
   } catch (err) {
     return fail(`could not load fragment "${target}": ${errMsg(err)}`);
+  }
+
+  // A composed fragment the run device cannot satisfy ERRORS the step rather
+  // than skipping it. At the root, an unmet requirement means "this scenario
+  // does not apply here" and a directory run moves on; mid-run it would mean
+  // part of the scenario silently did not happen while the report stayed
+  // green. Expressing that deliberately is what `when:` is for.
+  //
+  // Checked per fragment as it is reached, not by pre-walking the whole run:
+  // graph — that second resolution could disagree with the executor's own if
+  // the file changed in between, and the walk is exactly the work execRunStep
+  // is already doing.
+  if (fragment.requires && state.device) {
+    try {
+      await assertDeviceMeetsRequires(state.device, fragment.requires);
+    } catch (err) {
+      return fail(`fragment "${target}" cannot run on this device: ${errMsg(err)}`);
+    }
   }
 
   // Marker for the composition point, then expand the fragment's steps inline,
