@@ -885,3 +885,76 @@ describe("compatibility miss note: what it is scoped to", () => {
     expect(result.steps[0].reason).not.toMatch(/<U\+/);
   });
 });
+
+describe("a `matches` (regex) miss still explains an invisible it cannot see", () => {
+  it("names the ignorable codepoints in the text the pattern was tested against", async () => {
+    // `matches` is exempt from folding, from the confusable note and from the
+    // compat note — so the ONE comparison mode the fold cannot rescue was the
+    // one left with no explanation at all: two identical-looking strings and
+    // nothing else.
+    currentFetch = () => ({
+      tree: screen([
+        n({
+          identifier: "who",
+          label: "‪Hubert Gancarczyk‬",
+          frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.05 },
+        }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("matches-invisible", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "assert",
+          condition: "text",
+          selector: { identifier: "who" },
+          expectedText: "^Hubert Gancarczyk$",
+          textMatch: "matches",
+        },
+      ],
+    });
+
+    const result = await run("matches-invisible");
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/U\+202A/);
+    expect(result.steps[0].reason).toMatch(/U\+202C/);
+    // Still no codepoint comparison AGAINST the pattern — that would describe a
+    // mismatch that has nothing to do with the pattern that failed.
+    expect(result.steps[0].reason).not.toMatch(/vs expected \[/);
+  });
+
+  it("stays quiet when the text carries no invisible at all", async () => {
+    currentFetch = () => ({
+      tree: screen([
+        n({
+          identifier: "who",
+          label: "Someone Else",
+          frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.05 },
+        }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("matches-plain", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "assert",
+          condition: "text",
+          selector: { identifier: "who" },
+          expectedText: "^Hubert Gancarczyk$",
+          textMatch: "matches",
+        },
+      ],
+    });
+
+    const result = await run("matches-plain");
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/but its text was/);
+    expect(result.steps[0].reason).not.toMatch(/U\+/);
+  });
+});

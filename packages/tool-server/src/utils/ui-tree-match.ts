@@ -486,6 +486,35 @@ export function quoteScreenText(text: string): string {
   );
 }
 
+/**
+ * A note naming the invisible characters IN one string, without comparing it to
+ * anything.
+ *
+ * The counterpart {@link confusableTextNote} cannot serve a `matches` step: its
+ * "expected" is a regular expression, so comparing its code points against a
+ * label describes a mismatch that has nothing to do with the pattern that
+ * failed. But `matches` is also exempt from folding — a pattern carries its own
+ * precision — which left the one comparison mode the fold cannot rescue with no
+ * explanation at all, just two identical-looking strings and nothing else.
+ *
+ * So say what is in the TEXT and stop there: an author whose `^Hubert
+ * Gancarczyk$` misses a label wrapped in U+202A/U+202C needs to know the
+ * wrapper is there, and can then decide what their pattern should do about it.
+ *
+ * Returns undefined when the text holds no such character.
+ */
+export function ignorableTextNote(text: string): string | undefined {
+  const found = text.match(IGNORABLE_AND_INERT) ?? [];
+  if (found.length === 0) return undefined;
+  const names = [...new Set(found)]
+    .map((ch) => `U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`)
+    .join(" ");
+  return (
+    `the text carries invisible characters [${names}] that the pattern must account for ` +
+    `(a regular expression is deliberately never folded, so they are matched literally)`
+  );
+}
+
 export function includesCI(haystack: string | undefined, needle: string): boolean {
   if (!haystack) return false;
   // A needle that folds away to nothing is not a weak constraint, it is NO

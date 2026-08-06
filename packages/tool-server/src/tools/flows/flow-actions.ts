@@ -19,6 +19,7 @@ import {
   compatibilityVariantOf,
   compatibilityVariantIn,
   quoteScreenText,
+  ignorableTextNote,
   type Selector,
   type WaitCondition,
   type TextMatchMode,
@@ -1298,11 +1299,15 @@ function assertReason(
       // Only for the LITERAL modes: in `matches` the "expected" string is a
       // regular expression, not text, so comparing its code points against the
       // element's would describe a mismatch that has nothing to do with the
-      // pattern that failed.
+      // pattern that failed. `matches` gets the one-sided note instead — it is
+      // exempt from folding as well as from this comparison, so without it the
+      // one mode the fold cannot rescue is the one left unexplained.
       const confusable =
-        expectedText !== undefined && textMatch !== "matches"
-          ? (confusableTextNote(shown, expectedText) ?? confusableTextNote(own, expectedText))
-          : undefined;
+        expectedText === undefined
+          ? undefined
+          : textMatch === "matches"
+            ? (ignorableTextNote(shown) ?? ignorableTextNote(own))
+            : (confusableTextNote(shown, expectedText) ?? confusableTextNote(own, expectedText));
       return (
         `element matched ${sel} but its text was "${shown}"${ownNote} (wanted to ${wanted})` +
         (confusable ? ` — ${confusable}` : "")
