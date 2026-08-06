@@ -6,7 +6,7 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { discoverMetro } from "../utils/debugger/discovery";
-import { publishedMetroPort } from "../utils/debugger/metro-port";
+import { externalJsDebuggerUrl, publishedMetroPort } from "../utils/debugger/metro-port";
 import { classifyDevice } from "../utils/device-info";
 import { assertExternalCapability } from "../utils/external-devices";
 import { proxyStart } from "../utils/sim-remote";
@@ -210,7 +210,20 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       deviceId,
     });
 
-    const cdp = new CDPClient(selected.webSocketUrl);
+    /**
+     * React Native's inspector-proxy keeps one debugger per device and
+     * terminates the incumbent to admit a new one. Connecting to Metro's
+     * target would therefore evict a provider already debugging this runtime,
+     * and the two would reconnect in a loop. A provider avoids that by
+     * re-serving its own connection and publishing the socket.
+     *
+     * Only the socket comes from the provider. `selected` still supplies the
+     * session's identity below, so names, alias and source-map roots are the
+     * same either way.
+     */
+    const proxied = externalJsDebuggerUrl(deviceId);
+
+    const cdp = new CDPClient(proxied ?? selected.webSocketUrl);
     await cdp.connect();
 
     const sourceMaps = new SourceMapsRegistry(metro.projectRoot);
@@ -225,13 +238,32 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       process.stderr.write(`[JsRuntimeDebugger:${port}] ${label} failed (non-fatal): ${msg}\n`);
     };
 
-    await cdp.send("FuseboxClient.setClientMetadata", {}).catch(ignore);
+    /**
+     * Through a provider's socket Argent is one of several clients on a single
+     * connection, so this setup splits by what it touches.
+     *
+     * These four are per-runtime, not per-client. On a shared session they reach
+     * into someone else's debugger: `setPauseOnExceptions: "none"` would disarm
+     * exception breakpoints a user set, from a tool they did not run. The client
+     * that owns the session owns its global state.
+     *
+     * The rest are unconditional. Enables are idempotent, and a binding only
+     * adds one. Other clients can ignore it by name.
+     */
+    if (!proxied) {
+      await cdp.send("FuseboxClient.setClientMetadata", {}).catch(ignore);
+    }
+
     await cdp.send("ReactNativeApplication.enable", {}).catch(ignore);
     await cdp.send("Runtime.enable");
     await cdp.send("Debugger.enable", { maxScriptsCacheSize: 100_000_000 });
-    await cdp.send("Debugger.setPauseOnExceptions", { state: "none" });
-    await cdp.send("Debugger.setAsyncCallStackDepth", { maxDepth: 32 }).catch(ignore);
-    await cdp.send("Runtime.runIfWaitingForDebugger").catch(ignore);
+
+    if (!proxied) {
+      await cdp.send("Debugger.setPauseOnExceptions", { state: "none" });
+      await cdp.send("Debugger.setAsyncCallStackDepth", { maxDepth: 32 }).catch(ignore);
+      await cdp.send("Runtime.runIfWaitingForDebugger").catch(ignore);
+    }
+
     await cdp.addBinding("__argent_callback");
 
     await cdp.evaluate(DISABLE_LOGBOX_SCRIPT).catch(warnOnError("DISABLE_LOGBOX_SCRIPT"));

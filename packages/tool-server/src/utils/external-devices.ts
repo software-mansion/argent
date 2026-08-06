@@ -257,6 +257,36 @@ const httpUrl = z
     }
   }, "must be an http(s) URL");
 
+const webSocketUrl = z
+  .string()
+  .max(2048)
+  .refine((value) => {
+    try {
+      const parsed = new URL(value);
+      return parsed.protocol === "ws:" || parsed.protocol === "wss:";
+    } catch {
+      return false;
+    }
+  }, "must be a ws(s) URL");
+
+/**
+ * Where to attach a CDP client instead of the target Metro advertises.
+ *
+ * React Native allows one debugger per device:
+ * `Device.handleDebuggerConnection` terminates the existing connection with
+ * `NEW_DEBUGGER_OPENED` before installing a new one. Two independent clients
+ * cannot share a runtime, they evict each other in a loop.
+ *
+ * A provider already holding that connection can re-serve it, keeping the
+ * device down to one debugger while deciding what each client sees. Argent
+ * still reads Metro for the session's metadata; only the socket changes.
+ *
+ * Omit it when nothing else is debugging, and Argent connects to Metro direct.
+ */
+const jsDebuggerSchema = z.object({
+  webSocketUrl,
+});
+
 const simulatorServerSchema = z.object({
   apiUrl: httpUrl,
   streamUrl: httpUrl,
@@ -282,6 +312,8 @@ export const providerDeviceSchema = z
      * default set, which needs no `--set`.
      */
     deviceSet: z.string().min(1).max(4096).optional(),
+    /** @see {@linkcode jsDebuggerSchema} */
+    jsDebugger: jsDebuggerSchema.optional(),
     kind: z.enum(["simulator", "emulator", "device"]),
     /**
      * The Metro port serving this device, used as the default by every tool
@@ -380,6 +412,7 @@ export interface ExternalDevice {
   capabilities: ReadonlySet<string>;
   deviceSet?: string;
   id: string;
+  jsDebugger?: { webSocketUrl: string };
   kind: "device" | "emulator" | "simulator";
   metroPort?: number;
   name: string;
@@ -594,6 +627,7 @@ function adoptDevice(record: ProviderRecord, raw: unknown): ExternalDevice | und
     capabilities,
     ...(device.deviceSet ? { deviceSet: device.deviceSet } : {}),
     id: makeExternalId(record.id, device.nativeId),
+    ...(device.jsDebugger ? { jsDebugger: device.jsDebugger } : {}),
     kind: device.kind,
     ...(device.metroPort ? { metroPort: device.metroPort } : {}),
     name: device.name,

@@ -132,7 +132,27 @@ async function checkDevices(devices: ProviderDevice[], findings: Finding[]): Pro
       }
     }
 
+    if (device.jsDebugger && !device.capabilities.includes("js-debugger")) {
+      findings.push(
+        warn(
+          `${label}: publishes a jsDebugger socket but does not declare 'js-debugger', so argent ` +
+            `will never attach to it`
+        )
+      );
+    }
+
     if (device.capabilities.includes("js-debugger")) {
+      if (!device.jsDebugger) {
+        findings.push(
+          warn(
+            `${label}: declares 'js-debugger' with no jsDebugger socket — argent will connect to ` +
+              `metro directly, which evicts any debugger you already have on this runtime ` +
+              `(react native allows one per device). Publish a socket you multiplex, or withhold ` +
+              `the capability while you are debugging`
+          )
+        );
+      }
+
       if (device.metroPort === undefined) {
         findings.push(
           warn(

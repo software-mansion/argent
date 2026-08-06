@@ -56,6 +56,18 @@ export function metroPort(params: { device_id?: string; port?: number }): number
 }
 
 /**
+ * The CDP socket a provider wants Argent to attach to, in place of the target
+ * Metro advertises. Only the socket comes from the provider: Metro still
+ * supplies the session's metadata, so this composes with
+ * {@linkcode metroPort}.
+ */
+export function externalJsDebuggerUrl(deviceId: string): string | undefined {
+  if (!isExternalId(deviceId)) return undefined;
+
+  return findExternalDevice(deviceId)?.jsDebugger?.webSocketUrl;
+}
+
+/**
  * The port a provider publishes, when it differs from the one being used. An
  * explicit `port` beats it by design, so a Metro-unreachable failure is the
  * only place that disagreement is visible. The blueprint turns this into a

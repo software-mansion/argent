@@ -154,7 +154,19 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 65535,
-          "description": "Reserved for the 'js-debugger' capability: the Metro port serving this device."
+          "description": "The Metro port serving this device. Supplies the default port for every tool that speaks CDP to the app's JS runtime, so a caller never has to be told where the bundler is; an explicitly requested port still wins. Independent of the 'js-debugger' capability, which decides whether argent may attach at all."
+        },
+        "jsDebugger": {
+          "type": "object",
+          "description": "Where to attach a CDP client instead of the target Metro advertises. React Native's inspector-proxy admits exactly one debugger per device and evicts the incumbent to accept a new one, so a provider that is already debugging this runtime should re-serve its own connection here and multiplex it. Omit it when nothing else is debugging, and argent connects to Metro directly. Argent still reads Metro for the session's metadata; only the socket changes.",
+          "properties": {
+            "webSocketUrl": {
+              "type": "string",
+              "maxLength": 2048,
+              "description": "ws:// or wss:// URL speaking the Chrome DevTools Protocol."
+            }
+          },
+          "required": ["webSocketUrl"]
         }
       },
       "allOf": [
