@@ -1552,6 +1552,47 @@ describe("flow-add-step", () => {
     expect(parseFlow(await readFlowFile("compose-ambiguous")).steps).toEqual([]);
   });
 
+  // The alias spelling of the same dangerous shape. `flow_name` names a flow
+  // every bit as much as `name` does, so the bail-out has to see it: reading
+  // `name` alone lets the rewrite delete flow_path, substitute the file's stem,
+  // and RUN that flow — then record it as a plain `run:` success, permanently,
+  // with nothing saying the requested "checkout" was discarded.
+  it("hands a flow-execute that names flow_name and flow_path to flow-execute verbatim", async () => {
+    const registry = createMockRegistry({ "flow-execute": { result: null, throws: true } });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "compose-alias", project_root: tmpDir });
+    // A genuinely rewritable target: every check downstream of the bail-out
+    // accepts this flow_path, so the bail-out is the only thing standing
+    // between the caller's "checkout" and a swap to "login".
+    await writeSiblingFlow("login", "steps:\n  - echo: hi\n");
+    const args = {
+      flow_name: "checkout",
+      flow_path: path.join(tmpDir, ".argent", "flows", "login.yaml"),
+      project_root: tmpDir,
+    };
+
+    await expect(
+      tool.execute(
+        {},
+        {
+          name: "compose-alias",
+          project_root: tmpDir,
+          command: "flow-execute",
+          args: JSON.stringify(args),
+        }
+      )
+    ).rejects.toThrow();
+
+    expect(registry.invokeTool).toHaveBeenCalledWith("flow-execute", args);
+    // …so that flow-execute's own exactly-one-source rule is what rejects it.
+    const nested = (registry.invokeTool as any).mock.calls[0][1];
+    const parsed = createRunFlowTool(registry as unknown as Registry).zodSchema!.safeParse(nested);
+    expect(parsed.success).toBe(false);
+    expect(JSON.stringify(parsed.error?.issues)).toContain("Pass exactly one flow source");
+    expect(parseFlow(await readFlowFile("compose-alias")).steps).toEqual([]);
+  });
+
   it("throws on invalid JSON in args", async () => {
     const registry = createMockRegistry({
       tap: { result: { ok: true } },

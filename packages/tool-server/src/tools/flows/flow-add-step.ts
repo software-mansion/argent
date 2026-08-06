@@ -782,7 +782,15 @@ async function rewriteSiblingFlowPath(
 ): Promise<void> {
   const flowPath = args.flow_path;
   // A call naming both sources — or neither — is flow-execute's schema to judge.
-  if (typeof flowPath !== "string" || args.name !== undefined) return;
+  // Both spellings count as a name: `flow_name` is flow-execute's accepted
+  // alias, so a call that pairs it with a flow_path is the same dual-source
+  // misuse. Reading `name` alone would let the rewrite delete flow_path and
+  // substitute that file's stem, running and permanently RECORDING a different
+  // flow than the caller named — the recorded YAML is the artifact that gets
+  // committed and replayed, and nothing in it would say the requested name was
+  // discarded. Same fold, same precedence, as `resolveFlowName`.
+  if (typeof flowPath !== "string" || args.name !== undefined || args.flow_name !== undefined)
+    return;
 
   const invalid = (detail: string): FailureError =>
     new FailureError(
