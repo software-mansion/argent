@@ -287,6 +287,13 @@ describe("flow-add-echo", () => {
     // The whole growing YAML is deliberately no longer echoed per step; the
     // file on disk is the assertion surface, and `flowFile` must be gone.
     expect(result).not.toHaveProperty("flowFile");
+    // …and unlike flow-add-step, no `recorded` either. The asymmetry is
+    // deliberate: an echo step is entirely the `message` the caller just
+    // passed, so a rendered line would only quote their own input back, while
+    // a recorded step can be REWRITTEN on the way in (a coordinate tap into a
+    // selector, a restart-app into a launch) and needs a line saying what
+    // actually landed. Asserted so the pair can't silently drift together.
+    expect(result).not.toHaveProperty("recorded");
     // With `flowFile` gone, `savedTo` is the only field naming the destination,
     // so it has to be the real path — returning a bogus one used to pass the
     // whole suite. Pinned here and on flow-add-step, the two callers of
