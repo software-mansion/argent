@@ -211,9 +211,10 @@ export type FlowStepResult = {
   status?: "pass" | "fail" | "skip" | "error";
   reason?: string;
   /**
-   * Legacy: older tool-servers passed a snapshot that adopted a missing
-   * baseline and annotated it with this caveat (a missing baseline now fails
-   * the step). Rendered for wire compat with a not-yet-updated server.
+   * A step that PASSED but whose pass is weaker than it looks — currently a
+   * `hidden` check that held without its selector ever matching in a run that
+   * never established it. Rendered as a "⚠" so a permanently-green gate does
+   * not read as a clean tick.
    */
   warning?: string;
   tool?: string;

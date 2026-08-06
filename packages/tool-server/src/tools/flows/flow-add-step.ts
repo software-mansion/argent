@@ -32,7 +32,13 @@ import {
   type FlowStep,
   type RecordingSession,
 } from "./flow-utils";
-import { AWAIT_UI_ELEMENT_TOOL_ID } from "../await-ui-element";
+import {
+  AWAIT_UI_ELEMENT_TOOL_ID,
+  isUnmetUiWaitResult,
+  vacuousHiddenSelectors,
+} from "../await-ui-element";
+import { AWAIT_SCREEN_IDLE_TOOL_ID } from "../await-screen-idle";
+import { selectorEstablishedInSteps, selectorIdentityTerms } from "./flow-selector-evidence";
 import { runSequenceFailure } from "../run-sequence";
 import { probeWhenCondition } from "./flow-actions";
 import { NATIVE_READY_POLL_MS, NATIVE_READY_TIMEOUT_MS } from "./flow-run";
@@ -825,6 +831,21 @@ function rawCoordinateWarning(
   return undefined;
 }
 
+/**
+ * True when the flow being recorded has ALREADY established this selector
+ * positively — acted on it, or proved it present — in an earlier step.
+ *
+ * This is what makes a later `hidden` check falsifiable. The wait tool itself
+ * can only see its own poll window, so an element removed by the immediately
+ * preceding action reads as "never matched" even though the flow proves it
+ * existed two steps ago. Without this lookup the recorder would reject the
+ * correct authoring order (prove visible -> act -> prove gone) and push authors
+ * into adding absence checks by hand in YAML, which the skill forbids.
+ */
+function selectorEstablishedInFlow(session: RecordingSession, selector: unknown): boolean {
+  return selectorEstablishedInSteps(session.flow.steps, selector);
+}
+
 function flowExecuteRecordBlock(
   result: unknown
 ): { reason: string; mayHaveMutated: boolean } | null {
@@ -1327,6 +1348,99 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
         };
       }
       invalidateReadinessMissAfterAppStart(session, params.command, args, toolResult);
+
+      // An `await-ui-element` whose condition never held reports
+      // { success: false } instead of throwing — the same shape flow-run and
+      // run-sequence special-case to stop a sequence. Without this gate the
+      // wait would record as a passing step and bake a gate that fails every
+      // replay. Hand the full result back, record nothing.
+      if (isUnmetUiWaitResult(params.command, toolResult)) {
+        const { stepCount, note } = await activeFlowState(session);
+        const waitNote = (toolResult as { note?: unknown }).note;
+        const cancelled = ctx?.signal?.aborted === true;
+        return {
+          message: cancelled
+            ? `await-ui-element was cancelled — step NOT recorded${typeof waitNote === "string" ? `: ${waitNote}` : ""}.${note ? ` ${note}` : ""}`
+            : "await-ui-element condition not met — step NOT recorded. Fix the wait (a longer " +
+              `timeoutMs or a different selector) and re-run this flow-add-step call.${note ? ` ${note}` : ""}`,
+          toolResult,
+          stepCount,
+          savedTo: session.filePath,
+        };
+      }
+
+      // `await-screen-idle` reports "did not settle" as a SOFT `settled: false`
+      // rather than a failure, so persisting it bakes a step that is green on
+      // every replay whatever the screen does — the same unfalsifiable class
+      // the `hidden` gate below exists to block. The skills already say never
+      // to persist it; without this gate the recorder did it silently.
+      if (params.command === AWAIT_SCREEN_IDLE_TOOL_ID) {
+        const { stepCount, note } = await activeFlowState(session);
+        const settled = (toolResult as { settled?: unknown }).settled;
+        return {
+          message:
+            "`await-screen-idle` is a live diagnostic, not a gate — step NOT recorded. It " +
+            "reports a screen that never settled as `settled: false` instead of failing, so a " +
+            "recorded one passes on every replay no matter what the screen does" +
+            (settled === false ? " — and it just reported `settled: false`" : "") +
+            ". Record readiness as the element you actually need next (`await-ui-element`), or " +
+            "add `await: { idle: true }` during polish, which FAILS when the screen never " +
+            `settles.${note ? ` ${note}` : ""}`,
+          toolResult,
+          stepCount,
+          savedTo: session.filePath,
+        };
+      }
+
+      // A `hidden` wait that passed without the selector EVER matching is not
+      // proof of dismissal — it is a check that cannot fail. Recorded, it
+      // becomes a permanently-green gate: a typo'd selector, a renamed id, or
+      // the wrong screen all satisfy it.
+      //
+      // "Ever matched" is scoped to the wait's own poll window, which is too
+      // narrow on its own: the action that removes an element runs BEFORE the
+      // check, so the normal authoring order (prove visible -> act -> prove
+      // gone) always reaches here with everMatched false. The flow itself is
+      // the wider evidence — if an earlier recorded step established this
+      // selector, the check is falsifiable and is recorded.
+      //
+      // Read from `vacuousHiddenSelectors` rather than the wait's own args, so
+      // a wait NESTED in a `run-sequence` is judged too. Refusing only the
+      // direct call left the gate one wrapper away from being bypassed.
+      const vacuousHidden = vacuousHiddenSelectors(params.command, toolResult, args).filter(
+        // A selector this evidence model cannot name (role-only, a regex text
+        // locator) is not something it may condemn either — the runner passes
+        // it clean for the same reason, so refusing to record it would only
+        // disagree with the runner. Mirror `hiddenCheckIsFalsifiable`.
+        (selector) =>
+          selectorIdentityTerms(selector).length > 0 &&
+          !selectorEstablishedInFlow(session, selector)
+      );
+      if (vacuousHidden.length > 0) {
+        const { stepCount, note } = await activeFlowState(session);
+        const wrapped = params.command !== AWAIT_UI_ELEMENT_TOOL_ID;
+        return {
+          message:
+            `the \`hidden\` condition was met without the selector ever matching, and no earlier ` +
+            `step in this flow established it — step NOT recorded.${
+              wrapped
+                ? ` (Inside the \`${params.command}\` you passed; wrapping the wait does not make it provable, so the whole step is refused.)`
+                : ""
+            } This check cannot fail, so ` +
+            "it would prove nothing on replay. Record a `visible` check for the same selector " +
+            "while the element IS on screen first, then act, then record this one; the flow " +
+            "then proves the element went away. If the element is never present at all, the " +
+            `selector is wrong — find the real one with ${treeReaderFor(args.udid)}.${
+              // A wrapped wait means the whole sequence ran first, so earlier
+              // nested steps may already have changed device state — the same
+              // hazard the run-sequence failure/cancel refusals warn about.
+              wrapped ? ` ${partialMutationWarning("run-sequence")}` : ""
+            }${note ? ` ${note}` : ""}`,
+          toolResult,
+          stepCount,
+          savedTo: session.filePath,
+        };
+      }
 
       // The wait held against the accessibility tree. Ask the tree the runner
       // resolves DIRECTIVES against too, so the author learns now — rather than
