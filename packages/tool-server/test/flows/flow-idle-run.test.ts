@@ -401,6 +401,33 @@ steps:
     expect(step.warning).not.toContain("could not be captured on");
   });
 
+  // A capture that goes missing used to cost the settle TWO intervals, not
+  // one: the missing frame was also stored as the previous frame, so the next
+  // round had nothing to compare against either. Holding the last good frame
+  // asks the same question across the gap. The witness is the number of
+  // captures the settle takes — rounds run in lockstep, so it is exact.
+  it("loses only the interval a capture went missing in, not the one after it", async () => {
+    let captures = 0;
+    currentFrame = () => {
+      captures += 1;
+      return captures === 3 ? undefined : frameAt(120);
+    };
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, minStableMs: 0 }
+`
+    );
+    const step = (await run("ready")).steps.at(-1)!;
+    expect(step.status).toBe("pass");
+    // 1,2 hold; 3 is missing; 4 and 5 hold across the gap and settle. Six would
+    // mean round 4 was blinded by round 3's absence.
+    expect(captures).toBe(5);
+    // And one missed capture out of five is not "no screenshot could be read".
+    expect(step.warning).toBeUndefined();
+  });
+
   // A capture that goes missing is the ABSENCE of visual evidence. Treating it
   // as evidence of stillness is how a moving screen used to pass: the round
   // that outran the deadline skipped its capture, and the skip stood in for
