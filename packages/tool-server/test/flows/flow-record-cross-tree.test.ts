@@ -1252,6 +1252,11 @@ describe("a flow-directive name points at the tool that records it", () => {
     expect(msg).toContain("rewrites it into the `run:` step");
     expect(msg).toContain("sibling flow");
     expect(msg).toContain("delayMs");
+    // Three outcomes, not two. "Otherwise the raw step is kept" holds for the
+    // name route only: a non-sibling flow_path is refused before anything runs,
+    // and a remote recording keeps the raw step whatever the target is.
+    expect(msg).toContain("REMOTE");
+    expect(msg).toContain("refused outright and records nothing");
   });
 
   it("lets a genuine tool failure report itself", async () => {

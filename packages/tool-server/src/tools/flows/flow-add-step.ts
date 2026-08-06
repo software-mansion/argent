@@ -688,9 +688,16 @@ const DIRECTIVE_COMMAND_HINTS: Record<string, DirectiveHint> = {
   run: {
     tool: "flow-execute",
     rewritten: true,
+    // Three outcomes, not two: the blanket "otherwise the raw step is kept"
+    // was true only of the `name` route. A non-sibling `flow_path` is REFUSED
+    // before anything runs (a raw tool: step has no boundary to resolve a path
+    // through at replay), and a remote recording keeps the raw step whatever
+    // the target is, because `run:` composition is host-resolved.
     rewriteCondition:
-      "when the target resolves as a sibling flow in this recording's folder (otherwise the raw " +
-      "`tool: flow-execute` step is kept)",
+      "when the target resolves as a sibling flow in this recording's folder — a `name` that " +
+      "does not is kept as a raw `tool: flow-execute` step, and so is every target in a REMOTE " +
+      "recording (`run:` composition is host-resolved, so the host cannot validate the client's " +
+      "siblings); a `flow_path` that is not a sibling is refused outright and records nothing",
   },
   type: { tool: "keyboard", rewritten: false },
   await: { tool: AWAIT_UI_ELEMENT_TOOL_ID, rewritten: false },
