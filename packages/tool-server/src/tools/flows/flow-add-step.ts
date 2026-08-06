@@ -21,7 +21,7 @@ import {
   type FlowStep,
   type RecordingSession,
 } from "./flow-utils";
-import { AWAIT_UI_ELEMENT_TOOL_ID } from "../await-ui-element";
+import { AWAIT_UI_ELEMENT_TOOL_ID, isUnmetUiWaitResult } from "../await-ui-element";
 import { probeWhenCondition } from "./flow-actions";
 import { summarizeStep } from "./flow-finish-recording";
 import { invokeSubTool } from "../../utils/sub-invoke";
@@ -164,6 +164,30 @@ function treeDivergenceFor(udid: unknown): string {
   }
   return "The recorder and the runner read different projections of the screen.";
 }
+
+/**
+ * `await-ui-element` reports a condition that never came true by returning
+ * `{ success: false }` rather than throwing, so the recorder's success path
+ * records the step regardless — the same shape `run-sequence` and `flow-run`
+ * read through {@link isUnmetUiWaitResult} to STOP a run at a wait that never
+ * held. The recorder can't stop anything (the tool already ran), but it must
+ * not narrate the step as fine: at replay this is a step FAILURE that ends the
+ * run there.
+ *
+ * The cross-tree probe is skipped on this path, and saying so matters. That
+ * probe asks whether a check that PASSED would survive conversion to an
+ * `await:`/`assert:` directive; this one did not pass, so its answer would be
+ * about a premise that never held — and the divergence remedy it appends
+ * ("re-record with a selector present in both trees") would blame a tree
+ * mismatch for an element that is on neither tree.
+ */
+const UNMET_WAIT_WARNING =
+  "recorded, but the wait itself never held — `await-ui-element` reports an unmet condition by " +
+  "returning success:false instead of failing, so the step was written to the flow anyway. At " +
+  "replay an unmet wait FAILS the step and stops the run there, so re-record it once the " +
+  "condition can actually hold, or delete the step from the .yaml. The cross-tree re-probe was " +
+  "skipped: it asks whether a check that PASSED would survive conversion to `await:`/`assert:`, " +
+  "and this one did not pass";
 
 function abortError(): Error {
   const err = new Error(
@@ -669,15 +693,21 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
 
       const toolResult = await invokeSubTool(registry, ctx, params.command, args);
 
-      // The wait held against the accessibility tree. Ask the tree the runner
-      // resolves DIRECTIVES against too, so the author learns now — rather than
-      // after polish — whether the conversion is safe.
+      // A recorded wait that HELD against the accessibility tree gets asked the
+      // tree the runner resolves DIRECTIVES against too, so the author learns
+      // now — rather than after polish — whether the conversion is safe. One
+      // that never held is a step failure at replay and is reported as such
+      // instead (see {@link UNMET_WAIT_WARNING}).
       let crossTreeWarning: string | undefined;
       if (params.command === AWAIT_UI_ELEMENT_TOOL_ID) {
-        const probe = await probeAgainstRunnerTree(registry, ctx, args);
-        crossTreeWarning = probe.warning
-          ? `${probe.warning}. ${treeDivergenceFor(args.udid)} ${runnerSideReadClause(args.udid)}`
-          : undefined;
+        if (isUnmetUiWaitResult(params.command, toolResult)) {
+          crossTreeWarning = UNMET_WAIT_WARNING;
+        } else {
+          const probe = await probeAgainstRunnerTree(registry, ctx, args);
+          crossTreeWarning = probe.warning
+            ? `${probe.warning}. ${treeDivergenceFor(args.udid)} ${runnerSideReadClause(args.udid)}`
+            : undefined;
+        }
       }
 
       // Running a fragment via flow-execute mid-recording is recorded as a

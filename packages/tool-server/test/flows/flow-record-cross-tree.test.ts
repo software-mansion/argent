@@ -60,6 +60,26 @@ function registryWhereWaitSucceeds(): Registry {
   } as unknown as Registry;
 }
 
+/**
+ * A registry whose `await-ui-element` reports the condition NEVER held — the
+ * `{ success: false }` shape the tool returns instead of throwing.
+ */
+function registryWhereWaitTimesOut(): Registry {
+  return {
+    invokeTool: vi.fn(async (id: string) => {
+      if (id === "await-ui-element") {
+        return {
+          success: false,
+          elapsed: 1500,
+          note: "no element matched the selector before timeout",
+        };
+      }
+      throw new Error(`Tool "${id}" not found`);
+    }),
+    getTool: vi.fn(() => undefined),
+  } as unknown as Registry;
+}
+
 async function onDisk(name: string): Promise<string> {
   return fs.readFile(path.join(tmpDir, ".argent", "flows", `${name}.yaml`), "utf8");
 }
@@ -107,6 +127,48 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
     expect(result.message).toContain("Step added");
     expect(parseFlow(await onDisk("agree")).steps).toHaveLength(1);
+  });
+
+  // `await-ui-element` reports an unmet condition by returning
+  // { success: false }, so the recorder's success path records the step. The
+  // cross-tree warning must not be attached there: it says the raw step
+  // "replays fine — it reads the same tree it just passed against", and this
+  // one never passed. At replay an unmet wait fails the step and stops the run.
+  it("does not claim a wait that never held replays fine", async () => {
+    // The runner's tree AGREES with the selector, so the cross-tree probe —
+    // had it run — would have found nothing to warn about and the step would
+    // have been narrated as clean.
+    runnerTree = () => screen(["Continue"]);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "unmet", project_root: tmpDir, executionPrerequisite: "on the form" }
+    );
+    const tool = createFlowAddStepTool(registryWhereWaitTimesOut());
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "unmet",
+        project_root: tmpDir,
+        command: "await-ui-element",
+        args: JSON.stringify({
+          udid: DEVICE,
+          condition: "visible",
+          selector: { text: "Continue" },
+        }),
+      }
+    );
+
+    expect(result.message).toContain("the wait itself never held");
+    expect(result.message).toContain("stops the run there");
+    expect(result.message).not.toContain("replays fine");
+    // Nothing was compared, so nothing may blame a tree divergence or send the
+    // author to re-record against "a selector present in both".
+    expect(result.message).not.toContain("neither contains the other");
+    expect(result.message).not.toContain("present in both");
+    // Recording the step anyway is the pre-existing behaviour; only the
+    // narration changes.
+    expect(parseFlow(await onDisk("unmet")).steps).toHaveLength(1);
   });
 
   it("warns — but still records — a check the runner's tree cannot see", async () => {
