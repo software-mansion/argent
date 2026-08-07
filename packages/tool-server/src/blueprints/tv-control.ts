@@ -11,7 +11,7 @@ import {
 import { tvosAxServiceBinaryPath, tvosHidDaemonBinaryPath } from "@argent/native-devtools-ios";
 import { ensureAutomationEnabled } from "./ax-service";
 import { listIosSimulators, cacheSimulatorRuntimeKind } from "../utils/ios-devices";
-import { cachedDeviceSetForUdid, simctlPrefix } from "../utils/ios-device-sets";
+import { simctlTargetForUdidSync } from "../utils/ios-device-sets";
 import { UnsupportedOperationError } from "../utils/capability";
 import type { TvControlApi, TvDescribeResponse, TvDirection, TvElement } from "./tv-control-types";
 
@@ -120,13 +120,15 @@ async function sendJson(socketPath: string, command: string, timeoutMs?: number)
 function spawnAxDaemon(udid: string, socketPath: string): ChildProcess {
   // Sync by contract (returns the ChildProcess); the factory's device-list
   // validation has already learned the UDID's device set, so the cached view
-  // is warm here.
+  // is warm here. Spawning the AX reader is the ax-service mechanism, so that
+  // grant covers it.
+  const axTarget = simctlTargetForUdidSync(udid, { granted: "ax-service" });
   const proc = execFile(
     "xcrun",
     [
-      ...simctlPrefix(cachedDeviceSetForUdid(udid)),
+      ...axTarget.prefix,
       "spawn",
-      udid,
+      axTarget.nativeId,
       tvosAxServiceBinaryPath(),
       "--socket",
       socketPath,

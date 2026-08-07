@@ -15,7 +15,8 @@
     { "path": "../configuration-core" },
     { "path": "../registry" },
     { "path": "../telemetry" },
-    { "path": "../argent-tools-client" }
+    { "path": "../argent-tools-client" },
+    { "path": "../tool-server" }
   ],
   "include": ["src/**/*"]
 }

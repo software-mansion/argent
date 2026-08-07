@@ -14,6 +14,7 @@ import {
   type TouchActionName,
 } from "./datachannel-proto";
 import type { MoqClient } from "./moq-client";
+import { assertAllowedSimServerEndpoint } from "./external-devices";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -92,6 +93,25 @@ export function sendCommand(api: SimulatorServerApi, cmd: Record<string, unknown
     routeViaTransport(api.transport, cmd);
     return;
   }
+
+  /**
+   * `paste` is stdin-only in the simulator-server, not a WebSocket command, so
+   * an attached server would silently drop it. Refuse loudly instead.
+   */
+  if (api.external && cmd.cmd === "paste") {
+    throw new FailureError(
+      "Pasting text is not available on a device supplied by an external provider: " +
+        "the simulator-server accepts `paste` only on its standard input, which an " +
+        "attached client has no access to. Use `keyboard` to type the text instead.",
+      {
+        error_code: FAILURE_CODES.EXTERNAL_DEVICE_PASTE_UNSUPPORTED,
+        error_kind: "unsupported",
+        failure_area: "tool_server",
+        failure_stage: "external_device_paste_unsupported",
+      }
+    );
+  }
+
   const ws = getOrCreateWs(api);
   const payload = JSON.stringify({ id: String(++cmdId), ...cmd });
   if (ws.readyState === WebSocket.OPEN) {
@@ -135,6 +155,7 @@ async function pointerPost(
   // Remote (MoQ) sims expose no HTTP pointer endpoint; recording gates them out,
   // so the stubbed apiUrl simply makes this fetch fail and return false.
   try {
+    if (api.external) assertAllowedSimServerEndpoint("/api/pointer");
     const res = await fetch(`${api.apiUrl}/api/pointer`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -164,6 +185,12 @@ async function simulatorPost<T>(
   signal?: AbortSignal,
   fallbackHint?: string
 ): Promise<{ res: Response; body: T }> {
+  /**
+   * Parity rule: on a server Argent did not spawn, use only the endpoints its
+   * own build serves.
+   */
+  if (api.external) assertAllowedSimServerEndpoint(endpoint);
+
   let res: Response;
   try {
     res = await fetch(`${api.apiUrl}${endpoint}`, {
@@ -335,6 +362,9 @@ function routeViaTransport(
       void Promise.resolve(transport.paste(cmd.text as string));
       return;
     }
+    case "key":
+      transport.pressKey(cmd.direction as KeyActionName, cmd.code as number);
+      return;
     default:
       throw new Error(`MoQ transport does not implement sendCommand cmd '${String(cmd.cmd)}'`);
   }

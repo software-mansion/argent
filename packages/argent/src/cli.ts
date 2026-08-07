@@ -25,6 +25,7 @@
  *   argent enable <flag>          Enable a feature flag (global by default)
  *   argent disable <flag>         Disable a feature flag (global by default)
  *   argent flags                  Show current feature-flag state
+ *   argent providers check        Validate external device providers against the contract
  */
 
 import * as fs from "node:fs";
@@ -95,6 +96,7 @@ Commands:
   enable      Enable a feature flag (global by default, --scope project for project)
   disable     Disable a feature flag (global by default, --scope project for project)
   flags       Show current feature-flag state
+  providers   Inspect external device providers (\`providers check\` validates them)
   config      Manage configuration (list / get / set / unset, project & global)
   secrets     List the secrets a {{secret:NAME}} placeholder can type, and their sources
   telemetry   Manage opt-out telemetry (status / enable / disable)
@@ -172,6 +174,8 @@ async function main(): Promise<void> {
       return (await loadCli()).secrets(rest);
     case "telemetry":
       return (await loadCli()).telemetry(rest);
+    case "providers":
+      return (await loadCli()).providers(rest);
     case "--version":
     case "-v":
       console.log(getInstalledVersion() ?? "unknown");

@@ -3,6 +3,7 @@ import type { ToolDefinition } from "@argent/registry";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 import type { LogStats, MessageCluster } from "../../utils/debugger/log-file-writer";
 import { DEBUGGER_TOOL_CAPABILITY, debuggerServiceRef } from "./debugger-service-ref";
+import { metroPortField } from "../../utils/debugger/metro-port";
 
 interface LogRegistryResponse extends LogStats {
   clusters: MessageCluster[];
@@ -12,7 +13,7 @@ interface LogRegistryResponse extends LogStats {
 }
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port (ignored for Chromium)"),
+  port: metroPortField,
   device_id: z
     .string()
     .describe(

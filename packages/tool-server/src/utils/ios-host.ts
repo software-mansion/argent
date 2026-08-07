@@ -13,12 +13,7 @@ import {
   tcpInjectionDylibs,
 } from "@argent/native-devtools-ios";
 import { SIMCTL_KILL_SIGNAL, SIMCTL_SPAWN_TIMEOUT_MS } from "./simctl-config";
-import {
-  cachedDeviceSetForUdid,
-  deviceSetForUdid,
-  simctlArgsForUdid,
-  simctlPrefix,
-} from "./ios-device-sets";
+import { simctlArgsForUdid, simctlTargetForUdid, simctlTargetForUdidSync } from "./ios-device-sets";
 import { isTvOsSimulator } from "./ios-devices";
 import { ensureAutomationEnabled, isEntitlementBypassActive } from "./ax-prefs";
 import {
@@ -69,11 +64,15 @@ export interface IosHost {
   stopProxy(udid: string, port: number): Promise<void>;
 }
 
-/** Current bootstrap filename; `libInjectionBootstrap.dylib` is legacy (pre-rename) and still stripped when merging env. */
-const ARGENT_BOOTSTRAP_DYLIB_BASENAMES = new Set([
-  "libArgentInjectionBootstrap.dylib",
-  "libInjectionBootstrap.dylib",
-]);
+/**
+ * Argent's own bootstrap basename, always stripped before the active path is
+ * re-appended. The pre-rename name (`libInjectionBootstrap.dylib`) is
+ * deliberately not listed. It is generic and a live file carrying it could be
+ * another tool's injection bootstrap, which stripping would silently disable
+ * for the rest of the simulator's session. Stale pre-rename Argent entries
+ * still age out via the exists-on-disk rule below.
+ */
+const ARGENT_BOOTSTRAP_DYLIB_BASENAMES = new Set(["libArgentInjectionBootstrap.dylib"]);
 
 function splitDyldInsertLibraries(value: string): string[] {
   return value
@@ -83,9 +82,9 @@ function splitDyldInsertLibraries(value: string): string[] {
 }
 
 /**
- * Strips Argent bootstrap dylibs (by basename, including the legacy pre-rename name)
- * and entries that don't exist on disk (truncated artifacts from the simctl getenv
- * 127-byte bug, stale paths from old installs, etc.).
+ * Strips Argent's own bootstrap dylib (by basename) and entries that don't
+ * exist on disk (truncated artifacts from the `simctl getenv` 127-byte bug,
+ * stale paths from old installs).
  * Entries starting with '@' (loader-path references) are always preserved.
  * Third-party dylibs present on disk (e.g. SimCam) are kept verbatim.
  */
@@ -114,7 +113,11 @@ async function ensureAccessibilityEnabled(udid: string): Promise<void> {
   // in the simulator's defaults for SwiftUI to populate the accessibility tree.
   // Without these flags, all UIAccessibility APIs return nil/0 for SwiftUI views.
   const flags = ["AccessibilityEnabled", "ApplicationAccessibilityEnabled"];
-  const prefix = simctlPrefix(await deviceSetForUdid(udid));
+  /**
+   * Only reached from {@linkcode setupNativeDevtoolsEnvLocal}, so the
+   * native-devtools grant covers these spawns.
+   */
+  const { nativeId, prefix } = await simctlTargetForUdid(udid, { granted: "native-devtools" });
   await Promise.all(
     flags.map((flag) =>
       execFileAsync(
@@ -122,7 +125,7 @@ async function ensureAccessibilityEnabled(udid: string): Promise<void> {
         [
           ...prefix,
           "spawn",
-          udid,
+          nativeId,
           "defaults",
           "write",
           "com.apple.Accessibility",
@@ -148,7 +151,11 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
       ? bootstrapDylibPathTcp()
       : bootstrapDylibPath();
 
-  const prefix = simctlPrefix(await deviceSetForUdid(udid));
+  /**
+   * These spawns install the injection env, so the native-devtools grant
+   * covers them.
+   */
+  const { nativeId, prefix } = await simctlTargetForUdid(udid, { granted: "native-devtools" });
 
   // Read from launchctl inside the simulator (via simctl spawn) instead of
   // `simctl getenv`. The latter silently truncates values longer than 127 bytes,
@@ -156,7 +163,7 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
   // accumulate on every ensureEnv() cycle.
   const result = await execFileAsync(
     "xcrun",
-    [...prefix, "spawn", udid, "launchctl", "getenv", "DYLD_INSERT_LIBRARIES"],
+    [...prefix, "spawn", nativeId, "launchctl", "getenv", "DYLD_INSERT_LIBRARIES"],
     { encoding: "utf8", timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
   ).catch((e) => ({ stdout: (e as NodeJS.ErrnoException & { stdout?: string }).stdout ?? "" }));
 
@@ -166,7 +173,7 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
   if (updated !== existing) {
     await execFileAsync(
       "xcrun",
-      [...prefix, "spawn", udid, "launchctl", "setenv", "DYLD_INSERT_LIBRARIES", updated],
+      [...prefix, "spawn", nativeId, "launchctl", "setenv", "DYLD_INSERT_LIBRARIES", updated],
       { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
     );
   }
@@ -180,7 +187,7 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
       [
         ...prefix,
         "spawn",
-        udid,
+        nativeId,
         "launchctl",
         "setenv",
         "NATIVE_DEVTOOLS_IOS_CDP_PORT",
@@ -194,7 +201,7 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
       [
         ...prefix,
         "spawn",
-        udid,
+        nativeId,
         "launchctl",
         "setenv",
         "NATIVE_DEVTOOLS_IOS_CDP_SOCKET",
@@ -265,12 +272,15 @@ function spawnAxDaemonLocal(udid: string, endpoint: IosEndpoint): ChildProcess {
 
   // Synchronous by contract (returns the ChildProcess), so use the cached
   // device-set verdict — `bootstrapAx` has always resolved it by this point.
+  // The ax-service grant covers the spawn that starts the daemon.
+  const axTarget = simctlTargetForUdidSync(udid, { granted: "ax-service" });
+
   const proc = execFile(
     "xcrun",
     [
-      ...simctlPrefix(cachedDeviceSetForUdid(udid)),
+      ...axTarget.prefix,
       "spawn",
-      udid,
+      axTarget.nativeId,
       binaryPath,
       ...endpointArgs,
       "--timeout",

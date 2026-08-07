@@ -11,6 +11,7 @@ import {
   type ServiceInstance,
   type ServiceEvents,
 } from "@argent/registry";
+import { assertExternalCapability } from "../utils/external-devices";
 import { pickIosHost, type IosEndpoint } from "../utils/ios-host";
 
 // Re-export AX-pref helpers that used to live here so existing callers
@@ -250,6 +251,14 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
         }
       );
     }
+
+    /**
+     * Mechanism gate for provider-supplied devices. Gating here at the
+     * blueprint, rather than per tool is what keeps this bounded. Every tool
+     * built on `AX_SERVICE_NAMESPACE`, now and in future, inherits the check
+     * without being re-audited. A no-op for every device Argent booted itself.
+     */
+    await assertExternalCapability(AX_SERVICE_NAMESPACE, device, "ax-service");
 
     const udid = device.id;
     const host = pickIosHost(device);

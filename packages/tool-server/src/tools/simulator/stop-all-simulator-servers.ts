@@ -6,6 +6,7 @@ import { ANDROID_DEVTOOLS_NAMESPACE } from "../../blueprints/android-devtools";
 import { CHROMIUM_CDP_NAMESPACE } from "../../blueprints/chromium-cdp";
 import { TV_CONTROL_NAMESPACE } from "../../blueprints/tv-control";
 import { ANDROID_TV_CONTROL_NAMESPACE } from "../../blueprints/android-tv-control";
+import { isExternalDeviceUrn } from "../../utils/external-devices";
 
 const PREFIXES = [
   `${SIMULATOR_SERVER_NAMESPACE}:`,
@@ -47,7 +48,14 @@ export function createStopAllSimulatorServersTool(
           // was never a running server.
           const wasLive = isLiveServiceState(entry.state);
           await registry.disposeService(urn);
-          if (wasLive) stopped.push(urn);
+          /**
+           * A device from an external provider is disposed (dropping our
+           * cached handle) but never reported as stopped. Its `dispose()` is a
+           * no-op by design, so nothing was actually shut down and claiming
+           * otherwise would tell the agent it had cleaned up a server it does
+           * not own.
+           */
+          if (wasLive && !isExternalDeviceUrn(urn)) stopped.push(urn);
         }
       }
       return { stopped };

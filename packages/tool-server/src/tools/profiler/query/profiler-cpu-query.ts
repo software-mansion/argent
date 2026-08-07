@@ -15,6 +15,7 @@ import {
 import type { HermesProfileNode } from "../../../utils/react-profiler/types/input";
 import { readCpuProfile, readCommitTree } from "../../../utils/react-profiler/debug/dump";
 import { promises as fs } from "fs";
+import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 
 const timeWindowSchema = z.object({
   start: z.coerce.number().describe("Start of window in ms (performance.now clock)"),
@@ -22,7 +23,7 @@ const timeWindowSchema = z.object({
 });
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port"),
+  port: metroPortField,
   device_id: z
     .string()
     .describe(
@@ -365,7 +366,7 @@ Fails if no CPU profile is stored — run react-profiler-stop first.`,
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: () => ({}),
   async execute(_services, params) {
-    const sessionPaths = getCachedProfilerPaths(params.port, params.device_id);
+    const sessionPaths = getCachedProfilerPaths(metroPort(params), params.device_id);
     if (!sessionPaths) {
       throw new FailureError(
         "No profiling data stored. Run react-profiler-start → exercise the app → react-profiler-stop → react-profiler-analyze first.",

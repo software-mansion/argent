@@ -6,6 +6,7 @@ import { CHROMIUM_CDP_NAMESPACE } from "../../blueprints/chromium-cdp";
 import { TV_CONTROL_NAMESPACE } from "../../blueprints/tv-control";
 import { ANDROID_TV_CONTROL_NAMESPACE } from "../../blueprints/android-tv-control";
 import { resolveDevice } from "../../utils/device-info";
+import { isExternalId } from "../../utils/external-devices";
 
 const zodSchema = z.object({
   udid: z
@@ -47,12 +48,26 @@ export function createStopSimulatorServerTool(
             ? [SIMULATOR_SERVER_NAMESPACE, ANDROID_TV_CONTROL_NAMESPACE]
             : [SIMULATOR_SERVER_NAMESPACE, TV_CONTROL_NAMESPACE];
 
+      /**
+       * An external device has no server of ours to stop. Its `dispose()` is
+       * a no-op by design. Still drop the cached handles so the next call
+       * re-resolves against the provider's state, but report `stopped: false`.
+       * A clean no-op beats an error for an agent that calls this on every device.
+       */
+      const external = isExternalId(udid);
+
       const snapshot = registry.getSnapshot();
       let stopped = false;
       for (const namespace of namespaces) {
         const urn = `${namespace}:${udid}`;
         const entry = snapshot.services.get(urn);
         if (!entry || entry.state === ServiceState.IDLE) continue;
+
+        if (external) {
+          await registry.disposeService(urn);
+          continue;
+        }
+
         // A non-live node (ERROR / TERMINATING) holds no running process — e.g.
         // a tvOS UDID, where the SimulatorServer blueprint throws on start and
         // the node settles into ERROR. Clean it up, but don't claim we stopped a

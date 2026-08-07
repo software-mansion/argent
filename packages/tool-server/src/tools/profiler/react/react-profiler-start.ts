@@ -31,6 +31,7 @@ import {
   bootstrapFailureMessage,
   type BootstrapResult,
 } from "../../../utils/react-profiler/devtools-bootstrap";
+import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 
 /**
  * Verbose explanations the operator sees when the runtime is not profileable.
@@ -59,7 +60,7 @@ export const NO_RENDERERS_ATTACHED_ERROR =
   "Fix: ensure the app has rendered (interact with it once, then retry); if it stays empty, call react-profiler-start first — it will attempt to attach the DevTools backend automatically.";
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port"),
+  port: metroPortField,
   device_id: z
     .string()
     .describe(
@@ -127,8 +128,9 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       // Canonicalize a forwarded logicalDeviceId to the connect id so the
       // profiler session and its debugger dependency reuse the open connection.
       const deviceId = canonicalDeviceId(params.device_id);
-      const jsdUrn = `${JS_RUNTIME_DEBUGGER_NAMESPACE}:${params.port}:${deviceId}`;
-      const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}:${deviceId}`;
+      const port = metroPort(params);
+      const jsdUrn = `${JS_RUNTIME_DEBUGGER_NAMESPACE}:${port}:${deviceId}`;
+      const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${port}:${deviceId}`;
       const ignore = () => {};
 
       async function disposeAndWait() {
