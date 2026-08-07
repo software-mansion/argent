@@ -9,18 +9,52 @@ interface TouchCmd {
   y: number;
 }
 const sent: TouchCmd[] = [];
+const sentAt: number[] = [];
 vi.mock("../../src/utils/simulator-client", () => ({
   sendCommand: (_api: unknown, cmd: TouchCmd) => {
     sent.push(cmd);
+    sentAt.push(Date.now());
   },
 }));
 
+// Stub the delivery-verification entry point so the tool's contract is tested
+// in isolation: it passes the caller's `verify` through untouched, runs the
+// injection via the action, and spreads the returned check into the result. The
+// auto-first-touch policy is covered by the touch-verification unit tests.
+type Check = { verified?: boolean; warning?: string };
+let mockCheck: Check = {};
+const runWithDeliveryVerificationMock = vi.fn(
+  async (
+    _api: unknown,
+    _verify: boolean | undefined,
+    action: () => Promise<void>,
+    _device?: DeviceInfo
+  ) => {
+    await action();
+    return mockCheck;
+  }
+);
+vi.mock("../../src/utils/touch-verification", () => ({
+  runWithDeliveryVerification: (
+    api: unknown,
+    verify: boolean | undefined,
+    action: () => Promise<void>,
+    device?: DeviceInfo
+  ) => runWithDeliveryVerificationMock(api, verify, action, device),
+  describeVerify: (noun: string) => `verify ${noun}`,
+}));
+
 import { gestureTapTool } from "../../src/tools/gesture-tap";
+import type { DeviceInfo } from "@argent/registry";
 
 const touchServices = { simulatorServer: {} } as never;
+const ANDROID_DEVICE: DeviceInfo = { id: "X", platform: "android", kind: "device" };
 
 beforeEach(() => {
   sent.length = 0;
+  sentAt.length = 0;
+  mockCheck = {};
+  runWithDeliveryVerificationMock.mockClear();
 });
 
 describe("gesture-tap", () => {
@@ -58,5 +92,143 @@ describe("gesture-tap", () => {
       "mousePressed:2",
       "mouseReleased:2",
     ]);
+  });
+});
+
+describe("gesture-tap delivery verification", () => {
+  it("routes every touch tap through the verification wrapper with the caller's verify flag", async () => {
+    // undefined → the wrapper applies the automatic first-touch policy.
+    await gestureTapTool.execute(touchServices, { udid: "X", x: 0.5, y: 0.5 });
+    expect(runWithDeliveryVerificationMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      undefined,
+      expect.any(Function),
+      ANDROID_DEVICE
+    );
+
+    await gestureTapTool.execute(touchServices, { udid: "X", x: 0.5, y: 0.5, verify: true });
+    expect(runWithDeliveryVerificationMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      true,
+      expect.any(Function),
+      ANDROID_DEVICE
+    );
+
+    await gestureTapTool.execute(touchServices, { udid: "X", x: 0.5, y: 0.5, verify: false });
+    expect(runWithDeliveryVerificationMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      false,
+      expect.any(Function),
+      ANDROID_DEVICE
+    );
+  });
+
+  it("forwards the resolved device, which is what routes the no-change warning", async () => {
+    // Drop it and an Android caller gets pointed at recover-touch-injection —
+    // iOS-simulator-only, host-wide, and a guaranteed 400.
+    const IOS_UDID = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
+    await gestureTapTool.execute(touchServices, { udid: IOS_UDID, x: 0.5, y: 0.5 });
+    expect(runWithDeliveryVerificationMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      undefined,
+      expect.any(Function),
+      { id: IOS_UDID, platform: "ios", kind: "simulator" }
+    );
+
+    await gestureTapTool.execute(touchServices, { udid: "emulator-5554", x: 0.5, y: 0.5 });
+    expect(runWithDeliveryVerificationMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      undefined,
+      expect.any(Function),
+      { id: "emulator-5554", platform: "android", kind: "emulator" }
+    );
+  });
+
+  it("returns a bare result when no check ran, and still injects the taps", async () => {
+    mockCheck = {};
+    const result = await gestureTapTool.execute(touchServices, { udid: "X", x: 0.5, y: 0.5 });
+    expect(result.tapped).toBe(true);
+    expect(result.verified).toBeUndefined();
+    expect(result.warning).toBeUndefined();
+    expect(sent.map((e) => e.type)).toEqual(["Down", "Up"]);
+  });
+
+  it("reports verified:true and no warning when the tap observably lands", async () => {
+    mockCheck = { verified: true };
+    const result = await gestureTapTool.execute(touchServices, {
+      udid: "X",
+      x: 0.5,
+      y: 0.5,
+      verify: true,
+    });
+    expect(result.verified).toBe(true);
+    expect(result.warning).toBeUndefined();
+    // The touch was still injected (verification wraps, doesn't replace, the tap).
+    expect(sent.map((e) => e.type)).toEqual(["Down", "Up"]);
+  });
+
+  it("surfaces verified:false + a warning when the screen never changes (the wedge)", async () => {
+    mockCheck = { verified: false, warning: "warn:no-change" };
+    const result = await gestureTapTool.execute(touchServices, {
+      udid: "X",
+      x: 0.5,
+      y: 0.5,
+    });
+    // The touch was still sent; the result now reports the failed delivery.
+    expect(sent.map((e) => e.type)).toEqual(["Down", "Up"]);
+    expect(result.tapped).toBe(true);
+    expect(result.verified).toBe(false);
+    expect(result.warning).toBe("warn:no-change");
+  });
+
+  it("reports timestampMs of the first Down, not of the capture that precedes it", async () => {
+    // react-profiler-analyze computes commit offsets from this field, so a stamp
+    // taken before the capture inflates every reported delta by its cost.
+    const CAPTURE_MS = 60;
+    runWithDeliveryVerificationMock.mockImplementationOnce(async (_api, _verify, action) => {
+      await new Promise((resolve) => setTimeout(resolve, CAPTURE_MS));
+      await action();
+      return { verified: true };
+    });
+
+    const result = await gestureTapTool.execute(touchServices, {
+      udid: "X",
+      x: 0.5,
+      y: 0.5,
+      verify: true,
+    });
+
+    expect(sentAt[0] - result.timestampMs).toBeLessThan(CAPTURE_MS / 2);
+  });
+
+  it("marks a Chromium tap verified without an observational check (CDP already acks)", async () => {
+    const chromium = {
+      getViewport: () => ({ width: 1000, height: 800 }),
+      dispatchMouseEvent: vi.fn(async () => {}),
+    };
+    const result = await gestureTapTool.execute({ chromium } as never, {
+      udid: "chromium-cdp-9222",
+      x: 0.5,
+      y: 0.5,
+      verify: true,
+    });
+    expect(result.verified).toBe(true);
+    expect(result.warning).toBeUndefined();
+    expect(runWithDeliveryVerificationMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves a plain Chromium tap result bare (no verified field) when verify is not passed", async () => {
+    const chromium = {
+      getViewport: () => ({ width: 1000, height: 800 }),
+      dispatchMouseEvent: vi.fn(async () => {}),
+    };
+    const result = await gestureTapTool.execute({ chromium } as never, {
+      udid: "chromium-cdp-9222",
+      x: 0.5,
+      y: 0.5,
+    });
+    expect(result.tapped).toBe(true);
+    expect(result.verified).toBeUndefined();
+    expect(runWithDeliveryVerificationMock).not.toHaveBeenCalled();
   });
 });

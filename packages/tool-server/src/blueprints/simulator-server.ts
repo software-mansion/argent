@@ -18,7 +18,7 @@ import { isTvOsSimulator } from "../utils/ios-devices";
 import { deviceSetForUdid } from "../utils/ios-device-sets";
 import { UnsupportedOperationError } from "../utils/capability";
 import { openMoqClient } from "../utils/moq-client";
-import { createMoqTransport } from "../utils/simulator-client";
+import { createMoqTransport, notifyAttachClosed } from "../utils/simulator-client";
 import { simctlPbcopy } from "../utils/sim-remote";
 import { encodeKey } from "../utils/datachannel-proto";
 
@@ -112,6 +112,7 @@ async function buildRemoteInstance(
   return {
     api,
     dispose: async () => {
+      notifyAttachClosed(api.apiUrl);
       await moq.close();
     },
     events,
@@ -399,6 +400,7 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
         },
       },
       dispose: async () => {
+        notifyAttachClosed(apiUrl);
         proc.kill();
       },
       events,
