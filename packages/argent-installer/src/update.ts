@@ -39,7 +39,7 @@ import {
 } from "./utils.js";
 import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
 import { execShellCommandSync, runTrustingDisk } from "./shell.js";
-import { reportSkillRefresh } from "./skills.js";
+import { reportSkillRefresh, skillScopesForTargets } from "./skills.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { resolveInstallableUpdateTarget } from "./update-target.js";
 import { killToolServer, killToolServerForInstallDir } from "@argent/tools-client";
@@ -810,7 +810,15 @@ export async function update(args: string[]): Promise<void> {
         p.note(ruleResults.join("\n"), "Rules & Agents Updated");
       }
 
-      reportSkillRefresh(projectRoot, "installer_update_skills_refresh");
+      // Scopes follow the installs this run actually updated, not the project's
+      // mode alone — unlike the MCP config refresh above, which encodes which
+      // binary the project should launch. A skills lock records which binary's
+      // bundled skills it is pinned to, so only that binary moving may rewrite it.
+      reportSkillRefresh({
+        projectRoot,
+        scopes: skillScopesForTargets(targets, installMode),
+        stage: "installer_update_skills_refresh",
+      });
     }
 
     if (firstFailure) {
