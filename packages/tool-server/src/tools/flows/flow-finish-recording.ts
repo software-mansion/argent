@@ -149,12 +149,15 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
  * because `JSON.stringify(undefined)` is the VALUE `undefined`, not a string,
  * and would leave through a `string`-typed signature uncaught (TypeScript does
  * not flag it — `JSON.stringify`'s overload is declared to return `string`).
- * No reachable input is undefined today: every caller comes through
- * {@link summarizeSteps}, which is only ever handed `parseFlow` output, and
- * `fromYamlStep` normalises a missing/`null` `args:` to `{}` on the way
- * through. It is the `default:` arm of that switch this guards — a step kind
- * added without its own `case` lands there and is rendered as a `tool:` step,
- * with no `args` field to read.
+ * No reachable input is undefined today, on either of the two paths into
+ * {@link summarizeStep}: the finish comes through {@link summarizeSteps}, which
+ * is only ever handed `parseFlow` output, where `fromYamlStep` normalises a
+ * missing/`null` `args:` to `{}` on the way through; the recorder
+ * (`flow-add-step`) hands over a step it built in memory, whose `args` is
+ * `stripDeviceKeys(params.args ? JSON.parse(params.args) : {})` — a fresh
+ * spread, so an object either way. It is the `default:` arm of that switch this
+ * guards — a step kind added without its own `case` lands there and is rendered
+ * as a `tool:` step, with no `args` field to read.
  */
 function renderToolArgs(args: unknown): string {
   try {
