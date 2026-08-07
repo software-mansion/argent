@@ -83,6 +83,11 @@ describe("flow iOS full-hierarchy source", () => {
     expect(error.message).toContain("restart-app");
     expect(error.message).toContain("com.apple.*");
     expect(error.message).toContain("raw point taps");
+    // The clause is trimmed at the sentence break, so the impossible advice in
+    // the source's SECOND sentence never reaches the flow reason.
+    expect(error.message).toContain(
+      "(No native-devtools-connected apps are available for auto-targeting.)"
+    );
   });
 
   it("preserves app diagnostics and gives relevant advice when auto-targeting is ambiguous", async () => {

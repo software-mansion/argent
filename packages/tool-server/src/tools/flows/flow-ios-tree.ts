@@ -411,10 +411,17 @@ function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+// The first SENTENCE of a diagnostic's first line — the part that names what
+// went wrong, without the remedy paragraph each source appends for its own
+// callers. A sentence ends at a period followed by whitespace (or the end of
+// the line): every message that reaches here carries a dotted identifier
+// (`Application.getState`, `bundleId: com.acme.app`), and keying on the bare
+// period chopped mid-identifier, leaving `RPC timed out: Application.`.
+// A line with no sentence break is already the clause — return it whole.
 function firstClause(err: unknown): string {
   const firstLine = errMsg(err).split("\n", 1)[0];
-  const sentenceEnd = firstLine.indexOf(".");
-  return sentenceEnd === -1 ? firstLine : firstLine.slice(0, sentenceEnd + 1);
+  const sentenceEnd = /\.(?=\s|$)/.exec(firstLine);
+  return sentenceEnd === null ? firstLine : firstLine.slice(0, sentenceEnd.index + 1);
 }
 
 // Strip resolveNativeTargetApp's trailing "Provide bundleId explicitly…" line —
