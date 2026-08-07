@@ -32,7 +32,7 @@ describe("rendering a run that resolved no device", () => {
   it("still names a device when the run had one", () => {
     const line = renderSummary(report({ device: "UDID-1", passed: 2 }), { withDevice: true });
 
-    expect(line).toBe("PASS on UDID-1 — 2 passed, 0 failed, 0 errored, 0 skipped");
+    expect(line).toBe("PASS (started on UDID-1) — 2 passed, 0 failed, 0 errored, 0 skipped");
   });
 });
 

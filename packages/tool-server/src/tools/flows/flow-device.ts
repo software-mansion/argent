@@ -15,7 +15,24 @@ import type { FlowStep, WhenPlatform } from "./flow-utils";
 // flow-utils, which this aliases via WhenPlatform.
 export type FlowPlatform = WhenPlatform;
 
-const DEVICE_BIND_KEYS = ["udid", "device_id"] as const;
+/**
+ * Arg names that mean "the device to act on".
+ *
+ * The runner strips these from every recorded step and re-injects the resolved
+ * run device, so a name here must mean a device id on EVERY tool that declares
+ * one — the strip is schema-blind. `udid` covers most tools, `device_id` the
+ * debugger and profiler families, and `device` is `flow-execute`'s own, so a
+ * nested flow inherits the run device instead of pinning the one it was
+ * recorded on (#607).
+ *
+ * `platform` is deliberately absent, for two independent reasons. It is only
+ * ever read when no device was given — `resolveFlowDevice` returns on
+ * `opts.device` before touching it, and the chromium boot spec is gated on
+ * `!params.device` — so once `device` is bound it is inert. And it is not
+ * device-specific on every tool: `react-profiler-analyze` declares its own
+ * `platform`, which a blind strip would silently retarget.
+ */
+const DEVICE_BIND_KEYS = ["udid", "device_id", "device"] as const;
 
 /**
  * Keys that mean a tool acts on a device. A superset of the keys the runner
@@ -102,7 +119,13 @@ export async function resolveFlowDevice(
   );
 }
 
-/** Strip the device-id keys from a set of args (so a flow stores none). */
+/**
+ * Strip the device-id keys from a set of args (so a flow stores none).
+ *
+ * Schema-blind on purpose: `bindDeviceArgs` strips unconditionally and re-injects
+ * only what the target tool declares, so a stale id is never forwarded to a tool
+ * that does not want it.
+ */
 export function stripDeviceKeys(args: Record<string, unknown>): Record<string, unknown> {
   const out = { ...args };
   for (const k of DEVICE_BIND_KEYS) delete out[k];
@@ -116,6 +139,10 @@ export function stripDeviceKeys(args: Record<string, unknown>): Record<string, u
  * a stale baked-in udid can't override the run target. The id is injected only
  * for the device-id keys the tool's input schema declares (so `.strict()`
  * schemas stay valid).
+ *
+ * This covers a nested `tool: flow-execute` step too — its own `device` arg is
+ * rebound, so a composed run inherits the run device rather than driving the one
+ * it was recorded against, matching how `run:` composition already behaves.
  */
 /**
  * Whether a step acts on a device.

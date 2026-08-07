@@ -12,9 +12,10 @@ const zodSchema = z.object({
     .describe(
       "Text to paste into the focused field. To paste a credential without its plaintext ever " +
         "entering your context, use `{{secret:<NAME>}}` — resolved server-side from the " +
-        "`ARGENT_SECRET_<NAME>` environment variable (prefix mandatory; `{{secret:APP_PASSWORD}}` " +
-        "reads `ARGENT_SECRET_APP_PASSWORD`). If the secret is not set, ask the user to export it " +
-        "under that prefix — NEVER ask the user to paste the secret value into the conversation."
+        "`ARGENT_SECRET_<NAME>` environment variable or an argent secrets file (`.argent/secrets.env` " +
+        "in the project, `~/.argent/secrets.env`, or an `ARGENT_SECRET_`-prefixed key in the project's " +
+        "`.env`/`.env.local`). If the secret is not set, the failure lists every source it looked in — ask " +
+        "the user to add it to one — NEVER ask the user to paste the secret value into the conversation."
     ),
 });
 
@@ -44,7 +45,7 @@ export const pasteTool: ToolDefinition<Params, Result> = {
 Use when you need to fill a text input with a long string faster than character-by-character typing.
 Returns { pasted: true }. Fails if no field is focused or the simulator server is not running.
 Tap the text field first to focus it, then call paste.
-Supports \`{{secret:<NAME>}}\` placeholders resolved server-side from \`ARGENT_SECRET_<NAME>\` env vars (prefix mandatory), so credentials never enter agent context.
+Supports \`{{secret:<NAME>}}\` placeholders resolved server-side from \`ARGENT_SECRET_<NAME>\` env vars or an argent secrets file, so credentials never enter agent context.
 If paste doesn't work for a particular field, use the keyboard tool instead.`,
   zodSchema,
   capability,

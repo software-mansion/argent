@@ -6,7 +6,10 @@ import * as path from "node:path";
 import { PNG } from "pngjs";
 import { runSnapshot } from "../../src/tools/flows/flow-visual";
 import { ArtifactStore } from "../../src/artifacts";
-import type { DiffPngFilesOptions } from "../../src/tools/screenshot-diff/screenshot-diff";
+import {
+  diffPngFiles,
+  type DiffPngFilesOptions,
+} from "../../src/tools/screenshot-diff/screenshot-diff";
 import {
   settleTree,
   invokeOnDevice,
@@ -141,6 +144,8 @@ function opts(overrides: Partial<Parameters<typeof runSnapshot>[1]> = {}) {
     name: "home",
     maxMismatch: 0.5,
     updateBaselines: false,
+    appIdentity: "/apps/app-a",
+    seenKeys: new Map<string, string>(),
     ...overrides,
   };
 }
@@ -276,6 +281,53 @@ describe("runSnapshot baselines", () => {
     expect(r.artifacts?.baseline).toMatchObject({ __argentArtifact: true });
     expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
     expect(r.artifacts?.diff).toBeUndefined();
+  });
+});
+
+describe("runSnapshot cross-app key collision", () => {
+  // The run already captured this key from another app — flow-run's seenKeys
+  // record, pre-seeded the way a prior snapshot step would leave it.
+  const seenFromAppB = () => new Map([["home__ios-390x844", "/apps/app-b"]]);
+
+  it("fails a key already captured from a different app instead of overwriting its baseline", async () => {
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await fs.writeFile(baselinePath(), Buffer.from("app-b pixels"));
+
+    const r = await runSnapshot(env, opts({ updateBaselines: true, seenKeys: seenFromAppB() }));
+
+    expect(r.status).toBe("fail");
+    expect(r.reason).toContain(
+      'snapshot "home" was already captured in this run from a different app (/apps/app-b)'
+    );
+    expect(r.reason).toContain("home__ios-390x844.png");
+    expect(r.reason).toContain("distinct names");
+    expect(r.snapshotKey).toBe("home__ios-390x844");
+    // The other app's baseline survived — updateBaselines wrote nothing.
+    await expect(fs.readFile(baselinePath(), "utf8")).resolves.toBe("app-b pixels");
+  });
+
+  it("fails before comparing anything in plain compare mode", async () => {
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+    vi.mocked(diffPngFiles).mockClear();
+
+    const r = await runSnapshot(env, opts({ seenKeys: seenFromAppB() }));
+
+    expect(r.status).toBe("fail");
+    expect(r.reason).toContain("already captured in this run from a different app");
+    expect(vi.mocked(diffPngFiles)).not.toHaveBeenCalled();
+  });
+
+  it("allows recapturing a key from the same app", async () => {
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+
+    const r = await runSnapshot(
+      env,
+      opts({ seenKeys: new Map([["home__ios-390x844", "/apps/app-a"]]) })
+    );
+
+    expect(r.status).toBe("pass");
   });
 });
 
@@ -587,5 +639,49 @@ describe("runSnapshot cropOn", () => {
     const r2 = await runSnapshot(env, opts({ updateBaselines: true, cropOn: { text: "foo" } }));
 
     expect(r1.snapshotKey).not.toBe(r2.snapshotKey);
+  });
+
+  it("fails a crop key recaptured from another app, like any other key", async () => {
+    const seenKeys = new Map<string, string>();
+
+    const r1 = await runSnapshot(env, opts({ updateBaselines: true, cropOn, seenKeys }));
+    const r2 = await runSnapshot(
+      env,
+      opts({ updateBaselines: true, cropOn, seenKeys, appIdentity: "/apps/app-b" })
+    );
+
+    expect(r1.status).toBe("pass");
+    expect(r2.status).toBe("fail");
+    expect(r2.reason).toContain("already captured in this run from a different app (/apps/app-a)");
+    expect(r2.reason).toContain(`${cropKey}.png`);
+    // One file on disk: app-b never wrote over app-a's crop.
+    const files = await fs.readdir(path.join(tmpDir, "__baselines__", "checkout"));
+    expect(files).toEqual([`${cropKey}.png`]);
+  });
+
+  it("lets two apps share a snapshot name when they crop different elements", async () => {
+    // The keys carry the selector, so the two never share a baseline file —
+    // a guard keyed on the snapshot NAME would wrongly reject this.
+    const seenKeys = new Map<string, string>();
+
+    const r1 = await runSnapshot(
+      env,
+      opts({ updateBaselines: true, cropOn: { text: "Header" }, seenKeys })
+    );
+    const r2 = await runSnapshot(
+      env,
+      opts({
+        updateBaselines: true,
+        cropOn: { identifier: "hdr" },
+        seenKeys,
+        appIdentity: "/apps/app-b",
+      })
+    );
+
+    expect(r1.status).toBe("pass");
+    expect(r2.status).toBe("pass");
+    expect(r1.snapshotKey).not.toBe(r2.snapshotKey);
+    const files = await fs.readdir(path.join(tmpDir, "__baselines__", "checkout"));
+    expect(files.sort()).toEqual([`${r1.snapshotKey}.png`, `${r2.snapshotKey}.png`].sort());
   });
 });

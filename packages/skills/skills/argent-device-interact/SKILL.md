@@ -177,11 +177,21 @@ Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow
 { "udid": "<UDID>", "text": "{{secret:APP_PASSWORD}}", "key": "enter" }
 ```
 
-The placeholder is resolved on the machine running the tool-server from the `ARGENT_SECRET_<NAME>` environment variable (here `ARGENT_SECRET_APP_PASSWORD`) — the CI-native pattern: expose the secret under that prefix in the environment that starts the tool-server. Rules:
+The placeholder is resolved on the machine running the tool-server, from the first of these that defines the name:
 
-- The result echoes the placeholder, never the value. An unknown name fails with the list of available secret _names_.
+| #   | Source                                        | Which keys it exposes                                                |
+| --- | --------------------------------------------- | -------------------------------------------------------------------- |
+| 1   | `ARGENT_SECRET_<NAME>` environment variable   | prefixed vars only — the CI-native path                              |
+| 2   | `<project>/.argent/secrets.env`               | every key (`APP_PASSWORD=…`) — gitignore this file                   |
+| 3   | `<project>/.env.local`, then `<project>/.env` | only `ARGENT_SECRET_`-prefixed keys, so app config stays unreachable |
+| 4   | `~/.argent/secrets.env`                       | every key — per-user, works in any project                           |
+
+Rules:
+
+- The result echoes the placeholder, never the value. An unknown name fails with the list of available secret _names_ and every source it looked in, with paths — read that list before asking the user anything.
 - The auto-screenshot after the call is skipped so the typed value cannot re-enter your context as pixels. Do **not** `describe` or `screenshot` a non-secure field you just filled with a secret — submit or navigate away first, then verify the resulting screen.
-- Only `ARGENT_SECRET_*` variables are resolvable; never ask the user to paste a secret value into the conversation — ask them to export the env var instead.
+- Nothing outside those sources is reachable; never ask the user to paste a secret value into the conversation. Ask them to put it in a secrets file instead — a file edit applies to the next call, while an exported env var only reaches a tool-server started afterwards.
+- The project sources are found by walking up from the tool-server's working directory. If a project file is not being picked up, the failure's source list shows the paths actually consulted; `~/.argent/secrets.env` needs no project and always applies.
 
 ### rotate — Change orientation
 

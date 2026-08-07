@@ -268,6 +268,61 @@ describe("run cancellation mid-directive", () => {
     expect(calls).not.toContain("keyboard");
   });
 
+  it("attributes abort skips inside a fragment to the fragment, not the root", async () => {
+    const controller = new AbortController();
+    // The fragment's tap polls for a target that never appears; the run is
+    // cancelled on the third tree read, mid-auto-wait. The steps after the tap
+    // then hit execSteps' abort-skip branch (the run: line) and the hard-stop
+    // branch (the trailing echo) — with the fragment still on the run stack.
+    // Every skip line must carry the fragment's attribution, and the run: line
+    // its own target stem, identical to the executed and hard-stop paths.
+    let reads = 0;
+    currentFetch = () => {
+      reads++;
+      if (reads >= 3) controller.abort();
+      return {
+        tree: screen([n({ label: "Other", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 } })]),
+        source: "native-devtools",
+      };
+    };
+
+    await writeFlow("other", {
+      executionPrerequisite: "",
+      steps: [{ kind: "echo", message: "never loaded" }],
+    });
+    await writeFlow("frag", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "tap", selector: { text: "Checkout", loose: true } },
+        { kind: "run", flow: "other.yaml" },
+        { kind: "echo", message: "fragment tail" },
+      ],
+    });
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "frag.yaml" }],
+    });
+
+    const result = await run("main", mockRegistry([]), controller.signal);
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "run:pass",
+      "tap:skip",
+      "run:skip",
+      "echo:skip",
+    ]);
+    // The cancelled tap and the abort-skipped run: line report the uniform
+    // abort reason; the echo after them is a plain hard-stop skip.
+    expect(result.steps[1]).toMatchObject({ flow: "frag", reason: "run aborted" });
+    expect(result.steps[2]).toMatchObject({
+      flow: "other",
+      target: "other.yaml",
+      reason: "run aborted",
+    });
+    expect(result.steps[3]).toMatchObject({ flow: "frag", message: "fragment tail" });
+    expect(result.ok).toBe(false);
+  });
+
   it("reports an await cancelled mid-poll as a skip with the uniform abort reason", async () => {
     const controller = new AbortController();
     let reads = 0;

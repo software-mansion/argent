@@ -27,7 +27,10 @@ const zodSchema = z.object({
     .describe(
       'Fragments only: the app/device state assumed on entry (e.g. "Settings app open on General page"). ' +
         "For a self-contained e2e flow, omit this and record a `restart-app` as the first step instead — " +
-        "it is captured as the flow's `launch` step."
+        "it is captured as the flow's `launch` step. restart-app has no chromium support, so a chromium " +
+        "flow records as a fragment; add the `launch: { chromium: <app path> }` line to the YAML " +
+        "afterward, deleting the executionPrerequisite line if you passed one — a flow that starts " +
+        "with a launch must not declare it."
     ),
 });
 

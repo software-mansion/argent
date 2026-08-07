@@ -8,6 +8,7 @@ import { isFlagEnabled } from "@argent/configuration-core";
 import { randomUUID, createHash } from "node:crypto";
 import {
   FAILURE_CODES,
+  getFailureSignal,
   type FailureSignal,
   type FileInputSpec,
   type Registry,
@@ -101,6 +102,17 @@ function isToolExposed(
 
 function findDependencyMissing(err: unknown): DependencyMissingError | null {
   return findErrorInCauseChain(err, DependencyMissingError);
+}
+
+/**
+ * Wire-safe failure classification for a tool-error response, so a caller can
+ * tell a per-request rejection (e.g. `error_kind: "validation"`) from an infra
+ * fault without parsing the message. Signals carry only static allowlisted
+ * fields — never paths, hosts, or argv — so they are safe to put on the wire.
+ */
+function errorSignalFields(err: unknown): { error_code?: string; error_kind?: string } {
+  const signal = getFailureSignal(err);
+  return signal ? { error_code: signal.error_code, error_kind: signal.error_kind } : {};
 }
 
 /**
@@ -956,12 +968,16 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           return hint ? `${message} ${hint}` : message;
         };
         if (wantsStream) {
-          writeLine({ event: "error", error: attribute(streamErrorMessage(err)) });
+          writeLine({
+            event: "error",
+            error: attribute(streamErrorMessage(err)),
+            ...errorSignalFields(err),
+          });
           res.end();
           return;
         }
         if (err instanceof ToolNotFoundError) {
-          res.status(404).json({ error: attribute(err.message) });
+          res.status(404).json({ error: attribute(err.message), ...errorSignalFields(err) });
           return;
         }
         // Walk the cause chain so a registry ToolExecutionError wrapping
@@ -970,7 +986,11 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         // global preflight; this is their fall-back surface.
         const depErr = findDependencyMissing(err);
         if (depErr) {
-          res.status(424).json({ error: attribute(depErr.message), missing: depErr.missing });
+          res.status(424).json({
+            error: attribute(depErr.message),
+            missing: depErr.missing,
+            ...errorSignalFields(err),
+          });
           return;
         }
         // Unwrap the cause chain: these are thrown from inside execute() / a
@@ -978,7 +998,9 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         // top-level instanceof would miss them and fall through to a 500.
         const unsupportedErr = findErrorInCauseChain(err, UnsupportedOperationError);
         if (unsupportedErr) {
-          res.status(400).json({ error: attribute(unsupportedErr.message) });
+          res
+            .status(400)
+            .json({ error: attribute(unsupportedErr.message), ...errorSignalFields(err) });
           return;
         }
         // A tool rejecting its arguments (e.g. an unknown named key on any
@@ -998,7 +1020,9 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         // http-dep-gate.test.ts, so reordering is a visible, deliberate change.
         const invalidInputErr = findErrorInCauseChain(err, InvalidToolInputError);
         if (invalidInputErr) {
-          res.status(400).json({ error: attribute(invalidInputErr.message) });
+          res
+            .status(400)
+            .json({ error: attribute(invalidInputErr.message), ...errorSignalFields(err) });
           return;
         }
         const notImplementedErr = findErrorInCauseChain(err, NotImplementedOnPlatformError);
@@ -1008,10 +1032,13 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
             toolId: notImplementedErr.toolId,
             platform: notImplementedErr.platform,
             hint: notImplementedErr.hint,
+            ...errorSignalFields(err),
           });
           return;
         }
-        res.status(500).json({ error: attribute(formatErrorForAgent(err)) });
+        res
+          .status(500)
+          .json({ error: attribute(formatErrorForAgent(err)), ...errorSignalFields(err) });
       } finally {
         if (keepAlive) clearInterval(keepAlive);
         releaseInvocationMeta?.();

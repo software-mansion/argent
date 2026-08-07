@@ -73,6 +73,43 @@ describe("tool interaction messages", () => {
     ).toBe(`Failed to tap at (50%, 25%): ${failureSignal.error_code}`);
   });
 
+  it("names the flow from either source in flow-execute messages", () => {
+    const definitions = definitionsById(createRegistry());
+    const interaction = definitions.get("flow-execute")!.interaction!;
+
+    const byName = { name: "settings-explore", project_root: "/repo" };
+    expect(interaction.startedMsg!({ params: byName })).toBe("Running flow settings-explore");
+    expect(interaction.completedMsg!({ params: byName, result: {} })).toBe(
+      "Ran flow settings-explore"
+    );
+    expect(interaction.failedMsg!({ params: byName, error: new Error("raw"), failureSignal })).toBe(
+      `Failed to run flow settings-explore: ${failureSignal.error_code}`
+    );
+
+    // A flow_path call has no name param — the messages derive the name from
+    // the YAML basename instead of rendering "undefined".
+    const byPath = { flow_path: "/repo/flows/login.yaml", project_root: "/repo" };
+    expect(interaction.startedMsg!({ params: byPath })).toBe("Running flow login");
+    expect(interaction.completedMsg!({ params: byPath, result: {} })).toBe("Ran flow login");
+    expect(interaction.failedMsg!({ params: byPath, error: new Error("raw"), failureSignal })).toBe(
+      `Failed to run flow login: ${failureSignal.error_code}`
+    );
+
+    // Degenerate sources (these calls fail validation, but the started message
+    // renders first) still say something honest — never "" or "undefined".
+    expect(
+      interaction.startedMsg!({ params: { flow_path: "/repo/flows/.yaml", project_root: "/repo" } })
+    ).toBe("Running flow .yaml");
+    // Unlike the bare ".yaml" above, this path has an empty basename stem, so
+    // the raw path — not the stem — is what names the flow here.
+    expect(interaction.startedMsg!({ params: { flow_path: "/", project_root: "/repo" } })).toBe(
+      "Running flow /"
+    );
+    expect(interaction.startedMsg!({ params: { project_root: "/repo" } })).toBe(
+      "Running flow (unspecified)"
+    );
+  });
+
   it("does not expose sensitive inputs", () => {
     const definitions = definitionsById(createRegistry());
     const secret = "INTERACTION_MESSAGE_SECRET";

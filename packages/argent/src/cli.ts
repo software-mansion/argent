@@ -88,7 +88,7 @@ Commands:
   remove      ${installerHelpEntry("remove")}
   tools       List tools exposed by the tool-server
   run         Invoke a tool by name (use \`argent run <tool> --help\` for flags)
-  flow        Run a saved flow (use \`argent flow --help\` for options)
+  flow        Run a flow by name or YAML path (use \`argent flow --help\` for options)
   server      Manage the shared tool-server (start / status / stop / logs)
   lens        Open Argent Lens bound to a fresh coding-agent session (macOS)
   link        Route client requests to a remote tool-server
@@ -98,6 +98,7 @@ Commands:
   flags       Show current feature-flag state
   providers   Inspect external device providers (\`providers check\` validates them)
   config      Manage configuration (list / get / set / unset, project & global)
+  secrets     List the secrets a {{secret:NAME}} placeholder can type, and their sources
   telemetry   Manage opt-out telemetry (status / enable / disable)
 
 Options:
@@ -169,6 +170,8 @@ async function main(): Promise<void> {
       return (await loadCli()).flags(rest);
     case "config":
       return (await loadCli()).config(rest);
+    case "secrets":
+      return (await loadCli()).secrets(rest);
     case "telemetry":
       return (await loadCli()).telemetry(rest);
     case "providers":

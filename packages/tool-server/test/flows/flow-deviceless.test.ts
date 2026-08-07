@@ -224,7 +224,7 @@ describe("a flow that does touch a device still demands one", () => {
     await writeFlow("child", [{ kind: "echo", message: "quiet" }]);
     await writeFlow("parent", [
       { kind: "echo", message: "calling child" },
-      { kind: "run", flow: "child" },
+      { kind: "run", flow: "child.yaml" },
     ]);
     await expectDemandsDevice("parent");
   });

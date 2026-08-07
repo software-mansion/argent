@@ -2,7 +2,12 @@ import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { stringify as yamlStringify, parse as yamlParse } from "yaml";
-import { CLIENT_FILE_MARKER, type ClientFileDirective } from "@argent/registry";
+import {
+  CLIENT_FILE_MARKER,
+  FLOW_NAME_PATTERN,
+  FLOW_FILE_NAME_PATTERN,
+  type ClientFileDirective,
+} from "@argent/registry";
 import {
   hasVisibleText,
   selectorFieldsSchema,
@@ -104,11 +109,15 @@ export function clearActiveProjectRoot(): void {
   activeProjectRoot = null;
 }
 
-export function getFlowsDir(): string {
-  return path.join(requireActiveProjectRoot(), FLOWS_DIR_NAME);
+/** The flows dir under an explicit root — for callers that must not resolve
+ * against the active-project-root global (see flow-add-step). */
+export function flowsDirFor(root: string): string {
+  return path.join(root, FLOWS_DIR_NAME);
 }
 
-const FLOW_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
+export function getFlowsDir(): string {
+  return flowsDirFor(requireActiveProjectRoot());
+}
 
 export function assertSafeFlowName(name: string): void {
   if (!FLOW_NAME_PATTERN.test(name)) {
@@ -140,6 +149,54 @@ export function getFlowPath(name: string): string {
     });
   }
   return filePath;
+}
+
+/**
+ * How the flow file a caller addressed is spelled in its own directory.
+ * `listed`: the directory carries that basename byte-for-byte — or its listing
+ * could not be read at all, which vouches for nothing and so must refuse
+ * nothing (an execute-only parent directory lets stat through while refusing
+ * readdir, and the exact-named contract may well be honored there).
+ * `case_folded`: no entry carries it, but one differs from it only by case —
+ * exactly what a case-insensitive filesystem (APFS, NTFS) opens for a reader
+ * that asked for a spelling nothing on disk has, and the whole point of the
+ * check. `absent`: nothing matches even case-insensitively, i.e. the file is
+ * simply not there. `addressable` says whether the on-disk spelling is one the
+ * flow layer's own ladders accept, so a caller can be pointed at it instead of
+ * at a rename.
+ */
+export type OnDiskSpelling =
+  | { state: "listed" }
+  | { state: "case_folded"; actual: string; addressable: boolean }
+  | { state: "absent" };
+
+/**
+ * Classify the supplied basename against `dir`'s listing. One classifier serves
+ * every route that turns a caller's spelling into a flow identity — replay's
+ * `flow_path` and `name` (flow-run.ts) and the recorder's two nested
+ * flow-execute targets (flow-add-step.ts) — so they can never drift apart in
+ * which spellings they accept. That drift is the bug itself twice over: it let
+ * a `name` key a report and `__baselines__/` under a spelling `flow_path`
+ * refused two arms earlier, and it let the recorder bake a `run:` name whose
+ * flow_path spelling its own neighbouring arm would have refused.
+ *
+ * readdir, not realpath: realpath rewrites a symlinked flow to its target's
+ * name, and a flow deliberately runs — and composes — under the link's own
+ * name. Every call site hands a pure-ASCII basename (flow-name charset +
+ * ".yaml"), so Unicode-normalizing filesystems cannot make the comparison lie.
+ *
+ * What an `absent` verdict means is the caller's to decide, and they differ:
+ * `flow_path` arrives with the boundary's stat already vouching for the file,
+ * so a listing that lacks it is itself the phantom-spelling bug, while a `name`
+ * may simply not name a saved flow — an ordinary missing-flow error the later
+ * read reports far better than a casing complaint could.
+ */
+export async function classifyOnDiskSpelling(dir: string, base: string): Promise<OnDiskSpelling> {
+  const entries = await fs.readdir(dir).catch(() => null);
+  if (entries === null || entries.includes(base)) return { state: "listed" };
+  const actual = entries.find((entry) => entry.toLowerCase() === base.toLowerCase());
+  if (actual === undefined) return { state: "absent" };
+  return { state: "case_folded", actual, addressable: FLOW_FILE_NAME_PATTERN.test(actual) };
 }
 
 export function setActiveFlow(name: string): void {
@@ -196,8 +253,10 @@ export function clearActiveFlow(): void {
  * A chromium `launch` target: a filesystem path to the Electron app (bare
  * string) or a path plus extra CLI args. Unlike iOS/Android/Vega (an OS-installed
  * app id relaunched in place), chromium is booted from this path, so it must
- * exist on the tool-server host; a relative path resolves against the flow
- * file's directory (the same anchor `run:` and baselines use).
+ * exist on the tool-server host; a relative path resolves against the ROOT
+ * flow file's canonical (symlink-resolved) directory (the baseline anchor —
+ * only the root flow's leading launch ever boots; `run:` targets anchor per
+ * containing file, which for the root file is that same directory).
  */
 export type ChromiumLaunch = string | { path: string; args?: string[] };
 
@@ -303,6 +362,7 @@ export type FlowStep =
   | { kind: "tool"; name: string; args: Record<string, unknown>; delayMs?: number }
   | { kind: "echo"; message: string }
   | { kind: "launch"; app: Launch }
+  // `flow` is the as-written YAML path, resolved against the containing file's directory.
   | { kind: "run"; flow: string }
   | { kind: "when"; condition: WhenCondition; steps: FlowStep[] }
   | { kind: "tap"; selector?: FlowSelector; x?: number; y?: number; times?: number }
@@ -885,6 +945,16 @@ function toYamlStep(step: FlowStep): YamlStep {
   }
 }
 
+// Ceiling on how much of the offending entry a diagnostic echoes. The entry
+// is not always a hand-authored flow step: a mistyped `run:` path can select
+// any in-project YAML file (a CI config, a partial flow), and this message
+// travels verbatim into StepReport.reason — which `argent flow run` prints to
+// stdout and flowRunToMcpContent emits into the agent's context — so an
+// unbounded render would ship that file's values (multi-KB payloads, secrets)
+// to both surfaces. 200 chars still shows a genuine flow entry, the common
+// authoring-error case, in full.
+const MAX_ENTRY_RENDER_CHARS = 200;
+
 function badEntry(raw: unknown, detail: string): never {
   // A cyclic YAML alias materializes as a cyclic object — JSON.stringify
   // would throw and mask the validation message, so fall back to a marker.
@@ -893,6 +963,10 @@ function badEntry(raw: unknown, detail: string): never {
     rendered = JSON.stringify(raw);
   } catch {
     rendered = "[cyclic entry]";
+  }
+  if (rendered.length > MAX_ENTRY_RENDER_CHARS) {
+    const elided = rendered.length - MAX_ENTRY_RENDER_CHARS;
+    rendered = `${rendered.slice(0, MAX_ENTRY_RENDER_CHARS)}…(+${elided} chars)`;
   }
   throw new FailureError(`Unrecognized flow entry (${detail}): ${rendered}`, {
     error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
@@ -1686,6 +1760,111 @@ function parseWhenStep(raw: Record<string, unknown>, depth: number): FlowStep {
   return { kind: "when", condition, steps };
 }
 
+/**
+ * The report/display name of a `run:` target — its YAML basename stem. Parse
+ * guarantees the stem is a safe flow name, so this is also the fragment's
+ * attribution in step reports (mirroring how the CLI derives the top-level
+ * flow name from the file it runs) — except when the stem collides with the
+ * root flow's name, where the runner substitutes the as-written path minus
+ * the extension, or `./<stem>` for a bare spelling (see runDisplayName in
+ * flow-run.ts).
+ */
+export function runTargetName(target: string): string {
+  return path.posix.basename(target, ".yaml");
+}
+
+/**
+ * Shape-check a `run:` value: it must be a relative, forward-slashed path whose
+ * final segment is a flow name, with the `.yaml` extension optional (see
+ * {@link completeRunExtension}). `..` is deliberately legal — shared fragments
+ * may live outside the flows dir, and a fragment reaching sideways to
+ * `../shared/login.yaml` is a documented layout. Only the SHAPE is checked
+ * here; nothing about WHERE the path lands. At run time execRunStep joins it
+ * onto the containing flow file's own directory and resolves the result with
+ * kernel semantics (see canonicalFlowPath in flow-run.ts) — deliberately not a
+ * lexical collapse, since a `..` after a symlinked component names the parent
+ * of the link's target, not of the spelling. There is no path fence at that
+ * point: a target runs if the tool server can read it, and fails with that
+ * file's own ENOENT if it cannot.
+ */
+function parseRunTarget(raw: unknown, value: unknown): string {
+  // The body arrives uncoerced because YAML renders a valueless `run:` (and
+  // `run: ~` / `run: null`) as null, and bare scalars as booleans/numbers.
+  // String()-ing those before the checks below would hand completeRunExtension
+  // the plausible names "null"/"true"/"123" — and since a bare name is now
+  // ACCEPTED rather than merely advised against, a directive with no target at
+  // all would silently become a live reference to a `null.yaml` that was never
+  // meant to exist (and, on a filesystem where one happens to sit beside the
+  // flow, would run it). The rejection is what keeps the completion below
+  // applying only to targets an author actually wrote.
+  if (typeof value !== "string") {
+    badEntry(
+      raw,
+      value === null || value === undefined
+        ? "`run` has no target — give it a YAML path relative to this flow's file, e.g. `run: fragments/login.yaml`"
+        : "a `run` target must be a YAML path string relative to this flow's file, e.g. `run: fragments/login.yaml`"
+    );
+  }
+  if (value.includes("\\")) {
+    badEntry(raw, "a `run` path uses forward slashes, e.g. `run: fragments/login.yaml`");
+  }
+  // posix.isAbsolute catches `/...`; the drive-letter test catches every win32
+  // device form — absolute ("C:/") and drive-RELATIVE ("C:foo", which even
+  // win32.isAbsolute passes but which resolves against the drive's cwd). No
+  // `\`-separated absolute survives the backslash rejection above.
+  if (path.posix.isAbsolute(value) || /^[A-Za-z]:/.test(value)) {
+    badEntry(raw, "a `run` path must be relative to the flow file that references it");
+  }
+  const target = completeRunExtension(value);
+  if (!target.endsWith(".yaml")) {
+    if (target.toLowerCase().endsWith(".yaml")) {
+      badEntry(raw, "a `run` path must use the lowercase .yaml extension");
+    }
+    // Reached only when completion declined the value, so the bare-name form
+    // is quoted too: "must end in .yaml" alone would contradict the documented
+    // rule for an author who deliberately left the extension off and tripped
+    // the charset (`run: my flow`) or a trailing slash (`run: shared/`).
+    badEntry(raw, "a `run` path must end in .yaml, or name a sibling flow (`run: login`)");
+  }
+  if (!FLOW_FILE_NAME_PATTERN.test(path.posix.basename(target))) {
+    badEntry(
+      raw,
+      `a \`run\` target's filename must match ${FLOW_FILE_NAME_PATTERN} — letters, digits, underscore, hyphen before the .yaml`
+    );
+  }
+  return target;
+}
+
+/**
+ * Complete a `run:` target's optional `.yaml` extension: `run: login` means
+ * `login.yaml` beside the containing flow file, exactly as the spelled-out
+ * form does. This is the compatibility path for flows written when a `run:`
+ * target was a saved-flow NAME looked up in `.argent/flows` — a bare name
+ * resolves to the same file it always did, since those flows sit in that one
+ * directory and a bare target anchors to their own.
+ *
+ * Completed HERE rather than at resolution time so exactly one spelling
+ * reaches everything downstream: canonicalFlowPath's read, the fragment's
+ * on-disk casing check, the report's `target`, and runDisplayName — which
+ * slices a fixed `".yaml".length` off the target and would truncate a real
+ * path segment given a bare one (see flow-run.ts). Re-serializing a parsed
+ * flow therefore writes the completed spelling back, which is the intended
+ * one-way migration.
+ *
+ * The test is the CANDIDATE's basename, not the supplied value's: basename()
+ * strips a trailing slash, so testing `${basename(value)}.yaml` would complete
+ * `shared/` to the unopenable `shared/.yaml`. Anything else the candidate
+ * cannot name — a wrong extension (`login.yml`), a mis-cased one
+ * (`Login.YAML`), an empty target — leaves the value untouched for the
+ * caller's extension diagnostics, which name the real problem better than a
+ * silent completion to `login.yml.yaml` ever could.
+ */
+function completeRunExtension(value: string): string {
+  if (value.endsWith(".yaml")) return value;
+  const candidate = `${value}.yaml`;
+  return FLOW_FILE_NAME_PATTERN.test(path.posix.basename(candidate)) ? candidate : value;
+}
+
 function fromYamlStep(raw: YamlStep, whenDepth = 0): FlowStep {
   const entry = raw as Record<string, unknown>;
   // There is deliberately no per-step `optional:` — it would have to be
@@ -1736,7 +1915,7 @@ function fromYamlStep(raw: YamlStep, whenDepth = 0): FlowStep {
 
   if ("echo" in raw) return { kind: "echo", message: String(raw.echo) };
   if ("launch" in raw) return { kind: "launch", app: parseLaunch(raw.launch) };
-  if ("run" in raw) return { kind: "run", flow: String(raw.run) };
+  if ("run" in raw) return { kind: "run", flow: parseRunTarget(raw, raw.run) };
   if ("when" in raw) return parseWhenStep(entry, whenDepth);
 
   if ("tap" in raw) return parseTap((raw as { tap: unknown }).tap, raw);
@@ -1934,7 +2113,23 @@ export function parseFlow(content: string): FlowFile {
     return { executionPrerequisite: "", steps: [] };
   }
 
-  const parsed = yamlParse(trimmed) as YamlFlowFile;
+  // A raw YAMLParseError carries no failure signal, so a syntax error would
+  // abort a whole batch run instead of failing this file alone.
+  let parsed: YamlFlowFile;
+  try {
+    parsed = yamlParse(trimmed) as YamlFlowFile;
+  } catch (err) {
+    throw new FailureError(
+      `Invalid flow file: ${err instanceof Error ? err.message : String(err)}`,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "flow_file_parse",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      },
+      err instanceof Error ? { cause: err } : undefined
+    );
+  }
 
   if (
     typeof parsed !== "object" ||

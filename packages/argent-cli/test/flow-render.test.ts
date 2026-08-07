@@ -6,6 +6,8 @@ import {
   renderSummary,
   renderArtifactLines,
   renderUnderStepLine,
+  renderFailedSteps,
+  renderBatchSummary,
   type FlowReport,
   type StepReport,
 } from "../src/flow.js";
@@ -245,8 +247,10 @@ describe("flow report rendering", () => {
   it("renderSummary carries the device only when asked (live tail)", () => {
     const report = mkReport(STEPS);
     expect(renderSummary(report)).toBe("FAIL — 2 passed, 1 failed, 0 errored, 1 skipped");
+    // "started on": a chromium run can move onto runner-booted instances, so
+    // the summary must not claim the whole run happened on the starting device.
     expect(renderSummary(report, { withDevice: true })).toBe(
-      "FAIL on UDID-1 — 2 passed, 1 failed, 0 errored, 1 skipped"
+      "FAIL (started on UDID-1) — 2 passed, 1 failed, 0 errored, 1 skipped"
     );
   });
 
@@ -258,5 +262,50 @@ describe("flow report rendering", () => {
       "       baseline: /tmp/b.png",
       "       diff: /tmp/d.png",
     ]);
+  });
+
+  it("renderFailedSteps keeps full-report numbering and under-lines, echoes excluded", () => {
+    // Only the failing snapshot appears, numbered 3 as in the full report so
+    // the line matches a single-mode rerun; its artifact paths ride along.
+    expect(renderFailedSteps(mkReport(STEPS))).toEqual([
+      '  ✗  3 snapshot "home" — diff 2.10% > 1%',
+      "       baseline: /tmp/b.png",
+      "       diff: /tmp/d.png",
+    ]);
+  });
+
+  it("renderFailedSteps includes errored steps and their warnings", () => {
+    expect(
+      renderFailedSteps(
+        mkReport([
+          { index: 0, kind: "tap", status: "pass" },
+          {
+            index: 1,
+            kind: "tool",
+            tool: "screenshot",
+            status: "error",
+            reason: "device gone",
+            warning: "no baseline; adopted",
+          },
+        ])
+      )
+    ).toEqual(["  ✗  2 tool screenshot — device gone", "       ⚠ no baseline; adopted"]);
+  });
+
+  it("renderFailedSteps is empty for a clean pass", () => {
+    expect(renderFailedSteps(mkReport([{ index: 0, kind: "tap", status: "pass" }]))).toEqual([]);
+  });
+
+  it("renderBatchSummary mirrors the step summary's verdict shape", () => {
+    expect(renderBatchSummary({ total: 3, passed: 2, failed: 1, skipped: 0 })).toBe(
+      "FAIL — 3 flows: 2 passed, 1 failed, 0 skipped"
+    );
+    expect(renderBatchSummary({ total: 1, passed: 1, failed: 0, skipped: 0 })).toBe(
+      "PASS — 1 flow: 1 passed, 0 failed, 0 skipped"
+    );
+    // Skips only ever follow a failure, so they never turn the verdict alone.
+    expect(renderBatchSummary({ total: 2, passed: 1, failed: 0, skipped: 1 })).toBe(
+      "PASS — 2 flows: 1 passed, 0 failed, 1 skipped"
+    );
   });
 });
