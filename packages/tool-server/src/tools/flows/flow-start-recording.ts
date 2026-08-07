@@ -91,7 +91,11 @@ land in another's file. Steps still run LIVE, so give each concurrent recording
 its own device and pick a name unique to your task.
 
 After starting, use flow-add-step to append tool calls — each step is executed
-LIVE so you can verify it works before it gets recorded. For a self-contained
+LIVE so you can verify it works before it gets recorded. Read each step's
+\`message\`: an await-ui-element whose condition never held is still recorded (it
+returns success:false rather than failing), and a check that passes live can
+still fail once polished into an \`await:\`/\`assert:\` directive, which resolves
+against a different tree. flow-add-step warns about both. For a self-contained
 e2e flow, record a restart-app of the app under test as the FIRST step (captured
 as the flow's \`launch\` step); for a reusable fragment, skip that and pass
 executionPrerequisite instead. Use flow-add-echo to add labels. Call
