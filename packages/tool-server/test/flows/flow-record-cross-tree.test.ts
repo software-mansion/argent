@@ -583,7 +583,9 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
       "if the trees really do differ over this element, an `assert:` conversion fails the same way"
     );
     expect(warning).toContain("an `await:` does too unless the element reaches that tree");
-    expect(warning).toContain("if the SCREEN simply moved on since the live wait, both convert");
+    expect(warning).toContain(
+      "if the SCREEN simply moved on since the live wait, this verdict is no evidence"
+    );
     expect(warning).not.toContain("WILL fail");
     // iOS must NOT be told a tool "reads the runner's side": the Apple-only
     // full-hierarchy readers return the RAW view tree — both UILabels included,
@@ -839,7 +841,9 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     // and on that cause the conversion passes. So the conversion clause may not
     // decide against it — it has to leave the verdict to the cause.
     expect(warning).not.toContain("WILL fail");
-    expect(warning).toContain("if the SCREEN simply moved on since the live wait, both convert");
+    expect(warning).toContain(
+      "if the SCREEN simply moved on since the live wait, this verdict is no evidence"
+    );
     // The other three platforms' imperative. Here the selector is fine and the
     // screen is what moved, so nothing may send the author to rewrite it.
     expect(warning).not.toContain("retarget the DIRECTIVE");

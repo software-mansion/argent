@@ -512,9 +512,12 @@ async function probeAgainstRunnerTree(
   // did not hold on it. That is NOT the same as "the two trees disagree" — the
   // identical verdict comes back when the screen simply moved on between the
   // live wait and this re-probe (see SCREEN_MAY_HAVE_MOVED; on Vega that is the
-  // ONLY cause), and on that branch the conversion is fine: at replay the
+  // ONLY cause), and on that branch this verdict convicts nothing: at replay the
   // directive occupies the live wait's position in the sequence, not the moment
-  // after it where this probe looked. So the CONSEQUENCE has to stay
+  // after it where this probe looked. That is deliberately weaker than "the
+  // conversion is fine" — an `assert:` still gets only its short grace, so it
+  // can fail there for a reason that has nothing to do with the two trees, and
+  // this warning is not the place to promise otherwise. So the CONSEQUENCE has to stay
   // conditional on the cause the platform clause goes on to give — an absolute
   // "WILL fail" decides the very question that clause then asks the author to
   // rule out. This is still the one warning that may explain a divergence and
@@ -532,8 +535,9 @@ async function probeAgainstRunnerTree(
       // plainly wrong on Vega, where the two trees hold the same elements and a
       // disagreement means the screen moved, not that the selector is bad.
       `does too unless ${awaitStillNeeds(condition as WaitCondition)} within its longer ` +
-      `timeout; if the SCREEN simply moved on since the live wait, both convert fine — at ` +
-      `replay the directive runs where that wait ran, not a moment after it. ` +
+      `timeout; if the SCREEN simply moved on since the live wait, this verdict is no evidence ` +
+      `against either — at replay the directive runs where that wait ran, not a moment after ` +
+      `it. ` +
       SPELLING_CLAUSE +
       " " +
       `${treeDivergenceFor(args.udid)} ${runnerSideReadClause(args.udid)}`,
