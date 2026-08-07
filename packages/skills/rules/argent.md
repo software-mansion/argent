@@ -117,6 +117,11 @@ Skill: `argent-settings-permissions`
 When: You must change an app runtime permission (camera, microphone, photos, contacts, notifications, calendar, location, location-always, media-library, motion, reminders) that the app itself can't flip — pre-authorize or deny it before the app asks, re-enable one the user already denied (iOS never re-prompts), or reset it so the first-run dialog reappears. Works on the iOS simulator and Android emulator/device. Do NOT use it when the app has an in-app toggle or is showing its own permission dialog — tap that instead (see `argent-device-interact`); nor for permissions/settings outside that list.
 Prompt keywords: permission, grant, deny, revoke, reset permission, privacy, camera access, location access, TCC
 
+PUSH NOTIFICATIONS (iOS SIMULATOR)
+Skill: `argent-push-notifications`
+When: Testing how an app receives, displays, or deep-links from a push notification — deliver a simulated push (banner title/body or a raw APNS payload, including silent content-available pushes and badge updates) to an installed app on the iOS simulator with the `push-notification` tool, then verify/tap the banner. No APNS server or signing involved. iOS simulators only — not physical devices, Android, or remote simulators. Covers the permission prerequisite (the app must have accepted its notification dialog for a banner to appear) and the push → await banner → tap workflow.
+Prompt keywords: push notification, push, APNS, remote notification, notification banner, silent push, badge, deep link from notification
+
 TV INTERACTION (APPLE TV / ANDROID TV / FIRE TV)
 Skill: `argent-tv-interact`
 When: Any TV target — a `list-devices` entry with `runtimeKind: "tv"` (Apple TV simulator or Android TV emulator) or `platform:"vega"` / `kind:"vvd"` (Amazon Fire TV / VVD), or the user mentions Apple TV / tvOS / Android TV / leanback / Vega / Fire TV. A TV UI is focus-driven, not touch-driven: drive it with `describe` (read focus) + `tv-remote` (D-pad presses) + `keyboard` (type); `gesture-*` tools do NOT apply. Covers booting the target, app lifecycle, focus navigation, typing, screenshots, and (Vega) VVD lifecycle + Fast Refresh + JS-runtime debugging (evaluate, console logs, network inspector).
