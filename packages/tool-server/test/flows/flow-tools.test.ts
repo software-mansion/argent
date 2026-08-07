@@ -934,6 +934,13 @@ describe("flow-add-step", () => {
     expect(result.message).toContain("run-sequence stopped at await-ui-element after 1 of 2 steps");
     expect(result.message).toContain("await-ui-element condition not met");
     expect(result.message).toContain("step NOT recorded");
+    // Nothing was cancelled, so nothing may say it was. Asserted on the message
+    // OPENING with the verdict, because the cancellation wording only wraps it
+    // — `<command> was cancelled (<verdict>)` still contains every `toContain`
+    // above, so without this the signal-first guard cannot be told from a
+    // version that reports every failure as a cancellation.
+    expect(result.message.startsWith("run-sequence stopped at")).toBe(true);
+    expect(result.message).not.toContain("was cancelled");
     expect(result.message).toContain("Prior nested steps may already have changed the device");
     // A check, not a restore: relaunching would not reproduce the prefix.
     expect(result.message).toContain("state the recorded prefix leaves it in");
@@ -1163,6 +1170,10 @@ describe("flow-add-step", () => {
     expect(result.message).toContain('flow "login" failed: 1 passed, 1 failed, 0 errored');
     expect(result.message).toContain("assert: Home not visible");
     expect(result.message).toContain("NOT recorded");
+    // The other half of the signal-first guard: a composed flow that failed
+    // with no cancel in play is reported as a failure, not wrapped as one.
+    expect(result.message.startsWith('flow "login" failed:')).toBe(true);
+    expect(result.message).not.toContain("was cancelled");
     expect(result.message).toContain("Prior composed steps may already have changed the device");
     expect(result.message).toContain("state the recorded prefix leaves it in");
     expect(parseFlow(await onDisk("compose-failed")).steps).toEqual([]);
