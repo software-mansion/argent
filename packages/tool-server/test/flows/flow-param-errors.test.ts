@@ -8,10 +8,15 @@ import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flo
 import { flowReadPrerequisiteTool } from "../../src/tools/flows/flow-read-prerequisite";
 import { InvalidToolInputError } from "../../src/utils/capability";
 
-// An agent passed `flow_name` instead of `name` and got back
+// An agent passed `flow_name` instead of `name` and got back raw Zod JSON that
+// named neither spelling usefully. The shape depends on the tool: where `name`
+// is required (`flow-start-recording`) it is
 //   [{"expected":"string","code":"invalid_type","path":["name"]}]
-// which names the parameter the tool wanted and never the one that was sent —
-// so the mistake is invisible, and finding it costs a whole turn.
+// and on flow-execute, whose `name` is optional so `flow_path` can stand in, it
+// is the exactly-one-source rule instead —
+//   [{"code":"custom","path":["flow_path"],"message":"Pass exactly one flow source: …"}]
+// pointing at the one source field the caller had no reason to send. Either
+// way the mistake is invisible, and finding it costs a whole turn.
 
 let tmpDir: string;
 

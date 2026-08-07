@@ -490,11 +490,12 @@ const MAX_UNION_ALTERNATIVES = 12;
  * A schema failure as one sentence per bad parameter, instead of Zod's raw
  * issue JSON.
  *
- * The raw form — `[{"expected":"string","code":"invalid_type","path":["name"]}]`
- * — names the parameter the tool wanted but never the one the caller actually
- * sent, so the reader cannot see that they wrote `flow_name` for `name`. That
- * cost whole turns. Naming the unrecognized keys alongside the missing ones is
- * what makes the mistake self-evident.
+ * The raw form — `[{"expected":"string","code":"invalid_type","path":["name"]}]`,
+ * which is what `flow-start-recording` answers a `flow_name` call with — names
+ * the parameter the tool wanted but never the one the caller actually sent, so
+ * the reader cannot see that they wrote `flow_name` for `name`. That cost whole
+ * turns. Naming the unrecognized keys alongside the missing ones is what makes
+ * the mistake self-evident.
  */
 export function describeParamIssues(
   error: { issues: readonly ZodIssue[] },

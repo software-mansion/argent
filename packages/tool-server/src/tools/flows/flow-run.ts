@@ -77,10 +77,14 @@ import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
 
 // `flow_name` is the parameter name callers reach for — the tool is
 // `flow-execute`, so "the flow's name" spells itself that way. Getting it
-// wrong used to return raw Zod JSON
-// (`[{"expected":"string","code":"invalid_type","path":["name"]}]`), which
-// names the field it wanted but not the one that was sent. Accept the alias
-// instead of spending a turn on a rename.
+// wrong used to answer with raw Zod JSON that names neither the field the
+// caller sent nor the one the tool wanted. `name` has always been `.optional()`
+// here (so `flow_path` can stand in), so a `flow_name` call never tripped a
+// missing-`name` check — it tripped the exactly-one-source rule below and came
+// back as
+// `[{"code":"custom","path":["flow_path"],"message":"Pass exactly one flow source: name or flow_path."}]`,
+// anchored on the one source field the caller had no reason to send. Accept the
+// alias instead of spending a turn on a rename.
 const zodSchema = z
   .object({
     name: z
