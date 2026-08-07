@@ -573,10 +573,18 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
     expect(warning).toContain("does NOT hold against the tree the runner resolves");
     // The probe reads on the same short grace an `assert:` uses, so it predicts
-    // that conversion exactly; an `await:` polls longer, so it is only warned
-    // as conditional — not a flat "WILL fail" the probe's 1s window can't prove.
-    expect(warning).toContain("an `assert:` conversion WILL fail");
-    expect(warning).toContain("an `await:` will too unless the element reaches that tree");
+    // that conversion exactly — but only on the branch where the two trees
+    // really differ, which is this fixture (the merged label names no node in a
+    // hierarchy nothing changed). The consequence is stated conditionally
+    // because the same verdict also comes back from a screen that merely moved
+    // on, where the conversion is fine; an `await:` polls longer, so it carries
+    // the extra escape hatch on top.
+    expect(warning).toContain(
+      "if the trees really do differ over this element, an `assert:` conversion fails the same way"
+    );
+    expect(warning).toContain("an `await:` does too unless the element reaches that tree");
+    expect(warning).toContain("if the SCREEN simply moved on since the live wait, both convert");
+    expect(warning).not.toContain("WILL fail");
     // iOS must NOT be told a tool "reads the runner's side": the Apple-only
     // full-hierarchy readers return the RAW view tree — both UILabels included,
     // and still no view carrying the merged label — and they match
@@ -826,6 +834,12 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).toContain("the SCREEN changed between the live wait and this re-probe");
     expect(warning).toContain("`describe` reads the same source the runner does");
     expect(warning).not.toContain("different projections of the screen");
+    // Vega is where an absolute consequence is most plainly wrong: the arm
+    // below states outright that a disagreement here MEANS the screen changed,
+    // and on that cause the conversion passes. So the conversion clause may not
+    // decide against it — it has to leave the verdict to the cause.
+    expect(warning).not.toContain("WILL fail");
+    expect(warning).toContain("if the SCREEN simply moved on since the live wait, both convert");
     // The other three platforms' imperative. Here the selector is fine and the
     // screen is what moved, so nothing may send the author to rewrite it.
     expect(warning).not.toContain("retarget the DIRECTIVE");

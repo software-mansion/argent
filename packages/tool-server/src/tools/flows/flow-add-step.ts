@@ -508,21 +508,32 @@ async function probeAgainstRunnerTree(
         `not known-bad — re-probe once that tree source is back before trusting the conversion`,
     };
   }
-  // Determinate: the trees really were compared and really do disagree, so this
-  // is the one warning that may explain the divergence and name how to read the
-  // runner's side.
+  // Determinate: the runner's tree really was read, and the condition really
+  // did not hold on it. That is NOT the same as "the two trees disagree" — the
+  // identical verdict comes back when the screen simply moved on between the
+  // live wait and this re-probe (see SCREEN_MAY_HAVE_MOVED; on Vega that is the
+  // ONLY cause), and on that branch the conversion is fine: at replay the
+  // directive occupies the live wait's position in the sequence, not the moment
+  // after it where this probe looked. So the CONSEQUENCE has to stay
+  // conditional on the cause the platform clause goes on to give — an absolute
+  // "WILL fail" decides the very question that clause then asks the author to
+  // rule out. This is still the one warning that may explain a divergence and
+  // name how to read the runner's side.
   return {
     warning:
       `recorded, but this condition does NOT hold against the tree the runner resolves ` +
       `directives against (${cappedReason(outcome.reason ?? "no match")}). As the raw ` +
       `\`tool: ${AWAIT_UI_ELEMENT_TOOL_ID}\` step it replays fine — it reads the same tree it ` +
-      `just passed against — but an \`assert:\` conversion WILL fail (it reads that tree on ` +
-      `the same short grace this probe just used), and an \`await:\` will too unless ` +
+      `just passed against. What conversion costs you depends on WHY the two disagree: if the ` +
+      `trees really do differ over this element, an \`assert:\` conversion fails the same way ` +
+      `(it reads that tree on the same short grace this probe just used), and an \`await:\` ` +
       // The remedy belongs to the platform clause, not here: "re-record with a
       // selector present in both trees" is right on iOS/Android/Chromium and
       // plainly wrong on Vega, where the two trees hold the same elements and a
       // disagreement means the screen moved, not that the selector is bad.
-      `${awaitStillNeeds(condition as WaitCondition)} within its longer timeout. ` +
+      `does too unless ${awaitStillNeeds(condition as WaitCondition)} within its longer ` +
+      `timeout; if the SCREEN simply moved on since the live wait, both convert fine — at ` +
+      `replay the directive runs where that wait ran, not a moment after it. ` +
       SPELLING_CLAUSE +
       " " +
       `${treeDivergenceFor(args.udid)} ${runnerSideReadClause(args.udid)}`,
