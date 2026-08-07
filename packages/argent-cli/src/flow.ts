@@ -1139,6 +1139,17 @@ async function runFlowDirectory(
       results.push({ path: rel, status: "fail", error: message });
       const rejectedThisFlowOnly =
         err instanceof ToolInvocationError && err.errorKind === "validation";
+      // A verdict on stdout for every entry, next to the `[i/n]` header stdout
+      // already carries. The detail above goes to stderr, so without this line
+      // a redirected stdout log shows this flow's header followed by the next
+      // flow's — an entry that reads as if it never ran, while the final tally
+      // still counts it failed and names nothing.
+      if (!args.json) {
+        console.log(
+          `  ${STATUS_GLYPH.error} ` +
+            (rejectedThisFlowOnly ? "not run (invalid flow)" : "did not finish (run error)")
+        );
+      }
       if (!rejectedThisFlowOnly) stopped = true;
       continue;
     }
@@ -1146,6 +1157,7 @@ async function runFlowDirectory(
       const message = `"${rel}" did not produce a run report.`;
       console.error(message);
       results.push({ path: rel, status: "fail", error: message });
+      if (!args.json) console.log(`  ${STATUS_GLYPH.error} did not finish (no run report)`);
       stopped = true;
       continue;
     }

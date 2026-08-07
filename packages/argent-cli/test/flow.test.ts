@@ -1555,6 +1555,54 @@ describe("argent flow run <dir>", () => {
     expect(out).toContain("FAIL — 2 flows: 1 passed, 1 failed, 0 skipped");
   });
 
+  it("gives a rejected flow a verdict on stdout, not just a message on stderr", async () => {
+    toolsClientMock.callTool
+      .mockRejectedValueOnce(
+        new ToolInvocationError("flow file is not valid YAML", {
+          errorCode: "FLOW_FILE_INVALID",
+          errorKind: "validation",
+        })
+      )
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+    const lines = logs.join("\n").split("\n");
+    expect(lines).toContain("  ✗ not run (invalid flow)");
+    // stdout on its own is a complete ledger: every `[i/n]` header is followed
+    // by an indented outcome. Without one, a redirected stdout log shows this
+    // flow's header immediately followed by the next flow's — the entry reads
+    // as though it never ran, while the tally still counts a failure and names
+    // no flow.
+    const headers = lines.filter((l) => /^\[\d+\/\d+] /.test(l));
+    expect(headers).toHaveLength(2);
+    for (const header of headers) {
+      expect(lines[lines.indexOf(header) + 1]).toMatch(/^ {2}\S/);
+    }
+  });
+
+  it("gives the flow that stopped the batch its own stdout verdict", async () => {
+    toolsClientMock.callTool.mockRejectedValueOnce(
+      new ToolInvocationError("simulator boot failed", { errorKind: "subprocess" })
+    );
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+    // Distinguishable from the flows that follow it, which never started.
+    expect(logs.join("\n").split("\n")).toContain("  ✗ did not finish (run error)");
+    expect(logs.join("\n")).toContain("· not run (batch stopped)");
+  });
+
+  it("gives a report-less flow its own stdout verdict", async () => {
+    toolsClientMock.callTool.mockResolvedValueOnce({
+      data: { flow: "a-login", notice: "prerequisite" },
+    });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+    expect(logs.join("\n").split("\n")).toContain("  ✗ did not finish (no run report)");
+  });
+
   it("stops the batch on a server error the signal does not mark as validation", async () => {
     toolsClientMock.callTool.mockRejectedValueOnce(
       new ToolInvocationError("simulator boot failed", { errorKind: "subprocess" })
