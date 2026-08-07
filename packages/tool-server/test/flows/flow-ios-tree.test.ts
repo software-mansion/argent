@@ -229,6 +229,33 @@ describe("flow iOS full-hierarchy source", () => {
     expect(error.message).not.toContain("restart-app");
   });
 
+  it("keeps every targeting reason short enough to repeat per step", async () => {
+    // The recorder embeds this reason in the warning for EVERY captured tap
+    // while the read is failing, and a failing `await` repeats it once per
+    // poll. A reason that ran to ~900 characters made the recorder the
+    // session's largest context consumer for a single stuck screen.
+    const backgrounded = {
+      listConnectedBundleIds: () => ["com.example.solo"],
+      getAppState: vi.fn(async () => {
+        throw new FailureError("ViewInspector RPC timed out: Application.getState", {
+          error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT,
+          failure_stage: "native_devtools_rpc_request",
+          failure_area: "tool_server",
+          error_kind: "timeout",
+        });
+      }),
+    } as unknown as NativeDevtoolsApi;
+    const disconnected = {
+      listConnectedBundleIds: () => [] as string[],
+      getAppState: vi.fn(),
+    } as unknown as NativeDevtoolsApi;
+
+    for (const api of [backgrounded, disconnected]) {
+      const error = await queryFullHierarchyTree(registryFor(api), DEVICE).catch((err) => err);
+      expect(error.message.length).toBeLessThan(600);
+    }
+  });
+
   it("names restart-app (not launch-app) when the target loaded before instrumentation", async () => {
     const api = {
       listConnectedBundleIds: () => ["com.example.app"],
