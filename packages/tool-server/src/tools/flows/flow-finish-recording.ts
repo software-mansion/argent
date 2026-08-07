@@ -115,6 +115,11 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
               : { x: step.x as number, y: step.y as number }
           )}`;
         case "swipe": {
+          // The summary always runs over `parseFlow`'s output, and parse enforces
+          // exactly one of direction/to/by — so with the first two absent, `to` is
+          // present. The cast is that invariant, not an assumption about the
+          // recorder: an `undefined` here would mean the parser stopped enforcing
+          // it, which its own tests would catch first.
           const travel =
             step.direction ??
             (step.by
