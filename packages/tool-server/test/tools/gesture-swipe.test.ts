@@ -41,6 +41,15 @@ function trailingStationaryMoves(events: TouchCmd[], x: number, y: number): numb
   return count;
 }
 
+/** Run one swipe in isolation and hand back just its own touch train. */
+async function swipeTrain(
+  params: Parameters<typeof gestureSwipeTool.execute>[1]
+): Promise<TouchCmd[]> {
+  sent.length = 0;
+  await gestureSwipeTool.execute(services, params);
+  return [...sent];
+}
+
 beforeEach(() => {
   sent.length = 0;
   afterSend = undefined;
@@ -57,24 +66,62 @@ describe("gesture-swipe", () => {
     expect(trailingStationaryMoves(sent, 0.5, 0.2)).toBe(1);
   });
 
+  // 160ms is 10 steps, so nine interpolated Moves sit between the Down and the
+  // Up. Both curves are spelled out as literal progress rather than recomputed
+  // from the tool's own formula — a test that re-derives the curve cannot catch
+  // a changed exponent or a flag read backwards.
+  const EASED_PROGRESS = [0.271, 0.488, 0.657, 0.784, 0.875, 0.936, 0.973, 0.992, 0.999];
+  const LINEAR_PROGRESS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
+  /** Where progress p lands on this describe's `base` vector (0.7 → 0.2). */
+  const yAt = (p: number) => 0.7 - 0.5 * p;
+
   it("decelerates into the end point (ease-out) before lifting when momentum is off", async () => {
-    await gestureSwipeTool.execute(services, { ...base, durationMs: 160, momentum: false });
+    const eased = await swipeTrain({ ...base, durationMs: 160, momentum: false });
 
-    // Exactly one lift, at the end point.
-    expect(sent.filter((e) => e.type === "Up")).toHaveLength(1);
-    expect(sent.at(-1)).toMatchObject({ type: "Up", x: 0.5, y: 0.2 });
-    // The momentum-free landing comes from a decelerating trajectory, not a
-    // stationary hold (which UIKit coalesces away, so the fling survives): the
-    // one stationary sample is the end-point repeat.
-    expect(trailingStationaryMoves(sent, 0.5, 0.2)).toBe(1);
+    // Easing bends the path, not the end points: still one lift, still there.
+    expect(eased[0]).toMatchObject({ type: "Down", x: 0.5, y: 0.7 });
+    expect(eased.filter((e) => e.type === "Up")).toHaveLength(1);
+    expect(eased.at(-1)).toMatchObject({ type: "Up", x: 0.5, y: 0.2 });
 
-    // Ease-out: consecutive-sample travel shrinks toward the lift, so the release
-    // velocity decays to ~0. The last step is a small fraction of the first.
-    const ys = sent.map((e) => e.y);
-    const gaps = ys.slice(1).map((y, i) => Math.abs(y - ys[i]));
-    expect(gaps.at(-1)!).toBeLessThan(gaps[0]);
-    // Monotonic and in-bounds: every sample sits between the start and end point.
+    // Every interpolated sample sits on 1-(1-t)^3, past its linear counterpart;
+    // the train then repeats the end point as the unconditional pre-lift Move.
+    const easedMoves = eased.slice(1, -2);
+    expect(easedMoves).toHaveLength(EASED_PROGRESS.length);
+    easedMoves.forEach((move, i) => {
+      expect(move.y).toBeCloseTo(yAt(EASED_PROGRESS[i]), 5);
+      expect(move.x).toBeCloseTo(0.5, 12);
+    });
+    expect(eased.at(-2)).toMatchObject({ type: "Move", x: 0.5, y: 0.2 });
+
+    // Per-sample travel shrinks monotonically all the way into the lift, so the
+    // release velocity really decays to ~0.
+    const ys = eased.map((e) => e.y);
+    for (let i = 2; i < ys.length; i++) {
+      expect(ys[i - 1] - ys[i]).toBeLessThan(ys[i - 2] - ys[i - 1]);
+    }
+    // That landing is the curve arriving, not a stationary hold (which UIKit
+    // coalesces away, so the fling survives): the one stationary sample is the
+    // end-point repeat.
+    expect(trailingStationaryMoves(eased, 0.5, 0.2)).toBe(1);
+    // The ease-out never overshoots: every sample stays between the end points.
     expect(ys.every((y) => y >= 0.2 - 1e-9 && y <= 0.7 + 1e-9)).toBe(true);
+  });
+
+  it("leaves a swipe with momentum on the straight linear grid, by default and by name", async () => {
+    // The control for the ease-out above, run both ways round so the flag's
+    // polarity is pinned from both sides rather than only where it is set.
+    for (const momentum of [undefined, true]) {
+      const plain = await swipeTrain({ ...base, durationMs: 160, momentum });
+
+      const plainMoves = plain.slice(1, -2);
+      expect(plainMoves).toHaveLength(LINEAR_PROGRESS.length);
+      plainMoves.forEach((move, i) => {
+        expect(move.y).toBeCloseTo(yAt(LINEAR_PROGRESS[i]), 5);
+      });
+      // The pre-lift end-point repeat is unconditional, so it shows up here too.
+      expect(plain.at(-2)).toMatchObject({ type: "Move", x: 0.5, y: 0.2 });
+      expect(plain.at(-1)).toMatchObject({ type: "Up", x: 0.5, y: 0.2 });
+    }
   });
 });
 
