@@ -685,3 +685,62 @@ describe("runSnapshot cropOn", () => {
     expect(files.sort()).toEqual([`${r1.snapshotKey}.png`, `${r2.snapshotKey}.png`].sort());
   });
 });
+
+describe("runSnapshot capture scale", () => {
+  // These tests queue one-shot rejections. Reset the queue per test so an
+  // unconsumed one cannot leak into the next and fail it for the wrong reason.
+  beforeEach(() => {
+    vi.mocked(invokeOnDevice).mockReset();
+    vi.mocked(invokeOnDevice).mockImplementation(async () => ({ image: { hostPath: h.shotPath } }));
+  });
+
+  it("falls back to the default scale when a full-res frame cannot be streamed", async () => {
+    // Some Android emulator configurations reject a full-res frame with a
+    // framebuffer size mismatch. Without a fallback every snapshot step errors
+    // on those devices — including under --update-baselines, where there is
+    // nothing to compare against yet.
+    const scaled = path.join(tmpDir, "scaled.png");
+    await writeFakePng(scaled, 324, 727);
+    vi.mocked(invokeOnDevice).mockClear();
+    vi.mocked(invokeOnDevice).mockRejectedValueOnce(
+      new Error("Screenshot failed: wrong data size, expected 7853760 got 17627328.")
+    );
+    vi.mocked(invokeOnDevice).mockResolvedValueOnce({ image: { hostPath: scaled } });
+
+    const r = await runSnapshot(env, opts({ updateBaselines: true }));
+
+    expect(r.status).toBe("pass");
+    // The retry omits `scale`, leaving the server on the scale it can capture at.
+    expect(vi.mocked(invokeOnDevice).mock.calls).toEqual([
+      [env, "screenshot", { scale: 1.0, includeImageInContext: false }],
+      [env, "screenshot", { includeImageInContext: false }],
+    ]);
+    // The key follows the dimensions actually captured, so a fallback capture
+    // keys its own baseline instead of diffing against a full-res one.
+    expect(r.snapshotKey).toBe("home__ios-324x727");
+  });
+
+  it("surfaces the retry's error when the device is genuinely unreachable", async () => {
+    vi.mocked(invokeOnDevice).mockClear();
+    vi.mocked(invokeOnDevice).mockRejectedValueOnce(new Error("wrong data size"));
+    vi.mocked(invokeOnDevice).mockRejectedValueOnce(new Error("device not booted"));
+
+    await expect(runSnapshot(env, opts({ updateBaselines: true }))).rejects.toThrow(
+      "device not booted"
+    );
+    expect(vi.mocked(invokeOnDevice)).toHaveBeenCalledTimes(2);
+  });
+
+  it("captures at full resolution when the device can stream one", async () => {
+    vi.mocked(invokeOnDevice).mockClear();
+
+    const r = await runSnapshot(env, opts({ updateBaselines: true }));
+
+    expect(r.status).toBe("pass");
+    expect(vi.mocked(invokeOnDevice)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(invokeOnDevice)).toHaveBeenCalledWith(env, "screenshot", {
+      scale: 1.0,
+      includeImageInContext: false,
+    });
+  });
+});

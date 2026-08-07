@@ -204,10 +204,28 @@ export async function runSnapshot(
   // Full-resolution capture, not attached to any agent context — a baseline.
   // The screenshot tool already registers the capture, so `shot.image` is a
   // ready-made handle for the `current` artifact.
-  const shot = (await invokeOnDevice(env, "screenshot", {
-    scale: 1.0,
-    includeImageInContext: false,
-  })) as { image: ArtifactHandle };
+  //
+  // Full-res is preferred: it is the strictest comparison available. But some
+  // Android emulator configurations cannot stream a full-res frame — the
+  // simulator-server rejects it with a "wrong data size" framebuffer mismatch —
+  // so demanding one makes `snapshot` unusable on those devices, including
+  // under --update-baselines, where there is nothing to compare yet. Fall back
+  // to the server's default scale, which captures reliably; `screenshot-diff`
+  // resolves the same limitation the same way. The baseline key is built from
+  // the dimensions that came back, so a fallback capture keys its own baseline
+  // instead of being compared against a full-res one. If the device is
+  // genuinely unreachable the retry fails too, and its error is what surfaces.
+  let shot: { image: ArtifactHandle };
+  try {
+    shot = (await invokeOnDevice(env, "screenshot", {
+      scale: 1.0,
+      includeImageInContext: false,
+    })) as { image: ArtifactHandle };
+  } catch {
+    shot = (await invokeOnDevice(env, "screenshot", {
+      includeImageInContext: false,
+    })) as { image: ArtifactHandle };
+  }
 
   // The key stays on the FULL capture's dimensions even under cropOn: its job
   // is device-class identity (wrong-simulator/rotation detection), which
