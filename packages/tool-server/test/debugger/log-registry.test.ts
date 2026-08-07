@@ -87,7 +87,8 @@ describe("Log Registry (integration)", () => {
 
     const clusters = writer.getClusters();
     expect(clusters[0].sourceFile).toContain("screens/Home.tsx");
-    expect(clusters[0].sourceLine).toBe(55);
+    // CDP call frames are 0-based; sourceLine is the 1-based line an editor shows.
+    expect(clusters[0].sourceLine).toBe(56);
   });
 
   it("handles empty log state", () => {

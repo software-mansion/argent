@@ -95,15 +95,18 @@ Logs are written to a flat log file on disk. Use the **log-registry → grep** p
 
 One entry per line — fields (whitespace-separated, `|` delimiter before message)
 
-| Field         | Example                     | Notes                                               |
-| ------------- | --------------------------- | --------------------------------------------------- |
-| `[L:<id>]`    | `[L:42]`                    | Unique grep anchor                                  |
-| `<timestamp>` | `2026-03-17T14:30:00.000Z`  | ISO 8601                                            |
-| `<LEVEL>`     | `ERROR`, `WARN `, `LOG  `   | Uppercase, padded to 5 chars                        |
-| `<source>`    | `src/api/user.ts:42` or `-` | Relative path from source map; `-` if unavailable   |
-| `<message>`   | `Failed login attempt`      | Full message; embedded newlines replaced with space |
+| Field         | Example                     | Notes                                                                                                                  |
+| ------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `[L:<id>]`    | `[L:42]`                    | Unique grep anchor                                                                                                     |
+| `<timestamp>` | `2026-03-17T14:30:00.000Z`  | ISO 8601                                                                                                               |
+| `<LEVEL>`     | `ERROR`, `WARN `, `LOG  `   | Uppercase, padded to 5 chars                                                                                           |
+| `<source>`    | `src/api/user.ts:42` or `-` | Original file and 1-based line of the app code that logged; `-` when the log came entirely from framework/runtime code |
+| `<message>`   | `Failed login attempt`      | Full message; embedded newlines replaced with space                                                                    |
 
-Source attribution (file + line) is also available in `clusters` returned by `debugger-log-registry`.
+Source attribution (file + line) is also available in `clusters` returned by `debugger-log-registry`;
+`sourceFile` and `sourceLine` are always present together. Attribution points at the **app** frame
+that made the call, not the console/LogBox plumbing it passes through, so `grep -F 'src/api/user.ts:'`
+is a useful search axis.
 
 Log files and messages can be large - **Always scope your search**, treat the file like a database, not a document.
 

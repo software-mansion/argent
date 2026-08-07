@@ -106,7 +106,8 @@ describe("LogFileWriter", () => {
 
     const clusters = writer.getClusters();
     expect(clusters[0].sourceFile).toBe("src/api/user.ts");
-    expect(clusters[0].sourceLine).toBe(42);
+    // CDP call frames are 0-based; sourceLine is the 1-based line an editor shows.
+    expect(clusters[0].sourceLine).toBe(43);
   });
 
   it("readAll() returns all written entries", () => {
@@ -200,7 +201,7 @@ describe("LogFileWriter", () => {
     // But source attribution is still available via in-memory clusters
     const clusters = writer.getClusters();
     expect(clusters[0].sourceFile).toBe("src/App.tsx");
-    expect(clusters[0].sourceLine).toBe(10);
+    expect(clusters[0].sourceLine).toBe(11);
   });
 
   it("collapses newlines in message to spaces in flat file", () => {
