@@ -50,7 +50,7 @@ export const selectorFieldsSchema = z
       })
       .optional()
       .describe(
-        "Case-insensitive substring of the element's visible label or value. Compared on FOLDED text: a non-breaking space matches a plain one, a run of spaces or tabs matches a single space, and an LTR bidi wrapper around otherwise left-to-right text is ignored, so you can type what you see. Characters that change the rendering are NOT folded (bidi controls that reorder, a soft hyphen, emoji ZWJ/variation selectors, and a line break, which no number of spaces matches). A leading or trailing space is significant and constrains the match; a value that is only whitespace or invisible characters matches nothing."
+        "Case-insensitive substring of the element's visible label or value. Compared on FOLDED text: a non-breaking space matches a plain one, a run of spaces or tabs matches a single space, and an LTR bidi wrapper around otherwise left-to-right text is ignored, so you can type what you see. Characters that change the rendering are NOT folded (bidi controls that reorder, a soft hyphen, emoji ZWJ/variation selectors, and a line break, which no number of spaces matches). A leading or trailing space is significant and constrains the match; a value with no visible character at all is rejected."
       ),
     identifier: z
       .string()
@@ -64,7 +64,7 @@ export const selectorFieldsSchema = z
       .min(1)
       .optional()
       .describe(
-        "Case-insensitive substring of the element's role (e.g. AXButton, button, TextView). Folded like `text`; a value that is only whitespace or invisible characters matches nothing."
+        "Case-insensitive substring of the element's role (e.g. AXButton, button, TextView). Folded like `text`; a value of only invisible characters folds away to nothing and so matches nothing, rather than everything."
       ),
   })
   .strict();
@@ -666,38 +666,46 @@ export function ignorableTextNote(text: string): string | undefined {
 
 export function includesCI(haystack: string | undefined, needle: string): boolean {
   if (!haystack) return false;
-  // A needle that folds away to nothing is not a weak constraint, it is NO
-  // constraint: `"".includes()` is true of every string, so `{ role: " " }`
-  // matched every element on the screen and the check could never fail — the
-  // exact defect class the `hidden` evidence gate exists to prevent, arriving
-  // through a selector field instead. `text` was already covered by
-  // hasVisibleText; `role` and `identifier` were not, so refuse it here where
-  // every literal comparison passes through.
-  //
-  // The emptiness test is the TRIMMED fold, deliberately: a needle of pure
-  // whitespace folds loosely to " ", which is not empty and would then match
-  // every label containing a space — the very gate this is.
-  if (foldText(needle) === "") return false;
   // Both sides UNTRIMMED, so a boundary space in the needle survives to
   // constrain the match. See {@link foldLoose}. Folded as a PAIR so the
   // conditional LTR strip is decided once and a needle copied out of the label
   // stays a substring of it — see {@link foldPairLoose}.
   const [hay, ndl] = foldPairLoose(haystack, needle);
+  // A needle that folds away to LITERALLY nothing is not a weak constraint, it
+  // is NO constraint: `"".includes()` is true of every string, so the check
+  // could never fail — the defect class the `hidden` evidence gate exists to
+  // prevent, arriving through a selector field instead.
+  //
+  // Only an INVISIBLE-only needle does that, and only since this fold existed:
+  // `{ role: "​" }` folds to "" and matches every element on screen, where
+  // at base it was a plain lowercased `String.includes` and matched none.
+  // `text` is already covered by hasVisibleText's refinement; `role` and
+  // `identifier` are not, so refuse it here, where every literal comparison
+  // passes through.
+  //
+  // A WHITESPACE-only needle is a different thing and is deliberately allowed:
+  // it folds loosely to " ", which is not empty, so it constrains the match to
+  // labels containing a space exactly as it did at base. Testing the trimmed
+  // fold here instead rejected it, and `contains: " "` then failed against a
+  // label plainly showing one — a message that reads as a tool bug.
+  if (ndl === "") return false;
   return hay.includes(ndl);
 }
 
 export function equalsCI(actual: string | undefined, expected: string): boolean {
-  // Same rule as includesCI/identifierMatches: an expected that folds away to
-  // nothing is NO constraint, not an exact one, so it must not equal a textless
-  // element. Without this, `equalsCI("", " ")` is true — a `text`/`equals`
-  // check whose expected is whitespace- or invisible-only (a bare `" "`, a
-  // bidi pair, a ZWSP that survived a copy-paste) passed against every element
-  // with no text: the silently-wrong green this module rates worse than a flake.
-  if (foldText(expected) === "") return false;
   // Folded as a PAIR, for the same reason includesCI is: the two comparators
   // must agree about which controls survive, or a string could equal a label
   // that does not contain it. See {@link foldPairLoose}.
   const [got, wanted] = foldPairLoose(actual ?? "", expected);
+  // Same rule as includesCI: an expectation that folds away to LITERALLY
+  // nothing is NO constraint, not an exact one (a bidi pair, a ZWSP that
+  // survived a copy-paste), so it must not equal every textless element.
+  if (wanted === "") return false;
+  // Nothing survives the TRIM, so the expectation is pure whitespace — odd,
+  // but a real constraint, and one the trim would otherwise erase into the
+  // case above. Compare untrimmed, which is the only reading that can still
+  // tell a label of one space from an element with no text at all.
+  if (wanted.trim() === "") return got === wanted;
   return got.trim() === wanted.trim();
 }
 

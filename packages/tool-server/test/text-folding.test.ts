@@ -225,11 +225,14 @@ describe("literal comparisons fold both sides", () => {
       expect(foldText("  Save   Changes \n")).toBe("save changes");
     });
 
-    it("still refuses a needle that is nothing BUT whitespace", () => {
-      // Loosely folded, " " is not empty — without the trimmed emptiness gate
-      // it would match every label containing a space.
-      expect(includesCI("Save Changes", " ")).toBe(false);
-      expect(includesCI("Save Changes", "\t\n ")).toBe(false);
+    it("treats a needle that is nothing BUT whitespace as a real constraint", () => {
+      // Loosely folded, " " is not empty, so it constrains the match to labels
+      // that actually show a space — which is what it did before folding
+      // existed. Testing the TRIMMED fold here instead rejected it outright,
+      // and `contains: " "` then failed against a label plainly showing one.
+      expect(includesCI("Save Changes", " ")).toBe(true);
+      expect(includesCI("SaveChanges", " ")).toBe(false);
+      expect(includesCI("Save Changes", "\t\n ")).toBe(true); // the run folds to " "
     });
   });
 
@@ -512,31 +515,59 @@ describe("confusableTextNote", () => {
 });
 
 describe("a needle that folds away to nothing", () => {
-  // Folding turned a non-empty selector value into an empty one, and an empty
-  // needle is not a weak constraint — it is NO constraint. `{ role: " " }`
-  // matched every element on a real Bluesky screen and the check could never
-  // fail: the same unfalsifiable-gate defect the `hidden` evidence rule exists
-  // to prevent, arriving through a selector field instead.
-  const BLANK_NEEDLES = [" ", " ", "​", "‪‬", "\t\n "];
+  // Folding turned a non-empty selector value into an EMPTY one, and an empty
+  // needle is not a weak constraint — it is NO constraint: `"".includes()` is
+  // true of every string, so the check could never fail. That is the same
+  // unfalsifiable-gate defect the `hidden` evidence rule exists to prevent,
+  // arriving through a selector field instead.
+  //
+  // Only an INVISIBLE-only value does that, and only because folding exists:
+  // at base these were plain lowercased comparisons, and a ZWSP role needle
+  // matched nothing. A whitespace-only value is a different thing — it folds
+  // loosely to " ", which is not empty — so it lives in WHITESPACE_NEEDLES
+  // below and constrains the match instead of waving it through.
+  const BLANK_NEEDLES = ["​", "‪‬", "﻿"];
+  // Whitespace-only: a real constraint, not an absent one.
+  const WHITESPACE_NEEDLES = [" ", " ", "\t\n "];
 
   it.each(BLANK_NEEDLES)("includesCI(%j) matches nothing", (needle) => {
     expect(includesCI("Button", needle)).toBe(false);
     expect(includesCI("anything at all", needle)).toBe(false);
   });
 
-  it.each(BLANK_NEEDLES)("identifierMatches(%j) matches nothing", (needle) => {
-    expect(identifierMatches("save-button", needle)).toBe(false);
-    expect(identifierMatches("com.example.app:id/save-button", needle)).toBe(false);
-  });
+  it.each([...BLANK_NEEDLES, ...WHITESPACE_NEEDLES])(
+    "identifierMatches(%j) matches nothing",
+    (needle) => {
+      expect(identifierMatches("save-button", needle)).toBe(false);
+      expect(identifierMatches("com.example.app:id/save-button", needle)).toBe(false);
+    }
+  );
 
   it.each(BLANK_NEEDLES)("equalsCI(_, %j) equals nothing — not even a textless node", (needle) => {
     // Same guard, extended to the exact comparator: an expected that folds
     // away is NO constraint, so a `text`/`equals` check against a textless
     // element (whose folded text is "") must NOT pass. Without the guard
-    // `equalsCI("", " ") === true` — a silently-passing assertion.
+    // `equalsCI("", ZWSP) === true` — a silently-passing assertion.
     expect(equalsCI("", needle)).toBe(false);
     expect(equalsCI(undefined, needle)).toBe(false);
     expect(equalsCI("Button", needle)).toBe(false);
+  });
+
+  it.each(WHITESPACE_NEEDLES)("keeps %j answerable rather than unsatisfiable", (needle) => {
+    // Testing the TRIMMED fold swept these in with the blank ones and made them
+    // match nothing at all — so a label and an expectation that are
+    // byte-identical were reported as a mismatch, with confusableTextNote
+    // standing down at its `actual === expected` guard and nothing left to
+    // explain it. Compared untrimmed, one space is still distinguishable from
+    // no text at all.
+    expect(equalsCI(needle, needle)).toBe(true);
+    expect(equalsCI(" ", needle)).toBe(true);
+    expect(equalsCI("", needle)).toBe(false);
+    expect(equalsCI(undefined, needle)).toBe(false);
+    expect(equalsCI("Button", needle)).toBe(false);
+    // As a substring it means "shows a space", which is what it meant at base.
+    expect(includesCI("Save Changes", needle)).toBe(true);
+    expect(includesCI("SaveChanges", needle)).toBe(false);
   });
 
   it("still matches a real value, so the guard is not over-broad", () => {

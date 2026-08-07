@@ -76,7 +76,7 @@ Selectors resolve against the **full native hierarchy** (iOS: the UIView tree; A
 
 What is deliberately **not** folded is anything that changes what is drawn, because folding it would let a check pass against a screen that reads differently: bidi controls that reorder text (`5` + `U+200F` + `-3` renders `53-`), a soft hyphen (it paints at a line break), the emoji joiners and variation selectors that build one glyph out of several, and a **line break** — a run of spaces or tabs collapses to one space, but no number of spaces matches a label the screen renders on two lines. `id` is never folded at all — it is a machine key, so spell it exactly. And `matches` (regex) is never folded either: a pattern carries its own precision, so it must account for such characters itself.
 
-Two consequences worth knowing. A leading or trailing space in a `contains` needle is **significant** and works as a word boundary. And a selector value made only of whitespace or invisible characters matches **nothing** rather than everything — if you need "any element", say `any: true`.
+Two consequences worth knowing. A leading or trailing space in a `contains` needle is **significant** and works as a word boundary. And a selector value made only of invisible characters folds away to nothing, so it matches **nothing** rather than everything — if you need "any element", say `any: true`.
 
 When a check fails against two strings that look identical, the failure reason names the differing code points; when it fails against a typographic variant (a rendered `…` against three typed dots), it names that too. Read it rather than guessing.
 
