@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import type { Registry } from "@argent/registry";
 import {
-  IDLE_DEFAULT_MIN_STABLE_MS,
+  IDLE_DEFAULT_STABLE_FOR_MS,
   IDLE_DEFAULT_TIMEOUT_MS,
   IDLE_MIN_STILL_INTERVALS,
   IDLE_POLL_MS,
@@ -78,7 +78,7 @@ describe("create-flow SKILL.md scope snippets", () => {
   // a default that moves takes the sentence describing it with it.
   it("the skill's idle defaults and settle cost are the ones the parser enforces", () => {
     const skill = readFileSync(SKILL, "utf8");
-    expect(skill).toContain(`default ${IDLE_DEFAULT_MIN_STABLE_MS}`);
+    expect(skill).toContain(`default ${IDLE_DEFAULT_STABLE_FOR_MS}`);
     expect(skill).toContain(`default ${IDLE_DEFAULT_TIMEOUT_MS}`);
     expect(skill).toContain(`${IDLE_SETTLE_OVERHEAD_MS}ms a settle costs`);
     expect(skill).toContain(`${IDLE_POLL_MS}ms polls`);
@@ -93,7 +93,7 @@ describe("create-flow SKILL.md scope snippets", () => {
     // The skill tells an author the wait has to contain the hold plus the
     // settle. Take it at its word and check the boundary both ways — a parser
     // that demanded a millisecond more would make the documented sum a lie.
-    const smallest = IDLE_DEFAULT_MIN_STABLE_MS + IDLE_SETTLE_OVERHEAD_MS;
+    const smallest = IDLE_DEFAULT_STABLE_FOR_MS + IDLE_SETTLE_OVERHEAD_MS;
     expect(() =>
       parseFlow(`steps:\n  - await: { idle: true, timeout: ${smallest} }\n`)
     ).not.toThrow();

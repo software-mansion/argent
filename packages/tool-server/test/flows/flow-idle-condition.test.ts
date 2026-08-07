@@ -31,9 +31,9 @@ describe("await { idle }", () => {
   });
 
   it("carries the optional hold and timeout", () => {
-    expect(expectRoundTrip(`  - await: { idle: true, minStableMs: 400, timeout: 9000 }\n`)).toEqual(
-      [{ kind: "idle", minStableMs: 400, timeout: 9000 }]
-    );
+    expect(expectRoundTrip(`  - await: { idle: true, stableFor: 400, timeout: 9000 }\n`)).toEqual([
+      { kind: "idle", stableFor: 400, timeout: 9000 },
+    ]);
   });
 
   it("has no assert form — waiting is the whole point of the check", () => {
@@ -44,23 +44,23 @@ describe("await { idle }", () => {
     expect(() => parseSteps(`  - await: { idle: false }\n`)).toThrow(/idle takes only/);
   });
 
-  it("bounds minStableMs", () => {
-    expect(() => parseSteps(`  - await: { idle: true, minStableMs: -1 }\n`)).toThrow(
-      /idle.minStableMs/
+  it("bounds stableFor", () => {
+    expect(() => parseSteps(`  - await: { idle: true, stableFor: -1 }\n`)).toThrow(
+      /idle.stableFor/
     );
-    expect(() => parseSteps(`  - await: { idle: true, minStableMs: 1.5 }\n`)).toThrow(
-      /idle.minStableMs/
+    expect(() => parseSteps(`  - await: { idle: true, stableFor: 1.5 }\n`)).toThrow(
+      /idle.stableFor/
     );
     // And from above, so a hold written in the wrong unit (seconds, a pasted
     // timestamp) is rejected as a number rather than becoming a gate no run
     // can pass. The ceiling is ten minutes; a `timeout` wide enough to contain
     // it is what the case below checks separately.
-    expect(() => parseSteps(`  - await: { idle: true, minStableMs: 600001 }\n`)).toThrow(
+    expect(() => parseSteps(`  - await: { idle: true, stableFor: 600001 }\n`)).toThrow(
       /between 0 and 600000/
     );
-    expect(parseSteps(`  - await: { idle: true, minStableMs: 600000, timeout: 600600 }\n`)).toEqual(
-      [{ kind: "idle", minStableMs: 600000, timeout: 600600 }]
-    );
+    expect(parseSteps(`  - await: { idle: true, stableFor: 600000, timeout: 600600 }\n`)).toEqual([
+      { kind: "idle", stableFor: 600000, timeout: 600600 },
+    ]);
   });
 
   // A wait that cannot contain the settle it asks for is a gate that fails on
@@ -70,29 +70,29 @@ describe("await { idle }", () => {
   // spanning two 200ms polls, plus the budget the closing round has to start
   // with.
   it("rejects a wait that could never contain the settle it asks for", () => {
-    expect(() =>
-      parseSteps(`  - await: { idle: true, timeout: 500, minStableMs: 1000 }\n`)
-    ).toThrow(/idle needs a timeout of at least 1600ms to hold still for 1000ms/);
+    expect(() => parseSteps(`  - await: { idle: true, timeout: 500, stableFor: 1000 }\n`)).toThrow(
+      /idle needs a timeout of at least 1600ms to hold still for 1000ms/
+    );
     // With no explicit hold the DEFAULT is what has to fit — the spelling that
-    // slipped through, since leaving `minStableMs` out was the way past the
+    // slipped through, since leaving `stableFor` out was the way past the
     // check that only looked at a written-out one.
     expect(() => parseSteps(`  - await: { idle: true, timeout: 100 }\n`)).toThrow(
       /idle needs a timeout of at least 850ms to hold still for the default 250ms/
     );
     // Which is the same step as writing the default out, so it is rejected the
     // same way.
-    expect(() => parseSteps(`  - await: { idle: true, timeout: 100, minStableMs: 250 }\n`)).toThrow(
+    expect(() => parseSteps(`  - await: { idle: true, timeout: 100, stableFor: 250 }\n`)).toThrow(
       /idle needs a timeout of at least 850ms/
     );
     // With no explicit timeout the default is what the hold has to fit inside.
-    expect(() => parseSteps(`  - await: { idle: true, minStableMs: 9000 }\n`)).toThrow(
+    expect(() => parseSteps(`  - await: { idle: true, stableFor: 9000 }\n`)).toThrow(
       /idle needs a timeout of at least 9600ms/
     );
     // The boundary itself is legal on both sides.
-    expect(parseSteps(`  - await: { idle: true, timeout: 900, minStableMs: 300 }\n`)).toEqual([
-      { kind: "idle", timeout: 900, minStableMs: 300 },
+    expect(parseSteps(`  - await: { idle: true, timeout: 900, stableFor: 300 }\n`)).toEqual([
+      { kind: "idle", timeout: 900, stableFor: 300 },
     ]);
-    expect(() => parseSteps(`  - await: { idle: true, timeout: 899, minStableMs: 300 }\n`)).toThrow(
+    expect(() => parseSteps(`  - await: { idle: true, timeout: 899, stableFor: 300 }\n`)).toThrow(
       /idle needs a timeout of at least 900ms/
     );
   });
@@ -113,7 +113,7 @@ describe("await { idle }", () => {
   // the timeout is.
   it("rejects a timeout too small to settle in without inventing a range", () => {
     const parse = (): FlowStep[] =>
-      parseSteps(`  - await: { idle: true, timeout: 0.5, minStableMs: 0 }\n`);
+      parseSteps(`  - await: { idle: true, timeout: 0.5, stableFor: 0 }\n`);
     expect(parse).toThrow(/idle needs a timeout of at least 600ms/);
     expect(parse).not.toThrow(/between 0 and -/);
   });

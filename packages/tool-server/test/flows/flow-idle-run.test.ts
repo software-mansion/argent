@@ -169,7 +169,7 @@ describe("await: { idle }", () => {
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, minStableMs: 0 }
+  - await: { idle: true, stableFor: 0 }
 `
     );
     const r = await run("ready");
@@ -180,7 +180,7 @@ steps:
   });
 
   // Stillness is a property of an interval, and one interval can alias (see
-  // the reversing-animation case below), so `minStableMs: 0` still means "the
+  // the reversing-animation case below), so `stableFor: 0` still means "the
   // first two agreeing intervals" — three reads — not "the first read".
   it("never settles on one read or one interval, even with no hold requested", async () => {
     let reads = 0;
@@ -192,7 +192,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, minStableMs: 0 }
+  - await: { idle: true, stableFor: 0 }
 `
     );
     expect((await run("ready")).ok).toBe(true);
@@ -204,7 +204,7 @@ steps:
     expect(captureFirstFlags).toEqual([true, false, false]);
   });
 
-  // `minStableMs` is a clock, not a label: a screen that is still from the
+  // `stableFor` is a clock, not a label: a screen that is still from the
   // first read must still be held for it before the step returns. Without that
   // the option means nothing, since three reads take about 400ms whatever it
   // is set to.
@@ -213,7 +213,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 2500, minStableMs: 800 }
+  - await: { idle: true, timeout: 2500, stableFor: 800 }
 `
     );
     const started = Date.now();
@@ -232,7 +232,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 900, minStableMs: 300 }
+  - await: { idle: true, timeout: 900, stableFor: 300 }
 `
     );
     const r = await run("ready");
@@ -255,7 +255,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 900, minStableMs: 300 }
+  - await: { idle: true, timeout: 900, stableFor: 300 }
   - echo: reached
 `
     );
@@ -276,7 +276,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 600, minStableMs: 0 }
+  - await: { idle: true, timeout: 600, stableFor: 0 }
 `
     );
     const r = await run("ready");
@@ -301,7 +301,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, minStableMs: 0 }
+  - await: { idle: true, stableFor: 0 }
   - echo: reached
 `
     );
@@ -340,7 +340,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, minStableMs: 0 }
+  - await: { idle: true, stableFor: 0 }
 `
     );
     const step = (await run("ready")).steps.at(-1)!;
@@ -354,7 +354,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, minStableMs: 0 }
+  - await: { idle: true, stableFor: 0 }
 `
     );
     expect((await run("ready")).steps.at(-1)!.warning).toBeUndefined();
@@ -369,7 +369,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 2000, minStableMs: 0 }
+  - await: { idle: true, timeout: 2000, stableFor: 0 }
 `
     );
     const r = await run("ready");
@@ -401,7 +401,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 1500, minStableMs: 0 }
+  - await: { idle: true, timeout: 1500, stableFor: 0 }
 `
     );
     const r = await run("ready");
@@ -420,7 +420,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 800, minStableMs: 0 }
+  - await: { idle: true, timeout: 800, stableFor: 0 }
 `
     );
     const started = Date.now();
@@ -450,7 +450,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 2500, minStableMs: 0 }
+  - await: { idle: true, timeout: 2500, stableFor: 0 }
   - echo: reached
 `
     );
@@ -502,7 +502,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 1200, minStableMs: 0 }
+  - await: { idle: true, timeout: 1200, stableFor: 0 }
 `
     );
     const step = (await run("ready")).steps.at(-1)!;
@@ -517,7 +517,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 900, minStableMs: 0 }
+  - await: { idle: true, timeout: 900, stableFor: 0 }
 `
     );
     const r = await run("ready");
@@ -536,7 +536,7 @@ steps:
 
   // The tree-only report is a claim that the HIERARCHY settled, so it owes the
   // same hold every other settle does. Every case that reaches it elsewhere
-  // runs with `minStableMs: 0`, where the hold term is vacuous — drop it and
+  // runs with `stableFor: 0`, where the hold term is vacuous — drop it and
   // the suite stays green while a tree that had only just stopped moving is
   // reported as having settled.
   it("does not report a tree-only settle when the hold was never served", async () => {
@@ -551,7 +551,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 1400, minStableMs: 800 }
+  - await: { idle: true, timeout: 1400, stableFor: 800 }
 `
     );
     const step = (await run("ready")).steps.at(-1)!;
@@ -581,7 +581,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, minStableMs: 0 }
+  - await: { idle: true, stableFor: 0 }
 `
     );
     const step = (await run("ready")).steps.at(-1)!;
@@ -604,7 +604,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, minStableMs: 0 }
+  - await: { idle: true, stableFor: 0 }
 `
     );
     const step = (await run("ready")).steps.at(-1)!;
@@ -670,7 +670,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 900, minStableMs: 0 }
+  - await: { idle: true, timeout: 900, stableFor: 0 }
   - echo: unreachable
 `
     );
@@ -699,7 +699,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, minStableMs: 0 }
+  - await: { idle: true, stableFor: 0 }
 `
     );
     const step = (await run("ready")).steps.at(-1)!;
@@ -732,7 +732,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 900, minStableMs: 0 }
+  - await: { idle: true, timeout: 900, stableFor: 0 }
   - echo: reached
 `
     );
@@ -761,7 +761,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 900, minStableMs: 0 }
+  - await: { idle: true, timeout: 900, stableFor: 0 }
 `
     );
     const step = (await run("ready")).steps.at(-1)!;
@@ -782,7 +782,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, minStableMs: 0 }
+  - await: { idle: true, stableFor: 0 }
 `
     );
     const step = (await run("ready")).steps.at(-1)!;
@@ -829,7 +829,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 700, minStableMs: 0 }
+  - await: { idle: true, timeout: 700, stableFor: 0 }
 `
     );
     const r = await run("ready");
@@ -857,7 +857,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 2500, minStableMs: 0 }
+  - await: { idle: true, timeout: 2500, stableFor: 0 }
 `
     );
     const r = await run("ready");
@@ -877,7 +877,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 2500, minStableMs: 0 }
+  - await: { idle: true, timeout: 2500, stableFor: 0 }
 `
     );
     expect((await run("ready")).steps.at(-1)!.warning).toContain("never held still");
@@ -902,7 +902,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 2000, minStableMs: 0 }
+  - await: { idle: true, timeout: 2000, stableFor: 0 }
 `
     );
     const r = await run("ready");
@@ -919,7 +919,7 @@ steps:
       "ready",
       `executionPrerequisite: ""
 steps:
-  - await: { idle: true, timeout: 1600, minStableMs: 900 }
+  - await: { idle: true, timeout: 1600, stableFor: 900 }
 `
     );
     const r = await run("ready");
