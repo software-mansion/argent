@@ -104,7 +104,9 @@ describe("foldText", () => {
     expect(includesCI("Line one\nLine two", "one Line")).toBe(false);
     // A tab is horizontal, so it still folds.
     expect(equalsCI("a\tb", "a b")).toBe(true);
-    // As do the other line-breaking whitespace characters.
+    // As does U+2028 LINE SEPARATOR. U+0085 NEXT LINE gets there by a different
+    // route \u2014 JS `\s` does not match it, so it is never collapsed at all \u2014 but
+    // lands on the same answer.
     expect(equalsCI("Sign\u2028in", "Sign in")).toBe(false);
     expect(equalsCI("Sign\u0085in", "Sign in")).toBe(false);
   });

@@ -229,8 +229,12 @@ const SPACE_LIKE = /[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]/gu;
  * {@link foldLoose} would make the two disagree, and would break the boundary
  * space a `contains` needle is entitled to (`contains: "Changes "` against a
  * label ending `Changes\n`).
+ *
+ * U+0085 NEXT LINE is absent because JS `\s` does not match it, so it never
+ * reaches the collapse — which lands on the same conservative answer anyway: it
+ * survives folding whole, and a label carrying one equals no label without it.
  */
-const LINE_BREAK = /[\n\r\v\f\u0085\u2028\u2029]/;
+const LINE_BREAK = /[\n\r\v\f\u2028\u2029]/;
 
 /**
  * Invisible formatting that cannot change a glyph or its position in ANY
@@ -446,6 +450,8 @@ function isSequenceBuilding(ch: string): boolean {
 
 /** The directional controls: no glyph of their own, but they REORDER text. */
 const DIRECTIONAL = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
+/** {@link DIRECTIONAL}, global \u2014 for {@link quoteScreenText}'s replace. */
+const DIRECTIONAL_G = new RegExp(DIRECTIONAL.source, "gu");
 
 /**
  * No glyph of their own, but they change which glyphs are DRAWN \u2014 the two
@@ -463,8 +469,6 @@ const DIRECTIONAL = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
  * copy-paste.
  */
 const RENDERING_AFFECTING = /[\u00ad\u180e]/u;
-/** {@link DIRECTIONAL}, global — for {@link quoteScreenText}'s replace. */
-const DIRECTIONAL_G = new RegExp(DIRECTIONAL.source, "gu");
 
 /**
  * Every default-ignorable code point EXCEPT the sequence-building ones — the
