@@ -29,7 +29,7 @@ export const flowInsertEchoTool: ToolDefinition<
   },
   description: `Record an echo step in the flow named by \`name\` + \`project_root\`. Echo steps print a message when the flow is replayed — useful as labels between tool calls.
 Use when you want to annotate a recorded flow with a human-readable label or checkpoint message.
-Returns { message, stepCount, savedTo } - \`stepCount\` is how many steps the flow now has, and \`savedTo\` is where the YAML landed: a host path, or, against a remote client, the directive that has the client write it (the only field naming the destination in that mode). The flow's full YAML is deliberately NOT returned per step; read it back from \`flow-finish-recording\`. Fails if that flow has no recording in progress.`,
+Returns { message, stepCount, savedTo }. Fails if that flow has no recording in progress.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {
