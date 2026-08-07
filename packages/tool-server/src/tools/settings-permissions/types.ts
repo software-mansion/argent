@@ -40,12 +40,29 @@ export interface SettingsPermissionsResult {
    */
   applied: string[];
   /**
-   * Android only: mapped `android.permission.*` entries the package manager
-   * rejected (typically not declared in the app's manifest, or gated by the
-   * device's API level). Present only when at least one other mapped
-   * permission succeeded — if all of them fail, the tool errors instead.
+   * Android only: mapped `android.permission.*` entries that did not take
+   * effect — typically not declared in the app's manifest, or not a
+   * runtime-changeable permission on this device. Present only when at least
+   * one other mapped permission succeeded.
+   *
+   * On Android these are established by reading the package manager's own state
+   * back, not by trusting the command's exit status: recent Android accepts a
+   * request for a permission an app never declared and does nothing, so an exit
+   * code alone would report it as applied.
    */
   skipped?: string[];
+  /**
+   * Android only: entries reported in `applied` that could NOT be confirmed
+   * against the package manager's state — an older device, an unfamiliar dump
+   * layout, or a read that failed. They are still listed in `applied`, because
+   * the command itself reported success and refusing to believe it would break
+   * every device whose state we cannot read; this field exists so the caller can
+   * tell "confirmed" from "taken on trust".
+   *
+   * iOS never sets this: its permission commands fail loudly, so there is no
+   * equivalent silent no-op to guard against.
+   */
+  unverified?: string[];
 }
 
 export type SettingsPermissionsServices = Record<string, never>;
