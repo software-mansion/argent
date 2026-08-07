@@ -1,7 +1,7 @@
-import { resolve as resolvePath } from "node:path";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { vegaDevice } from "../../../utils/vega-cli";
+import { assertInstallableArtifact } from "../validate-artifact";
 import type { ReinstallAppParams, ReinstallAppResult, ReinstallAppServices } from "../types";
 
 /**
@@ -15,7 +15,7 @@ export const vegaImpl: PlatformImpl<ReinstallAppServices, ReinstallAppParams, Re
     requires: ["vega"],
     handler: async (_services, params) => {
       const { udid, bundleId, appPath } = params;
-      const absolute = resolvePath(appPath);
+      const absolute = await assertInstallableArtifact(appPath, "vega");
 
       await vegaDevice(udid, ["uninstall-app", "-a", bundleId], { timeoutMs: 60_000 }).catch(
         () => {}

@@ -49,7 +49,7 @@ export const reinstallAppTool: ToolDefinition<Params, ReinstallAppResult> = {
   },
   description: `Install or reinstall an app on the device. The previous installation (if any) is uninstalled first so app data and runtime permissions are cleared.
 Use for a full reinstall after rebuilding, or to start from a clean app state.
-Returns { reinstalled, bundleId }. Fails if the app path does not exist or the package does not match the platform (.app for iOS, .apk for Android, .vpkg for Vega).`,
+Returns { reinstalled, bundleId }. The artifact is checked before anything is uninstalled, so a wrong path leaves the current installation in place: fails if the app path does not exist or does not match the platform (.app bundle directory for iOS, .apk file for Android, .vpkg file for Vega). A device can still reject a well-formed artifact at install time (wrong ABI, minimum OS version, signature mismatch), and in that case the previous installation is already gone.`,
   zodSchema,
   capability,
   fileInputs: [{ target: "appPath", path: "${appPath}", kind: "tar-upload" }],
