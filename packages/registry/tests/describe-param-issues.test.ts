@@ -170,6 +170,38 @@ describe("describeParamIssues", () => {
     expect(msg.match(/expected "a"/g)?.length).toBe(1);
   });
 
+  it("caps a union's enumerated branches at 12 and SIGNALS the cut", () => {
+    // A union branch that is an ARRAY reports one issue per element, so the
+    // branch-issue count follows the caller's input rather than the schema.
+    // Both the enumeration and the work spent building it have to stop.
+    const schema = z.object({
+      button: z.union([z.enum(["up"]), z.array(z.enum(["up"]))]),
+    });
+    const value = { button: Array.from({ length: 40 }, (_, i) => `bad-${i}`) };
+    const msg = describeParamIssues(issuesOf(schema, value), value);
+    // Each element's reason is distinct (zod qualifies it by index), so 41
+    // alternatives are available — the scalar branch's own reason plus one per
+    // element — and exactly 12 must be printed.
+    expect(msg.match(/; or /g)?.length).toBe(12); // 12 alternatives + the "; or …"
+    expect(msg).toContain("; or ….");
+    expect(msg).toContain("button.0:");
+    expect(msg).toContain("button.10:");
+    expect(msg).not.toContain("button.11:");
+  });
+
+  it("does not truncate a union that fits, and adds no ellipsis to it", () => {
+    // The boundary the cap above is measured against: 12 alternatives render in
+    // full, so the ellipsis is evidence of a cut and never decoration.
+    const schema = z.object({
+      button: z.union([z.enum(["up"]), z.array(z.enum(["up"]))]),
+    });
+    const value = { button: Array.from({ length: 11 }, (_, i) => `bad-${i}`) };
+    const msg = describeParamIssues(issuesOf(schema, value), value);
+    expect(msg).toContain("button.10:"); // the 12th and last alternative
+    expect(msg).not.toContain("; or …");
+    expect(msg.match(/; or /g)?.length).toBe(11); // 12 alternatives, 11 joiners
+  });
+
   it("still reports an OMITTED union field as missing, not as a branch list", () => {
     const schema = z.object({ button: z.union([z.enum(["up"]), z.array(z.enum(["up"]))]) });
     const msg = describeParamIssues(issuesOf(schema, {}), {});

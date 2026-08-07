@@ -478,6 +478,15 @@ function valueAtPath(root: unknown, path: readonly PropertyKey[]): unknown {
 }
 
 /**
+ * How many distinct branch reasons a union parameter's message enumerates
+ * before it stops and says so. A registered union has a handful of branches, so
+ * this is not a limit any well-formed call reaches; it bounds the pathological
+ * one, where the branch is an array and the issue count follows the caller's
+ * input rather than the schema.
+ */
+const MAX_UNION_ALTERNATIVES = 12;
+
+/**
  * A schema failure as one sentence per bad parameter, instead of Zod's raw
  * issue JSON.
  *
@@ -549,6 +558,17 @@ export function describeParamIssues(
     if (issue.code === "invalid_union") {
       const branches = (issue as { errors?: readonly (readonly ZodIssue[])[] }).errors ?? [];
       const alternatives: string[] = [];
+      // A `Set` for the seen-check, and a hard cap on what is collected. The
+      // branch issues are CALLER-sized, not schema-sized: a union whose branch
+      // is an array reports one issue per element (`tv-remote`'s `button` takes
+      // a list of keys, and zod parses every element before `.max()` fires), so
+      // a client can hand this arm an arbitrarily long list. A linear
+      // `includes` scan per issue made that quadratic on the request thread,
+      // and joining an unbounded list renders megabytes into a message meant to
+      // be read. The cap also lets the scan stop early, which is what keeps the
+      // work proportional to what is printed rather than to what was sent.
+      const seen = new Set<string>();
+      let moreAlternatives = false;
       for (const branch of branches) {
         for (const inner of branch) {
           // Inner paths are relative to the union's own path, so qualify them
@@ -557,10 +577,22 @@ export function describeParamIssues(
           const text = `${innerAt}${inner.message}`;
           // Two branches can fail identically (a union of enums over the same
           // values); saying it twice is noise, not a second alternative.
-          if (!alternatives.includes(text)) alternatives.push(text);
+          if (seen.has(text)) continue;
+          if (alternatives.length >= MAX_UNION_ALTERNATIVES) {
+            moreAlternatives = true;
+            break;
+          }
+          seen.add(text);
+          alternatives.push(text);
         }
+        if (moreAlternatives) break;
       }
-      if (alternatives.length > 0) return `\`${at}\`: ${alternatives.join("; or ")}`;
+      if (alternatives.length > 0) {
+        // Signal the cut, for the same reason the "You sent:" list does: a
+        // silently shortened enumeration reads as the complete set of legal
+        // forms, so the caller would rule out the branch they wanted.
+        return `\`${at}\`: ${alternatives.join("; or ")}${moreAlternatives ? "; or …" : ""}`;
+      }
     }
     return `\`${at}\`: ${issue.message}`;
   });
