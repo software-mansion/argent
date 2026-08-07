@@ -332,16 +332,21 @@ export async function queryFullHierarchyTree(
   } catch (err) {
     const failureCode = getFailureSignal(err)?.error_code;
     if (failureCode === FAILURE_CODES.NATIVE_TARGET_MULTIPLE_APPS_AMBIGUOUS) {
+      // Backgrounding the others is deliberately NOT offered: it leaves them
+      // connected, so the set stays ambiguous, and once iOS suspends one it
+      // stops answering the state probe entirely — turning this failure into
+      // the harder indeterminate one below. That rationale lives here rather
+      // than in the reason, which is repeated per step.
       throw wrapPreservingFailure(
-        `could not uniquely target a native-devtools-connected app to read the view hierarchy from:\n` +
-          `${withoutExplicitBundleIdAdvice(errMsg(err))}\n` +
-          `Flow selector steps auto-target and cannot provide a bundleId. Bring the intended app to ` +
-          `the foreground with launch-app (it does not terminate, so its instrumentation survives), ` +
-          `then retry. If the read stays ambiguous, terminate the other connected apps with ` +
-          `\`xcrun simctl terminate <udid> <bundleId>\`: argent exposes no terminate tool, and ` +
-          `restart-app would relaunch that app frontmost — the opposite of what is needed. ` +
-          `Backgrounding them does not help: they stay connected, and once suspended they stop ` +
-          `answering the state probe this read depends on.`,
+        // The header stays short because the embedded diagnostic's own first
+        // line already says the set is ambiguous; repeating it cost 90 chars of
+        // a budget the per-app entries need.
+        `could not target an app to read the view hierarchy from:\n` +
+          `${cappedAppDiagnostic(withoutExplicitBundleIdAdvice(errMsg(err)))}\n` +
+          `Flow selectors auto-target and cannot name a bundleId. Foreground the intended app with ` +
+          `launch-app (it does not terminate), then retry; clear the others with ` +
+          `\`xcrun simctl terminate <udid> <bundleId>\` (argent has no terminate tool, and ` +
+          `restart-app would just bring that app back to the front).`,
         err
       );
     }
@@ -378,7 +383,7 @@ export async function queryFullHierarchyTree(
     if (stillConnected.length > 0) {
       throw wrapPreservingFailure(
         `could not read the state of the native-devtools-connected apps, so none could be ` +
-          `auto-targeted (${firstClause(err)}). Connected: ${stillConnected.join(", ")}. ` +
+          `auto-targeted (${firstClause(err)}). Connected: ${cappedList(stillConnected)}. ` +
           `They are instrumented — do not relaunch. A suspended app stops answering: foreground ` +
           `the app the flow drives with launch-app (it does not terminate), then retry.` +
           // Only worth saying when there IS another connection to clear, and it
@@ -460,6 +465,75 @@ function firstClause(err: unknown): string {
   const firstLine = errMsg(err).split("\n", 1)[0];
   const sentenceEnd = /\.(?=\s|$)/.exec(firstLine);
   return sentenceEnd === null ? firstLine : firstLine.slice(0, sentenceEnd.index + 1);
+}
+
+/**
+ * How many connected apps any targeting reason may enumerate.
+ *
+ * Two of these reasons embed a per-app list — the ambiguous branch keeps
+ * `resolveNativeTargetApp`'s per-app `applicationState` diagnostic (~110 chars
+ * a line) and the indeterminate branch names every live connection — so
+ * without a cap the reason grows with the connected-app count: measured at 778
+ * chars for 2 apps, 1000 for 4 and 1444 for 8. That is the wrong thing to let
+ * grow. `captureTapSelector`'s catch embeds the whole reason in the warning for
+ * every recorded tap, and a failing `await:` repeats it once per poll, so the
+ * cost is paid per step for as long as the screen stays stuck — and the
+ * ambiguous state is the most persistent of them, holding until somebody
+ * foregrounds or terminates something.
+ *
+ * Two is enough to act on: the remedy is "foreground the one you want, clear
+ * the rest", which does not change with the fourth entry. The count of what was
+ * dropped is still reported, so nothing is silently truncated.
+ */
+const MAX_LISTED_APPS = 2;
+
+/**
+ * Ceiling every reason thrown from {@link queryFullHierarchyTree} must fit,
+ * enforced by `keeps every targeting reason short enough to repeat per step`.
+ *
+ * Measured against the RAW message. Callers prefix it before an agent sees it —
+ * `waitForCondition` adds "could not read the UI tree: " (27 chars) and a
+ * `when:` guard adds "could not evaluate when guard (<label>): " with a
+ * caller-supplied label — so this is not the number the agent ends up reading.
+ *
+ * The ceiling is set by the ambiguous branch, which carries two full per-app
+ * `applicationState` diagnostics: that IS the diagnosis on the one branch where
+ * the agent has to choose which app to clear, so it is not the thing to cut.
+ * What matters is that the figure no longer moves with the connected-app count
+ * — see {@link MAX_LISTED_APPS}. Every other branch has well over 100 chars of
+ * slack.
+ */
+export const MAX_TARGETING_REASON_CHARS = 760;
+
+/** Keep the first {@link MAX_LISTED_APPS} entries, and say how many were not shown. */
+function cappedList(bundleIds: readonly string[]): string {
+  if (bundleIds.length <= MAX_LISTED_APPS) return bundleIds.join(", ");
+  const dropped = bundleIds.length - MAX_LISTED_APPS;
+  return `${bundleIds.slice(0, MAX_LISTED_APPS).join(", ")} (+${dropped} more)`;
+}
+
+/**
+ * Cap the per-app lines of an embedded `resolveNativeTargetApp` diagnostic,
+ * keeping its leading summary line intact. The entries are its `- <bundleId>
+ * (applicationState=…)` lines; anything else is passed through untouched, so a
+ * reworded source degrades to "no cap applied" rather than to a mangled
+ * message.
+ */
+function cappedAppDiagnostic(message: string): string {
+  const lines = message.split("\n");
+  const isEntry = (line: string): boolean => line.startsWith("- ");
+  const firstEntry = lines.findIndex(isEntry);
+  if (firstEntry === -1) return message;
+  const entries = lines.filter(isEntry);
+  if (entries.length <= MAX_LISTED_APPS) return message;
+  const kept = entries.slice(0, MAX_LISTED_APPS);
+  const dropped = entries.length - MAX_LISTED_APPS;
+  return [
+    ...lines.slice(0, firstEntry),
+    ...kept,
+    `- (+${dropped} more connected app${dropped === 1 ? "" : "s"})`,
+    ...lines.slice(firstEntry + entries.length).filter((line) => !isEntry(line)),
+  ].join("\n");
 }
 
 // Strip resolveNativeTargetApp's trailing "Provide bundleId explicitly…" line —

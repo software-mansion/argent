@@ -7,7 +7,10 @@ import {
   type Registry,
 } from "@argent/registry";
 import type { NativeDevtoolsApi } from "../../src/blueprints/native-devtools";
-import { queryFullHierarchyTree } from "../../src/tools/flows/flow-ios-tree";
+import {
+  MAX_TARGETING_REASON_CHARS,
+  queryFullHierarchyTree,
+} from "../../src/tools/flows/flow-ios-tree";
 import { selectorToFrame } from "../../src/utils/ui-tree-match";
 import { resolveNativeTargetApp } from "../../src/utils/native-target-app";
 
@@ -190,15 +193,13 @@ describe("flow iOS full-hierarchy source", () => {
     // the end of the message would start eating the middle of it.
     const source = await resolveNativeTargetApp(api, undefined).catch((err) => err);
     expect(error.message).toContain(source.message.split("\n").slice(0, -1).join("\n"));
-    expect(error.message).toContain(
-      "Flow selector steps auto-target and cannot provide a bundleId"
-    );
-    expect(error.message).toContain("to the foreground with launch-app");
+    expect(error.message).toContain("Flow selectors auto-target and cannot name a bundleId");
+    expect(error.message).toContain("Foreground the intended app with launch-app");
     // Clearing the other apps has to name something the agent can actually run:
     // argent exposes no terminate tool, and restart-app would bring the very app
     // being cleared back to the front.
     expect(error.message).toContain("xcrun simctl terminate <udid> <bundleId>");
-    expect(error.message).toContain("argent exposes no terminate tool");
+    expect(error.message).toContain("argent has no terminate tool");
     // Backgrounding is the wrong half of that advice — it leaves them connected
     // and, once suspended, unable to answer the state probe at all.
     expect(error.message).not.toContain("background or terminate");
@@ -307,31 +308,158 @@ describe("flow iOS full-hierarchy source", () => {
     expect(error.message).toContain("do not relaunch");
   });
 
+  // Every failure `queryFullHierarchyTree` can produce, one entry per branch.
+  // The length guard below asserts "every", so it has to iterate this rather
+  // than a hand-picked pair — the previous version looped over the two SHORTEST
+  // branches and so passed while the ambiguous one ran to 1444 characters.
+  // Bundle ids are deliberately long, to keep the budget honest for real ones.
+  const LONG_ID = "com.example.enterprise.mobile.client";
+  const rpcTimeout = (): never => {
+    throw new FailureError("ViewInspector RPC timed out: Application.getState", {
+      error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT,
+      failure_stage: "native_devtools_rpc_request",
+      failure_area: "tool_server",
+      error_kind: "timeout",
+    });
+  };
+  const appState = (bundleId: string, over: Record<string, unknown> = {}) => ({
+    bundleId,
+    applicationState: "active",
+    foregroundActiveSceneCount: 1,
+    foregroundInactiveSceneCount: 0,
+    backgroundSceneCount: 0,
+    unattachedSceneCount: 0,
+    isFrontmostCandidate: true,
+    ...over,
+  });
+  const notFrontmost = { applicationState: "background", isFrontmostCandidate: false } as const;
+
+  const targetingFailures = (appCount: number): { branch: string; api: NativeDevtoolsApi }[] => {
+    const ids = Array.from({ length: appCount }, (_, i) => `${LONG_ID}${i}`);
+    return [
+      {
+        branch: "ambiguous connected set",
+        api: {
+          listConnectedBundleIds: () => ids,
+          getAppState: vi.fn(async (b: string) =>
+            appState(b, { ...notFrontmost, foregroundActiveSceneCount: 0, backgroundSceneCount: 1 })
+          ),
+        } as unknown as NativeDevtoolsApi,
+      },
+      {
+        branch: "single app not foreground",
+        api: {
+          listConnectedBundleIds: () => [ids[0]],
+          getAppState: vi.fn(async (b: string) =>
+            appState(b, { ...notFrontmost, foregroundActiveSceneCount: 0, backgroundSceneCount: 1 })
+          ),
+        } as unknown as NativeDevtoolsApi,
+      },
+      {
+        branch: "state probe failed, connections live",
+        api: {
+          listConnectedBundleIds: () => ids,
+          getAppState: vi.fn(rpcTimeout),
+        } as unknown as NativeDevtoolsApi,
+      },
+      {
+        branch: "no connected app",
+        api: {
+          listConnectedBundleIds: () => [] as string[],
+          getAppState: vi.fn(),
+        } as unknown as NativeDevtoolsApi,
+      },
+      {
+        branch: "target requires a restart",
+        api: {
+          listConnectedBundleIds: () => [ids[0]],
+          getAppState: vi.fn(async (b: string) => appState(b)),
+          requiresAppRestart: vi.fn(async () => true),
+        } as unknown as NativeDevtoolsApi,
+      },
+      {
+        branch: "no windows",
+        api: {
+          listConnectedBundleIds: () => [ids[0]],
+          getAppState: vi.fn(async (b: string) => appState(b)),
+          requiresAppRestart: vi.fn(async () => false),
+          queryViewHierarchy: vi.fn(async () => ({ windows: [] })),
+        } as unknown as NativeDevtoolsApi,
+      },
+      {
+        branch: "getFullHierarchy errored",
+        api: {
+          listConnectedBundleIds: () => [ids[0]],
+          getAppState: vi.fn(async (b: string) => appState(b)),
+          requiresAppRestart: vi.fn(async () => false),
+          queryViewHierarchy: vi.fn(async () => ({ error: "serializer busy" })),
+        } as unknown as NativeDevtoolsApi,
+      },
+    ];
+  };
+
   it("keeps every targeting reason short enough to repeat per step", async () => {
     // The recorder embeds this reason in the warning for EVERY captured tap
     // while the read is failing, and a failing `await` repeats it once per
     // poll. A reason that ran to ~900 characters made the recorder the
     // session's largest context consumer for a single stuck screen.
-    const backgrounded = {
-      listConnectedBundleIds: () => ["com.example.solo"],
-      getAppState: vi.fn(async () => {
-        throw new FailureError("ViewInspector RPC timed out: Application.getState", {
-          error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT,
-          failure_stage: "native_devtools_rpc_request",
-          failure_area: "tool_server",
-          error_kind: "timeout",
-        });
-      }),
-    } as unknown as NativeDevtoolsApi;
-    const disconnected = {
-      listConnectedBundleIds: () => [] as string[],
-      getAppState: vi.fn(),
-    } as unknown as NativeDevtoolsApi;
-
-    for (const api of [backgrounded, disconnected]) {
+    for (const { branch, api } of targetingFailures(2)) {
       const error = await queryFullHierarchyTree(registryFor(api), DEVICE).catch((err) => err);
-      expect(error.message.length).toBeLessThan(600);
+      expect(`${branch}: ${error.message.length}`).toBe(
+        `${branch}: ${Math.min(error.message.length, MAX_TARGETING_REASON_CHARS)}`
+      );
     }
+    // The service-unresolvable wrap is the one failure that never reaches an
+    // api, so it is built separately rather than skewing the table above.
+    const unresolvable = await queryFullHierarchyTree(
+      {
+        resolveService: vi.fn(async () => {
+          throw new Error("no simulator-server for 0000…00ab");
+        }),
+      } as unknown as Registry,
+      DEVICE
+    ).catch((err) => err);
+    expect(unresolvable.message.length).toBeLessThanOrEqual(MAX_TARGETING_REASON_CHARS);
+  });
+
+  it("keeps the reason the same size as connections pile up", async () => {
+    // The point of the budget is that it cannot be spent by the DEVICE. Both
+    // list-bearing branches used to grow per connected app — the ambiguous one
+    // measured 778 / 1000 / 1444 chars at 2 / 4 / 8 apps — so a stuck screen on
+    // a busy simulator cost more context the busier it got.
+    for (const branch of ["ambiguous connected set", "state probe failed, connections live"]) {
+      const lengths = await Promise.all(
+        [2, 4, 16].map(async (appCount) => {
+          const { api } = targetingFailures(appCount).find((f) => f.branch === branch)!;
+          const error = await queryFullHierarchyTree(registryFor(api), DEVICE).catch((err) => err);
+          return error.message.length as number;
+        })
+      );
+      // Not byte-identical: the "(+N more)" count gains a digit. What matters
+      // is that four more connections cost a digit and not four more lines —
+      // each uncapped entry ran to ~110 characters.
+      expect(`${branch}: ${lengths[2] - lengths[1] < 5}`).toBe(`${branch}: true`);
+      expect(lengths[2]).toBeLessThanOrEqual(MAX_TARGETING_REASON_CHARS);
+    }
+  });
+
+  it("says how many connected apps a capped reason left out", async () => {
+    const { api } = targetingFailures(5).find((f) => f.branch === "ambiguous connected set")!;
+    const error = await queryFullHierarchyTree(registryFor(api), DEVICE).catch((err) => err);
+
+    // Two kept verbatim, the rest counted — never silently dropped.
+    expect(error.message).toContain(`${LONG_ID}0 (applicationState=background`);
+    expect(error.message).toContain(`${LONG_ID}1 (applicationState=background`);
+    expect(error.message).not.toContain(`${LONG_ID}2 (`);
+    expect(error.message).toContain("(+3 more connected apps)");
+
+    const probe = targetingFailures(5).find(
+      (f) => f.branch === "state probe failed, connections live"
+    )!;
+    const probeError = await queryFullHierarchyTree(registryFor(probe.api), DEVICE).catch(
+      (err) => err
+    );
+    expect(probeError.message).toContain(`Connected: ${LONG_ID}0, ${LONG_ID}1 (+3 more).`);
   });
 
   it("reports an unresolvable native-devtools service and keeps the original error", async () => {
