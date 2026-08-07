@@ -186,14 +186,19 @@ describe("port persistence across tool-server restarts", () => {
   });
 
   it("a dead persisted port is pruned from the file after a failed probe", async () => {
-    trackChromiumPort(43211);
-    portsToCleanup.push(43211);
-    expect(JSON.parse(fs.readFileSync(TEST_PORTS_FILE, "utf8"))).toContain(43211);
+    // Port 1 is privileged, so no unprivileged process on the host can bind it
+    // and the probe below is guaranteed to fail. A port in the unprivileged
+    // range would be bindable by anything — including a `listen(0)` fake CDP
+    // server in a sibling test file, which serves the very /json responses that
+    // would make this probe succeed and leave the port tracked.
+    const deadPort = 1;
+    trackChromiumPort(deadPort);
+    portsToCleanup.push(deadPort);
+    expect(JSON.parse(fs.readFileSync(TEST_PORTS_FILE, "utf8"))).toContain(deadPort);
 
-    // Nothing listens on 43211 — the probe fails and prunes it everywhere.
-    await discoverChromiumDevices({ timeoutMs: 300, ports: [43211] });
-    expect(JSON.parse(fs.readFileSync(TEST_PORTS_FILE, "utf8"))).not.toContain(43211);
-    expect(getCandidateChromiumPorts()).not.toContain(43211);
+    await discoverChromiumDevices({ timeoutMs: 300, ports: [deadPort] });
+    expect(JSON.parse(fs.readFileSync(TEST_PORTS_FILE, "utf8"))).not.toContain(deadPort);
+    expect(getCandidateChromiumPorts()).not.toContain(deadPort);
   });
 
   it("untrackChromiumPort removes the port from the persisted file", () => {

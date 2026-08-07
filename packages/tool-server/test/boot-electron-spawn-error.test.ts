@@ -17,6 +17,24 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
+/**
+ * CDP port for the boots below that must never reach a live endpoint.
+ *
+ * Every test that drives a spawn-error / early-exit / no-pid path needs
+ * `waitForCdpReady` to keep failing, so the readiness probe cannot win
+ * `bootElectronApp`'s `Promise.race`. When it does win, the boot resolves and
+ * detaches the child's boot listeners — the synthetic `'error'` emit that
+ * follows then hits an EventEmitter with no `'error'` listener and throws
+ * instead of rejecting, failing the test.
+ *
+ * Port 1 is privileged, so no unprivileged process on the host can bind it.
+ * A port in the unprivileged range is bindable by anything: argent's own
+ * examples and sibling tests use `chromium-cdp-19222`, so a real Chromium /
+ * Electron endpoint on 19222-19226 is exactly the kind of neighbour that turns
+ * these tests into host-dependent coin flips.
+ */
+const UNREACHABLE_CDP_PORT = 1;
+
 const spawnMock = vi.fn();
 
 vi.mock("node:child_process", async () => {
@@ -50,7 +68,19 @@ function makeFakeChild(opts: { pid?: number | undefined } = {}): FakeChild {
 }
 
 let appDir: string;
+let prevPortsFile: string | undefined;
+const TEST_PORTS_FILE = path.join(
+  os.tmpdir(),
+  `argent-boot-electron-spawn-ports-${process.pid}.json`
+);
 beforeAll(() => {
+  // The successful boot below calls trackChromiumPort, which persists the
+  // booted port to ~/.argent/chromium-cdp-ports.json. Redirect that to a
+  // throwaway file so tests never touch the real state on a developer machine
+  // or CI runner — the port they would leave behind is an ephemeral one that
+  // list-devices then probes on every call.
+  prevPortsFile = process.env.ARGENT_CHROMIUM_PORTS_FILE;
+  process.env.ARGENT_CHROMIUM_PORTS_FILE = TEST_PORTS_FILE;
   // resolveLauncher() fs-checks the app path before spawn, so the test needs
   // a real directory on disk. The spawn itself is mocked, so the contents
   // don't matter — only the path's existence.
@@ -62,6 +92,9 @@ beforeAll(() => {
   fs.writeFileSync(path.join(appDir, "main.js"), "// fake\n");
 });
 afterAll(() => {
+  if (prevPortsFile === undefined) delete process.env.ARGENT_CHROMIUM_PORTS_FILE;
+  else process.env.ARGENT_CHROMIUM_PORTS_FILE = prevPortsFile;
+  fs.rmSync(TEST_PORTS_FILE, { force: true });
   if (appDir) fs.rmSync(appDir, { recursive: true, force: true });
 });
 
@@ -82,7 +115,7 @@ describe("bootElectronApp — spawn error handling", () => {
 
     const promise = bootElectronApp({
       appPath: appDir,
-      port: 19222,
+      port: UNREACHABLE_CDP_PORT,
       readyTimeoutMs: 100,
     });
     promise.catch(() => {}); // detach so the test doesn't hang after assertion
@@ -113,7 +146,7 @@ describe("bootElectronApp — spawn error handling", () => {
         appPath: appDir,
         // Unreachable port → the readiness race rejects fast; we only care about
         // the spawn env, so detach and swallow the rejection.
-        port: 1,
+        port: UNREACHABLE_CDP_PORT,
         readyTimeoutMs: 50,
       });
       promise.catch(() => {});
@@ -140,7 +173,7 @@ describe("bootElectronApp — spawn error handling", () => {
 
     const promise = bootElectronApp({
       appPath: appDir,
-      port: 1,
+      port: UNREACHABLE_CDP_PORT,
       readyTimeoutMs: 50,
       extraArgs: ["--user-flag"],
     });
@@ -153,7 +186,7 @@ describe("bootElectronApp — spawn error handling", () => {
     expect(args).toContain("--disable-renderer-backgrounding");
     // User extras survive alongside the defaults.
     expect(args).toContain("--user-flag");
-    expect(args).toContain("--remote-debugging-port=1");
+    expect(args).toContain(`--remote-debugging-port=${UNREACHABLE_CDP_PORT}`);
 
     await promise.catch(() => {});
   });
@@ -164,7 +197,7 @@ describe("bootElectronApp — spawn error handling", () => {
 
     const promise = bootElectronApp({
       appPath: appDir,
-      port: 19223,
+      port: UNREACHABLE_CDP_PORT,
       readyTimeoutMs: 30_000,
     });
 
@@ -186,7 +219,7 @@ describe("bootElectronApp — spawn error handling", () => {
 
     const promise = bootElectronApp({
       appPath: appDir,
-      port: 19224,
+      port: UNREACHABLE_CDP_PORT,
       readyTimeoutMs: 30_000,
     });
     await new Promise((r) => setTimeout(r, 10));
@@ -206,7 +239,7 @@ describe("bootElectronApp — spawn error handling", () => {
     await expect(
       bootElectronApp({
         appPath: appDir,
-        port: 19225,
+        port: UNREACHABLE_CDP_PORT,
         readyTimeoutMs: 100,
       })
     ).rejects.toThrow(/spawn returned without a pid/);
@@ -319,10 +352,10 @@ describe("bootElectronApp — spawn error handling", () => {
       await expect(
         bootElectronApp({
           appPath: appDir,
-          // Pick an unbound port; ensureCdpReachable will fail repeatedly
-          // until readyTimeoutMs elapses. Don't pick 0 — we want a real
-          // unreachable port, not OS-assigned ephemeral.
-          port: 1,
+          // ensureCdpReachable fails repeatedly until readyTimeoutMs elapses.
+          // Don't pick 0 — we want a real unreachable port, not an OS-assigned
+          // ephemeral one.
+          port: UNREACHABLE_CDP_PORT,
           readyTimeoutMs: 100,
         })
       ).rejects.toBeInstanceOf(Error);
@@ -364,7 +397,7 @@ describe("bootElectronApp — spawn error handling", () => {
       await expect(
         bootElectronApp({
           appPath: appDir,
-          port: 19226,
+          port: UNREACHABLE_CDP_PORT,
           readyTimeoutMs: 100,
         })
       ).rejects.toThrow(/spawn returned without a pid/);
