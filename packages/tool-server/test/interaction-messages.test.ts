@@ -38,7 +38,7 @@ function definitionsById(registry: Registry): Map<string, ToolDefinition<any, an
 describe("tool interaction messages", () => {
   it("defines all three formatters for every tool", () => {
     const definitions = definitionsById(createRegistry());
-    expect(definitions.size).toBe(77);
+    expect(definitions.size).toBe(78);
 
     for (const [id, definition] of definitions) {
       expect(definition.interaction?.startedMsg, `${id}.startedMsg`).toBeTypeOf("function");
