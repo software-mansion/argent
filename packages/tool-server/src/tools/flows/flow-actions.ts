@@ -1229,13 +1229,12 @@ function compatibilityMissNote(
     // step whose locator missed.
     const wanted = selector.text;
     if (tree === undefined || wanted === undefined || wanted === "") return "";
-    // Label and value ONLY — deliberately not the hoisted `subtreeText`. A
-    // selector's `text` is compared against a node's own label/value (see
-    // matchNodeWithRegex), so suggesting a multi-child hoisted string sends the
-    // author to a selector that still matches nothing. The advice has to be
-    // text the locator can actually read.
-    // A selector's `text` is a SUBSTRING test, so the near-miss question is
-    // "does this label contain a compat variant of the needle", not "is it one".
+    // Both halves of this walk mirror how a `text` selector actually matches.
+    // Label and value ONLY — deliberately not the hoisted `subtreeText` —
+    // because that is what matchNodeWithRegex compares against, so suggesting a
+    // multi-child hoisted string would send the author to a selector that still
+    // matches nothing. And it is a SUBSTRING test, so the near-miss question is
+    // "does this label CONTAIN a compat variant of the needle", not "is it one".
     const walk = (node: DescribeNode): void => {
       if (hit !== undefined) return;
       for (const candidate of [node.label, node.value]) {
