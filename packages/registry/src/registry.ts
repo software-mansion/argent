@@ -526,12 +526,28 @@ export function describeParamIssues(
     // NOT undefined, so it still falls to the per-issue wording below.
     // Nested paths get the same treatment: `steps.0.tool` is every bit as
     // missing as a top-level field.
-    // A custom refinement's message is author-written for exactly this
-    // situation — a cross-field rule ("exactly one of name / flow_path") that
-    // no per-field wording can express — so it survives verbatim. Without this,
-    // the missing-value branch below rewrites it into "`flow_path` is required",
-    // naming a field the caller may have omitted quite deliberately.
-    if (issue.code === "custom") return issue.message;
+    // A custom refinement's message is author-written, so it is never rewritten
+    // the way the branches below rewrite Zod's own wording — in particular the
+    // missing-value branch must not turn it into "`flow_path` is required",
+    // naming a field the caller may have omitted quite deliberately. Which is
+    // why this arm comes FIRST, ahead of the absence check.
+    //
+    // The PATH still has to be printed, because two different kinds of rule
+    // arrive here. A cross-field rule — "exactly one of name / flow_path",
+    // gesture-rotate's radius pair — is about the payload as a whole and
+    // anchors at the root, where there is no field to name and the prose is the
+    // whole message. A `.refine()` BOUND to a field (`selector.text`'s
+    // visible-character rule) anchors at that field, and its message reads as
+    // prose about some parameter the sentence does not identify: `await-ui-
+    // element` declares both `selector.text` and `expectedText`, so "text must
+    // contain at least one visible character" lands ambiguously between them.
+    // The raw JSON this replaces carried the path, and "You sent:" only ever
+    // reaches the top-level `selector`, so without this the offending sub-key
+    // is named nowhere in the message — the exact failure this function exists
+    // to remove, on the one issue kind that had opted out of it.
+    if (issue.code === "custom") {
+      return issue.path.length > 0 ? `\`${at}\`: ${issue.message}` : issue.message;
+    }
     if (valueAtPath(params, issue.path) === undefined) {
       const expected = (issue as { expected?: unknown }).expected;
       const kind = typeof expected === "string" ? ` (${expected})` : "";

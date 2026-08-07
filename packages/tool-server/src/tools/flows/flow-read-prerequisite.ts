@@ -54,7 +54,9 @@ const zodSchema = z
           : "Pass exactly one flow source: name or flow_path. flow-read-prerequisite needs the " +
             "flow's name in `name` (`flow_name` is accepted as an alias) — it resolves " +
             "<project_root>/.argent/flows/<name>.yaml.",
-        path: ["flow_path"],
+        // The ROOT, matching flow-execute: the rule spans the source fields, so
+        // it must not be anchored on one of them. See flow-run.ts.
+        path: [],
       });
     }
   });

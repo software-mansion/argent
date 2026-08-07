@@ -242,6 +242,24 @@ describe("flow-read-prerequisite parameter handling", () => {
     ).rejects.toThrow(/needs the flow's name in `name`.*`flow_name` is accepted as an alias/s);
   });
 
+  it("anchors the exactly-one-source rule at the ROOT, not on flow_path", async () => {
+    // The rule spans the source fields and its message names them all, so it
+    // must not be attributed to one of them. Anchored on `flow_path` it renders
+    // as "`flow_path`: Pass exactly one flow source…" to an agent and
+    // "--flow_path Pass exactly one flow source…" to `argent run` — both
+    // pointing at the field the caller is as likely as not to have got right.
+    // An empty path is what makes both surfaces print the sentence alone.
+    for (const tool of [createRunFlowTool(new Registry()), flowReadPrerequisiteTool]) {
+      const parsed = tool.zodSchema!.safeParse({ project_root: tmpDir });
+      expect(parsed.success, tool.id).toBe(false);
+      const sourceIssues = parsed.error!.issues.filter((i) =>
+        i.message.includes("Pass exactly one flow source")
+      );
+      expect(sourceIssues, tool.id).toHaveLength(1);
+      expect(sourceIssues[0].path, tool.id).toEqual([]);
+    }
+  });
+
   it("stays terse when the caller named BOTH sources", async () => {
     // Two sources named is not a spelling problem — the caller has to drop one,
     // and the alias hint would only be noise.

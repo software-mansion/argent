@@ -270,6 +270,37 @@ describe("describeParamIssues", () => {
     expect(msg).not.toContain("..");
   });
 
+  it("path-qualifies a custom rule BOUND to a field, so the prose names its parameter", () => {
+    // The live instance is `selector.text`'s visible-character rule, reached by
+    // `await-ui-element` — which also declares `expectedText`, so bare prose
+    // about "text" lands ambiguously between the two. "You sent:" only ever
+    // carries top-level keys, so without the path the sub-key is named nowhere.
+    const schema = z.object({
+      selector: z.object({
+        text: z.string().refine(() => false, { message: "text must contain a visible character" }),
+      }),
+    });
+    const value = { selector: { text: "​" } };
+    const msg = describeParamIssues(issuesOf(schema, value), value);
+    expect(msg).toContain("`selector.text`: text must contain a visible character");
+  });
+
+  it("leaves a ROOT-anchored cross-field rule unqualified", () => {
+    // The other half of the pair above. A rule spanning several fields has no
+    // one field to name — a qualifier would point at whichever field the author
+    // happened to anchor on, which is as likely as not the one the caller got
+    // right — so the author's prose is the whole message.
+    const schema = z
+      .object({ a: z.string().optional(), b: z.string().optional() })
+      .superRefine((_v, ctx) =>
+        ctx.addIssue({ code: "custom", message: "Pass exactly one of a or b.", path: [] })
+      );
+    const msg = describeParamIssues(issuesOf(schema, {}), {});
+    expect(msg).toContain("Pass exactly one of a or b.");
+    expect(msg).not.toContain("(root)");
+    expect(msg).not.toMatch(/`[^`]*`: Pass exactly one/);
+  });
+
   it("leaves a multi-sentence message's internal periods alone", () => {
     // Only the TERMINAL stop is ours to drop — flow-execute's no-source message
     // is two sentences and the first one's period must survive.

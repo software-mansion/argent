@@ -151,7 +151,13 @@ const zodSchema = z
           : "Pass exactly one flow source: name or flow_path. flow-execute needs the flow's " +
             "name in `name` (`flow_name` is accepted as an alias) — it resolves " +
             "<project_root>/.argent/flows/<name>.yaml.",
-        path: ["flow_path"],
+        // The ROOT, not `flow_path`: this rule spans the source fields and its
+        // message names them all, so anchoring it on one of them points the
+        // reader at the field they are as likely as not to have got right — and
+        // has `describeParamIssues` prefix the whole sentence with
+        // "`flow_path`:". The CLI renders an empty path as the message alone,
+        // which is what a whole-payload rule should read as.
+        path: [],
       });
     }
   });
