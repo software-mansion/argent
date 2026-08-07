@@ -1,12 +1,12 @@
 # Flow YAML
 
-Read this reference when polishing, manually reviewing, or composing a flow.
+Read this reference when polishing, composing, or manually reviewing a flow.
 
 - [File shape and flow type](#file-shape-and-flow-type)
 - [Selectors](#selectors)
 - [Directives](#directives)
 - [Verification conditions](#verification-conditions)
-- [Prove a navigation: identity, then readiness](#prove-a-navigation-identity-then-readiness)
+- [Prove a navigation](#prove-a-navigation-identity-then-readiness)
 - [Optional divergences](#optional-divergences)
 - [Composition and platform limits](#composition-and-platform-limits)
 - [Snapshots and standalone runs](#snapshots-and-standalone-runs)
@@ -21,31 +21,33 @@ steps:
   - await: { idle: true }
 ```
 
-An e2e flow's first non-echo step is `launch:`, and it must not declare `executionPrerequisite` — the combination is a parse error. Put the named start state in a leading `echo:` instead. A leading `run:` does **not** make a flow e2e even when the composed flow launches: that launch does run inline, but the runner classifies only a literal leading `launch:` as e2e, and on Chromium that classification is what boots the app. A fragment has no leading launch and may declare:
+An e2e flow has a literal `launch:` as its first non-echo step. It cannot declare `executionPrerequisite`. Put the named start state in a leading echo.
+
+A leading `run:` does not classify the outer flow as e2e, even when the child launches. This distinction controls Chromium boot. A fragment has no leading launch and can declare:
 
 ```yaml
 executionPrerequisite: User is signed in and viewing Settings
 steps: []
 ```
 
-Flows never store a device id. The runner binds the selected/booted device. `launch:` restarts the app process; it does **not** clear persisted app, account, or backend data.
+Flows never store a device id. The runner binds the device. `launch:` restarts the process but does not clear app, account, or backend data.
 
 The one exception is a device _scope_ rather than a target: `stop-all-simulator-servers`' `devices` list **is** kept in the YAML, because without it the step means the machine-wide sweep and would tear down devices other agents are mid-session on. Replay rebinds a recorded scope only when you pass `device` explicitly — an auto-detected device would retarget the teardown at a device the flow never named. So the recorded ids are what run when you replay without `device`; on another host they reap nothing and come back in `unmatched`, so re-record the cleanup flow there or pass `device`. A step that recorded no scope is still narrowed onto whatever device the run resolved, since binding can only make the sweep smaller.
 
 ## Selectors
 
-Use selector values that meet the [stable-selector definition](../SKILL.md#stable-selectors). Write explicit selector maps:
+Use values that meet the [stable-selector definition](../SKILL.md#stable-selectors). Always write explicit maps:
 
 ```yaml
-{ id: save-button }       # exact testID/accessibilityIdentifier/resource-id
-{ text: Save }            # case-insensitive text/label substring
-{ role: button }          # case-insensitive role substring
-{ id: settings-row, text: Notifications } # fields all must match
+{ id: save-button }
+{ text: Save }
+{ role: button }
+{ id: settings-row, text: Notifications }
 ```
 
-`id` is exact and case-insensitive; an unqualified Android id such as `save-button` also matches `com.example:id/save-button`. `identifier` parses as an alias for `id`, but `id` is canonical and is what the recorder writes. A bare string is loose shorthand that tries id first and then text. Never write a bare string in a flow you author; always write the explicit map.
+All provided fields must match. `id` is exact and case-insensitive. `text` and `role` are case-insensitive substrings. An unqualified Android id also matches its qualified resource id. `identifier` is accepted as an alias, but `id` is canonical. Never author a bare string. It is loose shorthand that tries id before text.
 
-For dynamic native text, use an anchored, case-sensitive regex and single quotes:
+Use single quotes for anchored, case-sensitive regexes:
 
 ```yaml
 { text: { matches: '^Order #\d+$' } }
@@ -53,25 +55,24 @@ For dynamic native text, use an anchored, case-sensitive regex and single quotes
 
 ### The runner tree is not the discovery tree
 
-Flow selectors resolve against the runner's tree. The agent-facing `describe` tool and the live `await-ui-element` tool read a **different** projection of the same screen, and how the two differ is platform-specific — it decides what a missing element means:
+Flow selectors and live discovery use different screen projections:
 
-| Platform | Runner tree                                                                                | `describe` / `await-ui-element`         | How they differ                                                                                                |
-| -------- | ------------------------------------------------------------------------------------------ | --------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| iOS      | native UIView hierarchy                                                                    | accessibility tree                      | Each holds elements the other lacks; the role vocabularies are disjoint (`AXButton` exists only in `describe`) |
-| Android  | full accessibility hierarchy, including not-important views                                | the same dump, trimmed to interactables | Each holds elements the other lacks; the trim drops testID-only containers and merges nodes                    |
-| Chromium | the same DOM walk, keeping only nodes with an id, label, value, clickable or focused state | the whole DOM walk                      | The runner tree is a strict **subset**                                                                         |
-| Vega     | toolkit page source                                                                        | the same source                         | Same elements, re-shaped                                                                                       |
+| Platform | Runner tree                                               | `describe` / `await-ui-element` | Important difference                                     |
+| -------- | --------------------------------------------------------- | ------------------------------- | -------------------------------------------------------- |
+| iOS      | native UIView hierarchy                                   | accessibility tree              | Each contains elements and roles missing from the other  |
+| Android  | full accessibility hierarchy                              | trimmed interactables           | Discovery can omit testID-only containers or merge nodes |
+| Chromium | filtered DOM nodes with id, label, value, click, or focus | full DOM walk                   | The runner tree is a strict subset                       |
+| Vega     | toolkit page source                                       | same source                     | Same elements, different shape                           |
 
-Two consequences, both load-bearing:
+On iOS and Android, an id absent from `describe` can still resolve in a flow. Prefer the stable id and verify it in a scratch fragment. On Chromium, an element absent from `describe` cannot resolve. Add a test id instead.
 
-- **On iOS and Android**, a missing id in `describe` is not proof that the flow selector cannot resolve: prefer the id and verify it in a scratch fragment. **On Chromium the reverse holds** — what `describe` does not show, no selector can reach, and an element it does show carrying none of those five attributes is invisible to the runner. Give that element a testid instead of hunting for another selector.
-- A live `await-ui-element` check can pass against the tool's tree and mean nothing to the runner. The recorded `tool:` step still replays (that tool reads the tree it passed against); it is the `await:`/`assert:` directive polish converts it into that may not resolve. Replay the flow after polish and treat an unresolved converted wait as a polish-time blocker, not a recording failure.
+A live wait can pass against its tree while the converted directive cannot resolve. Replay after conversion. Treat failure there as a polish blocker, not a recording failure.
 
-When several visible nodes match, an exact text/identifier match beats a substring hit, then the smallest frame wins. Use a stricter map when that ranking could still select the wrong repeated element.
+When several nodes match, exact text or id beats substring, then the smallest frame wins. Use a stricter selector when ranking can still choose the wrong element.
 
 ### Relational scopes
 
-Flow YAML selectors also accept geometric, CSS-like relations. They work in every flow selector slot (`tap`, `type.into`, `await`, `assert`, `scroll-to`, `pinch.on`, `rotate.on`, `snapshot.cropOn`, and nested scopes), but not in the live `await-ui-element` tool.
+Flow selectors support frame-based `within`, `after`, and `next` in every selector slot. Live `await-ui-element` does not support them.
 
 ```yaml
 - tap: { text: Delete, within: { id: profile-card } } # inside a container
@@ -79,27 +80,29 @@ Flow YAML selectors also accept geometric, CSS-like relations. They work in ever
 - tap: { role: Switch, next: { text: Wi-Fi } } # nearest matching follower
 ```
 
-The relations are frame-based because platform flow trees are flattened. `within` means visual containment, so a child whose frame spills outside its parent's — an overflowing row, a popover anchored to a card — does not match it, however clearly it is that parent's child in the code. `after` and `next` use top-to-bottom/left-to-right reading order. Every anchor must be distinct; the synthetic screen root never counts.
+`within` means visual frame containment, not source-tree ancestry. Overflowing children and anchored popovers can fall outside it. `after` and `next` use top-to-bottom, left-to-right reading order. A target cannot satisfy its own `within`, `after`, or `next` anchor. The synthetic root never counts.
 
-`next` means the nearest **matching** follower, so it deliberately skips wrappers, spacers, and other non-matches. This differs from literal CSS `+`: if a Wi-Fi row has no switch, `{ role: Switch, next: { text: Wi-Fi } }` may find the next row's switch. Prefer `{ role: Switch, within: { id: wifi-row } }`, or assert that row-local control before acting, whenever the control may be absent.
+`next` finds the nearest matching follower and skips non-matches. It can therefore reach the next row when the intended row lacks a control. Prefer a stable row container with `within`, or assert the row-local control first.
 
-Scopes may combine and nest, with at most six scope keys per selector. Scope the target by a trusted container when a missing row control must fail instead of reaching another row. Use a strict map for an anchor you care about; a bare string keeps the loose identifier-first fallback and can bind to an unrelated id.
+Scopes can combine and nest, with at most six scope keys. Use strict selectors for anchors. Scope through a trusted container when a missing control must fail instead of reaching another row.
 
 ## Directives
 
-Every directive hard-stops the flow on failure; later steps are skipped. The set is `launch`, `tap`, `long-press`, `type`, `scroll-to`, `pinch`, `rotate`, `await`, `assert`, `wait`, `snapshot`, `run`, `when`, `echo`, and `tool`; `flow-execute`'s own tool description spells out each one's shape and options. What follows is only what that description does not say.
+Directives stop the flow on failure and skip later steps. `flow-execute` documents their shapes. The available directives are `launch`, `tap`, `long-press`, `type`, `scroll-to`, `pinch`, `rotate`, `await`, `assert`, `wait`, `snapshot`, `run`, `when`, `echo`, and `tool`.
 
-A bare `launch: com.acme.app` applies to every platform — and on Chromium it is read as the app **path**, so any flow that must run cross-platform needs the map form. `native:` covers iOS, Android, and Vega with one id: `- launch: { native: com.acme.app, chromium: ../../app }`. An Android app that must start on a non-launcher activity has no `launch:` form at all; record `restart-app` with its `activity` and accept that the flow is a fragment.
+Use the launch map for cross-platform flows. `native` covers iOS, Android, and Vega. `chromium` accepts a relative or absolute app path. A bare launch applies everywhere and becomes an app path on Chromium.
 
-A `scroll-to` map is always the options form — the target goes under `target:`. Only the bare-string form (`scroll-to: Logout`) omits it, and that spelling is a loose selector.
+```yaml
+- launch: { native: com.acme.app, chromium: ../../app }
+```
 
-`tap`, `type`, and `long-press` do not auto-scroll. Add `scroll-to` first whenever the target may be off-screen. `scroll-to` defaults to `down`, is a no-op if already visible, and needs `within` for a nested scroller.
+An Android app that needs a non-launcher activity has no `launch:` form. Record `restart-app` with `activity` and keep the flow as a fragment.
 
-`type` presses Enter unless `submit: false`. A polished focus-tap + raw keyboard pair normally needs `submit: false`, because the recording did not submit. Store secrets as `{{secret:APP_PASSWORD}}`; the runner resolves them from `ARGENT_SECRET_APP_PASSWORD` or a secrets file (`.argent/secrets.env`, `~/.argent/secrets.env`, `.env`), so one flow runs unchanged in CI and locally. Use it for any external value, not only sensitive ones — but every resolved value is redacted from output, so never use it for something a report must show.
+In a `scroll-to` map, put the selector under `target:`. The map supports `up`, `down`, `left`, and `right` directions. The default is `down`. If the target is already visible, the step is a safe no-op. `tap`, `type`, and `long-press` do not auto-scroll. Add `scroll-to` when the target can be off-screen. Use `within` for a nested scroller.
+
+`type` presses Enter unless `submit: false`. A polished focus tap plus keyboard call usually needs `submit: false`. Store external values as `{{secret:NAME}}`. The runner uses the first source that defines the name: environment `ARGENT_SECRET_NAME`; project `.argent/secrets.env`; project `.env.local`, then `.env` (only `ARGENT_SECRET_` keys); then `~/.argent/secrets.env`. It redacts every resolved value, so do not use a placeholder for content a report must show.
 
 ## Verification conditions
-
-The condition name is the key and its value is the selector:
 
 ```yaml
 - await: { visible: { id: settings-screen } }
@@ -109,56 +112,48 @@ The condition name is the key and its value is the selector:
 - assert: { text: { in: { id: result-count }, matches: '^\d+ results$' } }
 ```
 
-`text.in` locates one selector and compares its rendered/descendant text with exactly one of `contains` (case-insensitive substring), `equals` (case-insensitive exact match), or `matches` (case-sensitive JS regex). Substring boundaries are not implied: `contains: "Taps: 3"` is also satisfied by `Taps: 30`, so use `equals` or an anchored `matches` pattern when the complete value matters. Use a regex selector under `visible` when only the shape of free-standing text matters.
+`text.in` locates one element. It compares that element's rendered and descendant text with exactly one comparator:
 
-Use `await` for an outcome that may take time and `assert` for settled state. The default `await` wait is 7500 ms; `assert`'s fixed grace is 1000 ms. Add an `await.timeout` only after the 7500 ms default demonstrably expires, and only above it — a value below 7500 shortens the wait. `assert` rejects `timeout`; a timed check is an `await`.
+- `contains`: case-insensitive substring.
+- `equals`: case-insensitive full match.
+- `matches`: case-sensitive JavaScript regex.
 
-A negative condition such as `hidden` only says that no visible match exists in the current tree. It is true before the element ever appears, true if the selector is misspelled, and true on the wrong screen. Establish it positively first: prove the containing screen, and prove the same selector `visible` at some earlier point in the flow. A `hidden` whose selector never matched anywhere in the flow passes on every replay no matter what the app does, so it is not a check at all. When possible also verify a positive replacement or empty state.
+Use `equals` or an anchored regex when boundaries matter. For example, `contains: "Taps: 3"` also matches `Taps: 30`.
+
+Use `await` for an outcome that can take time. Its default is 7500 ms. Add a larger timeout only after the default expires. Use `assert` for settled state. It has a fixed 1000 ms grace and rejects `timeout`.
+
+A negative condition proves only that the current tree has no visible match. It also passes before the element appears, for a typo, or on the wrong screen. First prove the containing screen and the same stable selector as `visible`. Then perform the removing action and check `hidden`. Prefer an additional positive replacement or empty state.
 
 ## Prove a navigation: identity, then readiness
 
-A navigation needs two checks, and no single one covers both:
+Every screen change needs both checks:
 
 ```yaml
-- await: { visible: { id: profile-screen } } # identity: WHICH screen
-- await: { idle: true } # readiness: it stopped moving
+- await: { visible: { id: profile-screen } } # identity
+- await: { idle: true } # readiness
 ```
 
-**They are independent.** A dropped tap leaves the source screen perfectly idle, so readiness never proves identity. A destination element enters the tree while the transition is still animating over it, so identity never proves readiness.
+The identity selector must exist only on the destination. A dropped tap can leave the source screen idle. A destination element can enter the tree before its animation finishes. Therefore neither check replaces the other.
 
-Identity is an element that exists **only** on the destination ([which ones qualify](reliability-and-recovery.md#strong-transition-gates)).
+### `idle` readiness
 
-### `idle` — readiness
-
-The one condition that carries no selector, because stillness is a property of the whole screen. It returns the moment the screen has content and stops moving in **both** the UI tree and the rendered pixels, so the next tap resolves its target against a screen that has stopped rather than one still sliding under it.
+`idle` waits until the screen has content and stops changing in both the UI tree and pixels.
 
 ```yaml
 - await: { idle: true, stableFor: 400, timeout: 9000 }
 ```
 
-The pixel half is why it exists: an iOS push or modal dismissal commits its hierarchy up front and then animates a layer for a few hundred milliseconds, and a cross-fade or scrim moves no node at all. A tree-only wait returns mid-transition.
+`stableFor` (default 250) is how long stillness must hold, and must be shorter than `timeout` (default 7500). The wait must also fit the hold plus the 600ms a settle costs — three reads spanning two 200ms polls, plus the 200ms of budget the closing round needs to be allowed to start — or parse rejects the step. Stillness is measured across intervals, so `stableFor: 0` means the first two agreeing intervals, not the first read. `idle` has no assert form and no `when:` form.
 
-`stableFor` (default 250) is how long stillness must hold; it must be shorter than `timeout` (default 7500) or the gate could never pass, and parse rejects it. The wait also has to leave room for the hold plus the 600ms a settle costs — three reads spanning two 200ms polls, plus the 200ms of budget the closing round has to have left to be allowed to start — or the parser rejects the step. Stillness is measured across intervals, so a settle takes at least three reads: `stableFor: 0` means "the first two agreeing intervals", not "the first read".
+It **never fails a run.** Every outcome short of a clean settle passes with a warning, because readiness is not an acceptance criterion. Read that warning rather than stepping over it. It distinguishes a screen that never held still (video, shimmer, carousels, or live text stay healthy while moving, and a load that never finished looks identical), a small part still changing through the hold (a spinner, caret, or progress dot — tolerated, so the settle completed anyway), an empty tree (a canvas or video surface, or a screen that never arrived), a settle on the UI tree alone (no screenshot pair could be read, so presentation-layer animation was never waited out), and too few reads to judge either way.
 
-It has no `assert` form — waiting is the whole point — and no `when:` form. Prefer it over `wait:` for any transition with no element to gate on.
+Only a tree source that cannot be read stops the run, as an errored step — one still failing when the wait ends, one that wedges after answering, or one that never answers (raise `timeout` before suspecting the app). The run is then not ok and every later step is skipped. A single failed read is not that: the hold restarts from the next good read.
 
-It **never fails a run.** Readiness is not an acceptance criterion, so every outcome short of a clean settle passes carrying a `warning` on the step. Read it rather than stepping over it:
-
-- **the screen never held still** — it spent the timeout and went ahead. Healthy screens often never stop (a video, a shimmer, a carousel, live-updating text, which on Android moves the tree as well as the pixels), and a screen that never finished loading looks exactly the same from here.
-- **a small part of it was still changing** — a spinner, a caret, a progress dot, moving through the stretch of stillness the step settled on. Too small to be the screen moving, so the settle completed anyway; if it is a loading spinner, the screen was still loading when this step returned.
-- **the tree stayed empty** — the screen rendered no accessible content. Sometimes the app (a canvas, a video surface), sometimes a screen that never arrived.
-- **settled on the UI tree alone** — no screenshot could be read often enough to compare a pair, so the hierarchy held still but presentation-layer motion above it (a push, a fade, a dismissing modal) was never waited out.
-- **too few reads** — a settle needs three of them spanning two intervals, and this step got fewer, so it ended without evidence either way. A slow tree source, or a window blank for most of the wait.
-
-Only a tree source that cannot be read stops the run, as an `errored` step — one that is still failing when the wait ends, one that answers and then wedges, or one that never answers within the step (that last may simply be slow: raise `timeout` before suspecting the app). That is a broken window, not a verdict about the app: the run is not ok and every later step is skipped. A single failed read is not that window: the hold restarts from the next good one, and a read that fails at the very end of the wait is named in the warning rather than stopping the run.
-
-One more limit: it says nothing about **which** screen settled, so it never replaces the identity gate.
-
-Add one during polish after each screen change, not after every step: it is a directive with no live tool behind it, and each costs roughly 0.5-1.5 s warm — more on the first capture of a run.
+`idle` proves readiness only and never identifies the screen, so it cannot serve as acceptance evidence or replace the identity gate. Gate the next action on a stable element. Add `idle` during polish after each screen change, not after every step.
 
 ## Optional divergences
 
-Use `when:` only for a one-sided optional path such as a coach mark:
+Use `when:` only for optional setup or an interstitial that reconverges:
 
 ```yaml
 - when: { visible: { text: Got it } }
@@ -166,40 +161,28 @@ Use `when:` only for a one-sided optional path such as a coach mark:
     - tap: { text: Got it }
 ```
 
-The guard may be one `exists`/`visible`/`hidden`/`text` condition or `{ platform: ios|android|chromium|vega }`. It uses the short assert grace. There is no `else` and no per-step `optional`; separate behavioral paths belong in separate flows. A skipped optional block is not a failure, but a required acceptance check must never live behind a condition that may skip it.
+The guard accepts one `exists`, `visible`, `hidden`, or `text` condition, or `{ platform: ios|android|chromium|vega }`. UI guards use the short assert grace and reject `timeout`. There is no `else` or per-step `optional`. Put separate behavioral paths in separate flows. Never place a required acceptance check inside `when:`.
 
 ## Composition and platform limits
 
-A `run:` target is a YAML path resolved against the directory of the flow file that contains the step, so `../shared/login.yaml` reaches a sibling directory rather than the project root. The `.yaml` suffix is optional: `run: login` and `run: login.yaml` both name `login.yaml` beside the flow.
+A `run:` target is a YAML path resolved against the directory of the flow file containing the step, so `../shared/login.yaml` reaches a sibling directory rather than the project root. The `.yaml` suffix is optional: `run: login` and `run: login.yaml` both name `login.yaml` beside the flow.
 
-- iOS/Android e2e flows may run fragments or other e2e flows inline; a nested e2e launch restarts its app.
-- Chromium boots one Electron app for the top-level run. Do not nest a Chromium e2e flow with its own launch; make it top-level or turn the nested flow into a fragment. `pinch` is rejected there — drive the app's own zoom controls instead.
-- Vega is remote-driven. Touch directives (`tap`, `long-press`, `type`, `scroll-to`, `pinch`) are unsupported; record `tool: tv-remote` and raw `tool: keyboard`, then gate every focus/navigation result with `await`.
+- iOS and Android can run fragments or e2e flows inline. A nested e2e launch restarts its app.
+- Chromium boots one Electron app for the top-level run. Do not nest another Chromium e2e launch. Make that flow top-level or a fragment. Chromium rejects `pinch`. Use app zoom controls.
+- Vega uses `tool: tv-remote` and raw `tool: keyboard`. Touch directives are unsupported. Gate focus and navigation results with `await`.
 
 ## Snapshots and standalone runs
 
 `argent flow run <name> [--device <id>] [--platform ios|android|chromium|vega] [--update-baselines] [--output <dir>] [--json]` runs without an LLM and exits non-zero on failure.
 
-A raw `screenshot` captures evidence but never compares or fails on visual drift. Keep it for live inspection, diagnosis, or a human-reviewed before/after result. A `snapshot:` directive is executable verification: it compares the current pixels with a stored baseline and hard-fails on a missing baseline, excessive mismatch, or (for `cropOn`) region-size drift.
+A screenshot is human evidence. A `snapshot:` is executable visual verification. A missing baseline or excessive mismatch fails. A `cropOn` size change also fails. Use snapshots for color, layout, size, spacing, typography, clipping, overflow, images, icons, or stable component appearance. Use full screen for global changes and `cropOn` for one component.
 
-Use a snapshot when pixels are part of the requirement and structural selectors cannot prove the rendering:
+Do not use a snapshot as the only proof of navigation, persistence, data, accessibility state, logs, or network behavior. Avoid unstable timestamps, live data, ads, animation, and device drift. First establish deterministic state, identity, and readiness.
 
-- light/dark theme or other global color-mode changes;
-- layout, position, size, spacing, typography, clipping, overflow, image, or icon rendering;
-- a stable component whose appearance matters beyond its accessibility state.
+Baselines live under `.argent/flows/__baselines__/<flow>/` and are keyed by platform and full-capture geometry; `cropOn` also contributes its selector. Seed from a known-good state with `--update-baselines`. Inspect every baseline and require user review. Do not commit it yourself. Baseline creation or update is not a test pass. Never update a baseline only to make a diff pass. The default `maxMismatch` is 0.5 percent.
 
-Pair visual and structural evidence when the requirement is mixed. Use a full-screen snapshot for a global theme/layout and `cropOn` for one stable component to reduce unrelated noise.
-
-Do not use a snapshot as the only proof of navigation, persistence, data correctness, accessibility state, logs, or network behavior. Avoid it when timestamps, random/live data, ads, uncontrolled animation, or device drift make the pixels unstable. First make the screen deterministic and gate its identity/readiness with `await:` or `assert:`.
-
-Snapshot baselines live under `.argent/flows/__baselines__/<flow>/`, keyed by platform and full-capture resolution; `cropOn` also keys by selector. A `snapshot:` step fails when no baseline exists for the run's device class. Seed from a known-good state with `--update-baselines`, inspect every generated baseline against the requirement, tell the user it requires review, and do not commit it yourself. Baseline creation or update is not a test pass. Never update a baseline merely to make a failing diff green. The default `maxMismatch` is `0.5` percent.
-
-For iOS, Android, or Vega, record the seeding run's `--platform` and `--device` values and pass the same flags in CI so the device class stays pinned. For Chromium, persist the window-size argument in `launch.chromium.args`, run with `--platform chromium`, and omit `--device` so the runner boots the declared target with those arguments; pinning an already-running Chromium device bypasses the launch. The runner pins the iOS/Android status bar during a run to keep clock, battery, and signal changes out of full-screen visual diffs.
-
-`--output <dir>` writes failed snapshot baseline/current/diff images under `<dir>/<flow>/`, a stable directory for CI artifact upload.
+Pin `--platform` and `--device` for iOS, Android, or Vega. For Chromium, persist window size in `launch.chromium.args`, pass `--platform chromium`, and omit `--device`. The runner pins mobile status bars during visual runs. `--output <dir>` writes failed baseline, current, and diff images under `<dir>/<flow>/` for CI artifact upload.
 
 ## YAML safety
 
-Quote strings containing `#`, `:`, or quotes. A bare `true`/`false` or a number in a text slot is rejected at parse, so quote those too; `yes`/`no`/`on`/`off` parse as plain strings. Use single quotes for regex containing backslashes.
-
-Parse failures include invalid directives, selector shapes, regexes, `else`, unsupported options, and an e2e flow that combines a leading `launch:` with `executionPrerequisite`.
+Quote strings containing `#`, `:`, or quotes. Quote numbers and `true` or `false` in text slots. Use single quotes for regexes with backslashes. Parsing rejects invalid directives, selectors, regexes, `else`, unsupported options, and e2e flows that also declare `executionPrerequisite`.
