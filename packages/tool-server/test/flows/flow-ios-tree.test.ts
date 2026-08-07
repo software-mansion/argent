@@ -116,6 +116,7 @@ describe("flow iOS full-hierarchy source", () => {
     expect(error.message).toContain(
       "Flow selector steps auto-target and cannot provide a bundleId"
     );
+    expect(error.message).toContain("to the foreground with launch-app");
     expect(error.message).toContain("terminate the other connected apps");
     // Backgrounding is the wrong half of that advice — it leaves them connected
     // and, once suspended, unable to answer the state probe at all.
@@ -147,8 +148,9 @@ describe("flow iOS full-hierarchy source", () => {
     });
     // Preserves the per-app applicationState diagnostic from resolveNativeTargetApp.
     expect(error.message).toContain("com.example.solo (applicationState=background");
-    // Correct remedy: foreground it; it is already instrumented.
-    expect(error.message).toContain("Bring that app to the foreground");
+    // Correct remedy, and the tool that performs it: launch-app foregrounds
+    // without terminating, so the instrumentation the app already has survives.
+    expect(error.message).toContain("Bring that app to the foreground with launch-app");
     expect(error.message).toContain("already instrumented");
     // Not the impossible advice, and not the misleading relaunch-for-instrumentation
     // narrative meant for the no-connected-app case.

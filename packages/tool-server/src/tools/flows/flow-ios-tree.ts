@@ -337,7 +337,8 @@ export async function queryFullHierarchyTree(
         `could not uniquely target a native-devtools-connected app to read the view hierarchy from:\n` +
           `${withoutExplicitBundleIdAdvice(errMsg(err))}\n` +
           `Flow selector steps auto-target and cannot provide a bundleId. Bring the intended app to ` +
-          `the foreground, and terminate the other connected apps, then retry. Backgrounding them ` +
+          `the foreground with launch-app (it does not terminate, so its instrumentation survives), ` +
+          `and terminate the other connected apps, then retry. Backgrounding them ` +
           `does not help: they stay connected, and once suspended they stop answering the state ` +
           `probe this read depends on.`,
         err
@@ -353,7 +354,8 @@ export async function queryFullHierarchyTree(
         `the only native-devtools-connected app is not foreground, so it cannot be auto-targeted:\n` +
           `${withoutExplicitBundleIdAdvice(errMsg(err))}\n` +
           `Flow selector steps auto-target and cannot provide a bundleId. Bring that app to the ` +
-          `foreground (it is already instrumented, just not frontmost), then retry.`,
+          `foreground with launch-app (it does not terminate — the app is already instrumented, ` +
+          `just not frontmost), then retry.`,
         err
       );
     }
