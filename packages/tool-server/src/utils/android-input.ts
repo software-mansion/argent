@@ -152,6 +152,25 @@ export async function injectAndroidKeycode(serial: string, keycode: number): Pro
   await adbShell(serial, `input keyevent ${keycode}`, { timeoutMs: ADB_INPUT_TIMEOUT_MS });
 }
 
+/**
+ * Press one keycode `count` times in a single `adb shell input keyevent` call.
+ * `input keyevent` takes a whole list of keycodes and injects them from one
+ * `app_process` boot, so a run of presses costs one call's startup instead of
+ * `count` of them — the difference between well under a second and half a
+ * minute for the tens of backspaces the keyboard read-back's undo needs. A
+ * non-positive `count` is a no-op rather than a bare `input keyevent` (which
+ * would exit non-zero on a usage error).
+ */
+export async function injectAndroidKeycodeRepeated(
+  serial: string,
+  keycode: number,
+  count: number
+): Promise<void> {
+  if (count <= 0) return;
+  const codes = new Array<number>(count).fill(keycode).join(" ");
+  await adbShell(serial, `input keyevent ${codes}`, { timeoutMs: ADB_INPUT_TIMEOUT_MS });
+}
+
 /** Press a named key (keyboard tool `key` vocabulary) on Android. */
 export async function injectAndroidNamedKey(serial: string, name: string): Promise<void> {
   const lower = name.toLowerCase();
