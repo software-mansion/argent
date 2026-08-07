@@ -13,7 +13,12 @@ vi.mock("../src/utils/vega-automation", () => ({
   emulatorSerial: vi.fn(async () => ({ serial: "emulator-5554", consolePort: 5554 })),
 }));
 
-import { injectVegaButtons, injectVegaNamedKey, injectVegaText } from "../src/utils/vega-input";
+import {
+  NAMED_KEYCODES,
+  injectVegaButtons,
+  injectVegaNamedKey,
+  injectVegaText,
+} from "../src/utils/vega-input";
 
 // Real device output (verified on a VVD): get_screen_size prints this when
 // developer mode is ON; when OFF the dev-shell service is down and every
@@ -90,6 +95,30 @@ describe("injectVegaNamedKey", () => {
   it("maps a known key to its KEY_ code", async () => {
     await injectVegaNamedKey("enter");
     expect(lastScript()).toContain("button_press KEY_ENTER");
+  });
+
+  it("presses each named key with its own keycode (not one hardcoded value)", async () => {
+    // The map's literal values are pinned in vega-input.test.ts; this pins that
+    // the lookup READS the map, for every entry in it. `enter` is the only key
+    // any other test here presses, so a lookup that resolved every name to one
+    // code — the realistic fold/refactor slip — is green everywhere else, and
+    // `arrow-down`, `backspace`, `escape`, `tab` and f1–f12 would all submit the
+    // field instead of navigating. Twin of the android exhaustive test.
+    for (const [name, keycode] of Object.entries(NAMED_KEYCODES)) {
+      adbShell.mockClear();
+      adbShell.mockResolvedValue(SIZE_OK);
+      await injectVegaNamedKey(name);
+      expect(lastScript().match(/button_press \S+/g), `wrong keycode for "${name}"`).toEqual([
+        `button_press ${keycode}`,
+      ]);
+    }
+  });
+
+  it("case-folds the named key, like every other backend", async () => {
+    // `keyboard`'s `key` is a free `z.string()`, and the sim-server/android
+    // backends fold case, so an uppercase name must not read as unknown here.
+    await injectVegaNamedKey("Arrow-Down");
+    expect(lastScript()).toContain(`button_press ${NAMED_KEYCODES["arrow-down"]}`);
   });
 
   it("throws on an unknown key instead of silently dropping it", async () => {
