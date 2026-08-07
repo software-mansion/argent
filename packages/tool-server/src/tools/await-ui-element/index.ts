@@ -26,6 +26,7 @@ import {
   isVisible,
   firstInReadingOrder,
   evaluateCondition,
+  confusableTextNote,
 } from "../../utils/ui-tree-match";
 
 // Tool id. Exported so run-sequence can both allow this tool and recognise its
@@ -79,7 +80,7 @@ const zodSchema = z
       .enum(["contains", "equals"])
       .optional()
       .describe(
-        "For condition `text`: how expectedText is compared. `contains` (default) is a case-insensitive substring; `equals` is a case-insensitive full-string match."
+        "For condition `text`: how expectedText is compared. Both fold the text first, so a non-breaking space matches a plain one and an LTR bidi wrapper around left-to-right text is ignored. `contains` (default) is a case-insensitive substring, in which a leading or trailing space is significant and constrains the match; `equals` is a case-insensitive full-string match, trimmed at both ends."
       ),
     bundleId: z
       .string()
@@ -198,9 +199,25 @@ function timeoutNote(
       // same element the check read, or the two can contradict each other.
       const first = firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches);
       const wanted = params.textMatch === "equals" ? "equal" : "contain";
-      base = first
-        ? `element matched but its text was "${nodeText(first)}" (wanted to ${wanted} "${params.expectedText}")`
-        : "no element matched the selector before timeout";
+      if (!first) {
+        base = "no element matched the selector before timeout";
+        break;
+      }
+      // The two quoted strings can be indistinguishable on screen and still
+      // compare unequal — the same failure the flow runner's assertReason
+      // explains, and the one this tool's own result shape reported when it was
+      // first raised ("its text was X (wanted to equal X)", success: false,
+      // elapsed: 15001). It needs the codepoints just as much. This tool's
+      // textMatch is contains/equals only, so there is no regex spelling to
+      // exempt the way assertReason must.
+      const shown = nodeText(first);
+      const confusable =
+        params.expectedText === undefined
+          ? undefined
+          : confusableTextNote(shown, params.expectedText);
+      base =
+        `element matched but its text was "${shown}" (wanted to ${wanted} "${params.expectedText}")` +
+        (confusable ? ` — ${confusable}` : "");
       break;
     }
     case "hidden":
@@ -270,6 +287,11 @@ Conditions:
 The selector is { text?, identifier?, role? }; every provided field must match. text and role match as
 case-insensitive substrings of the element's label/value and role; identifier matches exactly (case-insensitive),
 also accepting the unqualified Android resource-id name ('submit' matches 'com.example.app:id/submit').
+text and role are compared on FOLDED text, so a non-breaking space matches a plain one and an LTR bidi wrapper
+around left-to-right text is ignored — but characters that change the rendering are not folded (bidi controls
+that reorder, a soft hyphen, emoji ZWJ/variation selectors), and a leading or trailing space is significant.
+identifier is never folded: it is a machine key, so spell it exactly. A field that is only whitespace or
+invisible characters matches nothing.
 It polls the same accessibility / DOM tree as \`describe\`
 (iOS AXRuntime, Android uiautomator, Chromium CDP, Vega automation toolkit) every pollIntervalMs
 (default ${DEFAULT_POLL_INTERVAL_MS}ms) until timeoutMs (default ${DEFAULT_TIMEOUT_MS}ms).

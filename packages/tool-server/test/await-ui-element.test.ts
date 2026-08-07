@@ -336,6 +336,59 @@ describe("await-ui-element tool", () => {
     expect(result.note).toMatch(/Loading/);
   });
 
+  it("`text` timeout note names the codepoints when the two strings LOOK identical", async () => {
+    // The failure this whole diagnostic was raised from is THIS tool's result
+    // shape: `its text was "X" (wanted to equal "X")`, success false, elapsed
+    // 15001. Quoting the same text twice and calling it a mismatch is what the
+    // note has to replace — the flow runner learned to explain it and this
+    // surface did not.
+    const { api } = makeSequencedAXService([
+      axResponse([{ label: "Amount", value: "PLN 42͏", frame: FRAME, traits: [] }]),
+    ]);
+    const tool = createAwaitUiElementTool(iosRegistry(api));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        condition: "text",
+        selector: { text: "Amount" },
+        expectedText: "Amount PLN 42",
+        textMatch: "equals",
+        timeoutMs: 30,
+        pollIntervalMs: 10,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.note).toMatch(/differ only in invisible characters/);
+    expect(result.note).toMatch(/U\+034F/);
+  });
+
+  it("`text` timeout note stays bare when the strings differ visibly", async () => {
+    const { api } = makeSequencedAXService([
+      axResponse([{ label: "Amount", value: "PLN 43", frame: FRAME, traits: [] }]),
+    ]);
+    const tool = createAwaitUiElementTool(iosRegistry(api));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        condition: "text",
+        selector: { text: "Amount" },
+        expectedText: "Amount PLN 42",
+        textMatch: "equals",
+        timeoutMs: 30,
+        pollIntervalMs: 10,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.note).toMatch(/PLN 43/);
+    expect(result.note ?? "").not.toMatch(/invisible characters/);
+  });
+
   it("`text` check and timeout note both read the visible match, not a zero-area shadow", async () => {
     // A stale zero-area "Total 0" sits above the visible "Total 42". Both the
     // condition and the note must read the visible node — otherwise the check
