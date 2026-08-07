@@ -70,6 +70,21 @@ describe("foldText", () => {
     expect(foldText("a​́")).toBe("á");
   });
 
+  it("composes AFTER the case fold, for letters whose precomposed form is lowercase-only", () => {
+    // `toLowerCase` is not NFC-preserving. U+01F0 (ǰ) has no uppercase
+    // precomposed twin, so NFC leaves "J̌" decomposed and lowercasing it yields
+    // a decomposed sequence, while the already-lowercase spelling composes.
+    // Normalizing before the case fold therefore left two identically-rendered
+    // spellings unequal — the inverse of what folding promises.
+    const UPPER_DECOMPOSED = "J̌anko"; // J + combining caron
+    const LOWER_PRECOMPOSED = "ǰanko"; // ǰ
+    expect(foldText(UPPER_DECOMPOSED)).toBe(foldText(LOWER_PRECOMPOSED));
+    expect(equalsCI(UPPER_DECOMPOSED, LOWER_PRECOMPOSED)).toBe(true);
+    expect(includesCI(`say ${UPPER_DECOMPOSED} now`, LOWER_PRECOMPOSED)).toBe(true);
+    // Same shape, different block: U+1E96 (ẖ) is likewise lowercase-only.
+    expect(foldText("H̱i")).toBe(foldText("ẖi"));
+  });
+
   it("keeps the joiners that BUILD a glyph", () => {
     // Invisible alone, load-bearing in sequence. The transgender flag is
     // U+1F3F3 VS16 ZWJ U+26A7 VS16 and renders as ONE glyph; folding the

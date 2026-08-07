@@ -318,9 +318,11 @@ const FOLD_CACHE_MAX = 4096;
 
 /**
  * The comparable form of a piece of UI text: invisible formatting stripped,
- * NFC-normalized, every space-like codepoint reduced to a plain space, each run
- * of whitespace collapsed to one character (a newline where the run breaks the
- * line — see {@link LINE_BREAK} — a space otherwise), trimmed, lowercased.
+ * every space-like codepoint reduced to a plain space, each run of whitespace
+ * collapsed to one character (a newline where the run breaks the line — see
+ * {@link LINE_BREAK} — a space otherwise), trimmed, lowercased, and only then
+ * NFC-normalized (composition runs last because `toLowerCase` is not
+ * NFC-preserving — see {@link foldLoose}).
  *
  * **NFC, not NFKC.** Canonical normalization only equates spellings that
  * render identically (a precomposed "é" and its decomposed form). COMPATIBILITY
@@ -369,7 +371,6 @@ function foldLoose(value: string): string {
   // for is in the INVISIBLE class, so all of them survive that first pass.
   if (!BIDI_SENSITIVE.test(stripped)) stripped = stripped.replace(LTR_BIDI, "");
   const folded = stripped
-    .normalize("NFC")
     .replace(SPACE_LIKE, " ")
     // One character per whitespace run — a newline when an INTERIOR run breaks
     // the line, a space otherwise. See {@link LINE_BREAK} for why the two
@@ -379,7 +380,17 @@ function foldLoose(value: string): string {
     .replace(/\s+/g, (run, at: number, whole: string) =>
       LINE_BREAK.test(run) && at > 0 && at + run.length < whole.length ? "\n" : " "
     )
-    .toLowerCase();
+    .toLowerCase()
+    // Compose LAST, because `toLowerCase` is not NFC-preserving. Where the
+    // uppercase spelling has no precomposed code point, NFC leaves it
+    // decomposed and lowercasing yields a decomposed sequence, while the
+    // already-lowercase spelling composes — so normalizing first left the two
+    // folds of one visibly-identical pair unequal (`J̌anko` vs `ǰanko`, and the
+    // same for U+1E96-U+1E99 and some sixty polytonic-Greek groups). Composing
+    // after the case fold settles both spellings on the same form. Nothing
+    // between here and the strip needs the composed form: a combining mark is
+    // neither space-like nor whitespace.
+    .normalize("NFC");
   // Trees are re-read on every poll, so the same strings recur constantly.
   // A plain size cap (rather than an LRU) is enough: the working set is one
   // screen's labels, and blowing it away wholesale costs one refill.
