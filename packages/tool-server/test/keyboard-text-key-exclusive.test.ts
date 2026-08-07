@@ -189,4 +189,29 @@ describe("keyboard — `text` and `key` are mutually exclusive", () => {
     expect(err.message).toMatch(/two calls/);
     expect(err.message).toMatch(/run-sequence/);
   });
+
+  it("still names the TV constraint the guard pre-empts", async () => {
+    // On a TV target `key` is rejected outright (platforms/tv.ts), so the
+    // remedy this message prescribes — a second call carrying { key: "enter" } —
+    // is a retry that cannot succeed there. Before the guard existed, a combined
+    // call on a TV got that diagnosis from the backend; the guard runs above the
+    // dispatch (deliberately, so nothing reaches a device) and would otherwise
+    // swallow it.
+    //
+    // The caveat is therefore carried statically, not by probing the target —
+    // distinguishing a TV kind is async. So this assertion holds for a phone
+    // udid too; what it pins is that the sentence survives edits to the message.
+    // The TV target is driven here because it is the shape that needs it.
+    isAndroidTv.mockResolvedValue(true);
+    const err = await createKeyboardTool(registry())
+      .execute({}, { udid: "emulator-5554", text: "hi", key: "enter" })
+      .then(
+        () => {
+          throw new Error("expected the combined text+key call to reject");
+        },
+        (e: unknown) => e as Error
+      );
+    expect(err.message).toMatch(/TV target/);
+    expect(err.message).toMatch(/tv-remote/);
+  });
 });

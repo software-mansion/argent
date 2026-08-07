@@ -133,9 +133,19 @@ Provide text OR key, never both. To type and then submit, use two calls, or two 
           // Says what did NOT happen, so the caller retries instead of first
           // inspecting the field — and spells the retry out with a literal
           // example rather than an ellipsis the Android backend can't type.
+          //
+          // The TV caveat is carried statically rather than by probing the
+          // target: this guard runs above the dispatch precisely so a combined
+          // request reaches no device, and distinguishing a TV kind is an async
+          // probe. Without it the prescribed `{ key: "enter" }` is a retry that
+          // cannot succeed on a TV, where `key` is rejected outright
+          // (platforms/tv.ts) — which is the diagnosis this guard would
+          // otherwise pre-empt.
           "keyboard takes `text` or `key`, not both — nothing was typed. To type and then press " +
             'a key, make two calls (or two `keyboard` steps in one `run-sequence`): { text: "hello" } ' +
-            'followed by { key: "enter" }.',
+            'followed by { key: "enter" }. On a TV target (Apple TV / Android TV) `key` is not ' +
+            "supported at all — type with `text` and move focus with `tv-remote` " +
+            "(up/down/left/right/select).",
           {
             error_code: FAILURE_CODES.KEYBOARD_TEXT_AND_KEY_COMBINED,
             failure_stage: "keyboard_text_and_key_combined",
