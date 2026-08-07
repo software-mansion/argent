@@ -90,6 +90,34 @@ describe("swipe: parse/serialize", () => {
     ).toThrow(/cannot serialize flow swipe\.by/i);
   });
 
+  it("rejects a programmatic zero axis riding beside a real one", () => {
+    // `by` is `{ x?: number; y?: number }`, so { x: 0, y: 0.5 } is type-legal,
+    // and its magnitude of 0.5 clears the travel floor — the per-axis zero
+    // clause is the only guard that sees it. Without that clause serialize
+    // emits `x: 0` and parse then refuses the file serialize just wrote: a
+    // saved flow that can never be read back. Asserted on `.by.x` and the
+    // non-zero wording so the magnitude message cannot stand in for it.
+    expect(() =>
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "swipe", by: { x: 0, y: 0.5 } }],
+      })
+    ).toThrow(/cannot serialize flow swipe\.by\.x: must be a non-zero fraction/i);
+  });
+
+  it("rejects a programmatic by carrying a key that is not x or y", () => {
+    // The junk key is type-illegal but reachable — FlowStep is also built
+    // programmatically, and appendStep serializes whatever it was handed.
+    // Without the junk-key clause `z` is dropped in silence and the run
+    // reports success on a flow the author did not ask for.
+    expect(() =>
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "swipe", by: { x: 0.5, z: 9 } } as never],
+      })
+    ).toThrow(/cannot serialize flow swipe\.by: accepts only x and y/i);
+  });
+
   it.each([
     ["a tap-scale delta", 0.02],
     ["a sub-threshold delta", 0.0005],
