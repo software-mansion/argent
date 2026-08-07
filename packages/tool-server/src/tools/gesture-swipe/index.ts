@@ -78,6 +78,17 @@ const zodSchema = z
       .describe(
         `Whether the swipe releases with momentum; default true (a natural flinging swipe). Pass false for a momentum-free swipe at the default durationMs: the finger decelerates into the end point (ease-out) so the OS reads ~0 release velocity and applies little to no fling. Use false for scroll-to-element loops. momentum: false needs durationMs >= ${MOMENTUM_FREE_MIN_DURATION_MS} and is rejected below it: a shorter ease-out gives the OS velocity fit too little wall clock to read the deceleration as a stop, and it flings harder than a plain swipe instead (on Android, backwards). At ${MOMENTUM_FREE_MIN_DURATION_MS} itself the swipe lands short of where the finger stopped, and 2 of 47 runs still flung backwards.`
       ),
+    // `settle` was `momentum`'s shipped spelling, with the opposite polarity.
+    // Declared-and-refused rather than left out: this non-strict object strips
+    // unknown keys, so an upgrading caller's `settle: true` would parse clean and
+    // fling — the exact inverse of the gesture it asked for.
+    settle: z
+      .never({
+        error:
+          "gesture-swipe's `settle` was renamed to `momentum`, with the opposite sense — write `momentum: false` for the momentum-free swipe that `settle: true` used to mean (plain `settle: false` was the default, so just drop it)",
+      })
+      .optional()
+      .describe("Retired: renamed to `momentum` with the opposite sense. Pass `momentum: false`."),
   })
   .refine(
     (p) =>
