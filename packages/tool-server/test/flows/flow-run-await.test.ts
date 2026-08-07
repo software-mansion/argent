@@ -184,9 +184,51 @@ steps:
     expect(result.steps[0]!.args).toBeDefined();
   });
 
-  it("falls back to the generic abort wording for a plain tool", async () => {
-    // Only the two nested orchestrators report their own progress; anything else
-    // has no abort verdict of its own, so the runner supplies the wording.
+  it("calls a CANCELLED await-ui-element a skip, not a condition the app failed", async () => {
+    // A cancelled wait reports itself by returning unmet, the same shape as one
+    // that timed out. Scored on that shape alone it becomes "the app never
+    // settled" — blaming the app for the author's own cancel, and failing a run
+    // that was only stopped.
+    const flowFile = await writeFlow(`executionPrerequisite: ""
+steps:
+  - tool: await-ui-element
+    args:
+      udid: X
+      condition: visible
+      selector:
+        text: Continue
+`);
+    const controller = new AbortController();
+    const registry = makeRegistry(async () => {
+      controller.abort();
+      return {
+        success: false,
+        elapsed: 12,
+        note: "wait was cancelled before the condition was met",
+      };
+    });
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile, device: "X" },
+        { signal: controller.signal } as never
+      )
+    );
+
+    expect(result.steps[0]).toMatchObject({
+      tool: "await-ui-element",
+      status: "skip",
+      reason: "run aborted during wait",
+    });
+    expect(result.steps[0]!.reason).not.toContain("condition not met");
+  });
+
+  it("keeps a plain tool that finished before the cancel a PASS", async () => {
+    // The cancel landed after the tap had already been dispatched and answered.
+    // That step ran in full, and the recorder records exactly this shape — a
+    // `skip` here would both contradict it and use `skip` for something other
+    // than "did not run".
     const flowFile = await writeFlow(`executionPrerequisite: ""
 steps:
   - tool: gesture-tap
@@ -209,10 +251,49 @@ steps:
       )
     );
 
+    expect(result.steps[0]).toMatchObject({ status: "pass", result: { tapped: true } });
+  });
+
+  it("keeps a nested step's FAILURE and its detail when the cancel lands too", async () => {
+    // A cancel arriving while a nested step was already failing must not
+    // overwrite the verdict: "run aborted" would hide that a step failed, and
+    // the generic wording would throw away the name of the step that did.
+    const flowFile = await writeFlow(`executionPrerequisite: ""
+steps:
+  - tool: run-sequence
+    args:
+      steps:
+        - tool: gesture-tap
+          args: { x: 0.5, y: 0.5 }
+        - tool: keyboard
+          args: { text: hi }
+`);
+    const controller = new AbortController();
+    const registry = makeRegistry(async () => {
+      controller.abort();
+      return {
+        completed: 1,
+        total: 2,
+        steps: [
+          { tool: "gesture-tap", result: { tapped: true } },
+          { tool: "keyboard", error: "keyboard failed: no focused field" },
+        ],
+      };
+    });
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile, device: "X" },
+        { signal: controller.signal } as never
+      )
+    );
+
     expect(result.steps[0]).toMatchObject({
-      status: "skip",
-      reason: "run aborted during tool",
-      result: { tapped: true },
+      tool: "run-sequence",
+      status: "fail",
+      reason:
+        "run-sequence stopped at keyboard after 1 of 2 steps: keyboard failed: no focused field",
     });
   });
 });

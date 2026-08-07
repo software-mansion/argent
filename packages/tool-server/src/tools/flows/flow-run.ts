@@ -2266,28 +2266,23 @@ async function execLeafStep(
       }
       try {
         const result = await invokeSubTool(registry, ctx, step.name, args);
-        // `flow-execute` and `run-sequence` run other tools and report what
-        // happened in their result instead of throwing, so without this a
-        // composition that failed everything counted as a passing step (#606).
-        const nested = nestedOrchestratorOutcome(step.name, result);
-        if (signal?.aborted) {
-          // The tool still RETURNED under the cancel (run-sequence honours the
-          // signal by returning a partial result rather than throwing), so
-          // without this guard that return would score a pass. Both nested
-          // orchestrators report their own abort as a skip and word it with the
-          // progress they made ("aborted after 2 of 5 steps"); prefer that over
-          // the generic wording rather than shadowing it. The payload is the
-          // pass branch's — a cancelled step's report must not be thinner than
-          // a passing one's, or the partial result it carries is unreadable.
-          return {
-            ...base,
-            status: "skip",
-            tool: step.name,
-            reason: nested?.status === "skip" ? nested.reason : "run aborted during tool",
-            result,
-            outputHint,
-            args,
-          };
+        // A cancelled `await-ui-element` reports itself by RETURNING unmet
+        // (`success: false`, note "wait was cancelled before the condition was
+        // met"), which the check below would score `fail` — telling the author
+        // the app failed to settle when what happened is that they cancelled the
+        // run. A skip, matching `wait` and the directives.
+        //
+        // Deliberately not a broader "the signal is set, so this step is a
+        // skip": every other cancellation here already lands correctly without
+        // one. A nested orchestrator cut short reports its own `skip` verdict
+        // below, worded with the progress it made; a nested step that genuinely
+        // FAILED under the cancel keeps its `fail` and the detail naming it; and
+        // a tool that ran to completion before the cancel arrived did run —
+        // scoring that `skip` would contradict the recorder, which records
+        // exactly that step, and would use `skip` for something other than "did
+        // not run", which is what it means everywhere else in this file.
+        if (signal?.aborted && isUnmetUiWaitResult(step.name, result)) {
+          return { ...base, status: "skip", tool: step.name, reason: "run aborted during wait" };
         }
         if (isUnmetUiWaitResult(step.name, result)) {
           const note = (result as { note?: string }).note;
@@ -2298,6 +2293,10 @@ async function execLeafStep(
             reason: `await-ui-element condition not met${note ? `: ${note}` : ""}`,
           };
         }
+        // `flow-execute` and `run-sequence` run other tools and report what
+        // happened in their result instead of throwing, so without this a
+        // composition that failed everything counted as a passing step (#606).
+        const nested = nestedOrchestratorOutcome(step.name, result);
         if (nested) {
           return {
             ...base,
