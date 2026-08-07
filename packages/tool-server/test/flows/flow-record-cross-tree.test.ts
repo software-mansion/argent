@@ -204,14 +204,6 @@ async function recordedSteps(name: string) {
 }
 
 /**
- * The warning half of `message`, or undefined when there is none.
- *
- * Asserting `message` contains "Step added" proves nothing — that is the
- * unconditional prefix of EVERY message, warnings included — so a regression
- * that nags on every correctly-recorded wait would sail through. Split the
- * prefix off and require the remainder to be absent instead.
- */
-/**
  * The probe's own reason, as the determinate warning quotes it back — the only
  * part of the message carrying screen content, and so the only part the cap
  * governs. Asserting on the whole warning instead measures the fixed prose
@@ -227,6 +219,14 @@ function echoedReasonOf(warning: string): string {
   return warning.slice(start + open.length, end);
 }
 
+/**
+ * The warning half of `message`, or undefined when there is none.
+ *
+ * Asserting `message` contains "Step added" proves nothing — that is the
+ * unconditional prefix of EVERY message, warnings included — so a regression
+ * that nags on every correctly-recorded wait would sail through. Split the
+ * prefix off and require the remainder to be absent instead.
+ */
 function warningOf(result: { message: string }, name: string): string | undefined {
   const prefix = `Step added to "${name}" flow`;
   expect(result.message.startsWith(prefix)).toBe(true);
