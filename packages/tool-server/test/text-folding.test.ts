@@ -337,6 +337,27 @@ describe("bidi wrappers", () => {
       expect(equalsCI(`${RLE}abc${PDF}def`, "abcdef")).toBe(false);
     });
 
+    it("decides the LTR strip once per COMPARISON, so a copied needle stays a substring", () => {
+      // The strip is conditional on the string being folded, and that is not
+      // monotonic under substring: a label carrying one RTL word keeps its
+      // wrappers, while a Latin-only fragment copied out of that same label
+      // does not — so the identical wrappers were stripped from the needle
+      // only, and a needle taken character-for-character off the screen no
+      // longer matched the screen.
+      const HEB = "שלום";
+      const label = `${LRE}@alice${PDF} ${LRE}@bob${PDF} ${HEB}`;
+      const needle = `${LRE}@alice${PDF} ${LRE}@bob${PDF}`;
+      expect(label.includes(needle)).toBe(true); // a literal substring
+      expect(includesCI(label, needle)).toBe(true);
+      // Control: the same needle against a label with no RTL word at all. Here
+      // both sides strip, and it matched before this rule too.
+      expect(includesCI(`${LRE}@alice${PDF} ${LRE}@bob${PDF} hello`, needle)).toBe(true);
+      // The pair rule keeps the controls when EITHER side is sensitive, so it
+      // can only ever fold less — the wrapper around RTL text still does not
+      // equal the bare spelling.
+      expect(equalsCI(`${LRE}${HEB}${PDF}`, HEB)).toBe(false);
+    });
+
     it("still folds an LTR wrapper around text that merely LOOKS exotic", () => {
       // No strong-RTL character anywhere, so the wrapper is provably inert and
       // the common Bluesky case keeps working.

@@ -360,16 +360,54 @@ export function foldText(value: string): string {
  * it, and only {@link includesCI} reaches past it.
  */
 function foldLoose(value: string): string {
-  const hit = foldCache.get(value);
+  return foldWith(value, !isBidiSensitive(value));
+}
+
+/**
+ * Does this string carry content the bidi algorithm can reorder — and so must
+ * keep its {@link LTR_BIDI} controls?
+ *
+ * Asked on the {@link INVISIBLE}-stripped form, which is the form
+ * {@link foldWith} tests: none of the controls {@link BIDI_SENSITIVE} looks for
+ * is in the INVISIBLE class, so that strip cannot change the answer, but asking
+ * on the same string keeps the two from drifting.
+ */
+function isBidiSensitive(value: string): boolean {
+  return BIDI_SENSITIVE.test(value.replace(INVISIBLE, ""));
+}
+
+/**
+ * Fold two strings that are about to be compared, deciding the conditional LTR
+ * strip ONCE for the pair rather than per string.
+ *
+ * Per string it is not monotonic under substring, and {@link includesCI} is a
+ * substring test: a label carrying one RTL word keeps its `U+202A`/`U+202C`
+ * wrappers, while a Latin-only fragment COPIED OUT OF THAT LABEL does not, so
+ * the identical wrappers were stripped from the needle only. A needle taken
+ * character-for-character off the screen then failed to match the screen —
+ * against the very population this fold is for (the 367-wrapper census), and
+ * against the workflow every miss note prescribes, "copy the characters the app
+ * actually renders".
+ *
+ * Either side being bidi-sensitive keeps the controls in both. That is the safe
+ * direction: folding less can only ever fail to equate two strings that render
+ * alike, never equate two that do not.
+ */
+function foldPairLoose(a: string, b: string): [string, string] {
+  const stripLtr = !isBidiSensitive(a) && !isBidiSensitive(b);
+  return [foldWith(a, stripLtr), foldWith(b, stripLtr)];
+}
+
+function foldWith(value: string, stripLtr: boolean): string {
+  const key = `${stripLtr ? "1" : "0"}${value}`;
+  const hit = foldCache.get(key);
   if (hit !== undefined) return hit;
   // Strip invisibles BEFORE composing: an invisible sitting between a base
   // letter and its combining mark blocks NFC from composing them, so a later
   // strip would leave a decomposed grapheme that no longer equals its
   // precomposed twin. Removing it first lets the NFC pass compose the pair.
   let stripped = value.replace(INVISIBLE, "");
-  // The bidi test reads the string as it stands: none of the controls it looks
-  // for is in the INVISIBLE class, so all of them survive that first pass.
-  if (!BIDI_SENSITIVE.test(stripped)) stripped = stripped.replace(LTR_BIDI, "");
+  if (stripLtr) stripped = stripped.replace(LTR_BIDI, "");
   const folded = stripped
     .replace(SPACE_LIKE, " ")
     // One character per whitespace run — a newline when an INTERIOR run breaks
@@ -395,7 +433,7 @@ function foldLoose(value: string): string {
   // A plain size cap (rather than an LRU) is enough: the working set is one
   // screen's labels, and blowing it away wholesale costs one refill.
   if (foldCache.size >= FOLD_CACHE_MAX) foldCache.clear();
-  foldCache.set(value, folded);
+  foldCache.set(key, folded);
   return folded;
 }
 
@@ -641,8 +679,11 @@ export function includesCI(haystack: string | undefined, needle: string): boolea
   // every label containing a space — the very gate this is.
   if (foldText(needle) === "") return false;
   // Both sides UNTRIMMED, so a boundary space in the needle survives to
-  // constrain the match. See {@link foldLoose}.
-  return foldLoose(haystack).includes(foldLoose(needle));
+  // constrain the match. See {@link foldLoose}. Folded as a PAIR so the
+  // conditional LTR strip is decided once and a needle copied out of the label
+  // stays a substring of it — see {@link foldPairLoose}.
+  const [hay, ndl] = foldPairLoose(haystack, needle);
+  return hay.includes(ndl);
 }
 
 export function equalsCI(actual: string | undefined, expected: string): boolean {
@@ -652,9 +693,12 @@ export function equalsCI(actual: string | undefined, expected: string): boolean 
   // check whose expected is whitespace- or invisible-only (a bare `" "`, a
   // bidi pair, a ZWSP that survived a copy-paste) passed against every element
   // with no text: the silently-wrong green this module rates worse than a flake.
-  const wanted = foldText(expected);
-  if (wanted === "") return false;
-  return foldText(actual ?? "") === wanted;
+  if (foldText(expected) === "") return false;
+  // Folded as a PAIR, for the same reason includesCI is: the two comparators
+  // must agree about which controls survive, or a string could equal a label
+  // that does not contain it. See {@link foldPairLoose}.
+  const [got, wanted] = foldPairLoose(actual ?? "", expected);
+  return got.trim() === wanted.trim();
 }
 
 /**
