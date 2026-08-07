@@ -118,8 +118,15 @@ describe("keyboard — `text` and `key` are mutually exclusive", () => {
         createKeyboardTool(r).execute({}, { udid, text: "hi", key: "enter", delayMs: 0 })
       );
       // Rejected before the dispatch, so the backend is never reached: no keys
-      // injected, and not even a service resolved (which would spawn one).
+      // injected on any of the four.
       expect(injections()).toBe(0);
+      // Adds signal on ios and chromium only — those resolve a service (and
+      // would spawn one) on a call that gets through. Android injects through
+      // `adbShell` directly and the vega branch never references the registry,
+      // so a SUCCESSFUL call resolves nothing there either and this line cannot
+      // fail on those two iterations. Kept because it holds for all four and
+      // guards the two that can regress; `injections()` above is what carries
+      // the android and vega rows.
       expect(r.resolveService).not.toHaveBeenCalled();
     });
 
