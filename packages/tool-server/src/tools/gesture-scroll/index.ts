@@ -84,7 +84,7 @@ Returns { scrolled: true, timestampMs }. Fails if the Chromium CDP session is no
   async execute(services, params) {
     const timestampMs = Date.now();
     const chromium = services.chromium as ChromiumCdpApi;
-    await assertChromiumWindowVisible(chromium, "scroll", "chromium_scroll_window_hidden");
+    await assertChromiumWindowVisible(chromium, "scroll");
     const vp = chromium.getViewport();
     const totalDx = (params.deltaX ?? 0) * vp.width;
     const totalDy = (params.deltaY ?? 0) * vp.height;

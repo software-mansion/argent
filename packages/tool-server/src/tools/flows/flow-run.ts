@@ -1047,7 +1047,8 @@ returns a notice with the prerequisite instead of running.`,
       // (scroll steps) stall on a throttled compositor. Covers the instance the
       // run starts on; a launch that boots one fronts it itself. Best-effort:
       // bringToFront can focus a page but cannot unhide a minimized window
-      // (gesture-scroll fails fast on that case itself).
+      // (gesture-tap/-drag/-scroll each fail fast on that case themselves, via
+      // assertChromiumWindowVisible).
       if (device?.platform === "chromium") await frontChromiumPage(registry, device);
 
       const state: ExecState = {

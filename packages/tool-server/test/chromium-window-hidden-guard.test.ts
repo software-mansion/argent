@@ -89,11 +89,34 @@ describe("hidden-window guard on chromium mouse tools", () => {
     expect(getFailureSignal(err)?.failure_stage).toBe("chromium_scroll_window_hidden");
   });
 
-  it("proceeds when the visibility probe rejects (mid-navigation, bare test fakes)", async () => {
+  it("proceeds when the visibility probe rejects (mid-navigation teardown)", async () => {
     // A failed probe proves nothing about visibility; only an explicit
-    // "hidden" refuses. This also covers api objects with no `cdp` at all.
+    // "hidden" refuses.
     const api = fakeChromiumApi();
     api.cdp.send = vi.fn().mockRejectedValue(new Error("Execution context was destroyed"));
+    const result = (await gestureTapTool.execute(
+      { chromium: api } as never,
+      {
+        udid: "chromium-cdp-19222",
+        x: 0.5,
+        y: 0.5,
+      } as never
+    )) as { tapped: boolean };
+    expect(result.tapped).toBe(true);
+    expect(api.dispatchMouseEvent).toHaveBeenCalled();
+  });
+
+  it("proceeds when the api carries no `cdp` at all (bare tool fakes)", async () => {
+    // A distinct failure mode from the rejecting-send case above: here the
+    // throw is a TypeError raised while reading `.send` off `undefined`, not a
+    // rejected promise. The bare fakes in chromium-drag.test.ts and
+    // tools/gesture-tap.test.ts are exactly this shape, so the guard has to
+    // stay transparent to them — but nothing pinned that until now, and those
+    // fakes only cover it for as long as neither of them grows a `cdp` key.
+    const api = {
+      getViewport: () => ({ width: 800, height: 600, devicePixelRatio: 1 }),
+      dispatchMouseEvent: vi.fn().mockResolvedValue(undefined),
+    };
     const result = (await gestureTapTool.execute(
       { chromium: api } as never,
       {

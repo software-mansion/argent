@@ -11,23 +11,34 @@ import type { ChromiumCdpApi } from "../blueprints/chromium-cdp";
  * act on. Only an explicit "hidden" refuses — a failed or empty read proves
  * nothing, and the gesture itself will surface a real transport error.
  *
- * Key events skip hit-testing and stay fast on hidden windows, so the
- * keyboard/button tools deliberately do NOT use this guard. It is a backstop:
- * while a session is attached, primePageSession's focus emulation pins the
- * renderer's reported visibility to "visible" and keeps input fast even for a
- * genuinely minimized window, so the probe only ever reads "hidden" on
- * sessions where emulation could not be applied (unsupported runtime, failed
- * priming) — exactly the world where the stall is real and un-minimizing is
- * the fix.
+ * Key events skip hit-testing and stay fast on a hidden window (measured on a
+ * minimized Electron window: Input.dispatchKeyEvent 1–14ms against 5002–5005ms
+ * for each mouse move), so the `keyboard` tool deliberately does NOT use this
+ * guard — pinned by keyboard-chromium-unguarded.test.ts. The `button` tool
+ * never reaches it either, for a different reason: its capability omits
+ * chromium entirely, so chromium hardware buttons exist only on the
+ * chromium-server HTTP surface the preview window drives.
  *
- * The entire probe (including the property access on `chromium`) stays inside
- * the try: test fakes and mid-navigation contexts may lack `cdp`, and neither
- * says anything about visibility.
+ * It is a backstop: while a session is attached, primePageSession's focus
+ * emulation pins the renderer's reported visibility to "visible" and keeps
+ * input fast even for a genuinely minimized window, so the probe only ever
+ * reads "hidden" on sessions where emulation could not be applied (unsupported
+ * runtime, failed priming) — exactly the world where the stall is real and
+ * un-minimizing is the fix.
+ *
+ * Any throw from the probe means "proves nothing about visibility", and there
+ * are two distinct shapes: a CDP rejection (mid-navigation teardown), and a
+ * TypeError from a `chromium` carrying no usable `cdp` — the shape the bare
+ * tool fakes in the sibling gesture tests pass.
+ *
+ * `failureStage` is derived rather than passed in: all three call sites want
+ * `chromium_<action>_window_hidden`, and hand-writing it invites a silent drift
+ * that would break the joinability the CHROMIUM_WINDOW_HIDDEN migration
+ * deliberately preserved by leaving `chromium_scroll_window_hidden` unchanged.
  */
 export async function assertChromiumWindowVisible(
   chromium: ChromiumCdpApi,
-  action: string,
-  failureStage: string
+  action: "tap" | "drag" | "scroll"
 ): Promise<void> {
   let value: unknown;
   try {
@@ -44,7 +55,7 @@ export async function assertChromiumWindowVisible(
       `Cannot ${action}: the Chromium window is hidden (minimized or fully occluded), so the renderer will not process mouse input. Bring the window to the foreground and retry.`,
       {
         error_code: FAILURE_CODES.CHROMIUM_WINDOW_HIDDEN,
-        failure_stage: failureStage,
+        failure_stage: `chromium_${action}_window_hidden`,
         failure_area: "tool_server",
         error_kind: "validation",
       }
