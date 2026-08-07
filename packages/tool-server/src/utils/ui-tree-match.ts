@@ -857,11 +857,17 @@ export function equalsCI(actual: string | undefined, expected: string): boolean 
  */
 export function identifierMatches(actual: string | undefined, needle: string): boolean {
   if (!actual) return false;
-  // Same rule as includesCI: an identifier that folds away to nothing names no
-  // element, so it must not match one — neither the blank-identifier nodes that
-  // an empty-vs-empty comparison would accept, nor every resource-id via a bare
-  // `:id/`. The GATE folds (a whitespace-only needle is no constraint however
-  // it is spelled); the comparison below does not.
+  // A needle that is blank however it is spelled names no element, so it must
+  // not match one. Narrower than it looks, and worth stating exactly: the
+  // `!actual` line above already rejects a node with no identifier, and an
+  // ordinary resource-id does not end in `:id/`, so neither an empty-vs-empty
+  // comparison nor a bare-suffix match is reachable past it. What the gate
+  // genuinely rules out is a node whose identifier is ITSELF blank — one
+  // spelled `" "` matching a `" "` needle — plus an empty needle against an id
+  // that really does end in `:id/`, which `z.string().min(1)` also blocks.
+  //
+  // The GATE folds, so every spelling of blank is caught at once; the
+  // comparison below deliberately does not, an identifier being a machine key.
   if (foldText(needle) === "") return false;
   const key = actual.toLowerCase();
   const wanted = needle.toLowerCase();

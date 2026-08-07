@@ -590,6 +590,25 @@ describe("a needle that folds away to nothing", () => {
     expect(includesCI("SaveChanges", needle)).toBe(false);
   });
 
+  it("blocks the two inputs its gate is actually reachable for", () => {
+    // The blank-needle cases above cannot discriminate here: identifierMatches
+    // deliberately does not fold, so the un-gated body already returns false
+    // for every one of them, and deleting the gate left the whole suite green.
+    // These two are the inputs the gate genuinely decides.
+    //
+    // A node whose identifier is itself blank, matched by a blank needle —
+    // without the gate `" " === " "` accepts it.
+    expect(identifierMatches(" ", " ")).toBe(false);
+    expect(identifierMatches("\u00a0", "\u00a0")).toBe(false);
+    // And an empty needle against an id that really does end in `:id/` —
+    // without the gate the suffix rule accepts every such id. The schema's
+    // .min(1) blocks this spelling too, so the gate is the second line.
+    expect(identifierMatches("com.example.app:id/", "")).toBe(false);
+    // The ordinary resource-id shape was never at risk: it does not end in
+    // `:id/`, so the suffix rule cannot fire on an empty needle.
+    expect(identifierMatches("com.example.app:id/save-button", "")).toBe(false);
+  });
+
   it("still matches a real value, so the guard is not over-broad", () => {
     expect(includesCI("Button", "butt")).toBe(true);
     expect(identifierMatches("com.example.app:id/save-button", "save-button")).toBe(true);
