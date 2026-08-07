@@ -1333,12 +1333,20 @@ function assertReason(
       const ownNote = own && own !== shown ? ` (own text "${quoteScreenText(own)}")` : "";
       // The two quoted strings can be indistinguishable on screen and still
       // compare unequal — a ZWSP or a bidi mark that survived a copy-paste, or
-      // any other format character (category Cf) the fold's explicit classes do
-      // not list. Say which codepoints differ rather than printing the same text
-      // twice and calling it a mismatch. (A space-like difference never reaches
-      // here: the fold reduces NBSP and its kin to a plain space, so the check
-      // already passes; a variation selector is category Mn, not Cf, so it is
-      // not one of these either — see confusableTextNote.)
+      // any other invisible the fold's explicit classes do not list. Say which
+      // codepoints differ rather than printing the same text twice and calling
+      // it a mismatch.
+      //
+      // The set is `Default_Ignorable_Code_Point`, NOT category Cf: the two
+      // disagree in both directions, and the property is right both times. It
+      // excludes the prepended concatenation marks (Cf, but they change how the
+      // digits after them render) and includes U+034F, which is Mn and would
+      // escape a Cf test despite being exactly the unexplainable invisible this
+      // note exists for. A variation selector is likewise Mn and IS ignorable —
+      // what keeps it out is that it BUILDS a glyph, not its category. See
+      // confusableTextNote. (A space-like difference never reaches here at all:
+      // the fold reduces NBSP and its kin to a plain space, so the check has
+      // already passed.)
       //
       // Only for the LITERAL modes: in `matches` the "expected" string is a
       // regular expression, not text, so comparing its code points against the
