@@ -3097,8 +3097,8 @@ export async function writeNewFlowFile(filePath: string, content: string): Promi
  * the take and the only thing countable — the guarantee below does not carry
  * across that boundary. The tool descriptions do not spell that out — they are
  * kept to what the tool does; the agent-facing statement of it lives in
- * `packages/skills/skills/argent-create-flow/SKILL.md`, in the
- * "Starting always truncates the `.yaml`" bullet.
+ * `packages/skills/skills/argent-create-flow/references/live-authoring.md`, in
+ * the "Starting always truncates the `.yaml`" bullet.
  *
  * The file — not the session's in-memory `flow` — is the take in "host" mode:
  * {@link appendStep}
