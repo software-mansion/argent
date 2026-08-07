@@ -64,8 +64,19 @@ export function findMissingRequired(
  * Two channels, because the wire changed under us. A tool-server now answers a rejected call with
  * PROSE in `error` (a sentence naming the caller's own keys, which is what an agent needs) and the
  * issue list beside it in `issues`; before that, the issue list WAS the message. Reading the
- * structured field first and falling back to parsing the message keeps this working against both,
- * so a CLI does not have to match its server's version.
+ * structured field first and falling back to parsing the message keeps this working against both.
+ *
+ * That covers NEW client -> OLD server, and only that direction. The reverse is a real break, and
+ * it is reachable: `argent run` resolves its endpoint ARGENT_TOOLS_URL > ~/.argent/link.json >
+ * local spawn, `argent link` is a documented way to point a local CLI at a remote tool-server, and
+ * the link file carries no version and there is no handshake. Every already-released CLI knows
+ * only `JSON.parse(message)`, so against a server that sends prose the parse throws, this returns
+ * null, and `run.ts` falls through to a bare `console.error(message)` — losing the `--flag`
+ * attribution, the `argent run <tool> [flags]` help block, and, for a `--json` caller, the JSON
+ * object entirely (exit 1 rather than 2). Nothing in this file can fix that; a released binary
+ * reads what it reads. It is recorded here so the shape is not mistaken for full compatibility.
+ * (`argent flow run` is unaffected: `requireLocalToolServer` refuses env/link routing, so it is
+ * always co-versioned with its server.)
  *
  * Neither channel is trusted on faith: the payload still has to BE a non-empty list of issues, or
  * this is not the validation failure it claims to be.
