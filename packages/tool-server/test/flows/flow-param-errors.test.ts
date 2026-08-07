@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -194,6 +195,49 @@ describe("flow-execute parameter handling", () => {
     expect(nameless).not.toContain("undefined");
     const aliased = tool.interaction!.startedMsg!({ params: { flow_name: "feeds" } as never });
     expect(aliased).toContain("feeds");
+  });
+
+  it("names only the keys the flow AUTHOR wrote, not the bound device key", async () => {
+    // `bindDeviceArgs` strips every device key off the recorded step and
+    // re-injects the resolved one, so `udid` is always present and never came
+    // from the YAML — the recorder strips it on the way in precisely so flows
+    // stay portable. Listing it beside the misspelling the list exists to
+    // expose points at a key the author cannot have written. run-sequence, the
+    // sibling dispatcher, already renders the caller's own keys; this pins the
+    // flow runner to the same sentence.
+    const dir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "typo.yaml"),
+      `steps:\n  - tool: gesture-tap\n    args:\n      xx: 0.5\n      y: 0.5\n`,
+      "utf8"
+    );
+
+    // A real Registry with a real schema: the rejection has to come from the
+    // same check the live dispatch runs, and a stub `invokeTool` would not run
+    // one at all.
+    const r = new Registry();
+    r.registerTool(createRunFlowTool(r) as never);
+    r.registerTool({
+      id: "gesture-tap",
+      description: "test double for gesture-tap",
+      zodSchema: z.object({ udid: z.string(), x: z.number(), y: z.number() }),
+      services: () => ({}),
+      execute: async () => ({ tapped: true }),
+    } as never);
+
+    const result = await r.invokeTool<FlowRunResult>("flow-execute", {
+      name: "typo",
+      project_root: tmpDir,
+      device: "00000000-0000-0000-0000-0000000000ab",
+      prerequisiteAcknowledged: true,
+    });
+
+    const step = result.steps.find((s) => s.tool === "gesture-tap")!;
+    expect(step.status).toBe("error");
+    expect(step.reason).toContain("`x` is required");
+    expect(step.reason).toContain("You sent: `xx`, `y`.");
+    expect(step.reason).not.toContain("`udid`");
   });
 });
 

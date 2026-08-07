@@ -40,7 +40,7 @@ import {
 } from "./flow-utils";
 import type { TextMatchMode, WaitCondition } from "../../utils/ui-tree-match";
 import { sleepOrAbort } from "../../utils/timing";
-import { invokeSubTool } from "../../utils/sub-invoke";
+import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { isUnmetUiWaitResult } from "../await-ui-element";
 import {
   resolveFlowDevice,
@@ -2298,7 +2298,13 @@ async function execLeafStep(
         }
         return { ...base, status: "pass", tool: step.name, result, outputHint, args };
       } catch (err) {
-        return { ...base, status: "error", tool: step.name, reason: errMsg(err) };
+        // A schema miss is re-rendered from the step's RECORDED args, not the
+        // bound ones. `bindDeviceArgs` strips every device key off the step and
+        // re-injects the resolved one, so the registry's "You sent:" list would
+        // name a key the flow author cannot have written — the recorder strips
+        // it on the way in precisely so flows stay portable.
+        const reframed = describeNestedParamError(registry, err, step.name, args, step.args ?? {});
+        return { ...base, status: "error", tool: step.name, reason: reframed ?? errMsg(err) };
       }
     }
 
