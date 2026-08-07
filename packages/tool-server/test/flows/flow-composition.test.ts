@@ -2355,23 +2355,22 @@ describe("flow composition (run:)", () => {
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:error", "echo:skip"]);
     expect(result.steps[0].reason).toMatch(/could not connect to native devtools/i);
     expect(result.ok).toBe(false);
-    // The counterpart of the non-injectable skip below: same platform, ordinary
-    // bundle, and the gate DOES run. Pinning both sides is what makes the skip
-    // bundle-scoped rather than platform-wide.
     expect(resolveService).toHaveBeenCalled();
   });
 
-  it("skips the devtools gate for a non-injectable (com.apple.*) app on iOS", async () => {
+  it("gates a com.apple.* launch on the connection like any other iOS bundle", async () => {
+    // The gate is what ties the launched bundle to the app a later selector
+    // step auto-targets, so it must not be skipped per bundle — see
+    // treeSourceGate. A resolvable service that never connects distinguishes a
+    // real wait from a skip: a skip would report launch:pass.
     await writeFlow("main", {
       executionPrerequisite: "",
       steps: [
         // Prefix matching is deliberately case-insensitive.
         { kind: "launch", app: "com.APPLE.Preferences" },
-        { kind: "echo", message: "runs without a devtools connection" },
+        { kind: "echo", message: "should never run" },
       ],
     });
-    // A resolvable service that never connects makes this test distinguish a
-    // real non-injectable skip from "wait, time out, then ignore the result".
     const resolveService = vi.fn(async () => ({ isConnected: () => false }));
     const registry = {
       invokeTool: vi.fn(async (id: string) =>
@@ -2388,21 +2387,27 @@ describe("flow composition (run:)", () => {
       )
     );
 
-    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:pass", "echo:pass"]);
-    expect(result.ok).toBe(true);
-    expect(resolveService).not.toHaveBeenCalled();
-  });
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:error", "echo:skip"]);
+    expect(result.ok).toBe(false);
+    expect(resolveService).toHaveBeenCalled();
+    // The one thing that differs by bundle: what to try when the retry keeps
+    // failing. A system app gets the injection-free route, not "restart the
+    // argent server".
+    expect(result.steps[0].reason).toMatch(/could not connect to native devtools/i);
+    expect(result.steps[0].reason).toMatch(/Apple system app/i);
+    expect(result.steps[0].reason).toMatch(/await-ui-element/);
+    expect(result.steps[0].reason).not.toMatch(/stale or duplicate argent server/i);
+  }, 15000);
 
-  it("fails a selector directive against a com.apple.* app on the read, not the launch", async () => {
-    // The gate skip lets an injection-free flow (raw point taps + `tool:`
-    // await-ui-element steps) drive a system app end to end. A selector step is
-    // the part that cannot work, and it must say so per read rather than the
-    // launch presenting the terminal state as a retryable connect failure.
+  it("passes the gate for a com.apple.* app that does connect", async () => {
+    // Argent treats these bundles as non-injectable, but on the simulator they
+    // do connect after a restart-app (measured on iOS 18.3 and 26.5), so the
+    // gate is a real wait for them and not a permanent dead-end.
     await writeFlow("main", {
       executionPrerequisite: "",
       steps: [
         { kind: "launch", app: "com.apple.Preferences" },
-        { kind: "tap" as const, selector: { text: "General" } },
+        { kind: "echo", message: "runs once the system app has connected" },
       ],
     });
     const registry = {
@@ -2410,8 +2415,7 @@ describe("flow composition (run:)", () => {
         id === "list-devices" ? { devices: [] } : { ok: true }
       ),
       getTool: vi.fn(() => undefined),
-      // Nothing is connected, because a system app can never connect.
-      resolveService: vi.fn(async () => ({ listConnectedBundleIds: () => [] as string[] })),
+      resolveService: vi.fn(async () => ({ isConnected: () => true })),
     } as unknown as Registry;
 
     const result = asRun(
@@ -2421,11 +2425,8 @@ describe("flow composition (run:)", () => {
       )
     );
 
-    expect(result.steps[0].status).toBe("pass");
-    expect(result.steps[1].status).not.toBe("pass");
-    expect(result.steps[1].reason).toMatch(/no app is connected to native devtools/i);
-    expect(result.steps[1].reason).toMatch(/com\.apple\.\*/);
-    expect(result.ok).toBe(false);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:pass", "echo:pass"]);
+    expect(result.ok).toBe(true);
   });
 });
 
