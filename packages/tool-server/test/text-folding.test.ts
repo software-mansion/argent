@@ -88,6 +88,42 @@ describe("foldText", () => {
     // because they render identically.
     expect(foldText("Cafe\u0301")).toBe(foldText("Café"));
     expect(foldText("  Save   Changes \n")).toBe("save changes");
+    expect(foldText("Total:\t42")).toBe("total: 42");
+  });
+
+  it("keeps a LINE BREAK, which no number of spaces renders as", () => {
+    // The whitespace collapse is the horizontal kind only. A soft hyphen is
+    // kept for a hyphen it MIGHT paint; `\n` moves the glyphs after it every
+    // time, so folding it let `equals: "Sign in"` pass against a label the
+    // screen renders on two lines — and nothing downstream catches that,
+    // because the fold having equated them leaves confusableTextNote no
+    // difference to name.
+    expect(foldText("Sign\nin")).toBe("sign\nin");
+    expect(equalsCI("Sign\nin", "Sign in")).toBe(false);
+    expect(confusableTextNote("Sign\nin", "Sign in")).toBeUndefined();
+    expect(includesCI("Line one\nLine two", "one Line")).toBe(false);
+    // A tab is horizontal, so it still folds.
+    expect(equalsCI("a\tb", "a b")).toBe(true);
+    // As do the other line-breaking whitespace characters.
+    expect(equalsCI("Sign\u2028in", "Sign in")).toBe(false);
+    expect(equalsCI("Sign\u0085in", "Sign in")).toBe(false);
+  });
+
+  it("still collapses a break run to ONE newline, the spaces around it included", () => {
+    // CRLF is one break, not two, and the incidental indentation either side of
+    // a break is as invisible as a doubled space is.
+    expect(foldText("Line one\r\nLine two")).toBe(foldText("Line one\nLine two"));
+    expect(foldText("Line one \n  Line two")).toBe("line one\nline two");
+  });
+
+  it("counts only an INTERIOR break, so outer whitespace stays a space", () => {
+    // A break at the label's edge separates no glyph from another, and foldText
+    // trims it away regardless — so the untrimmed foldLoose must not promote it
+    // either, or a `contains` needle's boundary space stops matching a label
+    // that happens to end in a newline.
+    expect(foldText("\nSign in\n")).toBe("sign in");
+    expect(includesCI("  Save   Changes \n", "Changes ")).toBe(true);
+    expect(equalsCI("Sign in\n", "Sign in")).toBe(true);
   });
 
   it("keeps COMPATIBILITY variants distinct — the eye can see those", () => {

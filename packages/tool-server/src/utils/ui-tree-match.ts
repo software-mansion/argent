@@ -50,7 +50,7 @@ export const selectorFieldsSchema = z
       })
       .optional()
       .describe(
-        "Case-insensitive substring of the element's visible label or value. Compared on FOLDED text: a non-breaking space matches a plain one, and an LTR bidi wrapper around otherwise left-to-right text is ignored, so you can type what you see. Characters that change the rendering are NOT folded (bidi controls that reorder, a soft hyphen, emoji ZWJ/variation selectors). A leading or trailing space is significant and constrains the match; a value that is only whitespace or invisible characters matches nothing."
+        "Case-insensitive substring of the element's visible label or value. Compared on FOLDED text: a non-breaking space matches a plain one, a run of spaces or tabs matches a single space, and an LTR bidi wrapper around otherwise left-to-right text is ignored, so you can type what you see. Characters that change the rendering are NOT folded (bidi controls that reorder, a soft hyphen, emoji ZWJ/variation selectors, and a line break, which no number of spaces matches). A leading or trailing space is significant and constrains the match; a value that is only whitespace or invisible characters matches nothing."
       ),
     identifier: z
       .string()
@@ -193,12 +193,44 @@ export function assertText(node: DescribeNode): string {
 //     flake, arriving through the fold itself.
 //   - A soft hyphen paints a real hyphen when the line breaks there.
 //   - U+180E suppresses Arabic cursive joining exactly as ZWNJ does.
+//   - A line break is not one of these controls at all, but the same test
+//     decides it: a run of whitespace collapses to a single character, and a
+//     run that breaks the line collapses to a newline rather than a space (see
+//     {@link LINE_BREAK}). A soft hyphen is kept for a hyphen it MIGHT paint;
+//     a `\n` moves the glyphs after it unconditionally.
 //
 // So the set is split three ways: always safe, safe only while the string has
 // no bidi content, and never.
 
 /** Space-like codepoints that are not U+0020. NBSP, narrow NBSP, ideographic, en/em quad, etc. */
 const SPACE_LIKE = /[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]/gu;
+
+/**
+ * Whitespace that BREAKS THE LINE, and so is the one part of the whitespace
+ * family the run-collapse must not equate with a space.
+ *
+ * A soft hyphen is kept because it MIGHT paint a hyphen, if the line happens to
+ * break there; `\n` breaks the line unconditionally. Collapsing it let
+ * `equals: "Sign in"` go green against a label the screen renders on two lines
+ * \u2014 a pass against a screen that reads differently, which is the outcome this
+ * module rates worse than a flake, and nothing downstream catches it (the fold
+ * having equated them, {@link confusableTextNote} sees no difference to name).
+ *
+ * The horizontal collapse it narrows is still worth having: doubled spaces and
+ * a tab used as padding really are invisible, and an NBSP reduced by
+ * {@link SPACE_LIKE} next to a plain space has to merge with it. So a run
+ * collapses to ONE character either way \u2014 a newline when the run breaks the
+ * line, a space otherwise \u2014 which also folds CRLF onto LF and absorbs the
+ * incidental spaces around a break.
+ *
+ * Only an INTERIOR run, though. A break at the very edge of a label separates
+ * no glyph from another, and it is the same outer whitespace {@link foldText}
+ * discards wholesale \u2014 so treating it as significant in the untrimmed
+ * {@link foldLoose} would make the two disagree, and would break the boundary
+ * space a `contains` needle is entitled to (`contains: "Changes "` against a
+ * label ending `Changes\n`).
+ */
+const LINE_BREAK = /[\n\r\v\f\u0085\u2028\u2029]/;
 
 /**
  * Invisible formatting that cannot change a glyph or its position in ANY
@@ -282,8 +314,9 @@ const FOLD_CACHE_MAX = 4096;
 
 /**
  * The comparable form of a piece of UI text: invisible formatting stripped,
- * NFC-normalized, every space-like codepoint reduced to a plain space, runs of
- * whitespace collapsed, trimmed, lowercased.
+ * NFC-normalized, every space-like codepoint reduced to a plain space, each run
+ * of whitespace collapsed to one character (a newline where the run breaks the
+ * line — see {@link LINE_BREAK} — a space otherwise), trimmed, lowercased.
  *
  * **NFC, not NFKC.** Canonical normalization only equates spellings that
  * render identically (a precomposed "é" and its decomposed form). COMPATIBILITY
@@ -334,7 +367,14 @@ function foldLoose(value: string): string {
   const folded = stripped
     .normalize("NFC")
     .replace(SPACE_LIKE, " ")
-    .replace(/\s+/g, " ")
+    // One character per whitespace run — a newline when an INTERIOR run breaks
+    // the line, a space otherwise. See {@link LINE_BREAK} for why the two
+    // cannot both collapse to a space, and why only an interior run counts:
+    // `\s+` is greedy, so a run with text on both sides is one with a non-space
+    // neighbour at each end.
+    .replace(/\s+/g, (run, at: number, whole: string) =>
+      LINE_BREAK.test(run) && at > 0 && at + run.length < whole.length ? "\n" : " "
+    )
     .toLowerCase();
   // Trees are re-read on every poll, so the same strings recur constantly.
   // A plain size cap (rather than an LRU) is enough: the working set is one
