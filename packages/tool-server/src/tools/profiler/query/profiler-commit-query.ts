@@ -10,8 +10,16 @@ import { deriveReason } from "../../../utils/react-profiler/pipeline/utils";
 import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
 
 const timeRangeSchema = z.object({
-  start: z.coerce.number().describe("Start of range in ms (performance.now clock)"),
-  end: z.coerce.number().describe("End of range in ms (performance.now clock)"),
+  start: z.coerce
+    .number()
+    .describe(
+      "Start of range in ms since profiling started — the same clock profiler-commit-query prints"
+    ),
+  end: z.coerce
+    .number()
+    .describe(
+      "End of range in ms since profiling started — the same clock profiler-commit-query prints"
+    ),
 });
 
 const zodSchema = z.object({
