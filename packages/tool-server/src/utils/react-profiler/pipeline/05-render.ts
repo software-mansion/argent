@@ -380,7 +380,8 @@ function renderCommit(
   if (hiddenCount > 0) {
     lines.push(
       `- _Shown: ${roundedShown}ms self / ${summary.totalRenderMs}ms commit (${coveragePct}%) — ` +
-        `${hiddenCount} more components not shown. Use \`profiler-commit-query mode=by_index\` to see all._`
+        `${hiddenCount} more components not shown. Use ` +
+        `\`profiler-commit-query mode=by_index commit_index=${summary.commitIndex}\` to see all._`
     );
   } else if (coveragePct < 80) {
     lines.push(
