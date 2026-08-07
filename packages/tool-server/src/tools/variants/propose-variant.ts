@@ -10,8 +10,10 @@ const zodSchema = z.object({
     .max(200)
     .describe(
       'Human name of the on-screen element this variant targets, e.g. "Foo button" or ' +
-        '"profile header". Repeated calls with the same element accumulate multiple variants ' +
-        "on it. Used as the default screen matcher when `match` is omitted."
+        '"profile header". This label IS the element\'s identity: repeated calls with the same ' +
+        "label (ignoring case and surrounding whitespace) accumulate variants on one picker card, " +
+        "whatever `match` they pass. Give genuinely different elements different labels. Also used " +
+        "as the default screen matcher when `match` is omitted."
     ),
   udid: z
     .string()
@@ -38,8 +40,11 @@ const zodSchema = z.object({
     .optional()
     .describe(
       "Optional precise matcher so the floating variant bubble anchors to the right element on " +
-        "the streamed screen. Defaults to { by: 'text', value: element }. Get exact " +
-        "labels/identifiers from the `describe` tool first for reliable anchoring."
+        "the streamed screen. Defaults to { by: 'text', value: element }. This is a locator only — " +
+        "it does not affect which element variants group under. A matcher you supply replaces the " +
+        "label-derived default, but if you then supply a different one for the same label the " +
+        "first is kept and the response reports what was ignored. Get exact labels/identifiers " +
+        "from the `describe` tool first for reliable anchoring."
     ),
   variant: z
     .object({
@@ -149,14 +154,23 @@ it does not wait for the user.`,
       const finish = variantProposalStore.isCliSession()
         ? "end your turn — the user's feedback will arrive as a message"
         : "call await_user_selection once";
+      // A dropped matcher has to be said out loud: the agent asked to locate
+      // the element one way and the card will use another, and the likeliest
+      // cause is that two different elements were given the same label.
+      const ignored = res.matchIgnored
+        ? ` Kept the matcher this element already had (${res.matchApplied.by}=${res.matchApplied.value}) ` +
+          `and ignored ${res.matchIgnored.by}=${res.matchIgnored.value} — variants group by the ` +
+          `\`element\` label, so give a different label if these are different elements.`
+        : "";
+
       return {
         ...res,
         hint:
-          res.variantCount === 1
+          (res.variantCount === 1
             ? `Staged the first variant for "${res.element}". Propose more variants (for this or ` +
               `other elements), then ${finish} when done.`
             : `"${res.element}" now has ${res.variantCount} variants. Keep proposing, then ` +
-              `${finish} when every element is covered.`,
+              `${finish} when every element is covered.`) + ignored,
       };
     },
   };

@@ -2950,6 +2950,7 @@
         cards: new Map(), // id -> { el, sig, target, anim, animVel, home, pos, vel, pinned, gone, spawned, dragging }
         thumbFrames: {}, // id -> frozen frame for the static preview crop
         anchors: {}, // id -> last-matched element frame {x,y,width,height} (disambiguates shared labels by size)
+        matchSigs: {}, // id -> matcher the anchor was locked against; a change re-homes the card
         conn: new Map(), // id -> { path, dot } reused SVG nodes
         pinEls: new Map(), // annId -> reused pin element
         annId: 0,
@@ -3272,6 +3273,7 @@
                 vp.annotations = [];
                 vp.thumbFrames = {};
                 vp.anchors = {};
+                vp.matchSigs = {};
                 vp.revealOffscreen = false;
                 vp.offscreenPromptCollapsed = false;
                 vp.inspectorUsed = false; // new round → reset per-round usage flags
@@ -5051,6 +5053,17 @@
           // element is followed across big scroll jumps, and when it leaves the
           // screen the bubble goes off-screen instead of re-homing onto a
           // same-text impostor. See vpMatchNode / vpDescMatches.
+          // The locator can be upgraded mid-round (a later call supplies a real
+          // matcher where the first only had the label-derived default). The
+          // anchor was locked against the OLD matcher, so drop it and re-home.
+          const matchSig = p.match ? p.match.by + ":" + p.match.value : "";
+          if (vp.matchSigs && vp.matchSigs[p.id] !== matchSig) {
+            if (vp.matchSigs[p.id] !== undefined) {
+              delete vp.anchors[p.id];
+              delete vp.thumbFrames[p.id];
+            }
+            vp.matchSigs[p.id] = matchSig;
+          }
           let anchor = vp.anchors[p.id];
           if (!anchor) {
             const av = p.variants && p.variants.find((v) => v.frame);

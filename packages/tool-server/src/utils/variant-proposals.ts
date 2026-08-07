@@ -69,6 +69,12 @@ export interface ElementProposal {
   /** Human-facing name the agent used, e.g. "Foo button". */
   element: string;
   match: VariantMatch;
+  /**
+   * True when the agent supplied `match` itself. A synthesized default is a
+   * placeholder, so a later explicit matcher may replace it; one the agent
+   * chose is never overwritten.
+   */
+  matchExplicit: boolean;
   variants: Variant[];
   createdAt: number;
 }
@@ -308,6 +314,16 @@ const MAX_PENDING_OUTCOMES = 32;
 const MAX_MATCH_VALUE_LENGTH = 200;
 const MAX_ANNOTATIONS = 200;
 
+/**
+ * Identity key for an element. `element` is the human-facing label AND the
+ * identity — repeated calls with the same label accumulate on one card — so it
+ * is compared case- and whitespace-insensitively, matching how `slug` folds the
+ * same string into an id.
+ */
+function elementKey(element: string): string {
+  return element.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
 function slug(s: string): string {
   return s
     .toLowerCase()
@@ -362,7 +378,6 @@ export class VariantProposalStore {
   private ownedDevices = new Set<string>();
   private submitted: SubmittedSelection[] = [];
   private submittedAnnotations: ElementAnnotation[] = [];
-  private variantSeq = 0;
   /** Parked await_user_selection calls. */
   private waitersList: Waiter[] = [];
   /** Frozen result of the current round once the user submits. */
@@ -431,7 +446,6 @@ export class VariantProposalStore {
     this.globalComment = "";
     this.submitted = [];
     this.submittedAnnotations = [];
-    this.variantSeq = 0;
     this.lastOutcome = null;
     this.events.emit("changed");
   }
@@ -526,6 +540,8 @@ export class VariantProposalStore {
     element: string;
     variantCount: number;
     totalElements: number;
+    matchApplied: VariantMatch;
+    matchIgnored?: VariantMatch;
   } {
     this.autoRollIfCompleted();
 
@@ -533,25 +549,46 @@ export class VariantProposalStore {
     // directly. Last non-empty value wins; usually set once on the first call.
     if (input.udid && input.udid.trim()) this.device = input.udid.trim();
 
-    const match: VariantMatch = input.match ?? { by: "text", value: input.element };
-    const key = `${match.by}:${match.value.trim().toLowerCase()}`;
+    // Identity is the element label, not the matcher. Keying on the matcher
+    // split one element into two cards whenever `match` was supplied, and — the
+    // other way round — filed variants under an unrelated element whenever two
+    // labels happened to share a matcher value.
+    const key = elementKey(input.element);
+    const explicitMatch = input.match;
+    const match: VariantMatch = explicitMatch ?? { by: "text", value: input.element };
 
-    let proposal = this.proposals.find(
-      (p) => `${p.match.by}:${p.match.value.trim().toLowerCase()}` === key
-    );
+    let proposal = this.proposals.find((p) => elementKey(p.element) === key);
+    let matchIgnored: VariantMatch | undefined;
+
     if (!proposal) {
       proposal = {
         id: `el-${slug(input.element) || "element"}-${this.proposals.length + 1}`,
         element: input.element,
         match,
+        matchExplicit: Boolean(explicitMatch),
         variants: [],
         createdAt: Date.now(),
       };
       this.proposals.push(proposal);
+    } else if (explicitMatch) {
+      if (!proposal.matchExplicit) {
+        // The stored locator was synthesized from the label; a real one the
+        // agent supplied is strictly better, so take it.
+        proposal.match = explicitMatch;
+        proposal.matchExplicit = true;
+      } else if (
+        proposal.match.by !== explicitMatch.by ||
+        proposal.match.value !== explicitMatch.value
+      ) {
+        // Two different explicit locators for one label is ambiguous — the
+        // agent may have meant two different elements. Keep the first (the UI
+        // has already anchored on it) and tell the caller what was dropped.
+        matchIgnored = explicitMatch;
+      }
     }
 
     const variant: Variant = {
-      id: `v${++this.variantSeq}`,
+      id: `v${proposal.variants.length + 1}`,
       name: input.variant.name,
       summary: input.variant.summary,
       code: input.variant.code,
@@ -570,6 +607,8 @@ export class VariantProposalStore {
       element: proposal.element,
       variantCount: proposal.variants.length,
       totalElements: this.proposals.length,
+      matchApplied: proposal.match,
+      ...(matchIgnored ? { matchIgnored } : {}),
     };
   }
 

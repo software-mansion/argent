@@ -977,3 +977,99 @@ describe("VariantProposalStore — roundAbandoned telemetry event", () => {
     expect(stats).toHaveLength(1);
   });
 });
+
+describe("VariantProposalStore — element is the identity (issue #624)", () => {
+  it("keeps variants on one element when a later call supplies a matcher", () => {
+    // The reported bug: identity was keyed on the matcher, so following the
+    // docs' advice to pass `match` forked a second picker card and the human
+    // was asked to choose between halves of one set.
+    const s = new VariantProposalStore();
+    const r1 = s.proposeVariant({ element: "QA probe button", variant: variant("A") });
+    const r2 = s.proposeVariant({
+      element: "QA probe button",
+      match: { by: "text", value: "SUBMIT" },
+      variant: variant("B"),
+    });
+
+    expect(r2.elementId).toBe(r1.elementId);
+    expect(r2.variantCount).toBe(2);
+    expect(r2.totalElements).toBe(1);
+  });
+
+  it("does not file one element's variants under another that shares a matcher", () => {
+    // The unreported direction, and the more damaging one: the key was
+    // symmetric, so two different labels sharing a matcher value merged — the
+    // response even came back naming the other element.
+    const s = new VariantProposalStore();
+    const shared = { by: "text" as const, value: "SHARED" };
+    const r1 = s.proposeVariant({ element: "Header logo", match: shared, variant: variant("A") });
+    const r2 = s.proposeVariant({ element: "Footer link", match: shared, variant: variant("B") });
+
+    expect(r2.elementId).not.toBe(r1.elementId);
+    expect(r1.element).toBe("Header logo");
+    expect(r2.element).toBe("Footer link");
+    expect(r2.totalElements).toBe(2);
+  });
+
+  it("treats the label case- and whitespace-insensitively, as the id slug does", () => {
+    const s = new VariantProposalStore();
+    const r1 = s.proposeVariant({ element: "Foo button", variant: variant("A") });
+    const r2 = s.proposeVariant({ element: "  foo   BUTTON ", variant: variant("B") });
+
+    expect(r2.elementId).toBe(r1.elementId);
+    expect(r2.variantCount).toBe(2);
+  });
+
+  it("upgrades a label-derived matcher to a real one the agent supplies", () => {
+    // The default matcher is synthesized from the label, so it is a placeholder
+    // — replacing it with something the agent actually chose is an improvement.
+    const s = new VariantProposalStore();
+    s.proposeVariant({ element: "Search field", variant: variant("A") });
+    const r2 = s.proposeVariant({
+      element: "Search field",
+      match: { by: "identifier", value: "search-input" },
+      variant: variant("B"),
+    });
+
+    expect(r2.matchApplied).toEqual({ by: "identifier", value: "search-input" });
+    expect(r2.matchIgnored).toBeUndefined();
+    expect(s.snapshot().proposals[0]!.match).toEqual({
+      by: "identifier",
+      value: "search-input",
+    });
+  });
+
+  it("keeps the first explicit matcher and reports the one it ignored", () => {
+    // Two different explicit matchers for one label is ambiguous — the agent
+    // may have meant two elements. The card is already anchored on the first,
+    // so keep it, but never drop the second silently.
+    const s = new VariantProposalStore();
+    s.proposeVariant({
+      element: "Buy",
+      match: { by: "identifier", value: "buy-top" },
+      variant: variant("A"),
+    });
+    const r2 = s.proposeVariant({
+      element: "Buy",
+      match: { by: "identifier", value: "buy-bottom" },
+      variant: variant("B"),
+    });
+
+    expect(r2.matchApplied).toEqual({ by: "identifier", value: "buy-top" });
+    expect(r2.matchIgnored).toEqual({ by: "identifier", value: "buy-bottom" });
+  });
+
+  it("numbers variants within their own element", () => {
+    // The ids used to come from a store-wide counter, so an element's second
+    // variant could be called v5 — which read as a per-element sequence and
+    // was how the reporter first noticed something was wrong.
+    const s = new VariantProposalStore();
+    s.proposeVariant({ element: "Foo", variant: variant("A") });
+    s.proposeVariant({ element: "Foo", variant: variant("B") });
+    s.proposeVariant({ element: "Bar", variant: variant("C") });
+
+    const snap = s.snapshot();
+    expect(snap.proposals[0]!.variants.map((v) => v.id)).toEqual(["v1", "v2"]);
+    expect(snap.proposals[1]!.variants.map((v) => v.id)).toEqual(["v1"]);
+  });
+});
