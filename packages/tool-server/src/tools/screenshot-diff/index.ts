@@ -37,13 +37,13 @@ const zodSchema = z
       .boolean()
       .optional()
       .describe(
-        "Capture the baseline screenshot live at full resolution before diffing. Cannot be combined with captureCurrent."
+        "Capture the baseline screenshot live before diffing — at full resolution where the device can stream one, otherwise at the server's default scale. Cannot be combined with captureCurrent."
       ),
     captureCurrent: z.coerce
       .boolean()
       .optional()
       .describe(
-        "Capture the current screenshot live at full resolution before diffing. Cannot be combined with captureBaseline."
+        "Capture the current screenshot live before diffing — at full resolution where the device can stream one, otherwise at the server's default scale. Cannot be combined with captureBaseline."
       ),
     rotation: z
       .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
@@ -100,7 +100,7 @@ export const screenshotDiffTool: ToolDefinition<Params, ScreenshotDiffResult> = 
     failedMsg: ({ failureSignal }) => `Failed to compare screenshots: ${failureSignal.error_code}`,
   },
   description: `Compare two PNG screenshots and return a compact visual-diff summary.
-Accepts saved baseline/current PNG paths, or one saved PNG plus one live full-resolution capture from a device. Always provide udid so the simulator-server dependency can be resolved.
+Accepts saved baseline/current PNG paths, or one saved PNG plus one live capture from a device — full resolution where the device can stream one, otherwise the server's default scale. Always provide udid so the simulator-server dependency can be resolved.
 Use when stable before/after screenshots exist and the expected result is pixel-visible: layout, spacing, color, typography, image/icon rendering, clipping, overflow, or text rendering.
 For live captures, set exactly one of captureBaseline or captureCurrent; use baselinePath + captureCurrent for the common visual-regression flow.
 Returns { summary, diffPath, contextDiffPath }. The summary uses normalized [0,1] screen locations matching describe coordinates; diffPath is the full-size diff image and contextDiffPath is a downscaled image for MCP/agent display.

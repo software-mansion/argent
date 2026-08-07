@@ -160,6 +160,14 @@ describe("diffPngFiles", () => {
     expect(result.summary).toContain(
       "- size_normalized: baseline=20x40 current=10x20 compared_at=10x20"
     );
+    // The remedy must stay followable on the devices that produce this status
+    // most often. Some Android emulators reject a full-res single frame with a
+    // "wrong data size" framebuffer mismatch, so naming `scale: 1.0` as the
+    // thing to do sends the reader at the one capture that cannot work — and
+    // contradicts "the same scale as the current image" unless that image
+    // happened to be full-res.
+    expect(result.summary).toContain("re-capture the baseline at the current image's scale");
+    expect(result.summary).not.toContain("(screenshot with scale: 1.0)");
   });
 
   it("still reports a real difference as `changed` when sizes were normalized", async () => {

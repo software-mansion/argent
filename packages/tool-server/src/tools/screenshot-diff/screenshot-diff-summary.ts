@@ -49,7 +49,7 @@ export function formatScreenshotDiffSummary(result: ScreenshotDiffSummaryInput):
     lines.push(
       `- size_normalized: baseline=${formatSize(baseline)} current=${formatSize(current)} compared_at=${formatSize(comparedAt)}`,
       "  - the inputs share an aspect ratio but not a resolution, so the larger was downscaled before comparing; any pixel or text differences below may include resampling artifacts, and the diff images are at compared_at rather than full size",
-      "  - re-capture the baseline at the same scale as the current image (screenshot with scale: 1.0) to compare without resampling"
+      "  - re-capture the baseline at the current image's scale to compare without resampling — `screenshot` takes a `scale`, and not every Android emulator can stream `scale: 1.0`"
     );
   }
 
