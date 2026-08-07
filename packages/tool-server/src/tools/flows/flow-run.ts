@@ -196,10 +196,22 @@ const inputSchema: Record<string, unknown> = {
  * `InvalidToolInputError`, not a plain `Error`: a missing name is a client
  * input error, so it must reach the HTTP boundary as a 400 (the class maps
  * there, matching the zod-validation path) and telemetry as a `validation`
- * signal, not the 500 / `ARGENT_UNCLASSIFIED_FAILURE` a plain `Error` yields.
- * Making `name` optional (for the alias) moved this check out of zod, so it now
- * has to carry that classification itself, the way its sibling validations
- * (`assertSafeFlowName`, `resolveFlowFilePath`) already do.
+ * signal. Making `name` optional (for the alias) moved this check out of zod,
+ * so it has to carry that classification itself.
+ *
+ * What a plain `Error` would cost is the classification, not the bucket: thrown
+ * from here it is inside `execute`'s try, so `ToolExecutionError` always wraps
+ * it and `getFailureSignalOrFallback` answers
+ * `REGISTRY_TOOL_EXECUTION_FAILED` / `error_kind: "unknown"` — the
+ * `ARGENT_UNCLASSIFIED` fallback in the telemetry listener is never consulted.
+ * So the gain is `unknown` → `validation`, plus the 400.
+ *
+ * Not a precedent this follows, though: `assertSafeFlowName` throws a bare
+ * `FailureError`, and `http.ts` maps to 400 off the error CLASS, so it falls
+ * past that arm to a 500 whose body says `error_kind: "validation"` —
+ * `{"name":"../x"}` answers 500 where `{"name":""}` answers 400, inside one
+ * tool. That is a pre-existing gap in the class-based mapping (it predates this
+ * branch), not something this check should imitate.
  */
 export function resolveFlowName(
   params: { name?: string; flow_name?: string },

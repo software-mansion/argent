@@ -132,8 +132,11 @@ export class Registry {
           // same rejection can land here or inside a tool (a cross-field rule
           // zod cannot express, a field left optional so an alias is accepted),
           // and telemetry must not read those two as different kinds of
-          // failure — an unsignalled Error buckets as ARGENT_UNCLASSIFIED,
-          // i.e. as an internal fault the caller could not have avoided.
+          // failure — an unsignalled Error is wrapped as
+          // REGISTRY_TOOL_EXECUTION_FAILED / `error_kind: "unknown"`, i.e. as an
+          // internal fault the caller could not have avoided. Signalling it here
+          // makes both spellings read as `validation`, and gives the HTTP
+          // boundary the code it needs to answer a nested miss with a 400.
           throw new FailureError(
             `Invalid params for tool "${id}": ${describeParamIssues(parsed.error, params)}`,
             {
