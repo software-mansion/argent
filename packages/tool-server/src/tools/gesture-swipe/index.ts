@@ -89,10 +89,10 @@ Pass momentum:false for a momentum-free swipe that lands exactly where the finge
     // wherever the last Move landed — so without repeating the end point as a
     // Move the swipe is delivered short of where it was authored. How short
     // depends on the ramp below: a plain swipe stops a full step out, at
-    // authored × (steps-1)/steps; a `settle` swipe's ease-out has already
+    // authored × (steps-1)/steps; a momentum-free swipe's ease-out has already
     // closed all but (1/steps)^n of the travel — orders of magnitude nearer,
     // but still not the end point, so the repeat is unconditional rather than
-    // gated on `!settle`, and settling is what `scroll-to` always asks for.
+    // gated on `!momentumFree` — and `scroll-to` always asks for momentum-free.
     // iOS honours the Up, and a duplicate sample before it would feed UIKit's
     // velocity estimator an extra near-zero interval and damp the fling.
     const repeatEndPointBeforeLift = resolveDevice(params.udid).platform === "android";

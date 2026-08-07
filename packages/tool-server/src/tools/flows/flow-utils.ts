@@ -881,9 +881,9 @@ export const SWIPE_MIN_TRAVEL = 0.03;
  *
  * 150ms is 8 moves over 9 frames. Measured on iOS a pan needs ~50ms of them to
  * read as a pan at all (33ms yields one move and is still a tap), so the floor
- * leaves real margin for slower recognizers and gives `settle`'s ease-out
- * enough samples to bend — with a single sample it inverts, measuring a
- * HIGHER release velocity than the linear ramp. It is applied on every
+ * leaves real margin for slower recognizers and gives `momentum: false`'s
+ * ease-out enough samples to bend — with a single sample it inverts, measuring
+ * a HIGHER release velocity than the linear ramp. It is applied on every
  * platform, though Chromium's `gesture-drag` floors its own step count and so
  * never degenerates to a bare press/release: there the floor is margin rather
  * than a rescue. An envelope on faithful delivery, not a judgment that fast
@@ -930,8 +930,8 @@ function swipeByToYaml(by: { x?: number; y?: number }): { x?: number; y?: number
 /** Display spelling of a relative swipe delta (`x=-0.31, y=0.2`, absent axes
  * dropped) — the DELTA's spelling shared by the run report's stepTarget and the
  * recording summary, so the two never disagree on it. That is all they share:
- * the recording summary goes on to append an options tail (`(settle, 800ms)`)
- * that the report's target does not carry. */
+ * the recording summary goes on to append an options tail
+ * (`(momentum-free, 800ms)`) that the report's target does not carry. */
 export function swipeByLabel(by: { x?: number; y?: number }): string {
   return (["x", "y"] as const)
     .filter((axis) => by[axis] !== undefined)
