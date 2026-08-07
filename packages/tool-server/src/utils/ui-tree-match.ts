@@ -406,6 +406,23 @@ function isSequenceBuilding(ch: string): boolean {
 
 /** The directional controls: no glyph of their own, but they REORDER text. */
 const DIRECTIONAL = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
+
+/**
+ * No glyph of their own, but they change which glyphs are DRAWN \u2014 the two
+ * members of the DELIBERATELY NOT FOLDED list that {@link isSequenceBuilding}
+ * does not cover and that are not {@link DIRECTIONAL} either. U+00AD SOFT
+ * HYPHEN paints a real hyphen when the line breaks there; U+180E MONGOLIAN
+ * VOWEL SEPARATOR suppresses Arabic cursive joining exactly as ZWNJ does.
+ *
+ * Both are `Default_Ignorable_Code_Point`, so they reach the note as ordinary
+ * inert ignorables and would be described as noise \u2014 the false story this note
+ * must never tell, about the very characters the fold keeps for the opposite
+ * reason. They get their own lead rather than being dropped the way ZWJ is,
+ * because the code points are still worth printing: an author cannot fix what
+ * they cannot see, and this lead points them at the rendering instead of at a
+ * copy-paste.
+ */
+const RENDERING_AFFECTING = /[\u00ad\u180e]/u;
 /** {@link DIRECTIONAL}, global — for {@link quoteScreenText}'s replace. */
 const DIRECTIONAL_G = new RegExp(DIRECTIONAL.source, "gu");
 
@@ -463,7 +480,7 @@ function differingIgnorables(actual: string, expected: string): string[] {
  * the advice that follows such a note is "copy what the app renders" and an
  * author who takes it masks the regression permanently:
  *
- * - The {@link SEQUENCE_BUILDING} characters are excluded outright. The fold
+ * - The {@link isSequenceBuilding} characters are excluded outright. The fold
  *   keeps ZWJ so a trans flag (U+1F3F3 VS16 ZWJ U+26A7 VS16, ONE glyph) cannot
  *   equal the two separate glyphs of a broken sequence — and then this note
  *   described that very difference as invisible noise, so the module's own
@@ -471,6 +488,10 @@ function differingIgnorables(actual: string, expected: string): string[] {
  * - A {@link DIRECTIONAL} difference is reported as what it is: those draw no
  *   glyph, but they move the ones around them, so "invisible" would be just as
  *   false a story about a `53-` that was asked to equal `5-3`.
+ * - A {@link RENDERING_AFFECTING} difference likewise. The soft hyphen and
+ *   U+180E are on the same DELIBERATELY NOT FOLDED list, and for the same
+ *   reason as ZWNJ — they change the glyphs — so the note names them as a
+ *   rendering difference instead of quietly grouping them with the ZWSPs.
  *
  * Returns undefined when the strings are equal, or differ visibly — the quoted
  * strings already say that.
@@ -489,10 +510,18 @@ export function confusableTextNote(actual: string, expected: string): string | u
     Array.from(s)
       .map((ch) => `U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`)
       .join(" ");
-  const lead = differingIgnorables(actual, expected).some((ch) => DIRECTIONAL.test(ch))
+  // Reordering is the more dramatic claim, so it wins a mixed difference; the
+  // rendering-affecting lead then covers everything left that is not simply
+  // invisible. Only the last branch is allowed to say "invisible".
+  const differing = differingIgnorables(actual, expected);
+  const lead = differing.some((ch) => DIRECTIONAL.test(ch))
     ? "the two strings differ only in directional formatting, which draws nothing itself but " +
       "REORDERS the characters around it, so the screen does not read the way the text does"
-    : "the two strings differ only in invisible characters";
+    : differing.some((ch) => RENDERING_AFFECTING.test(ch))
+      ? "the two strings differ in a character that draws nothing itself but changes what IS " +
+        "drawn — a soft hyphen paints a real hyphen where the line breaks, U+180E breaks " +
+        "Arabic cursive joining as ZWNJ does — so the screen and the text really do differ"
+      : "the two strings differ only in invisible characters";
   return `${lead} — actual [${codepoints(actual)}] vs expected [${codepoints(expected)}]`;
 }
 

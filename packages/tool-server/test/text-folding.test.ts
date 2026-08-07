@@ -360,6 +360,47 @@ describe("confusableTextNote", () => {
     expect(note).toContain("U+200F");
   });
 
+  it("says a soft hyphen is a RENDERING difference rather than calling it invisible", () => {
+    // SHY is Default_Ignorable, so it reached the note as ordinary inert noise
+    // — and the note then told the exact false story the fold keeps it to
+    // prevent: `kraft<SHY>fahrzeug` paints `kraft-` at a line break, so an
+    // author who "copies what the app renders" masks that permanently.
+    expect(equalsCI(`kraft${SOFT_HYPHEN}fahrzeug`, "kraftfahrzeug")).toBe(false);
+    const note = confusableTextNote(`kraft${SOFT_HYPHEN}fahrzeug`, "kraftfahrzeug")!;
+    expect(note).not.toContain("differ only in invisible characters");
+    expect(note).toContain("changes what IS drawn");
+    expect(note).toContain("U+00AD");
+  });
+
+  it("says the same of U+180E, which does ZWNJ's job", () => {
+    // ZWNJ is dropped from the note outright; U+180E breaks the same Arabic
+    // cursive run for the same reason, so it must not be described as noise
+    // just because it is not in the sequence-building set.
+    expect(equalsCI("ب᠎ب", "بب")).toBe(false);
+    const note = confusableTextNote("ب᠎ب", "بب")!;
+    expect(note).not.toContain("differ only in invisible characters");
+    expect(note).toContain("changes what IS drawn");
+    expect(note).toContain("U+180E");
+  });
+
+  it("lets the reordering lead win a difference that is both", () => {
+    // A mixed difference gets the sharper claim; what matters is that neither
+    // branch calls it invisible.
+    const note = confusableTextNote(`5‏-3${SOFT_HYPHEN}`, "5-3")!;
+    expect(note).toContain("REORDERS");
+    expect(note).not.toContain("differ only in invisible characters");
+  });
+
+  it("still calls a shared soft hyphen's OTHER difference invisible", () => {
+    // Both sides carry the SHY, so it is not what differs — the ZWSP is.
+    const note = confusableTextNote(
+      `kraft${SOFT_HYPHEN}fahr${ZWSP}zeug`,
+      `kraft${SOFT_HYPHEN}fahrzeug`
+    )!;
+    expect(note).toContain("differ only in invisible characters");
+    expect(note).toContain("U+200B");
+  });
+
   it("still calls a shared directional wrapper's OTHER difference invisible", () => {
     // Both sides carry the same LRE/PDF pair, so the directional characters are
     // not what differs — the ZWSP is, and that one really is inert.
