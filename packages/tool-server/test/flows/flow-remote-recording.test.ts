@@ -12,7 +12,10 @@ import {
 
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
-import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recording";
+import {
+  flowFinishRecordingTool,
+  summarizeStep,
+} from "../../src/tools/flows/flow-finish-recording";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import { createRunFlowTool, resolveFlowSource } from "../../src/tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../../src/tools/flows/flow-read-prerequisite";
@@ -219,6 +222,84 @@ describe("flow recording with a remote client (probe miss)", () => {
     await expect(
       flowFinishRecordingTool.execute({}, { name: "remote-flow", project_root: CLIENT_ROOT })
     ).rejects.toThrow("No active recording");
+  });
+
+  it("reports a running stepCount in client mode, without returning the YAML per step", async () => {
+    // The host-mode add-echo/add-step tests count stepCount off the re-read
+    // file; this pins the OTHER branch of appendStepToFlow — client mode counts
+    // off the in-memory flow and must report the same running total, still
+    // without echoing the growing YAML (the write travels via savedTo).
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "remote-flow", project_root: CLIENT_ROOT, executionPrerequisite: "Home" },
+      remoteCtx()
+    );
+    const first = await flowInsertEchoTool.execute(
+      {},
+      { name: "remote-flow", project_root: CLIENT_ROOT, message: "one" }
+    );
+    const second = await flowInsertEchoTool.execute(
+      {},
+      { name: "remote-flow", project_root: CLIENT_ROOT, message: "two" }
+    );
+
+    expect(first.stepCount).toBe(1);
+    expect(second.stepCount).toBe(2);
+    expect(first).not.toHaveProperty("flowFile");
+    expect(second).not.toHaveProperty("flowFile");
+  });
+
+  it("returns a `recorded` line in client mode that matches the YAML the client writes", async () => {
+    // `recorded` was only ever covered on the host branch. Client mode counts
+    // and serializes off a different branch of appendStepToFlow (the in-memory
+    // flow, not a re-read file), so the line and the count could drift from the
+    // bytes the client is told to write without anything noticing. The
+    // directive carries those bytes, so it is the assertion surface here — this
+    // host has no file to read back.
+    const registry = createMockRegistry({
+      "restart-app": { result: { restarted: true } },
+      "tap": { result: { tapped: true } },
+    });
+    const addStep = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "remote-flow", project_root: CLIENT_ROOT },
+      remoteCtx()
+    );
+    const launched = await addStep.execute(
+      {},
+      {
+        name: "remote-flow",
+        project_root: CLIENT_ROOT,
+        command: "restart-app",
+        args: '{"udid":"ABC","bundleId":"com.acme.app"}',
+      },
+      remoteCtx()
+    );
+    const tapped = await addStep.execute(
+      {},
+      {
+        name: "remote-flow",
+        project_root: CLIENT_ROOT,
+        command: "tap",
+        args: '{"x":0.5,"y":0.3}',
+      },
+      remoteCtx()
+    );
+
+    expect(launched.recorded).toBe("1. launch: com.acme.app");
+    expect(tapped.recorded).toBe('2. tool: tap {"x":0.5,"y":0.3}');
+    expect(tapped.stepCount).toBe(2);
+
+    // Every `recorded` line, replayed against the file the client actually
+    // gets, is the same rendering finish-recording would produce.
+    const directive = tapped.savedTo as { path: string; content: string };
+    expect(directive.path).toBe(CLIENT_FLOW_PATH);
+    expect(parseFlow(directive.content).steps.map((s, i) => summarizeStep(s, i + 1))).toEqual([
+      launched.recorded,
+      tapped.recorded,
+    ]);
   });
 
   it("a rejected append leaves the session usable instead of poisoning it", async () => {
