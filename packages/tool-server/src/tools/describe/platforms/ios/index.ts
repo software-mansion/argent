@@ -1,6 +1,7 @@
 import type { DeviceInfo, Registry, ToolDependency } from "@argent/registry";
 import { axServiceRef, AXServiceApi } from "../../../../blueprints/ax-service";
 import {
+  buildAppStateMessage,
   isInjectableBundleId,
   NON_INJECTABLE_NATIVE_WARNING,
   nativeDevtoolsRef,
@@ -40,8 +41,8 @@ const TVOS_HINT =
   "(up/down/left/right/select/back/menu/home) to move focus, and `keyboard` to type. " +
   "See the argent-tv-interact skill.";
 
-// Apple system apps (`com.apple.*`) can never load argent's injected dylib, so
-// the native-devtools fallback can't read their view hierarchy and restarting
+// Apple system apps (`com.apple.*`) cannot be relied on to load argent's dylib,
+// so the native-devtools fallback can't read their view hierarchy and restarting
 // them would never help — returning `should_restart` here puts the agent in an
 // unbounded restart-app → describe loop. This hint is reached only once
 // `describe`'s own ax-service path has already returned empty, so it leads with
@@ -49,7 +50,7 @@ const TVOS_HINT =
 // `native-*` dead-end warning verbatim with the precheck throw and
 // `native-devtools-status`.
 const NON_INJECTABLE_HINT =
-  "This is an Apple system app (com.apple.*), which cannot load argent's native-devtools " +
+  "This is an Apple system app (com.apple.*), which cannot be relied on to load argent's native-devtools " +
   "instrumentation — the native view hierarchy is unavailable and restarting the app will NOT " +
   "help. Take a `screenshot` to see the screen and interact by coordinate. " +
   NON_INJECTABLE_NATIVE_WARNING;
@@ -117,14 +118,17 @@ export async function describeIos(
     return { tree, source: "ax-service", hint };
   }
 
-  // A non-injectable system app can never connect, so `requiresAppRestart`
-  // would always be true and `should_restart` would loop forever. Return the
-  // (empty) AX result with the terminal screenshot hint instead of restarting.
+  // The launchd env carrying the bootstrap dylib is simulator-wide, so a system
+  // app's process inherits the very tokens the measurement reads and scores as
+  // injected — landing on `stale_process` (restart-app) or `unregistered`
+  // (restart the tool-server) by nothing but its age. Both are wrong for an app
+  // no restart can help, and the first rebuilds the restart-app → describe loop.
+  // Return the (empty) AX result with the terminal screenshot hint instead.
   // The gate sits BEFORE the native-devtools fallback: injectability is a
   // static property of the explicit bundle id, so the terminal hint must not
   // depend on service resolution succeeding (a downed ios-remote tunnel or a
   // dispose race would otherwise swallow it into the generic catch below), and
-  // no native-devtools service is spawned for an app that can never inject.
+  // no native-devtools service is spawned for an app that may never inject.
   // Auto-resolution (no bundleId) needs no gate — it only ever yields a
   // connected, hence injected, app. If the ax-service was degraded (sim not
   // booted through argent, so `hint` is DEGRADED_HINT), keep that re-boot
@@ -137,14 +141,45 @@ export async function describeIos(
   }
 
   // AX returned zero elements (or failed entirely) — attempt native-devtools fallback
+  let nativeApi: NativeDevtoolsApi;
   try {
     const ndRef = nativeDevtoolsRef(device);
-    const nativeApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
+    nativeApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
+  } catch (err) {
+    // The blueprint is registered unconditionally, so on an iOS target this
+    // rejects only when the service failed to come up — a socket bind losing to
+    // a concurrent same-udid server, a host that could not be picked. A failed
+    // attempt at corroboration, not an absence of one, so the empty read is as
+    // unexplained here as it is below.
+    return { tree, source: "ax-service", hint: unexplainedHint(hint, errMsg(err), params) };
+  }
 
+  try {
     const target = await resolveNativeTargetApp(nativeApi, params.bundleId);
 
-    if (await nativeApi.requiresAppRestart(target.bundleId)) {
-      return { tree, source: "ax-service", should_restart: true, hint };
+    // Degrade a rejection (the env re-apply this runs first fails on a sim that
+    // went away mid-call) rather than letting the outer catch turn a named
+    // remedy into a bare "could not be read".
+    const state = await nativeApi
+      .appConnectionState(target.bundleId)
+      .catch(() => "indeterminate" as const);
+    if (state !== "connected") {
+      // The diagnosis rides out as a hint in every state: `hint` is describe's
+      // only prose channel, and the one place `should_restart` is rendered as
+      // English — await-ui-element's timeout note — spells it "call restart-app
+      // and retry", the loop instruction with no escape. It costs most on
+      // `indeterminate`, the only state a running app reaches on ios-remote,
+      // whose message is the one saying to stop restarting the app.
+      //
+      // `should_restart` stays limited to the states a relaunch fixes:
+      // `unregistered` already launched under the terms a restart recreates, and
+      // `connecting` is the handshake exec begins, so flagging either would
+      // rebuild the restart-app → describe loop.
+      const diagnosis = buildAppStateMessage(target.bundleId, state);
+      const merged = hint ? `${hint} ${diagnosis}` : diagnosis;
+      return state === "unregistered" || state === "connecting"
+        ? { tree, source: "ax-service", hint: merged }
+        : { tree, source: "ax-service", should_restart: true, hint: merged };
     }
 
     const rawResult = (await nativeApi.queryViewHierarchy(
@@ -153,14 +188,54 @@ export async function describeIos(
     )) as { screenFrame?: unknown; elements?: unknown[]; error?: string };
 
     if (rawResult.error) {
-      return { tree, source: "ax-service", hint };
+      return { tree, source: "ax-service", hint: unexplainedHint(hint, rawResult.error, params) };
     }
 
     const parsed = parseNativeDescribeScreenResult(rawResult);
     const nativeTree = adaptNativeDescribeToDescribeResult(parsed);
     return { tree: nativeTree, source: "native-devtools", hint };
-  } catch {
-    // Native devtools unavailable or no connected app — return the empty AX result
-    return { tree, source: "ax-service", hint };
+  } catch (err) {
+    // The service answered but no hierarchy came back: no connected app to
+    // auto-target, an ambiguous frontmost, or the query threw. Returning the
+    // bare tree would say the screen is empty when it could not be read — and
+    // `await-ui-element`'s blind-read guard keys off `hint` / `should_restart`,
+    // so with neither set a `hidden` wait resolves against an element that may
+    // still be on screen.
+    //
+    // This is the DEFAULT (no `bundleId`) form's path: auto-targeting draws its
+    // candidates from the connected list, so every state the diagnosis above
+    // explains throws here before anything is measured. Nothing was resolved, so
+    // there is nothing to measure and no remedy to invent — the resolver's own
+    // message already carries one.
+    return { tree, source: "ax-service", hint: unexplainedHint(hint, errMsg(err), params) };
   }
+}
+
+function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Mark an empty accessibility read as unexplained rather than empty.
+ *
+ * Any hint already set is kept ahead of it: `DEGRADED_HINT`'s "boot-device with
+ * force=true" is corrective for the simulator itself, and dropping it would
+ * trade a repairable sim for a note about one read.
+ *
+ * `screenshot` is named on every path — the one action available whatever went
+ * wrong. Only the `bundleId` half is conditional, so a caller who supplied one
+ * is not told to take the step they already took.
+ */
+function unexplainedHint(
+  hint: string | undefined,
+  detail: string,
+  params: DescribeIosParams
+): string {
+  const next = params.bundleId
+    ? "Take a `screenshot` to see what is there."
+    : "Pass `bundleId` to have the connection state measured, or take a `screenshot` to see what is there.";
+  const why =
+    `The native view hierarchy could not be read (${detail}), so this empty accessibility tree is ` +
+    `not evidence that nothing is on screen. ${next}`;
+  return hint ? `${hint} ${why}` : why;
 }

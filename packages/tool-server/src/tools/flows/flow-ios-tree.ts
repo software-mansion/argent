@@ -1,5 +1,10 @@
 import type { DeviceInfo, Registry } from "@argent/registry";
-import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
+import {
+  buildAppStateMessage,
+  isInjectableBundleId,
+  nativeDevtoolsRef,
+  type NativeDevtoolsApi,
+} from "../../blueprints/native-devtools";
 import { resolveNativeTargetApp } from "../../utils/native-target-app";
 import { flattenHoisting, type FlatNode } from "./flow-tree-flatten";
 import {
@@ -263,16 +268,68 @@ const FULL_HIERARCHY_FIELDS = [
 ];
 
 /**
+ * Why the app a flow launched serves no view hierarchy, for the case where
+ * nothing at all is connected.
+ *
+ * An app the dylib cannot be relied on to load into is terminal for a selector,
+ * yet every measured state offers a relaunch or a tool-server restart: the
+ * launchd env carrying the bootstrap dylib is simulator-wide, so such a process
+ * inherits the injection tokens the measurement reads and can score as merely
+ * `unregistered`. Selector resolution is where that impossibility bites — the
+ * launch gate lets these apps through so a coordinate-driven flow still runs —
+ * so it is said here, with the remedy that exists at flow level.
+ *
+ * Everything else is measured off the running process; a rejection degrades as
+ * it does for the other consumers, since the call re-applies the launchd env
+ * before measuring and so rejects on a sim that went away mid-run.
+ */
+async function unreadableHierarchyReason(
+  nativeApi: NativeDevtoolsApi,
+  bundleId: string
+): Promise<string> {
+  if (!isInjectableBundleId(bundleId)) {
+    return (
+      `${bundleId} is an Apple system app: it is a platform binary with library validation, so ` +
+      `argent's native devtools cannot be relied on to inject into it, and without them a flow has ` +
+      `no view hierarchy to resolve selectors against. Replace the selector steps with coordinate ` +
+      `ones — \`tap: { x: 0.5, y: 0.35 }\` takes a point directly and reads no tree — or target an app ` +
+      `argent installs.`
+    );
+  }
+  const state = await nativeApi.appConnectionState(bundleId).catch(() => "indeterminate" as const);
+  if (state === "connected") {
+    // Reachable: `appConnectionState` re-reads the live connections map after
+    // its env re-apply and process probe, several simctl round-trips after the
+    // empty list that sent us here. So the connection arrived mid-read, and the
+    // only thing wrong with this attempt is that it was taken too early.
+    return (
+      `native devtools reported no connected app while this tree was being read, but ${bundleId} is ` +
+      `connected now — the connection arrived mid-read. Retry: flows resolve selectors against the ` +
+      `full view hierarchy native devtools serve.`
+    );
+  }
+  // The diagnosis already names the corrective action — for `unregistered` a
+  // tool-server restart, where telling a flow author to relaunch would loop.
+  // The trailing sentence says why a tree read needed one at all.
+  return `${buildAppStateMessage(bundleId, state)} Flows resolve selectors against the full view hierarchy native devtools serve.`;
+}
+
+/**
  * Query the raw UIView tree via native-devtools `getFullHierarchy` and adapt
  * it. Throws — with the reason — when native-devtools is unavailable / not yet
  * connected / errored, or when the resolved target returns no windows (a
  * non-injectable or backgrounded app): flows never degrade to the AX tree (see
  * `fetchFlowTree`), so the caller's retry loop either rides out a transient
  * failure or surfaces this message as the step's failure reason.
+ *
+ * `launchedBundleId` is the app the run's `launch` step started, when it had
+ * one. Auto-targeting cannot name an app that is not connected — exactly the
+ * cases worth explaining — so the explanation is measured for this id instead.
  */
 export async function queryFullHierarchyTree(
   registry: Registry,
-  device: DeviceInfo
+  device: DeviceInfo,
+  launchedBundleId?: string
 ): Promise<DescribeTreeData> {
   let nativeApi: NativeDevtoolsApi;
   try {
@@ -284,15 +341,22 @@ export async function queryFullHierarchyTree(
       { cause: err }
     );
   }
-  // resolveNativeTargetApp's own errors (no connected app / ambiguous frontmost)
-  // already carry the actionable next step, so they propagate unwrapped.
-  const target = await resolveNativeTargetApp(nativeApi, undefined);
-
-  if (await nativeApi.requiresAppRestart(target.bundleId)) {
-    throw new Error(
-      `${target.bundleId} was launched before argent's instrumentation loaded — relaunch it (launch-app, or a flow \`launch\` step) so the full view hierarchy is readable`
-    );
+  // Auto-targeting draws its candidates from `listConnectedBundleIds`, the same
+  // map `appConnectionState` reads, so an empty list is exactly the set of
+  // states that explain a missing connection — and the error it raises there
+  // ("Launch or restart the app first") is the restart loop this measurement
+  // exists to break. The flow's launched id does not come from that map, so it
+  // survives the disconnection auto-targeting could not describe.
+  //
+  // Tested directly rather than by catching the throw: its failure code travels
+  // on a module-local symbol, so a duplicate `@argent/registry` instance would
+  // read it as absent and silently fall back to the stock message.
+  // Auto-targeting's other errors arise only with a non-empty list and already
+  // name their next step, so they propagate unwrapped from the call below.
+  if (launchedBundleId !== undefined && nativeApi.listConnectedBundleIds().length === 0) {
+    throw new Error(await unreadableHierarchyReason(nativeApi, launchedBundleId));
   }
+  const target = await resolveNativeTargetApp(nativeApi, undefined);
 
   const rawResult = (await nativeApi.queryViewHierarchy(
     target.bundleId,

@@ -104,7 +104,7 @@ Read the exact error and choose the action that matches it:
 - `describe` succeeds but is not detailed enough for a React Native app:
   use `debugger-component-tree` next.
 - You need app-scoped inspection with full UIKit properties (`accessibilityIdentifier`, `viewClassName`):
-  use `native-describe-screen` with an explicit `bundleId`. This requires native devtools (dylib) injection — call `restart-app` first if needed.
+  use `native-describe-screen` with an explicit `bundleId`. This requires native devtools (dylib) injection.
 - You already have a candidate point and want to confirm what would actually receive touch:
   use `native-user-interactable-view-at-point`. Use `native-view-at-point` when you want the visually deepest view instead of the hit-test target.
 

@@ -52,6 +52,18 @@ export interface ActionEnv {
   ctx?: ToolContext;
   device: DeviceInfo;
   signal?: AbortSignal;
+  /**
+   * The app the most recent `launch` step started — including one inside a
+   * nested `run:`, which replaces it and is not restored afterwards, since that
+   * step's `restart-app` is what fronted the device. Undefined until a launch
+   * runs, so a fragment brought to its entry state out of band has none.
+   *
+   * The tree source uses it to explain a read it could not take: iOS
+   * auto-targeting resolves only out of the connected list, so it cannot name
+   * the very app whose disconnection needs explaining. This id comes from the
+   * flow file and survives that.
+   */
+  launchedBundleId?: string;
 }
 
 /** Outcome of a selector directive: ok, or a machine-readable reason it failed. */
@@ -323,7 +335,7 @@ export async function settleTree(env: ActionEnv): Promise<DescribeNode | undefin
     if (env.signal?.aborted) return undefined;
     let tree: DescribeNode | undefined;
     try {
-      ({ tree } = await fetchFlowTree(env.registry, env.device));
+      ({ tree } = await fetchFlowTree(env.registry, env.device, env.launchedBundleId));
     } catch (err) {
       // transient describe failure mid-navigation — retry until the deadline
       lastError = err instanceof Error ? err : new Error(String(err));
@@ -452,7 +464,7 @@ async function waitForFocus(
   for (;;) {
     if (env.signal?.aborted) return;
     try {
-      const { tree, source } = await fetchFlowTree(env.registry, env.device);
+      const { tree, source } = await fetchFlowTree(env.registry, env.device, env.launchedBundleId);
       if (!FOCUS_REPORTING_SOURCES.has(source)) return;
       const target = flowSelectorToFrame(tree, into) ?? tappedFrame;
       if (collectFocused(tree, []).some((n) => framesOverlap(n.frame, target))) return;
@@ -833,7 +845,7 @@ async function runPinch(
  */
 async function fetchScreenAspect(env: ActionEnv): Promise<number | undefined> {
   try {
-    const { screen } = await fetchFlowTree(env.registry, env.device);
+    const { screen } = await fetchFlowTree(env.registry, env.device, env.launchedBundleId);
     return screen && screen.width > 0 && screen.height > 0
       ? screen.width / screen.height
       : undefined;
@@ -1010,7 +1022,7 @@ async function waitForCondition(
   for (;;) {
     if (env.signal?.aborted) return ABORTED_OUTCOME;
     try {
-      const data = await fetchFlowTree(env.registry, env.device);
+      const data = await fetchFlowTree(env.registry, env.device, env.launchedBundleId);
       lastMatches = flowFindAll(data.tree, step.selector);
       fetchError = undefined;
       everMatched ||= lastMatches.length > 0;
