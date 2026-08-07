@@ -188,6 +188,25 @@ describe("android-tv-control — describe", () => {
     expect(res.focusable[1]?.label).toBe("Search");
     expect(res.focusable[1]?.traits).toContain("button");
   });
+
+  // The phone twin of this guard has its own suite
+  // (`describe-android-dump-failures.test.ts`); this copy had none, so the two
+  // could drift apart silently. Without it a `Killed` or `ERROR:` dump reaches
+  // `collectTvNodes` and reports "no focusable elements" — an empty screen —
+  // for what is really a retryable capture failure.
+  it.each([
+    ["a lost UiAutomation race", "Killed \n", /another uiautomator dump holding the device/],
+    [
+      "a device-refused dump",
+      "ERROR: null root node returned by UiTestAutomationBridge.",
+      /could not capture the screen/,
+    ],
+    ["an empty reply", "", /\(no output\)/],
+  ])("reports %s as a capture failure rather than an empty screen", async (_case, raw, matcher) => {
+    mockExecOut.mockResolvedValue(Buffer.from(raw));
+    const api = await makeApi();
+    await expect(api.describe()).rejects.toThrow(matcher);
+  });
 });
 
 describe("android-tv-control — recycleAx is a no-op", () => {

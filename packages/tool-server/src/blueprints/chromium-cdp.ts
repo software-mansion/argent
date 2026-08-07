@@ -68,6 +68,34 @@ export interface KeyEventArgs {
   /** DOM keyCode (deprecated but still consumed by many apps). */
   windowsVirtualKeyCode?: number;
   modifiers?: number;
+  /**
+   * Blink editing commands to run for this key event, e.g. `["selectAll"]`.
+   *
+   * Names the editing action outright instead of relying on the renderer to
+   * derive one from a modifier chord, which is what makes an editing operation
+   * portable over CDP. A `modifiers`-only event is NOT portable: on a macOS
+   * Chrome 150 build, `modifiers: 4` (Meta) and `modifiers: 2` (Ctrl) with
+   * `KeyA` both select **zero** characters, so a Backspace after one deletes a
+   * single character while the call still reports success (measured against a
+   * focused input seeded `hello123`: `modifiers` left `hello12`, `commands`
+   * left `""`). On a Linux/Windows build `modifiers: 2` does select the field,
+   * because Ctrl+A is that platform's select-all binding — so which modifier
+   * works, if any, depends on the build. `commands` works on all of them.
+   *
+   * `modifiers` is still worth setting ALONGSIDE it: the two are orthogonal and
+   * combine (verified — the field clears identically), and without it the page
+   * receives a bare unmodified letter, which fires any shortcut the app binds to
+   * that key and lets an app-level `preventDefault` cancel the edit outright.
+   *
+   * Honoured on `rawKeyDown`, `keyDown` and `char`, but NOT on `keyUp` (Chrome
+   * 150, 3/3 runs each). `rawKeyDown` is what this repo sends — it is the type
+   * a real chord's first event carries, and it delivers no character of its
+   * own. CDP also ignores unknown parameters silently, so on a Chromium old
+   * enough to predate this field the commands are dropped with no error — a
+   * caller that needs to know the edit happened has to observe the page, not
+   * the CDP reply.
+   */
+  commands?: string[];
 }
 
 export interface ViewportSize {
@@ -244,6 +272,7 @@ export const chromiumCdpBlueprint: ServiceBlueprint<ChromiumCdpApi, DeviceInfo> 
           payload.windowsVirtualKeyCode = event.windowsVirtualKeyCode;
         }
         if (event.modifiers !== undefined) payload.modifiers = event.modifiers;
+        if (event.commands !== undefined) payload.commands = event.commands;
         await server.cdp.send("Input.dispatchKeyEvent", payload);
       },
       captureScreenshot: (opts2?: ScreenshotOpts) => server.captureScreenshot(opts2),

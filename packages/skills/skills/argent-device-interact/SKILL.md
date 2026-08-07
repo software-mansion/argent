@@ -56,25 +56,25 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 
 ## 4. Choosing the Right Tool
 
-| Action            | Tool               | Notes                                                            |
-| ----------------- | ------------------ | ---------------------------------------------------------------- |
-| Multiple actions  | `run-sequence`     | Batch steps in one call (no intermediate screenshots)            |
-| Open an app       | `launch-app`       | **Always — never tap home-screen icons**                         |
-| Restart an app    | `restart-app`      | Terminate and relaunch by bundle ID                              |
-| Open URL/scheme   | `open-url`         | Web pages, deep links, URL schemes                               |
-| Single tap        | `gesture-tap`      | Buttons, links, checkboxes                                       |
-| Scroll/swipe      | `gesture-swipe`    | Straight-line scroll or swipe                                    |
-| Scroll (Chromium) | `gesture-scroll`   | Wheel-based; deltas are window fractions, positive deltaY = down |
-| Drag (Chromium)   | `gesture-drag`     | Sliders, drag-and-drop, text selection                           |
-| Long press        | `gesture-custom`   | Context menus, drag start                                        |
-| Drag & drop       | `gesture-custom`   | Complex drag interactions                                        |
-| Pinch/zoom        | `gesture-pinch`    | Two-finger pinch with auto-interpolation                         |
-| Rotation          | `gesture-rotate`   | Two-finger rotation with auto-interpolation                      |
-| Custom gesture    | `gesture-custom`   | Arbitrary touch sequences, optional interpolation                |
-| Hardware key      | `button`           | Home, back, power, volume, appSwitch, actionButton               |
-| Type text         | `keyboard`         | iOS+Android. Supports Enter, Escape, arrows                      |
-| Rotate device     | `rotate`           | Orientation changes                                              |
-| Wait for UI       | `await-ui-element` | Block until an element is visible/hidden/exists/contains text    |
+| Action            | Tool               | Notes                                                                                                        |
+| ----------------- | ------------------ | ------------------------------------------------------------------------------------------------------------ |
+| Multiple actions  | `run-sequence`     | Batch steps in one call (no intermediate screenshots)                                                        |
+| Open an app       | `launch-app`       | **Always — never tap home-screen icons**                                                                     |
+| Restart an app    | `restart-app`      | Terminate and relaunch by bundle ID                                                                          |
+| Open URL/scheme   | `open-url`         | Web pages, deep links, URL schemes                                                                           |
+| Single tap        | `gesture-tap`      | Buttons, links, checkboxes                                                                                   |
+| Scroll/swipe      | `gesture-swipe`    | Straight-line scroll or swipe                                                                                |
+| Scroll (Chromium) | `gesture-scroll`   | Wheel-based; deltas are window fractions, positive deltaY = down                                             |
+| Drag (Chromium)   | `gesture-drag`     | Sliders, drag-and-drop, text selection                                                                       |
+| Long press        | `gesture-custom`   | Context menus, drag start                                                                                    |
+| Drag & drop       | `gesture-custom`   | Complex drag interactions                                                                                    |
+| Pinch/zoom        | `gesture-pinch`    | Two-finger pinch with auto-interpolation                                                                     |
+| Rotation          | `gesture-rotate`   | Two-finger rotation with auto-interpolation                                                                  |
+| Custom gesture    | `gesture-custom`   | Arbitrary touch sequences, optional interpolation                                                            |
+| Hardware key      | `button`           | Home, back, power, volume, appSwitch, actionButton                                                           |
+| Type text         | `keyboard`         | iOS+Android+Chromium. Supports Enter, Escape, arrows; `clear: true` empties the field first (typing appends) |
+| Rotate device     | `rotate`           | Orientation changes                                                                                          |
+| Wait for UI       | `await-ui-element` | Block until an element is visible/hidden/exists/contains text                                                |
 
 ## 5. Finding Tap Targets
 
@@ -173,6 +173,18 @@ Values: `home`, `back`, `power`, `volumeUp`, `volumeDown`, `appSwitch`, `actionB
 
 Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12`. Optional: `"delayMs": 100` between keystrokes (default 50ms) — applies to the iOS simulator and Chromium; it is ignored on Android phones/tablets (typed via `adb input text`, no per-key cadence), on Vega, and on TV targets.
 
+**Replacing a field's value.** Typing **appends**. Pass `"clear": true` to empty the focused field first:
+
+```json
+{ "udid": "<UDID>", "clear": true, "text": "new@example.com" }
+```
+
+- `clear` runs **first**, so the call above replaces the value in one call. It may accompany `text` or `key`; those two still can't be combined, so submitting is a second call (`{ "key": "enter" }`). `{ "clear": true }` alone just empties the field, returning `"keys": 0` — the clear's own key presses never count.
+- **Focus a text field first.** Chromium refuses a clear with nothing editable (or a readonly / non-text element) focused, because a select-all there would select the page. iOS and Android dispatch it blind at whatever holds focus and report success either way.
+- iOS, Android and Chromium only — rejected up front on Vega and TV targets.
+- `"cleared": true` is **not proof the field is empty.** Only Chromium reads the field back, and even it goes best-effort on a page it cannot read. `describe` the field when the result matters.
+- **Old Android levels** (no `input keycombination`) delete backwards from end-of-line instead: a multi-line field keeps whatever sits below the caret, and a field over 150 characters is refused rather than half-deleted. A length it cannot read — a password field, or a screen it cannot capture — falls back to a fixed 128 backspaces, so a longer value keeps its head while the call still reports success.
+
 **Typing secrets.** To enter a credential without its plaintext ever entering your context, transcript, or logs, use a secret placeholder in `text` (works in `keyboard`, `paste`, `run-sequence` keyboard steps, and flow `type` steps):
 
 ```json
@@ -267,7 +279,7 @@ Use the sequencing when:
 
 - Knowing that some action needs multiple steps without necessarily immediate insight of screenshot
 - "scroll to bottom", "scroll to top", "scroll to do X" -> sequence scroll 3-5 times
-- form interactions, "clear and retype field" -> you may use triple-tap to select all, type new value
+- form interactions, "clear and retype field" -> one `keyboard` step with `{ "clear": true, "text": "…" }` (do NOT triple-tap to select all)
 - "submit form" → fill all fields in sequence, tap submit
 - "go back to X" → defined tap sequence for the navigation
 

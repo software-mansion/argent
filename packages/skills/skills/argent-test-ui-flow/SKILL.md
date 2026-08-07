@@ -58,12 +58,14 @@ Steps:
 ```
 1. screenshot → see login screen
 2. gesture-tap { x: 0.5, y: 0.4 }  → tap email field
-3. keyboard { text: "user@example.com" }
+3. keyboard { clear: true, text: "user@example.com" }
 4. gesture-tap { x: 0.5, y: 0.55 } → tap password field
-5. keyboard { text: "{{secret:APP_PASSWORD}}" }
+5. keyboard { clear: true, text: "{{secret:APP_PASSWORD}}" }
 6. gesture-tap { x: 0.5, y: 0.7 }  → tap Login button
 7. screenshot → verify home screen appeared
 ```
+
+> **Pre-filled fields:** `keyboard` appends, so a remembered login would leave `user@example.comuser@example.com` behind. Use `clear: true` on any field that may already hold a value — but assert the result when you depend on it, since only Chromium reads the field back (per-platform detail in `argent-device-interact`).
 
 > **Credentials:** never type plaintext credentials — use a `{{secret:<NAME>}}` placeholder in `keyboard`, resolved server-side from the `ARGENT_SECRET_<NAME>` environment variable, so the value never enters agent context. If the variable is not set, ask the user to export it (e.g. `ARGENT_SECRET_APP_PASSWORD`) instead of pasting the secret into the conversation. Never invent credentials or echo secret values into reports or saved files.
 

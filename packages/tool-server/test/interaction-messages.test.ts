@@ -96,6 +96,25 @@ describe("tool interaction messages", () => {
       keyboard.completedMsg!({ params: { udid: "device-1", text: "hi", key: "enter" }, result: {} })
     ).toBe("Entered text");
 
+    // `clear` carries neither `text` nor `key`, so without an arm of its own a
+    // clear-only call is announced and logged as a key press that never happens,
+    // and a `{ clear, text }` call hides the destructive half entirely.
+    expect(keyboard.startedMsg!({ params: { udid: "device-1", clear: true } })).toBe(
+      "Clearing a field"
+    );
+    expect(keyboard.completedMsg!({ params: { udid: "device-1", clear: true }, result: {} })).toBe(
+      "Cleared a field"
+    );
+    expect(keyboard.startedMsg!({ params: { udid: "device-1", clear: true, text: "hi" } })).toBe(
+      "Clearing a field and entering text"
+    );
+    expect(
+      keyboard.completedMsg!({ params: { udid: "device-1", clear: true, text: "hi" }, result: {} })
+    ).toBe("Cleared a field and entered text");
+    expect(keyboard.startedMsg!({ params: { udid: "device-1", clear: true, key: "enter" } })).toBe(
+      "Clearing a field and pressing a key"
+    );
+
     expect(
       definitions.get("screenshot")!.interaction!.completedMsg!({
         params: { udid: "device-1" },

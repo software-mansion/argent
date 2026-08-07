@@ -45,6 +45,15 @@ const zodSchema = z.object({
     .describe(
       "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1–f12. Cannot be combined with `text` in one call — one call per action. Not supported on TV targets — move focus with `tv-remote` (up/down/left/right) instead."
     ),
+  clear: z
+    .boolean()
+    .optional()
+    .describe(
+      "Empty the focused text field before typing. Use this whenever a field may already hold a value — typing alone APPENDS, it does not replace. " +
+        '`{ clear: true, text: "new@example.com" }` replaces a field\'s contents in one call; `{ clear: true }` alone just empties it. ' +
+        "Does not count towards `keys`, which reports only what you asked to be entered; `cleared` reports that the clear was carried out, which is not the same as the field having been observed empty — see the tool description. " +
+        'Supported on iOS, Android and Chromium; not supported on Vega or TV targets — empty a field there with the app\'s own clear affordance, or on Vega with repeated `key: "backspace"` presses.'
+    ),
   delayMs: z
     .number()
     .optional()
@@ -65,6 +74,32 @@ const inputSchema = {
 };
 
 type Params = z.infer<typeof zodSchema>;
+
+/**
+ * The `[started, completed]` phrasings for one keyboard request.
+ *
+ * Kept as one function so the two tenses cannot drift apart, and so every arm of
+ * the request shape is named exactly once. A request with none of the three is
+ * still possible (`{ udid }` alone types nothing) and reads as a key press,
+ * which is what it did before `clear` existed.
+ */
+function keyboardAction(params: Pick<Params, "text" | "key" | "clear">): [string, string] {
+  const text = params.text !== undefined;
+  const key = params.key !== undefined;
+  const [started, completed] =
+    text && key
+      ? ["entering text and pressing a key", "entered text and pressed a key"]
+      : text
+        ? ["entering text", "entered text"]
+        : ["pressing a key", "pressed a key"];
+  if (!params.clear) return [capitalize(started), capitalize(completed)];
+  // A clear-only call carries neither `text` nor `key`, so it has nothing else
+  // to report and must not be phrased as the key press it never makes.
+  if (!text && !key) return ["Clearing a field", "Cleared a field"];
+  return [`Clearing a field and ${started}`, `Cleared a field and ${completed}`];
+}
+
+const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
@@ -111,26 +146,29 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
       // `startedMsg` still describes a text+key request because it renders
       // BEFORE `execute` rejects the combination; `completedMsg` runs only after
       // a call that succeeded, so it never sees both.
-      startedMsg: ({ params }) => {
-        if (params.text === undefined) return "Pressing a key";
-        if (params.key === undefined) return "Entering text";
-        return "Entering text and pressing a key";
-      },
-      completedMsg: ({ params }) => (params.text === undefined ? "Pressed a key" : "Entered text"),
+      //
+      // `clear` gets its own arm rather than riding the text/key split: a
+      // clear-only call carries neither, so without one it announces a key press
+      // that never happens, and a `{ clear, text }` call is logged as plain
+      // typing with the destructive half unmentioned.
+      startedMsg: ({ params }) => keyboardAction(params)[0],
+      completedMsg: ({ params }) => keyboardAction(params)[1],
       failedMsg: ({ failureSignal }) => `Failed to use keyboard: ${failureSignal.error_code}`,
     },
     description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
 Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; use keyboard to type into a focused text field (e.g. a search or login box).
-Returns { typed: string, keys: number }. Fails if both text and key are given in one call (rejected before anything is typed), if an unsupported key name is provided, or if the device's input backend is not reachable.
+Returns { typed: string, keys: number, cleared?: boolean }. Fails if both text and key are given in one call (rejected before anything is typed), if an unsupported key name is provided, if \`clear\` is used on a platform that cannot do it, or if the device's input backend is not reachable.
 - text: types a string (supports uppercase, digits, common punctuation). To type a credential, use \`{{secret:<NAME>}}\` — resolved server-side from the \`ARGENT_SECRET_<NAME>\` env var (prefix mandatory; \`{{secret:APP_PASSWORD}}\` ↔ \`ARGENT_SECRET_APP_PASSWORD\`), so the plaintext never enters agent context; the result echoes the placeholder, not the value, and the after-typing auto-screenshot is skipped. To submit after typing a secret, put both steps in ONE \`run-sequence\` — that keeps the skip covering the Enter, which a second bare \`keyboard\` call would not.
 - key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1–f12) — NOT supported on TV targets; move focus with \`tv-remote\` instead.
+- clear: empties the focused field before typing. Typing alone APPENDS — against a field that already holds a value (a remembered login, a restored draft, a re-run step) the old text stays and the new text lands after it. Use \`{ clear: true, text: "…" }\` to replace a value, \`{ clear: true }\` alone to just empty it. iOS, Android and Chromium; rejected on Vega and TV targets. Focus a text field first: Chromium refuses a clear with nothing editable — or a readonly / non-text element — focused, while iOS and Android dispatch it blind at whatever holds focus. Only Chromium reads the field back, and even it falls back to best-effort on a page it cannot read, so \`cleared: true\` never means "seen NOT empty" but is not proof the field is empty either — assert the value whenever the result matters. On iOS and Android nothing is read back, and a widget that swallows the select-all leaves the following delete acting as a plain backspace: the field ends up ONE CHARACTER SHORTER, not unchanged, and a combined \`text\` then appends to that. On Android levels older than \`input keycombination\` the clear deletes backwards from end-of-LINE, so a multi-line field keeps what sits below the caret, and a field over 150 characters is refused rather than partly deleted; a length that cannot be read at all (a password field, or a screen the device would not capture) falls back to a fixed 128 backspaces, so a longer value keeps its head.
 On a TV target (runtimeKind 'tv') only \`text\` applies — focus a text field first (with \`tv-remote\`), then type into it (injected HID keyboard on Apple TV, \`adb input text\` on Android TV).
-Provide text OR key, never both. To type and then submit, use two calls, or two \`keyboard\` steps in one \`run-sequence\`: { text: "hello" } then { key: "enter" }.`,
+Provide text OR key, never both. \`clear\` may accompany either, and always runs first: { clear: true, text: "hello" } replaces a field's value. To type and then submit, use two calls, or two \`keyboard\` steps in one \`run-sequence\`: { clear: true, text: "hello" } then { key: "enter" }.`,
     zodSchema,
     inputSchema,
     capability,
     searchHint:
-      "type text keyboard input named key enter escape arrow tv vega fire tv search field hid leanback",
+      "type text keyboard input named key enter escape arrow tv vega fire tv search field hid leanback " +
+      "clear erase empty field reset delete contents replace value select all backspace",
     // No eager service: each branch resolves its backend lazily (TV control,
     // simulator-server, CDP, or Vega adb), since distinguishing a TV target is
     // async and a tvOS udid must never resolve simulator-server.

@@ -4,7 +4,29 @@ import { InvalidToolInputError } from "../src/utils/capability";
 import { typeSimulatorServer } from "../src/tools/keyboard/simulator-server-keys";
 import { makeChromiumImpl } from "../src/tools/keyboard/platforms/chromium";
 import { injectVegaNamedKey, injectVegaText } from "../src/utils/vega-input";
-import { injectAndroidNamedKey, injectAndroidText } from "../src/utils/android-input";
+
+// The android clear's own rejection is the one case in this file that has to
+// reach the device transport before it can decide, so adb is stubbed: a legacy
+// level (no `keycombination`) reporting a field longer than the delete run can
+// cover. Every other android case here throws during validation, before any adb
+// call, so the stub is inert for them.
+const { adbShell, adbExecOutBinary } = vi.hoisted(() => ({
+  adbShell: vi.fn(async (_serial: string, _cmd: string, _opts?: unknown): Promise<string> => ""),
+  adbExecOutBinary: vi.fn(
+    async (_serial: string, _cmd: string, _opts?: unknown): Promise<Buffer> => Buffer.from("")
+  ),
+}));
+vi.mock("../src/utils/adb", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/adb")>()),
+  adbShell,
+  adbExecOutBinary,
+}));
+
+import {
+  injectAndroidClear,
+  injectAndroidNamedKey,
+  injectAndroidText,
+} from "../src/utils/android-input";
 
 // The `keyboard` tool's `key` is a free `z.string()` and its `text` is a free
 // string, so an unknown named key or an un-typeable character passes zod
@@ -145,6 +167,103 @@ describe("keyboard backends — input rejection is a 400 with a uniform telemetr
     await expectInvalidInput(
       injectAndroidNamedKey("emulator-5554", "constructor"),
       FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED
+    );
+  });
+
+  // `clear`'s own rejections belong in the same taxonomy: they are states the
+  // caller can fix (focus the field, shorten the value, pick a newer API
+  // level), so they must be 400s carrying a code that distinguishes them from
+  // the key/character rejections above — otherwise "clear could not run" is
+  // indistinguishable in telemetry from "that key does not exist".
+  it("chromium: clear with nothing editable focused → 400 + KEYBOARD_CLEAR_NO_EDITABLE_FOCUS", async () => {
+    const registry = new Registry();
+    vi.spyOn(registry, "resolveService").mockResolvedValue({
+      dispatchKeyEvent: vi.fn(async () => {}),
+      evaluate: vi.fn(async () => JSON.stringify({ verdict: "none" })),
+    } as never);
+
+    await expectInvalidInput(
+      makeChromiumImpl(registry).handler(
+        {},
+        { udid: chromiumDevice.id, clear: true },
+        chromiumDevice
+      ),
+      FAILURE_CODES.KEYBOARD_CLEAR_NO_EDITABLE_FOCUS
+    );
+  });
+
+  it("chromium: clear of a readonly field → 400 + KEYBOARD_CLEAR_NO_EDITABLE_FOCUS", async () => {
+    const registry = new Registry();
+    vi.spyOn(registry, "resolveService").mockResolvedValue({
+      dispatchKeyEvent: vi.fn(async () => {}),
+      evaluate: vi.fn(async () =>
+        JSON.stringify({ verdict: "read-only", label: "INPUT#total", mac: true })
+      ),
+    } as never);
+
+    await expectInvalidInput(
+      makeChromiumImpl(registry).handler(
+        {},
+        { udid: chromiumDevice.id, clear: true },
+        chromiumDevice
+      ),
+      FAILURE_CODES.KEYBOARD_CLEAR_NO_EDITABLE_FOCUS
+    );
+  });
+
+  it("chromium: clear that left the field populated → KEYBOARD_CLEAR_INEFFECTIVE", async () => {
+    // Not a caller mistake — the page refused the edit — so this one is a 500
+    // (`FailureError`), unlike its siblings here. Pinned in the same place so
+    // the distinction is deliberate rather than incidental.
+    const registry = new Registry();
+    vi.spyOn(registry, "resolveService").mockResolvedValue({
+      dispatchKeyEvent: vi.fn(async () => {}),
+      // The clear runs three probes: resolve-and-park, a read-back that KEEPS
+      // the element parked, then the release. Routed by call order, not by
+      // matching text in the expression — the read-back and the release differ
+      // only in whether they delete the slot.
+      evaluate: (() => {
+        let calls = 0;
+        return vi.fn(async () => {
+          calls++;
+          return JSON.stringify(
+            calls === 1
+              ? { verdict: "editable", label: "INPUT#q", length: 7, mac: true }
+              : { tracked: true, length: 7 }
+          );
+        });
+      })(),
+    } as never);
+
+    const err = await makeChromiumImpl(registry)
+      .handler({}, { udid: chromiumDevice.id, clear: true }, chromiumDevice)
+      .then(
+        () => {
+          throw new Error("expected the call to reject, but it resolved");
+        },
+        (e: unknown) => e
+      );
+    expect(err).not.toBeInstanceOf(InvalidToolInputError);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_CLEAR_INEFFECTIVE);
+  });
+
+  it("android: clear of a field too long to delete → 400 + KEYBOARD_CLEAR_FIELD_TOO_LONG", async () => {
+    adbShell.mockReset();
+    adbExecOutBinary.mockReset();
+    // A level whose `input` has no `keycombination` reports it as a usage dump
+    // and still exits 0 …
+    adbShell.mockImplementationOnce(async () => "Usage: input …");
+    // … and the focused field is longer than the delete run can cover.
+    adbExecOutBinary.mockImplementationOnce(async () =>
+      Buffer.from(
+        `<hierarchy><node text="${"x".repeat(900)}" class="android.widget.EditText" ` +
+          `password="false" focused="true" /></hierarchy>`
+      )
+    );
+
+    await expectInvalidInput(
+      injectAndroidClear("emulator-5554"),
+      FAILURE_CODES.KEYBOARD_CLEAR_FIELD_TOO_LONG
     );
   });
 });
