@@ -110,6 +110,86 @@ describe("tool interaction messages", () => {
     );
   });
 
+  it("distinguishes a fresh recording start from a destructive restart", () => {
+    // A restart truncates and replaces a live take; if its message ever
+    // collapsed to the same wording as a fresh start (or reported a step
+    // count that was never actually obtained), an agent re-recording a flow
+    // would have no way to notice it just destroyed prior work.
+    const definitions = definitionsById(createRegistry());
+    const completedMsg = definitions.get("flow-start-recording")!.interaction!.completedMsg!;
+    const params = { name: "checkout", project_root: "/tmp/proj" };
+
+    expect(
+      completedMsg({
+        params,
+        result: { message: "", flowFile: "", savedTo: "project" },
+      })
+    ).toBe("Started recording flow checkout");
+
+    expect(
+      completedMsg({
+        params,
+        result: { message: "", flowFile: "", savedTo: "project", restarted: true },
+      })
+    ).toBe("Restarted recording flow checkout, discarding the previous take");
+
+    expect(
+      completedMsg({
+        params,
+        result: {
+          message: "",
+          flowFile: "",
+          savedTo: "project",
+          restarted: true,
+          discardedSteps: 1,
+        },
+      })
+    ).toBe("Restarted recording flow checkout, discarding 1 step");
+
+    expect(
+      completedMsg({
+        params,
+        result: {
+          message: "",
+          flowFile: "",
+          savedTo: "project",
+          restarted: true,
+          discardedSteps: 4,
+        },
+      })
+    ).toBe("Restarted recording flow checkout, discarding 4 steps");
+  });
+
+  it("names the flow in every recording-tool interaction line", () => {
+    // Recordings are concurrent, so several of these lines interleave in one log
+    // and an unqualified "flow recording" would not say which one died or
+    // finished. Only two of the twelve formatters on the four recording tools
+    // are pinned elsewhere (flow-start-recording.completedMsg above,
+    // flow-add-echo.completedMsg in the secrets test), so the other ten could
+    // silently revert to name-free wording. Hold every one to naming the flow —
+    // the property the concurrency support introduced — including the failure
+    // lines, which are the diagnostic when several recordings are live.
+    const definitions = definitionsById(createRegistry());
+    const name = "checkout";
+    const params = { name, project_root: "/tmp/proj", command: "gesture-tap", message: "note" };
+    const result = { message: "", flowFile: "", savedTo: "project" as const };
+
+    for (const id of [
+      "flow-start-recording",
+      "flow-add-step",
+      "flow-add-echo",
+      "flow-finish-recording",
+    ]) {
+      const i = definitions.get(id)!.interaction!;
+      expect(i.startedMsg!({ params }), `${id}.startedMsg`).toContain(name);
+      expect(i.completedMsg!({ params, result }), `${id}.completedMsg`).toContain(name);
+      expect(
+        i.failedMsg!({ params, error: new Error("raw error"), failureSignal }),
+        `${id}.failedMsg`
+      ).toContain(name);
+    }
+  });
+
   it("does not expose sensitive inputs", () => {
     const definitions = definitionsById(createRegistry());
     const secret = "INTERACTION_MESSAGE_SECRET";
@@ -130,13 +210,17 @@ describe("tool interaction messages", () => {
         params: { udid: "chromium-1", action: "set", name: "session", value: secret },
         result: { set: true },
       }),
+      // Recordings are keyed by `name` + `project_root`, so both are required
+      // and the message names the flow. The echoed `message` is the sensitive
+      // part — it is caller-authored free text — and stays out.
       definitions.get("flow-add-echo")!.interaction!.completedMsg!({
-        params: { message: secret },
+        params: { name: "checkout", project_root: "/tmp/proj", message: secret },
         result: { message: secret, flowFile: "/tmp/flow.yaml", savedTo: "project" },
       }),
     ];
 
     expect(messages.join("\n")).not.toContain(secret);
     expect(messages).toContain("Opening example.com");
+    expect(messages).toContain("Added note to flow checkout");
   });
 });

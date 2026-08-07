@@ -7,11 +7,7 @@ import { ArtifactStore, type Registry, type ToolContext } from "@argent/registry
 import { createHttpApp, type HttpAppHandle } from "../src/http";
 import { createRunFlowTool } from "../src/tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../src/tools/flows/flow-read-prerequisite";
-import {
-  clearActiveFlow,
-  clearActiveProjectRoot,
-  serializeFlow,
-} from "../src/tools/flows/flow-utils";
+import { serializeFlow } from "../src/tools/flows/flow-utils";
 
 vi.mock("../src/utils/update-checker", () => ({
   getUpdateState: vi.fn(() => ({ updateInstallable: false, currentVersion: "1.0.0" })),
@@ -99,13 +95,10 @@ beforeEach(async () => {
   );
   steps = stepRegistry();
   handle = createHttpApp(httpRegistry(steps));
-  clearActiveFlow();
 });
 
 afterEach(async () => {
   handle?.dispose();
-  clearActiveFlow();
-  clearActiveProjectRoot();
   await fs.rm(tmpDir, { recursive: true, force: true });
   if (originalToken === undefined) delete process.env.ARGENT_AUTH_TOKEN;
   else process.env.ARGENT_AUTH_TOKEN = originalToken;
@@ -188,6 +181,35 @@ describe("flow-execute flow_path over HTTP", () => {
       expect(steps.invokeTool).not.toHaveBeenCalled();
     } finally {
       process.chdir(originalCwd);
+    }
+  });
+
+  it("still validates project_root on the flow_path branch", async () => {
+    // `getFlowPath` validates the root, but only the `name` branch reaches it.
+    // Deleting `setActiveProjectRoot` — which ran unconditionally, ahead of
+    // both branches — left this branch with no check at all, so a relative or
+    // ".."-bearing root sailed through. Nothing reads project_root here today,
+    // which is exactly why the guardrail has to be pinned rather than assumed.
+    const st = await fs.stat(flowPath);
+    const wrapper = {
+      __argentFileInput: true,
+      path: flowPath,
+      size: st.size,
+      mtimeMs: st.mtimeMs,
+    };
+
+    for (const [root, expected] of [
+      ["relative/root", /project_root must be an absolute path/],
+      [`${projectRoot}/../elsewhere`, /must not contain "\.\." segments/],
+    ] as const) {
+      const res = await supertest(handle.app)
+        .post("/tools/flow-execute")
+        .send({ project_root: root, device: DEVICE, flow_path: wrapper });
+
+      expect(res.status).toBe(500);
+      expect(res.body.error).toMatch(expected);
+      expect(res.body.error_code).toBe("FLOW_PROJECT_ROOT_INVALID");
+      expect(steps.invokeTool).not.toHaveBeenCalled();
     }
   });
 

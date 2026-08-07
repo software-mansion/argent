@@ -2375,8 +2375,43 @@ describe("device binding (portability)", () => {
     expect(out).toEqual({ foo: 1 });
   });
 
-  it("stripDeviceKeys removes udid / device_id / device", () => {
+  it("stripDeviceKeys removes udid / device_id / device, leaving other args untouched", () => {
     expect(stripDeviceKeys({ udid: "A", device_id: "B", device: "C", x: 1 })).toEqual({ x: 1 });
+  });
+
+  it("stripDeviceKeys KEEPS a `devices` scope, because dropping it changes the step's meaning", () => {
+    // A target is stripped so the flow points at no device. A scope is not:
+    // `stop-all-simulator-servers` with no `devices` is the machine-wide sweep,
+    // so stripping it would record a correctly scoped teardown as a bare step
+    // that reaps every device on the machine when hand-run from the YAML — the
+    // manual-execution strategy the create-flow skill documents. Replay rebinds
+    // it either way (see bindDeviceArgs below).
+    expect(stripDeviceKeys({ udid: "A", devices: ["D", "E"], x: 1 })).toEqual({
+      devices: ["D", "E"],
+      x: 1,
+    });
+  });
+
+  it("bindDeviceArgs keeps a recorded scope when the run resolved NO device", () => {
+    // A cleanup flow resolves no device when none is unambiguous. Dropping the
+    // recorded scope there would widen the teardown from the devices the
+    // recording named to every device on the machine — the one direction that
+    // costs another agent their session. There is no run target to override.
+    expect(
+      bindDeviceArgs(reg({ devices: {} }), "stop-all-simulator-servers", "", {
+        devices: ["RECORDED"],
+      })
+    ).toEqual({ devices: ["RECORDED"] });
+  });
+
+  it("bindDeviceArgs never forwards a scope to a tool that does not declare it", () => {
+    // The schema-blind strip's job: a `.strict()` schema would reject the call.
+    expect(
+      bindDeviceArgs(reg({ port: {} }), "stop-metro", "RESOLVED", {
+        devices: ["RECORDED"],
+        port: 8081,
+      })
+    ).toEqual({ port: 8081 });
   });
 
   it("rebinds a nested flow-execute onto the run device (issue #607)", () => {
@@ -2399,6 +2434,76 @@ describe("device binding (portability)", () => {
     // retarget an unrelated recorded step. It is also inert once `device` is
     // bound, because device resolution returns before it is ever read.
     expect(stripDeviceKeys({ platform: "android", x: 1 })).toEqual({ platform: "android", x: 1 });
+  });
+
+  it("injects devices: [resolvedId] for a tool that declares it in its schema", () => {
+    // stop-all-simulator-servers' `devices` is a scope, not a single-device
+    // target, but it names the recording host's device ids the same way `udid`
+    // does — so it gets the same schema-aware rebind, as a one-element list.
+    const out = bindDeviceArgs(reg({ devices: {} }), "stop-all-simulator-servers", "RESOLVED", {});
+    expect(out).toEqual({ devices: ["RESOLVED"] });
+  });
+
+  it("does not invent a devices key for a tool that doesn't declare it", () => {
+    const out = bindDeviceArgs(reg({ foo: {} }), "x", "RESOLVED", { foo: 1 });
+    expect(out).toEqual({ foo: 1 });
+    expect(out).not.toHaveProperty("devices");
+  });
+
+  it("replaces a stale recorded devices list when the caller NAMED the run device", () => {
+    // An explicit `device` is the caller saying which device this run is about,
+    // so retargeting the teardown at it is what they asked for — and a flow
+    // recorded on one host must not carry that host's ids forward.
+    const out = bindDeviceArgs(
+      reg({ devices: {} }),
+      "stop-all-simulator-servers",
+      "RESOLVED",
+      { devices: ["OLD-HOST-ID", "OTHER"] },
+      true
+    );
+    expect(out).toEqual({ devices: ["RESOLVED"] });
+  });
+
+  it("keeps a recorded scope when the run device was only auto-detected", () => {
+    // The destructive direction: the flow named one device, exactly one other
+    // happens to be booted, and replay would reap THAT one — a device nobody in
+    // this run ever named, quite possibly another agent's. This is the
+    // cross-agent teardown the `devices` scope exists to prevent, so the
+    // recorded ids stand; on another host they reap nothing and come back in
+    // `unmatched`, which is the safe direction and a legible one.
+    const out = bindDeviceArgs(reg({ devices: {} }), "stop-all-simulator-servers", "AUTO", {
+      devices: ["RECORDED-HOST"],
+    });
+    expect(out).toEqual({ devices: ["RECORDED-HOST"] });
+  });
+
+  it("still narrows an UNSCOPED recorded sweep onto an auto-detected device", () => {
+    // Nothing recorded means the step is the machine-wide sweep, so binding can
+    // only narrow it. That is why a cleanup flow resolves a device at all.
+    const out = bindDeviceArgs(reg({ devices: {} }), "stop-all-simulator-servers", "AUTO", {});
+    expect(out).toEqual({ devices: ["AUTO"] });
+  });
+
+  it("binds a scalar and a list device key together when a tool declares both", () => {
+    const out = bindDeviceArgs(
+      reg({ udid: {}, devices: {} }),
+      "hypothetical-tool",
+      "RESOLVED",
+      { udid: "STALE", devices: ["OLD"] },
+      true
+    );
+    expect(out).toEqual({ udid: "RESOLVED", devices: ["RESOLVED"] });
+  });
+
+  it("rebinds the TARGET but not the recorded SCOPE on an auto-detected device", () => {
+    // The two keys part company here: a stale `udid` must never survive (the
+    // step would drive the wrong device), while a stale `devices` must never be
+    // retargeted (the step would destroy the wrong device).
+    const out = bindDeviceArgs(reg({ udid: {}, devices: {} }), "hypothetical-tool", "AUTO", {
+      udid: "STALE",
+      devices: ["OLD"],
+    });
+    expect(out).toEqual({ udid: "AUTO", devices: ["OLD"] });
   });
 });
 

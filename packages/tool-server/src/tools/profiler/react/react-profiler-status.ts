@@ -174,7 +174,7 @@ export function createReactProfilerStatusTool(
         session_status: isMine ? "active" : "taken_over",
         note: isMine
           ? "Your profiling session is still running. Call react-profiler-stop to collect the data, or continue profiling."
-          : "A different profiling session is running (another tool-server instance took over, or this process restarted after start). Data from the prior session is lost at the takeover moment. Use react-profiler-start { force: true } to reclaim.",
+          : "A different profiling session is running (another tool-server instance took over, this process restarted after start, or a stop-all-simulator-servers reaped this device's JS-runtime debugger and took this session down with it, leaving the in-app owner behind). Data from the prior session is lost at the takeover moment. Use react-profiler-start { force: true } to reclaim.",
       };
     },
   };

@@ -2,14 +2,14 @@ import { z } from "zod";
 import * as fs from "node:fs/promises";
 import type { ToolDefinition } from "@argent/registry";
 import {
-  getFlowPath,
-  getActiveFlow,
-  getRecordingSession,
-  clearActiveFlow,
+  requireRecordingSession,
+  clearRecordingSession,
+  withFlowFileLock,
   clientFileDirective,
   parseFlow,
   serializeFlow,
   selectorToYaml,
+  type FlowFile,
   type FlowSavedTo,
   type FlowSelector,
 } from "./flow-utils";
@@ -41,7 +41,16 @@ function textConditionLabel(
       : `text ${selector} contains ${JSON.stringify(expected)}`;
 }
 
-const zodSchema = z.object({});
+const zodSchema = z.object({
+  name: z
+    .string()
+    .describe("Name of the flow being recorded — the one passed to flow-start-recording."),
+  project_root: z
+    .string()
+    .describe(
+      "Absolute path to the project root of the flow being recorded — the same value passed to flow-start-recording. Together with `name` it identifies which recording to finish."
+    ),
+});
 
 export const flowFinishRecordingTool: ToolDefinition<
   z.infer<typeof zodSchema>,
@@ -57,100 +66,66 @@ export const flowFinishRecordingTool: ToolDefinition<
 > = {
   id: "flow-finish-recording",
   interaction: {
-    startedMsg: () => "Finishing flow recording",
-    completedMsg: ({ result }) => {
-      const flowName =
-        result.path
-          .split(/[\\/]/)
-          .pop()
-          ?.replace(/\.ya?ml$/, "") ?? "flow";
-      return `Saved recorded flow ${flowName}`;
-    },
-    failedMsg: ({ failureSignal }) =>
-      `Failed to finish flow recording: ${failureSignal.error_code}`,
+    // Name the flow: other recordings stay live across this call, so an
+    // unqualified "Finishing flow recording" would not identify which one.
+    startedMsg: ({ params }) => `Finishing recording of flow ${params.name}`,
+    // `params.name` rather than the basename of `result.path`: the two are the
+    // same string on every branch — `assertSafeFlowName` admits no dots or
+    // separators, so `getFlowPath` produces `<name>.yaml` and nothing else —
+    // and this spelling matches the two formatters either side of it.
+    completedMsg: ({ params }) => `Saved recorded flow ${params.name}`,
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to finish recording of flow ${params.name}: ${failureSignal.error_code}`,
   },
-  description: `Finish recording the active flow. Returns a summary of all recorded steps and the final YAML content. Use when you have added all desired steps and want to finalize the flow file. Fails if no active flow recording is in progress.
+  description: `Finish recording the flow named by \`name\` + \`project_root\`, leaving recordings under any other key untouched. Returns { message, path, executionPrerequisite, steps, summary, flowFile, savedTo } - a summary of all recorded steps plus the final YAML. Use when you have added all desired steps and want to finalize the flow file. Fails if that flow has no recording in progress.
 You can still edit the .yaml file directly afterwards to remove or reorder steps.`,
   zodSchema,
   services: () => ({}),
-  async execute(_services, _params) {
-    const flowName = getActiveFlow();
-    const session = getRecordingSession();
+  async execute(_services, params) {
+    // Resolve, read and clear as ONE critical section under the flow-file lock.
+    // Host mode's `await fs.readFile` is a yield, and an append that lands in it
+    // would be on disk while the summary and step count reported here — taken
+    // from the pre-append read — say otherwise.
+    const { filePath, flowFile, savedTo, flow, summary } = await withFlowFileLock(
+      params.project_root,
+      params.name,
+      async () => {
+        const session = await requireRecordingSession(params.project_root, params.name);
 
-    // Host mode re-reads the file so manual edits made during the recording
-    // survive into the summary; in client mode this host never has the file,
-    // so the in-memory copy is the truth and travels back in the directive.
-    const filePath = session?.filePath ?? getFlowPath(flowName);
-    let flowFile: string;
-    let savedTo: FlowSavedTo;
-    if (session?.persist === "client") {
-      flowFile = serializeFlow(session.flow);
-      savedTo = clientFileDirective(filePath, flowFile);
-    } else {
-      flowFile = await fs.readFile(filePath, "utf8");
-      savedTo = filePath;
-    }
-    const flow = parseFlow(flowFile);
-
-    const summary = flow.steps.map((step, i) => {
-      const n = i + 1;
-      switch (step.kind) {
-        case "echo":
-          return `${n}. echo: ${step.message}`;
-        case "launch":
-          return `${n}. launch: ${typeof step.app === "string" ? step.app : JSON.stringify(step.app)}`;
-        case "run":
-          return `${n}. run: ${step.flow}`;
-        case "tap":
-        case "long-press":
-          return `${n}. ${step.kind}: ${step.selector ? selectorLabel(step.selector) : `(${step.x}, ${step.y})`}`;
-        case "type":
-          return `${n}. type: ${selectorLabel(step.into)} ← "${step.text}"`;
-        case "await":
-        case "assert": {
-          const tail =
-            step.condition === "text"
-              ? textConditionLabel(step.selector, step.expectedText, step.textMatch)
-              : `${step.condition} ${selectorLabel(step.selector)}`;
-          return `${n}. ${step.kind}: ${tail}`;
+        // Host mode re-reads the file so manual edits made during the recording
+        // survive into the summary; in client mode this host never has the file,
+        // so the in-memory copy is the truth and travels back in the directive.
+        const filePath = session.filePath;
+        let flowFile: string;
+        let savedTo: FlowSavedTo;
+        if (session.persist === "client") {
+          flowFile = serializeFlow(session.flow);
+          savedTo = clientFileDirective(filePath, flowFile);
+        } else {
+          flowFile = await fs.readFile(filePath, "utf8");
+          savedTo = filePath;
         }
-        case "wait":
-          return `${n}. wait: ${step.ms}ms`;
-        case "when": {
-          // Mirror the await/assert rendering above — selectorLabel spelling,
-          // same comparator tail for text guards.
-          const cond =
-            step.condition.kind === "platform"
-              ? `platform ${step.condition.platform}`
-              : step.condition.condition === "text"
-                ? textConditionLabel(
-                    step.condition.selector,
-                    step.condition.expectedText,
-                    step.condition.textMatch
-                  )
-                : `${step.condition.condition} ${selectorLabel(step.condition.selector)}`;
-          // Pluralize like flow-run's skip reason so the two surfaces agree.
-          const count = step.steps.length;
-          return `${n}. when: ${cond} (${count} step${count === 1 ? "" : "s"})`;
-        }
-        case "scroll-to":
-          return `${n}. scroll-to: ${selectorLabel(step.target)} (${step.direction})`;
-        case "pinch":
-          return `${n}. pinch: scale ${step.scale}${step.selector ? ` on ${selectorLabel(step.selector)}` : ""}`;
-        case "rotate":
-          return `${n}. rotate: by ${step.by}°${step.selector ? ` on ${selectorLabel(step.selector)}` : ""}`;
-        case "snapshot":
-          return `${n}. snapshot: ${step.name}`;
-        case "tool":
-        default:
-          return `${n}. tool: ${step.name} ${JSON.stringify(step.args)}`;
+        // Parse BEFORE clearing. Hand-editing the .yaml mid-recording is a
+        // documented workflow, so parseFlow can legitimately throw here on a
+        // botched edit — and clearing first would destroy the session on the
+        // way out, leaving the agent unable to retry the finish after repairing
+        // the file (the only tool that re-establishes the key,
+        // flow-start-recording, truncates the take it would be recovering).
+        const flow = parseFlow(flowFile);
+        // Render the summary before clearing too, for the same reason: it walks
+        // step bodies the parser does not fully constrain, and nothing that can
+        // throw may run after the session is destroyed. The one known thrower
+        // there — `JSON.stringify` on a cyclic `args` anchor — is guarded in
+        // {@link renderToolArgs}; keeping the order is what makes the next one
+        // recoverable rather than fatal.
+        const summary = summarizeSteps(flow);
+        clearRecordingSession(session);
+        return { filePath, flowFile, savedTo, flow, summary };
       }
-    });
-
-    clearActiveFlow();
+    );
 
     return {
-      message: `Finished recording "${flowName}" flow (${flow.steps.length} steps)`,
+      message: `Finished recording "${params.name}" flow (${flow.steps.length} steps)`,
       path: filePath,
       executionPrerequisite: flow.executionPrerequisite,
       steps: flow.steps.length,
@@ -160,3 +135,88 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
     };
   },
 };
+
+/**
+ * A `tool:` step's `args` is the one step body the parser does not constrain, so
+ * a cyclic YAML alias in a hand-edited file reaches here as a cyclic object and
+ * `JSON.stringify` throws on it. Fall back to a marker, the way `parseFlow`
+ * already does for the same input class (see `badEntry` in flow-utils) — the
+ * summary of a recording that is otherwise fine should not fail on one
+ * unrenderable step.
+ *
+ * The body interpolates rather than returning `JSON.stringify(args)` directly,
+ * because `JSON.stringify(undefined)` is the VALUE `undefined`, not a string,
+ * and would leave through a `string`-typed signature uncaught (TypeScript does
+ * not flag it — `JSON.stringify`'s overload is declared to return `string`).
+ * No reachable input is undefined today: every caller comes through
+ * {@link summarizeSteps}, which is only ever handed `parseFlow` output, and
+ * `fromYamlStep` normalises a missing/`null` `args:` to `{}` on the way
+ * through. It is the `default:` arm of that switch this guards — a step kind
+ * added without its own `case` lands there and is rendered as a `tool:` step,
+ * with no `args` field to read.
+ */
+function renderToolArgs(args: unknown): string {
+  try {
+    return `${JSON.stringify(args)}`;
+  } catch {
+    return "[cyclic args]";
+  }
+}
+
+/** One human-readable line per recorded step, in the flow file's own spellings. */
+function summarizeSteps(flow: FlowFile): string[] {
+  return flow.steps.map((step, i) => {
+    const n = i + 1;
+    switch (step.kind) {
+      case "echo":
+        return `${n}. echo: ${step.message}`;
+      case "launch":
+        return `${n}. launch: ${typeof step.app === "string" ? step.app : JSON.stringify(step.app)}`;
+      case "run":
+        return `${n}. run: ${step.flow}`;
+      case "tap":
+      case "long-press":
+        return `${n}. ${step.kind}: ${step.selector ? selectorLabel(step.selector) : `(${step.x}, ${step.y})`}`;
+      case "type":
+        return `${n}. type: ${selectorLabel(step.into)} ← "${step.text}"`;
+      case "await":
+      case "assert": {
+        const tail =
+          step.condition === "text"
+            ? textConditionLabel(step.selector, step.expectedText, step.textMatch)
+            : `${step.condition} ${selectorLabel(step.selector)}`;
+        return `${n}. ${step.kind}: ${tail}`;
+      }
+      case "wait":
+        return `${n}. wait: ${step.ms}ms`;
+      case "when": {
+        // Mirror the await/assert rendering above — selectorLabel spelling,
+        // same comparator tail for text guards.
+        const cond =
+          step.condition.kind === "platform"
+            ? `platform ${step.condition.platform}`
+            : step.condition.condition === "text"
+              ? textConditionLabel(
+                  step.condition.selector,
+                  step.condition.expectedText,
+                  step.condition.textMatch
+                )
+              : `${step.condition.condition} ${selectorLabel(step.condition.selector)}`;
+        // Pluralize like flow-run's skip reason so the two surfaces agree.
+        const count = step.steps.length;
+        return `${n}. when: ${cond} (${count} step${count === 1 ? "" : "s"})`;
+      }
+      case "scroll-to":
+        return `${n}. scroll-to: ${selectorLabel(step.target)} (${step.direction})`;
+      case "pinch":
+        return `${n}. pinch: scale ${step.scale}${step.selector ? ` on ${selectorLabel(step.selector)}` : ""}`;
+      case "rotate":
+        return `${n}. rotate: by ${step.by}°${step.selector ? ` on ${selectorLabel(step.selector)}` : ""}`;
+      case "snapshot":
+        return `${n}. snapshot: ${step.name}`;
+      case "tool":
+      default:
+        return `${n}. tool: ${step.name} ${renderToolArgs(step.args)}`;
+    }
+  });
+}
