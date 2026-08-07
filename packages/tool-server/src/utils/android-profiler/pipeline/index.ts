@@ -65,6 +65,12 @@ export interface AndroidPipelineResult {
   uiHangs: UiHang[];
   rssGrowth: MemoryRssGrowth[];
   exportErrors: Record<string, string>;
+  /**
+   * Set when CPU samples exist but none carry a usable stack. Deliberately NOT
+   * an exportErrors entry: no query failed, and the renderer counts those as
+   * failures ("N of 3 queries errored"), which would be untrue here.
+   */
+  cpuDiagnostic?: string;
 }
 
 /**
@@ -124,12 +130,26 @@ export async function runAndroidProfilerPipeline(
   if (cpuRows.length === 0 && hangRows.length === 0 && !exportErrors.cpu) {
     exportErrors.cpu =
       `No CPU samples were captured for cmdline \`${appPackage}\`. ` +
-      `The most common cause is the target app being non-debuggable (release build) ` +
-      `without a \`<profileable shell="true">\` entry in its AndroidManifest.xml. ` +
-      `Without that, Perfetto silently drops the linux.perf data source. ` +
-      `Add \`<profileable android:shell="true"/>\` to the \`<application>\` element ` +
-      `and rebuild, or run a debug variant of the app.`;
+      `The trace contains no perf_sample rows for a process with that name, so no CPU ` +
+      `analysis is possible. Either the name never matched a running process (it must equal ` +
+      `the process cmdline exactly), or the app was never scheduled on-CPU during the ` +
+      `recording. If it was running, it must be a debug build or declare ` +
+      `\`<profileable android:shell="true"/>\` under \`<application>\` in its ` +
+      `AndroidManifest.xml — then re-record.`;
   }
+
+  // Samples were recorded but none carry a usable stack. Distinct from the case
+  // above: the rows exist, they just aggregate to nothing, and every one is
+  // dropped further down for having no leaf function. Saying nothing here is
+  // what makes the report read as "the app did no CPU work".
+  const stacklessSamples = cpuRows.reduce(
+    (sum, r) => (r.leaf_function ? sum : sum + Number(r.sample_count)),
+    0
+  );
+  const cpuDiagnostic =
+    cpuRows.length > 0 && !cpuRows.some((r) => r.leaf_function) && stacklessSamples > 0
+      ? describeStacklessSamples(appPackage, cpuRows, stacklessSamples)
+      : undefined;
 
   const cpuHotspots = aggregateCpuHotspots(cpuRowsToAggregatorRows(cpuRows, traceStartNs), {
     platform: "android",
@@ -173,7 +193,14 @@ export async function runAndroidProfilerPipeline(
   const rssGrowth = rssRowsToBottlenecks(rssRows);
 
   const bottlenecks: Bottleneck[] = [...cpuHotspots, ...uiHangs, ...rssGrowth];
-  return { bottlenecks, cpuHotspots, uiHangs, rssGrowth, exportErrors };
+  return {
+    bottlenecks,
+    cpuHotspots,
+    uiHangs,
+    rssGrowth,
+    exportErrors,
+    ...(cpuDiagnostic ? { cpuDiagnostic } : {}),
+  };
 }
 
 /**
@@ -535,6 +562,38 @@ async function renderThreadBreakdownAndroid(
 // ---------------------------------------------------------------------------
 // Row → Bottleneck transformers
 // ---------------------------------------------------------------------------
+
+/**
+ * Explain a trace whose perf samples carry no usable stack.
+ *
+ * Two causes, told apart by whether a frame row existed at all: `leaf_mapping`
+ * comes from the same LEFT JOIN chain as `leaf_function`, so a mapping without a
+ * name means the stack was unwound and only the symbol is missing, while neither
+ * means nothing was ever unwound.
+ */
+function describeStacklessSamples(
+  appPackage: string,
+  cpuRows: AndroidCpuHotspotRow[],
+  stacklessSamples: number
+): string {
+  const unwound = cpuRows.some((r) => r.leaf_mapping);
+  const head =
+    `${stacklessSamples} CPU sample${stacklessSamples === 1 ? "" : "s"} were captured for ` +
+    `\`${appPackage}\`, but none carry a usable call stack, so no CPU hotspots could be ` +
+    `computed and \`profiler-stack-query\` mode=\`function_callers\` / mode=\`hang_stacks\` ` +
+    `will find nothing. The app was running — this is a capture limitation, not an idle app. ` +
+    `mode=\`thread_breakdown\` still works, since it counts samples and needs no stacks.`;
+
+  return unwound
+    ? `${head} The stacks were unwound but no frame resolved to a symbol, which points at ` +
+        `stripped native libraries. Profile a build that keeps its symbols (a debug build, or a ` +
+        `release build with unstripped \`.so\`s).`
+    : `${head} No stack was unwound at all: Perfetto only unwinds a process it can read ` +
+        `\`/proc/<pid>/mem\` for. Profile a debug build, or add ` +
+        `\`<profileable android:shell="true"/>\` to \`<application>\` and rebuild — verify with ` +
+        `\`adb shell dumpsys package ${appPackage}\`, which shows \`DEBUGGABLE\` for a profileable ` +
+        `target. Platform packages such as \`com.android.settings\` are never profileable.`;
+}
 
 function cpuRowsToAggregatorRows(
   rows: AndroidCpuHotspotRow[],
