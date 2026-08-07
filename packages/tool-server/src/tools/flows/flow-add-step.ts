@@ -1250,8 +1250,9 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
      * normally with the unchanged `stepCount`, so the caller can see its take
      * was left alone. Those paths are:
      *
-     * - a `command` naming a recorder tool, or a flow directive with no tool
-     *   that records it (`wait`, `long-press`, …) — nothing is executed either;
+     * - a `command` naming a recorder tool, or one naming a flow-file directive
+     *   rather than a tool — those two answer with the call to make instead,
+     *   and are the only ones that also run nothing at the device;
      * - a nested `flow-execute` that failed, was cancelled, or returned a
      *   prerequisite notice instead of running;
      * - a nested `run-sequence` that stopped on a failed step or was cancelled
