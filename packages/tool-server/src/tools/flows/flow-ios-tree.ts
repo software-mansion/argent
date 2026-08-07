@@ -337,7 +337,9 @@ export async function queryFullHierarchyTree(
         `could not uniquely target a native-devtools-connected app to read the view hierarchy from:\n` +
           `${withoutExplicitBundleIdAdvice(errMsg(err))}\n` +
           `Flow selector steps auto-target and cannot provide a bundleId. Bring the intended app to ` +
-          `the foreground, and background or terminate the other connected apps, then retry.`,
+          `the foreground, and terminate the other connected apps, then retry. Backgrounding them ` +
+          `does not help: they stay connected, and once suspended they stop answering the state ` +
+          `probe this read depends on.`,
         err
       );
     }

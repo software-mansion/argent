@@ -116,7 +116,10 @@ describe("flow iOS full-hierarchy source", () => {
     expect(error.message).toContain(
       "Flow selector steps auto-target and cannot provide a bundleId"
     );
-    expect(error.message).toContain("background or terminate the other connected apps");
+    expect(error.message).toContain("terminate the other connected apps");
+    // Backgrounding is the wrong half of that advice — it leaves them connected
+    // and, once suspended, unable to answer the state probe at all.
+    expect(error.message).not.toContain("background or terminate");
     expect(error.message).not.toContain("Provide bundleId explicitly");
     expect(error.message).not.toContain("guarantees instrumentation");
   });
