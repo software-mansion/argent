@@ -1,6 +1,5 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
-import { spawn } from "node:child_process";
 import { track } from "@argent/telemetry";
 import {
   SKILLS_DIR,
@@ -8,22 +7,75 @@ import {
   isOnline,
   isSkillsCliAvailable,
   withNpmForce,
+  listBundledSkills,
 } from "./utils.js";
 import { InitCancelled } from "./init-args.js";
 import type { Scope } from "./init-scope.js";
+import { runNpxSkills } from "./npx-skills.js";
 
 export type SkillsMethod = "default" | "interactive" | "manual";
+/** Where the skills were actually installed from. */
+export type SkillsSource = "pinned" | "bundled";
+
+export interface SkillsStepResult {
+  method: SkillsMethod;
+  outcome: "success" | "failure" | "skipped";
+  /** Null when nothing was attempted (manual instructions only). */
+  source: SkillsSource | null;
+  /** True only when the pinned source failed and the bundled copy rescued it. */
+  usedFallback: boolean;
+}
 
 // Step 2 — install skills via `npx skills`. Emits the skill_install telemetry
 // event itself (it owns all the inputs). Throws InitCancelled("skills") on a
 // cancelled method prompt.
+
+/** Matches the usual missing-ref wording. Used for telemetry only — never to decide. */
+const REF_MISSING =
+  /Remote branch .* not found in upstream|couldn't find remote ref|unknown revision/i;
+
+/**
+ * The line worth showing out of a wall of subprocess output. The first line is
+ * usually an npm warning about `--force`, so prefer the one that names the
+ * actual failure and fall back to the first non-noise line.
+ */
+function meaningfulLine(err: unknown): string {
+  const lines = (err instanceof Error ? err.message : String(err))
+    .split("\n")
+    .map((l) => l.replace(/^[│┌└■◇\s]+/, "").trim())
+    .filter(Boolean);
+  return (
+    lines.find((l) => /^fatal:|^Error:|Failed to|not found|Could not/i.test(l)) ??
+    lines.find((l) => !/^npm (WARN|notice)/i.test(l)) ??
+    lines[0] ??
+    "unknown error"
+  );
+}
+
+/**
+ * Report a skills install that could not be rescued. The manual command names
+ * the source that could still work, not the one that just failed — printing the
+ * failing command back as the remedy is what made the original report so
+ * confusing.
+ */
+function reportSkillsFailure(
+  method: SkillsMethod,
+  spinner: { stop: (msg?: string) => void },
+  err: unknown,
+  attempted: string
+): void {
+  if (method === "default") spinner.stop(pc.red("Skills installation failed."));
+  p.log.error(`Failed to install skills from ${attempted}: ${meaningfulLine(err)}`);
+  p.log.info(`You can install them manually:\n  npx skills add ${SKILLS_DIR} --skill '*' -y`);
+}
+
 export async function runSkillsStep(args: {
   nonInteractive: boolean;
   fromTar: string | null;
   version: string;
   scope: Scope;
   customRoot?: string;
-}): Promise<SkillsMethod> {
+}): Promise<SkillsStepResult> {
   const { nonInteractive, fromTar, version, scope, customRoot } = args;
 
   p.log.step(pc.bold("Step 2: Skills Installation"));
@@ -74,11 +126,17 @@ export async function runSkillsStep(args: {
     skillsMethod = choice as SkillsMethod;
   }
 
-  // Prefer the GitHub-pinned source. SKILLS_DIR as a fallback.
+  // Prefer the GitHub-pinned source: it keeps skills-lock.json portable by
+  // recording a shared ref rather than a path on this machine. The bundled copy
+  // is the same version's skills either way (it ships inside this package), so
+  // falling back to it below costs provenance, not content.
   const useGitHubSource = online && !fromTar && version !== "unknown";
   const skillsSource = useGitHubSource ? buildArgentSkillsSource(version) : SKILLS_DIR;
 
   let skillOutcome: "success" | "failure" | "skipped";
+  // Which source the skills actually came from, and why the pinned one lost.
+  let skillsSourceUsed: SkillsSource = skillsSource === SKILLS_DIR ? "bundled" : "pinned";
+  let fallbackReason: "ref_missing" | "unclassified" | null = null;
 
   if (skillsMethod === "manual") {
     p.note(
@@ -101,85 +159,108 @@ export async function runSkillsStep(args: {
     );
     skillOutcome = "skipped";
   } else {
-    const skillsArgs = ["skills", "add", skillsSource];
+    // Rebuilt per source rather than string-swapped, so a retry keeps the scope
+    // flag and the offline `--no-install` prefix it was going to run with.
+    const buildSkillsArgs = (source: string): string[] => {
+      const args = ["skills", "add", source];
+      if (scope === "global") args.push("-g");
+      if (skillsMethod === "default") args.push("--skill", "*", "-y");
+      return offlineWithCache ? ["--no-install", ...args] : args;
+    };
 
-    if (scope === "global") {
-      skillsArgs.push("-g");
-    }
-
-    if (skillsMethod === "default") {
-      skillsArgs.push("--skill", "*", "-y");
-    }
-
-    const baseArgs = offlineWithCache ? ["--no-install", ...skillsArgs] : skillsArgs;
     // `--force` softens the host project's npm engine gate (see withNpmForce /
     // issue #298); the displayed and manual-fallback commands stay clean.
-    const npxArgs = withNpmForce(baseArgs);
-
-    p.log.info(`Running: ${pc.dim("npx")} ${pc.cyan(baseArgs.join(" "))}`);
+    p.log.info(`Running: ${pc.dim("npx")} ${pc.cyan(buildSkillsArgs(skillsSource).join(" "))}`);
 
     const spinner = p.spinner();
     if (skillsMethod === "default") {
       spinner.start("Installing skills...");
     }
 
+    const skillsCwd = scope === "custom" ? customRoot : undefined;
+    const runWith = (source: string) =>
+      runNpxSkills(
+        withNpmForce(buildSkillsArgs(source)),
+        skillsMethod === "interactive",
+        skillsCwd
+      );
+
     try {
-      const skillsCwd = scope === "custom" ? customRoot : undefined;
-      await runNpxSkills(npxArgs, skillsMethod === "interactive", skillsCwd);
+      await runWith(skillsSource);
       if (skillsMethod === "default") {
         spinner.stop("Skills installed.");
       }
       skillOutcome = "success";
     } catch (err) {
-      if (skillsMethod === "default") {
-        spinner.stop(pc.red("Skills installation failed."));
+      // Retry against the copy bundled with this package. The decision is
+      // deliberately structural rather than a match on the error text: the
+      // interactive path captures no output to match against, and the usual
+      // cause — git reporting a missing ref — is a translated string, so a text
+      // rule would quietly stop working for anyone not running an English
+      // toolchain. Every failure the retry cannot rescue simply fails again,
+      // cheaply and locally.
+      const bundledUsable = skillsSource !== SKILLS_DIR && listBundledSkills().length > 0;
+
+      if (bundledUsable) {
+        // Not a red "failed" yet — that would contradict a retry that is about
+        // to succeed, which is the same class of lie this fixes.
+        if (skillsMethod === "default") {
+          spinner.message("Pinned source unavailable — installing the bundled copy...");
+        }
+        p.log.warn(
+          `Could not install skills from ${skillsSource}: ${meaningfulLine(err)}\n` +
+            "Falling back to the copy bundled with this package."
+        );
+        fallbackReason = REF_MISSING.test(String(err)) ? "ref_missing" : "unclassified";
+        try {
+          await runWith(SKILLS_DIR);
+          if (skillsMethod === "default") {
+            spinner.stop("Skills installed from the bundled copy.");
+          }
+          skillOutcome = "success";
+          skillsSourceUsed = "bundled";
+          p.note(
+            [
+              "Skills came from the copy bundled with this package, because the",
+              "pinned source could not be resolved.",
+              "",
+              "skills-lock.json now records a path on this machine rather than a",
+              "shared source. A later `argent update` on a tagged release restores",
+              "the portable entry.",
+            ].join("\n"),
+            "Skills installed locally"
+          );
+        } catch (fallbackErr) {
+          reportSkillsFailure(skillsMethod, spinner, fallbackErr, SKILLS_DIR);
+          skillOutcome = "failure";
+        }
+      } else {
+        reportSkillsFailure(skillsMethod, spinner, err, skillsSource);
+        skillOutcome = "failure";
       }
-      p.log.error(`Failed to run npx skills: ${err}`);
-      p.log.info(`You can install skills manually:\n  npx ${skillsArgs.join(" ")}`);
-      skillOutcome = "failure";
     }
   }
+
+  const usedFallback = fallbackReason !== null && skillOutcome === "success";
 
   track("installation:skill_install", {
     method: skillsMethod,
     is_online: online,
     has_offline_cache: offlineWithCache,
     outcome: skillOutcome,
+    // A release whose tag was never pushed makes every install fall back. That
+    // is invisible once the fallback rescues it, so it has to be measurable.
+    source: skillOutcome === "skipped" ? null : skillsSourceUsed,
+    used_fallback: usedFallback,
+    ...(fallbackReason ? { fallback_reason: fallbackReason } : {}),
   });
 
-  return skillsMethod;
+  return {
+    method: skillsMethod,
+    outcome: skillOutcome,
+    source: skillOutcome === "skipped" ? null : skillsSourceUsed,
+    usedFallback,
+  };
 }
 
-export function runNpxSkills(args: string[], interactive: boolean, cwd?: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx";
-    const child = spawn(npxCmd, args, {
-      stdio: interactive ? "inherit" : ["ignore", "pipe", "pipe"],
-      shell: process.platform === "win32",
-      ...(cwd ? { cwd } : {}),
-    });
-
-    let stdout = "";
-    let stderr = "";
-
-    if (!interactive) {
-      child.stdout?.on("data", (chunk: Buffer) => {
-        stdout += chunk.toString();
-      });
-      child.stderr?.on("data", (chunk: Buffer) => {
-        stderr += chunk.toString();
-      });
-    }
-
-    child.on("close", (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        const output = [stderr, stdout].filter(Boolean).join("\n").trim();
-        reject(new Error(output || `npx skills exited with code ${code}`));
-      }
-    });
-
-    child.on("error", reject);
-  });
-}
+export { runNpxSkills } from "./npx-skills.js";
