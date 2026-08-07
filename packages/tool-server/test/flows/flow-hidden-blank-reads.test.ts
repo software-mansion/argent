@@ -664,6 +664,51 @@ describe("text/equals failure notes are wired through the runner and scoped to t
     expect(result.steps[0].reason).toMatch(/typographic variant/);
     expect(result.steps[0].reason).toMatch(/Add more languages…/);
   });
+
+  it("explains a LOCATOR miss under `matches` too, as `exists` is explained", async () => {
+    // The `matches` exemption is about the EXPECTATION, and the not-located
+    // branch never reads the expectation — it walks the tree for
+    // `selector.text`, which is a literal whatever comparator the step uses.
+    // Applied before the branch was chosen, it dropped the explanation for the
+    // one comparator whose expectation was irrelevant to why the selector
+    // missed, so the same selector on the same screen was explained under
+    // `exists` and left bare under `text`.
+    currentFetch = () => ({
+      tree: screen([
+        n({ label: "Add more languages…", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.05 } }),
+      ]),
+      source: "native-devtools",
+    });
+
+    for (const [name, step] of [
+      ["locator-miss-exists", { condition: "exists" as const }],
+      [
+        "locator-miss-contains",
+        { condition: "text" as const, expectedText: "whatever", textMatch: "contains" as const },
+      ],
+      [
+        "locator-miss-matches",
+        { condition: "text" as const, expectedText: "whatever", textMatch: "matches" as const },
+      ],
+    ] as const) {
+      await writeFlow(name, {
+        executionPrerequisite: "",
+        steps: [
+          {
+            kind: "assert",
+            selector: { text: "Add more languages..." },
+            ...step,
+          },
+        ],
+      });
+
+      const result = await run(name);
+
+      expect(result.steps[0].status).toBe("fail");
+      expect(result.steps[0].reason, name).toMatch(/typographic variant/);
+      expect(result.steps[0].reason, name).toMatch(/Add more languages…/);
+    }
+  });
 });
 
 describe("compatibility miss note: what it is scoped to", () => {

@@ -1184,7 +1184,13 @@ function confusableNoteFor(
  *   label describes a mismatch that has nothing to do with the pattern that
  *   failed — the same exemption {@link confusableTextNote} draws, for the same
  *   reason. (An invisible in the text it was tested against still gets named;
- *   see {@link ignorableTextNote}.)
+ *   see {@link ignorableTextNote}.) This one belongs to the LOCATED branch
+ *   only, and is applied there: it is a statement about the EXPECTATION, and
+ *   the not-located branch never reads the expectation. What that branch
+ *   compares is `selector.text`, which is a literal whatever comparator the
+ *   step happens to use — so exempting it here dropped the explanation for the
+ *   one comparator whose expectation had nothing to do with why the selector
+ *   missed, and broke the invariant two bullets down.
  *
  * And it is scoped by what actually missed, which is a question about the
  * MATCH SET rather than about the condition:
@@ -1209,7 +1215,7 @@ function compatibilityMissNote(
   textMatch: TextMatchMode | undefined,
   matches: ReturnType<typeof findAll>
 ): string {
-  if (condition === "hidden" || (condition === "text" && textMatch === "matches")) return "";
+  if (condition === "hidden") return "";
   // `visible` with matches is a visibility failure, not a locator miss.
   if (condition === "visible" && matches.length > 0) return "";
   let hit: string | undefined;
@@ -1221,6 +1227,11 @@ function compatibilityMissNote(
     // The element WAS located; what missed is the expectation, not the locator.
     // Scope strictly to the located element's own text — the very node
     // assertReason quotes — so an unrelated look-alike cannot hijack the note.
+    //
+    // And this is where the `matches` exemption belongs: only here is the
+    // expectation what missed, and only here would it be compared as a
+    // pattern. See the third exemption above.
+    if (textMatch === "matches") return "";
     if (expectedText === undefined || expectedText === "") return "";
     const first = located;
     const shown = assertText(first);
