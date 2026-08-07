@@ -16,6 +16,7 @@ import {
   nodeText,
   treeFingerprint,
   confusableTextNote,
+  confusableTextNoteIn,
   compatibilityVariantOf,
   compatibilityVariantIn,
   quoteScreenText,
@@ -1140,6 +1141,24 @@ async function waitForCondition(
 }
 
 /**
+ * The invisible-character note for the comparator the step actually used —
+ * whole-string for `equals`, substring for `contains` (the default). `matches`
+ * never reaches here; it gets the one-sided {@link ignorableTextNote}.
+ *
+ * Kept in one place because two callers must agree on it: the note itself, and
+ * the compatibility note that stands down whenever this one applies.
+ */
+function confusableNoteFor(
+  textMatch: TextMatchMode | undefined,
+  shown: string,
+  expectedText: string
+): string | undefined {
+  return textMatch === "equals"
+    ? confusableTextNote(shown, expectedText)
+    : confusableTextNoteIn(shown, expectedText);
+}
+
+/**
  * When a selector (or a `text` expectation) missed and the ONLY thing standing
  * between it and a match is a compatibility variant, say which one.
  *
@@ -1213,8 +1232,8 @@ function compatibilityMissNote(
     // two conflicting explanations of one failure. The codepoint note is the
     // more precise, so this note stands down whenever it applies.
     if (
-      confusableTextNote(shown, expectedText) !== undefined ||
-      confusableTextNote(own, expectedText) !== undefined
+      confusableNoteFor(textMatch, shown, expectedText) !== undefined ||
+      confusableNoteFor(textMatch, own, expectedText) !== undefined
     ) {
       return "";
     }
@@ -1310,7 +1329,14 @@ function assertReason(
           ? undefined
           : textMatch === "matches"
             ? (ignorableTextNote(shown, expectedText) ?? ignorableTextNote(own, expectedText))
-            : (confusableTextNote(shown, expectedText) ?? confusableTextNote(own, expectedText));
+            : // Match the comparator the step used, as the compat note does:
+              // `equals` asks whether the WHOLE strings are confusable,
+              // `contains` (the default) whether the needle is confusable with
+              // a substring of the label. Asking the whole-string question
+              // under `contains` left the note absent on every proper
+              // substring, which is the shape `contains` exists for.
+              (confusableNoteFor(textMatch, shown, expectedText) ??
+              confusableNoteFor(textMatch, own, expectedText));
       return (
         `element matched ${sel} but its text was "${quoteScreenText(shown)}"${ownNote} ` +
         `(wanted to ${wanted})` +

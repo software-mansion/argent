@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   compatibilityVariantOf,
   confusableTextNote,
+  confusableTextNoteIn,
   equalsCI,
   evaluateCondition,
   findAll,
@@ -405,6 +406,25 @@ describe("confusableTextNote", () => {
     // remove: two identical-looking strings, quoted, declared unequal.
     expect(equalsCI(`Save${CGJ}`, "Save")).toBe(false);
     expect(confusableTextNote(`Save${CGJ}`, "Save")).toContain("U+034F");
+  });
+
+  it("has a SUBSTRING form, so the note is not absent on the default comparator", () => {
+    // The whole-string gate could only ever fire under `contains` when the
+    // needle spanned the entire label — so on the proper-substring shape,
+    // which is what `contains` is for and the comparator most misses arrive
+    // through, the note was missing exactly when the label was longer.
+    expect(includesCI(`Save${CGJ}Changes now`, "SaveChanges")).toBe(false);
+    expect(confusableTextNote(`Save${CGJ}Changes now`, "SaveChanges")).toBeUndefined();
+    const note = confusableTextNoteIn(`Save${CGJ}Changes now`, "SaveChanges")!;
+    expect(note).toContain("differ only in invisible characters");
+    expect(note).toContain("U+034F");
+    // It keeps the leads that tell the truth about what the character does.
+    expect(confusableTextNoteIn(`kraft${SOFT_HYPHEN}fahrzeug GmbH`, "kraftfahrzeug")).toContain(
+      "changes what IS drawn"
+    );
+    // And says nothing when the ignorables are not why the needle missed.
+    expect(confusableTextNoteIn("Totally other text", "SaveChanges")).toBeUndefined();
+    expect(confusableTextNoteIn("Save Changes now", "Save")).toBeUndefined();
   });
 
   it("stays silent for a prepended concatenation mark, which is NOT ignorable", () => {

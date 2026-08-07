@@ -599,13 +599,23 @@ export function confusableTextNote(actual: string, expected: string): string | u
   // case-sensitive by design and must not be told otherwise.
   const visible = withoutInertIgnorables;
   if (visible(actual) !== visible(expected)) return undefined;
-  const codepoints = (s: string): string =>
-    Array.from(s)
-      .map((ch) => `U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`)
-      .join(" ");
-  // Reordering is the more dramatic claim, so it wins a mixed difference; the
-  // rendering-affecting lead then covers everything left that is not simply
-  // invisible. Only the last branch is allowed to say "invisible".
+  return ignorableDifferenceNote(actual, expected);
+}
+
+const codepoints = (s: string): string =>
+  Array.from(s)
+    .map((ch) => `U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`)
+    .join(" ");
+
+/**
+ * The shared body of the two confusable notes: pick the lead that tells the
+ * TRUTH about which characters differ, then print both strings as code points.
+ *
+ * Reordering is the more dramatic claim, so it wins a mixed difference; the
+ * rendering-affecting lead then covers everything left that is not simply
+ * invisible. Only the last branch is allowed to say "invisible".
+ */
+function ignorableDifferenceNote(actual: string, expected: string): string | undefined {
   const differing = differingIgnorables(actual, expected);
   const lead = differing.some((ch) => DIRECTIONAL.test(ch))
     ? "the two strings differ only in directional formatting, which draws nothing itself but " +
@@ -616,6 +626,34 @@ export function confusableTextNote(actual: string, expected: string): string | u
         "Arabic cursive joining as ZWNJ does — so the screen and the text really do differ"
       : "the two strings differ only in invisible characters";
   return `${lead} — actual [${codepoints(actual)}] vs expected [${codepoints(expected)}]`;
+}
+
+/**
+ * The substring analog of {@link confusableTextNote}: did the needle fail to
+ * appear in the label ONLY because of inert ignorable characters?
+ *
+ * {@link confusableTextNote}'s gate is whole-string, so under `contains` it
+ * could only ever fire when the needle spanned the entire label — the note was
+ * absent on the proper-substring shape, which is what `contains` is for, and
+ * `contains` is the default comparator most misses arrive through. This is the
+ * same gap {@link compatibilityVariantIn} exists to close for the other note.
+ *
+ * The test is the comparator's own: strip the inert ignorables from both sides
+ * and ask `includesCI` again. If the needle is in the label THEN and was not
+ * before, those characters are exactly what stopped it — no other difference
+ * can be responsible, because everything else the fold handles already matched.
+ *
+ * Both whole strings are printed, not the matched region: mapping an index back
+ * through the fold is not sound (case and whitespace collapse change lengths),
+ * and the author needs to see where in the label the intruder sits anyway.
+ */
+export function confusableTextNoteIn(haystack: string, needle: string): string | undefined {
+  if (includesCI(haystack, needle)) return undefined;
+  const bareHaystack = withoutInertIgnorables(haystack);
+  const bareNeedle = withoutInertIgnorables(needle);
+  if (!includesCI(bareHaystack, bareNeedle)) return undefined;
+  if (differingIgnorables(haystack, needle).length === 0) return undefined;
+  return ignorableDifferenceNote(haystack, needle);
 }
 
 /**

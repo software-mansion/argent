@@ -27,6 +27,7 @@ import {
   firstInReadingOrder,
   evaluateCondition,
   confusableTextNote,
+  confusableTextNoteIn,
   quoteScreenText,
 } from "../../utils/ui-tree-match";
 
@@ -212,10 +213,16 @@ function timeoutNote(
       // textMatch is contains/equals only, so there is no regex spelling to
       // exempt the way assertReason must.
       const shown = nodeText(first);
+      // Whole-string for `equals`, substring for `contains` (the default and
+      // this tool's other spelling): asking the whole-string question under
+      // `contains` left the note absent whenever the label was longer than the
+      // needle, which is the ordinary shape for a substring check.
       const confusable =
         params.expectedText === undefined
           ? undefined
-          : confusableTextNote(shown, params.expectedText);
+          : params.textMatch === "equals"
+            ? confusableTextNote(shown, params.expectedText)
+            : confusableTextNoteIn(shown, params.expectedText);
       // The label is defused before it is quoted: an unbalanced U+202E in it
       // reverses every character printed after it, and what follows here is the
       // codepoint note itself. See quoteScreenText.
