@@ -8,6 +8,8 @@ import {
 } from "@argent/registry";
 import type { NativeDevtoolsApi } from "../../src/blueprints/native-devtools";
 import { queryFullHierarchyTree } from "../../src/tools/flows/flow-ios-tree";
+import { selectorToFrame } from "../../src/utils/ui-tree-match";
+import { resolveNativeTargetApp } from "../../src/utils/native-target-app";
 
 const DEVICE = {
   id: "00000000-0000-0000-0000-0000000000ab",
@@ -66,6 +68,70 @@ describe("flow iOS full-hierarchy source", () => {
     );
   });
 
+  it("adapts and resolves a view buried deeper than the old 40-level cap", async () => {
+    // The claim the raised cap rests on: a view at depth 41+ must survive the
+    // query, survive adaptation, and be reachable by an `id:` selector. Asking
+    // for maxDepth 100 proves nothing on its own — the device is what truncates.
+    const DEEP = 45;
+    const buildRaw = (maxDepth: number) => {
+      // Innermost first, then wrap outward, so the leaf sits at depth DEEP.
+      let node: Record<string, unknown> = {
+        className: "UIButton",
+        identifier: "deep-button",
+        label: "Buy now",
+        frame: { x: 100, y: 400, width: 200, height: 40 },
+        windowFrame: { x: 100, y: 400, width: 200, height: 40 },
+        children: [],
+      };
+      for (let depth = DEEP - 1; depth >= 1; depth--) {
+        node = {
+          className: "RNSScreenView",
+          frame: { x: 0, y: 0, width: 400, height: 800 },
+          windowFrame: { x: 0, y: 0, width: 400, height: 800 },
+          // The device drops everything past the requested depth; below the cap
+          // the wrapper keeps its subtree.
+          children: depth < maxDepth ? [node] : [],
+        };
+      }
+      return {
+        windows: [
+          {
+            className: "UIWindow",
+            frame: { x: 0, y: 0, width: 400, height: 800 },
+            windowFrame: { x: 0, y: 0, width: 400, height: 800 },
+            children: [node],
+          },
+        ],
+      };
+    };
+
+    const apiWithCap = (deviceCap: number) =>
+      ({
+        listConnectedBundleIds: () => ["com.example.app"],
+        getAppState: vi.fn(async (bundleId: string) => ({
+          bundleId,
+          applicationState: "active",
+          foregroundActiveSceneCount: 1,
+          foregroundInactiveSceneCount: 0,
+          backgroundSceneCount: 0,
+          unattachedSceneCount: 0,
+          isFrontmostCandidate: true,
+        })),
+        requiresAppRestart: vi.fn(async () => false),
+        queryViewHierarchy: vi.fn(async (_bundleId, _method, params) =>
+          buildRaw(Math.min((params as { maxDepth: number }).maxDepth, deviceCap))
+        ),
+      }) as unknown as NativeDevtoolsApi;
+
+    const { tree } = await queryFullHierarchyTree(registryFor(apiWithCap(DEEP)), DEVICE);
+    expect(selectorToFrame(tree, { identifier: "deep-button" })).toBeDefined();
+
+    // Sensitivity check: the same fixture read under the old cap loses it, so a
+    // pass above is the depth doing the work and not the fixture being shallow.
+    const { tree: truncated } = await queryFullHierarchyTree(registryFor(apiWithCap(40)), DEVICE);
+    expect(selectorToFrame(truncated, { identifier: "deep-button" })).toBeUndefined();
+  });
+
   it("keeps native-target FailureError metadata while replacing impossible advice", async () => {
     const api = {
       listConnectedBundleIds: () => [] as string[],
@@ -119,6 +185,11 @@ describe("flow iOS full-hierarchy source", () => {
     });
     expect(error.message).toContain("com.example.first (applicationState=background");
     expect(error.message).toContain("com.example.second (applicationState=background");
+    // Only the TRAILING advice line is dropped; every other line of the source
+    // diagnostic survives verbatim. Anchoring the strip per-line instead of at
+    // the end of the message would start eating the middle of it.
+    const source = await resolveNativeTargetApp(api, undefined).catch((err) => err);
+    expect(error.message).toContain(source.message.split("\n").slice(0, -1).join("\n"));
     expect(error.message).toContain(
       "Flow selector steps auto-target and cannot provide a bundleId"
     );
@@ -256,7 +327,44 @@ describe("flow iOS full-hierarchy source", () => {
     }
   });
 
+  it("reports an unresolvable native-devtools service and keeps the original error", async () => {
+    const cause = new Error("no simulator-server for 0000…00ab");
+    const registry = {
+      resolveService: vi.fn(async () => {
+        throw cause;
+      }),
+    } as unknown as Registry;
+
+    const error = await queryFullHierarchyTree(registry, DEVICE).catch((err) => err);
+
+    expect(error.message).toContain("native devtools is unavailable");
+    expect(error.message).toContain("no simulator-server for 0000…00ab");
+    // A plain Error carries no failure signal, so the wrapper must stay a plain
+    // Error rather than inventing one — but the cause still has to survive.
+    expect(error).not.toBeInstanceOf(FailureError);
+    expect(error.cause).toBe(cause);
+  });
+
+  it("keeps the original error as the cause of a wrapped targeting failure", async () => {
+    const api = {
+      listConnectedBundleIds: () => [] as string[],
+      getAppState: vi.fn(),
+    } as unknown as NativeDevtoolsApi;
+
+    const error = await queryFullHierarchyTree(registryFor(api), DEVICE).catch((err) => err);
+
+    expect(error.cause).toBeInstanceOf(FailureError);
+    // The rendered message trims the source down to its first sentence; the
+    // untrimmed original is only reachable through the cause.
+    expect((error.cause as Error).message).toContain("provide bundleId explicitly");
+    expect(error.message).not.toContain("provide bundleId explicitly");
+  });
+
   it("names restart-app (not launch-app) when the target loaded before instrumentation", async () => {
+    // NOTE: the mock forces a state the live service cannot reach for an
+    // auto-resolved target — requiresAppRestart returns false for every
+    // connected bundle id, and auto-resolution only ever yields connected ones.
+    // This pins the message's wording, not that the branch fires in practice.
     const api = {
       listConnectedBundleIds: () => ["com.example.app"],
       getAppState: vi.fn(async (bundleId: string) => ({
