@@ -31,7 +31,7 @@ Work this gate the moment `flow-add-step` warns that it kept a raw point, while 
 3. Verify candidates in a scratch fragment containing `assert: { visible: <candidate> }`, executed on the valid target screen. If one passes, replace the point. If it fails, inspect the exact reason and try a better id, label, target app, or container; do not assume a visible miss is depth truncation.
 4. If no candidate resolves and you have the app's source, read it for the element's `testID` / `accessibilityIdentifier` / `resource-id` — the code is the one projection no discovery tool trims, and it names ids the others can drop. If the element has none, tell the user which element needs a stable test id and report that as the real fix; a kept coordinate is the workaround.
 
-A tree-unavailable error makes the candidate run **void** — on iOS an error containing `could not target a native-devtools-connected app` or `native devtools is unavailable`, on Android a failure to reach the devtools helper, on Chromium an unreachable CDP session, on Vega a missing page source. It proves the tree was absent, not that the selector failed, and never authorizes coordinates — and it is the same reason the recorder quotes back in its `selector capture failed` warning, so read that warning before treating it as a verdict about the element.
+A tree-unavailable error makes the candidate run **void** — on iOS an error containing `native devtools is unavailable` or `No native-devtools-connected apps are available`, on Android a failure to reach the devtools helper, on Chromium an unreachable CDP session, on Vega a missing page source. It proves the tree was absent, not that the selector failed, and never authorizes coordinates — and it is the same reason the recorder quotes back in its `selector capture failed` warning, so read that warning before treating it as a verdict about the element.
 
 Coordinates may remain only when the target is genuinely unlabeled (no id/text/label in available discovery) or all plausible labeled candidates failed against a working flow tree. Precede the kept point with an echo naming the target, and follow it with an `await:`/`assert:` on the **outcome** — the destination screen, the changed state, the element that disappeared. The target itself has no selector to check, so what makes the step falsifiable is proof that the tap landed, not proof that the target exists. Report the evidence. Anything the gate did not clear gets re-recorded against a selector, not annotated. A QA flow may keep such a step only for a genuinely unlabeled target, and every kept coordinate must appear in the report with its evidence; any other kept coordinate is a blocking defect.
 
@@ -40,9 +40,9 @@ Coordinates may remain only when the target is genuinely unlabeled (no id/text/l
 The full iOS flow tree exists only for an app Argent launched with instrumentation.
 
 1. If the app came from Metro/Expo, Xcode, its icon, or an earlier uninstrumented launch, call `restart-app`, restore the screen, and retry. `launch-app` does not terminate the app first: when the app is already running, the launch only foregrounds that existing, uninstrumented process. Only `restart-app` (terminate + relaunch) guarantees an instrumented launch.
-2. Tap capture already waits up to the normal post-launch connection budget. A repeated missing-tree warning after a fresh restart is not a transient capture race.
+2. Tap capture does **not** wait for that connection: it makes one tree read and turns any failure straight into the kept-coordinates warning. A recording-time `restart-app` returns before the devtools connection opens, so a missing-tree warning on the first tap after a restart can be transient. Re-record that tap once before escalating. Only a warning that survives the retry is evidence of a real fault.
 3. Call `native-devtools-status` with the same explicit simulator UDID and bundle id. If `requiresRestart` is true, restart once and check again.
-4. If the app is injectable but still disconnected, call `stop-all-simulator-servers` once, then `restart-app` and `native-devtools-status` again. This recreates the current Argent transport and devtools services; it does not change app/account data.
+4. If the app is injectable but still disconnected, call `stop-all-simulator-servers` once, **scoped to `devices: [<this simulator's UDID>]`** — the UDID step 3 already has in hand. One tool-server serves every agent using this Argent install, so an unscoped call tears down their devices too. Then call `restart-app` and `native-devtools-status` again. This recreates the current Argent transport and devtools services; it does not change app/account data.
 5. If it remains disconnected, report an Argent server/instrumentation environment blocker. Do not call the app non-injectable or replace selector actions with coordinates in a QA flow.
 
 More than one booted simulator is not itself an injection fault: native services are keyed by UDID. Use the same explicit UDID throughout; when standalone flow device selection reports ambiguity, pass `--device <udid>`.
@@ -53,9 +53,10 @@ Android, Chromium, and Vega never inject anything, so none of this applies to th
 
 **Scope gate: this section applies only to `com.apple.*` system apps. A connection failure in any other app never authorizes this fallback.**
 
-Apple system apps (`com.apple.*`) cannot load the instrumentation. Their `launch:` step skips the impossible devtools-readiness gate, but selector directives still cannot resolve. A generic flow may use the injection-free form:
+Apple system apps (`com.apple.*`) cannot load the instrumentation, and nothing in the launch path exempts them. A `launch:` step on iOS always waits for the devtools connection, so for one of these apps it spends that budget, fails, and every later step is skipped.
 
-- leading `launch:` for the system app;
+**Never give such a flow a `launch:` step.** Start it with a raw `tool: restart-app`, which performs the same terminate-and-relaunch without the readiness gate. Accept that the result is a **fragment**: its first non-echo step is not `launch:`, so the runner never classifies it as e2e. The rest of the injection-free form:
+
 - raw `tool: await-ui-element` checks against the accessibility tree;
 - point `tap:` / `long-press:` actions derived from `describe`, each named by an echo;
 - point focus tap plus raw `tool: keyboard` with `delayMs: 500`;
@@ -65,7 +66,7 @@ Disclose that the whole flow is injection-free. Do not pretend its coordinates a
 
 An injection-free flow is a valid generic flow but never a QA-contract-satisfying one: report it as an injection-free artifact plus the platform blocker, not as a completed QA test. Disclose it in the final report.
 
-If a normally injectable app is broken in the environment, replacing `launch:` with raw `tool: restart-app` can make a self-resetting **fragment**, but the runner no longer classifies it as e2e because its first non-echo step is not `launch:`. It therefore cannot satisfy the normal `argent-qa-flows` e2e contract. Report the blocker rather than labeling that fallback a completed QA test.
+The same fragment fallback covers a normally injectable app that is broken in the environment: raw `tool: restart-app` in place of `launch:` still makes a self-resetting flow. Either way the flow cannot satisfy the `argent-qa-flows` e2e contract, which requires a leading `launch:`. Report the blocker rather than labeling that fallback a completed QA test.
 
 ## Tree source recovery on Android, Chromium, and Vega
 
@@ -104,14 +105,14 @@ A selector tap resolves an element and dispatches at its coordinates; it does no
 
 Classify the result before editing:
 
-| Outcome              | Evidence                                                                                                     | Next step                                                                                                         |
-| -------------------- | ------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| Hard error           | A step reports error/fail and later steps skip                                                               | Inspect that step and actual state                                                                                |
-| Environment, not app | The reason says the check could not run — an unreadable tree, unconfirmed focus with no tree to read it from | Fix the environment and rerun; it is not a verdict about the app and never counts toward or against a pass streak |
-| Silent misfire       | Run reports success but expected final state is wrong                                                        | Restore the screen where the state should have changed and record the missing gate live; do not add it in YAML    |
-| Partial divergence   | An intermediate screenshot/tree disagrees with its echo                                                      | Find the first divergent transition                                                                               |
-| Acceptance failure   | Navigation/actions passed but a requested check fails                                                        | Preserve the check; investigate app/data behavior                                                                 |
-| Never settled        | A step passed carrying a `warning` from `await: { idle: true }`                                              | Look at that screen: motion by design, or a load that never finished? Gate the next action on a stable element    |
+| Outcome              | Evidence                                                                                                     | Next step                                                                                                                                                                                                |
+| -------------------- | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Hard error           | A step reports error/fail and later steps skip                                                               | Inspect that step and actual state                                                                                                                                                                       |
+| Environment, not app | The reason says the check could not run — an unreadable tree, unconfirmed focus with no tree to read it from | Fix the environment and rerun; it is not a verdict about the app and never counts toward or against a pass streak                                                                                        |
+| Silent misfire       | Run reports success but expected final state is wrong                                                        | Restore the screen where the state should have changed and record the missing gate live; do not add it in YAML                                                                                           |
+| Partial divergence   | An intermediate screenshot/tree disagrees with its echo                                                      | Find the first divergent transition                                                                                                                                                                      |
+| Acceptance failure   | Navigation/actions passed but a requested check fails                                                        | Preserve the check; investigate app/data behavior                                                                                                                                                        |
+| No clean settle      | A step passed carrying a `warning` from `await: { idle: true }`                                              | Read [which of the five warnings](flow-yaml.md#idle--readiness) it is — the screen moved, or the step got no evidence it settled — then look at that screen and gate the next action on a stable element |
 
 Then:
 
