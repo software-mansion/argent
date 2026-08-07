@@ -24,15 +24,33 @@ import { runVega, __resetVegaBinaryCacheForTests } from "../src/utils/vega-cli";
 // enough to be timed out and snapshotted. A complete reap therefore requires BOTH the
 // group kill (launcher + its sleep) and the descendant sweep (the detached worker).
 // Each test passes its OWN sentinel so one test's strays can't be mistaken for
-// another's. Sentinels share the `6910x` range so afterEach can sweep them all with
-// a single tight pattern (see sweep()).
-const SENTINEL_DEADLINE = "69101";
-const SENTINEL_REAP = "69102";
-const SENTINEL_OVERFLOW = "69103";
-const SENTINEL_LINGER = "69104";
-const SENTINEL_OVERFLOW_ERR = "69105";
-const SENTINEL_LINGER_NEAR_DEADLINE = "69106";
-const SENTINEL_LINGER_GROUPED = "69107";
+// another's, and every sentinel shares a per-run prefix so afterEach can sweep them
+// all with a single tight pattern (see sweep()).
+//
+// That prefix must be unique to THIS test process, because strayCount/sweep match
+// sentinels against the command line of every process on the machine. A second
+// concurrent run of this file — two agents running the suite at once, or the suite
+// alongside a single-file run — would otherwise share one sentinel namespace, and each
+// run's afterEach sweep would SIGKILL the other run's live workers: the `hang`
+// launcher's blocking `sleep` returns, the launcher exits 0, and runVega resolves
+// cleanly at ~100ms instead of timing out, so both `hang` tests fail. The tag is the
+// pid (unique among live processes) plus three random digits, so a worker leaked by an
+// earlier run whose pid has since been recycled is never mistaken for one of ours.
+//
+// It rides in the FRACTION of the sleep duration rather than being the duration: the
+// workers only need to outlive the assertions (a few seconds), but a run killed before
+// afterAll leaves them behind, so the whole-second part caps that leak at ten minutes.
+const RUN_TAG = `${process.pid}${Math.floor(Math.random() * 900 + 100)}`;
+const WORKER_LIFETIME_SECONDS = 600;
+const SENTINEL_PREFIX = `${WORKER_LIFETIME_SECONDS}.${RUN_TAG}`;
+const sentinel = (slot: number): string => `${SENTINEL_PREFIX}${slot}`;
+const SENTINEL_DEADLINE = sentinel(1);
+const SENTINEL_REAP = sentinel(2);
+const SENTINEL_OVERFLOW = sentinel(3);
+const SENTINEL_LINGER = sentinel(4);
+const SENTINEL_OVERFLOW_ERR = sentinel(5);
+const SENTINEL_LINGER_NEAR_DEADLINE = sentinel(6);
+const SENTINEL_LINGER_GROUPED = sentinel(7);
 let dir: string;
 let prevPath: string | undefined;
 
@@ -123,15 +141,29 @@ beforeEach(() => {
 
 afterEach(() => sweep());
 
+/**
+ * `pgrep`/`pkill` ERE matching a worker whose whole command line is exactly
+ * `sleep <target>`, where `target` is one sentinel or `<SENTINEL_PREFIX>[0-9]` for all
+ * of this run's.
+ *
+ * Anchored to the WHOLE command line (`^…$`). With a bare `sleep <sentinel>` substring,
+ * Linux's procps `pgrep -f` also matches the wrapper shell `/bin/sh -c "pgrep -f 'sleep
+ * <sentinel>' || true"` that execSync spawns — its own argv contains the literal
+ * pattern, and pgrep excludes only its own pid, not that parent shell — so a clean reap
+ * still reported 1 phantom stray and every waitForClear assertion failed on CI. (macOS's
+ * BSD pgrep doesn't match the wrapper, which is why it only bit Linux.) Anchoring also
+ * keeps a `sleep` from unrelated work on the machine from ever being matched.
+ *
+ * The sentinel's decimal point is its one ERE metacharacter, so escape it; a `[0-9]`
+ * slot glob passes through as the character class it is.
+ */
+function cmdlinePattern(target: string): string {
+  return `^sleep ${target.replaceAll(".", "\\.")}$`;
+}
+
 function sweep(): void {
   try {
-    // Match only this suite's sentinels (6910[0-9]) rather than a loose `sleep 691`
-    // substring, so a stray `sleep` from unrelated work on the machine is never killed.
-    // Anchored to the whole command line (`^…$`) for the same reason as strayCount: an
-    // unanchored `-f` pattern would also match the wrapper shell execSync spawns to run
-    // it (whose argv contains the literal pattern). The real sleeps' cmdline is exactly
-    // `sleep 6910<n>`.
-    execSync(`pkill -f '^sleep 6910[0-9]$' || true`);
+    execSync(`pkill -f '${cmdlinePattern(`${SENTINEL_PREFIX}[0-9]`)}' || true`);
   } catch {
     /* nothing to clean */
   }
@@ -139,15 +171,9 @@ function sweep(): void {
 
 function strayCount(sentinel: string): number {
   try {
-    // Anchor the pattern to the WHOLE command line (`^sleep <sentinel>$`). With a bare
-    // `sleep <sentinel>` substring, Linux's procps `pgrep -f` also matches the wrapper
-    // shell `/bin/sh -c "pgrep -f 'sleep <sentinel>' || true"` that execSync spawns —
-    // its own argv contains the literal `sleep <sentinel>`, and pgrep excludes only its
-    // own pid, not that parent shell — so a clean reap still reported 1 phantom stray
-    // and every waitForClear assertion failed on CI. (macOS's BSD pgrep doesn't match
-    // the wrapper, which is why it only bit Linux.) The anchors restrict the match to a
-    // real `sleep <sentinel>` process, whose full cmdline is exactly that.
-    const out = execSync(`pgrep -f '^sleep ${sentinel}$' || true`, { encoding: "utf-8" });
+    const out = execSync(`pgrep -f '${cmdlinePattern(sentinel)}' || true`, {
+      encoding: "utf-8",
+    });
     return out.split("\n").filter((l) => l.trim()).length;
   } catch {
     return 0;
