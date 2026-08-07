@@ -365,6 +365,37 @@ describe("await-ui-element tool", () => {
     expect(result.note).toMatch(/U\+034F/);
   });
 
+  it("`text` timeout note defuses a directional override in the label it quotes", async () => {
+    // The label survives the fold on purpose — a control that reorders is
+    // exactly what must not be stripped — so quoting it verbatim reversed
+    // everything printed after it. That tail used to be the ~30-character
+    // "(wanted to …)" suffix; it is now the codepoint note itself, the whole
+    // explanation this surface was given.
+    const { api } = makeSequencedAXService([
+      axResponse([{ label: "report‮txt.exe", value: "", frame: FRAME, traits: [] }]),
+    ]);
+    const tool = createAwaitUiElementTool(iosRegistry(api));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        condition: "text",
+        selector: { text: "report" },
+        expectedText: "reporttxt.exe",
+        textMatch: "equals",
+        timeoutMs: 30,
+        pollIntervalMs: 10,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.note).not.toContain("‮");
+    // Defused AND named, so the author can see what is in their label.
+    expect(result.note).toMatch(/<U\+202E>/);
+    expect(result.note).toMatch(/REORDERS/);
+  });
+
   it("`text` timeout note stays bare when the strings differ visibly", async () => {
     const { api } = makeSequencedAXService([
       axResponse([{ label: "Amount", value: "PLN 43", frame: FRAME, traits: [] }]),

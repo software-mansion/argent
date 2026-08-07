@@ -27,6 +27,7 @@ import {
   firstInReadingOrder,
   evaluateCondition,
   confusableTextNote,
+  quoteScreenText,
 } from "../../utils/ui-tree-match";
 
 // Tool id. Exported so run-sequence can both allow this tool and recognise its
@@ -215,8 +216,12 @@ function timeoutNote(
         params.expectedText === undefined
           ? undefined
           : confusableTextNote(shown, params.expectedText);
+      // The label is defused before it is quoted: an unbalanced U+202E in it
+      // reverses every character printed after it, and what follows here is the
+      // codepoint note itself. See quoteScreenText.
       base =
-        `element matched but its text was "${shown}" (wanted to ${wanted} "${params.expectedText}")` +
+        `element matched but its text was "${quoteScreenText(shown)}" ` +
+        `(wanted to ${wanted} "${params.expectedText}")` +
         (confusable ? ` — ${confusable}` : "");
       break;
     }

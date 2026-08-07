@@ -884,6 +884,44 @@ describe("compatibility miss note: what it is scoped to", () => {
     expect(result.steps[0].reason).toMatch(/does show "Add more languages…"/);
     expect(result.steps[0].reason).not.toMatch(/<U\+/);
   });
+
+  it("neutralises it in the TEXT-miss reason, where the codepoint note follows", async () => {
+    // The compat note was defused; the reason that quotes the located element's
+    // own text on every `text` failure was not — and that is the one the
+    // codepoint note is appended to, so an unbalanced U+202E reversed the whole
+    // explanation rather than a short suffix.
+    currentFetch = () => ({
+      tree: screen([
+        n({
+          identifier: "file",
+          label: "report‮txt.exe",
+          frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.05 },
+        }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("rlo-text-miss", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "assert",
+          condition: "text",
+          selector: { identifier: "file" },
+          expectedText: "reporttxt.exe",
+          textMatch: "equals",
+        },
+      ],
+    });
+
+    const result = await run("rlo-text-miss");
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).not.toContain("‮");
+    expect(result.steps[0].reason).toMatch(/<U\+202E>/);
+    // The explanation it protects is still there, and still last.
+    expect(result.steps[0].reason).toMatch(/REORDERS/);
+  });
 });
 
 describe("a `matches` (regex) miss still explains an invisible it cannot see", () => {

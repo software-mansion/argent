@@ -1285,7 +1285,11 @@ function assertReason(
       // the author may have been asserting against either.
       const shown = assertText(first);
       const own = nodeText(first);
-      const ownNote = own && own !== shown ? ` (own text "${own}")` : "";
+      // Defused before quoting, like every other place this reason prints screen
+      // text: an unbalanced U+202E in the label reverses everything after it, and
+      // what follows here is now the codepoint note — the very explanation this
+      // failure exists to give. See quoteScreenText.
+      const ownNote = own && own !== shown ? ` (own text "${quoteScreenText(own)}")` : "";
       // The two quoted strings can be indistinguishable on screen and still
       // compare unequal — a ZWSP or a bidi mark that survived a copy-paste, or
       // any other format character (category Cf) the fold's explicit classes do
@@ -1308,7 +1312,8 @@ function assertReason(
             ? (ignorableTextNote(shown) ?? ignorableTextNote(own))
             : (confusableTextNote(shown, expectedText) ?? confusableTextNote(own, expectedText));
       return (
-        `element matched ${sel} but its text was "${shown}"${ownNote} (wanted to ${wanted})` +
+        `element matched ${sel} but its text was "${quoteScreenText(shown)}"${ownNote} ` +
+        `(wanted to ${wanted})` +
         (confusable ? ` — ${confusable}` : "")
       );
     }
