@@ -6,11 +6,11 @@ import { sendCommand } from "../../utils/simulator-client";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// Ease-out exponent for a `settle` swipe. The finger follows 1-(1-t)^n rather
-// than a straight line, so it decelerates into the end point and lifts at ~0
-// velocity — the scroll view then skips its fling. Cubic gives a fast glide that
-// flattens over the final frames; a higher exponent would linger longer at rest.
-const SETTLE_EASE_EXPONENT = 3;
+// Ease-out exponent for a `momentum: false` swipe. The finger follows 1-(1-t)^n
+// rather than a straight line, so it decelerates into the end point and lifts at
+// ~0 velocity — the scroll view then skips its fling. Cubic gives a fast glide
+// that flattens over the final frames; a higher exponent would linger at rest.
+const MOMENTUM_FREE_EASE_EXPONENT = 3;
 
 const zodSchema = z.object({
   udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
@@ -22,12 +22,23 @@ const zodSchema = z.object({
     .number()
     .optional()
     .describe("Total gesture duration in milliseconds (default 300)"),
-  settle: z
+  momentum: z
     .boolean()
     .optional()
     .describe(
-      "Momentum-free swipe: decelerate into the end point (ease-out) so the OS reads ~0 release velocity and applies little to no fling. Use for scroll-to-element loops; default false (a natural flinging swipe)."
+      "Whether the swipe releases with momentum; default true (a natural flinging swipe). Pass false for a momentum-free swipe: the finger decelerates into the end point (ease-out) so the OS reads ~0 release velocity and applies little to no fling. Use false for scroll-to-element loops."
     ),
+  // `settle` was `momentum`'s shipped spelling, with the opposite polarity.
+  // Declared-and-refused rather than left out: this non-strict object strips
+  // unknown keys, so an upgrading caller's `settle: true` would parse clean and
+  // fling — the exact inverse of the gesture it asked for.
+  settle: z
+    .never({
+      error:
+        "gesture-swipe's `settle` was renamed to `momentum`, with the opposite sense — write `momentum: false` for the momentum-free swipe that `settle: true` used to mean (plain `settle: false` was the default, so just drop it)",
+    })
+    .optional()
+    .describe("Retired: renamed to `momentum` with the opposite sense. Pass `momentum: false`."),
 });
 
 type Params = z.infer<typeof zodSchema>;
@@ -60,7 +71,7 @@ export const gestureSwipeTool: ToolDefinition<Params, Result> = {
 Generates interpolated Move events for a natural feel (~60fps).
 Swipe up (fromY > toY) to scroll content down.
 Use when you need to scroll a list, dismiss a modal, drag an element, or navigate between pages. Not supported on Chromium — use gesture-scroll there instead.
-Pass settle:true for a momentum-free swipe that lands exactly where the finger lifts (little to no fling — a very short durationMs leaves the deceleration too little wall clock for the OS velocity tracker to read it as a stop), when you need a deterministic scroll distance. Returns { swiped: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
+Pass momentum:false for a momentum-free swipe that lands exactly where the finger lifts (little to no fling — a very short durationMs leaves the deceleration too little wall clock for the OS velocity tracker to read it as a stop), when you need a deterministic scroll distance. Returns { swiped: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
   alwaysLoad: true,
   searchHint: "swipe scroll drag pan gesture device simulator emulator touch move",
   zodSchema,
@@ -70,7 +81,7 @@ Pass settle:true for a momentum-free swipe that lands exactly where the finger l
   }),
   async execute(services, params) {
     const duration = params.durationMs ?? 300;
-    const settle = params.settle ?? false;
+    const momentumFree = params.momentum === false;
     const timestampMs = Date.now();
     const api = services.simulatorServer as SimulatorServerApi;
     const steps = Math.max(1, Math.round(duration / 16));
@@ -78,25 +89,25 @@ Pass settle:true for a momentum-free swipe that lands exactly where the finger l
     // wherever the last Move landed — so without repeating the end point as a
     // Move the swipe is delivered short of where it was authored. How short
     // depends on the ramp below: a plain swipe stops a full step out, at
-    // authored × (steps-1)/steps; a `settle` swipe's ease-out has already
+    // authored × (steps-1)/steps; a momentum-free swipe's ease-out has already
     // closed all but (1/steps)^n of the travel — orders of magnitude nearer,
     // but still not the end point, so the repeat is unconditional rather than
-    // gated on `!settle`, and settling is what `scroll-to` always asks for.
+    // gated on `!momentumFree` — and `scroll-to` always asks for momentum-free.
     // iOS honours the Up, and a duplicate sample before it would feed UIKit's
     // velocity estimator an extra near-zero interval and damp the fling.
     const repeatEndPointBeforeLift = resolveDevice(params.udid).platform === "android";
 
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
-      // A plain swipe advances linearly; a `settle` swipe eases-out so the finger
-      // decelerates into the end point and lifts at ~0 velocity (no fling). The
+      // A plain swipe advances linearly; a momentum-free one eases-out so the
+      // finger decelerates into the end point and lifts at ~0 velocity. The
       // shrinking end-of-curve steps stay distinct, non-coalescible moves whose
       // dx/dt genuinely decays — unlike a train of identical "hold" samples,
       // which UIKit coalesces away, leaving the fast pre-hold velocity to fling.
       // Ease-out also keeps every sample between the start and end point, so it
       // never runs off-screen the way a beyond-the-end hold would for a swipe
       // that already finishes at an edge.
-      const progress = settle ? 1 - Math.pow(1 - t, SETTLE_EASE_EXPONENT) : t;
+      const progress = momentumFree ? 1 - Math.pow(1 - t, MOMENTUM_FREE_EASE_EXPONENT) : t;
       const x = params.fromX + (params.toX - params.fromX) * progress;
       const y = params.fromY + (params.toY - params.fromY) * progress;
       const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
