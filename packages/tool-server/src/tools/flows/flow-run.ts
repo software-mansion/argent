@@ -1014,7 +1014,8 @@ Name exactly ONE source: the flow's name in \`name\` (\`flow_name\` is accepted 
 both are sent), which resolves <project_root>/.argent/flows/<name>.yaml — or \`flow_path\`. Both, or
 neither, is refused.
 Steps run in order: \`launch\` starts an app from scratch (terminate + relaunch) and waits until that
-app's selector tree source is ready; \`tool\` calls dispatch through the registry; \`tap\`/\`long-press\`/\`type\` resolve a selector to an
+app's selector tree source is ready; \`tool\` calls dispatch through the registry;
+\`tap\`/\`long-press\`/\`type\` resolve a selector to an
 element and act on it (\`tap: { on, times: 2 }\` double-taps; \`long-press: { on, duration }\` presses and
 holds; \`tap\`/\`long-press\` alternatively take a raw normalized point — bare \`{ x, y }\` or \`on: { x, y }\`;
 any selector may scope its matches geometrically, the CSS combinators read off frames: \`within: <selector>\`
