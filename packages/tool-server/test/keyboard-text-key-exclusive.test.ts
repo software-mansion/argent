@@ -257,3 +257,76 @@ describe("keyboard — `text` and `key` are mutually exclusive", () => {
     expect(err.message).toMatch(/tv-remote/);
   });
 });
+
+// Minimal evaluator for the presence-only JSON Schema subset this constraint
+// uses (required / not), so the advertised schema can be checked semantically
+// without pulling in a full validator. Mirrors gesture-rotate-radius.test.ts.
+interface PresenceConstraint {
+  required?: string[];
+  not?: PresenceConstraint;
+}
+
+function satisfies(params: Record<string, unknown>, c: PresenceConstraint): boolean {
+  if (c.required && !c.required.every((key) => key in params)) return false;
+  if (c.not && satisfies(params, c.not)) return false;
+  return true;
+}
+
+// The rule is enforced in `execute`, so a client that only ever calls the tool
+// learns it from a 400. A client that validates arguments against the advertised
+// schema, or constrains generation from it, never gets that far — for those, the
+// schema IS the contract, which is why the constraint is re-encoded there
+// (the same reason gesture-rotate hand-writes its `anyOf`).
+describe("keyboard inputSchema", () => {
+  // `isAndroidTv` is module-level, and the TV test above leaves it resolving
+  // true — without this the android udid here would route to the TV backend.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    isAndroidTv.mockResolvedValue(false);
+  });
+
+  it("leaves both halves optional, constrained only by the `not`", () => {
+    const schema = createKeyboardTool(registry()).inputSchema!;
+    expect(schema.type).toBe("object");
+    const required = schema.required as string[];
+    expect(required).toEqual(["udid"]);
+    expect(required).not.toContain("text");
+    expect(required).not.toContain("key");
+  });
+
+  it("advertises exactly the shapes `execute` accepts at runtime", async () => {
+    const tool = createKeyboardTool(registry());
+    const constraint = tool.inputSchema! as unknown as PresenceConstraint;
+    const shapes: Array<[args: Record<string, unknown>, valid: boolean]> = [
+      [{ text: "hi" }, true],
+      [{ key: "enter" }, true],
+      [{}, true], // neither is required — an empty request is a documented no-op
+      [{ text: "hi", key: "enter" }, false],
+      [{ text: "", key: "" }, false], // shape, not truthiness — same as `execute`
+    ];
+
+    for (const [args, valid] of shapes) {
+      const params = { udid: "emulator-5554", ...args };
+      expect(satisfies(params, constraint), `schema disagrees on ${JSON.stringify(args)}`).toBe(
+        valid
+      );
+
+      // And the runtime agrees, so the two can't drift apart silently.
+      vi.clearAllMocks();
+      const rejected = await tool.execute({}, params as never).then(
+        () => false,
+        () => true
+      );
+      expect(rejected, `runtime disagrees on ${JSON.stringify(args)}`).toBe(!valid);
+    }
+  });
+
+  it("states the constraint on `text` too, not only on `key`", () => {
+    // A caller reading only the parameter it is filling in must still see the
+    // rule; `boot-device` restates its exactly-one check in all four fields for
+    // the same reason.
+    const { text, key } = createKeyboardTool(registry()).zodSchema!.shape;
+    expect(text.description).toMatch(/Cannot be combined with `key`/);
+    expect(key.description).toMatch(/Cannot be combined with `text`/);
+  });
+});
