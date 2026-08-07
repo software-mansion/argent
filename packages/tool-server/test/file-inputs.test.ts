@@ -177,27 +177,41 @@ describe("resolveFileInputs", () => {
       { target: "b", path: "${b}", kind: "file" },
     ];
 
+    // resolveFileInputs materializes into mkdtemp(join(os.tmpdir(),
+    // "argent-file-input-")), and os.tmpdir() reads process.env.TMPDIR at call
+    // time. Scope TMPDIR to this test so the listing below covers only dirs
+    // this run created — the machine-wide tmpdir also holds the in-flight dirs
+    // of any concurrent run, which would read as an uncleaned leak.
+    const savedTmpdir = process.env.TMPDIR;
+    const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "argent-file-input-scan-"));
+    process.env.TMPDIR = scratch;
+
     const listInputTempDirs = async () => {
-      const entries = await fs.readdir(os.tmpdir());
+      const entries = await fs.readdir(scratch);
       return entries.filter((e) => e.startsWith("argent-file-input-"));
     };
-    const before = await listInputTempDirs();
 
-    await expect(
-      resolveFileInputs(
-        { fileInputs: specs },
-        {
-          a: wire({
-            path: "/client/a.png",
-            size: content.length,
-            content: content.toString("base64"),
-          }),
-          b: wire({ path: path.join(tmpDir, "ghost.png") }),
-        }
-      )
-    ).rejects.toThrow(FileInputError);
+    try {
+      await expect(
+        resolveFileInputs(
+          { fileInputs: specs },
+          {
+            a: wire({
+              path: "/client/a.png",
+              size: content.length,
+              content: content.toString("base64"),
+            }),
+            b: wire({ path: path.join(tmpDir, "ghost.png") }),
+          }
+        )
+      ).rejects.toThrow(FileInputError);
 
-    expect(await listInputTempDirs()).toEqual(before);
+      expect(await listInputTempDirs()).toEqual([]);
+    } finally {
+      if (savedTmpdir === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = savedTmpdir;
+      await fs.rm(scratch, { recursive: true, force: true });
+    }
   });
 
   it("rejects a missing file with no uploaded content", async () => {

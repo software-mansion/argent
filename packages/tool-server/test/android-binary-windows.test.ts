@@ -40,6 +40,11 @@ describe("resolveAndroidBinary on Windows", () => {
     delete process.env.ANDROID_HOME;
     delete process.env.ANDROID_SDK_ROOT;
     tmpRoot = await mkdtemp(join(tmpdir(), "argent-android-win-"));
+    // The win32 resolver also derives a root from the home directory
+    // (%USERPROFILE%\AppData\Local\Android\Sdk). Point HOME at the same empty
+    // temp root so a real Studio install under the developer's home cannot
+    // satisfy a lookup these tests expect to fail.
+    process.env.HOME = tmpRoot;
   });
 
   afterEach(async () => {

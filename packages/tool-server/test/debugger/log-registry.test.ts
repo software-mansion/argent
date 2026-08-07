@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { LogFileWriter } from "../../src/utils/debugger/log-file-writer";
+import { scopeTempHome } from "../helpers/temp-home";
+
+scopeTempHome("argent-log-registry-home-");
 
 /**
  * Tests for the debugger-log-registry tool behavior.

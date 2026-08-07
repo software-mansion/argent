@@ -58,7 +58,11 @@ import {
   nativeDevtoolsBlueprint,
 } from "../../src/blueprints/native-devtools";
 
-const UDID = "FACTORY1-1111-1111-1111-111111111111";
+// The factory really binds /tmp/argent-nd-<first 8 UDID chars>.sock, and the
+// bind unlinks and rebinds over whatever already holds that path. Tag the UDID
+// with this process's pid so a concurrent run of this file owns a different
+// socket instead of silently orphaning ours (and we, theirs).
+const UDID = `${process.pid.toString(16).toUpperCase().padStart(8, "0")}-1111-1111-1111-111111111111`;
 const device: DeviceInfo = { id: UDID, platform: "ios", kind: "simulator" };
 const SOCKET_PATH = `/tmp/argent-nd-${UDID.slice(0, 8)}.sock`;
 

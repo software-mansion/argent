@@ -49,6 +49,7 @@ import {
 } from "../../src/blueprints/native-profiler-session";
 import { profilerLoadTool } from "../../src/tools/profiler/query/profiler-load";
 import { nativeProfilerAnalyzeTool } from "../../src/tools/profiler/native-profiler/native-profiler-analyze";
+import { __primeDepCacheForTests, __resetDepCacheForTests } from "../../src/utils/check-deps";
 import {
   writeAndroidNativeProfilerMetadata,
   readAndroidNativeProfilerMetadata,
@@ -110,6 +111,11 @@ describe("native-profiler freshness flagging — real analyze/render path", () =
   let originalTmpdir: string | undefined;
 
   beforeEach(async () => {
+    // The analyze path's dependency gate resolves a real `adb` off PATH,
+    // $ANDROID_HOME and the default SDK locations, so without priming these
+    // tests pass only on a machine that has the Android SDK installed.
+    __resetDepCacheForTests();
+    __primeDepCacheForTests(["adb"]);
     runTpQueryMock.mockReset();
     routeCleanTrace();
     // Resolve the isolated dir off the REAL tmpdir before we redirect TMPDIR.

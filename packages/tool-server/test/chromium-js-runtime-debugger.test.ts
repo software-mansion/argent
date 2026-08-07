@@ -8,6 +8,12 @@ import {
 import { resolveDevice } from "../src/utils/device-info";
 import type { ChromiumCdpApi } from "../src/blueprints/chromium-cdp";
 import type { CDPClientEvents } from "../src/utils/debugger/cdp-client";
+import { scopeTempHome } from "./helpers/temp-home";
+
+// The JS-runtime-debugger / network blueprints build a real LogFileWriter,
+// whose constructor mkdir -p's os.homedir()/.argent/tmp. Keep that out of the
+// developer's real home.
+scopeTempHome("argent-chromium-jsdbg-home-");
 
 function makeFakeChromiumCdpApi(): {
   api: ChromiumCdpApi;

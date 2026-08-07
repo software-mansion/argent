@@ -190,7 +190,20 @@ const androidDevice: DeviceInfo = {
   kind: "emulator",
 } as DeviceInfo;
 
-beforeEach(() => {
+// startCapture names its output join(os.tmpdir(),
+// `argent-screen-recording-${deviceId}-${Date.now()}.mp4`). Both halves are
+// constant here — the device ids are fixtures and the fake timers below freeze
+// Date.now() — so every run of this file derives the SAME path, and each test
+// ends by removing it. Two concurrent runs therefore delete each other's
+// recording mid-test. os.tmpdir() reads process.env.TMPDIR at call time, so
+// scope it per test.
+let savedTmpdir: string | undefined;
+let scratch: string;
+
+beforeEach(async () => {
+  savedTmpdir = process.env.TMPDIR;
+  scratch = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screen-recording-test-"));
+  process.env.TMPDIR = scratch;
   __resetActiveScreenRecordingsForTesting();
   mockSpawn.mockReset();
   mockOpenStream.mockReset();
@@ -199,8 +212,13 @@ beforeEach(() => {
   vi.useFakeTimers();
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
+  // Restore TMPDIR before the cleanup rm so it and any later suite resolve the
+  // real tmpdir again.
+  if (savedTmpdir === undefined) delete process.env.TMPDIR;
+  else process.env.TMPDIR = savedTmpdir;
+  await fs.rm(scratch, { recursive: true, force: true });
 });
 
 describe("screen-recording session blueprint", () => {

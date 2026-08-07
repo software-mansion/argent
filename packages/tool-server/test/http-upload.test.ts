@@ -151,8 +151,18 @@ describe("POST /upload", () => {
   });
 
   it("discards the partial file when the client disconnects mid-upload", async () => {
+    // The upload path is join(os.tmpdir(), `argent-upload-${id}.tar.gz`), and
+    // os.tmpdir() reads process.env.TMPDIR at call time. Scope TMPDIR to this
+    // test so the leak check sees only this run's partials: against the
+    // machine-wide tmpdir a concurrent run's in-flight upload never
+    // disappears, and the poll below turns into a timeout rather than a
+    // one-line failure.
+    const savedTmpdir = process.env.TMPDIR;
+    const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "argent-upload-scan-"));
+    process.env.TMPDIR = scratch;
+
     const uploadFiles = async (): Promise<Set<string>> => {
-      const entries = await fs.readdir(os.tmpdir());
+      const entries = await fs.readdir(scratch);
       return new Set(entries.filter((e) => e.startsWith("argent-upload-")));
     };
     const before = await uploadFiles();
@@ -183,6 +193,9 @@ describe("POST /upload", () => {
       });
     } finally {
       server.close();
+      if (savedTmpdir === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = savedTmpdir;
+      await fs.rm(scratch, { recursive: true, force: true });
     }
   });
 });

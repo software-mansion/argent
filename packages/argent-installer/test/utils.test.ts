@@ -829,6 +829,19 @@ describe("localUninstallCommand", () => {
 // ── detectProjectPackageManager ──────────────────────────────────────────────
 
 describe("detectProjectPackageManager", () => {
+  // With no marker found the walk falls back to detectPackageManager(), which
+  // reads npm_config_user_agent — the agent of whichever package manager is
+  // running the suite. Pin it so the boundary case below tests the walk rather
+  // than the contributor's package manager.
+  const originalAgent = process.env.npm_config_user_agent;
+  beforeEach(() => {
+    delete process.env.npm_config_user_agent;
+  });
+  afterEach(() => {
+    if (originalAgent === undefined) delete process.env.npm_config_user_agent;
+    else process.env.npm_config_user_agent = originalAgent;
+  });
+
   it("detects pnpm from pnpm-lock.yaml", () => {
     fs.writeFileSync(path.join(tmpDir, "pnpm-lock.yaml"), "");
     expect(detectProjectPackageManager(tmpDir)).toBe("pnpm");
@@ -959,8 +972,9 @@ describe("detectProjectPackageManager", () => {
     const repo = path.join(tmpDir, "other-repo");
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     // The sibling repo has no lockfile of its own; the outer pnpm lockfile
-    // must NOT bleed through the .git boundary.
-    expect(["npm", "yarn", "bun"]).toContain(detectProjectPackageManager(repo));
+    // must NOT bleed through the .git boundary, so the walk stops and falls
+    // back to the (pinned-unset) agent default.
+    expect(detectProjectPackageManager(repo)).toBe("npm");
   });
 });
 

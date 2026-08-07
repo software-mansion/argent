@@ -60,7 +60,14 @@ vi.mock("posthog-node", () => {
 describe("telemetry public surface", () => {
   const { tmp } = scopeHome();
 
+  // DO_NOT_TRACK is a consortium-standard opt-out any developer may export.
+  // Left ambient it disables consent for the whole suite, so these tests would
+  // assert what the developer's shell says rather than what markEnabled() does.
+  let restoreOptOut: () => void;
+
   beforeEach(() => {
+    restoreOptOut = snapshotEnv(["DO_NOT_TRACK"]);
+    delete process.env.DO_NOT_TRACK;
     posthogMock.instances.length = 0;
     posthogMock.flushImpl = () => Promise.resolve();
     resetClient();
@@ -93,6 +100,7 @@ describe("telemetry public surface", () => {
     delete (globalThis as Record<string, unknown>).__ARGENT_POSTHOG_KEY_TEST;
     resetClient();
     vi.restoreAllMocks();
+    restoreOptOut();
   });
 
   it("markDisabled persists disabled state and drains prior events without emitting an opt-out event", async () => {

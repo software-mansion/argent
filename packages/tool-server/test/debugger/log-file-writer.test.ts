@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import { LogFileWriter, type RichLogEntry } from "../../src/utils/debugger/log-file-writer";
+import { scopeTempHome } from "../helpers/temp-home";
+
+scopeTempHome("argent-log-writer-home-");
 
 let writer: LogFileWriter;
 
