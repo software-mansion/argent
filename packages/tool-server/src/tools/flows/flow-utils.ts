@@ -713,7 +713,7 @@ export type FlowStep =
    * is a property of the whole screen. There is no `assert` form: "has it
    * stopped moving yet" is inherently a wait.
    */
-  | { kind: "idle"; timeout?: number; minStableMs?: number }
+  | { kind: "idle"; timeout?: number; stableFor?: number }
   | { kind: "wait"; ms: number }
   | { kind: "scroll-to"; target: FlowSelector; direction: ScrollDirection; within?: FlowSelector }
   | { kind: "pinch"; selector?: FlowSelector; scale: number }
@@ -857,7 +857,7 @@ type YamlTextWaitCondition = Extract<YamlWaitCondition, { text: unknown }>;
  * body carries either a selector condition or this one, never a mix — so it is
  * parsed by {@link parseIdleFields} rather than by parseWaitFields.
  */
-type YamlIdleCondition = { idle: true; minStableMs?: number; timeout?: number };
+type YamlIdleCondition = { idle: true; stableFor?: number; timeout?: number };
 
 /** `scroll-to` body: a bare target (scrolls down), or a map with options. */
 type YamlScrollBody =
@@ -1173,7 +1173,7 @@ function waitToYaml(
  */
 function idleToYaml(step: Extract<FlowStep, { kind: "idle" }>): YamlStep {
   const body: YamlIdleCondition = { idle: true };
-  if (step.minStableMs !== undefined) body.minStableMs = step.minStableMs;
+  if (step.stableFor !== undefined) body.stableFor = step.stableFor;
   if (step.timeout !== undefined) body.timeout = step.timeout;
   return { await: body };
 }
@@ -1697,7 +1697,7 @@ const IDLE_CONDITION = "idle";
  * gates. The runner imports them back.
  */
 export const IDLE_DEFAULT_TIMEOUT_MS = 7500;
-export const IDLE_DEFAULT_MIN_STABLE_MS = 250;
+export const IDLE_DEFAULT_STABLE_FOR_MS = 250;
 
 /** `idle` poll cadence, matching `await-screen-idle`'s own. */
 export const IDLE_POLL_MS = 200;
@@ -1731,7 +1731,7 @@ export const IDLE_SETTLE_OVERHEAD_MS = (IDLE_MIN_STILL_INTERVALS + 1) * IDLE_POL
  * gate no run can pass. The relationship that actually matters is with
  * `timeout`, checked separately.
  */
-const IDLE_MAX_MIN_STABLE_MS = 600_000;
+const IDLE_MAX_STABLE_FOR_MS = 600_000;
 
 /**
  * The `timeout` sibling key an `await` may carry, spelled once for both the
@@ -1786,7 +1786,7 @@ function parseIdleFields(raw: Record<string, unknown>, kind: "await" | "assert")
           : "")
     );
   }
-  rejectUnknownKeys(entry, raw, ["idle", "minStableMs", "timeout"], kind);
+  rejectUnknownKeys(entry, raw, ["idle", "stableFor", "timeout"], kind);
 
   // `idle: true` only. A falsey value would spell "assert the screen is NOT
   // settled", which no flow wants and the runner cannot answer.
@@ -1796,13 +1796,8 @@ function parseIdleFields(raw: Record<string, unknown>, kind: "await" | "assert")
 
   const step: Extract<FlowStep, { kind: "idle" }> = { kind: "idle" };
   if ("timeout" in raw) step.timeout = parseAwaitTimeout(entry, raw.timeout);
-  if (raw.minStableMs !== undefined) {
-    step.minStableMs = parseBoundedMs(
-      entry,
-      raw.minStableMs,
-      "idle.minStableMs",
-      IDLE_MAX_MIN_STABLE_MS
-    );
+  if (raw.stableFor !== undefined) {
+    step.stableFor = parseBoundedMs(entry, raw.stableFor, "idle.stableFor", IDLE_MAX_STABLE_FOR_MS);
   }
 
   // A wait that cannot contain the settle it asks for is a gate that never
@@ -1816,20 +1811,20 @@ function parseIdleFields(raw: Record<string, unknown>, kind: "await" | "assert")
   // Checked against the EFFECTIVE hold, not just a written-out one: the
   // default is what most steps run with, so leaving it out was the way to get
   // an unsatisfiable step past the parser (`timeout: 100` was accepted while
-  // the identical `timeout: 100, minStableMs: 250` was rejected).
+  // the identical `timeout: 100, stableFor: 250` was rejected).
   const timeoutMs = step.timeout ?? IDLE_DEFAULT_TIMEOUT_MS;
-  const minStableMs = step.minStableMs ?? IDLE_DEFAULT_MIN_STABLE_MS;
-  const needed = minStableMs + IDLE_SETTLE_OVERHEAD_MS;
+  const stableFor = step.stableFor ?? IDLE_DEFAULT_STABLE_FOR_MS;
+  const needed = stableFor + IDLE_SETTLE_OVERHEAD_MS;
   if (timeoutMs < needed) {
     badEntry(
       entry,
       `idle needs a timeout of at least ${needed}ms to hold still for ` +
-        `${step.minStableMs === undefined ? `the default ` : ``}${minStableMs}ms: a settle is ` +
+        `${step.stableFor === undefined ? `the default ` : ``}${stableFor}ms: a settle is ` +
         `${IDLE_MIN_STILL_INTERVALS + 1} reads spanning ${IDLE_MIN_STILL_INTERVALS} ` +
         `${IDLE_POLL_MS}ms polls, plus the ${IDLE_POLL_MS}ms of budget the closing round has to ` +
         `have left to be allowed to start, and the wait has to contain all of that as well as ` +
         `the hold. Raise ` +
-        `\`timeout\`${step.minStableMs === undefined ? "" : " or lower `minStableMs`"}`
+        `\`timeout\`${step.stableFor === undefined ? "" : " or lower `stableFor`"}`
     );
   }
   return step;

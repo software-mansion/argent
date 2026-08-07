@@ -46,7 +46,7 @@ import {
 import {
   describeSelector,
   describeTextExpectation,
-  IDLE_DEFAULT_MIN_STABLE_MS,
+  IDLE_DEFAULT_STABLE_FOR_MS,
   IDLE_DEFAULT_TIMEOUT_MS,
   IDLE_MIN_STILL_INTERVALS,
   IDLE_POLL_MS,
@@ -1283,7 +1283,7 @@ async function waitForIdle(
   step: Extract<FlowStep, { kind: "idle" }>
 ): Promise<DirectiveOutcome> {
   const timeoutMs = step.timeout ?? IDLE_DEFAULT_TIMEOUT_MS;
-  const minStableMs = step.minStableMs ?? IDLE_DEFAULT_MIN_STABLE_MS;
+  const stableFor = step.stableFor ?? IDLE_DEFAULT_STABLE_FOR_MS;
   // Resolved once: it depends only on the device, and on iOS it costs a
   // runtime probe the capture path memoizes anyway.
   const maskTopFraction = await statusBarMaskFraction(env.device);
@@ -1400,7 +1400,7 @@ async function waitForIdle(
 
         // Stillness is a property of an INTERVAL, so no verdict comes from one
         // observation — and, per MIN_STILL_INTERVALS, none comes from one
-        // interval either. `minStableMs: 0` therefore still means three reads:
+        // interval either. `stableFor: 0` therefore still means three reads:
         // a single sample proves nothing about motion, and a single agreeing
         // pair can be two points of an animation that reversed between them.
         const treeHeld = signature === treeSignature;
@@ -1412,7 +1412,7 @@ async function waitForIdle(
           treeStillIntervals += 1;
         }
         treeSettledAtLastRead =
-          treeStillIntervals >= MIN_STILL_INTERVALS && now - treeSince >= minStableMs;
+          treeStillIntervals >= MIN_STILL_INTERVALS && now - treeSince >= stableFor;
 
         // A missing frame is the ABSENCE of visual evidence, never evidence of
         // stillness. Letting it stand in for "the pixels held" is what turned a
@@ -1442,7 +1442,7 @@ async function waitForIdle(
         if (treeHeld && pixelsHeld) {
           stillIntervals += 1;
           if (localizedThisInterval) localizedMotionDuringHold = true;
-          if (stillIntervals >= MIN_STILL_INTERVALS && now - bothSince >= minStableMs) {
+          if (stillIntervals >= MIN_STILL_INTERVALS && now - bothSince >= stableFor) {
             return localizedMotionDuringHold
               ? { ok: true, warning: LOCALIZED_MOTION_WARNING }
               : { ok: true };
@@ -1596,7 +1596,7 @@ async function waitForIdle(
   return {
     ok: true,
     warning:
-      `the screen never held still for ${minStableMs}ms within ${timeoutMs}ms, so this step went ` +
+      `the screen never held still for ${stableFor}ms within ${timeoutMs}ms, so this step went ` +
       `ahead without waiting it out. Either something on it never stops (a video, a looping ` +
       `animation, a carousel, live-updating text) or the screen never finished loading. Look at ` +
       `what is moving, and make sure the next action is gated on a stable element rather than on ` +
