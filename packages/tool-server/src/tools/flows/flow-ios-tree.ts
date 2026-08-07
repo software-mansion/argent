@@ -388,10 +388,11 @@ export async function queryFullHierarchyTree(
     throw wrapPreservingFailure(
       `no app is connected to native devtools, so flow selectors have no instrumented process to ` +
         `read the view hierarchy from (${firstClause(err)}). Relaunch with restart-app (or a flow ` +
-        `\`launch\` step): launch-app does not terminate, so for an app already running from ` +
-        `Metro/Expo, Xcode, or its icon it only foregrounds that same uninstrumented process. ` +
-        `An Apple system app (com.apple.*) never instruments — and only for it do the native-* ` +
-        `tools dead-end too — so drive it with raw point taps and tool: await-ui-element steps.`,
+        `\`launch\` step): launch-app does not terminate, so on an app already running from ` +
+        `Metro/Expo, Xcode, or its icon it only foregrounds that uninstrumented process. ` +
+        `Argent treats an Apple system app (com.apple.*) as non-injectable — the native-* tools ` +
+        `refuse it too — so if one never connects, drive it with raw point taps and ` +
+        `tool: await-ui-element steps.`,
       err
     );
   }
