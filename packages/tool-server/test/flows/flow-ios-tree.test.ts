@@ -83,6 +83,12 @@ describe("flow iOS full-hierarchy source", () => {
     expect(error.message).toContain("restart-app");
     expect(error.message).toContain("com.apple.*");
     expect(error.message).toContain("raw point taps");
+    // An injectable app simply launched outside Argent also lands here, and for
+    // it the native-* tools do NOT dead-end — the injection precheck throws the
+    // non-injectable error only for com.apple.*, and returns restart_required
+    // otherwise. So that blanket warning must not ride along.
+    expect(error.message).not.toContain("native-describe-screen");
+    expect(error.message).not.toContain("Do not fall back to the native-devtools feature tools");
     // The clause is trimmed at the sentence break, so the impossible advice in
     // the source's SECOND sentence never reaches the flow reason.
     expect(error.message).toContain(

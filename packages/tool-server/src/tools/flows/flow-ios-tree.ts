@@ -5,11 +5,7 @@ import {
   type DeviceInfo,
   type Registry,
 } from "@argent/registry";
-import {
-  nativeDevtoolsRef,
-  NON_INJECTABLE_NATIVE_WARNING,
-  type NativeDevtoolsApi,
-} from "../../blueprints/native-devtools";
+import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
 import {
   resolveNativeTargetApp,
   type ResolvedNativeTargetApp,
@@ -385,8 +381,9 @@ export async function queryFullHierarchyTree(
         `when the app is already running from Metro/Expo, Xcode, or its icon, launch-app only ` +
         `foregrounds that existing uninstrumented process. restart-app (or an e2e flow's launch step) ` +
         `terminates and relaunches it, which guarantees instrumentation for an injectable app. ` +
-        `An Apple system app (com.apple.*) can never be instrumented; drive it with raw point taps and ` +
-        `tool: await-ui-element steps instead. ${NON_INJECTABLE_NATIVE_WARNING}`,
+        `An Apple system app (com.apple.*) can never be instrumented, and only for it do the ` +
+        `native-* tools dead-end too — drive it with raw point taps and tool: await-ui-element ` +
+        `steps instead.`,
       err
     );
   }
