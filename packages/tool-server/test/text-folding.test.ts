@@ -663,18 +663,59 @@ describe("ranking prefers the literal spelling over one only the fold equates", 
     });
   });
 
-  it("grades identifier and role the same way", () => {
-    const folded: DescribeNode = {
-      ...icon,
-      identifier: `save${ZWSP}`,
-      frame: { x: 0, y: 0, width: 0.02, height: 0.02 },
-    };
-    const literal: DescribeNode = {
+  it("grades an EXACT identifier above one matched by its resource-id suffix", () => {
+    // The identifier gate is `identifierMatches`, which deliberately does not
+    // fold — so a folded-only identifier never reaches ranking at all, and a
+    // fixture built on one pins nothing. The two spellings that DO both reach
+    // it are the exact id and the unqualified `:id/` suffix, and only the
+    // former scores.
+    //
+    // The exact node is deliberately the LARGER one, so the grade has to be
+    // what decides: without it the two tie at zero and "smallest frame wins"
+    // elects the suffix match instead.
+    const exact: DescribeNode = {
       ...cta,
       identifier: "save",
       frame: { x: 0, y: 0.5, width: 0.4, height: 0.08 },
     };
-    expect(selectorToFrame(screen([folded, literal]), { identifier: "save" })).toMatchObject({
+    const suffix: DescribeNode = {
+      ...icon,
+      identifier: "com.example.app:id/save",
+      frame: { x: 0, y: 0, width: 0.02, height: 0.02 },
+    };
+    expect(selectorToFrame(screen([exact, suffix]), { identifier: "save" })).toMatchObject({
+      width: 0.4,
+    });
+    expect(selectorToFrame(screen([suffix, exact]), { identifier: "save" })).toMatchObject({
+      width: 0.4,
+    });
+    // The suffix spelling is still a match when it is the only one.
+    expect(selectorToFrame(screen([suffix]), { identifier: "save" })).toMatchObject({
+      width: 0.02,
+    });
+  });
+
+  it("grades a literal role above one only the fold equates", () => {
+    // The other field the scale covers, and the one the old test named without
+    // asserting anything about. Both roles match (`role` is a folded substring
+    // test), so only the grade separates them — and again the literal node is
+    // the larger, so a collapsed scale would elect the other.
+    const literalRole: DescribeNode = {
+      ...cta,
+      role: "button",
+      identifier: "a",
+      frame: { x: 0, y: 0.5, width: 0.4, height: 0.08 },
+    };
+    const foldedRole: DescribeNode = {
+      ...icon,
+      role: `button${NBSP}`,
+      identifier: "b",
+      frame: { x: 0, y: 0, width: 0.02, height: 0.02 },
+    };
+    expect(selectorToFrame(screen([literalRole, foldedRole]), { role: "button" })).toMatchObject({
+      width: 0.4,
+    });
+    expect(selectorToFrame(screen([foldedRole, literalRole]), { role: "button" })).toMatchObject({
       width: 0.4,
     });
   });
