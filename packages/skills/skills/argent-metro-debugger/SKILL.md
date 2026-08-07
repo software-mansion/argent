@@ -27,6 +27,16 @@ All tools accept `port` (default 8081) AND `device_id` (the iOS Simulator UDID, 
 
 One Metro port can serve multiple connected devices (e.g. two simulators on `localhost:8081`, or an iOS simulator alongside an Android emulator with `adb reverse` set up). `device_id` pins every debugger/network/profiler call to a specific device so sessions do not collide.
 
+### Network capture starts when you first ask for it (React Native)
+
+On RN there is no always-on recorder: `view-network-logs` / `view-network-request-details` inject a `fetch()` interceptor the first time one of them runs, and only traffic after that point is recorded. `debugger-reload-metro` — or any full JS reload — discards both the interceptor and everything already captured.
+
+Practical consequence: **arm capture before the interaction you want to observe.** Call `view-network-logs` once up front (an empty result is fine), then drive the app, then read the logs. If you read first and see nothing, that empty result is not evidence the app made no requests — the message quotes how long capture has actually been running, so a window of a few milliseconds means you learned nothing, while a window of minutes means the app really was quiet.
+
+Two exclusions are silent and worth knowing before concluding anything: only `globalThis.fetch` is patched, so a client built on `XMLHttpRequest` (including axios, whose RN adapter is XHR-based), WebSockets, and native-module HTTP never appear — use `native-network-logs` for native traffic; and requests to Metro itself are filtered out, matched literally on `localhost`/`127.0.0.1` at the Metro port, so a device reaching Metro over a LAN IP still shows them.
+
+Chromium is different: it reads the browser's native CDP Network recording, which is enabled when the page is attached rather than on first use.
+
 ### Connect & diagnostics
 
 | Tool               | Purpose                                                                                                                                                                                                                                                                                                                                                                |

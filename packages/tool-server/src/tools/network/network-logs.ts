@@ -19,6 +19,30 @@ function formatBytes(bytes: number): string {
   return bytesUtil(bytes, { decimalPlaces: 1, unitSeparator: " " }) ?? `${bytes} B`;
 }
 
+/**
+ * How long capture has been running, phrased so the magnitude does the talking:
+ * "0.04 s" reads as "you have learned nothing yet", "14 min" reads as "this
+ * empty result means something". That is why the empty message quotes a number
+ * instead of picking a threshold and claiming "just started" on one side of it.
+ */
+function formatElapsed(ms: number): string {
+  if (ms < 1000) return `${ms} ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 60) return `${minutes} min ${Math.round((ms % 60_000) / 1000)} s`;
+  return `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+}
+
+/** Shared tail: the two silent exclusions that make an empty result ambiguous. */
+function captureCaveats(metroPort: number): string {
+  return (
+    `Only fetch() is intercepted — an app using XMLHttpRequest directly (this includes axios, ` +
+    `whose React Native adapter is XHR-based), WebSockets, or native-module HTTP will show nothing ` +
+    `here; use native-network-logs for native traffic. Requests to the Metro dev server ` +
+    `(localhost:${metroPort} / 127.0.0.1:${metroPort}) are excluded from results.`
+  );
+}
+
 interface LogEntry {
   id: number;
   requestId: string;
@@ -128,7 +152,8 @@ export const networkLogsTool: ToolDefinition<z.infer<typeof zodSchema>, string> 
   description: `Retrieve captured network (HTTP) requests from the running app.
 Returns a paginated list of requests with method, URL, status, resource type, size, and duration.
 Each entry includes a requestId that can be passed to view-network-request-details for full details.
-On React Native (iOS / Android / Vega) interception is injected into the JS runtime — it captures fetch() calls. On Chromium it reads the browser's native CDP Network domain (the active tab; all request types).
+On React Native (iOS / Android / Vega) interception is injected into the JS runtime — it captures fetch() calls only, so an app using XMLHttpRequest directly (including axios, whose React Native adapter is XHR-based), WebSockets, or native-module HTTP shows nothing here; use native-network-logs for native traffic. On Chromium it reads the browser's native CDP Network domain (the active tab; all request types).
+On React Native, capture starts when a network tool first arms it — not when the app launched — and a JS reload discards both the interception and everything already captured, so traffic issued before that window is not recorded and an empty result is not evidence that the app made no requests. Requests to the Metro dev server are filtered out; the match is literal on localhost and 127.0.0.1 at the Metro port, so a device reaching Metro over a LAN IP still shows them.
 Use when inspecting outbound HTTP traffic or debugging API calls in the running app.
 Fails if the app is not connected (RN) or the device is not reachable (Chromium).`,
   zodSchema,
@@ -157,10 +182,45 @@ Fails if the app is not connected (RN) or the device is not reachable (Chromium)
     // First get the total count for pagination by running the read script with a
     // zero-length slice — same filtering logic, no duplication.
     const countRaw = await api.cdp.evaluate(makeNetworkLogReadScript(0, 0, api.port));
-    const { total } = JSON.parse(countRaw as string) as { total: number };
+    const {
+      total,
+      interceptorInstalled: countInterceptorInstalled,
+      capturedForMs,
+    } = JSON.parse(countRaw as string) as {
+      total: number;
+      interceptorInstalled?: boolean;
+      capturedForMs?: number | null;
+    };
 
     if (total === 0) {
-      return "No network traffic captured. Make sure the app is running and making HTTP requests. Network interception is active — it captures fetch() calls.";
+      // An empty log is only meaningful if you know capture was running, and for
+      // how long. Reporting "interception is active" without that made a window
+      // of a few milliseconds indistinguishable from a genuine "no requests".
+      if (countInterceptorInstalled === false) {
+        return (
+          `No network traffic captured. fetch() interception is NOT installed in the app's JS ` +
+          `runtime, so nothing was being recorded — this result says nothing about whether the app ` +
+          `made requests. Installation is attempted on every call and is non-fatal, so it most ` +
+          `likely failed or the JS runtime reloaded. Call view-network-logs again; if it keeps ` +
+          `reporting this, reconnect with debugger-connect. ${captureCaveats(api.port)}`
+        );
+      }
+      if (capturedForMs == null) {
+        return (
+          `No network traffic captured. fetch() interception is installed but its start time is ` +
+          `unknown (it was installed by an earlier session), so how much traffic predates it cannot ` +
+          `be determined — this is not evidence that the app made no requests. Re-run the flow that ` +
+          `should issue requests, then call view-network-logs again. ${captureCaveats(api.port)}`
+        );
+      }
+      return (
+        `No network traffic captured. fetch() interception has been recording for ` +
+        `${formatElapsed(capturedForMs)} — it starts when a network tool first arms it, not when ` +
+        `the app launched, and a JS reload resets it, so anything the app requested before that ` +
+        `window was never recorded. Treat this as "nothing since capture began", not "the app made ` +
+        `no requests"; to be sure, re-run the flow that should issue requests and call ` +
+        `view-network-logs again. ${captureCaveats(api.port)}`
+      );
     }
 
     const pageCount = Math.ceil(total / ITEMS_PER_PAGE);
@@ -180,7 +240,15 @@ Fails if the app is not connected (RN) or the device is not reachable (Chromium)
     };
 
     if (!data.interceptorInstalled) {
-      return "Network interceptor not installed. Try reconnecting with network-inspector-connect.";
+      // Reachable when the runtime reloads between the count read above and this
+      // page read: the reload drops the interceptor and everything it captured.
+      // (The old text pointed at `network-inspector-connect`, which does not exist.)
+      return (
+        `Network capture disappeared while reading page ${pageIndex + 1}. The app's JS runtime ` +
+        `reloaded mid-call, which clears the interceptor and every request it had already ` +
+        `captured. Call view-network-logs again — interception is reinstalled automatically — ` +
+        `and re-run the flow, because the earlier requests are gone.`
+      );
     }
 
     const lines = data.entries.map(formatEntry);

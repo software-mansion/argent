@@ -11,6 +11,11 @@
 export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
   if (globalThis.__argent_network_installed) return JSON.stringify({ installed: false, reason: 'already installed' });
   globalThis.__argent_network_installed = true;
+  // When capture started. Read back by makeNetworkLogReadScript so an empty
+  // result can say how long we have actually been listening — nothing before
+  // this moment was recorded. Both this and the read happen in the app, so the
+  // elapsed time never depends on host/device clock agreement.
+  globalThis.__argent_network_installed_at = Date.now();
 
   var log = [];
   globalThis.__argent_network_log = log;
@@ -120,6 +125,15 @@ export function makeNetworkLogReadScript(start: number, limit: number, metroPort
   var log = globalThis.__argent_network_log;
   if (!log) return JSON.stringify({ entries: [], total: 0, interceptorInstalled: false });
 
+  // Raw, never defaulted to "now": an interceptor installed by an older argent
+  // has no timestamp, and reporting that as a fresh capture window would be the
+  // same lie this whole read is meant to avoid. null means "unknown".
+  // Elapsed is computed here, in the app, from two app-side clock reads, so it
+  // never depends on the host and device clocks agreeing. Clamped at 0 because
+  // Date.now() is wall clock and can step backwards.
+  var installedAt = globalThis.__argent_network_installed_at;
+  var capturedForMs = installedAt ? Math.max(0, Date.now() - installedAt) : null;
+
   // Filter out requests to the Metro server
   var filtered = [];
   for (var i = 0; i < log.length; i++) {
@@ -156,7 +170,7 @@ export function makeNetworkLogReadScript(start: number, limit: number, metroPort
     });
   }
 
-  return JSON.stringify({ entries: entries, total: total, interceptorInstalled: true });
+  return JSON.stringify({ entries: entries, total: total, interceptorInstalled: true, capturedForMs: capturedForMs });
 })()`;
 }
 
