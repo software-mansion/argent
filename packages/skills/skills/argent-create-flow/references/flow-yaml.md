@@ -150,7 +150,7 @@ It **never fails a run.** Readiness is not an acceptance criterion, so every out
 - **settled on the UI tree alone** — no screenshot could be read often enough to compare a pair, so the hierarchy held still but presentation-layer motion above it (a push, a fade, a dismissing modal) was never waited out.
 - **too few reads** — a settle needs three of them spanning two intervals, and this step got fewer, so it ended without evidence either way. A slow tree source, or a window blank for most of the wait.
 
-Only a tree source that cannot be read stops the run, as an `errored` step — one that fails outright, one that answers and then wedges, or one that never answers within the step (that last may simply be slow: raise `timeout` before suspecting the app). That is a broken window, not a verdict about the app: the run is not ok and every later step is skipped.
+Only a tree source that cannot be read stops the run, as an `errored` step — one that is still failing when the wait ends, one that answers and then wedges, or one that never answers within the step (that last may simply be slow: raise `timeout` before suspecting the app). That is a broken window, not a verdict about the app: the run is not ok and every later step is skipped. A single failed read is not that window: the hold restarts from the next good one, and a read that fails at the very end of the wait is named in the warning rather than stopping the run.
 
 One more limit: it says nothing about **which** screen settled, so it never replaces the identity gate.
 
