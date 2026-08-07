@@ -663,6 +663,60 @@ describe("ranking prefers the literal spelling over one only the fold equates", 
     });
   });
 
+  it("grades a folded-exact match above one that merely CONTAINS the needle", () => {
+    // The tier the fold was added for, and the half nothing pinned: literal >
+    // folded was covered, folded > substring was not. Collapsing it (grading
+    // exactTextScore on the literal comparison instead of the folded one)
+    // leaves the fold-located element scoring zero, tying it with a node that
+    // merely contains the needle — and "smallest frame wins" then elects the
+    // link, with the step still reporting pass.
+    const foldedExact: DescribeNode = {
+      role: "button",
+      label: `Sign${NBSP}in`,
+      identifier: "cta",
+      frame: { x: 0, y: 0, width: 0.8, height: 0.09 },
+      children: [],
+    };
+    const substring: DescribeNode = {
+      role: "link",
+      label: "Sign in with Apple",
+      identifier: "apple",
+      frame: { x: 0, y: 0.2, width: 0.4, height: 0.04 },
+      children: [],
+    };
+    expect(selectorToFrame(screen([foldedExact, substring]), { text: "Sign in" })).toMatchObject({
+      width: 0.8,
+    });
+    expect(selectorToFrame(screen([substring, foldedExact]), { text: "Sign in" })).toMatchObject({
+      width: 0.8,
+    });
+  });
+
+  it("grades a regex that consumes the WHOLE string as a literal match", () => {
+    // A regex is never folded, so full consumption IS the literal grade — but
+    // nothing pinned the arm at two rather than one, and the difference
+    // retargets a tap. The full-consumption node is deliberately the larger and
+    // carries the weaker role grade, so only the regex arm's two points can
+    // keep it ahead: demoted to one it ties, and the smaller node wins.
+    const whole: DescribeNode = {
+      role: `button${NBSP}`, // folded-equal to the selector's role, grade 1
+      label: "Sign in",
+      identifier: "whole",
+      frame: { x: 0, y: 0, width: 0.4, height: 0.08 },
+      children: [],
+    };
+    const partial: DescribeNode = {
+      role: "button", // literal, grade 2
+      label: "Sign in now",
+      identifier: "partial",
+      frame: { x: 0, y: 0.3, width: 0.02, height: 0.02 },
+      children: [],
+    };
+    const selector = { textMatches: "Sign in", role: "button" };
+    expect(selectorToFrame(screen([whole, partial]), selector)).toMatchObject({ width: 0.4 });
+    expect(selectorToFrame(screen([partial, whole]), selector)).toMatchObject({ width: 0.4 });
+  });
+
   it("grades an EXACT identifier above one matched by its resource-id suffix", () => {
     // The identifier gate is `identifierMatches`, which deliberately does not
     // fold — so a folded-only identifier never reaches ranking at all, and a
