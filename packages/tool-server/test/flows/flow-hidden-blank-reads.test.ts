@@ -767,6 +767,98 @@ describe("compatibility miss note: what it is scoped to", () => {
     expect(rightId.steps[0].reason).toMatch(/typographic variant/);
   });
 
+  it("describes the very node assertReason quotes, not a zero-area shadow above it", async () => {
+    // The located element is picked visible-first so the note and the quoted
+    // text cannot contradict each other. Dropping that filter left the note
+    // describing a zero-area shadow while the reason quoted the visible
+    // element — two explanations of one failure, about different elements.
+    currentFetch = () => ({
+      tree: screen([
+        // Zero-area, and FIRST in reading order: what the unfiltered pick takes.
+        n({
+          role: "AXButton",
+          label: "Add more languages…",
+          frame: { x: 0.1, y: 0.1, width: 0, height: 0 },
+        }),
+        // The visible match, which is the one the reason quotes.
+        n({
+          role: "AXButton",
+          label: "Something else",
+          frame: { x: 0.1, y: 0.3, width: 0.8, height: 0.05 },
+        }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("compat-visible-first", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "assert",
+          condition: "text",
+          selector: { role: "AXButton" },
+          expectedText: "Add more languages...",
+          textMatch: "equals",
+        },
+      ],
+    });
+
+    const result = await run("compat-visible-first");
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/but its text was "Something else"/);
+    expect(result.steps[0].reason).not.toMatch(/typographic variant/);
+  });
+
+  it("asks the whole-string question for `equals` and the substring one for `contains`", async () => {
+    // The two are not interchangeable. Against a label that CONTAINS a compat
+    // variant plus more text, only `contains` can be rescued by copying the
+    // rendered characters — for `equals` the strings still would not match, so
+    // the note would send the author to a fix that cannot work. Inverted, each
+    // comparator gets the other's question and both answers flip.
+    currentFetch = () => ({
+      tree: screen([
+        n({
+          identifier: "lbl",
+          label: "Add more languages… now",
+          frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.05 },
+        }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("compat-equals-longer", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "assert",
+          condition: "text",
+          selector: { identifier: "lbl" },
+          expectedText: "Add more languages...",
+          textMatch: "equals",
+        },
+      ],
+    });
+    const equals = await run("compat-equals-longer");
+    expect(equals.steps[0].status).toBe("fail");
+    expect(equals.steps[0].reason).not.toMatch(/typographic variant/);
+
+    await writeFlow("compat-contains-longer", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "assert",
+          condition: "text",
+          selector: { identifier: "lbl" },
+          expectedText: "Add more languages...",
+          textMatch: "contains",
+        },
+      ],
+    });
+    const contains = await run("compat-contains-longer");
+    expect(contains.steps[0].status).toBe("fail");
+    expect(contains.steps[0].reason).toMatch(/typographic variant/);
+  });
+
   it("names the code points when only an invisible kept the SELECTOR from matching", async () => {
     // The compat note was the only note reachable on the selector path, and it
     // asks the NFKC question only — so an invisible-character miss on a
