@@ -11,11 +11,13 @@ import type { ChildProcess } from "child_process";
 import { promises as fs } from "fs";
 import { waitForChildExit } from "../utils/profiler-shared/lifecycle";
 import { clearActiveScreenRecording } from "../utils/screen-recording-reminder";
+import type { ServerRecordingResult } from "../utils/simulator-client";
 
-// Session for the `screen-recording-*` tools. One shape for every platform:
-// frames come from simulator-server's MJPEG stream and are paced into an ffmpeg
-// child that writes the mp4 host-side, so there is nothing device-side to clean
-// up. Mirrors the native-profiler session shape.
+// Session for the `screen-recording-*` tools. One shape for every platform and
+// for both capture paths: simulator-server records and muxes the video itself
+// where its build supports it, otherwise its MJPEG stream is paced into a host
+// ffmpeg child. Either way the video is host-side, so there is nothing
+// device-side to clean up. Mirrors the native-profiler session shape.
 export const SCREEN_RECORDING_SESSION_NAMESPACE = "ScreenRecordingSession";
 
 type ScreenRecordingSessionFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
@@ -63,8 +65,15 @@ export interface ScreenRecordingSessionApi {
    * that is mid-startup at shutdown — `captureProcess` is success-only.
    */
   pendingChild: ChildProcess | null;
-  /** Host path ffmpeg is writing the video to. */
+  /** Host path the finished video lands at. */
   outputFile: string | null;
+  /**
+   * Finalizes a recording simulator-server is running and hands back the muxed
+   * video. Set only while a server-side capture is live, so it doubles as the
+   * marker for which side owns the recording: with it set there is no capture
+   * child, no frame stream and no pump, and stop goes to the server.
+   */
+  serverStop: (() => Promise<ServerRecordingResult>) | null;
   /** Temp copy of the watermark logo ffmpeg reads; removed when the capture ends. */
   logoFile: string | null;
   /** Why the watermark was requested but not drawn; surfaced by stop's warning. */
@@ -116,6 +125,7 @@ function clearLiveState(state: ScreenRecordingSessionApi): void {
   state.pendingRetrieval = false;
   state.captureProcess = null;
   state.pendingChild = null;
+  state.serverStop = null;
   state.frameStream = null;
   state.lastFrameStreamError = null;
   state.pointerDisable = null;
@@ -171,6 +181,7 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       pendingRetrieval: false,
       captureProcess: null,
       pendingChild: null,
+      serverStop: null,
       outputFile: null,
       logoFile: null,
       watermarkSkipped: null,
@@ -218,6 +229,15 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
           const disable = state.pointerDisable;
           state.pointerDisable = null;
           await disable().catch(() => {});
+        }
+
+        // A recording running inside simulator-server outlives this process, and
+        // it accumulates frames until something stops it — so end it here even
+        // though the video is being abandoned.
+        if (state.serverStop) {
+          const stop = state.serverStop;
+          state.serverStop = null;
+          await stop().catch(() => {});
         }
 
         // A start still mid-readiness at shutdown has a live child that
