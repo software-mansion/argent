@@ -200,10 +200,13 @@ export function summarizeStep(step: FlowStep, n: number): string {
     case "tap":
     case "long-press": {
       // `times` (tap) and `duration` (long-press) change what replays, so a
-      // summary line that drops them misdescribes the file, and since the
-      // recorder stopped returning the YAML per step this line is the author's
-      // only per-step view of what was appended. Neither kind carries a
-      // `delayMs` (only `tool` steps do), so no delayLabel here.
+      // summary line that drops them misdescribes the file. `times` has a
+      // second reason: `tap` is one of the kinds the recorder builds, and since
+      // it stopped returning the YAML per step this line is the author's only
+      // per-step view of what was appended. `long-press` has no recorder path,
+      // so it only ever reaches an author through flow-finish-recording's
+      // `summary`, which still returns `flowFile` beside it. Neither kind
+      // carries a `delayMs` (only `tool` steps do), so no delayLabel here.
       const target = step.selector ? selectorLabel(step.selector) : `(${step.x}, ${step.y})`;
       // Only ×2..×10 is renderable: `times: 1` is the default and never lands in
       // the file (parseTapTimes normalizes it to absent), so rendering `×1` for
