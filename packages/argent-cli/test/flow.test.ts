@@ -1555,6 +1555,94 @@ describe("argent flow run <dir>", () => {
     expect(out).toContain("FAIL — 2 flows: 1 passed, 1 failed, 0 skipped");
   });
 
+  it("skips a flow whose requires the target does not satisfy, and keeps going", async () => {
+    // The whole point of the block: one command over a mixed suite runs what
+    // applies here and filters out the rest, rather than failing on it.
+    toolsClientMock.callTool
+      .mockRejectedValueOnce(
+        new ToolInvocationError(
+          "This flow declares requires: { platform: [android] }, which excludes the ios target this run was pointed at.",
+          { errorCode: "FLOW_REQUIREMENTS_UNMET", errorKind: "validation" }
+        )
+      )
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) });
+
+    await expect(flow(["run", flowsDir, "--platform", "ios"], opts)).rejects.toThrow(
+      "process.exit:0"
+    );
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(2);
+    const out = logs.join("\n");
+    expect(out).toContain("· skipped — This flow declares requires: { platform: [android] }");
+    expect(out).toContain("PASS — 2 flows: 1 passed, 0 failed, 1 skipped");
+    // A skip is not an error: nothing goes to stderr and the exit stays 0.
+    expect(errs.join("\n")).not.toContain("requires");
+  });
+
+  it("fails — never skips — a flow whose requirements could not be verified", async () => {
+    // A probe that could not answer says nothing about whether the flow applies
+    // here, so folding it into the skip bucket would hide a broken toolchain
+    // behind "check your requires: blocks".
+    toolsClientMock.callTool
+      .mockRejectedValueOnce(
+        new ToolInvocationError(
+          "This flow declares requires: { runtimeKind: tv }. The runtime kind of device emulator-5554 could not be determined (android), so the requirement cannot be verified.",
+          { errorCode: "FLOW_REQUIREMENTS_UNVERIFIABLE", errorKind: "validation" }
+        )
+      )
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+    // Validation still means this flow alone — the batch reached the second.
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(2);
+    expect(errs.join("\n")).toContain("could not be determined");
+    const out = logs.join("\n");
+    expect(out).not.toContain("skipped —");
+    expect(out).toContain("FAIL — 2 flows: 1 passed, 1 failed, 0 skipped");
+  });
+
+  it("exits 2 when every flow was skipped — nothing ran, which is not a pass", async () => {
+    // Otherwise a mistyped requires (or a target nobody meant to run against)
+    // reads as a green suite.
+    toolsClientMock.callTool.mockRejectedValue(
+      new ToolInvocationError(
+        "This flow declares requires: { platform: [vega] }, which excludes…",
+        {
+          errorCode: "FLOW_REQUIREMENTS_UNMET",
+          errorKind: "validation",
+        }
+      )
+    );
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:2");
+
+    // Not "PASS": the verdict has to agree with the non-zero exit.
+    expect(logs.join("\n")).toContain("NONE RAN — 2 flows: 0 passed, 0 failed, 2 skipped");
+    expect(errs.join("\n")).toContain("No flow ran");
+  });
+
+  it("reports a fully-skipped batch as not ok in --json", async () => {
+    toolsClientMock.callTool.mockRejectedValue(
+      new ToolInvocationError("requires unmet", {
+        errorCode: "FLOW_REQUIREMENTS_UNMET",
+        errorKind: "validation",
+      })
+    );
+
+    await expect(flow(["run", flowsDir, "--json"], opts)).rejects.toThrow("process.exit:2");
+
+    const parsed = JSON.parse(logs.join("\n")) as {
+      ok: boolean;
+      skipped: number;
+      flows: { status: string; skipReason?: string }[];
+    };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.skipped).toBe(2);
+    expect(parsed.flows.every((f) => f.status === "skip")).toBe(true);
+    expect(parsed.flows[0]?.skipReason).toBe("requires unmet");
+  });
+
   it("stops the batch on a server error the signal does not mark as validation", async () => {
     toolsClientMock.callTool.mockRejectedValueOnce(
       new ToolInvocationError("simulator boot failed", { errorKind: "subprocess" })
@@ -1670,7 +1758,11 @@ describe("argent flow run <dir>", () => {
       flows: [
         { path: "a-login.yaml", status: "pass", report: report({ flow: "a-login" }) },
         { path: "b-checkout.yaml", status: "fail", error: "boom" },
-        { path: path.join("sub", "c-search.yaml"), status: "skip" },
+        {
+          path: path.join("sub", "c-search.yaml"),
+          status: "skip",
+          skipReason: "batch stopped",
+        },
       ],
     });
   });

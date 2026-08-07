@@ -74,6 +74,47 @@ export async function simctlListDevices(): Promise<SimRemoteListDevicesResult> {
   }
 }
 
+// A simulator's runtime kind is fixed at creation, so memoize per bare udid and
+// keep a repeat requirement check off the `sim-remote` round-trip — the same
+// deal (and the same shape) as the local `getSimulatorRuntimeKind`.
+const remoteRuntimeKindCache = new Map<string, "mobile" | "tv">();
+
+/**
+ * Resolve the runtime kind ("mobile" | "tv") of a remote simulator, or undefined
+ * when the listing doesn't know the udid (or `sim-remote` can't be reached).
+ *
+ * The remote analogue of `getSimulatorRuntimeKind`: `classifyDevice` tags every
+ * `remote:`-prefixed id `ios-remote` by shape alone, so a caller that must tell
+ * tvOS from iOS reads the real runtime off the listing's runtime-id key here.
+ */
+export async function getRemoteSimulatorRuntimeKind(
+  udid: string
+): Promise<"mobile" | "tv" | undefined> {
+  const bare = stripRemotePrefix(udid);
+  const cached = remoteRuntimeKindCache.get(bare);
+  if (cached) return cached;
+  try {
+    const listed = await simctlListDevices();
+    for (const [runtimeId, devices] of Object.entries(listed.devices)) {
+      // Mirror `listRemoteIosSimulators`' availability filter, so a simulator
+      // `list-devices` hides can't be the one that answers here.
+      if (!devices.some((d) => d.udid === bare && d.isAvailable !== false)) continue;
+      const kind = runtimeId.includes("tvOS") ? "tv" : "mobile";
+      remoteRuntimeKindCache.set(bare, kind);
+      return kind;
+    }
+  } catch {
+    // A payload that parses but isn't shaped like a listing is as unanswerable
+    // as an unreachable orchestrator, and owes the caller the same undefined.
+  }
+  return undefined;
+}
+
+/** Test-only: clear the remote runtime-kind memo so cases don't leak verdicts. */
+export function __resetRemoteSimulatorRuntimeKindCacheForTesting(): void {
+  remoteRuntimeKindCache.clear();
+}
+
 export async function simctlBoot(udid: string): Promise<void> {
   await run(["simctl", "boot", stripRemotePrefix(udid)]);
 }
