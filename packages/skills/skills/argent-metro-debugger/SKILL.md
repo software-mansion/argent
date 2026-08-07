@@ -36,10 +36,10 @@ One Metro port can serve multiple connected devices (e.g. two simulators on `loc
 
 ### Reload & recovery
 
-| Tool                    | Purpose                                                                                       |
-| ----------------------- | --------------------------------------------------------------------------------------------- |
-| `debugger-reload-metro` | Reload all connected apps (like pressing "r" in Metro terminal). Needs a CDP target.          |
-| `restart-app`           | Terminate and relaunch the app by device id and bundleId. Use when app lost Metro connection. |
+| Tool                    | Purpose                                                                                                              |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `debugger-reload-metro` | Reload all connected apps (like pressing "r" in Metro terminal). Needs a CDP target.                                 |
+| `restart-app`           | Terminate and relaunch the app by device id and bundleId (iOS / Android / Vega). Use when app lost Metro connection. |
 
 ### Inspection & console
 
@@ -120,13 +120,13 @@ When reading from the log file:
 
 ## Quick Reference
 
-| Action                            | Tool                                                                |
-| --------------------------------- | ------------------------------------------------------------------- |
-| Diagnose / check connection       | `debugger-status`                                                   |
-| Connect to CDP (Metro / Chromium) | `debugger-connect`                                                  |
-| Reload JS (already connected)     | `debugger-reload-metro`                                             |
-| Relaunch app on device            | `restart-app`                                                       |
-| Inspect component at point        | `debugger-inspect-element`                                          |
-| Full component tree               | `debugger-component-tree`                                           |
-| Console log overview              | `debugger-log-registry` (summary + log file path for `Grep`/`Read`) |
-| Evaluate JS                       | `debugger-evaluate`                                                 |
+| Action                            | Tool                                                                   |
+| --------------------------------- | ---------------------------------------------------------------------- |
+| Diagnose / check connection       | `debugger-status`                                                      |
+| Connect to CDP (Metro / Chromium) | `debugger-connect`                                                     |
+| Reload JS (already connected)     | `debugger-reload-metro`                                                |
+| Relaunch app on device            | `restart-app` (iOS / Android / Vega; on Chromium re-run `boot-device`) |
+| Inspect component at point        | `debugger-inspect-element`                                             |
+| Full component tree               | `debugger-component-tree`                                              |
+| Console log overview              | `debugger-log-registry` (summary + log file path for `Grep`/`Read`)    |
+| Evaluate JS                       | `debugger-evaluate`                                                    |
