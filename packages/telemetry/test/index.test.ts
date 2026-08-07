@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import {
   _resetConsentCacheForTest,
+  disableForSession,
   getConsentState,
   markDisabled,
   markEnabled,
@@ -116,6 +117,25 @@ describe("telemetry public surface", () => {
     expect(client.flush).not.toHaveBeenCalled();
     expect(client.shutdown).toHaveBeenCalledTimes(1);
     expect(isEnabled()).toBe(false);
+  });
+
+  it("disableForSession is observable, drains the client, and does not rewrite consent", async () => {
+    track("toolserver:start", {});
+    const client = posthogMock.instances[0]!;
+
+    await expect(disableForSession()).resolves.toBe(true);
+
+    expect(client.shutdown).toHaveBeenCalledTimes(1);
+    expect(getConsentState()).toEqual({
+      enabled: false,
+      source: { source: "session_override" },
+    });
+    expect(JSON.parse(fs.readFileSync(configFilePath(), "utf8"))).toMatchObject({
+      telemetry: { enabled: true },
+    });
+
+    _resetConsentCacheForTest();
+    expect(isEnabled()).toBe(true);
   });
 
   it("does not provision the anon-id file when the PostHog key is unusable", () => {
