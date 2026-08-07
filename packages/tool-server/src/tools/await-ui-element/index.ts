@@ -10,6 +10,9 @@ import type {
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
 import { isTvOsSimulator } from "../../utils/ios-devices";
+import { describeTvFocus } from "../describe/platforms/tv-focus";
+import { resolveTvApi } from "../tv/tv-service";
+import type { TvControlApi } from "../../blueprints/tv-control-types";
 import { isAndroidTv } from "../../utils/adb";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
@@ -232,9 +235,15 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
     params: Params,
     services: Record<string, unknown>,
     isTvOs: boolean,
-    androidIsTv: boolean
+    androidIsTv: boolean,
+    tvApi: TvControlApi | null
   ): Promise<DescribeTreeData> {
     if (device.platform === "ios") {
+      // Apple TV: match against the focus view. `describeIos` short-circuits
+      // every tvOS read to an empty tree, so no selector could ever resolve
+      // (#620). Resolution happens once, up front (see execute) so a backend
+      // failure still throws rather than being reported as an unmet condition.
+      if (isTvOs && tvApi) return describeTvFocus(tvApi);
       return describeIos(registry, device, { bundleId: params.bundleId }, { isTvOs });
     }
     if (device.platform === "android") {
@@ -271,9 +280,14 @@ The selector is { text?, identifier?, role? }; every provided field must match. 
 case-insensitive substrings of the element's label/value and role; identifier matches exactly (case-insensitive),
 also accepting the unqualified Android resource-id name ('submit' matches 'com.example.app:id/submit').
 It polls the same accessibility / DOM tree as \`describe\`
-(iOS AXRuntime, Android uiautomator, Chromium CDP, Vega automation toolkit) every pollIntervalMs
+(iOS AXRuntime, Android uiautomator, Chromium CDP, Apple TV focus engine, Vega automation toolkit) every pollIntervalMs
 (default ${DEFAULT_POLL_INTERVAL_MS}ms) until timeoutMs (default ${DEFAULT_TIMEOUT_MS}ms).
 
+On an Apple TV the tree is the focus view: \`visible\` means the same as \`exists\` there, because the
+focus engine only enumerates what is on screen and reachable with the D-pad; \`role\` matches the
+element's accessibility traits, and \`{role:"focused"}\` targets whichever element currently holds
+the cursor — the wait to use between \`tv-remote\` and \`select\`. \`identifier\` does not apply.
+Android TV and Vega keep their full element trees.
 Returns { success: boolean, elapsed: number } — success=false means the condition never held before the
 timeout (a \`note\` then explains what was seen). Use this after a tap/navigation to wait for the next screen,
 or before tapping an element that appears asynchronously.`,
@@ -304,6 +318,12 @@ or before tapping an element that appears asynchronously.`,
       // the Android TV probe: a serial that isn't listed is never cached, so
       // leaving it inside `describeAndroid` would spawn `adb devices` per poll.
       const isTvOs = device.platform === "ios" && (await isTvOsSimulator(device.id));
+      // Resolved before the clock starts, like every other setup step here: the
+      // first resolution spawns the tvOS daemons and can take seconds, which
+      // must not eat the caller's wait budget. A failure here is an
+      // infrastructure problem, so it throws — reporting it as `success: false`
+      // would make run-sequence call it an unmet condition.
+      const tvApi = isTvOs ? await resolveTvApi(registry, device.id) : null;
       const androidIsTv = device.platform === "android" && (await isAndroidTv(device.id));
 
       // Start the wait clock after setup so its fixed cost isn't charged against
@@ -325,7 +345,7 @@ or before tapping an element that appears asynchronously.`,
       let everMatched = false;
 
       const poll = await pollDescribeTree<WaitResult>({
-        fetchTree: () => fetchTree(device, params, services, isTvOs, androidIsTv),
+        fetchTree: () => fetchTree(device, params, services, isTvOs, androidIsTv, tvApi),
         timeoutMs,
         pollIntervalMs,
         signal,

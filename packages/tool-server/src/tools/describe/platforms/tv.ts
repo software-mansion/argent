@@ -1,3 +1,4 @@
+import { isEmptyFocus } from "./tv-focus";
 import type { DeviceInfo, Registry } from "@argent/registry";
 import type { DescribeResult } from "../contract";
 import { formatDescribeTree } from "../format-tree";
@@ -47,10 +48,11 @@ const ANDROID_FOCUS_EMPTY_HINT =
   "these screens even though the labels aren't enumerable, so you can drive blind + screenshot " +
   "to confirm.";
 
-/** A describe result is "empty" when the focus engine reports nothing actionable. */
-function isEmpty(res: TvDescribeResponse): boolean {
-  return res.focusable.length === 0 && !res.focused;
-}
+/**
+ * Shared with the wait tools' focus adapter so the two paths can never disagree
+ * about what "empty" means — the hint they each attach depends on it.
+ */
+const isEmpty = isEmptyFocus;
 
 /**
  * tvOS AX labels are often compound multi-line strings, e.g.
