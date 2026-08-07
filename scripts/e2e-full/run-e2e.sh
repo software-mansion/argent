@@ -3,7 +3,8 @@
 #
 # Starting from ONLY a `swmansion-argent-*.tgz`, this:
 #   0. installs from the tarball (global + local), runs init/uninstall/telemetry
-#   1. introspects the CLI (help, all 70 `tools describe`, flags, server, link)
+#   1. introspects the CLI (help, a `tools describe` per published tool, flags,
+#      server, link)
 #   2. validates every tool's argument schema (missing/enum/type rejection)
 #   3. drives a happy-path of every applicable tool against real targets:
 #        - Android emulator      (Linux + Mac)
@@ -37,21 +38,40 @@ KEEP=0
 export E2E_ANDROID_SERIAL="${E2E_ANDROID_SERIAL:-}"
 export E2E_ANDROID_AVD="${E2E_ANDROID_AVD:-}"
 
-usage() { sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+# Print the header comment block, stopping at the first non-comment line, so the
+# help text cannot drift into printing code the way a pinned line range does.
+usage() { sed -n '2,${/^#/!q; s/^# \{0,1\}//; p;}' "${BASH_SOURCE[0]}"; exit "${1:-0}"; }
+
+# A value-taking flag given without its value would otherwise read an unset $2
+# and die on "unbound variable" with no usage text — the least helpful response
+# to a plain typo, and the one the `*)` arm below already handles properly.
+need_val() { [ "$1" -ge 2 ] || { echo "$2 needs a value" >&2; usage 1; }; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --tgz) TGZ="$2"; shift 2;;
-    --phase|--phases) PHASES="$2"; shift 2;;
+    --tgz) need_val $# "$1"; TGZ="$2"; shift 2;;
+    --phase|--phases) need_val $# "$1"; PHASES="$2"; shift 2;;
     --skip-install) SKIP_INSTALL=1; shift;;
     --system) SYSTEM_INSTALL=1; shift;;
-    --android-serial) E2E_ANDROID_SERIAL="$2"; shift 2;;
-    --android-avd) E2E_ANDROID_AVD="$2"; shift 2;;
+    --android-serial) need_val $# "$1"; E2E_ANDROID_SERIAL="$2"; shift 2;;
+    --android-avd) need_val $# "$1"; E2E_ANDROID_AVD="$2"; shift 2;;
     --keep) KEEP=1; shift;;
     -h|--help) usage 0;;
     *) echo "unknown arg: $1" >&2; usage 1;;
   esac
 done
+
+# A misspelled phase selects nothing, and a run that executes no phase records
+# no failure — so without this the harness reports "pass:0 fail:0" and exits 0,
+# announcing success for a release it never tested.
+ALL_PHASES="install introspection validation android chromium rn"
+for _p in ${PHASES//,/ }; do
+  case " $ALL_PHASES " in
+    *" $_p "*) ;;
+    *) echo "unknown phase: $_p (known: $ALL_PHASES)" >&2; exit 2;;
+  esac
+done
+unset _p
 
 # --------------------------------------------------------------------------
 # Locate the tgz (default: newest swmansion-argent-*.tgz at the repo root)
@@ -79,10 +99,81 @@ export E2E_OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 # Results
 RESULTS_DIR="$E2E_ROOT/results"
 mkdir -p "$RESULTS_DIR"
-TS="$(date +%Y%m%d-%H%M%S)"
+# The pid disambiguates two runs started in the same second, which would
+# otherwise share one results file: the second truncates it, both append, and
+# each run's exit code is then computed over the other's cases too.
+TS="$(date +%Y%m%d-%H%M%S)-$$"
 export E2E_JSONL="$RESULTS_DIR/e2e-$TS.jsonl"
 REPORT_MD="$RESULTS_DIR/report-$TS.md"
 : > "$E2E_JSONL"
+
+# Sourced before the teardown trap below is installed: finish() calls group/warn/err
+# and run_one, so the handler has to be defined against a shell that already has them.
+source "$E2E_ROOT/lib/common.sh"
+source "$E2E_ROOT/lib/discover-tools.sh"
+
+# --------------------------------------------------------------------------
+# Teardown. Installed the moment the sandbox and the results log exist, because
+# every exit path other than the happy one has to reach it: an unbound variable
+# inside a phase, a Ctrl-C, or the early `exit 3` below all leave behind a
+# ~500MB sandbox and a run whose results were never rendered.
+#
+# ARGENT_BIN and TGZ_VERSION are read defensively — an abort can happen before
+# either is assigned, and this must not become the thing that fails.
+# --------------------------------------------------------------------------
+E2E_COMPLETED=0
+CLEANUP_RAN=0
+finish() {
+  local rc=$?
+  trap - EXIT INT TERM
+
+  # Processes first, sandbox second, and both from in here so an abort reaches
+  # them at all. $E2E_HOME holds the detached tool-server's pid file, and
+  # ensure_server starts that server with no idle timeout — so removing the
+  # sandbox before stopping it strands a process that `argent server stop` can
+  # no longer find, along with any Electron, Metro and fixture server the tiers
+  # spawned.
+  # ARGENT_BIN has to be set before cleanup can run: argent_cli resolves it with
+  # ${ARGENT_BIN:?}, which exits the shell outright — from in here that would
+  # abandon the rest of this handler and leak the sandbox it exists to remove.
+  if [ "$CLEANUP_RAN" -eq 0 ] && [ -n "${ARGENT_BIN:-}" ] && declare -F run_one >/dev/null 2>&1; then
+    CLEANUP_RAN=1
+    run_one cleanup "$E2E_ROOT/phases/90-cleanup.sh" || true
+  fi
+
+  group "Generating report"
+  E2E_JSONL="$E2E_JSONL" TGZ_VERSION="${TGZ_VERSION:-unknown}" E2E_OS="$E2E_OS" \
+    ARGENT_BIN="${ARGENT_BIN:-}" \
+    python3 "$E2E_ROOT/lib/report.py" "$E2E_JSONL" > "$REPORT_MD" || warn "report generation failed"
+  cat "$REPORT_MD" >&2 || true
+
+  local tp tf ts
+  tp=$(jq -s '[.[]|select(.status=="pass")]|length' "$E2E_JSONL" 2>/dev/null || echo 0)
+  tf=$(jq -s '[.[]|select(.status=="fail")]|length' "$E2E_JSONL" 2>/dev/null || echo 0)
+  ts=$(jq -s '[.[]|select(.status=="skip")]|length' "$E2E_JSONL" 2>/dev/null || echo 0)
+
+  if [ "$KEEP" -eq 1 ]; then
+    warn "--keep: leaving sandbox at $E2E_WORK"
+  else
+    rm -rf "$E2E_WORK"
+  fi
+
+  group "DONE — pass:$tp fail:$tf skip:$ts"
+  echo "report: $REPORT_MD" >&2
+
+  # A run that stopped early is not a pass, however few failures it recorded:
+  # the phases it never reached cannot have failed.
+  if [ "$E2E_COMPLETED" -eq 0 ]; then
+    err "harness stopped before finishing its phase list — these results are PARTIAL"
+    [ "$rc" -ne 0 ] && exit "$rc"
+    exit 1
+  fi
+  [ "$tf" -eq 0 ] || exit 1
+  exit 0
+}
+trap finish EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Free port for our private tool-server
 export E2E_TOOLS_PORT="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
@@ -114,9 +205,6 @@ if [ "$SYSTEM_INSTALL" -eq 0 ]; then export npm_config_prefix="$E2E_PREFIX"; fi
 export DO_NOT_TRACK=1
 export CI=1
 
-source "$E2E_ROOT/lib/common.sh"
-source "$E2E_ROOT/lib/discover-tools.sh"
-
 # --------------------------------------------------------------------------
 # Unpack the tarball (used for file-level install assertions + skip-install)
 # --------------------------------------------------------------------------
@@ -136,6 +224,19 @@ if [ -z "$PHASES" ]; then
 fi
 selected() { case ",$PHASES," in *",$1,"*) return 0;; *) return 1;; esac; }
 
+# The name check above walks the words a phase list splits into, so a list that
+# splits into none — `--phase ,` or `--phase ' '` — passes it while selecting
+# nothing. Count what `selected` actually matches instead: a run that executes
+# no phase records no failure, and reports "pass:0 fail:0" and exit 0 for a
+# release it never tested.
+_selected=0
+for _p in $ALL_PHASES; do selected "$_p" && _selected=$((_selected + 1)); done
+if [ "$_selected" -eq 0 ]; then
+  echo "no phases selected from '$PHASES' (known: $ALL_PHASES)" >&2
+  exit 2
+fi
+unset _p _selected
+
 # --------------------------------------------------------------------------
 # Establish the argent CLI we drive with.
 #   default: real sandbox global install (also what phase 0 asserts)
@@ -151,11 +252,17 @@ else
   # network download and are irrelevant to the offline phases.
   OMIT="--omit=optional"
   if selected chromium || selected rn; then OMIT=""; fi
+  # Published so the install phase can put the driver back exactly as it was
+  # after its uninstall test. Restoring with different flags silently changes
+  # what the rest of the run is testing.
+  export E2E_NPM_OMIT="$OMIT"
   if [ "$SYSTEM_INSTALL" -eq 1 ]; then
     warn "--system: installing to the REAL global prefix (release-machine mode)"
+    export E2E_NPM_PREFIX_ARGS=""
     npm install -g "$E2E_TGZ" $OMIT 2>&1 | tail -20 >&2 || true
     export ARGENT_BIN="$(command -v argent || echo "$E2E_PREFIX/bin/argent")"
   else
+    export E2E_NPM_PREFIX_ARGS="--prefix $E2E_PREFIX"
     npm install -g "$E2E_TGZ" --prefix "$E2E_PREFIX" $OMIT 2>&1 | tail -20 >&2 || true
     export ARGENT_BIN="$E2E_PREFIX/bin/argent"
   fi
@@ -176,9 +283,17 @@ log "Results: $E2E_JSONL"
 run_one() { # phase-name file
   local name="$1" file="$2"
   group "PHASE: $name"
-  if [ ! -f "$file" ]; then warn "missing $file"; return; fi
+  if [ ! -f "$file" ]; then fail "$name" harness phase-file "missing $file"; return; fi
+  # Drop the previous phase's definition first. `source` on a file with a syntax
+  # error leaves the old run_phase bound, and that phase would run a second time
+  # with its results recorded under this phase's name.
+  unset -f run_phase
   # shellcheck disable=SC1090
   source "$file"
+  if ! declare -F run_phase >/dev/null; then
+    fail "$name" harness phase-load "$file defined no run_phase (syntax error?)"
+    return
+  fi
   run_phase || warn "phase $name returned non-zero (continuing)"
 }
 
@@ -189,26 +304,7 @@ if selected android;       then run_one android       "$E2E_ROOT/phases/30-andro
 if selected chromium;      then run_one chromium      "$E2E_ROOT/phases/40-chromium.sh"; fi
 if selected rn;            then run_one rn            "$E2E_ROOT/phases/50-rn-bluesky.sh"; fi
 
-run_one cleanup "$E2E_ROOT/phases/90-cleanup.sh"
-
-# --------------------------------------------------------------------------
-# Report
-# --------------------------------------------------------------------------
-group "Generating report"
-E2E_JSONL="$E2E_JSONL" TGZ_VERSION="$TGZ_VERSION" E2E_OS="$E2E_OS" ARGENT_BIN="$ARGENT_BIN" \
-  python3 "$E2E_ROOT/lib/report.py" "$E2E_JSONL" > "$REPORT_MD" || warn "report generation failed"
-cat "$REPORT_MD" >&2 || true
-
-TOTAL_FAIL=$(jq -s '[.[]|select(.status=="fail")]|length' "$E2E_JSONL")
-TOTAL_PASS=$(jq -s '[.[]|select(.status=="pass")]|length' "$E2E_JSONL")
-TOTAL_SKIP=$(jq -s '[.[]|select(.status=="skip")]|length' "$E2E_JSONL")
-
-if [ "$KEEP" -eq 1 ]; then
-  warn "--keep: leaving sandbox at $E2E_WORK"
-else
-  rm -rf "$E2E_WORK"
-fi
-
-group "DONE — pass:$TOTAL_PASS fail:$TOTAL_FAIL skip:$TOTAL_SKIP"
-echo "report: $REPORT_MD" >&2
-[ "$TOTAL_FAIL" -eq 0 ]
+# Every selected phase ran. The EXIT trap runs the cleanup phase, renders the
+# report, tears the sandbox down and decides the exit code — the same path an
+# aborted run takes, so teardown cannot depend on getting here.
+E2E_COMPLETED=1
