@@ -27,19 +27,48 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { serverJsonMismatches } from "./check-workspace-versions.mjs";
+import { pluginManifestMismatches, serverJsonMismatches } from "./check-workspace-versions.mjs";
 
 const VERSION = "0.18.0";
-const ARGENT_PKG = { name: "@swmansion/argent", mcpName: "io.github.software-mansion/argent" };
+const ARGENT_PKG = {
+  name: "@swmansion/argent",
+  mcpName: "io.github.software-mansion/argent",
+  files: ["dist/", "skills/", "plugin.json", "mcp.json"],
+};
 const SERVER = {
   name: "io.github.software-mansion/argent",
   version: VERSION,
   packages: [{ identifier: "@swmansion/argent", version: VERSION }],
 };
+const PLUGIN = {
+  $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  name: "argent",
+  version: VERSION,
+};
+const PLUGIN_MCP = {
+  $schema: "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  mcpServers: {
+    argent: { type: "stdio", command: "npx", args: ["-y", `@swmansion/argent@${VERSION}`, "mcp"] },
+  },
+};
 
 /** @param {(s: typeof SERVER) => void} mutate */
 function server(mutate) {
   const copy = structuredClone(SERVER);
+  mutate(copy);
+  return copy;
+}
+
+/** @param {(p: typeof PLUGIN) => void} mutate */
+function plugin(mutate) {
+  const copy = structuredClone(PLUGIN);
+  mutate(copy);
+  return copy;
+}
+
+/** @param {(m: typeof PLUGIN_MCP) => void} mutate */
+function pluginMcp(mutate) {
+  const copy = structuredClone(PLUGIN_MCP);
   mutate(copy);
   return copy;
 }
@@ -219,6 +248,159 @@ test("every problem is reported at once, not just the first", () => {
   assert.equal(problems.length, 4);
 });
 
+// --- the Agent Plugins manifest pair ----------------------------------------
+// plugin.json and mcp.json are read by plugin-aware clients, never by our build,
+// so nothing in the repo exercises them — these are the only thing standing
+// between a bump and a plugin that ships this release's skills next to a server
+// pinned to the previous one.
+
+test("an in-sync manifest pair reports nothing", () => {
+  assert.deepEqual(pluginManifestMismatches(VERSION, ARGENT_PKG, PLUGIN, PLUGIN_MCP), []);
+});
+
+test("a plugin.json version left behind by a bump is caught", () => {
+  const problems = pluginManifestMismatches(
+    VERSION,
+    ARGENT_PKG,
+    plugin((p) => (p.version = "0.17.0")),
+    PLUGIN_MCP
+  );
+  assert.deepEqual(problems, [
+    "plugin.json version is 0.17.0, packages/argent/package.json is 0.18.0",
+  ]);
+});
+
+// The failure this pair exists to prevent: the manifest says 0.18.0 while the
+// server it launches is the previous release, so the skills and the tools they
+// name come from different versions.
+test("an npx pin left behind by a bump is caught", () => {
+  const problems = pluginManifestMismatches(
+    VERSION,
+    ARGENT_PKG,
+    PLUGIN,
+    pluginMcp((m) => (m.mcpServers.argent.args = ["-y", "@swmansion/argent@0.17.0", "mcp"]))
+  );
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /does not pin @swmansion\/argent@0\.18\.0/);
+});
+
+// An unpinned `@latest` (or a bare name) passes every other check here while
+// silently decoupling the server from the plugin it ships in.
+test("an unpinned npx arg is caught", () => {
+  for (const spec of ["@swmansion/argent", "@swmansion/argent@latest"]) {
+    const problems = pluginManifestMismatches(
+      VERSION,
+      ARGENT_PKG,
+      PLUGIN,
+      pluginMcp((m) => (m.mcpServers.argent.args = ["-y", spec, "mcp"]))
+    );
+    assert.equal(problems.length, 1, `expected ${spec} to be caught`);
+    assert.match(problems[0], /does not pin/);
+  }
+});
+
+// The spec requires both $schema values to name the same spec version; a
+// mismatch invalidates the MCP component while the rest of the plugin still
+// loads, which is worse than failing outright.
+test("either $schema drifting from the targeted spec version is caught", () => {
+  const bumped = pluginManifestMismatches(
+    VERSION,
+    ARGENT_PKG,
+    plugin((p) => (p.$schema = "https://agent-plugins.org/schemas/1.1.0/plugin.schema.json")),
+    PLUGIN_MCP
+  );
+  assert.equal(bumped.length, 1);
+  assert.match(bumped[0], /plugin\.json \$schema is/);
+
+  const mcpBumped = pluginManifestMismatches(
+    VERSION,
+    ARGENT_PKG,
+    PLUGIN,
+    pluginMcp((m) => (m.$schema = "https://agent-plugins.org/schemas/1.1.0/mcp.schema.json"))
+  );
+  assert.equal(mcpBumped.length, 1);
+  assert.match(mcpBumped[0], /mcp\.json \$schema is/);
+});
+
+// npm ships package.json, README and LICENSE implicitly and nothing else, so a
+// `files` array that forgets either file publishes a tarball that is not a
+// plugin root at all — and every other check here would still pass.
+test("a files array that would not ship the pair is caught", () => {
+  const problems = pluginManifestMismatches(
+    VERSION,
+    { ...ARGENT_PKG, files: ["dist/", "skills/"] },
+    PLUGIN,
+    PLUGIN_MCP
+  );
+  assert.deepEqual(problems, [
+    'packages/argent/package.json "files" does not list plugin.json — it would not ship in the tarball',
+    'packages/argent/package.json "files" does not list mcp.json — it would not ship in the tarball',
+  ]);
+});
+
+// Clients namespace a plugin server's tools by its mcp.json key, so renaming it
+// renames every mcp__argent__* tool the bundled skills call for by name.
+test("renaming the server key away from argent is caught", () => {
+  const problems = pluginManifestMismatches(
+    VERSION,
+    ARGENT_PKG,
+    PLUGIN,
+    pluginMcp((m) => {
+      m.mcpServers = /** @type {any} */ ({ "swm-argent": m.mcpServers.argent });
+    })
+  );
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /declares no "argent" server \(found: swm-argent\)/);
+});
+
+// Absent, null and array all leave the plugin exposing no tools, and reading
+// through the last two would throw rather than report.
+test("an mcp.json with no usable mcpServers object is caught", () => {
+  const unusable = [
+    pluginMcp((m) => delete (/** @type {any} */ (m).mcpServers)),
+    pluginMcp((m) => (m.mcpServers = /** @type {any} */ (null))),
+    pluginMcp((m) => (m.mcpServers = /** @type {any} */ ([]))),
+  ];
+  for (const broken of unusable) {
+    const problems = pluginManifestMismatches(VERSION, ARGENT_PKG, PLUGIN, broken);
+    assert.deepEqual(problems, [
+      "mcp.json has no mcpServers object — the plugin would expose no tools",
+    ]);
+  }
+});
+
+// A transport the client cannot launch from a plugin directory, e.g. a hand-edit
+// to an http URL that nothing in this repo serves.
+test("a non-stdio transport is caught", () => {
+  const problems = pluginManifestMismatches(
+    VERSION,
+    ARGENT_PKG,
+    PLUGIN,
+    pluginMcp((m) => (m.mcpServers.argent.type = "streamable-http"))
+  );
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /argent\.type is streamable-http, expected stdio/);
+});
+
+// Same vacuous-pass shape serverJsonMismatches guards: with no version to
+// compare against, the version check and the pin check both compare undefined.
+test("a version-less manifest fails instead of passing vacuously", () => {
+  const problems = pluginManifestMismatches(undefined, ARGENT_PKG, PLUGIN, PLUGIN_MCP);
+  assert.deepEqual(problems, [
+    "packages/argent/package.json has no version — nothing for plugin.json to be checked against",
+  ]);
+});
+
+test("every problem is reported at once, not just the first", () => {
+  const problems = pluginManifestMismatches(
+    VERSION,
+    { ...ARGENT_PKG, files: ["dist/"] },
+    plugin((p) => (p.version = "0.17.0")),
+    pluginMcp((m) => (m.mcpServers.argent.args = ["-y", "@swmansion/argent@0.17.0", "mcp"]))
+  );
+  assert.equal(problems.length, 4);
+});
+
 // --- the real script, spawned -----------------------------------------------
 // main() is what repo-hygiene.yml runs and none of the above touches it, so a
 // fail-open edit there (an exit(0) on the failure path, a guard that skips
@@ -234,16 +416,24 @@ const SCRIPT_PATH = fileURLToPath(new URL("./check-workspace-versions.mjs", impo
  * symlink test then reintroduces deliberately.
  * @param {import("node:test").TestContext} t
  * @param {{ argentVersion?: string | null, otherVersion?: string, serverJson?: unknown,
- *   extraPackages?: Record<string, unknown> }} [options]
- *   serverJson: an object to write as JSON, a string to write verbatim, or null
- *   to leave the file out entirely. argentVersion: null omits the version key.
- *   extraPackages: further packages/<dir> entries, a null value creating the
- *   directory with no package.json in it.
+ *   pluginJson?: unknown, pluginMcpJson?: unknown, extraPackages?: Record<string, unknown> }} [options]
+ *   serverJson / pluginJson / pluginMcpJson: an object to write as JSON, a
+ *   string to write verbatim, or null to leave the file out entirely.
+ *   argentVersion: null omits the version key. extraPackages: further
+ *   packages/<dir> entries, a null value creating the directory with no
+ *   package.json in it.
  * @returns {string} the repo root
  */
 function fixtureRepo(
   t,
-  { argentVersion = VERSION, otherVersion = VERSION, serverJson, extraPackages = {} } = {}
+  {
+    argentVersion = VERSION,
+    otherVersion = VERSION,
+    serverJson,
+    pluginJson,
+    pluginMcpJson,
+    extraPackages = {},
+  } = {}
 ) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "check-workspace-versions-")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -269,6 +459,12 @@ function fixtureRepo(
     if (manifest !== null) write(join(root, "packages", dir, "package.json"), manifest);
   }
   if (serverJson !== null) write(join(root, "server.json"), serverJson ?? SERVER);
+  if (pluginJson !== null) {
+    write(join(root, "packages", "argent", "plugin.json"), pluginJson ?? PLUGIN);
+  }
+  if (pluginMcpJson !== null) {
+    write(join(root, "packages", "argent", "mcp.json"), pluginMcpJson ?? PLUGIN_MCP);
+  }
 
   return root;
 }
@@ -289,7 +485,51 @@ test("[script] an in-sync repo passes quietly", (t) => {
   const result = runScript(fixtureRepo(t));
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stderr, "");
-  assert.match(result.stdout, /All workspace packages and server\.json are at 0\.18\.0\./);
+  assert.match(
+    result.stdout,
+    /All workspace packages, server\.json and the plugin manifest are at 0\.18\.0\./
+  );
+});
+
+test("[script] plugin manifest drift alone exits 1", (t) => {
+  const root = fixtureRepo(t, { pluginJson: plugin((p) => (p.version = "0.17.0")) });
+  const result = runScript(root);
+  assert.equal(result.status, 1, `expected a failure, got:\n${result.stdout}${result.stderr}`);
+  assert.match(result.stderr, /plugin\.json version is 0\.17\.0/);
+  // Nothing else disagrees, so this is the only thing that could have failed it.
+  assert.doesNotMatch(result.stderr, /server\.json is out of sync/);
+  assert.doesNotMatch(result.stderr, /Workspace package versions are out of sync/);
+});
+
+test("[script] a half-finished bump reports server.json and the plugin pair in one run", (t) => {
+  const root = fixtureRepo(t, {
+    serverJson: server((s) => {
+      s.version = "0.17.0";
+      s.packages[0].version = "0.17.0";
+    }),
+    pluginMcpJson: pluginMcp(
+      (m) => (m.mcpServers.argent.args = ["-y", "@swmansion/argent@0.17.0", "mcp"])
+    ),
+  });
+  const result = runScript(root);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /server\.json version is 0\.17\.0/);
+  assert.match(result.stderr, /does not pin @swmansion\/argent@0\.18\.0/);
+});
+
+test("[script] a missing plugin.json fails on-message", (t) => {
+  const result = runScript(fixtureRepo(t, { pluginJson: null }));
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Cannot read packages\/argent\/plugin\.json: /);
+  assert.match(result.stderr, /git checkout -- packages\/argent\/plugin\.json/);
+  assertNoStackTrace(result.stderr);
+});
+
+test("[script] a malformed mcp.json fails on-message", (t) => {
+  const result = runScript(fixtureRepo(t, { pluginMcpJson: "{ not json" }));
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /packages\/argent\/mcp\.json is not valid JSON: /);
+  assertNoStackTrace(result.stderr);
 });
 
 test("[script] server.json drift alone exits 1", (t) => {

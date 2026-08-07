@@ -9,6 +9,13 @@
 // bump that sweeps the workspace leaves it behind — and the registry then
 // rejects the publish, either because `packages[].version` names a version npm
 // has never seen or because `name` doesn't match the tarball's `mcpName`.
+//
+// packages/argent/plugin.json + mcp.json (the Agent Plugins manifest pair, which
+// makes the published tarball a loadable plugin root) are checked for the same
+// reason: plugin.json carries its own `version`, and mcp.json pins the exact npm
+// version its stdio server runs. Both are inert at build time, so nothing else
+// notices when a bump leaves them behind — the plugin would just keep launching
+// the previous release, next to skills shipped from this one.
 import { readFileSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,6 +26,22 @@ const repoRoot = join(dirname(selfPath), "..");
 const packagesDir = join(repoRoot, "packages");
 const argentManifestPath = join(packagesDir, "argent", "package.json");
 const serverJsonPath = join(repoRoot, "server.json");
+const pluginManifestPath = join(packagesDir, "argent", "plugin.json");
+const pluginMcpPath = join(packagesDir, "argent", "mcp.json");
+
+// The Agent Plugins spec version the manifest pair targets. Both files declare
+// it, and the spec requires them to agree — a mismatch invalidates the MCP
+// component while leaving the rest of the plugin loadable, which is exactly the
+// half-broken state this check exists to prevent.
+const PLUGIN_SPEC_VERSION = "1.0.0";
+const PLUGIN_SCHEMA = `https://agent-plugins.org/schemas/${PLUGIN_SPEC_VERSION}/plugin.schema.json`;
+const PLUGIN_MCP_SCHEMA = `https://agent-plugins.org/schemas/${PLUGIN_SPEC_VERSION}/mcp.schema.json`;
+
+// Same key `argent init` writes into every editor config (MCP_SERVER_KEY in
+// packages/argent-installer). Clients namespace a plugin server's tools by this
+// id, so renaming it here would rename every `mcp__argent__*` tool the bundled
+// skills call for by name.
+const PLUGIN_MCP_SERVER_KEY = "argent";
 
 /**
  * Everything server.json has to keep in step with the npm package it points at,
@@ -96,6 +119,88 @@ export function serverJsonMismatches(publishedVersion, argentPkg, server) {
         `server.json packages[${i}].identifier (${pkg.identifier}) != published package name (${argentPkg.name})`
       );
     }
+  }
+
+  return mismatches;
+}
+
+/**
+ * Everything the Agent Plugins manifest pair has to keep in step with the npm
+ * package it ships inside, as one human-readable line per problem. Pure, like
+ * serverJsonMismatches() above, so the whole matrix is unit-testable.
+ * @param {string | undefined} publishedVersion the version packages/argent/package.json carries
+ * @param {{ name?: string, files?: string[] }} argentPkg packages/argent/package.json
+ * @param {{ $schema?: string, name?: string, version?: string }} plugin packages/argent/plugin.json
+ * @param {{ $schema?: string, mcpServers?: Record<string, { type?: string, command?: string, args?: string[] }> }} mcp packages/argent/mcp.json
+ * @returns {string[]} empty when in sync
+ */
+export function pluginManifestMismatches(publishedVersion, argentPkg, plugin, mcp) {
+  const mismatches = [];
+
+  // Mirrors the publishedVersion guard in serverJsonMismatches: with no version
+  // to compare against, every check below would pass on undefined === undefined.
+  if (!publishedVersion) {
+    mismatches.push(
+      "packages/argent/package.json has no version — nothing for plugin.json to be checked against"
+    );
+  } else if (plugin.version !== publishedVersion) {
+    mismatches.push(
+      `plugin.json version is ${plugin.version}, packages/argent/package.json is ${publishedVersion}`
+    );
+  }
+
+  if (plugin.$schema !== PLUGIN_SCHEMA) {
+    mismatches.push(`plugin.json $schema is ${plugin.$schema}, expected ${PLUGIN_SCHEMA}`);
+  }
+  if (mcp.$schema !== PLUGIN_MCP_SCHEMA) {
+    mismatches.push(`mcp.json $schema is ${mcp.$schema}, expected ${PLUGIN_MCP_SCHEMA}`);
+  }
+
+  // Both files ship inside the tarball, but only if `files` names them — npm
+  // includes package.json, README and LICENSE implicitly and nothing else. A
+  // plugin root missing either file is not a plugin at all.
+  const files = Array.isArray(argentPkg.files) ? argentPkg.files : [];
+  for (const entry of ["plugin.json", "mcp.json"]) {
+    if (!files.includes(entry)) {
+      mismatches.push(
+        `packages/argent/package.json "files" does not list ${entry} — it would not ship in the tarball`
+      );
+    }
+  }
+
+  // Absent and non-object both mean the plugin declares no MCP server, and
+  // reading through the latter would throw rather than report.
+  const servers = mcp.mcpServers;
+  if (typeof servers !== "object" || servers === null || Array.isArray(servers)) {
+    mismatches.push("mcp.json has no mcpServers object — the plugin would expose no tools");
+    return mismatches;
+  }
+
+  const keys = Object.keys(servers);
+  if (!keys.includes(PLUGIN_MCP_SERVER_KEY)) {
+    mismatches.push(
+      `mcp.json declares no "${PLUGIN_MCP_SERVER_KEY}" server (found: ${keys.join(", ") || "none"}) — ` +
+        `plugin tools would not be named mcp__${PLUGIN_MCP_SERVER_KEY}__*, which the bundled skills call for`
+    );
+    return mismatches;
+  }
+
+  const entry = servers[PLUGIN_MCP_SERVER_KEY];
+  if (entry.type !== "stdio") {
+    mismatches.push(`mcp.json ${PLUGIN_MCP_SERVER_KEY}.type is ${entry.type}, expected stdio`);
+  }
+
+  // The npx form is deliberate: a plugin directory can reach a client by a route
+  // that never runs `npm install` (a git clone, a marketplace copy), so the
+  // server cannot be assumed to be resolvable next to the manifest. The pin is
+  // what keeps the launched server on the same release as the skills sitting
+  // beside it in the same plugin.
+  const pin = `${argentPkg.name}@${publishedVersion}`;
+  const args = Array.isArray(entry.args) ? entry.args : [];
+  if (publishedVersion && argentPkg.name && !args.includes(pin)) {
+    mismatches.push(
+      `mcp.json ${PLUGIN_MCP_SERVER_KEY}.args does not pin ${pin} (found: ${args.join(" ") || "none"})`
+    );
   }
 
   return mismatches;
@@ -182,6 +287,8 @@ function main() {
   // though — a manifest missing its version is caught as a mismatch below.
   const argentPkg = readTrackedJson(argentManifestPath);
   const server = readTrackedJson(serverJsonPath);
+  const plugin = readTrackedJson(pluginManifestPath);
+  const pluginMcp = readTrackedJson(pluginMcpPath);
 
   // server.json names the npm coordinates of packages/argent, so that manifest
   // is what it has to agree with. Reported even when packages/* disagree, so a
@@ -197,9 +304,26 @@ function main() {
     failed = true;
   }
 
+  // Reported alongside the server.json result rather than instead of it, for the
+  // same reason: one run should list every file a half-finished bump left behind.
+  const pluginProblems = pluginManifestMismatches(argentPkg.version, argentPkg, plugin, pluginMcp);
+  if (pluginProblems.length > 0) {
+    console.error(
+      "packages/argent/plugin.json + mcp.json are out of sync with packages/argent/package.json:"
+    );
+    for (const line of pluginProblems) console.error(`  ${line}`);
+    console.error(
+      "\nThe Agent Plugins manifest pair carries its own version and pins the npm version its\n" +
+        "server runs, so a workspace bump leaves both behind — edit them by hand to match."
+    );
+    failed = true;
+  }
+
   if (failed) process.exit(1);
 
-  console.log(`All workspace packages and server.json are at ${argentPkg.version}.`);
+  console.log(
+    `All workspace packages, server.json and the plugin manifest are at ${argentPkg.version}.`
+  );
 }
 
 // Run only when invoked directly, not when imported by the test. Both sides are

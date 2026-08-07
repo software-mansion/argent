@@ -40,7 +40,9 @@
     "skills/",
     "agents/",
     "rules/",
-    "assets/"
+    "assets/",
+    "plugin.json",
+    "mcp.json"
   ],
   "dependencies": {
     "@fails-components/webtransport": "^1.6.3",

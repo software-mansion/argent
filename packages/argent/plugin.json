@@ -1,0 +1,23 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "argent",
+  "version": "0.19.0",
+  "description": "iOS Simulator, Android Emulator, Fire TV and Chromium app control for coding agents",
+  "author": {
+    "name": "Software Mansion",
+    "url": "https://swmansion.com"
+  },
+  "homepage": "https://github.com/software-mansion/argent",
+  "repository": "https://github.com/software-mansion/argent",
+  "license": "Apache-2.0",
+  "keywords": [
+    "ios",
+    "android",
+    "simulator",
+    "emulator",
+    "react-native",
+    "electron",
+    "mobile",
+    "testing"
+  ]
+}
