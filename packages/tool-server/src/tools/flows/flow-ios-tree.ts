@@ -283,11 +283,14 @@ const FULL_HIERARCHY_FIELDS = [
  * stop matching), the cap carries generous headroom rather than hugging the
  * deepest observed measurement.
  *
- * Cost note: this tree is internal to selector resolution — it is consumed by
- * `selectorToFrame`/`evaluateCondition` and never returned to the caller — so a
- * deeper cap does NOT enlarge any tool result or agent context. It only grows
- * the getFullHierarchy payload over the native-devtools socket, and that payload
- * is already field-limited (`FULL_HIERARCHY_FIELDS`). In the measured production
+ * Cost note: this tree is internal to selector resolution — `selectorToFrame`/
+ * `evaluateCondition` consume it, and the tree itself is never returned — so a
+ * deeper cap does NOT enlarge any tool result or agent context. (Text derived
+ * from it can still reach the agent in small amounts: `compatibilityMissNote`
+ * walks the whole tree and its output joins the step's `reason` — see
+ * flow-actions.ts — so the cap does bound how far that note can look.) It
+ * otherwise only grows the getFullHierarchy payload over the native-devtools
+ * socket, and that payload is field-limited (`FULL_HIERARCHY_FIELDS`). In the measured production
  * tree, depth-40 was ~11KB and depth-48 ~15KB; past the tree's real depth a
  * higher cap adds nothing at all, so 100 stays modest.
  */
@@ -341,9 +344,14 @@ export async function queryFullHierarchyTree(
       );
     }
     if (failureCode === FAILURE_CODES.NATIVE_TARGET_SINGLE_APP_NOT_FOREGROUND) {
-      // The lone connected app is already instrumented; it is just not frontmost
-      // (home/system UI over it, a permission dialog, a deep-link that
-      // backgrounded it). Foregrounding it fixes the read, so the generic
+      // The lone connected app is already instrumented; it is just not
+      // foreground-like. Reaching this verdict means the app ANSWERED the state
+      // probe, so it is not merely suspended (that path rejects the probe and
+      // is handled below): the window is a just-backgrounded app before iOS
+      // suspends it, or one that keeps running in the background (audio,
+      // location, VoIP) and so keeps answering. A permission dialog does NOT
+      // land here — the app stays inactive with a foreground-inactive scene,
+      // which resolves normally. Foregrounding fixes the read, so the generic
       // relaunch-for-instrumentation advice below would misdiagnose the state.
       // Keep resolveNativeTargetApp's per-app applicationState diagnostic.
       throw wrapPreservingFailure(
