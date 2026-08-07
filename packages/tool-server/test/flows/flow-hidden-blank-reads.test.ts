@@ -712,6 +712,96 @@ describe("text/equals failure notes are wired through the runner and scoped to t
 });
 
 describe("compatibility miss note: what it is scoped to", () => {
+  it("names only an element the REST of the selector could have accepted", async () => {
+    // The walk applied the text test alone, never re-applying role/id/scopes,
+    // so it named a node the step could never have matched. Taking the advice
+    // meant changing the one field that was already correct and landing back on
+    // a bare miss with no further hint.
+    currentFetch = () => ({
+      tree: screen([
+        n({
+          identifier: "ellipsis",
+          label: "Add more languages…",
+          frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.05 },
+        }),
+        n({
+          identifier: "plain",
+          label: "Sign in",
+          frame: { x: 0.1, y: 0.3, width: 0.8, height: 0.05 },
+        }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("compat-wrong-id", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "assert",
+          condition: "visible",
+          selector: { text: "Add more languages...", identifier: "plain" },
+        },
+      ],
+    });
+
+    const wrongId = await run("compat-wrong-id");
+    expect(wrongId.steps[0].status).toBe("fail");
+    expect(wrongId.steps[0].reason).not.toMatch(/typographic variant/);
+    expect(wrongId.steps[0].reason).not.toMatch(/Add more languages…/);
+
+    // Control: with the id the look-alike actually carries, the note is the
+    // whole point and must still fire.
+    await writeFlow("compat-right-id", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "assert",
+          condition: "visible",
+          selector: { text: "Add more languages...", identifier: "ellipsis" },
+        },
+      ],
+    });
+
+    const rightId = await run("compat-right-id");
+    expect(rightId.steps[0].status).toBe("fail");
+    expect(rightId.steps[0].reason).toMatch(/typographic variant/);
+  });
+
+  it("does not name a zero-area node to a `visible` step that matched nothing", async () => {
+    // The `visible`-with-matches exemption does not cover this: with NO matches
+    // the walk runs, and could name a node the runner simultaneously knows is
+    // off screen. Following that advice only flips the failure to
+    // "matched … but none was visible".
+    currentFetch = () => ({
+      tree: screen([
+        // The only look-alike is zero-area, so it is no answer for `visible`.
+        n({ label: "Add more languages…", frame: { x: 0.1, y: 0.3, width: 0, height: 0 } }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("compat-zero-area-lookalike", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "assert", condition: "visible", selector: { text: "Add more languages..." } },
+      ],
+    });
+
+    const result = await run("compat-zero-area-lookalike");
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).not.toMatch(/typographic variant/);
+
+    // `exists` deliberately accepts zero-area nodes, so it still gets the note.
+    await writeFlow("compat-zero-area-exists", {
+      executionPrerequisite: "",
+      steps: [{ kind: "assert", condition: "exists", selector: { text: "Add more languages..." } }],
+    });
+
+    const exists = await run("compat-zero-area-exists");
+    expect(exists.steps[0].status).toBe("fail");
+    expect(exists.steps[0].reason).toMatch(/typographic variant/);
+  });
+
   it("stays quiet when `visible` failed on zero-area matches, not on a miss", async () => {
     // The locator WORKED — assertReason says so ("none was visible"). Appending
     // "copy the characters the app actually renders" then blames the wrong

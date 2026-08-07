@@ -1259,23 +1259,37 @@ function compatibilityMissNote(
     // step whose locator missed.
     const wanted = selector.text;
     if (tree === undefined || wanted === undefined || wanted === "") return "";
-    // Both halves of this walk mirror how a `text` selector actually matches.
+    // Search only among the nodes the step could actually have ACCEPTED. The
+    // text is the field that missed, so drop it and re-apply everything else
+    // the author named — role, id, and the within/after/next scopes — through
+    // the same resolver the step itself used.
+    //
+    // Testing the text alone named elements the selector could never have
+    // matched: `{ text: "Add more languages...", id: plain }` was told the
+    // screen shows "Add more languages…" about a DIFFERENT element, so the
+    // author changed the one field that was already correct and landed back on
+    // a bare miss. That is the same hijack the located branch is scoped to
+    // prevent, arriving through the other branch.
+    const candidates = flowFindAll(tree, { ...selector, text: undefined });
+    // `visible` with no matches at all can still reach a zero-area node here
+    // (Vega's flow adapter keeps them; the other platforms prune them), and
+    // telling a `visible` step "the screen does show X" about a node the runner
+    // knows is not on screen sends the author to a rewrite that only flips the
+    // failure to "matched … but none was visible". `exists` deliberately
+    // accepts zero-area nodes, so it must not filter.
+    const eligible = condition === "visible" ? candidates.filter(isVisible) : candidates;
     // Label and value ONLY — deliberately not the hoisted `subtreeText` —
     // because that is what matchNodeWithRegex compares against, so suggesting a
     // multi-child hoisted string would send the author to a selector that still
     // matches nothing. And it is a SUBSTRING test, so the near-miss question is
     // "does this label CONTAIN a compat variant of the needle", not "is it one".
-    const walk = (node: DescribeNode): void => {
-      if (hit !== undefined) return;
-      for (const candidate of [node.label, node.value]) {
-        if (candidate && compatibilityVariantIn(candidate, wanted)) {
-          hit = candidate;
-          return;
-        }
-      }
-      for (const child of node.children) walk(child);
-    };
-    walk(tree);
+    for (const node of eligible) {
+      hit = [node.label, node.value].find(
+        (candidate): candidate is string =>
+          Boolean(candidate) && compatibilityVariantIn(candidate!, wanted)
+      );
+      if (hit !== undefined) break;
+    }
   }
   return hit === undefined
     ? ""
