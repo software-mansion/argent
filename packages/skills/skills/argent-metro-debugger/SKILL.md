@@ -68,6 +68,8 @@ Both can point to source files, but `inspect-element` is purpose-built for sourc
 Applies to both `debugger-component-tree` and `debugger-inspect-element`. Set to `true` only when debugging filter behavior — e.g., an expected component is missing from output, or you need to inspect a very specific branch of the tree (not just an overview).
 
 > **Warning:** Output can be very large. Always combine with `maxNodes` (component-tree) or `maxItems` (inspect-element) and increase it incrementally (e.g., start at 50, then grow). Do not use `includeSkipped` without a limit on large apps.
+>
+> `maxNodes` is a budget, not a guarantee: it collapses structural wrapper chains but never drops a node carrying a name, text, testID or a branch, because doing so would let you conclude an element is absent when it was only trimmed. When it cannot reach the budget the response says so and by how much — narrow the tree with `debugger-inspect-element` rather than raising the limit blindly.
 
 ---
 

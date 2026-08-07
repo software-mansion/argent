@@ -292,3 +292,119 @@ describe("buildTextTree — includeSkipped summary", () => {
     expect(result).toContain("Off-screen:");
   });
 });
+
+describe("buildTextTree — maxNodes accounting and budget honesty (issue #631)", () => {
+  // Seven content-free single-child wrappers with distinct rects (so the
+  // content-free-wrapper pass does not eat them) above one text leaf.
+  function wrapperChain(): RawResult {
+    const components: RawEntry[] = [];
+    for (let i = 0; i < 7; i++) {
+      components.push(
+        entry(i, `W${i}`, i === 0 ? -1 : i - 1, {
+          x: i * 12,
+          y: i * 12,
+          w: 300 - i * 12,
+          h: 400 - i * 12,
+        })
+      );
+    }
+    components.push(entry(7, "Leaf", 6, { x: 100, y: 200, w: 80, h: 20 }, { text: "Hi" }));
+    return { ...SCREEN, components };
+  }
+
+  it("never reports collapsing more nodes than the tree contains", () => {
+    // Regression: chain discovery also pushed every suffix of a chain, so the
+    // greedy pass collapsed an outer chain and one nested inside it and counted
+    // the shared nodes twice — an 8-node tree reported 11 collapsed.
+    const result = buildTextTree(wrapperChain(), { onScreenOnly: false, maxNodes: 1 });
+    const collapsed = Number(/\.\.\. (\d+) wrapper node/.exec(result)![1]);
+    expect(collapsed).toBe(6);
+    expect(collapsed).toBeLessThan(8);
+  });
+
+  it("counts only the wrappers it actually hides in the inline marker", () => {
+    // The chain start is printed above the marker and the chain end below it,
+    // so a 7-wrapper chain hides 6.
+    const result = buildTextTree(wrapperChain(), { onScreenOnly: false, maxNodes: 1 });
+    expect(result).toContain("... via 6 wrappers");
+    expect(result).not.toContain("... via 7 wrappers");
+  });
+
+  it("keeps every named node and states the shortfall when the budget cannot be met", () => {
+    const components: RawEntry[] = [entry(0, "Root", -1, { x: 0, y: 0, w: 400, h: 780 })];
+    for (let i = 1; i <= 6; i++) {
+      components.push(
+        entry(i, `Item${i}`, 0, { x: 0, y: i * 60, w: 400, h: 50 }, { text: `Row ${i}` })
+      );
+    }
+    const result = buildTextTree({ ...SCREEN, components }, { onScreenOnly: false, maxNodes: 2 });
+
+    // Truncating here would let a caller conclude Row 6 does not exist.
+    for (let i = 1; i <= 6; i++) expect(result).toContain(`Row ${i}`);
+    expect(result).toContain("could not be met");
+    expect(result).toContain("5 nodes over budget");
+  });
+
+  it("says nothing extra when the budget is met", () => {
+    const result = buildTextTree(wrapperChain(), { onScreenOnly: false, maxNodes: 50 });
+    expect(result).not.toContain("could not be met");
+    expect(result).not.toContain("collapsed");
+  });
+
+  it("treats a zero budget as one rather than emitting an empty tree", () => {
+    const result = buildTextTree(wrapperChain(), { onScreenOnly: false, maxNodes: 0 });
+    expect(result).toContain('Leaf "Hi"');
+  });
+});
+
+describe("buildTextTree — off-screen coordinates are not offered as tap targets", () => {
+  function scrolledAboveViewport(): RawResult {
+    return {
+      ...SCREEN,
+      components: [
+        entry(0, "Screen", -1, { x: 0, y: 0, w: 400, h: 800 }, { testID: "root" }),
+        // Centre at y = -20 → above the viewport, but inside the 10% margin the
+        // on-screen filter allows, so it survives onScreenOnly: true.
+        entry(1, "Heading", 0, { x: 10, y: -40, w: 200, h: 40 }, { text: "Explore" }),
+        entry(2, "Body", 0, { x: 10, y: 300, w: 200, h: 40 }, { text: "Visible" }),
+      ],
+    };
+  }
+
+  it("marks a node whose centre is off the viewport, in the default mode too", () => {
+    const result = buildTextTree(scrolledAboveViewport(), { onScreenOnly: true });
+    expect(result).toContain('Heading "Explore" (off-screen:');
+    // The affordance token must be gone — an agent scanning for `tap:` would
+    // otherwise feed gesture-tap a coordinate that cannot land.
+    expect(result).not.toContain('Heading "Explore" (tap:');
+    // Sign is preserved so the caller knows which way to scroll.
+    expect(result).toContain("-0.03");
+  });
+
+  it("still lists on-screen nodes as tap targets", () => {
+    const result = buildTextTree(scrolledAboveViewport(), { onScreenOnly: true });
+    expect(result).toContain('Body "Visible" (tap:');
+  });
+
+  it("marks rather than removes when onScreenOnly is false", () => {
+    const result = buildTextTree(scrolledAboveViewport(), { onScreenOnly: false });
+    expect(result).toContain('Heading "Explore" (off-screen:');
+  });
+});
+
+describe("buildTextTree — off-screen accounting is visible when the filter is on", () => {
+  it("reports Off-screen: 0 so an inert filter is distinguishable from a broken one", () => {
+    // This is what the reporter of #631 could not tell apart: with everything on
+    // screen, onScreenOnly true and false agree, and suppressing the zero made
+    // that look like the parameter had no effect.
+    const data: RawResult = {
+      ...SCREEN,
+      components: [
+        entry(0, "Screen", -1, { x: 0, y: 0, w: 400, h: 800 }, { testID: "root" }),
+        entry(1, "Body", 0, { x: 10, y: 300, w: 200, h: 40 }, { text: "Visible" }),
+      ],
+    };
+    const result = buildTextTree(data, { onScreenOnly: true, includeSkipped: true });
+    expect(result).toContain("Off-screen: 0");
+  });
+});
