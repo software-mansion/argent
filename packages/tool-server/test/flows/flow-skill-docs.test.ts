@@ -73,7 +73,7 @@ describe("create-flow idle docs", () => {
 
   it("the reference's idle defaults and settle cost are the ones the parser enforces", () => {
     const reference = readFileSync(FLOW_YAML, "utf8");
-    expect(reference).toContain(`default ${IDLE_DEFAULT_MIN_STABLE_MS}`);
+    expect(reference).toContain(`default ${IDLE_DEFAULT_STABLE_FOR_MS}`);
     expect(reference).toContain(`default ${IDLE_DEFAULT_TIMEOUT_MS}`);
     expect(reference).toContain(`${IDLE_SETTLE_OVERHEAD_MS}ms a settle costs`);
     expect(reference).toContain(`${IDLE_POLL_MS}ms polls`);
@@ -87,7 +87,7 @@ describe("create-flow idle docs", () => {
     // The reference tells an author the wait has to contain the hold plus the
     // settle. Take it at its word and check the boundary both ways — a parser
     // that demanded a millisecond more would make the documented sum a lie.
-    const smallest = IDLE_DEFAULT_MIN_STABLE_MS + IDLE_SETTLE_OVERHEAD_MS;
+    const smallest = IDLE_DEFAULT_STABLE_FOR_MS + IDLE_SETTLE_OVERHEAD_MS;
     expect(() =>
       parseFlow(`steps:\n  - await: { idle: true, timeout: ${smallest} }\n`)
     ).not.toThrow();

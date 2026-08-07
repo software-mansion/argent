@@ -133,12 +133,12 @@ Identity is an element that exists **only** on the destination ([which ones qual
 The one condition that carries no selector, because stillness is a property of the whole screen. It returns the moment the screen has content and stops moving in **both** the UI tree and the rendered pixels, so the next tap resolves its target against a screen that has stopped rather than one still sliding under it.
 
 ```yaml
-- await: { idle: true, minStableMs: 400, timeout: 9000 }
+- await: { idle: true, stableFor: 400, timeout: 9000 }
 ```
 
 The pixel half is why it exists: an iOS push or modal dismissal commits its hierarchy up front and then animates a layer for a few hundred milliseconds, and a cross-fade or scrim moves no node at all. A tree-only wait returns mid-transition.
 
-`minStableMs` (default 250) is how long stillness must hold; it must be shorter than `timeout` (default 7500) or the gate could never pass, and parse rejects it. The wait also has to leave room for the hold plus the 600ms a settle costs — three reads spanning two 200ms polls, plus the 200ms of budget the closing round has to have left to be allowed to start — or the parser rejects the step. Stillness is measured across intervals, so a settle takes at least three reads: `minStableMs: 0` means "the first two agreeing intervals", not "the first read".
+`stableFor` (default 250) is how long stillness must hold; it must be shorter than `timeout` (default 7500) or the gate could never pass, and parse rejects it. The wait also has to leave room for the hold plus the 600ms a settle costs — three reads spanning two 200ms polls, plus the 200ms of budget the closing round has to have left to be allowed to start — or the parser rejects the step. Stillness is measured across intervals, so a settle takes at least three reads: `stableFor: 0` means "the first two agreeing intervals", not "the first read".
 
 It has no `assert` form — waiting is the whole point — and no `when:` form. Prefer it over `wait:` for any transition with no element to gate on.
 
