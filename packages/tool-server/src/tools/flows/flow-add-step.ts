@@ -791,9 +791,17 @@ function directiveCommandHint(command: string): string | undefined {
     `"${command}" is a flow directive, not a tool. Record it by calling \`${hint.tool}\` ` +
     `through flow-add-step` +
     (hint.rewritten
-      ? ` — the recorder rewrites it into the \`${command}:\` step ${hint.rewriteCondition ?? "for you"}. ` +
-        `A \`delayMs\` on the call opts out of the rewrite: it is then kept as a raw \`tool: ${hint.tool}\` ` +
-        `step (a replay delay has no directive form), so leave \`delayMs\` off if you want the \`${command}:\` step.`
+      ? // The `delayMs` clause is appended to EVERY rewrite hint, so it has to
+        // be scoped to calls that are recorded at all: `run`'s own
+        // rewriteCondition, printed two clauses earlier, says a non-sibling
+        // `flow_path` is refused outright and records nothing — and it is,
+        // whatever `delayMs` says, because `rewriteSiblingFlowPath` runs before
+        // the invoke and throws. Promising a raw step there contradicts the
+        // sentence beside it.
+        ` — the recorder rewrites it into the \`${command}:\` step ${hint.rewriteCondition ?? "for you"}. ` +
+        `Where the call is recorded at all, a \`delayMs\` on it opts out of the rewrite: the step is then ` +
+        `kept in its raw \`tool: ${hint.tool}\` form (a replay delay has no directive form), so leave ` +
+        `\`delayMs\` off if you want the \`${command}:\` step.`
       : `. It is stored as a raw \`tool: ${hint.tool}\` step; converting it to \`${command}:\` ` +
         `is part of the polish pass.`)
   );
