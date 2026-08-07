@@ -242,6 +242,8 @@ When using `screenshot` for permission or native modal navigation:
 
 Optional rotation parameter: `{ "udid": "<UDID>", "rotation": "LandscapeLeft" }` — rotates the capture without changing simulator orientation.
 
+On a rotated iOS simulator the capture is composited in the device's unrotated space, so it looks sideways. `rotation` makes it readable, but that image is then in a different coordinate space from `describe` frames and from where taps land — so never read tap coordinates off a rotated capture. Use `describe` for anything you intend to tap.
+
 Screenshots are downscaled by default (30% of original resolution) to reduce context size. Use the normal downscaled screenshot for UI context and state checks. `scale` accepts values from 0.01 to 1.0, but do not use `scale: 1.0` as a general readability or tapping aid.
 
 Use full-resolution screenshots only when saving baseline/current PNG files for comparison. In that case, suppress the image block so the full-size PNG is not loaded into agent context:

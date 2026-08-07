@@ -12,6 +12,7 @@ import {
   parseNativeDescribeScreenResult,
   type NativeDescribeScreenResult,
 } from "./native-describe-contract";
+import { withLandscapeHint } from "../../utils/ios-orientation-hint";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
@@ -96,6 +97,11 @@ If status is restart_required: call restart-app then retry.`,
     }
 
     const parsed = parseNativeDescribeScreenResult(result);
-    return { status: "ok", ...parsed };
+    // normalizedFrame / normalizedTapPoint are relative to the app's own screen
+    // bounds, which follow the device rotation. Touch input does not, so on a
+    // rotated device these are not tap coordinates (#609). Flag it rather than
+    // leave the caller to discover it by missing.
+    const hint = withLandscapeHint(undefined, parsed.screenFrame);
+    return { status: "ok", ...parsed, ...(hint ? { hint } : {}) };
   },
 };

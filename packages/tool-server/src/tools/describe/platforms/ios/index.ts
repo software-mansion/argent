@@ -9,6 +9,7 @@ import {
 import { resolveNativeTargetApp } from "../../../../utils/native-target-app";
 import { isTvOsSimulator } from "../../../../utils/ios-devices";
 import { parseNativeDescribeScreenResult } from "../../../native-devtools/native-describe-contract";
+import { withLandscapeHint } from "../../../../utils/ios-orientation-hint";
 import { DescribeTreeData, parseDescribeResult, type DescribeNode } from "../../contract";
 import { adaptAXDescribeToDescribeResult } from "./ios-ax-adapter";
 import { adaptNativeDescribeToDescribeResult } from "./ios-native-adapter";
@@ -158,7 +159,15 @@ export async function describeIos(
 
     const parsed = parseNativeDescribeScreenResult(rawResult);
     const nativeTree = adaptNativeDescribeToDescribeResult(parsed);
-    return { tree: nativeTree, source: "native-devtools", hint };
+    // This branch reports the app's own coordinate space, which on a rotated
+    // device is upright — unlike the ax-service branch above and unlike where
+    // taps land. Say so rather than silently handing back coordinates that miss
+    // (#609).
+    return {
+      tree: nativeTree,
+      source: "native-devtools",
+      hint: withLandscapeHint(hint, parsed.screenFrame),
+    };
   } catch {
     // Native devtools unavailable or no connected app — return the empty AX result
     return { tree, source: "ax-service", hint };
