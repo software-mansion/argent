@@ -426,13 +426,19 @@ export async function queryFullHierarchyTree(
     );
   }
 
+  // Reachable only through a disconnect race. The target came from
+  // `resolveNativeTargetApp(api, undefined)`, which returns ids out of
+  // `listConnectedBundleIds()`, and `requiresAppRestart` answers false for
+  // anything in `connections` — so getting `true` here means the socket dropped
+  // between the resolve and this call. The app therefore WAS instrumented, and
+  // the "launched before argent's instrumentation loaded" diagnosis that fits
+  // an explicitly-named bundle is exactly wrong for this one.
   if (await nativeApi.requiresAppRestart(target.bundleId)) {
     throw new Error(
-      `${target.bundleId} was launched before argent's instrumentation loaded — relaunch it with ` +
-        `restart-app (or a flow \`launch\` step at replay) so the full view hierarchy is readable. ` +
-        `launch-app does not terminate the app first: when the app is already running, it only ` +
-        `foregrounds that existing uninstrumented process. Only restart-app (terminate + relaunch) ` +
-        `guarantees an instrumented launch.`
+      `${target.bundleId} answered the target probe and then dropped its native-devtools ` +
+        `connection before the view hierarchy could be read. It was instrumented, so a retry may ` +
+        `ride this out; if the connection does not come back, relaunch with restart-app (or a ` +
+        `flow \`launch\` step) — launch-app would only foreground the process that just lost it.`
     );
   }
 

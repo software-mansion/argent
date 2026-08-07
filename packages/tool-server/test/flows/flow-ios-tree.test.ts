@@ -586,11 +586,13 @@ describe("flow iOS full-hierarchy source", () => {
     expect(error.message).not.toContain("provide bundleId explicitly");
   });
 
-  it("names restart-app (not launch-app) when the target loaded before instrumentation", async () => {
-    // NOTE: the mock forces a state the live service cannot reach for an
-    // auto-resolved target — requiresAppRestart returns false for every
-    // connected bundle id, and auto-resolution only ever yields connected ones.
-    // This pins the message's wording, not that the branch fires in practice.
+  it("reports a dropped connection, not a pre-instrumentation launch, when the target needs a restart", async () => {
+    // The ONE way this branch fires for an auto-resolved target:
+    // requiresAppRestart answers false for every connected bundle id, and
+    // auto-resolution only ever yields connected ones, so a `true` here means
+    // the socket dropped between the resolve and the read. The mock reproduces
+    // that race — an app that resolved and then went away — which is why the
+    // message must not diagnose an app that was never instrumented.
     const api = {
       listConnectedBundleIds: () => ["com.example.app"],
       getAppState: vi.fn(async (bundleId: string) => ({
@@ -608,9 +610,14 @@ describe("flow iOS full-hierarchy source", () => {
     const error = await queryFullHierarchyTree(registryFor(api), DEVICE).catch((err) => err);
 
     expect(error).toBeInstanceOf(Error);
-    expect(error.message).toContain("com.example.app was launched before argent's instrumentation");
-    expect(error.message).toContain("restart-app");
-    expect(error.message).toContain("Only restart-app (terminate + relaunch)");
+    expect(error.message).toContain("com.example.app answered the target probe and then dropped");
+    // It WAS instrumented — the opposite of what the old wording claimed — so
+    // the retry is named before the relaunch.
+    expect(error.message).toContain("It was instrumented");
+    expect(error.message).toContain("a retry may ride this out");
+    expect(error.message).not.toContain("launched before argent's instrumentation loaded");
+    // restart-app is still the fallback, and launch-app still is not.
+    expect(error.message).toContain("relaunch with restart-app");
     expect(error.message).not.toContain("launch-app, or a flow");
   });
 });
