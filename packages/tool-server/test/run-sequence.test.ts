@@ -407,6 +407,32 @@ describe("run-sequence", () => {
       expect(error).not.toContain("`udid`");
     });
 
+    it("STOPS the sequence, leaving the later steps un-run", async () => {
+      // Two steps, because one cannot tell a `break` from a `continue`: with a
+      // single-step sequence both spellings return the same result, and the
+      // existing multi-step "stops on first error" tests all exercise the
+      // INVOKE path. A regression here types into whatever screen the un-tapped
+      // app is still on.
+      const { registry, executed } = liveRegistry();
+      const tool = createRunSequenceTool(registry);
+
+      const result = await tool.execute(
+        {},
+        {
+          udid: IOS,
+          steps: [
+            { tool: "gesture-tap", args: { xx: 0.5, y: 0.3 } },
+            { tool: "keyboard", args: { text: "hello" } },
+          ],
+        }
+      );
+
+      expect(result.steps).toHaveLength(1);
+      expect(result.completed).toBe(0);
+      expect(result.total).toBe(2);
+      expect(executed).toEqual([]); // neither step reached the device
+    });
+
     it("still emits the step's own invoked/failed events", async () => {
       // The rejection is re-rendered from the registry's failure rather than
       // pre-empting the dispatch, so the step stays visible to the telemetry
