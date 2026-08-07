@@ -1051,6 +1051,45 @@ describe("swipe: execution", () => {
     expect(result.calls).toEqual([]);
   });
 
+  it("reports an off-screen to that also sits inside the travel floor as off-screen", async () => {
+    // Pins the ORDER of the two `to` guards, not either guard alone: the bounds
+    // check must run BEFORE the travel gate. Both frames parse — each field is
+    // inside [0, 1] and describeFrameSchema never constrains y + height — yet
+    // the anchor centres at (0.5, 0.99) and the endpoint at (0.5, 1.01), which
+    // is at once off the screen and only 0.02 away, under the 0.03 floor. Run
+    // the gates the other way round and the step blames the target's placement
+    // — aim it farther from the start — for what is the adapter clipping the
+    // endpoint out of the viewport, sending the author to fix the wrong end.
+    currentTree = () =>
+      screen([
+        n({ label: "Anchor", frame: { x: 0.4, y: 0.97, width: 0.2, height: 0.04 } }),
+        n({ label: "Drop", frame: { x: 0.4, y: 0.99, width: 0.2, height: 0.04 } }),
+      ]);
+    await writeFlow("to-offscreen-and-sub-floor", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "swipe",
+          from: { selector: { text: "Anchor", loose: true } },
+          to: { selector: { text: "Drop", loose: true } },
+        },
+      ],
+    });
+
+    const result = await run("to-offscreen-and-sub-floor");
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]).toMatchObject({
+      kind: "swipe",
+      status: "fail",
+      reason: expect.stringMatching(
+        /swipe\.to resolved outside the normalized screen: \(0\.5, 1\.01\).*between 0 and 1/i
+      ),
+    });
+    expect(result.steps[0].reason).not.toMatch(/minimum swipe travel of the start point/i);
+    expect(result.calls).toEqual([]);
+  });
+
   it("fails with the scroll-to hint when the from anchor never appears", async () => {
     currentTree = () => screen([]);
     await writeFlow("from-missing", {
