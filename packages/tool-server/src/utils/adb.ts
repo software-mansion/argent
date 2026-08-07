@@ -617,6 +617,26 @@ const TERMINAL_ADB_ERROR_PATTERNS: RegExp[] = [
  * which should propagate with adb's own cause — apart from a command-level
  * rejection they can classify themselves (e.g. `pm` refusing a permission).
  */
+/**
+ * Is any process for `pkg` alive right now?
+ *
+ * Matches on the process name, which defaults to the package name — an app that
+ * sets `android:process` on its launcher activity will read as not running. That
+ * direction is safe for every current caller: they use this only to *upgrade* a
+ * result they would otherwise reject, so a miss simply leaves the stricter
+ * answer in place.
+ *
+ * `|| true` because `pidof` exits non-zero when nothing matches and `adbShell`
+ * rejects on a non-zero exit — the same idiom the Android profiler's app
+ * detection uses. On an image old enough to lack `pidof` the error goes to
+ * stderr and stdout is empty, which reads as "not running" and again degrades to
+ * the stricter answer.
+ */
+export async function isPackageProcessRunning(serial: string, pkg: string): Promise<boolean> {
+  const out = await adbShell(serial, `pidof ${shellQuote(pkg)} || true`, { timeoutMs: 10_000 });
+  return out.trim().length > 0;
+}
+
 export function isTerminalAdbError(message: string): boolean {
   return TERMINAL_ADB_ERROR_PATTERNS.some((pattern) => pattern.test(message));
 }

@@ -65,7 +65,7 @@ export function createRestartAppTool(registry: Registry): ToolDefinition<Params,
     },
     description: `Terminate then relaunch an app by bundle id / package name.
 Use when you need a clean in-memory state without a full reinstall. Also refreshes the native-devtools injection before the relaunch (the iOS slice on iOS, the tvOS slice on Apple TV); on tvOS, interaction is focus-driven — use the tv-* tools rather than coordinate taps.
-Returns { restarted, bundleId }. Fails if the app is not installed.`,
+Returns { restarted, bundleId, note? }. Fails if the app is not installed. On Android a launch that overruns the platform's wait window is confirmed by checking the app's process instead of failing, and \`note\` then says the app may not be interactive yet.`,
     alwaysLoad: true,
     searchHint:
       "terminate relaunch restart reset app bundle id package simulator emulator vega tvos fire tv",
