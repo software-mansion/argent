@@ -5,6 +5,7 @@ import path from "path";
 import { z } from "zod";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type {
+  DeviceInfo,
   FileInputSpec,
   ServiceRef,
   ToolContext,
@@ -14,6 +15,7 @@ import type {
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
 import { httpScreenshot } from "../../utils/simulator-client";
+import { captureScreenshotUpright } from "../../utils/rotation-aware-capture";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 import { diffPngFiles } from "./screenshot-diff";
 
@@ -48,7 +50,11 @@ const zodSchema = z
     rotation: z
       .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
       .optional()
-      .describe("Orientation override for live baseline/current captures."),
+      .describe(
+        "Orientation override for live baseline/current captures. Rarely needed: an Android capture " +
+          "already follows the device's rotation. Setting it pins a fixed rotation, which can make a " +
+          "live capture disagree with a saved baseline taken at a different device rotation."
+      ),
     outputDir: z
       .string()
       .min(1)
@@ -197,6 +203,7 @@ async function resolveInputPaths(
   const baselinePath = params.captureBaseline
     ? await captureLiveInput({
         api: requireSimulatorServer(services),
+        device: resolveDevice(params.udid),
         outputDir,
         name: "baseline",
         rotation: params.rotation,
@@ -208,6 +215,7 @@ async function resolveInputPaths(
   const currentPath = params.captureCurrent
     ? await captureLiveInput({
         api: requireSimulatorServer(services),
+        device: resolveDevice(params.udid),
         outputDir,
         name: "current",
         rotation: params.rotation,
@@ -279,6 +287,10 @@ async function captureLiveInput(params: {
   // Resolved and validated by requireSimulatorServer at the call site, so it is
   // never undefined here.
   api: SimulatorServerApi;
+  // Needed so a live capture picks up the device's rotation the same way the
+  // `screenshot` tool does. Without it a rotated-Android `captureCurrent` would
+  // come back sideways and diff at ~100% against an upright saved baseline.
+  device: DeviceInfo;
   outputDir: string;
   name: "baseline" | "current";
   rotation?: Params["rotation"];
@@ -294,9 +306,23 @@ async function captureLiveInput(params: {
   // baseline saved at any scale. Full-res is preserved wherever it works (iOS).
   let capture: Awaited<ReturnType<CaptureScreenshot>>;
   try {
-    capture = await params.captureScreenshot(params.api, params.rotation, params.signal, 1.0);
+    capture = await captureScreenshotUpright(
+      params.api,
+      params.device,
+      params.rotation,
+      params.signal,
+      1.0,
+      params.captureScreenshot
+    );
   } catch {
-    capture = await params.captureScreenshot(params.api, params.rotation, params.signal);
+    capture = await captureScreenshotUpright(
+      params.api,
+      params.device,
+      params.rotation,
+      params.signal,
+      undefined,
+      params.captureScreenshot
+    );
   }
   const suffix = crypto.randomBytes(4).toString("hex");
   const destination = path.join(params.outputDir, `${params.name}-${suffix}.live.png`);

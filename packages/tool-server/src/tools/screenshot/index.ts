@@ -7,7 +7,8 @@ import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry"
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
-import { getScreenshotScale, httpScreenshot } from "../../utils/simulator-client";
+import { getScreenshotScale } from "../../utils/simulator-client";
+import { captureScreenshotUpright } from "../../utils/rotation-aware-capture";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { simctlArgsForUdid } from "../../utils/ios-device-sets";
 import { captureVegaScreenshotPng } from "../../utils/vega-screen";
@@ -25,7 +26,11 @@ const zodSchema = z.object({
     .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
     .optional()
     .describe(
-      "Orientation override for the screenshot (rotates the captured image after Page.captureScreenshot on Chromium)."
+      "Orientation override. Rarely needed: on Android the capture already follows the device's " +
+        "current rotation, so it is upright without this. Setting it replaces that with a fixed " +
+        "rotation, which on a rotated device produces an image whose geometry no longer matches " +
+        "`describe` frames or gesture coordinates. On Chromium it rotates the captured image after " +
+        "Page.captureScreenshot."
     ),
   scale: z
     .number()
@@ -130,6 +135,7 @@ export function createScreenshotTool(registry: Registry): ToolDefinition<Params,
     },
     description: `Capture a screenshot of the device screen (iOS simulator, Android emulator, Apple TV simulator, Vega, or Chromium app). Returns { image }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
 Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.
+On a rotated Android device the capture follows the device's rotation, so it comes back upright and its geometry matches \`describe\` frames and gesture coordinates. Do not pass \`rotation\` to correct a sideways image.
 Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.`,
     alwaysLoad: true,
     searchHint: "device simulator emulator chromium screen image capture baseline tvos apple tv",
@@ -177,8 +183,9 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
 
       const ref = simulatorServerRef(device);
       const api = (await registry.resolveService(ref.urn, ref.options)) as SimulatorServerApi;
-      const { path: capturedPath } = await httpScreenshot(
+      const { path: capturedPath } = await captureScreenshotUpright(
         api,
+        device,
         params.rotation,
         signal,
         params.scale
