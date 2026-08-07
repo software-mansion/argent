@@ -10,8 +10,10 @@ import {
   parseFlow,
   serializeFlow,
   selectorToYaml,
+  swipeByLabel,
   type FlowSavedTo,
   type FlowSelector,
+  type GestureTarget,
 } from "./flow-utils";
 import type { TextMatchMode } from "../../utils/ui-tree-match";
 
@@ -39,6 +41,10 @@ function textConditionLabel(
     : textMatch === "equals"
       ? `text ${selector} == ${JSON.stringify(expected)}`
       : `text ${selector} contains ${JSON.stringify(expected)}`;
+}
+
+function targetLabel(target: GestureTarget): string {
+  return "selector" in target ? selectorLabel(target.selector) : `(${target.x}, ${target.y})`;
 }
 
 const zodSchema = z.object({});
@@ -103,7 +109,32 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
           return `${n}. run: ${step.flow}`;
         case "tap":
         case "long-press":
-          return `${n}. ${step.kind}: ${step.selector ? selectorLabel(step.selector) : `(${step.x}, ${step.y})`}`;
+          return `${n}. ${step.kind}: ${targetLabel(
+            step.selector
+              ? { selector: step.selector }
+              : { x: step.x as number, y: step.y as number }
+          )}`;
+        case "swipe": {
+          // The summary always runs over `parseFlow`'s output, and parse enforces
+          // exactly one of direction/to/by — so with the first two absent, `to` is
+          // present. The cast is that invariant, not an assumption about the
+          // recorder: an `undefined` here would mean the parser stopped enforcing
+          // it, which its own tests would catch first.
+          const travel =
+            step.direction ??
+            (step.by
+              ? `by ${swipeByLabel(step.by)}`
+              : `to ${targetLabel(step.to as GestureTarget)}`);
+          const from = step.from ? ` from ${targetLabel(step.from)}` : "";
+          // Present options only — otherwise distinct gestures collapse into
+          // one line in the very summary read before hand-editing the YAML.
+          const options = [
+            ...(step.settle ? ["settle"] : []),
+            ...(step.duration !== undefined ? [`${step.duration}ms`] : []),
+          ];
+          const tail = options.length > 0 ? ` (${options.join(", ")})` : "";
+          return `${n}. swipe: ${travel}${from}${tail}`;
+        }
         case "type":
           return `${n}. type: ${selectorLabel(step.into)} ← "${step.text}"`;
         case "await":

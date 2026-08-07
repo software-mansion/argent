@@ -30,8 +30,10 @@ import {
   parseFlow,
   runTargetName,
   setActiveProjectRoot,
+  swipeByLabel,
   type FlowFile,
   type FlowSelector,
+  type GestureTarget,
   type FlowStep,
   type Launch,
   type WhenCondition,
@@ -902,6 +904,10 @@ order), \`next: <selector>\` (CSS \`+\` — the nearest such follower, which unl
 non-matching neighbour rather than failing), plus \`any: true\` (CSS \`*\` — legal only WITH a scope and
 never beside text/id/role). Scopes nest to disambiguate — \`within: { id: card, within: { id: list } }\`
 reads "inside card inside list", each container's frame inside the next);
+\`swipe\` performs one finger flick (\`swipe: left\`, or \`swipe: { from?, direction|to|by, settle?, duration? }\` —
+direction is the FINGER's travel, the opposite sense of scroll-to's content direction; \`by: { x?, y? }\` — signed
+0–1 screen fractions, combined length at least 0.03 (a diagonal clears it where neither axis does); duration in ms,
+default 300, minimum 150; either floor is a parse error that rejects the file before any step runs);
 \`scroll-to\` scrolls (momentum-free) until a target is visible; \`pinch\` zooms
 (\`pinch: { on?, scale }\` — scale > 1 in, < 1 out; screen center when \`on\` is omitted); \`rotate\` is the
 two-finger rotation gesture (\`rotate: { on?, by }\` — degrees, + clockwise, within ±3000°; screen center
@@ -1502,6 +1508,11 @@ function conditionLabel(
   return `${cond.condition} ${sel}`;
 }
 
+/** Human-readable selector/point spelling shared by gesture reports. */
+function gestureTargetLabel(target: GestureTarget): string {
+  return "selector" in target ? selectorLabel(target.selector) : `(${target.x}, ${target.y})`;
+}
+
 /** Display-only "what this step acts on" for {@link StepReport.target}. */
 function stepTarget(step: FlowStep): string | undefined {
   switch (step.kind) {
@@ -1510,6 +1521,19 @@ function stepTarget(step: FlowStep): string | undefined {
       if (step.selector) return selectorLabel(step.selector);
       if (step.x !== undefined && step.y !== undefined) return `(${step.x}, ${step.y})`;
       return undefined;
+    case "swipe": {
+      let travel: string;
+      if (step.direction !== undefined) {
+        travel = step.direction;
+      } else if (step.by !== undefined) {
+        travel = `by ${swipeByLabel(step.by)}`;
+      } else if (step.to !== undefined) {
+        travel = `to ${gestureTargetLabel(step.to)}`;
+      } else {
+        return undefined;
+      }
+      return `${travel}${step.from ? ` from ${gestureTargetLabel(step.from)}` : ""}`;
+    }
     case "type":
       return `into ${selectorLabel(step.into)}`;
     case "await":
@@ -2061,6 +2085,7 @@ async function execLeafStep(
 
     case "tap":
     case "long-press":
+    case "swipe":
     case "type":
     case "await":
     case "assert":

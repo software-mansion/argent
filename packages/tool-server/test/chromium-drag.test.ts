@@ -16,7 +16,45 @@ function fakeChromiumApi() {
   return {
     getViewport: () => ({ width: 800, height: 600, devicePixelRatio: 2 }),
     dispatchMouseEvent: vi.fn().mockResolvedValue(undefined),
+    // The real ChromiumCdpApi always carries the raw CDP client; the tool's
+    // visibility guard probes document.visibilityState through it.
+    cdp: { send: vi.fn().mockResolvedValue(undefined) },
   };
+}
+
+// Drives the tool on a virtual clock that both the dispatch round-trip and
+// every `sleep` advance, so a measured press→release span is exact instead of
+// carrying real-scheduler jitter.
+async function runOnVirtualClock(
+  params: Record<string, unknown>,
+  opts: { dispatchCostMs?: number; startMs?: number } = {}
+) {
+  const api = fakeChromiumApi();
+  const dispatchCostMs = opts.dispatchCostMs ?? 0;
+  let now = opts.startMs ?? 1000;
+  const stamps: { type: string; at: number; x: number }[] = [];
+  const sleepDelays: number[] = [];
+  const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+  api.dispatchMouseEvent.mockImplementation(async (event: Record<string, unknown>) => {
+    stamps.push({ type: event.type as string, at: now, x: event.x as number });
+    now += dispatchCostMs;
+  });
+  const timeoutSpy = vi.spyOn(global, "setTimeout").mockImplementation(((
+    fn: () => void,
+    ms?: number
+  ) => {
+    sleepDelays.push(ms ?? 0);
+    now += ms ?? 0;
+    fn();
+    return 0 as unknown as ReturnType<typeof setTimeout>;
+  }) as never);
+  try {
+    await gestureDragTool.execute({ chromium: api } as never, params as never);
+  } finally {
+    timeoutSpy.mockRestore();
+    nowSpy.mockRestore();
+  }
+  return { stamps, sleepDelays };
 }
 
 describe("gesture-drag", () => {
@@ -53,6 +91,204 @@ describe("gesture-drag", () => {
       expect(move.x as number).toBeLessThan(0.75 * 800);
       expect(move.y).toBeCloseTo(0.5 * 600, 5);
     }
+  });
+
+  it("paces each frame off a deadline so the dispatch round-trip counts toward the 16ms budget", async () => {
+    // Simulate an ~11ms CDP round-trip per dispatch and capture the delay every
+    // `sleep` requests. A fixed sleep(16) would charge 16ms on top of each
+    // dispatch (the ~1.5x overrun); the deadline charges only the remainder, so
+    // the frame stays ~16ms total. durationMs 320 → 20 steps → a 16ms frame.
+    const dispatchCostMs = 11;
+    const { sleepDelays } = await runOnVirtualClock(
+      {
+        udid: "chromium-cdp-19222",
+        fromX: 0.1,
+        fromY: 0.5,
+        toX: 0.9,
+        toY: 0.5,
+        durationMs: 320,
+      },
+      { dispatchCostMs }
+    );
+    // Every frame subtracts the dispatch it just awaited from the 16ms budget.
+    expect(sleepDelays.length).toBeGreaterThan(0);
+    for (const delay of sleepDelays) {
+      expect(delay).toBe(16 - dispatchCostMs);
+    }
+  });
+
+  it("delivers the whole requested press→release span, not one frame short", async () => {
+    // Pacing `steps - 1` frames off a fixed 16ms landed the release a frame
+    // early — 32ms of a requested 50 (0.64x) — and short durations are exactly
+    // where apps threshold a flick against a drag. The run-start deadline spends
+    // that last frame before the release instead.
+    for (const durationMs of [50, 100, 300, 1000]) {
+      const { stamps } = await runOnVirtualClock({
+        udid: "chromium-cdp-19222",
+        fromX: 0.1,
+        fromY: 0.5,
+        toX: 0.9,
+        toY: 0.5,
+        durationMs,
+      });
+      const press = stamps[0];
+      const release = stamps[stamps.length - 1];
+      expect(press.type).toBe("mousePressed");
+      expect(release.type).toBe("mouseReleased");
+      // Nothing costs wall clock under the mock, so the span is the pacing alone.
+      expect(release.at - press.at).toBeGreaterThanOrEqual(durationMs - 3);
+      expect(release.at - press.at).toBeLessThanOrEqual(durationMs + 3);
+      // The release alone carries the endpoint: a move there plus the final
+      // still frame would read as a hold and kill a non-settle drag's fling.
+      const moves = stamps.slice(1, -1);
+      expect(moves.length).toBeGreaterThan(0);
+      for (const move of moves) {
+        expect(move.type).toBe("mouseMoved");
+        expect(move.x).toBeLessThan(release.x);
+      }
+    }
+  });
+
+  it("settle: true eases the moves out (release at ~0 pointer velocity); without it they stay linear", async () => {
+    // Web drag libraries compute their fling from the release velocity of this
+    // very mouse stream, so the eased curve must genuinely decay into the
+    // release. durationMs 64 samples 4 frames, under the settle floor, so the
+    // eased path runs on the floor's 8-frame grid while the plain one keeps 4.
+    const params = { udid: "chromium-cdp-19222", fromX: 0.25, fromY: 0.5, toX: 0.75, toY: 0.5 };
+    const startPx = 0.25 * 800;
+    const deltaPx = (0.75 - 0.25) * 800;
+
+    const settled = fakeChromiumApi();
+    await gestureDragTool.execute(
+      { chromium: settled } as never,
+      { ...params, durationMs: 64, settle: true } as never
+    );
+    const settledCalls = settled.dispatchMouseEvent.mock.calls.map(
+      (c) => c[0] as Record<string, unknown>
+    );
+    // Endpoints are untouched by the easing — only the path between changes.
+    expect(settledCalls[0]).toMatchObject({ type: "mousePressed", x: startPx });
+    expect(settledCalls[settledCalls.length - 1]).toMatchObject({
+      type: "mouseReleased",
+      x: 0.75 * 800,
+    });
+    const settledMoves = settledCalls.slice(1, -1);
+    // 1-(1-t)^3 at t = i/8 — each point past its linear counterpart.
+    const easedProgress = [
+      0.330078125, 0.578125, 0.755859375, 0.875, 0.947265625, 0.984375, 0.998046875,
+    ];
+    expect(settledMoves).toHaveLength(easedProgress.length);
+    settledMoves.forEach((move, i) => {
+      expect(move.x as number).toBeCloseTo(startPx + deltaPx * easedProgress[i], 5);
+    });
+    // Per-frame step size shrinks monotonically all the way into the release.
+    const xs = settledCalls.map((c) => c.x as number);
+    for (let i = 2; i < xs.length; i++) {
+      expect(xs[i] - xs[i - 1]).toBeLessThan(xs[i - 1] - xs[i - 2]);
+    }
+
+    const control = fakeChromiumApi();
+    await gestureDragTool.execute(
+      { chromium: control } as never,
+      { ...params, durationMs: 64 } as never
+    );
+    const controlMoves = control.dispatchMouseEvent.mock.calls
+      .map((c) => c[0] as Record<string, unknown>)
+      .slice(1, -1);
+    expect(controlMoves).toHaveLength(3);
+    // Without settle the same endpoints interpolate on the straight linear grid.
+    expect(controlMoves[0].x as number).toBeCloseTo(startPx + deltaPx * 0.25, 5);
+    expect(controlMoves[1].x as number).toBeCloseTo(startPx + deltaPx * 0.5, 5);
+    expect(controlMoves[2].x as number).toBeCloseTo(startPx + deltaPx * 0.75, 5);
+  });
+
+  it("floors the settle sample count so the final frame before the release is a sliver of the travel", async () => {
+    // An ease-out only decelerates as finely as it is sampled, and the last
+    // frame of the cubic covers (1/steps)^3 of the travel. At the 2 samples
+    // durationMs/16 gives a 32ms drag that is 12.5% of the distance crossed in
+    // the frame the page reads as release velocity — `settle` measured as a
+    // no-op there. The floor drops it to ~0.2%.
+    const params = { udid: "chromium-cdp-19222", fromX: 0.1, fromY: 0.5, toX: 0.9, toY: 0.5 };
+    const finalFrameFraction = (stamps: { x: number }[]) => {
+      const last = stamps[stamps.length - 1];
+      return (last.x - stamps[stamps.length - 2].x) / (last.x - stamps[0].x);
+    };
+    for (const durationMs of [32, 50, 100]) {
+      const settled = await runOnVirtualClock({ ...params, durationMs, settle: true });
+      expect(settled.stamps.slice(1, -1)).toHaveLength(7);
+      expect(finalFrameFraction(settled.stamps)).toBeLessThan(0.005);
+      // Same duration without settle: sampling untouched, and its final frame
+      // still carries a sixth to a half of the travel — the contrast is the
+      // whole point of the flag.
+      const plain = await runOnVirtualClock({ ...params, durationMs });
+      expect(plain.stamps.slice(1, -1)).toHaveLength(Math.max(2, Math.round(durationMs / 16)) - 1);
+      expect(finalFrameFraction(plain.stamps)).toBeGreaterThan(0.15);
+    }
+  });
+
+  it("keeps the settle floor off the press→release span and off an already well-sampled drag", async () => {
+    const params = { udid: "chromium-cdp-19222", fromX: 0.1, fromY: 0.5, toX: 0.9, toY: 0.5 };
+    const span = (stamps: { at: number }[]) => stamps[stamps.length - 1].at - stamps[0].at;
+    // 300ms samples 19 frames on its own, above the floor: settle bends the
+    // curve and nothing else — same frame count, same span.
+    const longSettled = await runOnVirtualClock({ ...params, durationMs: 300, settle: true });
+    const longPlain = await runOnVirtualClock({ ...params, durationMs: 300 });
+    expect(longSettled.stamps).toHaveLength(longPlain.stamps.length);
+    expect(longSettled.stamps.slice(1, -1)).toHaveLength(Math.round(300 / 16) - 1);
+    expect(span(longSettled.stamps)).toBeCloseTo(300, 6);
+    expect(span(longPlain.stamps)).toBeCloseTo(300, 6);
+    // And where the floored frame (100/8 = 12.5ms) still clears an ~9ms CDP
+    // round-trip, the run-start deadline absorbs the extra samples for free —
+    // apps threshold a flick against a drag on exactly this span.
+    for (const durationMs of [100, 300]) {
+      const settled = await runOnVirtualClock(
+        { ...params, durationMs, settle: true },
+        { dispatchCostMs: 9 }
+      );
+      expect(span(settled.stamps)).toBeCloseTo(durationMs, 6);
+    }
+    // Below that, eight frames no longer fit at one round-trip each and the span
+    // stretches to what the transport can deliver — the accepted cost of a
+    // settle that isn't a no-op (the flow swipe directive floors duration at
+    // 150ms, so only a direct tool call reaches here).
+    const overrun = await runOnVirtualClock(
+      { ...params, durationMs: 32, settle: true },
+      { dispatchCostMs: 9 }
+    );
+    expect(span(overrun.stamps)).toBeCloseTo(8 * 9, 6);
+  });
+
+  it("clamps a normalized 1.0 endpoint to the last addressable pixel so the release stays in the viewport", async () => {
+    // The flow swipe directive saturates `by` deltas to [0, 1], so a 1.0
+    // endpoint is routine — unclamped it maps to pixel == width/height, one
+    // past the viewport, where a release was observed reaching the page
+    // without its pointerup. See the clamp's comment for why that observation
+    // is kept as build-specific rather than a universal Chromium rule.
+    const api = fakeChromiumApi();
+    const result = await gestureDragTool.execute(
+      { chromium: api } as never,
+      {
+        udid: "chromium-cdp-19222",
+        fromX: 0.5,
+        fromY: 0.5,
+        toX: 1.0,
+        toY: 1.0,
+        durationMs: 64,
+      } as never
+    );
+    expect(result.dragged).toBe(true);
+
+    const calls = api.dispatchMouseEvent.mock.calls.map((c) => c[0] as Record<string, unknown>);
+    // Press, every interpolated move, and the release all stay addressable.
+    for (const call of calls) {
+      expect(call.x as number).toBeLessThanOrEqual(800 - 1);
+      expect(call.y as number).toBeLessThanOrEqual(600 - 1);
+    }
+    expect(calls[calls.length - 1]).toMatchObject({
+      type: "mouseReleased",
+      x: 800 - 1,
+      y: 600 - 1,
+    });
   });
 
   it("is chromium-only: capability gate rejects iOS and Android targets", () => {

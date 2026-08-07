@@ -282,6 +282,22 @@ export type Launch =
 export type ScrollDirection = "up" | "down" | "left" | "right";
 
 /**
+ * Direction of a `swipe` — the FINGER's travel (the Maestro/Appium
+ * convention), which is the OPPOSITE sense of `scroll-to`'s content
+ * direction: `swipe: left` flings content leftward, revealing what is to the
+ * right.
+ */
+export type SwipeDirection = "up" | "down" | "left" | "right";
+
+/**
+ * A resolved gesture target as a step stores it: an element selector or a raw
+ * normalized point. The point form is act-only — a point can be acted on but
+ * not observed — so only the gesture directives (`tap`, `long-press`,
+ * `swipe`) carry targets; the observation directives store bare selectors.
+ */
+export type GestureTarget = { selector: FlowSelector } | { x: number; y: number };
+
+/**
  * A selector as a flow step carries it. Extends the shared {@link Selector} with
  * an internal `loose` flag, set when the selector came from bare-string sugar
  * (`tap: foo`). A loose selector resolves identifier-first, then falls back to
@@ -367,6 +383,15 @@ export type FlowStep =
   | { kind: "when"; condition: WhenCondition; steps: FlowStep[] }
   | { kind: "tap"; selector?: FlowSelector; x?: number; y?: number; times?: number }
   | { kind: "long-press"; selector?: FlowSelector; x?: number; y?: number; duration?: number }
+  | {
+      kind: "swipe";
+      from?: GestureTarget;
+      direction?: SwipeDirection;
+      to?: GestureTarget;
+      by?: { x?: number; y?: number };
+      settle?: boolean;
+      duration?: number;
+    }
   | { kind: "type"; into: FlowSelector; text: string; submit?: boolean }
   | {
       kind: "await";
@@ -483,8 +508,8 @@ type YamlSelector =
 /**
  * A gesture target: an element (selector, possibly a bare string) or a raw
  * normalized point `{ x, y }`. Only the point-acting directives (`tap`,
- * `long-press`) accept the point form — a point can be acted on but not
- * observed, so the selector-only directives (`type`, `await`, `assert`,
+ * `long-press`, `swipe`) accept the point form — a point can be acted on but
+ * not observed, so the selector-only directives (`type`, `await`, `assert`,
  * `scroll-to`) keep taking {@link YamlSelector}.
  */
 type YamlTarget = YamlSelector | { x: number; y: number };
@@ -496,6 +521,30 @@ type YamlTarget = YamlSelector | { x: number; y: number };
  * bare-string-loose / map-strict selector sugar).
  */
 type TapBody = YamlTarget | { on: YamlTarget; times?: number };
+
+/**
+ * A `swipe` body: a bare direction (`swipe: left` — the whole-screen flick;
+ * unambiguous, since a bare selector could never express a valid swipe) or
+ * the options form. The travel is exactly one of `direction` (semantic
+ * preset), `to` (explicit endpoint target), or `by` (signed relative delta);
+ * `from` anchors the start on a target and defaults to the direction's
+ * standard start point, or screen centre for `to` and — NOMINALLY — for `by`:
+ * an unanchored `by` too large to fit from the centre slides its whole
+ * start→end segment on-screen rather than truncating the delta, so its
+ * touch-down is the centre only while each axis delta stays within 0.5 (see
+ * runSwipe). `duration` is the travel time in milliseconds, floored at
+ * {@link SWIPE_MIN_DURATION_MS} — shorter is delivered as a tap, not a swipe.
+ */
+type SwipeBody =
+  | SwipeDirection
+  | {
+      from?: YamlTarget;
+      direction?: SwipeDirection;
+      to?: YamlTarget;
+      by?: { x?: number; y?: number };
+      settle?: boolean;
+      duration?: number;
+    };
 
 /**
  * The condition of an `await`/`assert` step. The condition is the key, not a
@@ -543,6 +592,7 @@ type YamlStep =
   | { tool: string; args?: Record<string, unknown>; delayMs?: number }
   | { tap: TapBody }
   | { "long-press": YamlTarget | { on: YamlTarget; duration?: number } }
+  | { swipe: SwipeBody }
   | { type: { into: YamlSelector; text: string; submit?: boolean } }
   | { await: YamlWaitCondition & { timeout?: number } }
   | { assert: YamlWaitCondition }
@@ -774,7 +824,7 @@ function textWaitToYaml(
   }
 }
 
-/** Sugar a gesture target (`tap`/`long-press`) for YAML output, rejecting
+/** Sugar a gesture target (`tap`/`long-press`/`swipe`) for YAML output, rejecting
  * internal states that would serialize to a flow the parser cannot read back. */
 function targetToYaml(step: { selector?: FlowSelector; x?: number; y?: number }): YamlTarget {
   const hasPointField = step.x !== undefined || step.y !== undefined;
@@ -797,6 +847,118 @@ function targetToYaml(step: { selector?: FlowSelector; x?: number; y?: number })
     );
   }
   return { x: step.x, y: step.y };
+}
+
+/**
+ * The tap/swipe boundary, not a magnitude policy: a travel-vector magnitude
+ * under the platform recognizers' slop (~8dp Android, ~10pt iOS) is read as a
+ * tap, so a swipe below this floor cannot be delivered as a swipe.
+ *
+ * It is one conservative NORMALIZED floor because the flow layer is
+ * device-independent (DeviceInfo carries no point dimensions), so it cannot
+ * turn the physical slop into a per-axis fraction. Slop-as-a-fraction is
+ * largest on the shortest axis of the smallest phones (~10pt ÷ 440pt ≈ 0.023
+ * on a flagship width, but ÷ ~330pt ≈ 0.03 on a compact one), so 0.03 sits at
+ * or just above the slop on the narrowest axis of any phone and a floor-length
+ * swipe is recognized as a swipe on either axis. The cost is over-rejecting a
+ * thin band of deliverable travel on longer axes (0.03 of a 956pt height ≈
+ * 29pt, well past the ~10pt slop) — the right way to err for a boundary that
+ * would otherwise turn a swipe into a silent tap. An envelope on faithful
+ * delivery, not a judgment that short swipes are bad style.
+ */
+export const SWIPE_MIN_TRAVEL = 0.03;
+
+/**
+ * The same tap/swipe boundary on the TIME axis: gesture-swipe interpolates one
+ * move per ~16ms frame, so under a few frames the device gets a bare Down/Up
+ * pair with too few (at 16ms, zero) intermediate moves for a pan recognizer to
+ * see a travel — the gesture lands as a tap on the start point however far it
+ * was meant to go.
+ *
+ * 150ms is 8 moves over 9 frames. Measured on iOS a pan needs ~50ms of them to
+ * read as a pan at all (33ms yields one move and is still a tap), so the floor
+ * leaves real margin for slower recognizers and gives `settle`'s ease-out
+ * enough samples to bend — with a single sample it inverts, measuring a
+ * HIGHER release velocity than the linear ramp. It is applied on every
+ * platform, though Chromium's `gesture-drag` floors its own step count and so
+ * never degenerates to a bare press/release: there the floor is margin rather
+ * than a rescue. An envelope on faithful delivery, not a judgment that fast
+ * flicks are bad style: a genuinely sub-floor flick belongs in a raw
+ * `tool: gesture-swipe` step.
+ */
+export const SWIPE_MIN_DURATION_MS = 150;
+
+/** Serialize a relative swipe delta without producing a body parseSwipeBy
+ * would reject. FlowStep is also constructed programmatically, so its
+ * deliberately convenient optional-axis type is not enough at runtime. */
+function swipeByToYaml(by: { x?: number; y?: number }): { x?: number; y?: number } {
+  const keys = Object.keys(by);
+  if (keys.some((key) => key !== "x" && key !== "y")) {
+    throw new Error("Cannot serialize flow swipe.by: accepts only x and y");
+  }
+
+  const axes = (["x", "y"] as const).filter((axis) => by[axis] !== undefined);
+  if (axes.length === 0) {
+    throw new Error("Cannot serialize flow swipe.by: needs at least one of x or y");
+  }
+
+  const result: { x?: number; y?: number } = {};
+  for (const axis of axes) {
+    const value = by[axis]!;
+    if (!Number.isFinite(value) || value === 0 || value < -1 || value > 1) {
+      throw new Error(
+        `Cannot serialize flow swipe.by.${axis}: must be a non-zero fraction of the screen between -1 and 1`
+      );
+    }
+    result[axis] = value;
+  }
+  // Gate the COMBINED travel on its vector magnitude (matching parseSwipeBy), so
+  // serialize accepts exactly what parse accepts and the round-trip stays exact.
+  const magnitude = Math.hypot(result.x ?? 0, result.y ?? 0);
+  if (magnitude < SWIPE_MIN_TRAVEL) {
+    throw new Error(
+      `Cannot serialize flow swipe.by: travels only ${magnitude} — below the minimum swipe travel of ${SWIPE_MIN_TRAVEL} — a travel that small is a tap, not a swipe`
+    );
+  }
+  return result;
+}
+
+/** Display spelling of a relative swipe delta (`x=-0.31, y=0.2`, absent axes
+ * dropped) — the DELTA's spelling shared by the run report's stepTarget and the
+ * recording summary, so the two never disagree on it. That is all they share:
+ * the recording summary goes on to append an options tail (`(settle, 800ms)`)
+ * that the report's target does not carry. */
+export function swipeByLabel(by: { x?: number; y?: number }): string {
+  return (["x", "y"] as const)
+    .filter((axis) => by[axis] !== undefined)
+    .map((axis) => `${axis}=${by[axis]}`)
+    .join(", ");
+}
+
+function isPositiveMs(raw: unknown): raw is number {
+  return typeof raw === "number" && Number.isFinite(raw) && raw > 0;
+}
+
+/** Serialize a positive millisecond option without producing YAML that the
+ * corresponding parser rejects when a FlowStep is constructed in code. */
+function positiveMsToYaml(value: number, label: string): number {
+  if (!isPositiveMs(value)) {
+    throw new Error(`Cannot serialize flow ${label}: needs a positive number of milliseconds`);
+  }
+  return value;
+}
+
+/** Serialize a swipe's travel time, gating it on SWIPE_MIN_DURATION_MS as
+ * swipeByToYaml gates the delta on SWIPE_MIN_TRAVEL, so serialize accepts
+ * exactly what parseSwipe accepts and the round-trip stays exact. */
+function swipeDurationToYaml(value: number): number {
+  const duration = positiveMsToYaml(value, "swipe.duration");
+  if (duration < SWIPE_MIN_DURATION_MS) {
+    throw new Error(
+      `Cannot serialize flow swipe.duration: only ${duration}ms — below the minimum swipe duration of ${SWIPE_MIN_DURATION_MS}ms — too few interpolated moves for a pan recognizer to see a travel, so the gesture lands as a tap on the start point`
+    );
+  }
+  return duration;
 }
 
 /** Sugar an await/assert step into the condition-as-key YAML body. */
@@ -823,7 +985,7 @@ function waitToYaml(
       body = textWaitToYaml(sel, expectedText, textMatch);
       break;
   }
-  if (timeoutMs !== undefined) body.timeout = timeoutMs;
+  if (timeoutMs !== undefined) body.timeout = positiveMsToYaml(timeoutMs, "await.timeout");
   return body;
 }
 
@@ -859,8 +1021,45 @@ function toYamlStep(step: FlowStep): YamlStep {
       const target = targetToYaml(step);
       return {
         "long-press":
-          step.duration !== undefined ? { on: target, duration: step.duration } : target,
+          step.duration !== undefined
+            ? { on: target, duration: positiveMsToYaml(step.duration, "long-press.duration") }
+            : target,
       };
+    }
+    case "swipe": {
+      // FlowStep can be constructed outside the YAML parser. Enforce the same
+      // exactly-one travel invariant here before applying direction sugar;
+      // otherwise direction + by/to silently loses a travel specification,
+      // while a travel-less step serializes to YAML that cannot be parsed.
+      const travels = (["direction", "to", "by"] as const).filter((key) => step[key] !== undefined);
+      if (travels.length !== 1) {
+        throw new Error("Cannot serialize flow swipe: needs exactly one of direction, to, or by");
+      }
+
+      // Canonical minimal spelling: a direction with no other field
+      // round-trips to the bare-direction sugar (`swipe: left`). A falsy
+      // `settle` counts as no field, matching the body builder below and
+      // parseSwipe's normalization of `settle: false` to absent — otherwise a
+      // programmatically-built step carrying the default would serialize to
+      // the verbose form.
+      if (
+        step.direction !== undefined &&
+        step.from === undefined &&
+        step.to === undefined &&
+        step.by === undefined &&
+        !step.settle &&
+        step.duration === undefined
+      ) {
+        return { swipe: step.direction };
+      }
+      const body: Exclude<SwipeBody, SwipeDirection> = {};
+      if (step.from !== undefined) body.from = targetToYaml(step.from);
+      if (step.direction !== undefined) body.direction = step.direction;
+      if (step.to !== undefined) body.to = targetToYaml(step.to);
+      if (step.by !== undefined) body.by = swipeByToYaml(step.by);
+      if (step.settle) body.settle = true;
+      if (step.duration !== undefined) body.duration = swipeDurationToYaml(step.duration);
+      return { swipe: body };
     }
     case "type": {
       const body: { into: YamlSelector; text: string; submit?: boolean } = {
@@ -974,6 +1173,18 @@ function badEntry(raw: unknown, detail: string): never {
     failure_area: "tool_server",
     error_kind: "validation",
   });
+}
+
+/**
+ * Parse a positive millisecond value at the YAML boundary. The finite check is
+ * intentional: YAML `.inf` (and an overflowing literal such as `1e400`) parses
+ * to a number, but would turn a gesture or await into an unbounded operation.
+ */
+function parsePositiveMs(raw: unknown, entry: unknown, label: string, example: string): number {
+  if (!isPositiveMs(raw)) {
+    badEntry(entry, `${label} needs a positive number of milliseconds (e.g. \`${example}\`)`);
+  }
+  return raw;
 }
 
 /** Validate a regex pattern at the YAML boundary and report its flow context. */
@@ -1268,16 +1479,7 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert" | "when"): WaitF
         "assert has no timeout — it is an immediate check; use `await` for a timed wait"
       );
     }
-    // Like `wait`, reject non-finite values: YAML `.inf` (or an overflowing
-    // literal like 1e400) parses to Infinity — typeof number and > 0 — which
-    // would make the runner's poll deadline unreachable and the await unbounded.
-    if (typeof b.timeout !== "number" || !Number.isFinite(b.timeout) || b.timeout <= 0) {
-      badEntry(
-        { [kind]: b },
-        "await.timeout needs a positive number of milliseconds (e.g. `timeout: 10000`)"
-      );
-    }
-    timeout = b.timeout as number;
+    timeout = parsePositiveMs(b.timeout, { [kind]: b }, "await.timeout", "timeout: 10000");
   }
 
   // `await` takes the condition key plus `timeout`; `assert` the condition key
@@ -1416,6 +1618,7 @@ const STEP_DIRECTIVE_KEYS: readonly string[] = [
   "tool",
   "tap",
   "long-press",
+  "swipe",
   "type",
   "await",
   "assert",
@@ -1460,18 +1663,15 @@ function hasSelectorField(obj: Record<string, unknown>): boolean {
 }
 
 /**
- * Parse a gesture target (`tap`/`long-press` body or its `on:` value): a
- * selector (bare string = loose, map = strict) or a raw normalized point
- * `{ x, y }`. A map mixing selector fields with x/y is ambiguous (which
- * wins?) — and zod would silently STRIP the coordinates from a selector
- * map — so it is rejected loudly. Only the point-acting directives call
- * this; the observation directives take `parseSelector` directly, since a
- * point can be acted on but not observed.
+ * Parse a gesture target (a `tap`/`long-press` body, its `on:` value, or a
+ * swipe's `from:`/`to:`): a selector (bare string = loose, map = strict) or a
+ * raw normalized point `{ x, y }`. A map mixing selector fields with x/y is
+ * ambiguous (which wins?) — and zod would silently STRIP the coordinates from
+ * a selector map — so it is rejected loudly. Only the point-acting directives
+ * call this; the observation directives take `parseSelector` directly, since
+ * a point can be acted on but not observed.
  */
-function parseTarget(
-  raw: unknown,
-  where: string
-): { selector: FlowSelector } | { x: number; y: number } {
+function parseTarget(raw: unknown, where: string): GestureTarget {
   if (raw !== null && typeof raw === "object") {
     const obj = raw as Record<string, unknown>;
     if (obj.x !== undefined || obj.y !== undefined) {
@@ -1565,15 +1765,7 @@ function parseLongPress(body: unknown, entry: unknown): FlowStep {
     }
     const step: FlowStep = { kind: "long-press", ...parseTarget(obj.on, "long-press.on") };
     if (obj.duration !== undefined) {
-      // Like `await.timeout`: reject non-finite values (YAML `.inf` parses to
-      // Infinity), which would hold the press forever.
-      if (typeof obj.duration !== "number" || !Number.isFinite(obj.duration) || obj.duration <= 0) {
-        badEntry(
-          entry,
-          "long-press.duration needs a positive number of milliseconds (e.g. `duration: 1200`)"
-        );
-      }
-      step.duration = obj.duration;
+      step.duration = parsePositiveMs(obj.duration, entry, "long-press.duration", "duration: 1200");
     }
     return step;
   }
@@ -1865,6 +2057,146 @@ function completeRunExtension(value: string): string {
   return FLOW_FILE_NAME_PATTERN.test(path.posix.basename(candidate)) ? candidate : value;
 }
 
+const SWIPE_DIRECTIONS: readonly SwipeDirection[] = ["up", "down", "left", "right"];
+
+const SWIPE_OPTION_KEYS = ["from", "direction", "to", "by", "settle", "duration"] as const;
+
+/**
+ * Parse a swipe's `by:` delta: signed normalized fractions of the screen,
+ * `{ x }` (horizontal), `{ y }` (vertical), or `{ x, y }` (diagonal). Each
+ * present axis must be a number in [-1, 1] — an explicit zero is a spelled-out
+ * no-travel axis, so it's rejected with "omit it instead" rather than stored;
+ * junk keys are rejected like a point target's. The combined travel VECTOR must
+ * then clear {@link SWIPE_MIN_TRAVEL} of magnitude, or it's rejected as a tap in
+ * disguise — gated on the magnitude, not per axis, so a diagonal whose
+ * components are each sub-floor still passes when its length does.
+ */
+function parseSwipeBy(raw: unknown, entry: unknown): { x?: number; y?: number } {
+  if (raw === null || typeof raw !== "object") {
+    badEntry(entry, "swipe.by needs { x } and/or { y } — signed 0–1 fractions of the screen");
+  }
+  const obj = raw as Record<string, unknown>;
+  rejectUnknownKeys(entry, obj, ["x", "y"], "swipe.by");
+  if (obj.x === undefined && obj.y === undefined) {
+    badEntry(entry, "swipe.by needs at least one of x, y");
+  }
+  const by: { x?: number; y?: number } = {};
+  for (const axis of ["x", "y"] as const) {
+    const v = obj[axis];
+    if (v === undefined) continue;
+    if (typeof v !== "number" || !Number.isFinite(v) || v === 0 || v < -1 || v > 1) {
+      badEntry(
+        entry,
+        `swipe.by.${axis} must be a non-zero fraction of the screen between -1 and 1 (omit the axis instead of 0)`
+      );
+    }
+    by[axis] = v;
+  }
+  // Gate the COMBINED travel on its vector magnitude, not each axis: a diagonal
+  // whose per-axis components are each sub-floor can still clear the floor and
+  // must be accepted, so the tap/swipe boundary matches `to`/`direction` and
+  // stays monotonic in distance. `by`'s delta is static, so this device-less
+  // magnitude is the whole check — the runtime `by` branch adds no second guard
+  // (re-checking there would spuriously reject a delta that lands one ulp under
+  // the floor after an in-bounds passthrough).
+  const magnitude = Math.hypot(by.x ?? 0, by.y ?? 0);
+  if (magnitude < SWIPE_MIN_TRAVEL) {
+    badEntry(
+      entry,
+      `swipe.by travels only ${magnitude} — below the minimum swipe travel of ${SWIPE_MIN_TRAVEL}; a travel that small is a tap, not a swipe`
+    );
+  }
+  return by;
+}
+
+/**
+ * Parse a `swipe` body: a bare direction (`swipe: left` — whole-screen; the
+ * one directive whose bare string is NOT a selector, because a selector alone
+ * could never express a valid swipe, so there is no ambiguity to protect) or
+ * the options form `{ from?, direction|to|by, settle?, duration? }`. The
+ * travel is exactly one of `direction` (semantic preset with
+ * Maestro-compatible geometry — see SWIPE_GEOMETRY in flow-actions.ts), `to`
+ * (explicit endpoint target), or `by` (relative delta). `direction` is the
+ * FINGER's direction — the opposite sense of scroll-to's content direction.
+ */
+function parseSwipe(body: unknown, entry: unknown): FlowStep {
+  if (typeof body === "string") {
+    if (!(SWIPE_DIRECTIONS as readonly string[]).includes(body)) {
+      badEntry(
+        entry,
+        `swipe takes a direction (${SWIPE_DIRECTIONS.join(", ")}) — to anchor on an element use swipe: { from: <target>, direction: … }`
+      );
+    }
+    return { kind: "swipe", direction: body as SwipeDirection };
+  }
+  if (body === null || typeof body !== "object") {
+    badEntry(entry, `swipe needs a direction (${SWIPE_DIRECTIONS.join(", ")}) or an options map`);
+  }
+  const obj = body as Record<string, unknown>;
+
+  if (hasSelectorField(obj)) {
+    badEntry(
+      entry,
+      'the swipe options form takes a nested target — e.g. swipe: { from: { text: "Card" }, direction: left }'
+    );
+  }
+  if (obj.x !== undefined || obj.y !== undefined) {
+    badEntry(
+      entry,
+      "the swipe options form takes a nested point — e.g. swipe: { from: { x: 0.5, y: 0.5 }, direction: left }"
+    );
+  }
+  rejectUnknownKeys(entry, obj, SWIPE_OPTION_KEYS, "swipe");
+
+  // The travel spec: three mutually exclusive spellings.
+  const travels = (["direction", "to", "by"] as const).filter((k) => obj[k] !== undefined);
+  if (travels.length !== 1) {
+    badEntry(entry, "swipe needs exactly one of `direction`, `to`, or `by`");
+  }
+
+  const step: FlowStep = { kind: "swipe" };
+  if (obj.from !== undefined) step.from = parseTarget(obj.from, "swipe.from");
+  switch (travels[0]!) {
+    case "direction": {
+      if (
+        typeof obj.direction !== "string" ||
+        !(SWIPE_DIRECTIONS as readonly string[]).includes(obj.direction)
+      ) {
+        badEntry(entry, `swipe.direction must be one of ${SWIPE_DIRECTIONS.join(", ")}`);
+      }
+      step.direction = obj.direction as SwipeDirection;
+      break;
+    }
+    case "to":
+      step.to = parseTarget(obj.to, "swipe.to");
+      break;
+    case "by":
+      step.by = parseSwipeBy(obj.by, entry);
+      break;
+  }
+  if (obj.settle !== undefined) {
+    if (typeof obj.settle !== "boolean") {
+      badEntry(entry, "swipe.settle must be true or false");
+    }
+    // `false` is the default and normalizes to absent, keeping
+    // parse/serialize exact inverses.
+    if (obj.settle) step.settle = true;
+  }
+  if (obj.duration !== undefined) {
+    const duration = parsePositiveMs(obj.duration, entry, "swipe.duration", "duration: 800");
+    // The time-axis twin of parseSwipeBy's magnitude gate: too short and the
+    // dispatch carries too few interpolated moves to read as a travel at all.
+    if (duration < SWIPE_MIN_DURATION_MS) {
+      badEntry(
+        entry,
+        `swipe.duration is only ${duration}ms — below the minimum swipe duration of ${SWIPE_MIN_DURATION_MS}ms; that leaves too few interpolated moves for a pan recognizer to see a travel, so the gesture lands as a tap on the start point`
+      );
+    }
+    step.duration = duration;
+  }
+  return step;
+}
+
 function fromYamlStep(raw: YamlStep, whenDepth = 0): FlowStep {
   const entry = raw as Record<string, unknown>;
   // There is deliberately no per-step `optional:` — it would have to be
@@ -1923,6 +2255,7 @@ function fromYamlStep(raw: YamlStep, whenDepth = 0): FlowStep {
   if ("long-press" in raw) {
     return parseLongPress((raw as { "long-press": unknown })["long-press"], raw);
   }
+  if ("swipe" in raw) return parseSwipe((raw as { swipe: unknown }).swipe, raw);
 
   if ("type" in raw) {
     const body = (raw as { type: { into?: unknown; text?: unknown; submit?: unknown } }).type;
