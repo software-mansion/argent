@@ -172,7 +172,33 @@ describe("tool interaction messages", () => {
     const definitions = definitionsById(createRegistry());
     const name = "checkout";
     const params = { name, project_root: "/tmp/proj", command: "gesture-tap", message: "note" };
-    const result = { message: "", flowFile: "", savedTo: "project" as const };
+    // Each tool's OWN result shape. One shared `{ message, flowFile, savedTo }`
+    // used to stand in for all four, which stopped describing any of them once
+    // the recorder dropped the per-step YAML: `flowFile` survives on start and
+    // finish only, and add-step/add-echo report `stepCount` (plus `recorded`
+    // on add-step) instead. No formatter below reads a field that differs
+    // between them, but a fixture that misdescribes the contract is the one
+    // that gets copied into a test that does.
+    const results: Record<string, Record<string, unknown>> = {
+      "flow-start-recording": { message: "", flowFile: "", savedTo: "project" },
+      "flow-add-step": {
+        message: "",
+        toolResult: {},
+        stepCount: 1,
+        recorded: "1. tap: (0.5, 0.3)",
+        savedTo: "project",
+      },
+      "flow-add-echo": { message: "", stepCount: 1, savedTo: "project" },
+      "flow-finish-recording": {
+        message: "",
+        path: "/tmp/proj/.argent/flows/checkout.yaml",
+        executionPrerequisite: "",
+        steps: 1,
+        summary: ["1. tap: (0.5, 0.3)"],
+        flowFile: "",
+        savedTo: "project",
+      },
+    };
 
     for (const id of [
       "flow-start-recording",
@@ -182,7 +208,9 @@ describe("tool interaction messages", () => {
     ]) {
       const i = definitions.get(id)!.interaction!;
       expect(i.startedMsg!({ params }), `${id}.startedMsg`).toContain(name);
-      expect(i.completedMsg!({ params, result }), `${id}.completedMsg`).toContain(name);
+      expect(i.completedMsg!({ params, result: results[id] }), `${id}.completedMsg`).toContain(
+        name
+      );
       expect(
         i.failedMsg!({ params, error: new Error("raw error"), failureSignal }),
         `${id}.failedMsg`
@@ -215,7 +243,7 @@ describe("tool interaction messages", () => {
       // part — it is caller-authored free text — and stays out.
       definitions.get("flow-add-echo")!.interaction!.completedMsg!({
         params: { name: "checkout", project_root: "/tmp/proj", message: secret },
-        result: { message: secret, flowFile: "/tmp/flow.yaml", savedTo: "project" },
+        result: { message: secret, stepCount: 1, savedTo: "project" },
       }),
     ];
 
