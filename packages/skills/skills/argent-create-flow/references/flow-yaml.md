@@ -21,7 +21,11 @@ steps:
   - await: { idle: true }
 ```
 
-An e2e flow's first non-echo step is `launch:`, and it must not declare `executionPrerequisite` — the combination is a parse error. Put the named start state in a leading `echo:` instead. A leading `run:` does **not** make a flow e2e even when the composed flow launches: that launch does run inline, but the runner classifies only a literal leading `launch:` as e2e, and on Chromium that classification is what boots the app. A fragment has no leading launch and may declare:
+An e2e flow's first non-echo step is `launch:`. It must not declare `executionPrerequisite` — the combination is a parse error. Put the named start state in a leading `echo:` instead.
+
+A leading `run:` does **not** make a flow e2e by that classification, but the runner still follows the chain to the launch it reaches. On Chromium that launch boots the app before step 1, exactly as a literal leading `launch:` does. On every platform, a flow whose leading `run:` chain reaches a launch is refused an `executionPrerequisite` too — parse accepts the file and the run then rejects it. The one way out is a run pinned to a Chromium instance you brought to the required state yourself (`--device chromium-cdp-<port>`), where the leading launch only attaches.
+
+A fragment reaches no leading launch, by its own step or through a `run:` chain, and may declare:
 
 ```yaml
 executionPrerequisite: User is signed in and viewing Settings
@@ -89,13 +93,33 @@ Scopes may combine and nest, with at most six scope keys per selector. Scope the
 
 Every directive hard-stops the flow on failure; later steps are skipped. The set is `launch`, `tap`, `long-press`, `type`, `scroll-to`, `pinch`, `rotate`, `await`, `assert`, `wait`, `snapshot`, `run`, `when`, `echo`, and `tool`; `flow-execute`'s own tool description spells out each one's shape and options. What follows is only what that description does not say.
 
-A bare `launch: com.acme.app` applies to every platform — and on Chromium it is read as the app **path**, so any flow that must run cross-platform needs the map form. `native:` covers iOS, Android, and Vega with one id: `- launch: { native: com.acme.app, chromium: ../../app }`. An Android app that must start on a non-launcher activity has no `launch:` form at all; record `restart-app` with its `activity` and accept that the flow is a fragment.
+A bare `launch: com.acme.app` applies to every platform — and on Chromium it is read as the app **path**, so any flow that must run cross-platform needs the map form.
+
+The map takes `native:`, `ios:`, `android:`, `vega:`, and `chromium:`. `native:` is one id shared by iOS, Android, and Vega, and a per-platform key overrides it for that platform. That override is how a flow whose iOS bundle id differs from its Android package spells both:
+
+```yaml
+- launch: { native: com.acme.app, chromium: ../../app }
+- launch: { ios: com.acme.app, android: com.acme.app.android, chromium: ../../app }
+```
+
+A launch that declares no id for the run's platform is an error, not a cue to switch platforms.
+
+An Android app that must start on a non-launcher activity has no `launch:` form at all; record `restart-app` with its `activity` and accept that the flow is a fragment.
 
 A `scroll-to` map is always the options form — the target goes under `target:`. Only the bare-string form (`scroll-to: Logout`) omits it, and that spelling is a loose selector.
 
-`tap`, `type`, and `long-press` do not auto-scroll. Add `scroll-to` first whenever the target may be off-screen. `scroll-to` defaults to `down`, is a no-op if already visible, and needs `within` for a nested scroller.
+`tap`, `type`, and `long-press` do not auto-scroll. Add `scroll-to` first whenever the target may be off-screen. Its `direction` is `up`, `down`, `left`, or `right`, and defaults to `down`; set it explicitly to reach a target above the viewport or along a horizontal carousel. `scroll-to` is a no-op if the target is already visible, and needs `within` for a nested scroller.
 
-`type` presses Enter unless `submit: false`. A polished focus-tap + raw keyboard pair normally needs `submit: false`, because the recording did not submit. Store secrets as `{{secret:APP_PASSWORD}}`; the runner resolves them from `ARGENT_SECRET_APP_PASSWORD` or a secrets file (`.argent/secrets.env`, `~/.argent/secrets.env`, `.env`), so one flow runs unchanged in CI and locally. Use it for any external value, not only sensitive ones — but every resolved value is redacted from output, so never use it for something a report must show.
+`type` presses Enter unless `submit: false`. A polished focus-tap + raw keyboard pair normally needs `submit: false`, because the recording did not submit.
+
+Store secrets as `{{secret:APP_PASSWORD}}`, so one flow runs unchanged in CI and locally. The runner reads the first source that defines the name:
+
+1. the `ARGENT_SECRET_APP_PASSWORD` environment variable;
+2. `<project>/.argent/secrets.env`;
+3. `<project>/.env.local`, then `<project>/.env`;
+4. `~/.argent/secrets.env`.
+
+The two dedicated `secrets.env` files accept the bare name `APP_PASSWORD`. The shared dotenv files expose **only** `ARGENT_SECRET_`-prefixed keys, so a bare `APP_PASSWORD=…` in `.env` or `.env.local` is ignored and the placeholder stays unresolved. Use `{{secret:…}}` for any external value, not only sensitive ones — but every resolved value is redacted from output, so never use it for something a report must show.
 
 ## Verification conditions
 
@@ -173,8 +197,8 @@ The guard may be one `exists`/`visible`/`hidden`/`text` condition or `{ platform
 A `run:` target is a YAML path resolved against the directory of the flow file that contains the step, so `../shared/login.yaml` reaches a sibling directory rather than the project root. The `.yaml` suffix is optional: `run: login` and `run: login.yaml` both name `login.yaml` beside the flow.
 
 - iOS/Android e2e flows may run fragments or other e2e flows inline; a nested e2e launch restarts its app.
-- Chromium boots one Electron app for the top-level run. Do not nest a Chromium e2e flow with its own launch; make it top-level or turn the nested flow into a fragment. `pinch` is rejected there — drive the app's own zoom controls instead.
-- Vega is remote-driven. Touch directives (`tap`, `long-press`, `type`, `scroll-to`, `pinch`) are unsupported; record `tool: tv-remote` and raw `tool: keyboard`, then gate every focus/navigation result with `await`.
+- Chromium boots one instance per launch **step**, not one per run. The leading launch — the flow's own, or the one its leading `run:` chain reaches — boots before step 1, unless you pinned the run with an explicit `device`, in which case that first launch only attaches to the instance you pinned. Every later launch boots a fresh instance, moves the run onto it, and tears down the instance the run already owned for that app path. Nesting a Chromium e2e flow with its own launch is therefore the supported way to give a sub-scenario its own app restart. `pinch` and `rotate` are rejected there — drive the app's own zoom or rotate controls instead.
+- Vega is remote-driven. The touch directives (`tap`, `long-press`, `type`, `scroll-to`, `pinch`, `rotate`) are unsupported; record `tool: tv-remote` and raw `tool: keyboard`, then gate every focus/navigation result with `await`.
 
 ## Snapshots and standalone runs
 
