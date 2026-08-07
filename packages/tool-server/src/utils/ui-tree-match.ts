@@ -650,17 +650,53 @@ export function quoteScreenText(text: string): string {
  * Gancarczyk$` misses a label wrapped in U+202A/U+202C needs to know the
  * wrapper is there, and can then decide what their pattern should do about it.
  *
- * Returns undefined when the text holds no such character.
+ * `pattern` is what keeps that RELEVANT. A label can carry an ignorable and
+ * have missed for a reason that has nothing to do with it, and a note is not
+ * free — it names a cause. Re-testing the pattern against the text with the
+ * ignorables removed answers the question the note is implicitly claiming to
+ * have answered: only when that would have matched are they the obstacle.
+ * Omitting it reports every ignorable in the text, unfiltered.
+ *
+ * Returns undefined when the text holds no such character, or when removing
+ * them would not have rescued the pattern.
  */
-export function ignorableTextNote(text: string): string | undefined {
+export function ignorableTextNote(text: string, pattern?: string): string | undefined {
   const found = inertIgnorables(text);
   if (found.length === 0) return undefined;
+  // Only speak when these characters are WHY the pattern missed. Without this
+  // the note fired on any `matches` failure whose text merely carried one, so
+  // on an app that wraps every display name (the 367-pair census) every failing
+  // assertion against a name ended in "that the pattern must account for" —
+  // pointing at the wrapper when the pattern was looking for another name
+  // entirely. Removing them and re-testing answers the question directly: if
+  // the pattern still does not match, they are not the obstacle.
+  if (pattern !== undefined) {
+    let stripped: RegExp;
+    try {
+      stripped = uiTreeMatchInternals.createRegExp(pattern);
+    } catch {
+      return undefined;
+    }
+    if (!stripped.test(withoutInertIgnorables(text))) return undefined;
+  }
   const names = [...new Set(found)]
     .map((ch) => `U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`)
     .join(" ");
+  // Same three-way lead as {@link confusableTextNote}, and for the same reason:
+  // its siblings on the DELIBERATELY NOT FOLDED list must not be described as
+  // noise. Calling a U+202E "invisible" is the false story that note refuses to
+  // tell about the very same code point.
+  const lead = found.some((ch) => DIRECTIONAL.test(ch))
+    ? `the text carries directional formatting [${names}], which draws nothing itself but ` +
+      `REORDERS the characters around it, so the screen does not read the way the text does`
+    : found.some((ch) => RENDERING_AFFECTING.test(ch))
+      ? `the text carries characters [${names}] that draw nothing themselves but change what IS ` +
+        `drawn — a soft hyphen paints a real hyphen where the line breaks, U+180E breaks Arabic ` +
+        `cursive joining as ZWNJ does`
+      : `the text carries invisible characters [${names}]`;
   return (
-    `the text carries invisible characters [${names}] that the pattern must account for ` +
-    `(a regular expression is deliberately never folded, so they are matched literally)`
+    `${lead} — the pattern must account for them (a regular expression is deliberately never ` +
+    `folded, so they are matched literally)`
   );
 }
 

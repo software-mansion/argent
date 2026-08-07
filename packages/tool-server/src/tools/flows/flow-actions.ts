@@ -1309,7 +1309,7 @@ function assertReason(
         expectedText === undefined
           ? undefined
           : textMatch === "matches"
-            ? (ignorableTextNote(shown) ?? ignorableTextNote(own))
+            ? (ignorableTextNote(shown, expectedText) ?? ignorableTextNote(own, expectedText))
             : (confusableTextNote(shown, expectedText) ?? confusableTextNote(own, expectedText));
       return (
         `element matched ${sel} but its text was "${quoteScreenText(shown)}"${ownNote} ` +

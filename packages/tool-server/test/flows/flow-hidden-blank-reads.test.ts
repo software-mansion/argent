@@ -964,6 +964,83 @@ describe("a `matches` (regex) miss still explains an invisible it cannot see", (
     expect(result.steps[0].reason).not.toMatch(/vs expected \[/);
   });
 
+  it("names a bidi wrapper as REORDERING, never as an invisible character", async () => {
+    // Its sibling refuses to describe the same code point that way, and for a
+    // reason that holds here too: a directional control draws nothing but moves
+    // the glyphs around it, so "invisible" is a false story about it.
+    currentFetch = () => ({
+      tree: screen([
+        n({
+          identifier: "who",
+          label: "‪Hubert Gancarczyk‬",
+          frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.05 },
+        }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("matches-directional", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "assert",
+          condition: "text",
+          selector: { identifier: "who" },
+          expectedText: "^Hubert Gancarczyk$",
+          textMatch: "matches",
+        },
+      ],
+    });
+
+    const result = await run("matches-directional");
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/directional formatting/);
+    expect(result.steps[0].reason).toMatch(/REORDERS/);
+    expect(result.steps[0].reason).not.toMatch(/invisible characters/);
+  });
+
+  it("stays quiet when the ignorable is not why the pattern missed", async () => {
+    // No relevance gate, and the note fired on ANY `matches` failure whose text
+    // carried an ignorable. On an app that wraps every display name that is
+    // every failing assertion against a name, and "the pattern must account for
+    // them" then points at a wrapper the pattern never tripped over.
+    currentFetch = () => ({
+      tree: screen([
+        n({
+          identifier: "who",
+          label: "‪Bob Smith‬",
+          frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.05 },
+        }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("matches-irrelevant", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "assert",
+          condition: "text",
+          selector: { identifier: "who" },
+          expectedText: "^Alice Jones$",
+          textMatch: "matches",
+        },
+      ],
+    });
+
+    const result = await run("matches-irrelevant");
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/but its text was/);
+    // Removing the wrapper would not have matched "Alice Jones" either, so no
+    // note. The `<U+202A>` still in the quoted label is quoteScreenText
+    // defusing it, which is a separate job and must keep happening.
+    expect(result.steps[0].reason).not.toMatch(/must account for/);
+    expect(result.steps[0].reason).not.toMatch(/the text carries/);
+    expect(result.steps[0].reason).toMatch(/<U\+202A>/);
+  });
+
   it("stays quiet when the text carries no invisible at all", async () => {
     currentFetch = () => ({
       tree: screen([
