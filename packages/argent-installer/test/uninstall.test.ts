@@ -51,8 +51,20 @@ vi.mock("@clack/prompts", () => ({
     message: vi.fn(),
     step: vi.fn(),
     success: vi.fn(),
+    warn: vi.fn(),
   },
   note: vi.fn(),
+}));
+
+// The uninstall preflight asks the real filesystem whether the global npm
+// prefix is writable. Left unmocked, this suite's verdict would depend on
+// whether the machine running it happens to have a root-owned
+// /usr/local/lib/node_modules/@swmansion — green on nvm, red on a stock Linux
+// box or the reporter's layout. Pin it; the probe's own behavior is covered in
+// utils.test.ts.
+vi.mock("../src/utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils.js")>()),
+  probeGlobalPackageRemoval: () => ({ verdict: "writable", parentDir: null }),
 }));
 
 let tmpDir: string;
@@ -151,8 +163,16 @@ describe("uninstall — telemetry consent preservation", () => {
       if (bin === "npm") throw new Error("npm failed");
       return undefined;
     });
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code) => {
+      throw new Error(`exit:${code}`);
+    });
 
-    await uninstall(["--yes"]);
+    // A failed package removal must not report success to the shell — a script
+    // chaining `argent uninstall -y && …` would otherwise carry on as if the
+    // package were gone. This is the exit-code half of issue #622.
+    await expect(uninstall(["--yes"])).rejects.toThrow("exit:1");
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    exitSpy.mockRestore();
 
     expect(telemetryMock.track).toHaveBeenCalledWith(
       "installation:cli_uninstall_complete",

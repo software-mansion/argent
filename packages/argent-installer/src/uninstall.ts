@@ -22,6 +22,7 @@ import {
   isDeclaredLocally,
   isGloballyInstalled,
   probeLocalInstall,
+  probeGlobalPackageRemoval,
   resolveInstallMode,
   removeInstallRecord,
   resolveProjectRoot,
@@ -52,6 +53,16 @@ const UNINSTALL_PACKAGE_ACTION_FAILED: InstallerFailureSignal = {
   error_kind: "subprocess",
 };
 
+// The package could not be removed for an environmental reason and we stopped
+// BEFORE touching anything. Distinct from UNINSTALL_PACKAGE_ACTION_FAILED, which
+// means a removal actually ran and failed — no subprocess is involved here.
+const UNINSTALL_PACKAGE_ROOT_NOT_WRITABLE: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.UNINSTALL_PACKAGE_ROOT_NOT_WRITABLE,
+  failure_stage: "installer_uninstall_package_not_writable",
+  failure_area: "installer",
+  error_kind: "validation",
+};
+
 // Catch-all for any unexpected throw in the prune/cleanup section or a prompt,
 // so the buffered cli_uninstall_start still flushes with a terminal event.
 const UNINSTALL_UNCLASSIFIED_FAILED: InstallerFailureSignal = {
@@ -60,6 +71,33 @@ const UNINSTALL_UNCLASSIFIED_FAILED: InstallerFailureSignal = {
   failure_area: "installer",
   error_kind: "unknown",
 };
+
+/**
+ * How to re-run an uninstall that this user lacks the permission to finish.
+ *
+ * Deliberately NOT `sudo -E`: Ubuntu 25.10 ships sudo-rs, which does not
+ * implement that flag at all — it prints "preserving the entire environment is
+ * not supported, `-E` is ignored" and HOME still becomes /root. The
+ * `sudo VAR=value cmd` form assigns the variable directly in the command's
+ * environment, so it survives `env_reset` on both sudo-rs and classic sudo.
+ *
+ * HOME has to survive, because the global-scope cleanup resolves ~/.claude,
+ * ~/.cursor and friends from it; under a reset HOME it would clean root's home
+ * and silently leave the user's own config in place. (Running as root does still
+ * create a root-owned ~/.argent for telemetry state, and rewrites any config
+ * file that keeps non-argent entries as root — unavoidable when the package
+ * itself lives in a root-owned prefix.)
+ *
+ * Re-running ARGENT rather than the package manager directly matters too: the
+ * package removal is only half the job, and removing the package by hand strands
+ * every MCP entry, skill and rule pointing at a binary that is gone — with
+ * argent no longer around to clean them up.
+ */
+function elevatedRerunHint(): string {
+  return process.platform === "win32"
+    ? "Re-run this command from an elevated (Administrator) terminal."
+    : `Re-run it with elevated permissions: ${pc.cyan('sudo HOME="$HOME" argent uninstall --global')}`;
+}
 
 export interface BundledContentRemoval {
   removedPaths: string[];
@@ -358,6 +396,8 @@ export async function uninstall(args: string[]): Promise<void> {
   let hasPrunedContent = false;
   let hasUninstalledPackage = false;
   let hasUninstalledGlobalPackage = false;
+  // First thing that went wrong, reported once after every target is attempted.
+  let firstFailure: InstallerFailureSignal | null = null;
 
   try {
     p.intro(pc.bgRed(pc.white(" argent uninstall ")));
@@ -425,6 +465,64 @@ export async function uninstall(args: string[]): Promise<void> {
       removePreconfirmed = true;
     } else {
       removeTargets = targetDecision.targets;
+    }
+
+    // ── Preflight: can we actually remove the global package? ───────────────────
+    // Everything below this point is destructive and irreversible, while the
+    // package removal at the very end can fail for a purely environmental reason
+    // (a root-owned npm prefix, the usual `sudo npm i -g` install). Running them
+    // in that order strips the workspace and then leaves the package installed —
+    // issue #622. Ask the environment first, while nothing has been touched.
+    //
+    // Only when the removal is already consented to: on a bare interactive run
+    // the per-install confirm below defaults to NO, and pruning-while-keeping the
+    // package is a supported outcome we must not turn into a hard failure.
+    const removalPreconsented = nonInteractive || removePreconfirmed;
+    let blockedGlobalRemoval = false;
+    // Blocked, but the user still gets asked (interactive, unconfirmed) — the
+    // prompt says so rather than letting them opt into a removal that will fail.
+    let globalRemovalNeedsElevation = false;
+    if (removeTargets.includes("global") && globalPresent) {
+      const probe = probeGlobalPackageRemoval();
+      if (probe.verdict === "blocked") {
+        p.log.error(
+          `Cannot remove the global ${PACKAGE_NAME} package: ` +
+            `${pc.dim(probe.parentDir ?? "the install directory")} is not writable by this user, ` +
+            `so the removal would fail partway through.`
+        );
+        p.log.info(elevatedRerunHint());
+        if (removalPreconsented) {
+          blockedGlobalRemoval = true;
+          firstFailure = UNINSTALL_PACKAGE_ROOT_NOT_WRITABLE;
+          // Drop the target rather than aborting outright: a `--global --local`
+          // run can still remove the local devDependency. Dropping it also feeds
+          // the scope rule below, which then keeps the retained global install's
+          // config wired up instead of orphaning it.
+          removeTargets = removeTargets.filter((t) => t !== "global");
+        } else {
+          // Interactive and unconfirmed: warn, but leave today's behavior intact.
+          // The prompt still asks, and still defaults to no.
+          globalRemovalNeedsElevation = true;
+          p.log.info(
+            pc.dim("Skipping the global package removal below will leave your setup as it is.")
+          );
+        }
+      }
+    }
+
+    if (blockedGlobalRemoval && removeTargets.length === 0) {
+      // Nothing left to do, and nothing has been modified yet. Stop here so the
+      // workspace configuration survives — it belongs to an install that is
+      // still on this machine.
+      p.log.info(
+        pc.dim(
+          "Nothing was changed by this run: argent is still installed, so its configuration " +
+            "was left in place."
+        )
+      );
+      await finalizeUninstallTelemetry(false, false, firstFailure ?? undefined);
+      p.outro(pc.red(`${PACKAGE_NAME} was not removed.`));
+      process.exit(1);
     }
 
     // Which config scopes the entry/allowlist/content removal may touch: clean
@@ -665,7 +763,9 @@ export async function uninstall(args: string[]): Promise<void> {
       return {
         kind: "global",
         cmd: globalUninstallCommand(detectPackageManager(), PACKAGE_NAME),
-        prompt: `Uninstall the global ${PACKAGE_NAME} package?`,
+        prompt: globalRemovalNeedsElevation
+          ? `Uninstall the global ${PACKAGE_NAME} package? (will fail without elevated permissions)`
+          : `Uninstall the global ${PACKAGE_NAME} package?`,
         defaultRemove: false,
         installDir: getGloballyInstalledPackageRoot(),
       };
@@ -675,7 +775,10 @@ export async function uninstall(args: string[]): Promise<void> {
       .map((t) => buildRemovable(t))
       .filter((r): r is RemovableInstall => r !== null);
 
-    if (removables.length === 0) {
+    // Suppressed when the preflight dropped the global target: the install WAS
+    // detected, we just cannot remove it, and "no matching install detected"
+    // would contradict the reason we already printed.
+    if (removables.length === 0 && !blockedGlobalRemoval) {
       // The probe is PATH/node_modules based, so an install under a different
       // toolchain (or the other mode) is intentionally left untouched.
       p.log.info(
@@ -724,14 +827,43 @@ export async function uninstall(args: string[]): Promise<void> {
           p.log.info(pc.dim("Removed .argent/install.json (local mode marker)."));
         }
       } catch (err) {
-        p.log.error(`${removable.kind} uninstall failed: ${err}`);
-        await finalizeUninstallTelemetry(
-          hasPrunedContent,
-          hasUninstalledPackage,
-          UNINSTALL_PACKAGE_ACTION_FAILED
+        // The package manager's own output already streamed to the terminal
+        // (execShellCommandSync inherits stdio), so `err` here carries only
+        // "Command failed: <cmd>" — there is no stderr to classify. Re-running
+        // the probe is what tells us whether this was a permission problem, and
+        // it needs no output parsing to do it.
+        const blockedNow =
+          removable.kind === "global" && probeGlobalPackageRemoval().verdict === "blocked";
+        p.log.error(
+          blockedNow
+            ? `Removing the global ${PACKAGE_NAME} package failed: the install directory is ` +
+                `not writable by this user.`
+            : `${removable.kind} uninstall failed: ${err}`
         );
-        return;
+        if (blockedNow) {
+          p.log.info(elevatedRerunHint());
+          if (hasPrunedContent) {
+            p.log.warn(
+              pc.dim(
+                "Workspace configuration was already removed, but the package is still installed."
+              )
+            );
+          }
+        }
+        firstFailure ??= blockedNow
+          ? { ...UNINSTALL_PACKAGE_ACTION_FAILED, failure_spawn_code: "EACCES" }
+          : UNINSTALL_PACKAGE_ACTION_FAILED;
+        // Keep going: a failed global removal must not silently skip a local one
+        // the user also asked for, and finalizing here would report
+        // has_uninstalled_package=false even if a later target succeeds.
+        continue;
       }
+    }
+
+    if (firstFailure) {
+      await finalizeUninstallTelemetry(hasPrunedContent, hasUninstalledPackage, firstFailure);
+      p.outro(pc.red(`${PACKAGE_NAME} was not fully removed — see above.`));
+      process.exit(1);
     }
 
     await finalizeUninstallTelemetry(hasPrunedContent, hasUninstalledPackage);

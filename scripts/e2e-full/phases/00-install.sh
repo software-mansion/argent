@@ -160,10 +160,19 @@ run_phase() {
 
   # --- uninstall GLOBAL, then restore the driver so downstream phases run ---
   pushd "$gws" >/dev/null
-  if argent_cli uninstall --yes --global; then pass "$P" uninstall-global exit0; else skip "$P" uninstall-global exit0 "$(printf '%s' "$CLI_OUT" | tail -2 | tr '\n' ' ')"; fi
+  local uninstalled_global=0
+  if argent_cli uninstall --yes --global; then uninstalled_global=1; pass "$P" uninstall-global exit0; else skip "$P" uninstall-global exit0 "$(printf '%s' "$CLI_OUT" | tail -2 | tr '\n' ' ')"; fi
   popd >/dev/null
-  local gcfg2; gcfg2="$(_argent_mcp_in_ws "$gws")"
-  if [ -z "$gcfg2" ]; then pass "$P" uninstall-global config-removed; else fail "$P" uninstall-global config-removed "argent MCP config remains: $gcfg2"; fi
+  # Only assert the config is gone when the uninstall actually ran. It refuses,
+  # by design, when the npm prefix is not writable by this user (a root-owned
+  # `sudo npm i -g` prefix), and in that case leaving the config in place is the
+  # correct outcome — the package is still installed and still needs it.
+  if [ "$uninstalled_global" -eq 0 ]; then
+    skip "$P" uninstall-global config-removed "uninstall did not run"
+  else
+    local gcfg2; gcfg2="$(_argent_mcp_in_ws "$gws")"
+    if [ -z "$gcfg2" ]; then pass "$P" uninstall-global config-removed; else fail "$P" uninstall-global config-removed "argent MCP config remains: $gcfg2"; fi
+  fi
 
   # Restore the global driver (uninstall --global removes the sandbox bin that
   # ARGENT_BIN points at). Fast: the tarball is local and npm caches it.
