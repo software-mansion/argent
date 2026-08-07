@@ -94,7 +94,8 @@ export function createRunSequenceTool(
 Use when you need sequential actions and do NOT need to observe the screen between them
 (e.g. scrolling multiple times, typing then pressing enter, rotating back and forth).
 Returns { completed, total, steps } with per-step results. Fails if an unrecognised tool name is used in a step (error returned at that step, execution stops).
-No screenshot is captured automatically — call screenshot separately after the sequence if needed.
+One screenshot is captured automatically after the whole sequence (not per step) — call screenshot separately only for a baseline BEFORE it, or to observe an intermediate step.
+That single capture is also why a secret belongs in this call rather than in two bare ones: the skip is decided from the whole request, so a \`{{secret:...}}\` in any step suppresses the capture that would otherwise follow the submit.
 
 ONLY use this when every step is known in advance. If any step depends on the
 result of a previous one (e.g. tapping a menu item that only appears after

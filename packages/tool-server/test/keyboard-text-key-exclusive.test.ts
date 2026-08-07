@@ -190,6 +190,48 @@ describe("keyboard — `text` and `key` are mutually exclusive", () => {
     expect(err.message).toMatch(/run-sequence/);
   });
 
+  it("steers a combined SECRET call to run-sequence, not to two bare calls", async () => {
+    // The two remedies diverge here. The MCP auto-screenshot skip keys off a
+    // deep scan of the whole request (argent-mcp `containsSecretPlaceholder`),
+    // and `run-sequence` is itself in `AUTO_SCREENSHOT_TOOLS` — so the combined
+    // call and the one-run-sequence form both skip, while of two bare calls only
+    // the first does. The second, `{ key: "enter" }`, carries no placeholder and
+    // is screenshotted AFTER the key lands, handing the still-visible secret
+    // back as pixels. Splitting a combined secret call the way the generic
+    // message says would therefore lose the protection the placeholder exists
+    // for, so the message has to say which remedy to pick.
+    const err = await createKeyboardTool(registry())
+      .execute({}, { udid: "emulator-5554", text: "{{secret:APP_PASSWORD}}", key: "enter" })
+      .then(
+        () => {
+          throw new Error("expected the combined text+key call to reject");
+        },
+        (e: unknown) => e as Error
+      );
+    expect(err.message).toMatch(/ONE `run-sequence` form/);
+    expect(err.message).toMatch(/still-visible secret/);
+    // Still resolves nothing: the steer is a syntactic `.includes` on the
+    // placeholder, above `resolveSecretPlaceholders`, so an unset name does not
+    // turn this into an "unknown secret" error.
+    expect(adbShell).not.toHaveBeenCalled();
+  });
+
+  it("leaves the secret steer out of a plain combined call", async () => {
+    // Positive control for the test above: the run-sequence steer is specific to
+    // a placeholder-bearing request, so a plain one must not carry it — an
+    // unconditional sentence would pass that test while telling every caller to
+    // batch for a skip that has nothing to skip.
+    const err = await createKeyboardTool(registry())
+      .execute({}, { udid: "emulator-5554", text: "hi", key: "enter" })
+      .then(
+        () => {
+          throw new Error("expected the combined text+key call to reject");
+        },
+        (e: unknown) => e as Error
+      );
+    expect(err.message).not.toMatch(/still-visible secret/);
+  });
+
   it("still names the TV constraint the guard pre-empts", async () => {
     // On a TV target `key` is rejected outright (platforms/tv.ts), so the
     // remedy this message prescribes — a second call carrying { key: "enter" } —

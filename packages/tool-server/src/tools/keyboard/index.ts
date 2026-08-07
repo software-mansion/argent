@@ -3,7 +3,11 @@ import { FAILURE_CODES } from "@argent/registry";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { InvalidToolInputError } from "../../utils/capability";
-import { redactSecretsFromError, resolveSecretPlaceholders } from "../../utils/secrets";
+import {
+  SECRET_PLACEHOLDER_MARKER,
+  redactSecretsFromError,
+  resolveSecretPlaceholders,
+} from "../../utils/secrets";
 import type { KeyboardParams, KeyboardResult } from "./types";
 import { makeIosImpl, makeIosRemoteImpl } from "./platforms/ios";
 import { makeAndroidImpl } from "./platforms/android";
@@ -142,7 +146,20 @@ Provide text OR key, never both. To type and then submit, use two calls, or two 
             'a key, make two calls (or two `keyboard` steps in one `run-sequence`): { text: "hello" } ' +
             'followed by { key: "enter" }. On a TV target (Apple TV / Android TV) `key` is not ' +
             "supported at all — type with `text` and move focus with `tv-remote` " +
-            "(up/down/left/right/select).",
+            "(up/down/left/right/select)." +
+            // The two remedies are NOT equivalent once the text carries a
+            // placeholder, and this message is where an agent converts a
+            // combined secret call — the tool description's caveat is read long
+            // before that moment, if at all. The check is syntactic (the same
+            // `.includes` flow-utils.ts uses), so it still resolves nothing.
+            (params.text.includes(SECRET_PLACEHOLDER_MARKER)
+              ? " This `text` carries a `" +
+                SECRET_PLACEHOLDER_MARKER +
+                "...}}` placeholder, so use the ONE `run-sequence` form, not two bare calls: the " +
+                "auto-screenshot skip is decided per tool call from the whole request, and a " +
+                'separate { key: "enter" } call carries no placeholder — its screenshot is taken ' +
+                "after the key lands and can capture the still-visible secret."
+              : ""),
           {
             error_code: FAILURE_CODES.KEYBOARD_TEXT_AND_KEY_COMBINED,
             failure_stage: "keyboard_text_and_key_combined",
