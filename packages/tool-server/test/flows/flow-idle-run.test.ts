@@ -41,6 +41,12 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
 // Stub only the capture; the real `comparePixels` decides whether two frames
 // moved, so the comparison the check depends on is the one under test.
 let currentFrame: () => PixelFrame | undefined;
+/**
+ * How long a capture takes to come back. A live backend is not instant, and a
+ * round is `Promise.all([read, capture])` — so this, not the poll, is what a
+ * round lasts once the capture is the slow half.
+ */
+let captureDelayMs = 0;
 /** Every `firstCapture` flag the runner passed, in order. */
 const captureFirstFlags: boolean[] = [];
 vi.mock("../../src/tools/flows/flow-pixels", async (importOriginal) => {
@@ -64,7 +70,15 @@ vi.mock("../../src/tools/flows/flow-pixels", async (importOriginal) => {
       ): Promise<PixelFrame | undefined> => {
         captureFirstFlags.push(firstCapture);
         if (env.signal?.aborted) return undefined;
-        return Date.now() >= deadline ? undefined : currentFrame();
+        const budget = deadline - Date.now();
+        if (budget <= 0) return undefined;
+        if (captureDelayMs > 0) {
+          // Bounded by what is left, the way `settleWithin` bounds the real
+          // one, and abandoned rather than answered late if it outlasts that.
+          await new Promise((r) => setTimeout(r, Math.min(captureDelayMs, budget)));
+          if (captureDelayMs > budget || env.signal?.aborted) return undefined;
+        }
+        return currentFrame();
       }
     ),
   };
@@ -157,6 +171,7 @@ beforeEach(async () => {
   currentTree = () => screenWith("Home");
   currentFrame = () => frameAt(120);
   treeDelayMs = 0;
+  captureDelayMs = 0;
   captureFirstFlags.length = 0;
 });
 
@@ -753,6 +768,71 @@ steps:
     expect(step.warning).toContain("transient describe failure");
     // And the checks that actually carry the flow's verdict still run.
     expect(r.steps.at(-1)).toMatchObject({ kind: "echo", status: "pass" });
+  });
+
+  // ...and it stays a blip when the round runs longer than a poll. The tail
+  // between the last read that answered and the end of the wait is
+  // `sleep + max(read, capture)`, and nothing holds either half to a poll: a
+  // capture gets seconds of its own. Measuring the tolerance in milliseconds
+  // therefore expired it on any slow-but-working capture backend, which put the
+  // verdict back on where the blip landed — the exact thing the tolerance
+  // exists to remove. It is counted in rounds for that reason.
+  it("does not stop the run when the closing read failed and captures are slow", async () => {
+    captureDelayMs = 300; // > IDLE_POLL_MS, so the round outlasts the poll
+    let firstReadAt: number | undefined;
+    let tick = 0;
+    // Never settles. With a 300ms capture the rounds start every ~500ms, so of
+    // the five that fit in 2400ms only the last (t≈2000) is past the threshold.
+    currentTree = () => {
+      firstReadAt ??= Date.now();
+      if (Date.now() - firstReadAt >= 1750) throw new Error("transient describe failure");
+      return screenWith(`frame ${tick++}`);
+    };
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, timeout: 2400, stableFor: 0 }
+  - echo: reached
+`
+    );
+    const r = await run("ready");
+    expect(r.ok).toBe(true);
+    const step = r.steps.find((s) => s.kind === "idle")!;
+    expect(step.status).toBe("pass");
+    expect(step.warning).toContain("never held still");
+    expect(step.warning).toContain("transient describe failure");
+    expect(r.steps.at(-1)).toMatchObject({ kind: "echo", status: "pass" });
+  });
+
+  // The other side of that bound: a slow round does not buy a second failing
+  // read the same tolerance. Two consecutive dark reads are the window this
+  // step cannot describe, however long the rounds that carried them took.
+  it("still errors when two consecutive reads failed, however slow the captures", async () => {
+    captureDelayMs = 300;
+    let firstReadAt: number | undefined;
+    let tick = 0;
+    // Threshold one round earlier than the case above, so the last two reads
+    // (t≈1500 and t≈2000) both throw.
+    currentTree = () => {
+      firstReadAt ??= Date.now();
+      if (Date.now() - firstReadAt >= 1250) throw new Error("native-devtools is not connected");
+      return screenWith(`frame ${tick++}`);
+    };
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, timeout: 2400, stableFor: 0 }
+  - echo: unreachable
+`
+    );
+    const r = await run("ready");
+    expect(r.ok).toBe(false);
+    const step = r.steps.find((s) => s.kind === "idle")!;
+    expect(step.status).toBe("error");
+    expect(step.reason).toContain("could not read the UI tree");
+    expect(r.steps.at(-1)!.status).toBe("skip");
   });
 
   // The same blip against the other window it used to redden: a screen that

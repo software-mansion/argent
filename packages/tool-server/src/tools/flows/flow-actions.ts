@@ -1229,8 +1229,8 @@ const HUNG_TREE_READ_MS = 2_000;
 
 /**
  * Evidence-gap bound for the post-loop verdict, and the idle twin of
- * {@link CONDITION_DARK_TAIL_TOLERANCE_MS}: how long the tree source may have
- * been failing at the end of the wait before "the source stopped answering" is
+ * {@link CONDITION_DARK_TAIL_TOLERANCE_MS}: how much of the end of the wait the
+ * tree source may have spent failing before "the source stopped answering" is
  * the better account of the window than whatever the screen was doing.
  *
  * A tree-source blip is expected mid-settle — the loop restarts the hold and
@@ -1241,12 +1241,20 @@ const HUNG_TREE_READ_MS = 2_000;
  * screen this step is explicit about wanting to pass came down to where the
  * blip landed.
  *
- * Two polls is what one blip costs: up to a poll of sleep since the last read
- * that answered, plus a poll's worth of latency for the failing one. A longer
- * tail means consecutive reads went dark, which is the window this step cannot
- * describe.
+ * Counted in ROUNDS rather than in milliseconds, unlike its `waitForCondition`
+ * twin, because a round here is not a poll: it is `Promise.all([read,
+ * capture])`, so it lasts `max(read, capture)`, and neither half is held to a
+ * poll — `capturePixelsWithin` grants a capture seconds of its own
+ * (PIXEL_CAPTURE_TIMEOUT_MS) and the read gets what is left of the step. A
+ * wall-clock tolerance sized at two polls therefore expired whenever a round
+ * merely ran long, which a capture backend that is slow but working is enough
+ * to do — putting the verdict back on where the blip landed, the very thing
+ * this bound exists to take it off.
+ *
+ * One unanswered round is what a blip costs. Consecutive ones mean the source
+ * went dark, which is the window this step cannot describe.
  */
-const IDLE_DARK_TAIL_TOLERANCE_MS = IDLE_POLL_MS * 2;
+const IDLE_TOLERATED_DARK_READS = 1;
 
 /** How the last tree read ended. Only `value` licenses a verdict about the app. */
 type TreeReadOutcome = "value" | "error" | "timeout";
@@ -1314,12 +1322,10 @@ async function waitForIdle(
   // and every arm of that round sets it.
   let lastRead!: TreeReadOutcome;
   let treeErrorMessage: string | undefined;
-  // Date.now() of the most recent read that ANSWERED — 0 until one does, which
-  // the `readsSucceeded === 0` guard below returns on before anything measures
-  // from it. Post-loop it anchors the dark tail: how long the window's final
-  // stretch went without a look at the screen (blank counts — it is an
-  // observation; see the blank branch).
-  let lastAnsweredReadAt = 0;
+  // Rounds since the last read that ANSWERED. Post-loop this is the dark tail:
+  // how much of the window's final stretch went without a look at the screen.
+  // A blank read clears it — it is an observation; see the blank branch.
+  let darkReads = 0;
   let treeReadHung = false;
   let sawContent = false;
   let pixelsEverMoved = false;
@@ -1355,6 +1361,7 @@ async function waitForIdle(
       // tree state nor stands in for one, so the hold state is left as it was
       // and the bottom decides what, if anything, it means.
       lastRead = "timeout";
+      darkReads += 1;
       // ...except for one thing it does say. A read abandoned with seconds of
       // budget left is a source that has wedged, not a step that ran out of
       // time, and the difference decides whether the bottom may describe the
@@ -1364,6 +1371,7 @@ async function waitForIdle(
       // A tree-source blip mid-animation is expected; keep polling. Only its
       // presence on the LAST read is reportable.
       lastRead = "error";
+      darkReads += 1;
       treeErrorMessage = read.error;
       treeSignature = undefined;
       previousFrame = undefined;
@@ -1375,7 +1383,7 @@ async function waitForIdle(
     } else {
       lastRead = "value";
       readsSucceeded += 1;
-      lastAnsweredReadAt = Date.now();
+      darkReads = 0;
       treeErrorMessage = undefined;
       // It answered, so whatever wedged it has cleared.
       treeReadHung = false;
@@ -1495,12 +1503,11 @@ async function waitForIdle(
   //
   // Measured as a tail, not as a single read: the source failing on the last
   // poll and the source having stopped answering are different windows, and
-  // only the second is unreadable. See IDLE_DARK_TAIL_TOLERANCE_MS.
-  const darkTailMs = Date.now() - lastAnsweredReadAt;
+  // only the second is unreadable. See IDLE_TOLERATED_DARK_READS.
   if (
     lastRead === "error" &&
     treeErrorMessage !== undefined &&
-    darkTailMs > IDLE_DARK_TAIL_TOLERANCE_MS
+    darkReads > IDLE_TOLERATED_DARK_READS
   ) {
     return unreadable(treeErrorMessage);
   }
