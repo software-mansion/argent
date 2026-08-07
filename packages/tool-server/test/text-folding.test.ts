@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  compatibilityVariantIn,
   compatibilityVariantOf,
   confusableTextNote,
   confusableTextNoteIn,
@@ -8,6 +9,7 @@ import {
   findAll,
   foldText,
   identifierMatches,
+  quoteScreenText,
   includesCI,
   selectorToFrame,
   textMatches,
@@ -807,5 +809,72 @@ describe("end-to-end: a plain selector matches a bidi-wrapped label through find
   it("but a genuinely different name still fails, so the fold has not gone blind", () => {
     const matches = findAll(root, { text: "Eddie Robson" });
     expect(evaluateCondition("text", "Eddie Robertson", matches, "equals")).toBe(false);
+  });
+});
+
+describe("the character sets are pinned member by member, not by a representative", () => {
+  // Each set was asserted at a couple of code points, so most individual
+  // members were held by nothing: dropping U+FEFF, LRM, RLE or the emoji tag
+  // block, or narrowing the quoting class to RLO alone, each left the whole
+  // suite green. They are not interchangeable — every case below is a distinct
+  // claim the module's own docstrings make.
+
+  it("strips an INTERIOR U+FEFF, which the whitespace collapse cannot rescue", () => {
+    // A leading BOM folds away whatever INVISIBLE says, because JS `\s` matches
+    // U+FEFF and the trim takes it — so only an interior one tests membership.
+    // Dropped from INVISIBLE it survives to the collapse and becomes a SPACE.
+    expect(foldText(`a${BOM}b`)).toBe("ab");
+    expect(equalsCI(`Save${BOM}Changes`, "SaveChanges")).toBe(true);
+  });
+
+  it("folds U+200E LRM, not just the embeddings either side of it", () => {
+    // The LTR set is a range plus singletons; LRM is the singleton, and an
+    // otherwise-LTR string carrying one renders identically without it.
+    expect(equalsCI("a‎b", "ab")).toBe(true);
+    expect(foldText("Total:‎ 42")).toBe("total: 42");
+  });
+
+  it("counts U+202B RLE as bidi-sensitive, so the LTR half of a pair stays", () => {
+    // RLE survives folding regardless — it is not in the LTR set. What its
+    // membership in BIDI_SENSITIVE decides is whether the PDF beside it is
+    // stripped, and folding half of a directional pair rewrites the string
+    // without rewriting what it renders as.
+    const RLE = "‫";
+    const PDF = "‬";
+    expect(equalsCI(`${RLE}abc${PDF}`, `${RLE}abc`)).toBe(false);
+    // Same shape for the other RTL controls the set names.
+    expect(equalsCI(`‮abc${PDF}`, "‮abc")).toBe(false);
+    expect(equalsCI(`⁧abc⁩`, "⁧abc")).toBe(false);
+  });
+
+  it("treats the emoji TAG characters as sequence-building, not as noise", () => {
+    // U+E0020-U+E007F build a subdivision flag: England is U+1F3F4 plus five
+    // tag letters and a terminator, ONE glyph. They are Default_Ignorable, so
+    // without the tag arm the note would describe a BROKEN tag sequence — a
+    // real rendering regression — as an invisible difference, which is the
+    // outcome its docstring calls the thing it must never do.
+    const ENGLAND = "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}";
+    expect(confusableTextNote(ENGLAND, "\u{1F3F4}")).toBeUndefined();
+    expect(foldText(ENGLAND)).not.toBe(foldText("\u{1F3F4}"));
+  });
+
+  it("spells out EVERY directional control in quoted screen text, not only RLO", () => {
+    // Narrowed to RLO, every other control stayed live in the quoted label and
+    // reversed the explanation printed after it.
+    for (const ch of ["؜", "‎", "‏", "‪", "‫", "‬", "‭", "‮", "⁦", "⁧", "⁨", "⁩"]) {
+      const cp = `U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`;
+      expect(quoteScreenText(`a${ch}b`), cp).toBe(`a<${cp}>b`);
+    }
+    // Everything else is left alone, so the quoted text stays copy-pasteable.
+    expect(quoteScreenText("Add more languages…")).toBe("Add more languages…");
+  });
+
+  it("keeps compatibilityVariantIn silent when the needle genuinely matches", () => {
+    // Without its includesCI guard the note fires on a label the selector
+    // already matches, describing a "near miss" that is not a miss at all.
+    expect(compatibilityVariantIn("Add more languages…", "more")).toBe(false);
+    expect(compatibilityVariantIn("Add more languages…", "languages")).toBe(false);
+    // The real near miss still answers true.
+    expect(compatibilityVariantIn("Add more languages…", "languages...")).toBe(true);
   });
 });
