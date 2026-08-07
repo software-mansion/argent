@@ -297,6 +297,22 @@ describe("bidi wrappers", () => {
     expect(equalsCI("⁨@bsky.app⁩", "@bsky.app")).toBe(true);
   });
 
+  it("folds an LTR wrapper on the ASSUMPTION of a left-to-right layout direction", () => {
+    // KNOWN LIMIT, documented on LTR_BIDI. What reorders a neutral is the base
+    // direction of the PARAGRAPH, which lives on the container; a describe tree
+    // carries no direction, so this test reads the string alone. Measured in
+    // Chromium under `<body dir="rtl">`, bare "-42" renders "42-" while
+    // <LRE>-42<PDF> renders as written — so the equality below is correct under
+    // an LTR layout and wrong under an RTL one, and the comparators cannot
+    // currently tell which they are in. Pinned so the assumption is visible and
+    // a future change to it is deliberate.
+    expect(equalsCI(`${LRE}-42${PDF}`, "-42")).toBe(true);
+    // The escape hatch the docs point at: a regex is never folded, so it still
+    // separates the correctly-wrapped spelling from the one rendering backwards.
+    expect(textMatches(`${LRE}-42${PDF}`, `^${LRE}-42${PDF}$`, "matches")).toBe(true);
+    expect(textMatches("-42", `^${LRE}-42${PDF}$`, "matches")).toBe(false);
+  });
+
   it("does not swallow the narrow no-break space next to that range", () => {
     // U+202F sits one codepoint past the embeddings; it is a SPACE, not a
     // formatting control, and must fold to " " rather than vanish.

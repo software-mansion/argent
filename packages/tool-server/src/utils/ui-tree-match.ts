@@ -50,7 +50,7 @@ export const selectorFieldsSchema = z
       })
       .optional()
       .describe(
-        "Case-insensitive substring of the element's visible label or value. Compared on FOLDED text: a non-breaking space matches a plain one, a run of spaces or tabs matches a single space, and an LTR bidi wrapper around otherwise left-to-right text is ignored, so you can type what you see. Characters that change the rendering are NOT folded (bidi controls that reorder, a soft hyphen, emoji ZWJ/variation selectors, and a line break, which no number of spaces matches). A leading or trailing space is significant and constrains the match; a value with no visible character at all is rejected."
+        "Case-insensitive substring of the element's visible label or value. Compared on FOLDED text: a non-breaking space matches a plain one, a run of spaces or tabs matches a single space, and an LTR bidi wrapper around otherwise left-to-right text is ignored, so you can type what you see (that last one assumes a left-to-right layout direction; in an RTL-localized UI such a wrapper does move glyphs, so pin those with a regex instead). Characters that change the rendering are NOT folded (bidi controls that reorder, a soft hyphen, emoji ZWJ/variation selectors, and a line break, which no number of spaces matches). A leading or trailing space is significant and constrains the match; a value with no visible character at all is rejected."
       ),
     identifier: z
       .string()
@@ -255,9 +255,28 @@ const INVISIBLE = /[\u200b\u2060-\u2064\u206a-\u206f\ufeff]/gu;
  * The LTR-forcing directional controls — LRM, LRE, PDF, LRO, LRI, FSI, PDI —
  * folded ONLY when {@link BIDI_SENSITIVE} finds nothing in the string that
  * could give the bidi algorithm a non-trivial order to produce. In a string
- * whose strong characters are all left-to-right, every one of these resolves
- * to "lay this out left to right", which is already what happens, so removing
- * them provably cannot move a glyph.
+ * whose strong characters are all left-to-right, laid out in a LEFT-TO-RIGHT
+ * paragraph, every one of these resolves to "lay this out left to right",
+ * which is already what happens, so removing them cannot move a glyph.
+ *
+ * KNOWN LIMIT — that last qualifier is an assumption, not something the string
+ * can answer. What reorders a neutral is the base direction of the PARAGRAPH
+ * the label sits in, and that lives on the container; a describe tree carries
+ * no direction, so this test reads the only evidence it has. Under an
+ * RTL-localized UI the assumption is wrong, and these controls become as
+ * load-bearing as their RTL counterparts: measured in Chromium under
+ * `<body dir="rtl">`, `-42` renders `42-` and `(iPhone)` renders `)iPhone(`,
+ * while the same strings wrapped in LRE…PDF render as written. Folding the
+ * wrapper away equates the two, so a check cannot tell a correctly-wrapped
+ * price from one rendering backwards.
+ *
+ * That is knowingly accepted here rather than fixed, because the alternative
+ * within reach — not folding these at all — gives up the case this fold exists
+ * for (see the census below) to buy correctness in RTL-localized apps only.
+ * Fixing it properly means carrying the resolved layout direction on the tree
+ * from every platform adapter and folding against it; until then, an
+ * RTL-localized UI should pin bidi-wrapped text with `matches`, which is never
+ * folded.
  *
  * This is what keeps the common real case working. An app that renders
  * user-supplied names wraps every one of them: a census of four Bluesky web

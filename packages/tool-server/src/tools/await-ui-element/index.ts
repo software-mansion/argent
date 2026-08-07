@@ -83,7 +83,7 @@ const zodSchema = z
       .enum(["contains", "equals"])
       .optional()
       .describe(
-        "For condition `text`: how expectedText is compared. Both fold the text first, so a non-breaking space matches a plain one and an LTR bidi wrapper around left-to-right text is ignored. `contains` (default) is a case-insensitive substring, in which a leading or trailing space is significant and constrains the match; `equals` is a case-insensitive full-string match, trimmed at both ends."
+        "For condition `text`: how expectedText is compared. Both fold the text first, so a non-breaking space matches a plain one and an LTR bidi wrapper around left-to-right text is ignored (the wrapper rule assumes a left-to-right layout direction; in an RTL-localized UI it does move glyphs). `contains` (default) is a case-insensitive substring, in which a leading or trailing space is significant and constrains the match; `equals` is a case-insensitive full-string match, trimmed at both ends."
       ),
     bundleId: z
       .string()
