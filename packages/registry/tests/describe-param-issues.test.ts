@@ -72,6 +72,35 @@ describe("describeParamIssues", () => {
     expect(msg).toContain("`needed` is required");
     expect(msg).toContain("…"); // truncation is not silent
     expect(msg).not.toContain("`k29`"); // the 30th key is dropped
+    // The cap is 24 and not merely "some number below 30": assert the last key
+    // that survives and the first that does not, so a narrower cap — which
+    // would drop the misspelling this list exists to surface — fails here.
+    expect(msg).toContain("`k23`");
+    expect(msg).not.toContain("`k24`");
+  });
+
+  it("prints all 24 keys with NO ellipsis when the list exactly fills the cap", () => {
+    // The other side of the boundary. The ellipsis has to mean "keys were
+    // dropped", so a list that fits must not carry one — otherwise a reader
+    // who cannot find their key in the list cannot tell whether it was
+    // stripped as unknown or merely cut off.
+    const value: Record<string, unknown> = {};
+    for (let i = 0; i < 24; i++) value[`k${i}`] = i;
+    const schema = z.object({ needed: z.string() });
+    const msg = describeParamIssues(issuesOf(schema, value), value);
+    expect(msg).toContain("`k0`");
+    expect(msg).toContain("`k23`");
+    expect(msg).not.toContain(", ….");
+  });
+
+  it("adds the ellipsis as soon as ONE key is over the cap", () => {
+    const value: Record<string, unknown> = {};
+    for (let i = 0; i < 25; i++) value[`k${i}`] = i;
+    const schema = z.object({ needed: z.string() });
+    const msg = describeParamIssues(issuesOf(schema, value), value);
+    expect(msg).toContain("`k23`");
+    expect(msg).not.toContain("`k24`");
+    expect(msg).toContain(", ….");
   });
 
   it("joins several bad parameters into one sentence each", () => {
