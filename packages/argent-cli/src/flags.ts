@@ -13,6 +13,7 @@
 import pc from "picocolors";
 import {
   FLAG_REGISTRY,
+  flagSupportsPlatform,
   getFlagDefinition,
   getFlagsPath,
   readFlags,
@@ -98,19 +99,55 @@ function parseScope(raw: string): FlagScope {
   throw new Error(`--scope must be "project" or "global", got "${raw}"`);
 }
 
+// Platform names as users know them, for messages. Anything unlisted falls
+// through to the raw `process.platform` value rather than being hidden.
+const PLATFORM_NAMES: Record<string, string> = {
+  darwin: "macOS",
+  win32: "Windows",
+  linux: "Linux",
+};
+
+function platformName(platform: string): string {
+  return PLATFORM_NAMES[platform] ?? platform;
+}
+
+/**
+ * A short note that a flag's feature does not exist everywhere, or "" when it
+ * does. Rendered from the flag's declared platforms rather than written into
+ * its description, so the two can never disagree.
+ */
+function platformBadge(def: FlagDefinition, platform: NodeJS.Platform): string {
+  if (def.platforms === undefined) return "";
+  const supported = def.platforms.map(platformName).join(", ");
+  return flagSupportsPlatform(def, platform)
+    ? `[${supported} only]`
+    : `[${supported} only — unavailable on ${platformName(platform)}]`;
+}
+
 // Renders the registry as an indented "Available flags:" block for --help
 // output: one line per flag, `name <padding> description`, so users can see
 // what they can toggle without running `argent flags` first.
-function formatAvailableFlags(registry: readonly FlagDefinition[]): string {
+function formatAvailableFlags(
+  registry: readonly FlagDefinition[],
+  platform: NodeJS.Platform
+): string {
   if (registry.length === 0) {
     return "Available flags:\n  (none defined)";
   }
   const maxName = registry.reduce((m, def) => Math.max(m, def.name.length), 0);
-  const lines = registry.map((def) => `  ${def.name.padEnd(maxName)}  ${def.description}`);
+  const lines = registry.map((def) => {
+    // Prefixed so a truncated read still carries the constraint.
+    const badge = platformBadge(def, platform);
+    return `  ${def.name.padEnd(maxName)}  ${badge ? `${badge} ` : ""}${def.description}`;
+  });
   return ["Available flags:", ...lines].join("\n");
 }
 
-function printToggleHelp(command: "enable" | "disable", registry: readonly FlagDefinition[]): void {
+function printToggleHelp(
+  command: "enable" | "disable",
+  registry: readonly FlagDefinition[],
+  platform: NodeJS.Platform
+): void {
   const summary =
     command === "enable"
       ? "Enable a predefined feature flag (see `argent flags`) at the chosen scope."
@@ -120,7 +157,7 @@ function printToggleHelp(command: "enable" | "disable", registry: readonly FlagD
 
 ${summary}
 
-${formatAvailableFlags(registry)}
+${formatAvailableFlags(registry, platform)}
 
 Storage:
   ~/.argent/flags.json                 (global, default)
@@ -135,10 +172,11 @@ Options:
 function runToggle(
   argv: string[],
   command: "enable" | "disable",
-  registry: readonly FlagDefinition[]
+  registry: readonly FlagDefinition[],
+  platform: NodeJS.Platform
 ): void {
   if (argv.includes("--help") || argv.includes("-h")) {
-    printToggleHelp(command, registry);
+    printToggleHelp(command, registry, platform);
     return;
   }
 
@@ -178,29 +216,51 @@ function runToggle(
 
   if (command === "enable") {
     console.log(`Enabled flag "${parsed.name}" (${parsed.scope}). Stored at ${filePath}.`);
+    // The flag is stored either way — it may well be authored here for a
+    // teammate or a CI host that does support it. Say plainly that nothing
+    // changes *here*, and claim nothing about machines this one cannot see.
+    const def = getFlagDefinition(parsed.name, registry);
+    if (def && !flagSupportsPlatform(def, platform)) {
+      const supported = def.platforms!.map(platformName).join(", ");
+      console.error(
+        `Note: "${parsed.name}" is ${supported}-only, so enabling it has no effect on ${platformName(platform)}.`
+      );
+    }
   } else {
     console.log(`Disabled flag "${parsed.name}" (${parsed.scope}).`);
   }
 }
 
-export function enable(argv: string[], registry: readonly FlagDefinition[] = FLAG_REGISTRY): void {
-  runToggle(argv, "enable", registry);
+export function enable(
+  argv: string[],
+  registry: readonly FlagDefinition[] = FLAG_REGISTRY,
+  platform: NodeJS.Platform = process.platform
+): void {
+  runToggle(argv, "enable", registry, platform);
 }
 
-export function disable(argv: string[], registry: readonly FlagDefinition[] = FLAG_REGISTRY): void {
-  runToggle(argv, "disable", registry);
+export function disable(
+  argv: string[],
+  registry: readonly FlagDefinition[] = FLAG_REGISTRY,
+  platform: NodeJS.Platform = process.platform
+): void {
+  runToggle(argv, "disable", registry, platform);
 }
 
 // `argent flags` — list every registry flag with its description and effective
 // state (project overrides global; unset flags read as disabled).
-export function flags(argv: string[], registry: readonly FlagDefinition[] = FLAG_REGISTRY): void {
+export function flags(
+  argv: string[],
+  registry: readonly FlagDefinition[] = FLAG_REGISTRY,
+  platform: NodeJS.Platform = process.platform
+): void {
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(`Usage: argent flags [--json]
 
 List the available feature flags and their current state. Flags are
 predefined; project-scoped values override global ones.
 
-${formatAvailableFlags(registry)}
+${formatAvailableFlags(registry, platform)}
 
 Options:
   --json   Print machine-readable JSON
@@ -226,6 +286,10 @@ Options:
       // An unset opt-out flag reads as on (its declared default).
       enabled: eff?.value ?? def.defaultEnabled ?? false,
       scope: eff?.scope ?? null,
+      // Null when the feature works everywhere. Deliberately the durable fact
+      // rather than a "supported here" boolean, which would be wrong the moment
+      // the output is read on another host.
+      platforms: def.platforms ? [...def.platforms] : null,
     };
   });
 
@@ -266,7 +330,13 @@ Options:
     const maxName = registryView.reduce((m, f) => Math.max(m, f.name.length), 0);
     for (const f of registryView) {
       const scopeLabel = f.scope ? ` (${f.scope})` : "";
-      console.log(`  ${f.name.padEnd(maxName, " ")}  ${colorState(f.enabled)}${scopeLabel}`);
+      const def = getFlagDefinition(f.name, registry);
+      // Beside the "enabled" word, which is exactly what misleads without it.
+      const badge = def ? platformBadge(def, platform) : "";
+      const badgeLabel = badge ? `  ${badge}` : "";
+      console.log(
+        `  ${f.name.padEnd(maxName, " ")}  ${colorState(f.enabled)}${scopeLabel}${badgeLabel}`
+      );
       console.log(`  ${" ".repeat(maxName)}  ${f.description}`);
     }
   }

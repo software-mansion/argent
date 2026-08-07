@@ -200,6 +200,13 @@ export function createRegistry(): Registry {
   // enable/disable argent-lens` takes effect on the next tools/list WITHOUT
   // restarting the long-lived tool-server. Platform gates at registration; the
   // flag gates at the exposure boundary.
+  //
+  // The same macOS-only fact is declared on the flag itself (`platforms` in
+  // FLAG_REGISTRY) so `argent enable` and `argent flags` can say so instead of
+  // reporting success for a flag that cannot take effect. The two are kept
+  // separate rather than derived from one another: reading the registry here
+  // would register these tools on every platform the day the flag graduates and
+  // its entry is removed. A test pins them together.
   if (process.platform === "darwin") {
     registry.registerTool(createProposeVariantTool(registry));
     registry.registerTool(awaitUserSelectionTool);

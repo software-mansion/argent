@@ -45,6 +45,25 @@ export interface FlagDefinition {
   // entry both read as on. Omit (falsey) for the usual opt-IN flags, which are
   // off until enabled. Runtime callers get the default via `isFeatureEnabled`.
   readonly defaultEnabled?: boolean;
+  // Platforms the underlying feature exists on. Omit when it works everywhere.
+  // Listing them lets `argent enable` and `argent flags` say so, instead of
+  // reporting success for a flag that cannot take effect on this host.
+  //
+  // Reads stay platform-blind on purpose: a flag committed to a project by a
+  // teammate on a supported host must not behave differently here, so this
+  // affects what the CLI *says*, never what `isFlagEnabled` answers.
+  readonly platforms?: readonly NodeJS.Platform[];
+}
+
+/**
+ * Whether a flag's feature exists on a platform. A flag that lists no platforms
+ * works everywhere.
+ */
+export function flagSupportsPlatform(
+  def: FlagDefinition,
+  platform: NodeJS.Platform = process.platform
+): boolean {
+  return def.platforms === undefined || def.platforms.includes(platform);
 }
 
 // The flags argent recognizes. Adding one entry here is the only change needed
@@ -58,6 +77,11 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     name: "argent-lens",
     description:
       "Argent Lens — the propose_variant / await_user_selection tools and the Electron preview window for staging UI design variants and letting a human pick among them. Off by default while the feature is in development.",
+    // The Lens window and `argent lens` drive Terminal/iTerm and the simulator
+    // stream through macOS-only paths, so the tools are not registered at all
+    // elsewhere. Must stay in step with the platform gate in the tool-server's
+    // setup-registry, which a test pins.
+    platforms: ["darwin"],
   },
   {
     name: "artifacts-list-endpoint",
