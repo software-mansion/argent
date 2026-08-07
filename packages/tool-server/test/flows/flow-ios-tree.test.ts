@@ -194,7 +194,11 @@ describe("flow iOS full-hierarchy source", () => {
       "Flow selector steps auto-target and cannot provide a bundleId"
     );
     expect(error.message).toContain("to the foreground with launch-app");
-    expect(error.message).toContain("terminate the other connected apps");
+    // Clearing the other apps has to name something the agent can actually run:
+    // argent exposes no terminate tool, and restart-app would bring the very app
+    // being cleared back to the front.
+    expect(error.message).toContain("xcrun simctl terminate <udid> <bundleId>");
+    expect(error.message).toContain("argent exposes no terminate tool");
     // Backgrounding is the wrong half of that advice — it leaves them connected
     // and, once suspended, unable to answer the state probe at all.
     expect(error.message).not.toContain("background or terminate");
@@ -296,8 +300,11 @@ describe("flow iOS full-hierarchy source", () => {
     const error = await queryFullHierarchyTree(registryFor(api), DEVICE).catch((err) => err);
 
     expect(error.message).toContain("com.example.driven, com.example.stale");
-    expect(error.message).toContain("terminate any other connected app");
-    expect(error.message).not.toContain("restart-app");
+    expect(error.message).toContain("xcrun simctl terminate <udid> <bundleId>");
+    // restart-app may only appear as the thing NOT to reach for: these apps are
+    // instrumented, so relaunching one discards state and cannot fix the read.
+    expect(error.message).not.toMatch(/Relaunch with restart-app/i);
+    expect(error.message).toContain("do not relaunch");
   });
 
   it("keeps every targeting reason short enough to repeat per step", async () => {

@@ -337,9 +337,11 @@ export async function queryFullHierarchyTree(
           `${withoutExplicitBundleIdAdvice(errMsg(err))}\n` +
           `Flow selector steps auto-target and cannot provide a bundleId. Bring the intended app to ` +
           `the foreground with launch-app (it does not terminate, so its instrumentation survives), ` +
-          `and terminate the other connected apps, then retry. Backgrounding them ` +
-          `does not help: they stay connected, and once suspended they stop answering the state ` +
-          `probe this read depends on.`,
+          `then retry. If the read stays ambiguous, terminate the other connected apps with ` +
+          `\`xcrun simctl terminate <udid> <bundleId>\`: argent exposes no terminate tool, and ` +
+          `restart-app would relaunch that app frontmost — the opposite of what is needed. ` +
+          `Backgrounding them does not help: they stay connected, and once suspended they stop ` +
+          `answering the state probe this read depends on.`,
         err
       );
     }
@@ -378,8 +380,14 @@ export async function queryFullHierarchyTree(
         `could not read the state of the native-devtools-connected apps, so none could be ` +
           `auto-targeted (${firstClause(err)}). Connected: ${stillConnected.join(", ")}. ` +
           `They are instrumented — do not relaunch. A suspended app stops answering: foreground ` +
-          `the app the flow drives with launch-app (it does not terminate), and terminate any ` +
-          `other connected app, then retry.`,
+          `the app the flow drives with launch-app (it does not terminate), then retry.` +
+          // Only worth saying when there IS another connection to clear, and it
+          // has to name a command that exists: argent exposes no terminate tool,
+          // and restart-app on the other app would make it frontmost instead.
+          (stillConnected.length > 1
+            ? ` To clear the others use \`xcrun simctl terminate <udid> <bundleId>\` — argent ` +
+              `exposes no terminate tool, and restart-app would bring that app to the front instead.`
+            : ``),
         err
       );
     }
