@@ -10,7 +10,10 @@ vi.mock("../src/utils/device-info", () => ({
     state: "Booted",
   })),
 }));
-vi.mock("../src/tools/describe/platforms/ios", () => ({ describeIos: vi.fn() }));
+vi.mock("../src/tools/describe/platforms/ios", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  describeIos: vi.fn(),
+}));
 vi.mock("../src/tools/describe/platforms/android", () => ({ describeAndroid: vi.fn() }));
 // captureElementFrame probes isTvOsSimulator() — a real `xcrun simctl list`
 // that never caches for a fake UDID, so it re-runs per call and takes seconds

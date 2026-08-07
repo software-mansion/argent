@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
+import { isFlagEnabled } from "@argent/configuration-core";
 import {
   listAndroidDevices,
   listAvds,
@@ -7,7 +8,7 @@ import {
   ADB_DEVICES_TIMEOUT_MS,
 } from "../../utils/adb";
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
-import { listIosSimulators, type IosSimulator } from "../../utils/ios-devices";
+import { listIosSimulators, listIosDevices } from "../../utils/ios-devices";
 import { simctlListDevices } from "../../utils/sim-remote";
 import { withRemotePrefix } from "../../utils/device-info";
 import { discoverChromiumDevices, type ChromiumDevice } from "../../utils/chromium-discovery";
@@ -16,7 +17,24 @@ import {
   filterVvdShadowsFromAndroid,
   type VegaDevice,
 } from "../../utils/vega-devices";
-type IosDevice = IosSimulator & { platform: "ios" };
+
+const PHYSICAL_IOS_FLAG = "physical-ios-devices";
+
+type IosDevice = {
+  platform: "ios";
+  udid: string;
+  name: string;
+  state: string;
+  // "simulator" for an `xcrun simctl` simulator, "device" for a physical iPhone
+  // discovered via `xcrun devicectl` and driven over CoreDevice by the sim-server.
+  kind: "simulator" | "device";
+  // simulators only (the iOS runtime, e.g. "com.apple.CoreSimulator.SimRuntime.iOS-18-5")
+  runtime?: string;
+  // simulators only: "tv" for an Apple TV simulator, "mobile" for iOS/iPadOS.
+  runtimeKind?: "mobile" | "tv";
+  // physical devices only (Apple product type, e.g. "iPhone15,4")
+  productType?: string | null;
+};
 
 type IosRemoteDevice = {
   platform: "ios-remote";
@@ -42,15 +60,18 @@ type AndroidDevice = {
   runtimeKind?: "mobile" | "tv";
 };
 
-type ListDevicesResult = {
+export type ListDevicesResult = {
   devices: Array<IosDevice | IosRemoteDevice | AndroidDevice | ChromiumDevice | VegaDevice>;
   avds: Array<{ name: string }>;
 };
 
+// A simulator is ready when "Booted"; a physical device is ready when "connected".
+const iosReady = (d: IosDevice): boolean => d.state === "Booted" || d.state === "connected";
+
 function sortIos(a: IosDevice, b: IosDevice): number {
-  const aBooted = a.state === "Booted" ? 0 : 1;
-  const bBooted = b.state === "Booted" ? 0 : 1;
-  if (aBooted !== bBooted) return aBooted - bBooted;
+  const aReady = iosReady(a) ? 0 : 1;
+  const bReady = iosReady(b) ? 0 : 1;
+  if (aReady !== bReady) return aReady - bReady;
   const aIpad = a.name.includes("iPad") ? 1 : 0;
   const bIpad = b.name.includes("iPad") ? 1 : 0;
   return aIpad - bIpad;
@@ -70,10 +91,11 @@ function sortAndroid(a: AndroidDevice, b: AndroidDevice): number {
 function readinessRank(
   d: IosDevice | IosRemoteDevice | AndroidDevice | ChromiumDevice | VegaDevice
 ): number {
+  if (d.platform === "ios") return iosReady(d) ? 0 : 1;
   if (d.platform === "android") return d.state === "device" ? 0 : 1;
   if (d.platform === "vega") return d.state === "running" || d.state === "device" ? 0 : 1;
   if (d.platform === "chromium") return 0; // Chromium entries are only listed when their CDP is responsive
-  return d.state === "Booted" ? 0 : 1; // ios + ios-remote
+  return d.state === "Booted" ? 0 : 1; // ios-remote
 }
 
 /**
@@ -201,10 +223,11 @@ export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesR
     },
     failedMsg: ({ failureSignal }) => `Failed to list devices: ${failureSignal.error_code}`,
   },
-  description: `List iOS simulators, Android emulators, connected physical Android devices, running Chromium apps, and Vega (Fire TV) devices in one place.
+  description: `List iOS simulators, connected physical iPhones, Android emulators, connected physical Android devices, running Chromium apps, and Vega (Fire TV) devices in one place.
 Use at the start of a session to pick a target id ('udid' for iOS entries, 'serial' for Android/Vega entries, 'id' for Chromium) to pass to interaction tools, and to see which targets are already running.
 Returns { devices, avds } where each device carries a 'platform' discriminator ('ios', 'android', 'chromium', or 'vega'); 'avds' lists Android AVDs bootable via boot-device. A Vega VVD is listed under 'devices' whether running or stopped (state 'running'/'stopped'); start a stopped one with boot-device using its 'vvdImage'.
 Android entries also carry a 'kind' ('emulator' for a local AVD, 'device' for a physical phone connected over USB / wireless adb) — physical phones are detected from \`adb devices\` (any serial that is not an \`emulator-*\` one) and are driven through the same interaction tools as emulators; they do not need boot-device (just connect the phone with USB debugging authorised).
+iOS entries likewise carry a 'kind' ('simulator', or 'device' for a connected physical iPhone). Physical iOS devices require the 'physical-ios-devices' flag (\`argent enable physical-ios-devices\`) and a device with Developer Mode enabled that has been connected to Xcode/devicectl at least once (so the CoreDevice Developer Disk Image is mounted); they are driven root-free over USB by the simulator-server. Capture, single-touch input, hardware buttons, typing, accessibility reads and app lifecycle all work on hardware; multi-touch, and every tool whose backend is simulator-only - the ones that inject argent's devtools into the app, and the ones that drive simctl - do not, and reject a 'device' udid with a clear "not supported" error instead of failing on the device; each tool's own capability declaration is what decides, and the README's physical-iOS section lists the current set.
 TV targets are tagged with runtimeKind 'tv' (Apple TV simulators on iOS, Android TV / leanback devices on Android) — these are focus-driven, not touch-driven: use \`describe\` to read focus, \`tv-remote\` for remote presses (up/down/left/right/select/back/menu/home), and \`keyboard\` to type, rather than the coordinate/gesture tools.
 iOS simulators from an additional CoreSimulator device set (the 'ios.additionalDeviceSets' configuration — e.g. devices created by Radon IDE) are listed alongside default-set ones, tagged with their owning 'deviceSet' path; they are driven through the same tools by udid, but run headless (no Simulator.app window attaches to them).
 Chromium apps are discovered by probing CDP debugging ports (default 9222; extend via the ARGENT_CHROMIUM_PORTS=<comma-separated-ports> env var). They must already be running with --remote-debugging-port=<port> — use boot-device with electronAppPath to launch one.
@@ -223,9 +246,15 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
     // timer is cleared on the fast happy path). The deadline only substitutes a
     // fallback on *slowness*; a rejection still propagates exactly as before — so the
     // `.catch(() => [])` wrappers (and the lack of one on iOS/AVDs) are unchanged.
-    const [ios, iosRemote, android, avds, chromium, vega] = await Promise.all([
+    const physicalIosEnabled = isFlagEnabled(PHYSICAL_IOS_FLAG);
+    const [ios, iosRemote, iosPhysical, android, avds, chromium, vega] = await Promise.all([
       withDeadline(listIosSimulators(), [], "ios"),
       withDeadline(listRemoteIosSimulators(), [], "ios-remote"),
+      withDeadline(
+        physicalIosEnabled ? listIosDevices().catch(() => []) : Promise.resolve([]),
+        [],
+        "ios-physical"
+      ),
       withDeadline(
         // Opt into runtimeKind enrichment (list-devices surfaces TV vs mobile to
         // the agent, so the extra feature probe per device is warranted here — the
@@ -250,7 +279,29 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
         "vega"
       ),
     ]);
-    const iosTagged: IosDevice[] = ios.map((s) => ({ platform: "ios", ...s }));
+    const iosTagged: IosDevice[] = [
+      ...ios.map(
+        (s): IosDevice => ({
+          platform: "ios",
+          kind: "simulator",
+          udid: s.udid,
+          name: s.name,
+          state: s.state,
+          runtime: s.runtime,
+          runtimeKind: s.runtimeKind,
+        })
+      ),
+      ...iosPhysical.map(
+        (d): IosDevice => ({
+          platform: "ios",
+          kind: "device",
+          udid: d.udid,
+          name: d.name,
+          state: d.state,
+          productType: d.productType,
+        })
+      ),
+    ];
     iosTagged.sort(sortIos);
     iosRemote.sort(sortIosRemote);
     const androidTagged: AndroidDevice[] = android.map((d) => ({

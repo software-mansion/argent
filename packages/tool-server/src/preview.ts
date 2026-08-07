@@ -10,7 +10,7 @@ import { simulatorServerRef, type SimulatorServerApi } from "./blueprints/simula
 import { resolveDevice } from "./utils/device-info";
 import { classifyDeviceForTelemetry } from "./utils/telemetry-platform";
 import { shutdownDevice } from "./utils/device-shutdown";
-import { listDevicesTool } from "./tools/devices/list-devices";
+import { listDevicesTool, type ListDevicesResult } from "./tools/devices/list-devices";
 import {
   variantProposalStore,
   type StoreSnapshot,
@@ -55,6 +55,65 @@ function wsUrlFromHttp(httpUrl: string): string {
   const u = new URL(httpUrl);
   const scheme = u.protocol === "https:" ? "wss:" : "ws:";
   return `${scheme}//${u.host}/ws`;
+}
+
+type PreviewEntry = {
+  udid: string;
+  name: string;
+  state: string;
+  runtime: string;
+  isAvailable: boolean;
+  platform: "ios" | "android";
+};
+
+/**
+ * Map the `list-devices` result to the targets the preview UI can actually
+ * drive. The UI keys off `udid` and `state === "Booted"` (iOS terminology), so
+ * Android serials are remapped to that shape — `simulator-server/:udid` already
+ * accepts Android serials via `resolveDevice(udid)`.
+ *
+ * Chromium is excluded because it has no simulator-server WebSocket to stream
+ * frames from at all. Physical iPhones are excluded because the preview's
+ * describe-driven overlay places its bubbles from element frames, and the
+ * CoreDevice accessibility read reports no geometry — every frame is synthesised
+ * from list position, so the overlay would anchor to positions no element
+ * occupies. (`ios_device` does stream frames, so lifting this is a matter of the
+ * overlay gaining a geometry-free mode, not of the transport.) Both should be
+ * driven through the MCP tools (screenshot, describe, gesture-*) directly.
+ *
+ * This is also the whitelist the preview's device-id guard is built from, so a
+ * target excluded here is rejected by /simulator-server/:udid, /describe/:udid,
+ * /boot and /shutdown too.
+ */
+export function devicesToPreviewEntries(devices: ListDevicesResult["devices"]): PreviewEntry[] {
+  return devices.flatMap<PreviewEntry>((d) => {
+    if (d.platform === "ios") {
+      if (d.kind === "device") return [];
+      return [
+        {
+          udid: d.udid,
+          name: d.name,
+          state: d.state,
+          runtime: d.runtime ?? "",
+          isAvailable: true,
+          platform: "ios",
+        },
+      ];
+    }
+    if (d.platform === "android") {
+      return [
+        {
+          udid: d.serial,
+          name: d.avdName ?? d.model ?? d.serial,
+          state: d.state === "device" ? "Booted" : d.state,
+          runtime: d.sdkLevel != null ? `Android API ${d.sdkLevel}` : "Android",
+          isAvailable: true,
+          platform: "android",
+        },
+      ];
+    }
+    return [];
+  });
 }
 
 export function createPreviewRouter(registry: Registry): Router {
@@ -139,26 +198,20 @@ export function createPreviewRouter(registry: Registry): Router {
   let knownDevices: { ids: Set<string>; at: number } | null = null;
   let knownDevicesInFlight: Promise<Set<string>> | null = null;
 
-  // Mirror the original `.some()` guard exactly: an iOS device is keyed by its
-  // udid, every other platform by its serial (a chromium entry has neither, so
-  // it's skipped — it was never a valid preview target anyway).
-  function deviceIdSet(
-    devices: ReadonlyArray<{ platform: string; udid?: string; serial?: string }>
-  ): Set<string> {
-    const ids = new Set<string>();
-    for (const d of devices) {
-      const id = d.platform === "ios" ? d.udid : d.serial;
-      if (typeof id === "string") ids.add(id);
-    }
-    return ids;
+  // The guard set is exactly what the dropdown offers: `devicesToPreviewEntries`
+  // already keys every entry by the id the preview routes take (udid for iOS,
+  // serial remapped onto `udid` for Android) and drops the targets the preview
+  // can't drive. Deriving the guard from it keeps the two from disagreeing —
+  // otherwise a target the UI refuses to list is still accepted by
+  // /simulator-server/:udid, /describe/:udid, /boot and /shutdown.
+  function deviceIdSet(devices: ListDevicesResult["devices"]): Set<string> {
+    return new Set(devicesToPreviewEntries(devices).map((e) => e.udid));
   }
 
   // Record a freshly-resolved device list into the cache (used by both the
   // dedicated refresh below and the /simulators handler, which already fetches
   // the full list for its dropdown).
-  function rememberDevices(
-    devices: ReadonlyArray<{ platform: string; udid?: string; serial?: string }>
-  ): void {
+  function rememberDevices(devices: ListDevicesResult["devices"]): void {
     knownDevices = { ids: deviceIdSet(devices), at: Date.now() };
   }
 
@@ -172,9 +225,7 @@ export function createPreviewRouter(registry: Registry): Router {
     }
     if (knownDevicesInFlight) return knownDevicesInFlight;
     knownDevicesInFlight = registry
-      .invokeTool<{
-        devices: Array<{ platform: string; udid?: string; serial?: string }>;
-      }>(listDevicesTool.id)
+      .invokeTool<ListDevicesResult>(listDevicesTool.id)
       .then((data) => {
         rememberDevices(data.devices);
         return knownDevices!.ids;
@@ -187,71 +238,19 @@ export function createPreviewRouter(registry: Registry): Router {
 
   router.get("/simulators", async (_req: Request, res: Response) => {
     try {
-      const data = await registry.invokeTool<{
-        devices: Array<
-          | { platform: "ios"; udid: string; name: string; state: string; runtime: string }
-          | {
-              platform: "android";
-              serial: string;
-              state: string;
-              avdName?: string;
-              model?: string;
-              sdkLevel?: number | null;
-            }
-          | { platform: "chromium"; id: string; title: string; port: number }
-        >;
-      }>(listDevicesTool.id);
-      // The preview UI keys off `udid` and `state === "Booted"`, which are
-      // iOS terminology. Map Android serials to the same shape so the same
-      // dropdown can target both platforms — `simulator-server/:udid` already
-      // accepts Android serials via `resolveDevice(udid)`.
-      //
-      // Chromium is intentionally excluded: the preview UI streams frames
-      // through simulator-server's WebSocket, which only exists for iOS /
-      // Android. Surfacing chromium entries would let the UI offer a target
-      // it can't actually drive. Chromium consumers should use the MCP tools
-      // (screenshot, describe, gesture-*) directly.
-      type PreviewEntry = {
-        udid: string;
-        name: string;
-        state: string;
-        runtime: string;
-        isAvailable: boolean;
-        platform: "ios" | "android";
-      };
-      const simulators = data.devices.flatMap<PreviewEntry>((d) => {
-        if (d.platform === "ios") {
-          return [
-            {
-              udid: d.udid,
-              name: d.name,
-              state: d.state,
-              runtime: d.runtime,
-              isAvailable: true,
-              platform: "ios",
-            },
-          ];
-        }
-        if (d.platform === "android") {
-          return [
-            {
-              udid: d.serial,
-              name: d.avdName ?? d.model ?? d.serial,
-              state: d.state === "device" ? "Booted" : d.state,
-              runtime: d.sdkLevel != null ? `Android API ${d.sdkLevel}` : "Android",
-              isAvailable: true,
-              platform: "android",
-            },
-          ];
-        }
-        return [];
-      });
+      // Reuse list-devices' own result type rather than a hand-rolled copy, so
+      // the preview's view of a device can't silently drift from what the tool
+      // actually returns (e.g. physical-iOS entries carrying `kind`/no runtime).
+      const data = await registry.invokeTool<ListDevicesResult>(listDevicesTool.id);
       // This is the authoritative fresh device list — prime the validation
       // cache so the immediately-following connect (/simulator-server/:udid)
       // and the describe poll loop hit a warm, correct set instead of each
       // re-running `list-devices`.
       rememberDevices(data.devices);
-      res.json({ simulators });
+      // devicesToPreviewEntries maps iOS/Android into the UI's udid/Booted shape
+      // and excludes chromium and physical iOS (kind: "device") — see its doc
+      // comment for why each is left out.
+      res.json({ simulators: devicesToPreviewEntries(data.devices) });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
@@ -405,11 +404,11 @@ export function createPreviewRouter(registry: Registry): Router {
       // One fresh `list-devices` (boot is a rare, user-initiated action, never
       // hot-polled) drives the already-running check below; it also re-warms the
       // cache for the connect/describe poll that follows a successful boot.
-      const data = await registry.invokeTool<{
-        devices: Array<{ platform: string; udid?: string; serial?: string; state?: string }>;
-      }>(listDevicesTool.id);
+      const data = await registry.invokeTool<ListDevicesResult>(listDevicesTool.id);
       rememberDevices(data.devices); // warm the connect/describe validation cache
-      const entry = data.devices.find((d) => (d.platform === "ios" ? d.udid : d.serial) === udid);
+      // Match against the same mapped entries the guard and the dropdown use, so
+      // "known" means the same thing on all three paths.
+      const entry = devicesToPreviewEntries(data.devices).find((e) => e.udid === udid);
       if (!entry) {
         res
           .status(400)

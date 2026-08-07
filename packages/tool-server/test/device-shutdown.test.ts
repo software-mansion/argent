@@ -102,6 +102,26 @@ describe("shutdownOwnedDevice (best-effort, swallows errors)", () => {
     await shutdownOwnedDevices(["A", "B"]);
     expect(execFileMock).toHaveBeenCalledTimes(2);
   });
+
+  it("leaves a physical iPhone alone at session teardown", async () => {
+    // Lens tears down the devices it booted. A physical iPhone was never ours
+    // to boot, so it is never ours to power off — and `simctl shutdown` could
+    // not do it anyway. Mirrors the physical-Android exclusion below.
+    resolveDeviceMock.mockReturnValue({ platform: "ios", kind: "device" });
+    await shutdownOwnedDevice("00008120-000E6D0C0ABBA01E");
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves a physical Android phone alone at session teardown", async () => {
+    // The other half of the same rule, and the one that decides whether this
+    // function is scoped by kind at all: platform alone sends a phone serial to
+    // `adb -s <serial> emu kill`, and the failure is swallowed, so nothing here
+    // reports that teardown reached for a device Lens never booted.
+    resolveDeviceMock.mockReturnValue({ platform: "android", kind: "device" });
+    await shutdownOwnedDevice("R5CT30ABCDE");
+    expect(resolveAndroidBinaryMock).not.toHaveBeenCalled();
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("shutdownDevice (surfaces the outcome)", () => {
@@ -130,6 +150,18 @@ describe("shutdownDevice (surfaces the outcome)", () => {
     const r = await shutdownDevice("PHONE123");
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/physical Android/i);
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("physical iPhone -> ok:false with a reason, no simctl", async () => {
+    // The `kind` half of the iOS branch. Platform alone would send a hardware
+    // UDID to `xcrun simctl shutdown`, which answers "Invalid device" — the UI
+    // would then blame the UDID rather than say the phone can't be powered off
+    // remotely. Same shape as the physical-Android case above.
+    resolveDeviceMock.mockReturnValue({ platform: "ios", kind: "device" });
+    const r = await shutdownDevice("00008120-000E6D0C0ABBA01E");
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/physical iPhone/i);
     expect(execFileMock).not.toHaveBeenCalled();
   });
 

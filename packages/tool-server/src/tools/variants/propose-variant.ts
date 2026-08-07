@@ -19,10 +19,12 @@ const zodSchema = z.object({
     .max(200)
     .optional()
     .describe(
-      "Device id (iOS udid / Android serial) the variants were captured on. The preview window " +
-        "streams THIS device directly — pass the same udid you screenshotted/described with, so " +
-        "the human never has to pick a simulator. Set it on the first propose_variant of a round; " +
-        "later calls may omit it (the last non-empty value wins)."
+      "Device id (iOS simulator udid / Android serial) the variants were captured on. The preview " +
+        "window streams THIS device directly — pass the same udid you screenshotted/described " +
+        "with, so the human never has to pick a simulator. A physical iPhone is not a preview " +
+        "target (the overlay places its bubbles from element frames, and the CoreDevice read " +
+        "reports none), so the window cannot stream one. Set it on the first propose_variant of a " +
+        "round; later calls may omit it (the last non-empty value wins)."
     ),
   match: z
     .object({

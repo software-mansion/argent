@@ -16,7 +16,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const describeIosMock = vi.fn();
 const describeAndroidMock = vi.fn();
 
-vi.mock("../src/tools/describe/platforms/ios", () => ({
+vi.mock("../src/tools/describe/platforms/ios", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
   describeIos: (...args: unknown[]) => describeIosMock(...args),
 }));
 vi.mock("../src/tools/describe/platforms/android", () => ({

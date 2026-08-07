@@ -55,7 +55,7 @@ vi.mock("@argent/native-devtools-ios", async () => {
 });
 
 import { ensureAutomationEnabled, isEntitlementBypassActive } from "../src/utils/ax-prefs";
-import { listIosSimulators } from "../src/utils/ios-devices";
+import { listIosDevices, listIosSimulators } from "../src/utils/ios-devices";
 import { localIosHost } from "../src/utils/ios-host";
 
 beforeEach(() => {
@@ -64,6 +64,21 @@ beforeEach(() => {
 
 function xcrunCalls() {
   return calls.filter((c) => c.cmd === "xcrun" && c.args[0] === "simctl");
+}
+
+function devicectlCalls() {
+  return calls.filter((c) => c.cmd === "xcrun" && c.args[0] === "devicectl");
+}
+
+/** Run `fn` as though the host were `platform`. */
+async function asPlatform(platform: string, fn: () => Promise<unknown>) {
+  const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { ...original, value: platform });
+  try {
+    await fn();
+  } finally {
+    Object.defineProperty(process, "platform", original);
+  }
 }
 
 describe("iOS simctl calls are hard-killed on timeout (SIGKILL, not SIGTERM)", () => {
@@ -135,5 +150,37 @@ describe("iOS simctl calls are hard-killed on timeout (SIGKILL, not SIGTERM)", (
       expect(c.options?.killSignal).toBe("SIGKILL");
       expect(typeof c.options?.timeout).toBe("number");
     }
+  });
+});
+
+// `devicectl` is a second Xcode CLI on the same discovery path, reached by
+// `list-devices` on every call. The `simctl` filter above cannot see it, so the
+// hazard these tests exist for — a wedged Xcode CLI that traps SIGTERM and never
+// settles, leaking one stuck process per invocation — is unguarded for it
+// otherwise.
+describe("iOS devicectl discovery is bounded the same way simctl is", () => {
+  it("passes killSignal SIGKILL + a finite timeout, and asks for machine-readable output only", async () => {
+    await asPlatform("darwin", () => listIosDevices());
+    const devicectl = devicectlCalls();
+    expect(devicectl.length).toBe(1);
+    expect(devicectl[0]!.options?.killSignal).toBe("SIGKILL");
+    expect(typeof devicectl[0]!.options?.timeout).toBe("number");
+    // `--quiet` keeps the human-readable table off stdout; without it the JSON
+    // is not the whole stream and the parse this feeds silently yields nothing.
+    expect(devicectl[0]!.args).toEqual([
+      "devicectl",
+      "list",
+      "devices",
+      "--quiet",
+      "--json-output",
+      "-",
+    ]);
+  });
+
+  it("does not shell Xcode at all off macOS", async () => {
+    // list-devices runs on every session on Linux and Windows too; without the
+    // host guard each call pays a spawn that can only ENOENT.
+    await asPlatform("linux", () => listIosDevices());
+    expect(calls).toEqual([]);
   });
 });

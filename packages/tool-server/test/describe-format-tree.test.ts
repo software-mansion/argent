@@ -512,4 +512,32 @@ describe("formatDescribeTree", () => {
     expect(out).toContain("Mode: nested");
     expect(out).toMatch(/Button\s+"Like"/);
   });
+
+  it("warns that a coredevice-ax tree's frames are placeholders, not tap coordinates", () => {
+    // A physical iPhone's frames are synthesised from list position. Rendered
+    // under the generic header, they read as measurements — and the header is
+    // the only place the renderer says otherwise, since the frames themselves
+    // look ordinary. The two other sources must NOT get the warning, or it stops
+    // meaning anything.
+    const root: DescribeNode = {
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        leaf({
+          role: "AXButton",
+          label: "Wi-Fi",
+          frame: { x: 0.04, y: 0.2, width: 0.92, height: 0.05 },
+        }),
+      ],
+    };
+
+    const physical = formatDescribeTree(root, { source: "coredevice-ax" });
+    expect(physical).toContain("Source: coredevice-ax");
+    expect(physical).toMatch(/FRAMES ARE PLACEHOLDERS/);
+    expect(physical).toMatch(/never as tap coordinates/);
+
+    for (const source of ["ax-service", "uiautomator"] as const) {
+      expect(formatDescribeTree(root, { source }), source).not.toMatch(/FRAMES ARE PLACEHOLDERS/);
+    }
+  });
 });

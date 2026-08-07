@@ -34,9 +34,19 @@ describe("profiler-stack-query / profiler-combined-report Android capability", (
         expect(() => assertSupported(tool.id, tool.capability, androidUnknown)).not.toThrow();
       });
 
-      it("is still supported on Apple simulator + device", () => {
+      it("is still supported on an iOS simulator", () => {
         expect(() => assertSupported(tool.id, tool.capability, iosSim)).not.toThrow();
-        expect(() => assertSupported(tool.id, tool.capability, iosDevice)).not.toThrow();
+      });
+
+      // These read a trace the native profiler captured. A physical iPhone has
+      // no capture path — `native-profiler-start` rejects it at the gate — so a
+      // trace can never exist for one, and letting it through only produces a
+      // "run native-profiler-stop → native-profiler-analyze first" dead-end
+      // pointing at two tools that reject it as well.
+      it("is not supported on a physical iPhone", () => {
+        expect(() => assertSupported(tool.id, tool.capability, iosDevice)).toThrow(
+          /not supported on ios device/
+        );
       });
     });
   }

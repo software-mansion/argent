@@ -37,6 +37,7 @@ vi.mock("../src/utils/sim-remote", async () => {
 });
 
 import { httpDeepLinkNote } from "../src/tools/open-url/deep-link-note";
+import { openUrlTool } from "../src/tools/open-url";
 import { iosImpl } from "../src/tools/open-url/platforms/ios";
 import { androidImpl } from "../src/tools/open-url/platforms/android";
 import { iosRemoteImpl } from "../src/tools/open-url/platforms/ios-remote";
@@ -145,5 +146,50 @@ describe("open-url iOS remote handler surfaces the caveat only for web URLs", ()
     const res = await iosRemoteImpl.handler({}, { udid: "SIM", url: "maps://" }, device);
     expect(res.opened).toBe(true);
     expect(res.note).toBeUndefined();
+  });
+});
+
+describe("open-url rejects a url with no scheme", () => {
+  const parse = (url: string) => openUrlTool.zodSchema!.safeParse({ udid: "device-1", url });
+
+  it("refuses a value that would reach devicectl as a flag", () => {
+    // `xcrun devicectl device process openURL --device <udid> --help` exits 0
+    // and prints help, so without this the physical-iOS path returns
+    // `opened: true` for a URL it never opened. Same class the sibling
+    // launch-app closes with BUNDLE_ID_PATTERN.
+    for (const url of ["--help", "-v", "--device"]) {
+      expect(parse(url).success, `${url} must be rejected`).toBe(false);
+    }
+  });
+
+  it("refuses a flag that carries a scheme further along", () => {
+    // The leading anchor is the only part of the pattern that makes a leading
+    // `-` fatal: the values above contain no colon, so an unanchored pattern
+    // rejects them too and holds nothing. These do contain one, and would reach
+    // devicectl's argv as flags.
+    for (const url of ["--console=http://x", "-o https://example.com", "--url=tel:555"]) {
+      expect(parse(url).success, `${url} must be rejected`).toBe(false);
+    }
+  });
+
+  it("refuses a bare host, which no backend could have opened anyway", () => {
+    expect(parse("example.com").success).toBe(false);
+    expect(parse("").success).toBe(false);
+  });
+
+  it("accepts every scheme shape the description advertises", () => {
+    for (const url of [
+      "https://example.com",
+      "http://example.com/a?b=c#d",
+      "messages://",
+      "tel:555",
+      "geo:37.0,-122.0",
+      "mailto:a@b.co",
+      "myapp://settings/privacy",
+      "about:blank",
+      "x-custom+scheme.v2://path",
+    ]) {
+      expect(parse(url).success, `${url} must be accepted`).toBe(true);
+    }
   });
 });

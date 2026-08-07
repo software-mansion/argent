@@ -23,7 +23,7 @@ Argent drives a growing set of targets through a single toolkit, each with the r
 
 | Platform          | Targets                                                                 | Interaction      |
 | ----------------- | ----------------------------------------------------------------------- | ---------------- |
-| **iOS**           | Simulators                                                              | Touch / gesture  |
+| **iOS**           | Simulators, and physical iPhones over CoreDevice (experimental)         | Touch / gesture  |
 | **Android**       | Emulators (AVDs) and physical devices over adb                          | Touch / gesture  |
 | **TV**            | Apple TV (tvOS), Android TV / Google TV, Amazon Fire TV (Vega)          | D-pad / remote   |
 | **Desktop & web** | Electron and Chromium apps (incl. React Native Web / Expo web) over CDP | Mouse / keyboard |
@@ -45,6 +45,118 @@ Argent drives a growing set of targets through a single toolkit, each with the r
 <p align="center">
   <img src="https://github.com/software-mansion/argent/blob/main/assets/showcase.gif" alt="argent showcase video gif" width="100%" />
 </p>
+
+---
+
+## Physical iOS devices (experimental)
+
+Argent can drive a **physical iPhone** — no app installed on the device — over Apple's
+CoreDevice "remote control" services (the same path Xcode's device window uses). The device
+interaction runs natively inside the bundled **simulator-server** (radon's `ios_device`
+controller). The CoreDevice tunnel is a userspace TCP stack over the USB connection, so every
+command runs unprivileged, with no admin prompt and nothing installed on the host. Supported interactions: `screenshot`, `screen-recording-start` / `screen-recording-stop`,
+`gesture-tap`, `gesture-swipe`, `gesture-custom` (single touch), `keyboard`, `button`, `rotate`,
+`launch-app`, `restart-app`, `reinstall-app`, `open-url`, `screenshot-diff`, `await-screen-idle`,
+`await-ui-element`, `run-sequence`, and
+`describe` (the live on-screen accessibility tree — see the note below). The device shows up in `list-devices` with `kind: "device"`.
+
+**Requirements**
+
+- macOS with **Xcode** installed (its CoreDevice Developer Disk Image must have been mounted
+  once — connecting the device in Xcode does that).
+- The iPhone connected, unlocked, trusted, with **Developer Mode** on.
+- Verified on **iOS 27**; `describe` needs the RSDCheckin handshake iOS 26 added (the
+  sim-server performs it).
+
+**Setup**
+
+1. Enable the feature flag:
+   ```sh
+   argent enable physical-ios-devices
+   ```
+2. Connect the iPhone (unlocked, trusted, Developer Mode on).
+
+`list-devices` then includes the iPhone, and the supported tools work against its UDID. The
+first interaction (or `boot-device`) starts the CoreDevice session automatically over USB —
+no manual step, no `sudo`.
+
+**Limitations / notes**
+
+- `describe` returns the device's **live on-screen accessibility tree** — the frontmost app's
+  elements (or the home screen), read app-free via the iOS-26+ accessibility-audit service over
+  CoreDevice. It tells you **what** is on screen, not **where**. Element labels, values and traits
+  (roles) are exact, but two things are not:
+  - **Frames.** The accessibility read carries no geometry — the inspector publishes no frame
+    attribute for an element — so every frame is a placeholder synthesised from the element's
+    position in the list.
+  - **Order.** The read starts from the device's current VoiceOver cursor and advances it, so
+    consecutive calls return the same elements rotated by one — which also means a given element's
+    synthesised frame changes between calls, and two `describe` results are not comparable. The read
+    also returns at most 120 elements: past that, consecutive calls cover different parts of the
+    screen rather than rotating one set, and `await-screen-idle` says so instead of waiting out its
+    timeout.
+  - **Identifiers.** This read does not surface accessibility identifiers, so every element comes
+    back without one and an `identifier` selector matches nothing — select by label, value or role.
+    Enabled/disabled and selected state _are_ reported, and land on the node's `disabled` /
+    `selected` fields.
+
+  Locate anything you intend to tap with `screenshot` first, and use `screenshot` (not `describe`)
+  to tell whether the screen changed. (For pixel-exact in-app frames + taps you'd need an on-device
+  XCUITest runner, which requires code-signing.)
+
+- **Multi-touch is not available.** `gesture-pinch` and `gesture-rotate` return a clear "not
+  supported" error, and `gesture-custom` rejects any event carrying a second touch point
+  (`x2`/`y2`) — its single-touch sequences (long press, drag-and-drop, custom scroll) work. The
+  device registers a single touch surface, `mainTouchscreen` (HID usage page `0x0D` "Digitizer" /
+  usage `0x04` "Touch Screen"). Its report does carry a contact identifier, and the device accepts
+  reports addressed to different ids, but iOS reads one finger off them all the same: fed
+  byte-identical two-finger input that makes an iOS simulator zoom out a step, enter 3D and pinch,
+  an iPhone 15 on iOS 27 did nothing, panned, and panned by exactly one contact's displacement —
+  and held two contacts still long enough to fire a _single_-finger long press. The surface that
+  sounds like a second candidate, `touchscreenGesture`, enumerates as usage page `0x01` "Generic
+  Desktop" / usage `0x02` "Mouse" — the pointer for the mirroring window, not a second finger.
+
+- **`await-screen-idle` ignores the read's element order here**, because that order rotates every
+  call (see above). "Settled" therefore means the on-screen elements stopped changing, not that
+  the pixels stopped moving: an animation with no accessibility change (a spinner) reads as
+  settled. Each read is a ~2s round trip over the tunnel, so the default `timeoutMs` on a physical
+  iPhone is 15s rather than the 3s used elsewhere. The same rotation makes `await-ui-element`
+  reliable only for `condition: "exists"` — `visible`/`hidden` and `text`'s reading-order pick
+  all read the synthesised frames, and its answer carries a `note` saying so. It gets the same
+  15s default, for the same reason.
+
+- **`reinstall-app` needs a bundle signed for this device**, since it installs through
+  `devicectl device install app`. A simulator `.app`, or one whose provisioning profile does not
+  list the device UDID, fails with a message saying so — as does a locked or untrusted phone,
+  which reports what `devicectl` itself said rather than the signing hint.
+
+- **Flows do not run on a physical iPhone.** `flow-execute` resolves selectors against the native
+  view hierarchy, which needs argent's devtools dylib inside the app; it refuses a hardware udid up
+  front rather than failing on the first selector step. Drive the phone with `describe` +
+  `gesture-*` instead.
+
+- Anything that needs argent's **native devtools** inside the target app is **not supported** and
+  returns a clear "not supported" error: the native inspection tools (`native-*`) attach by
+  injecting a dylib through `simctl spawn`, which has no physical-device equivalent — a real device
+  would need that dylib linked into a signed build. (The `debugger-*` and `react-profiler-*` family
+  is a different mechanism — it talks to the app's JS runtime through Metro, not through the
+  device — so it is not gated here.) `native-profiler-*` is gated for a narrower reason: its iOS
+  capture path resolves the target process and bundle through `simctl spawn` and `simctl listapps`,
+  both simulator-only. The instrument itself is not the obstacle — on Xcode 16.4,
+  `xctrace record --device <ecid> --attach <pid>` profiles a process on a tethered iPhone and
+  returns symbolicated stacks with no code-signing identity on the host, so this one is an
+  unimplemented device path rather than a platform wall. (Attach by pid: the name lookup only sees
+  processes it could launch, so `--attach <name>` reports "Cannot find process" for a process that
+  is running. Xcode 26.4 and later also carry the `--device` recording-start deadlock the
+  simulator capture path already works around.)
+  `settings-permissions` drives `simctl privacy`, which edits a simulator's TCC store on the host
+  filesystem; a physical device exposes no equivalent switch. `devicectl` carries no privacy verb
+  anywhere in its command tree (`device settings` covers appearance, audio, biometrics and reset),
+  and installing a configuration profile instead requires a CMS-signed one, which lands back on the
+  same signing requirement.
+
+- `launch-app`, `restart-app`, `reinstall-app` and `open-url` go through `devicectl` rather than
+  the CoreDevice session, so they work even before the first interaction has warmed it.
 
 ---
 

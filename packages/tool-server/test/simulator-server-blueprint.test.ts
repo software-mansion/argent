@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
-import type { DeviceInfo } from "@argent/registry";
+import { FAILURE_CODES, getFailureSignal, type DeviceInfo } from "@argent/registry";
 import { toSimulatorNetworkError } from "../src/utils/format-error";
 
 // ─── Mocks ───────────────────────────────────────────────────────────
@@ -106,6 +106,32 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("skips the simulator-only prep for a physical iPhone", async () => {
+    // The tvOS probe and the automation toggle both address a sim runtime, so
+    // running them against a hardware UDID can only fail (and `simctl` would be
+    // shelled on the hot path for every session). Nothing else exercises the
+    // iOS branch of the factory with `kind: "device"`, so widening the guard to
+    // run them on hardware goes unnoticed.
+    const fakeProc = makeFakeProc();
+    spawnMock.mockReturnValue(fakeProc);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+    const { isTvOsSimulator } = await import("../src/utils/ios-devices");
+
+    const device: DeviceInfo = {
+      id: "00008120-000E6D0C0ABBA01E",
+      platform: "ios",
+      kind: "device",
+    };
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    signalReady(fakeProc, 55511);
+    await factoryPromise;
+
+    expect(vi.mocked(isTvOsSimulator)).not.toHaveBeenCalled();
+    expect(ensureAutomationEnabledMock).not.toHaveBeenCalled();
+    // …and it still reaches the spawn, on the hardware controller.
+    expect(spawnMock.mock.calls[0]![1][0]).toBe("ios_device");
   });
 
   it("spawns the `ios` subcommand for an iOS device", async () => {
@@ -323,5 +349,59 @@ describe("simulatorServerBlueprint.recoverable — self-heal a wedged sim-server
   it("does NOT recover on an unrelated error carrying no failure signal", async () => {
     const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
     expect(simulatorServerBlueprint.recoverable!(new Error("boom"))).toBe(false);
+  });
+});
+
+describe("a bundled simulator-server that predates the requested controller", () => {
+  beforeEach(async () => {
+    spawnMock.mockReset();
+    ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
+    const { __resetDepCacheForTests, __primeDepCacheForTests } =
+      await import("../src/utils/check-deps");
+    __resetDepCacheForTests();
+    __primeDepCacheForTests(["xcrun", "adb"]);
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /** Run the factory against a child that dies without ever becoming ready. */
+  async function failWith(stderr: string, code: number): Promise<Error> {
+    const fakeProc = makeFakeProc();
+    spawnMock.mockReturnValue(fakeProc);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+    const device = iosDevice("11111111-2222-3333-4444-555555555555");
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    setImmediate(() => {
+      fakeProc.stderr.push(stderr);
+      setImmediate(() => fakeProc.emit("exit", code, null));
+    });
+    return (await factoryPromise.catch((e: unknown) => e)) as Error;
+  }
+
+  it("says to upgrade argent, and buckets apart from a crash", async () => {
+    // Verified against the released binary on this machine: `simulator-server
+    // ios_device --help` exits 1 with exactly this text. The binary ships
+    // inside argent, so "Unrecognized argument" alone gives a user nothing to
+    // act on — it looks like the server crashed, not like their argent is old.
+    const err = await failWith(
+      "Unrecognized argument: ios_device\n\nRun simulator-server --help for more information.\n",
+      1
+    );
+    expect(err.message).toMatch(/predates this feature/);
+    expect(err.message).toMatch(/Upgrade argent/);
+    expect(getFailureSignal(err)?.error_code).toBe(
+      FAILURE_CODES.SIMULATOR_SERVER_SUBCOMMAND_UNSUPPORTED
+    );
+    // Blank stderr lines must not survive into the message as empty segments.
+    expect(err.message).not.toMatch(/\|\s+\|/);
+  });
+
+  it("leaves a genuine crash in its own bucket, with no upgrade advice", async () => {
+    const err = await failWith("thread 'main' panicked at src/main.rs:42\n", 101);
+    expect(err.message).toMatch(/panicked/);
+    expect(err.message).not.toMatch(/Upgrade argent/);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.SIMULATOR_SERVER_READY_EXITED);
   });
 });

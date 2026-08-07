@@ -11,7 +11,10 @@
 import { describe, it, expect, vi } from "vitest";
 import type { Registry } from "@argent/registry";
 
-vi.mock("../src/tools/describe/platforms/ios", () => ({ describeIos: vi.fn() }));
+vi.mock("../src/tools/describe/platforms/ios", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  describeIos: vi.fn(),
+}));
 vi.mock("../src/tools/describe/platforms/android", () => ({ describeAndroid: vi.fn() }));
 vi.mock("../src/utils/device-info", () => ({
   resolveDevice: (udid: string) => ({ id: udid, platform: "ios", kind: "simulator" }),

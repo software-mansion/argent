@@ -15,7 +15,8 @@ import {
   nativeProfilerSessionRef,
   type NativeProfilerSessionApi,
 } from "../../../blueprints/native-profiler-session";
-import { resolveDevice } from "../../../utils/device-info";
+import { isPhysicalIos, resolveDevice } from "../../../utils/device-info";
+import { UnsupportedOperationError } from "../../../utils/capability";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
 import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/index";
@@ -534,12 +535,28 @@ Fails if the session_id is not found or required XML files are missing from disk
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => {
     const svcs: Record<string, ServiceRef> = {};
-    if (params.mode === "load_native") {
+    // `load_native` is the only mode that touches a device; `list` and
+    // `load_react` read the debug directory, so a physical-iPhone udid is fine
+    // for them and the tool stays capable of both. A native trace, though, can
+    // only come from `native-profiler-start`, which is simulator-only — so one
+    // can never exist for hardware, and building the session ref would leave a
+    // NativeProfilerSession in the registry that every reader of it rejects.
+    if (params.mode === "load_native" && !isPhysicalIos(resolveDevice(params.device_id))) {
       svcs.session = nativeProfilerSessionRef(resolveDevice(params.device_id));
     }
     return svcs;
   },
   async execute(services, params) {
+    if (params.mode === "load_native") {
+      const device = resolveDevice(params.device_id);
+      if (isPhysicalIos(device)) {
+        throw new UnsupportedOperationError(
+          "profiler-load",
+          device,
+          "native traces are captured by `native-profiler-start`, which is iOS-simulator-only, so no native session exists for a physical iPhone; `list` and `load_react` work"
+        );
+      }
+    }
     const debugDir = await getDebugDir();
 
     switch (params.mode) {
