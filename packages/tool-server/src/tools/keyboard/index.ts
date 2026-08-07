@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { FAILURE_CODES } from "@argent/registry";
+import { FAILURE_CODES, zodObjectToJsonSchema } from "@argent/registry";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { InvalidToolInputError } from "../../utils/capability";
@@ -14,6 +14,13 @@ import { makeAndroidImpl } from "./platforms/android";
 import { makeChromiumImpl } from "./platforms/chromium";
 import { vegaImpl } from "./platforms/vega";
 
+// NOTE on mutual exclusion: `text` and `key` are at-most-one. As on
+// `boot-device`, zod's `.refine()` returns a ZodEffects the Registry
+// ToolDefinition type does not accept (it requires a ZodObject so the JSON
+// Schema generator can walk `.shape`), so the check lives inside `execute` — and
+// the constraint is restated in BOTH fields' `.describe()` so an MCP client
+// reading either parameter sees it, even if its JSON-schema inspector ignores
+// the runtime.
 const zodSchema = z.object({
   udid: z
     .string()
@@ -24,7 +31,8 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Text to type character by character. Handles uppercase and common punctuation. " +
+      "Text to type character by character. Cannot be combined with `key` in one call — one call per action. " +
+        "Handles uppercase and common punctuation. " +
         "To type a credential without its plaintext ever entering your context, use a secret placeholder: " +
         '`{{secret:<NAME>}}` — e.g. text: "{{secret:APP_PASSWORD}}". The value is resolved on the machine running the ' +
         "tool-server, from the first source that defines the name: the `ARGENT_SECRET_<NAME>` environment variable, " +
@@ -47,6 +55,17 @@ const zodSchema = z.object({
       "Delay in ms between key presses (default 50). Ignored on Android phones/tablets (typed via `adb input text`, which has no per-key cadence), on Vega (text/keys injected in a single shot), and on TV targets (Apple TV / Android TV type the whole string at the daemon's own cadence)."
     ),
 });
+
+// Explicit because the auto-derived JSON Schema carries no cross-field rule — a
+// client that validates arguments against the advertised schema, or constrains
+// generation from it, would otherwise still treat `{ text, key }` as legal and
+// only learn otherwise from a 400. `not.required` is the at-most-one encoding:
+// neither parameter is mandatory (an empty request is a no-op), so this forbids
+// only the pair.
+const inputSchema = {
+  ...zodObjectToJsonSchema(zodSchema),
+  not: { required: ["text", "key"] },
+};
 
 type Params = z.infer<typeof zodSchema>;
 
@@ -111,6 +130,7 @@ Returns { typed: string, keys: number }. Fails if both text and key are given in
 On a TV target (runtimeKind 'tv') only \`text\` applies — focus a text field first (with \`tv-remote\`), then type into it (injected HID keyboard on Apple TV, \`adb input text\` on Android TV).
 Provide text OR key, never both. To type and then submit, use two calls, or two \`keyboard\` steps in one \`run-sequence\`: { text: "hello" } then { key: "enter" }.`,
     zodSchema,
+    inputSchema,
     capability,
     searchHint:
       "type text keyboard input named key enter escape arrow tv vega fire tv search field hid leanback",
