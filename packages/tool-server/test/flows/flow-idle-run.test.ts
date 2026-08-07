@@ -21,9 +21,17 @@ let currentTree: () => DescribeNode;
 let treeDelayMs = 0;
 vi.mock("../../src/tools/flows/flow-tree", () => ({
   fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => {
+    // Pinned to the source this call started against, not to whatever the
+    // module-level `currentTree` holds when the delay elapses. A read the
+    // runner abandoned (`settleWithin` gives up; the underlying fetch does not)
+    // resolves after its own step, and often after `beforeEach` has repointed
+    // `currentTree` at the NEXT case — so an unpinned call reported an orphan
+    // read into a case that never made it, moving where that case's blank read
+    // landed and how many it saw.
+    const source = currentTree;
     if (treeDelayMs > 0) await new Promise((r) => setTimeout(r, treeDelayMs));
     return {
-      tree: currentTree(),
+      tree: source(),
       source: "native-devtools",
       screen: { width: 390, height: 844 },
     };
