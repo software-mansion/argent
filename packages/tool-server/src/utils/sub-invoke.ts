@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { FAILURE_CODES, describeParamIssues, getFailureSignal } from "@argent/registry";
 import type { Registry, ToolContext } from "@argent/registry";
 
 /**
@@ -52,4 +53,41 @@ export async function invokeSubTool<T = unknown>(
   } finally {
     release();
   }
+}
+
+/**
+ * A nested schema rejection re-rendered against the args the CALLER wrote, or
+ * undefined when `err` is not one.
+ *
+ * Every dispatcher injects the device key into the args it forwards —
+ * run-sequence merges `udid` into each step, and the flow runner's
+ * `bindDeviceArgs` strips the recorded device keys and re-injects the resolved
+ * one. The registry can only describe what it was handed, so its message closes
+ * with "You sent: `xx`, `y`, `udid`", naming a key the author never typed
+ * (indeed CANNOT have typed: the recorder strips it so flows stay portable)
+ * beside the misspelling that list exists to expose. Here is the only place
+ * both the dispatched args and the authored ones are in scope.
+ *
+ * Re-parsing rather than short-circuiting the dispatch: the invoke is what
+ * emits `toolInvoked`/`toolFailed` for the step, which the telemetry listener
+ * and the event log both subscribe to. Validating up front instead would make
+ * an invalid step invisible to both — the very signal a schema miss is now
+ * classified to produce. This runs on a failure path only.
+ */
+export function describeNestedParamError(
+  registry: Registry,
+  err: unknown,
+  toolId: string,
+  dispatchedArgs: unknown,
+  authoredArgs: unknown
+): string | undefined {
+  if (getFailureSignal(err)?.error_code !== FAILURE_CODES.TOOL_INPUT_INVALID) return undefined;
+  const zodSchema = registry.getTool(toolId)?.zodSchema;
+  if (!zodSchema) return undefined;
+  // `?? {}` mirrors what the registry parsed, so the issues are the same ones.
+  const parsed = zodSchema.safeParse(dispatchedArgs ?? {});
+  // Defensive: the rejection came from this parse, so a success here would mean
+  // the schema is not a pure function of its input. Leave the original message.
+  if (parsed.success) return undefined;
+  return `Invalid params for tool "${toolId}": ${describeParamIssues(parsed.error, authoredArgs)}`;
 }

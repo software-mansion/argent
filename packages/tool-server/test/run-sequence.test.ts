@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { z } from "zod";
-import type { Registry, ToolContext } from "@argent/registry";
+import { Registry } from "@argent/registry";
+import type { ToolContext } from "@argent/registry";
 import { createRunSequenceTool } from "../src/tools/run-sequence";
 
 // A minimal registry stub: records every invokeTool call and returns a marker.
@@ -358,23 +359,41 @@ describe("run-sequence", () => {
   });
 
   describe("a step whose args the sub-tool rejects", () => {
-    // A registry that knows gesture-tap's schema, so the step's args are
-    // actually validated the way a live registry validates them.
-    const registryKnowingGestureTap = () =>
-      ({
-        getTool: vi.fn((id: string) =>
-          id === "gesture-tap"
-            ? { id, zodSchema: z.object({ udid: z.string(), x: z.number(), y: z.number() }) }
-            : undefined
-        ),
-        invokeTool: vi.fn(async () => ({ ok: true })),
-      }) as unknown as Registry;
+    // A REAL registry, not a stub: the rejection has to come from the same
+    // schema check the live dispatch runs, and the events it emits are half of
+    // what these tests assert. A stub `invokeTool` that resolves happily would
+    // let the rejection come from somewhere else entirely.
+    const liveRegistry = () => {
+      const registry = new Registry();
+      const executed: string[] = [];
+      registry.registerTool({
+        id: "gesture-tap",
+        description: "test double for gesture-tap",
+        zodSchema: z.object({ udid: z.string(), x: z.number(), y: z.number() }),
+        services: () => ({}),
+        execute: async () => {
+          executed.push("gesture-tap");
+          return { ok: true };
+        },
+      } as never);
+      registry.registerTool({
+        id: "keyboard",
+        description: "test double for keyboard",
+        zodSchema: z.object({ udid: z.string(), text: z.string().optional() }),
+        services: () => ({}),
+        execute: async () => {
+          executed.push("keyboard");
+          return { ok: true };
+        },
+      } as never);
+      return { registry, executed };
+    };
 
     it("names only the keys the AUTHOR wrote, not the injected udid", async () => {
       // `udid` is injected into every step — the tool's own docs tell authors to
       // leave it out — so listing it beside the misspelling the list exists to
       // expose points at a key they never typed.
-      const registry = registryKnowingGestureTap();
+      const { registry } = liveRegistry();
       const tool = createRunSequenceTool(registry);
 
       const result = await tool.execute(
@@ -386,12 +405,30 @@ describe("run-sequence", () => {
       expect(error).toContain("`x` is required");
       expect(error).toContain("You sent: `xx`, `y`.");
       expect(error).not.toContain("`udid`");
-      // Nothing was dispatched at the device.
-      expect(registry.invokeTool).not.toHaveBeenCalled();
+    });
+
+    it("still emits the step's own invoked/failed events", async () => {
+      // The rejection is re-rendered from the registry's failure rather than
+      // pre-empting the dispatch, so the step stays visible to the telemetry
+      // listener and the event log — which both subscribe to this pair. A
+      // pre-flight that returned before invoking would make an invalid step
+      // emit nothing at all, while the outer call still reported completion.
+      const { registry } = liveRegistry();
+      const events: string[] = [];
+      registry.events.on("toolInvoked", (id) => events.push(`invoked:${id}`));
+      registry.events.on("toolFailed", (id) => events.push(`failed:${id}`));
+      const tool = createRunSequenceTool(registry);
+
+      await tool.execute(
+        {},
+        { udid: IOS, steps: [{ tool: "gesture-tap", args: { xx: 0.5, y: 0.3 } }] }
+      );
+
+      expect(events).toEqual(["invoked:gesture-tap", "failed:gesture-tap"]);
     });
 
     it("still accepts a step that omits udid, since it is injected", async () => {
-      const registry = registryKnowingGestureTap();
+      const { registry, executed } = liveRegistry();
       const tool = createRunSequenceTool(registry);
 
       const result = await tool.execute(
@@ -400,7 +437,7 @@ describe("run-sequence", () => {
       );
 
       expect((result.steps[0] as { error?: string }).error).toBeUndefined();
-      expect(registry.invokeTool).toHaveBeenCalledTimes(1);
+      expect(executed).toEqual(["gesture-tap"]);
     });
   });
 });

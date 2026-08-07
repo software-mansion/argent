@@ -1,10 +1,10 @@
 import { z } from "zod";
-import { describeParamIssues } from "@argent/registry";
+
 import type { Registry, ToolCapability, ToolContext, ToolDefinition } from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported, UnsupportedOperationError } from "../../utils/capability";
 import { sleepOrAbort, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
-import { invokeSubTool } from "../../utils/sub-invoke";
+import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { AWAIT_UI_ELEMENT_TOOL_ID, isUnmetUiWaitResult } from "../await-ui-element";
 
 const ALLOWED_TOOLS = new Set([
@@ -203,27 +203,6 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
 
         const toolArgs = { ...step.args, udid };
 
-        // Pre-flight the sub-tool's schema for the same reason the capability
-        // gate above is pre-flighted: only from here can the rejection name the
-        // keys the CALLER wrote. `udid` is injected into every step (the tool's
-        // own docs tell authors to leave it out), so the registry's copy of this
-        // check — which reads the args it was handed — closes with
-        // "You sent: `xx`, `y`, `udid`", naming a key the author never typed
-        // beside the misspelling that list exists to expose. Validate the
-        // MERGED args, so the injected udid still satisfies the schema, but
-        // render the sentence from the step's own. The registry re-validates on
-        // invoke; this only decides the wording.
-        if (subTool?.zodSchema) {
-          const parsed = subTool.zodSchema.safeParse(toolArgs);
-          if (!parsed.success) {
-            results.push({
-              tool: step.tool,
-              error: `Invalid params for tool "${step.tool}": ${describeParamIssues(parsed.error, step.args ?? {})}`,
-            });
-            break;
-          }
-        }
-
         try {
           const result = await invokeSubTool(registry, ctx, step.tool, toolArgs);
           if (isUnmetUiWaitResult(step.tool, result)) {
@@ -236,9 +215,24 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
           }
           results.push({ tool: step.tool, result });
         } catch (err) {
+          // A schema miss is re-rendered from the STEP's own args rather than
+          // the merged ones: `udid` is injected into every step (the tool's own
+          // docs tell authors to leave it out), so the registry's message —
+          // which can only read the args it was handed — closes with
+          // "You sent: `xx`, `y`, `udid`", naming a key the author never typed
+          // beside the misspelling that list exists to expose. Re-rendering
+          // rather than pre-flighting keeps the dispatch, and with it the
+          // step's `toolInvoked`/`toolFailed` events.
+          const reframed = describeNestedParamError(
+            registry,
+            err,
+            step.tool,
+            toolArgs,
+            step.args ?? {}
+          );
           results.push({
             tool: step.tool,
-            error: err instanceof Error ? err.message : String(err),
+            error: reframed ?? (err instanceof Error ? err.message : String(err)),
           });
           break;
         }
