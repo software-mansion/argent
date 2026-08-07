@@ -81,9 +81,14 @@ run_phase() {
   local D="\"device_id\":\"$LID\",\"port\":$MPORT"
 
   # --- debugger chain -------------------------------------------------------
-  assert_ok    "$P" debugger-status status "{$D}"
+  # Both of these answer 200 while reporting that the debugger is NOT connected,
+  # so the exit code alone says only that the server replied. debugger-status
+  # carries `connected`; debugger-log-registry does not, and reports the same
+  # state through `status` (absent on a healthy call, "not_connected" when the
+  # runtime is unreachable).
+  assert_true  "$P" debugger-status status "{$D}" '.connected'
   assert_field "$P" debugger-evaluate eval "{$D,\"expression\":\"1+1\"}" '(.result|tostring)' '2'
-  assert_ok    "$P" debugger-log-registry logs "{$D}"
+  assert_field "$P" debugger-log-registry logs "{$D}" '(.status // "connected")' 'connected'
   assert_ok    "$P" debugger-component-tree tree "{$D}"
   assert_ok    "$P" debugger-inspect-element inspect "{$D,\"x\":0.5,\"y\":0.5}"
   assert_ok    "$P" debugger-reload-metro reload "{$D}"
