@@ -714,7 +714,12 @@ export async function killToolServerForInstallDir(packageDir: string): Promise<n
 function processCommandMatches(pid: number, marker: string | undefined): boolean {
   if (!marker) return false;
   try {
-    const cmd = execFileSync("ps", ["-p", String(pid), "-o", "command="], {
+    // `-ww` disables ps's width truncation. Without it procps-ng clips the
+    // command to $COLUMNS (or the terminal width), so a bundle path longer
+    // than that never matches its own marker, this returns false, and the
+    // kill-before-respawn below is skipped — orphaning the live server.
+    // Same flag tool-server's vega-process PS_ARGS uses.
+    const cmd = execFileSync("ps", ["-ww", "-p", String(pid), "-o", "command="], {
       encoding: "utf8",
       timeout: 2_000,
       stdio: ["ignore", "pipe", "ignore"],

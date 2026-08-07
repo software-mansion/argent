@@ -117,6 +117,37 @@ describe("sweepDeadStateFiles", () => {
     }
   });
 
+  it("terminates a live server whose bundle path is longer than the terminal is wide", async () => {
+    // The identity guard reads the process command line with `ps`, and procps-ng
+    // clips `-o command=` to $COLUMNS unless `-ww` is passed. A bundle path that
+    // does not fit the width must still match its own marker; otherwise the
+    // guard fails safe and the sweep leaves the server running forever.
+    const NARROW_COLUMNS = 40;
+    const bundle = join(TEST_HOME, "a-bundle-path-far-wider-than-a-narrow-terminal.cjs");
+    // Precondition, not decoration: a marker short enough to survive truncation
+    // matches however `ps` is invoked, which would make this test vacuous.
+    expect(bundle.length).toBeGreaterThan(NARROW_COLUMNS);
+    const child = await spawnFakeServer(bundle);
+    const file = writeRecord(bundle, child.pid!);
+    rmSync(bundle);
+    // `ps` inherits this process's environment, so COLUMNS fixes the width it
+    // reports at, independent of the terminal the suite happens to run under.
+    const ambientColumns = process.env.COLUMNS;
+    process.env.COLUMNS = String(NARROW_COLUMNS);
+    try {
+      await launcher.sweepDeadStateFiles();
+      expect(await waitForExit(child)).toBe(true);
+      expect(existsSync(file)).toBe(false);
+    } finally {
+      if (ambientColumns === undefined) delete process.env.COLUMNS;
+      else process.env.COLUMNS = ambientColumns;
+      child.kill("SIGKILL");
+    }
+    // waitForExit's own window exceeds vitest's 5 s default, so a server the
+    // guard failed to identify reports as an unterminated server rather than
+    // as a bare test timeout.
+  }, 20_000);
+
   it("returns without waiting out the kill grace window on a SIGTERM-ignoring orphan", async () => {
     const bundle = join(TEST_HOME, "wedged-bundle.cjs");
     const child = await spawnFakeServer(bundle, { trapSigterm: true });
