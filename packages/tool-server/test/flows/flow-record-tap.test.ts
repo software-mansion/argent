@@ -187,6 +187,40 @@ describe("flow-add-step tap selector capture", () => {
     expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.2, y: 0.52 }]);
   });
 
+  it("flags a role-only selector rather than recording the downgrade silently", async () => {
+    // Raising the iOS flow tree's depth cap surfaced views that used to be
+    // truncated away: an unlabeled icon inside a testID container is now the
+    // smallest frame under the tap, so nodeAtPoint elects it and deriveSelector
+    // falls through to its role. That replays only while it stays the
+    // first-ranked element of that role, which is worth saying out loud.
+    setTree([
+      n({
+        identifier: "product-card",
+        frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 },
+        children: [n({ role: "AXImage", frame: { x: 0.48, y: 0.48, width: 0.04, height: 0.04 } })],
+      }),
+    ]);
+
+    const result = await recordTap({ x: 0.5, y: 0.5 });
+
+    expect(result.message).toContain("matches by role alone");
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { role: "AXImage" } }]);
+  });
+
+  it("does not flag a selector that carries an id or text", async () => {
+    setTree([
+      n({
+        identifier: "add-to-cart",
+        role: "AXButton",
+        frame: { x: 0.3, y: 0.5, width: 0.4, height: 0.06 },
+      }),
+    ]);
+
+    const result = await recordTap({ x: 0.5, y: 0.52 });
+
+    expect(result.message).not.toContain("matches by role alone");
+  });
+
   it("records the selector with a caveat when captured from the fallback tree source", async () => {
     setTree(
       [n({ label: "Settings", frame: { x: 0.3, y: 0.5, width: 0.4, height: 0.06 } })],

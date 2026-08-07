@@ -1,6 +1,15 @@
-import type { DeviceInfo, Registry } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  getFailureSignal,
+  type DeviceInfo,
+  type Registry,
+} from "@argent/registry";
 import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
-import { resolveNativeTargetApp } from "../../utils/native-target-app";
+import {
+  resolveNativeTargetApp,
+  type ResolvedNativeTargetApp,
+} from "../../utils/native-target-app";
 import { flattenHoisting, type FlatNode } from "./flow-tree-flatten";
 import {
   type DescribeFrame,
@@ -263,6 +272,31 @@ const FULL_HIERARCHY_FIELDS = [
 ];
 
 /**
+ * Depth ceiling for the flow selector tree. This counts RAW UIView nesting, so
+ * it has to clear the invisible wrapper layers RN stacks on every screen —
+ * nested navigators (RNSScreenStackView → RNSScreenView, often two deep) plus a
+ * drawer/root wrapper routinely bury on-screen content 40–60 levels down before
+ * the first tappable view. At 40, plainly visible interactive elements in a
+ * deeply nested production RN app were truncated at depths 41–62, so `id:` and
+ * `text:` selectors silently failed to resolve and only coordinate taps worked.
+ * Because an overflow is silent (nothing reports "truncated" — selectors just
+ * stop matching), the cap carries generous headroom rather than hugging the
+ * deepest observed measurement.
+ *
+ * Cost note: this tree is internal to selector resolution — `selectorToFrame`/
+ * `evaluateCondition` consume it, and the tree itself is never returned — so a
+ * deeper cap does NOT enlarge any tool result or agent context. (Text derived
+ * from it can still reach the agent in small amounts: `compatibilityMissNote`
+ * walks the whole tree and its output joins the step's `reason` — see
+ * flow-actions.ts — so the cap does bound how far that note can look.) It
+ * otherwise only grows the getFullHierarchy payload over the native-devtools
+ * socket, and that payload is field-limited (`FULL_HIERARCHY_FIELDS`). In the measured production
+ * tree, depth-40 was ~11KB and depth-48 ~15KB; past the tree's real depth a
+ * higher cap adds nothing at all, so 100 stays modest.
+ */
+const FLOW_TREE_MAX_DEPTH = 100;
+
+/**
  * Query the raw UIView tree via native-devtools `getFullHierarchy` and adapt
  * it. Throws — with the reason — when native-devtools is unavailable / not yet
  * connected / errored, or when the resolved target returns no windows (a
@@ -279,18 +313,97 @@ export async function queryFullHierarchyTree(
     const ndRef = nativeDevtoolsRef(device);
     nativeApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
   } catch (err) {
-    throw new Error(
+    throw wrapPreservingFailure(
       `native devtools is unavailable (${errMsg(err)}) — flows resolve selectors against the full view hierarchy it serves`,
-      { cause: err }
+      err
     );
   }
-  // resolveNativeTargetApp's own errors (no connected app / ambiguous frontmost)
-  // already carry the actionable next step, so they propagate unwrapped.
-  const target = await resolveNativeTargetApp(nativeApi, undefined);
+  // resolveNativeTargetApp's own errors suggest providing a bundleId — a flow
+  // selector step has no way to express one (this call hardcodes
+  // auto-targeting) — so replace that advice with the remedy available for the
+  // specific failure. When apps ARE connected but none is uniquely frontmost
+  // (ambiguous set, or a lone backgrounded app) the remedy is to foreground the
+  // intended one, NOT to relaunch it for instrumentation it already has. Only
+  // "no connected app" means the target was launched outside Argent (Metro/Expo,
+  // Xcode, or the home-screen icon) and needs an Argent relaunch.
+  let target: ResolvedNativeTargetApp;
+  try {
+    target = await resolveNativeTargetApp(nativeApi, undefined);
+  } catch (err) {
+    const failureCode = getFailureSignal(err)?.error_code;
+    if (failureCode === FAILURE_CODES.NATIVE_TARGET_MULTIPLE_APPS_AMBIGUOUS) {
+      throw wrapPreservingFailure(
+        `could not uniquely target a native-devtools-connected app to read the view hierarchy from:\n` +
+          `${withoutExplicitBundleIdAdvice(errMsg(err))}\n` +
+          `Flow selector steps auto-target and cannot provide a bundleId. Bring the intended app to ` +
+          `the foreground with launch-app (it does not terminate, so its instrumentation survives), ` +
+          `and terminate the other connected apps, then retry. Backgrounding them ` +
+          `does not help: they stay connected, and once suspended they stop answering the state ` +
+          `probe this read depends on.`,
+        err
+      );
+    }
+    if (failureCode === FAILURE_CODES.NATIVE_TARGET_SINGLE_APP_NOT_FOREGROUND) {
+      // The lone connected app is already instrumented; it is just not
+      // foreground-like. Reaching this verdict means the app ANSWERED the state
+      // probe, so it is not merely suspended (that path rejects the probe and
+      // is handled below): the window is a just-backgrounded app before iOS
+      // suspends it, or one that keeps running in the background (audio,
+      // location, VoIP) and so keeps answering. A permission dialog does NOT
+      // land here — the app stays inactive with a foreground-inactive scene,
+      // which resolves normally. Foregrounding fixes the read, so the generic
+      // relaunch-for-instrumentation advice below would misdiagnose the state.
+      // Keep resolveNativeTargetApp's per-app applicationState diagnostic.
+      throw wrapPreservingFailure(
+        `the only native-devtools-connected app is not foreground, so it cannot be auto-targeted:\n` +
+          `${withoutExplicitBundleIdAdvice(errMsg(err))}\n` +
+          `Flow selector steps auto-target and cannot provide a bundleId. Bring that app to the ` +
+          `foreground with launch-app (it does not terminate — the app is already instrumented, ` +
+          `just not frontmost), then retry.`,
+        err
+      );
+    }
+    // Neither verdict — the applicationState probe resolveNativeTargetApp runs
+    // over EVERY connected app failed, so it reached no verdict at all. iOS
+    // suspends a backgrounded app within about a second and a suspended app
+    // stops answering that probe, so one stale connection rejects the whole
+    // read (the probe is a single Promise.all). That is not the "nothing is
+    // instrumented" state the relaunch advice below describes: the connections
+    // are live. Relaunching discards whatever state the flow built up, and when
+    // the unresponsive connection belongs to a DIFFERENT app than the one being
+    // driven, relaunching the target cannot fix the read at all.
+    const stillConnected = nativeApi.listConnectedBundleIds();
+    if (stillConnected.length > 0) {
+      throw wrapPreservingFailure(
+        `could not read the state of the native-devtools-connected apps, so none could be ` +
+          `auto-targeted (${firstClause(err)}). Connected: ${stillConnected.join(", ")}. ` +
+          `They are instrumented — do not relaunch. A suspended app stops answering: foreground ` +
+          `the app the flow drives with launch-app (it does not terminate), and terminate any ` +
+          `other connected app, then retry.`,
+        err
+      );
+    }
+    // Kept short on purpose: every selector read that fails repeats this reason
+    // verbatim, and the recorder repeats it once per captured tap.
+    throw wrapPreservingFailure(
+      `no app is connected to native devtools, so flow selectors have no instrumented process to ` +
+        `read the view hierarchy from (${firstClause(err)}). Relaunch with restart-app (or a flow ` +
+        `\`launch\` step): launch-app does not terminate, so on an app already running from ` +
+        `Metro/Expo, Xcode, or its icon it only foregrounds that uninstrumented process. ` +
+        `Argent treats an Apple system app (com.apple.*) as non-injectable — the native-* tools ` +
+        `refuse it too — so if one never connects, drive it with raw point taps and ` +
+        `tool: await-ui-element steps.`,
+      err
+    );
+  }
 
   if (await nativeApi.requiresAppRestart(target.bundleId)) {
     throw new Error(
-      `${target.bundleId} was launched before argent's instrumentation loaded — relaunch it (launch-app, or a flow \`launch\` step) so the full view hierarchy is readable`
+      `${target.bundleId} was launched before argent's instrumentation loaded — relaunch it with ` +
+        `restart-app (or a flow \`launch\` step at replay) so the full view hierarchy is readable. ` +
+        `launch-app does not terminate the app first: when the app is already running, it only ` +
+        `foregrounds that existing uninstrumented process. Only restart-app (terminate + relaunch) ` +
+        `guarantees an instrumented launch.`
     );
   }
 
@@ -299,7 +412,7 @@ export async function queryFullHierarchyTree(
     "ViewHierarchy.getFullHierarchy",
     {
       fields: FULL_HIERARCHY_FIELDS,
-      maxDepth: 40,
+      maxDepth: FLOW_TREE_MAX_DEPTH,
     }
   )) as { windows?: unknown[]; error?: string };
 
@@ -326,4 +439,33 @@ export async function queryFullHierarchyTree(
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+// The first SENTENCE of a diagnostic's first line — the part that names what
+// went wrong, without the remedy paragraph each source appends for its own
+// callers. A sentence ends at a period followed by whitespace (or the end of
+// the line): every message that reaches here carries a dotted identifier
+// (`Application.getState`, `bundleId: com.acme.app`), and keying on the bare
+// period chopped mid-identifier, leaving `RPC timed out: Application.`.
+// A line with no sentence break is already the clause — return it whole.
+function firstClause(err: unknown): string {
+  const firstLine = errMsg(err).split("\n", 1)[0];
+  const sentenceEnd = /\.(?=\s|$)/.exec(firstLine);
+  return sentenceEnd === null ? firstLine : firstLine.slice(0, sentenceEnd.index + 1);
+}
+
+// Strip resolveNativeTargetApp's trailing "Provide bundleId explicitly…" line —
+// a flow selector step hardcodes auto-targeting and cannot act on it. Matching
+// the whole line (not just the bare sentence) covers both wordings it emits:
+// the ambiguous case ends "Provide bundleId explicitly." and the single-app case
+// ends "Provide bundleId explicitly if you still want to target this app.".
+function withoutExplicitBundleIdAdvice(message: string): string {
+  return message.replace(/\nProvide bundleId explicitly[^\n]*$/, "");
+}
+
+/** Add actionable flow-specific context without stripping FailureError data. */
+function wrapPreservingFailure(message: string, err: unknown): Error {
+  const cause = err instanceof Error ? err : new Error(String(err));
+  const signal = getFailureSignal(err);
+  return signal ? new FailureError(message, signal, { cause }) : new Error(message, { cause });
 }

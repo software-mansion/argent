@@ -546,6 +546,27 @@ async function probeAgainstRunnerTree(
 }
 
 /**
+ * `deriveSelector`'s last resort: the tapped node carried no identifier and no
+ * visibly-rendered text, so the step replays on role alone. That holds only
+ * while it stays the element of that role which wins `selectorToFrame`'s
+ * ranking — the re-resolve guard below proves that for the RECORDING screen,
+ * never for the screen replay meets. Say so, because the alternative is silent.
+ *
+ * Reachability rose with the iOS flow tree's depth cap: an unlabeled icon that
+ * used to be truncated away — leaving `nodeAtPoint` to elect its `testID`
+ * container — is now present and is the smaller frame under the tap.
+ */
+function roleOnlySelectorWarning(selector: Selector): string | undefined {
+  if (selector.role === undefined || selector.identifier !== undefined) return undefined;
+  if (selector.text !== undefined || selector.textMatches !== undefined) return undefined;
+  return (
+    `selector ${describeSelector(selector)} matches by role alone (the tapped element has no id ` +
+    `or visible text) — replay takes whichever element of that role ranks first, so re-record ` +
+    `against a labelled element if that is not reliably this one`
+  );
+}
+
+/**
  * For a recorded `gesture-tap`, look up the element under the tapped point and
  * record a portable `tap: { selector }` step instead of raw coordinates.
  * Returns the selector (possibly with a caveat warning), or a warning
@@ -593,7 +614,11 @@ async function captureTapSelector(
         warning: `selector ${describeSelector(selector)} resolves to a different element on this screen; kept coordinates (brittle)`,
       };
     }
-    return { selector, warning: fallbackSourceWarning(source, device.platform) };
+    const warnings = [
+      roleOnlySelectorWarning(selector),
+      fallbackSourceWarning(source, device.platform),
+    ].filter((w) => w !== undefined);
+    return { selector, ...(warnings.length > 0 ? { warning: warnings.join("; ") } : {}) };
   } catch (err) {
     return {
       warning: `selector capture failed (${err instanceof Error ? err.message : String(err)}); kept coordinates`,

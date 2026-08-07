@@ -2334,14 +2334,15 @@ describe("flow composition (run:)", () => {
     // must fail rather than let selectors silently fall back to the AX tree.
     // (An unresolvable service fails fast; a resolvable-but-never-connected
     // one hits the same guard after the connect timeout.)
+    const resolveService = vi.fn(async () => {
+      throw new Error("native-devtools unavailable");
+    });
     const registry = {
       invokeTool: vi.fn(async (id: string) =>
         id === "list-devices" ? { devices: [] } : { ok: true }
       ),
       getTool: vi.fn(() => undefined),
-      resolveService: vi.fn(async () => {
-        throw new Error("native-devtools unavailable");
-      }),
+      resolveService,
     } as unknown as Registry;
 
     const result = asRun(
@@ -2353,6 +2354,77 @@ describe("flow composition (run:)", () => {
 
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:error", "echo:skip"]);
     expect(result.steps[0].reason).toMatch(/could not connect to native devtools/i);
+    expect(result.ok).toBe(false);
+    // The counterpart of the non-injectable skip below: same platform, ordinary
+    // bundle, and the gate DOES run. Pinning both sides is what makes the skip
+    // bundle-scoped rather than platform-wide.
+    expect(resolveService).toHaveBeenCalled();
+  });
+
+  it("skips the devtools gate for a non-injectable (com.apple.*) app on iOS", async () => {
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [
+        // Prefix matching is deliberately case-insensitive.
+        { kind: "launch", app: "com.APPLE.Preferences" },
+        { kind: "echo", message: "runs without a devtools connection" },
+      ],
+    });
+    // A resolvable service that never connects makes this test distinguish a
+    // real non-injectable skip from "wait, time out, then ignore the result".
+    const resolveService = vi.fn(async () => ({ isConnected: () => false }));
+    const registry = {
+      invokeTool: vi.fn(async (id: string) =>
+        id === "list-devices" ? { devices: [] } : { ok: true }
+      ),
+      getTool: vi.fn(() => undefined),
+      resolveService,
+    } as unknown as Registry;
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:pass", "echo:pass"]);
+    expect(result.ok).toBe(true);
+    expect(resolveService).not.toHaveBeenCalled();
+  });
+
+  it("fails a selector directive against a com.apple.* app on the read, not the launch", async () => {
+    // The gate skip lets an injection-free flow (raw point taps + `tool:`
+    // await-ui-element steps) drive a system app end to end. A selector step is
+    // the part that cannot work, and it must say so per read rather than the
+    // launch presenting the terminal state as a retryable connect failure.
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: "com.apple.Preferences" },
+        { kind: "tap" as const, selector: { text: "General" } },
+      ],
+    });
+    const registry = {
+      invokeTool: vi.fn(async (id: string) =>
+        id === "list-devices" ? { devices: [] } : { ok: true }
+      ),
+      getTool: vi.fn(() => undefined),
+      // Nothing is connected, because a system app can never connect.
+      resolveService: vi.fn(async () => ({ listConnectedBundleIds: () => [] as string[] })),
+    } as unknown as Registry;
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps[0].status).toBe("pass");
+    expect(result.steps[1].status).not.toBe("pass");
+    expect(result.steps[1].reason).toMatch(/no app is connected to native devtools/i);
+    expect(result.steps[1].reason).toMatch(/com\.apple\.\*/);
     expect(result.ok).toBe(false);
   });
 });

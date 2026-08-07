@@ -59,7 +59,11 @@ import {
   type ActionEnv,
   type DirectiveOutcome,
 } from "./flow-actions";
-import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
+import {
+  isInjectableBundleId,
+  nativeDevtoolsRef,
+  type NativeDevtoolsApi,
+} from "../../blueprints/native-devtools";
 import { androidDevtoolsRef, type AndroidDevtoolsApi } from "../../blueprints/android-devtools";
 import {
   chromiumCdpRef,
@@ -445,8 +449,10 @@ async function androidDevtoolsReady(registry: Registry, device: DeviceInfo): Pro
  * to degrade to the trimmed AX tree (see flow-tree.ts) — so the launch step
  * fails outright with an actionable, platform-specific reason instead of
  * letting the first directive surface a raw tree-source error. Returns null
- * when ready (or the platform needs no gate / the run was aborted), else the
- * reason to report.
+ * when ready — and also when there is nothing to gate: a platform with no
+ * full-hierarchy source of its own, an iOS bundle Argent treats as
+ * non-injectable (the skip is per BUNDLE, not per platform — see below), or a
+ * run that was aborted. Otherwise, the reason to report.
  */
 async function treeSourceGate(
   registry: Registry,
@@ -454,7 +460,14 @@ async function treeSourceGate(
   bundleId: string,
   signal?: AbortSignal
 ): Promise<string | null> {
-  if (device.platform === "ios" && !signal?.aborted) {
+  // An Apple system app (com.apple.*) can never load the injected dylib
+  // (library validation — see isInjectableBundleId), so there is no connection
+  // to wait for: gating would present that terminal state as a retryable
+  // "re-run to relaunch" failure. Skip the gate instead — an injection-free
+  // flow (raw point taps + `tool: await-ui-element` steps against the AX tree)
+  // drives such an app fine, and a selector directive still fails per-read
+  // with fetchFlowTree's reason.
+  if (device.platform === "ios" && isInjectableBundleId(bundleId) && !signal?.aborted) {
     const connected = await waitForNativeDevtools(registry, device, bundleId, signal);
     if (!connected && !signal?.aborted) {
       return (
@@ -993,8 +1006,9 @@ export function createRunFlowTool(
 Name exactly ONE source: the flow's name in \`name\` (\`flow_name\` is accepted as an alias; \`name\` wins if
 both are sent), which resolves <project_root>/.argent/flows/<name>.yaml — or \`flow_path\`. Both, or
 neither, is refused.
-Steps run in order: \`launch\` starts an app from scratch (terminate + relaunch) and waits until it is
-ready; \`tool\` calls dispatch through the registry; \`tap\`/\`long-press\`/\`type\` resolve a selector to an
+Steps run in order: \`launch\` starts an app from scratch (terminate + relaunch) and waits until its
+selector tree source is ready — except for an Apple system app (com.apple.*), whose launch does not
+wait; \`tool\` calls dispatch through the registry; \`tap\`/\`long-press\`/\`type\` resolve a selector to an
 element and act on it (\`tap: { on, times: 2 }\` double-taps; \`long-press: { on, duration }\` presses and
 holds; \`tap\`/\`long-press\` alternatively take a raw normalized point — bare \`{ x, y }\` or \`on: { x, y }\`;
 any selector may scope its matches geometrically, the CSS combinators read off frames: \`within: <selector>\`
