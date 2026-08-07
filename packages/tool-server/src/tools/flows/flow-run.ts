@@ -222,11 +222,18 @@ export function resolveFlowName(
   // exact confusion the alias exists to prevent.
   const name = params.name || params.flow_name;
   if (name === undefined || name === "") {
+    // Over the wire this throw is reachable ONLY for an empty-string `name` or
+    // `flow_name`: a call spelling the name `flowName` or `flow` sets no source
+    // at all, so the schema's exactly-one-source rule fires first and its
+    // message closes with "You sent: `flowName`, …" — naming the very key they
+    // typed. So this text must not claim to cover that caller; it would
+    // describe a case the reader is never in while reading it, and point away
+    // from the message that does name their key.
     throw new InvalidToolInputError(
       `${toolName} needs the flow's name in \`name\` (\`flow_name\` is accepted as an alias) — ` +
-        "it resolves <project_root>/.argent/flows/<name>.yaml. No other spelling names the flow: " +
-        "`flowName` and `flow` are discarded before the tool runs (so this is also what you get " +
-        "when the name was sent under one of those), and `flow_file` is a path, not a name."
+        "it resolves <project_root>/.argent/flows/<name>.yaml. An empty string is not a name, and " +
+        "no other spelling supplies one: `flowName` and `flow` are discarded before the tool " +
+        "runs, and `flow_file` is a path, not a name."
     );
   }
   return name;
