@@ -19,6 +19,8 @@ import {
   confusableTextNoteIn,
   compatibilityVariantOf,
   compatibilityVariantIn,
+  selectorMissNote,
+  typographicVariantNote,
   quoteScreenText,
   ignorableTextNote,
   type Selector,
@@ -1278,25 +1280,20 @@ function compatibilityMissNote(
     // failure to "matched … but none was visible". `exists` deliberately
     // accepts zero-area nodes, so it must not filter.
     const eligible = condition === "visible" ? candidates.filter(isVisible) : candidates;
-    // Label and value ONLY — deliberately not the hoisted `subtreeText` —
-    // because that is what matchNodeWithRegex compares against, so suggesting a
-    // multi-child hoisted string would send the author to a selector that still
-    // matches nothing. And it is a SUBSTRING test, so the near-miss question is
-    // "does this label CONTAIN a compat variant of the needle", not "is it one".
-    for (const node of eligible) {
-      hit = [node.label, node.value].find(
-        (candidate): candidate is string =>
-          Boolean(candidate) && compatibilityVariantIn(candidate!, wanted)
-      );
-      if (hit !== undefined) break;
-    }
+    // Both near-miss questions, in one place shared with the tool surface: an
+    // invisible-character difference as well as a typographic one. Asking only
+    // the compat question left an invisible-character miss on a SELECTOR ending
+    // in the bare "no element matched" this whole area exists to eliminate —
+    // the `text` expectation named the differing code points, and the selector
+    // that missed for the very same reason named nothing.
+    return prefixNote(selectorMissNote(eligible, wanted));
   }
-  return hit === undefined
-    ? ""
-    : ` — the screen does show "${quoteScreenText(hit)}", which differs only by a typographic variant ` +
-        `(a rendered "…" is ONE character, not three dots; likewise ligatures and fullwidth ` +
-        `forms). Those are not folded together, because doing so would also equate a styled ` +
-        `display name with the plain one it imitates. Copy the characters the app actually renders.`;
+  return prefixNote(hit === undefined ? undefined : typographicVariantNote(hit));
+}
+
+/** A miss note as it appears appended to a failure reason, or "" for none. */
+function prefixNote(note: string | undefined): string {
+  return note === undefined ? "" : ` — ${note}`;
 }
 
 function assertReason(

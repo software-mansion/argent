@@ -738,6 +738,62 @@ export function ignorableTextNote(text: string, pattern?: string): string | unde
   );
 }
 
+/**
+ * Why a text SELECTOR matched nothing, when something on screen nearly did.
+ *
+ * `candidates` is the node set the caller has already narrowed to what its
+ * selector could otherwise have accepted (every field but the text, plus
+ * whatever visibility rule the condition implies) — searching wider lets an
+ * unrelated look-alike hijack the note and sends the author down a dead end.
+ *
+ * Both halves mirror how a `text` selector actually matches: label and value
+ * ONLY (never the hoisted `subtreeText`, which no selector compares against),
+ * and a SUBSTRING test, so the question is "does this label contain a
+ * near-miss of the needle", not "is it one".
+ *
+ * The invisible-character question is asked FIRST, matching the precedence the
+ * `text` expectation's failure already uses: it names exact code points, so it
+ * is the more precise answer whenever both apply.
+ *
+ * Shared because a bare "no element matched" is the failure this whole area
+ * exists to eliminate, and it is reachable from the tool surface as readily as
+ * from the flow runner — explaining it in one and not the other just moves the
+ * unexplainable miss.
+ */
+export function selectorMissNote(
+  candidates: readonly DescribeNode[],
+  wanted: string
+): string | undefined {
+  if (wanted === "") return undefined;
+  const texts: string[] = [];
+  for (const node of candidates) {
+    for (const text of [node.label, node.value]) if (text) texts.push(text);
+  }
+  for (const text of texts) {
+    const note = confusableTextNoteIn(text, wanted);
+    if (note !== undefined) return `the screen does show "${quoteScreenText(text)}" — ${note}`;
+  }
+  for (const text of texts) {
+    if (compatibilityVariantIn(text, wanted)) return typographicVariantNote(text);
+  }
+  return undefined;
+}
+
+/**
+ * The sentence naming a compatibility variant the screen renders. Shared so the
+ * two places that reach it — a selector that matched nothing, and a `text`
+ * expectation that missed on a located element — cannot drift apart.
+ */
+export function typographicVariantNote(shown: string): string {
+  return (
+    `the screen does show "${quoteScreenText(shown)}", which differs only by a typographic ` +
+    `variant (a rendered "…" is ONE character, not three dots; likewise ligatures and ` +
+    `fullwidth forms). Those are not folded together, because doing so would also equate a ` +
+    `styled display name with the plain one it imitates. Copy the characters the app ` +
+    `actually renders.`
+  );
+}
+
 export function includesCI(haystack: string | undefined, needle: string): boolean {
   if (!haystack) return false;
   // Both sides UNTRIMMED, so a boundary space in the needle survives to

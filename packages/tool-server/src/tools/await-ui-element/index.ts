@@ -28,6 +28,7 @@ import {
   evaluateCondition,
   confusableTextNote,
   confusableTextNoteIn,
+  selectorMissNote,
   quoteScreenText,
 } from "../../utils/ui-tree-match";
 
@@ -194,6 +195,22 @@ function timeoutNote(
 ): string {
   if (fetchError) return `last tree fetch failed: ${fetchError}`;
   const matches = lastTree ? findAll(lastTree, params.selector) : [];
+  // Why the SELECTOR found nothing, when something on screen nearly matched —
+  // the same explanation the flow runner gives for the same miss on the same
+  // screen. Without it an author on the tool surface paid the full timeout and
+  // was told only "no element matched", which points at nothing.
+  //
+  // Scoped exactly as the runner scopes it: the text is the field that missed,
+  // so drop it and keep every other constraint, and never offer a zero-area
+  // node to a `visible` wait. `hidden` never reaches it — a selector that
+  // matches nothing SATISFIES `hidden`, so there is no miss to explain.
+  const missNote = (): string => {
+    if (lastTree === null || params.selector.text === undefined) return "";
+    const candidates = findAll(lastTree, { ...params.selector, text: undefined });
+    const eligible = params.condition === "visible" ? candidates.filter(isVisible) : candidates;
+    const note = selectorMissNote(eligible, params.selector.text);
+    return note === undefined ? "" : ` — ${note}`;
+  };
   let base: string;
   switch (params.condition) {
     case "text": {
@@ -202,7 +219,7 @@ function timeoutNote(
       const first = firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches);
       const wanted = params.textMatch === "equals" ? "equal" : "contain";
       if (!first) {
-        base = "no element matched the selector before timeout";
+        base = `no element matched the selector before timeout${missNote()}`;
         break;
       }
       // The two quoted strings can be indistinguishable on screen and still
@@ -241,10 +258,10 @@ function timeoutNote(
       base =
         matches.length > 0
           ? "element(s) matched but none was visible (zero-area frame) before timeout"
-          : "no element matched the selector before timeout";
+          : `no element matched the selector before timeout${missNote()}`;
       break;
     default:
-      base = "no element matched the selector before timeout";
+      base = `no element matched the selector before timeout${missNote()}`;
   }
   return appendDiagnostics(base, lastData);
 }

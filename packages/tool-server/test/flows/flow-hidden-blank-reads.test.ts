@@ -767,6 +767,33 @@ describe("compatibility miss note: what it is scoped to", () => {
     expect(rightId.steps[0].reason).toMatch(/typographic variant/);
   });
 
+  it("names the code points when only an invisible kept the SELECTOR from matching", async () => {
+    // The compat note was the only note reachable on the selector path, and it
+    // asks the NFKC question only — so an invisible-character miss on a
+    // selector still ended in the unexplained "no element matched" this area
+    // exists to eliminate, while the same difference in a `text` expectation
+    // was named code point by code point.
+    currentFetch = () => ({
+      tree: screen([
+        n({ label: "SaveChanges", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.05 } }),
+      ]),
+      source: "native-devtools",
+    });
+
+    await writeFlow("selector-invisible", {
+      executionPrerequisite: "",
+      steps: [
+        // U+034F in the selector, not on the screen: identical to the eye.
+        { kind: "assert", condition: "visible", selector: { text: "Save͏Changes" } },
+      ],
+    });
+
+    const result = await run("selector-invisible");
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/differ only in invisible characters/);
+    expect(result.steps[0].reason).toMatch(/U\+034F/);
+  });
+
   it("does not name a zero-area node to a `visible` step that matched nothing", async () => {
     // The `visible`-with-matches exemption does not cover this: with NO matches
     // the walk runs, and could name a node the runner simultaneously knows is

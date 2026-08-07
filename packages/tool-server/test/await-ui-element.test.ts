@@ -365,6 +365,79 @@ describe("await-ui-element tool", () => {
     expect(result.note).toMatch(/U\+034F/);
   });
 
+  it("explains a SELECTOR miss, as the flow runner explains the same one", async () => {
+    // The other half of the same gap: this arm gained the codepoint note for a
+    // located element, but a selector that matched NOTHING still timed out into
+    // a bare "no element matched" while the flow runner named the variant on
+    // screen. An author on the tool surface paid the full timeout for it.
+    const { api } = makeSequencedAXService([
+      axResponse([{ label: "Loading…", value: "", frame: FRAME, traits: [] }]),
+    ]);
+    const tool = createAwaitUiElementTool(iosRegistry(api));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        condition: "visible",
+        selector: { text: "Loading..." },
+        timeoutMs: 30,
+        pollIntervalMs: 10,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.note).toMatch(/typographic variant/);
+    expect(result.note).toMatch(/Loading…/);
+  });
+
+  it("names the code points when only an invisible kept a SELECTOR from matching", async () => {
+    // `text.equals` named the differing code points and the selector that
+    // missed for the very same reason named nothing — so the situation the
+    // codepoint note exists for (two strings identical on screen) still ended
+    // in an unexplained miss whenever it arrived through a selector.
+    const { api } = makeSequencedAXService([
+      axResponse([{ label: "SaveChanges", value: "", frame: FRAME, traits: [] }]),
+    ]);
+    const tool = createAwaitUiElementTool(iosRegistry(api));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        condition: "visible",
+        selector: { text: "Save͏Changes" }, // U+034F the screen does not carry
+        timeoutMs: 30,
+        pollIntervalMs: 10,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.note).toMatch(/differ only in invisible characters/);
+    expect(result.note).toMatch(/U\+034F/);
+  });
+
+  it("stays bare when nothing on screen resembles the selector", async () => {
+    const { api } = makeSequencedAXService([
+      axResponse([{ label: "Loading…", value: "", frame: FRAME, traits: [] }]),
+    ]);
+    const tool = createAwaitUiElementTool(iosRegistry(api));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        condition: "visible",
+        selector: { text: "Nothing like this" },
+        timeoutMs: 30,
+        pollIntervalMs: 10,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.note).toBe("no element matched the selector before timeout");
+  });
+
   it("`text` timeout note defuses a directional override in the label it quotes", async () => {
     // The label survives the fold on purpose — a control that reorders is
     // exactly what must not be stripped — so quoting it verbatim reversed
