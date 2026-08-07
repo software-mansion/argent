@@ -149,7 +149,7 @@ Track what has been recorded from each call's return: `flow-add-step` gives you 
 
 ### flow-add-step arguments
 
-The `command` parameter is the MCP **tool** name — not a flow-file directive. Naming a directive (`tap`, `launch`, `run`, `type`, `await`, `assert`, `echo`, `wait`, `long-press`) is answered with the tool that records it, and nothing runs or is recorded; so is naming a recording tool (`flow-add-step`, `flow-add-echo`, `flow-start-recording`, `flow-finish-recording`), which nested would record the action twice and fail on every replay. `args` is a **JSON string** (not an object), omitted entirely for tools with no arguments:
+The `command` parameter is the MCP **tool** name — not a flow-file directive. Naming a directive (`tap`, `launch`, `run`, `type`, `await`, `assert`, `echo`, `wait`, `long-press`) is answered with guidance and nothing runs or is recorded: most name the tool that records the directive, while `wait` and `long-press` have no recording tool at all and are answered with what to do instead. Naming a recording tool (`flow-add-step`, `flow-add-echo`, `flow-start-recording`, `flow-finish-recording`) is refused the same way, each for its own reason — nested, one would erase this flow at replay, end the take, or write the step twice. `args` is a **JSON string** (not an object), omitted entirely for tools with no arguments:
 
 ```
 name: "checkout-e2e"   project_root: "/Users/dev/MyApp"

@@ -54,9 +54,11 @@ const zodSchema = z.object({
     .describe(
       'MCP tool name (e.g. "gesture-tap", "screenshot", "launch-app") — a TOOL, not a flow directive. ' +
         'A flow-file directive name ("tap", "launch", "run", "type", "await", "assert", "echo", "wait", ' +
-        '"long-press") is answered with the tool that records it, and nothing runs or is recorded. So is ' +
-        "a recording tool (flow-add-step, flow-add-echo, flow-start-recording, flow-finish-recording): " +
-        "nesting one would record the action twice and fail on every replay."
+        '"long-press") is answered with guidance, and nothing runs or is recorded: most name the tool ' +
+        'that records the directive, while "wait" and "long-press" have no recording tool at all and ' +
+        "are answered with what to do instead. A recording tool (flow-add-step, flow-add-echo, " +
+        "flow-start-recording, flow-finish-recording) is refused the same way, each for its own " +
+        "reason — nesting one would erase this flow at replay, end the take, or write the step twice."
     ),
   args: z
     .string()
