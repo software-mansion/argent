@@ -212,20 +212,20 @@ const SPACE_LIKE = /[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]/gu;
  * A soft hyphen is kept because it MIGHT paint a hyphen, if the line happens to
  * break there; `\n` breaks the line unconditionally. Collapsing it let
  * `equals: "Sign in"` go green against a label the screen renders on two lines
- * \u2014 a pass against a screen that reads differently, which is the outcome this
+ * — a pass against a screen that reads differently, which is the outcome this
  * module rates worse than a flake, and nothing downstream catches it (the fold
  * having equated them, {@link confusableTextNote} sees no difference to name).
  *
  * The horizontal collapse it narrows is still worth having: doubled spaces and
  * a tab used as padding really are invisible, and an NBSP reduced by
  * {@link SPACE_LIKE} next to a plain space has to merge with it. So a run
- * collapses to ONE character either way \u2014 a newline when the run breaks the
- * line, a space otherwise \u2014 which also folds CRLF onto LF and absorbs the
+ * collapses to ONE character either way — a newline when the run breaks the
+ * line, a space otherwise — which also folds CRLF onto LF and absorbs the
  * incidental spaces around a break.
  *
  * Only an INTERIOR run, though. A break at the very edge of a label separates
  * no glyph from another, and it is the same outer whitespace {@link foldText}
- * discards wholesale \u2014 so treating it as significant in the untrimmed
+ * discards wholesale — so treating it as significant in the untrimmed
  * {@link foldLoose} would make the two disagree, and would break the boundary
  * space a `contains` needle is entitled to (`contains: "Changes "` against a
  * label ending `Changes\n`).
@@ -450,18 +450,18 @@ function isSequenceBuilding(ch: string): boolean {
 
 /** The directional controls: no glyph of their own, but they REORDER text. */
 const DIRECTIONAL = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
-/** {@link DIRECTIONAL}, global \u2014 for {@link quoteScreenText}'s replace. */
+/** {@link DIRECTIONAL}, global — for {@link quoteScreenText}'s replace. */
 const DIRECTIONAL_G = new RegExp(DIRECTIONAL.source, "gu");
 
 /**
- * No glyph of their own, but they change which glyphs are DRAWN \u2014 the two
+ * No glyph of their own, but they change which glyphs are DRAWN — the two
  * members of the DELIBERATELY NOT FOLDED list that {@link isSequenceBuilding}
  * does not cover and that are not {@link DIRECTIONAL} either. U+00AD SOFT
  * HYPHEN paints a real hyphen when the line breaks there; U+180E MONGOLIAN
  * VOWEL SEPARATOR suppresses Arabic cursive joining exactly as ZWNJ does.
  *
  * Both are `Default_Ignorable_Code_Point`, so they reach the note as ordinary
- * inert ignorables and would be described as noise \u2014 the false story this note
+ * inert ignorables and would be described as noise — the false story this note
  * must never tell, about the very characters the fold keeps for the opposite
  * reason. They get their own lead rather than being dropped the way ZWJ is,
  * because the code points are still worth printing: an author cannot fix what
