@@ -248,6 +248,11 @@ export function summarizeStep(step: FlowStep, n: number): string {
       return `${n}. ${step.kind}: ${target}${times}${held}`;
     }
     case "swipe": {
+      // The summary always runs over `parseFlow`'s output, and parse enforces
+      // exactly one of direction/to/by — so with the first two absent, `to` is
+      // present. The cast is that invariant, not an assumption about the
+      // recorder: an `undefined` here would mean the parser stopped enforcing
+      // it, which its own tests would catch first.
       const travel =
         step.direction ??
         (step.by ? `by ${swipeByLabel(step.by)}` : `to ${targetLabel(step.to as GestureTarget)}`);
