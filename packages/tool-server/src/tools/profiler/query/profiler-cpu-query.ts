@@ -14,6 +14,11 @@ import {
 } from "../../../utils/react-profiler/pipeline/00-cpu-correlate";
 import type { HermesProfileNode } from "../../../utils/react-profiler/types/input";
 import { readCpuProfile, readCommitTree } from "../../../utils/react-profiler/debug/dump";
+import {
+  resolveComponentName,
+  renderComponentNameMiss,
+  describeResolution,
+} from "../../../utils/react-profiler/component-names";
 import { promises as fs } from "fs";
 
 const timeWindowSchema = z.object({
@@ -267,11 +272,25 @@ function renderComponentCpu(
     return "_No commit data available. Run react-profiler-analyze first._";
   }
 
-  // Find all commits where this component rendered
-  const componentCommits = commitTree.commits.filter((c) => c.componentName === componentName);
+  // The report prints display names (wrappers stripped), so accept those too —
+  // otherwise the tool refuses the name analyze just told the caller to use.
+  const resolution = resolveComponentName(
+    componentName,
+    commitTree.commits.map((c) => c.componentName)
+  );
+  if (resolution.kind === "ambiguous" || resolution.kind === "missing") {
+    return renderComponentNameMiss(resolution, {
+      fiberRenders: commitTree.commits.length,
+      commits: new Set(commitTree.commits.map((c) => c.commitIndex)).size,
+    });
+  }
+  const resolvedName = resolution.rawName;
+  const resolutionNote = describeResolution(resolution);
+
+  const componentCommits = commitTree.commits.filter((c) => c.componentName === resolvedName);
 
   if (componentCommits.length === 0) {
-    return `_Component \`${componentName}\` not found in commit data._`;
+    return `_Component \`${resolvedName}\` not found in commit data._`;
   }
 
   // Group by commitIndex to get unique commit windows
@@ -313,14 +332,15 @@ function renderComponentCpu(
   const sorted = [...aggregated.entries()].sort((a, b) => b[1].selfMs - a[1].selfMs).slice(0, topN);
 
   if (sorted.length === 0) {
-    return `_No CPU samples found during \`${componentName}\` commits._`;
+    return `_No CPU samples found during \`${resolvedName}\` commits._`;
   }
 
   const totalCommitMs = [...commitWindows.values()].reduce((sum, w) => sum + w.duration, 0);
 
   const lines: string[] = [
-    `## CPU During \`${componentName}\` Commits`,
+    `## CPU During \`${resolvedName}\` Commits`,
     "",
+    ...(resolutionNote ? [resolutionNote, ""] : []),
     `**Commits:** ${commitWindows.size}  **Total commit time:** ${totalCommitMs.toFixed(1)}ms`,
     "",
     "| Function | Self (ms) | Total (ms) | Location |",

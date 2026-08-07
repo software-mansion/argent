@@ -8,6 +8,11 @@ import type {
 } from "../../../utils/react-profiler/types/input";
 import { deriveReason } from "../../../utils/react-profiler/pipeline/utils";
 import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
+import {
+  resolveComponentName,
+  renderComponentNameMiss,
+  describeResolution,
+} from "../../../utils/react-profiler/component-names";
 
 const timeRangeSchema = z.object({
   start: z.coerce.number().describe("Start of range in ms (performance.now clock)"),
@@ -92,9 +97,23 @@ function renderByComponent(
   componentName: string,
   topN: number
 ): string {
-  const matching = commits.filter((c) => c.componentName === componentName);
+  // Accept the display name the report prints, not just the raw DevTools name.
+  const resolution = resolveComponentName(
+    componentName,
+    commits.map((c) => c.componentName)
+  );
+  if (resolution.kind === "ambiguous" || resolution.kind === "missing") {
+    return renderComponentNameMiss(resolution, {
+      fiberRenders: commits.length,
+      commits: new Set(commits.map((c) => c.commitIndex)).size,
+    });
+  }
+  const resolvedName = resolution.rawName;
+  const resolutionNote = describeResolution(resolution);
+
+  const matching = commits.filter((c) => c.componentName === resolvedName);
   if (matching.length === 0) {
-    return `_Component \`${componentName}\` not found in commit data._`;
+    return `_Component \`${resolvedName}\` not found in commit data._`;
   }
 
   // Group by commitIndex
@@ -122,8 +141,9 @@ function renderByComponent(
     .slice(0, topN);
 
   const lines: string[] = [
-    `## Commits for \`${componentName}\``,
+    `## Commits for \`${resolvedName}\``,
     "",
+    ...(resolutionNote ? [resolutionNote, ""] : []),
     `**Total occurrences:** ${matching.length} across ${byCommit.size} commits`,
     "",
     "| Commit | Instances | Duration (ms) | Commit Total (ms) | Time (ms) | Reason | Parent |",

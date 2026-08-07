@@ -13,46 +13,10 @@ import { promises as fs } from "fs";
 import { join } from "path";
 import type { HotCommitSummary, ComponentFinding } from "../types/output";
 import type { SessionContext } from "../types/pipeline";
+import { annotateComponentName } from "../component-names";
 
 const MAX_INLINE_COMMITS = 10;
 const REPORT_FILENAME = "react-profiler-report.md";
-
-interface ComponentAnnotation {
-  displayName: string;
-  tag: string;
-  rawName: string;
-}
-
-// Strips Forget/Memo/ForwardRef wrappers from display names and returns a
-// human-readable annotation for each wrapper found. rawName must be used in all
-// query tool suggestions — every pipeline stage keys on the original DevTools
-// string. Only apply displayName + tag in markdown text.
-function annotateComponentName(raw: string): ComponentAnnotation {
-  let name = raw;
-  let hasForget = false;
-  let hasMemo = false;
-  let hasForwardRef = false;
-
-  for (let i = 0; i < 4; i++) {
-    const m =
-      name.match(/^Forget\((.+)\)$/) ||
-      name.match(/^Memo\((.+)\)$/) ||
-      name.match(/^ForwardRef\((.+)\)$/);
-    if (!m) break;
-    if (name.startsWith("Forget(")) hasForget = true;
-    else if (name.startsWith("Memo(")) hasMemo = true;
-    else if (name.startsWith("ForwardRef(")) hasForwardRef = true;
-    name = m[1]!;
-  }
-
-  const parts: string[] = [];
-  if (hasMemo) parts.push("React.memo");
-  if (hasForget) parts.push("React Compiler");
-  if (hasForwardRef) parts.push("forwardRef");
-  const tag = parts.length > 0 ? ` [${parts.join(" + ")}]` : "";
-
-  return { displayName: name, tag, rawName: raw };
-}
 
 export interface RenderInput {
   hotCommitSummaries: HotCommitSummary[];
