@@ -30,6 +30,8 @@ steps: []
 
 Flows never store a device id. The runner binds the selected/booted device. `launch:` restarts the app process; it does **not** clear persisted app, account, or backend data.
 
+The one exception is a device _scope_ rather than a target: `stop-all-simulator-servers`' `devices` list **is** kept in the YAML, because without it the step means the machine-wide sweep and would tear down devices other agents are mid-session on. Replay rebinds a recorded scope only when you pass `device` explicitly — an auto-detected device would retarget the teardown at a device the flow never named. So the recorded ids are what run when you replay without `device`; on another host they reap nothing and come back in `unmatched`, so re-record the cleanup flow there or pass `device`. A step that recorded no scope is still narrowed onto whatever device the run resolved, since binding can only make the sweep smaller.
+
 ## Selectors
 
 Use selector values that meet the [stable-selector definition](../SKILL.md#stable-selectors). Write explicit selector maps:
@@ -136,13 +138,21 @@ The one condition that carries no selector, because stillness is a property of t
 
 The pixel half is why it exists: an iOS push or modal dismissal commits its hierarchy up front and then animates a layer for a few hundred milliseconds, and a cross-fade or scrim moves no node at all. A tree-only wait returns mid-transition.
 
-`minStableMs` (default 250) is how long stillness must hold; it must be shorter than `timeout` (default 7500) or the gate could never pass, and parse rejects it. Stillness is measured across intervals, so a settle takes at least three reads: `minStableMs: 0` means "the first two agreeing intervals", not "the first read".
+`minStableMs` (default 250) is how long stillness must hold; it must be shorter than `timeout` (default 7500) or the gate could never pass, and parse rejects it. The wait also has to leave room for the hold plus the 600ms a settle costs — three reads spanning two 200ms polls, plus the 200ms of budget the closing round has to have left to be allowed to start — or the parser rejects the step. Stillness is measured across intervals, so a settle takes at least three reads: `minStableMs: 0` means "the first two agreeing intervals", not "the first read".
 
-It has no `assert` form — waiting is the whole point. Prefer it over `wait:` for any transition with no element to gate on.
+It has no `assert` form — waiting is the whole point — and no `when:` form. Prefer it over `wait:` for any transition with no element to gate on.
 
-**It never fails a run.** A screen that never settles spends the timeout, then passes with a `warning` on the step — readiness is not an acceptance criterion, and healthy screens often never stop (a video, a shimmer, a carousel, live-updating text, which on Android moves the tree as well as the pixels). Treat that warning as a finding: go and look, because a load that never finished looks exactly the same from the report. Gate the next action on a stable element, never on stillness.
+It **never fails a run.** Readiness is not an acceptance criterion, so every outcome short of a clean settle passes carrying a `warning` on the step. Read it rather than stepping over it:
 
-Two more limits. It says nothing about **which** screen settled, so it never replaces the identity gate. And where no screenshot could be read it passes on the tree alone with a different `warning` — the hierarchy held still, but presentation-layer motion above it was never waited out. Only an unreadable or permanently empty tree stops a run, as an `errored` step.
+- **the screen never held still** — it spent the timeout and went ahead. Healthy screens often never stop (a video, a shimmer, a carousel, live-updating text, which on Android moves the tree as well as the pixels), and a screen that never finished loading looks exactly the same from here.
+- **a small part of it was still changing** — a spinner, a caret, a progress dot, moving through the stretch of stillness the step settled on. Too small to be the screen moving, so the settle completed anyway; if it is a loading spinner, the screen was still loading when this step returned.
+- **the tree stayed empty** — the screen rendered no accessible content. Sometimes the app (a canvas, a video surface), sometimes a screen that never arrived.
+- **settled on the UI tree alone** — no screenshot could be read often enough to compare a pair, so the hierarchy held still but presentation-layer motion above it (a push, a fade, a dismissing modal) was never waited out.
+- **too few reads** — a settle needs three of them spanning two intervals, and this step got fewer, so it ended without evidence either way. A slow tree source, or a window blank for most of the wait.
+
+Only a tree source that cannot be read stops the run, as an `errored` step — one that fails outright, one that answers and then wedges, or one that never answers within the step (that last may simply be slow: raise `timeout` before suspecting the app). That is a broken window, not a verdict about the app: the run is not ok and every later step is skipped.
+
+One more limit: it says nothing about **which** screen settled, so it never replaces the identity gate.
 
 Add one during polish after each screen change, not after every step: it is a directive with no live tool behind it, and each costs roughly 0.5-1.5 s warm — more on the first capture of a run.
 

@@ -48,3 +48,51 @@ describe("create-flow selector-scope docs", () => {
     }
   });
 });
+
+// The `idle` account moved out of SKILL.md into the flow-yaml reference, so
+// these read it there. They are otherwise the guards that came with the
+// warn-instead-of-fail change: the two agent-facing descriptions of `idle`
+// have to agree with what it does, and the numbers the prose quotes have to be
+// the ones the parser enforces.
+describe("create-flow idle docs", () => {
+  it("the flow-execute description and the reference agree that idle warns rather than fails", () => {
+    const description = createRunFlowTool({} as unknown as Registry).description;
+    expect(description).toContain("idle: true");
+    expect(description).toMatch(/never\s+fails a run/);
+    expect(description).not.toMatch(/FAILS on timeout/i);
+
+    const reference = readFileSync(FLOW_YAML, "utf8");
+    expect(reference).toContain("It **never fails a run.**");
+    // The one outcome that does stop a run is the window, never the app.
+    expect(reference).toMatch(/Only a tree source that cannot be read stops the run/);
+    // Both surfaces have to carry that caveat: the description is what an
+    // authoring agent reads, and "never fails a run" on its own is not true
+    // of a tree nobody could read.
+    expect(description).toMatch(/unreadable|cannot be read|could not be read/);
+  });
+
+  it("the reference's idle defaults and settle cost are the ones the parser enforces", () => {
+    const reference = readFileSync(FLOW_YAML, "utf8");
+    expect(reference).toContain(`default ${IDLE_DEFAULT_MIN_STABLE_MS}`);
+    expect(reference).toContain(`default ${IDLE_DEFAULT_TIMEOUT_MS}`);
+    expect(reference).toContain(`${IDLE_SETTLE_OVERHEAD_MS}ms a settle costs`);
+    expect(reference).toContain(`${IDLE_POLL_MS}ms polls`);
+    // The gloss has to add up to the cost it explains: the polls the intervals
+    // span, plus the round-start floor.
+    expect(IDLE_SETTLE_OVERHEAD_MS).toBe((IDLE_MIN_STILL_INTERVALS + 1) * IDLE_POLL_MS);
+    expect(reference).toContain(`plus the ${IDLE_POLL_MS}ms of budget the closing round`);
+  });
+
+  it("the smallest timeout the reference's arithmetic allows is the one the parser accepts", () => {
+    // The reference tells an author the wait has to contain the hold plus the
+    // settle. Take it at its word and check the boundary both ways — a parser
+    // that demanded a millisecond more would make the documented sum a lie.
+    const smallest = IDLE_DEFAULT_MIN_STABLE_MS + IDLE_SETTLE_OVERHEAD_MS;
+    expect(() =>
+      parseFlow(`steps:\n  - await: { idle: true, timeout: ${smallest} }\n`)
+    ).not.toThrow();
+    expect(() =>
+      parseFlow(`steps:\n  - await: { idle: true, timeout: ${smallest - 1} }\n`)
+    ).toThrow(new RegExp(`at least ${smallest}ms`));
+  });
+});
