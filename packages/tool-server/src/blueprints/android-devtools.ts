@@ -38,12 +38,47 @@ export interface GetHierarchyOptions {
   maxDepth?: number;
   maxNodes?: number;
   /**
-   * Drop the helper's accessibility-node cache before capturing — it can serve
-   * stale text (notably after the inspected app restarts under the helper's
-   * connection). Opt in when asserting on changing text; default keeps the
-   * cheaper cached read.
+   * Drop the helper's accessibility-node cache before capturing, so the walk
+   * reads every node from the app rather than from that cache. Defaults to
+   * `true`, because the cache is invalidated only by accessibility
+   * content-change events from the app: a node whose app emits none is never
+   * invalidated, and the cached read keeps serving its first-seen text while the
+   * screen moves on. A capture that stands for the current screen (a describe, a
+   * wait/assert poll, a selector match that becomes tap coordinates) is then
+   * wrong rather than merely slow. Measured on a stopwatch under a
+   * freshly-opened connection: 20 cached reads across 30 s all returned 2:09.32
+   * while the running timer had reached 2:40.32.
+   *
+   * Pass `false` to trade that guarantee for latency. A coherent capture re-reads
+   * every node over binder, so it scales with the tree: measured on arm64
+   * emulators at 0.28-0.31 ms/node on API 30, linear from 330 to 4080 nodes, and
+   * 0.34-0.82 ms/node on API 34 between 315 and 3065 nodes. Clearing in a single
+   * UiAutomation.clearCache() call at API 34+ does not make it the cheaper
+   * platform — its coherent capture costs more than API 30's per-node refresh()
+   * at every size from 315 nodes up. A cached capture is the cheaper read, never
+   * the more accurate one.
    */
   clearCache?: boolean;
+}
+
+/**
+ * Build the `getHierarchy` request payload, filling in every field the helper
+ * understands. The helper's own defaults are not relied on: each key is always
+ * present on the wire, so an options object that omits `clearCache` gets this
+ * module's coherent default rather than the device-side `false`.
+ */
+export function getHierarchyRequestParams(options: GetHierarchyOptions = {}): {
+  waitForIdleMs: number;
+  maxDepth: number;
+  maxNodes: number;
+  clearCache: boolean;
+} {
+  return {
+    waitForIdleMs: options.waitForIdleMs ?? 500,
+    maxDepth: options.maxDepth ?? 128,
+    maxNodes: options.maxNodes ?? 5000,
+    clearCache: options.clearCache ?? true,
+  };
 }
 
 export interface HierarchyResult {
@@ -335,12 +370,7 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
     const api: AndroidDevtoolsApi = {
       isReady: () => ready && !disposed,
       getHierarchy(getOpts: GetHierarchyOptions = {}) {
-        return client.request<HierarchyResult>("getHierarchy", {
-          waitForIdleMs: getOpts.waitForIdleMs ?? 500,
-          maxDepth: getOpts.maxDepth ?? 128,
-          maxNodes: getOpts.maxNodes ?? 5000,
-          clearCache: getOpts.clearCache ?? false,
-        });
+        return client.request<HierarchyResult>("getHierarchy", getHierarchyRequestParams(getOpts));
       },
       getScreenSize() {
         return client.request<{ width: number; height: number; rotation: number }>("getScreenSize");

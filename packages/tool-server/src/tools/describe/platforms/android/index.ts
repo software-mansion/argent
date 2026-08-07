@@ -52,7 +52,34 @@ export async function describeAndroid(
       const ref = androidDevtoolsRef(device);
       const devtools = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
       const [{ xml }, size] = await Promise.all([
-        devtools.getHierarchy(),
+        // clearCache: every reader of this tree is answering "what is on the
+        // screen right now" — the `describe` tool, `await-screen-idle`,
+        // `await-ui-element` and the Lens/preview describe route all read it,
+        // and a selector match turns it into tap coordinates. The helper's
+        // long-lived connection caches AccessibilityNodeInfo per node, and only
+        // an accessibility content-change event from the app invalidates an
+        // entry. An app that emits none for a node — a running stopwatch is the
+        // reproducible case — leaves that entry valid forever, and the cached
+        // read keeps serving its first-seen text while the screen moves on. It
+        // takes no app restart: measured on a freshly-opened connection, 20
+        // cached reads across 30 s all returned 2:09.32 against a timer that had
+        // reached 2:40.32.
+        //
+        // The cost scales with the tree, because dropping the cache means the
+        // walk re-fetches every node over binder. Measured device-side on arm64
+        // emulators: API 30 is linear at 0.28-0.31 ms/node from 330 to 4080
+        // nodes; API 34 runs 0.34-0.82 ms/node between 315 and 3065 nodes.
+        // Clearing in a single UiAutomation.clearCache() call at API 34+ does
+        // not make it the cheaper platform — it costs more than API 30's
+        // per-node refresh() at every size from 315 nodes up.
+        //
+        // On the polled readers that cost lands as a verdict, not just latency.
+        // They bound each fetch by the budget they were given and do not overrun
+        // it, but settling takes two samples that agree, so a tree too slow to
+        // read twice starves them of the second one. Both report that as a note
+        // rather than as a negative answer about the screen; see
+        // `samples` in poll-describe-tree.
+        devtools.getHierarchy({ clearCache: true }),
         devtools.getScreenSize(),
       ]);
       const tree = parseUiAutomatorDump(xml, size.width, size.height);
