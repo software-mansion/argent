@@ -170,6 +170,37 @@ describe("a nested run-sequence reports its own verdict", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("flags a nested failure whose error message is empty", () => {
+    // A tool that throws `new Error("")` records `error: ""`. Keying the check
+    // on a non-empty message would skip that entry and let the failed sequence
+    // score — or, in the recorder, record — as a pass. The message is named
+    // rather than rendered blank so the reason does not trail off at the colon.
+    const out = nestedOrchestratorOutcome("run-sequence", {
+      completed: 0,
+      total: 1,
+      steps: [{ tool: "keyboard", error: "" }],
+    });
+
+    expect(out?.status).toBe("fail");
+    expect(out?.reason).toBe(
+      "run-sequence stopped at keyboard after 0 of 1 steps: failed without an error message"
+    );
+  });
+
+  it("reports the FIRST failure, not a later one", () => {
+    const out = nestedOrchestratorOutcome("run-sequence", {
+      completed: 0,
+      total: 2,
+      steps: [
+        { tool: "keyboard", error: "first" },
+        { tool: "gesture-tap", error: "second" },
+      ],
+    });
+
+    expect(out?.reason).toMatch(/stopped at keyboard/);
+    expect(out?.reason).toMatch(/first$/);
+  });
+
   it("skips when the sequence was cut short by cancellation", async () => {
     // No error entry, but fewer step results than steps requested — the only
     // other way run-sequence leaves its loop.

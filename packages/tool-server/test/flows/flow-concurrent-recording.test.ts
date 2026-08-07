@@ -116,6 +116,11 @@ function createMockRegistry(): Registry {
       // the same starting gun.
       await new Promise((resolve) => setTimeout(resolve, 0));
       if (subToolGate) await subToolGate();
+      // The one tool here that returns a FAILED verdict instead of throwing, so
+      // a test can drive flow-add-step's refuse-to-record return.
+      if (id === "run-sequence") {
+        return { completed: 0, total: 2, steps: [{ tool: "keyboard", error: "device went away" }] };
+      }
       return { ok: true };
     }),
     getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
@@ -1342,6 +1347,40 @@ describe("a restart that lands while a step is still running", () => {
     expect(await readMarkers(root, "alpha")).toEqual(["tool:a3"]);
     const finished = await finish(root, "alpha");
     expect(finished.steps).toBe(1);
+  });
+
+  it("rejects a superseded step that records NOTHING, rather than counting another take", async () => {
+    // A return that deliberately records nothing still reports `stepCount` and
+    // `savedTo`, and both are read off the session it resolved before the live
+    // call. Without the same liveness check the append path performs, a refusal
+    // that lands after a takeover answers with the OTHER take's step count —
+    // the one number this caller has to know where its own take stands.
+    const root = await makeRoot("supersede-refusal");
+    await start(root, "alpha");
+    await addStep(root, "alpha", "a1");
+
+    const gate = gateNextSubTool();
+    // run-sequence reports a failed nested step by RETURNING, so this call takes
+    // flow-add-step's refuse-to-record path rather than throwing.
+    const refusing = addRawStep(root, "alpha", "run-sequence", {
+      udid: "ABC",
+      steps: [
+        { tool: "keyboard", args: { text: "x" } },
+        { tool: "keyboard", args: { text: "y" } },
+      ],
+    });
+    await gate.reached;
+
+    const restarted = await start(root, "alpha");
+    expect(restarted.restarted).toBe(true);
+
+    gate.release();
+    const err = await captureFailure(refusing);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_NO_ACTIVE_RECORDING);
+    expect((err as Error).message).toContain("restarted while this step was running");
+    // Nothing was recorded, but the nested sequence DID run at the device.
+    expect((err as Error).message).toContain("already ran on the device");
+    expect(await readMarkers(root, "alpha")).toEqual([]);
   });
 
   it("does not warn a superseded ECHO that it already ran on the device", async () => {

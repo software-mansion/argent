@@ -2266,6 +2266,29 @@ async function execLeafStep(
       }
       try {
         const result = await invokeSubTool(registry, ctx, step.name, args);
+        // `flow-execute` and `run-sequence` run other tools and report what
+        // happened in their result instead of throwing, so without this a
+        // composition that failed everything counted as a passing step (#606).
+        const nested = nestedOrchestratorOutcome(step.name, result);
+        if (signal?.aborted) {
+          // The tool still RETURNED under the cancel (run-sequence honours the
+          // signal by returning a partial result rather than throwing), so
+          // without this guard that return would score a pass. Both nested
+          // orchestrators report their own abort as a skip and word it with the
+          // progress they made ("aborted after 2 of 5 steps"); prefer that over
+          // the generic wording rather than shadowing it. The payload is the
+          // pass branch's — a cancelled step's report must not be thinner than
+          // a passing one's, or the partial result it carries is unreadable.
+          return {
+            ...base,
+            status: "skip",
+            tool: step.name,
+            reason: nested?.status === "skip" ? nested.reason : "run aborted during tool",
+            result,
+            outputHint,
+            args,
+          };
+        }
         if (isUnmetUiWaitResult(step.name, result)) {
           const note = (result as { note?: string }).note;
           return {
@@ -2275,10 +2298,6 @@ async function execLeafStep(
             reason: `await-ui-element condition not met${note ? `: ${note}` : ""}`,
           };
         }
-        // `flow-execute` and `run-sequence` run other tools and report what
-        // happened in their result instead of throwing, so without this a
-        // composition that failed everything counted as a passing step (#606).
-        const nested = nestedOrchestratorOutcome(step.name, result);
         if (nested) {
           return {
             ...base,
