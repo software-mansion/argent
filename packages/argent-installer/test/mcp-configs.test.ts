@@ -2288,6 +2288,28 @@ describe("installer preserves foreign MCP config", () => {
     fs.rmSync(homedirOverride, { recursive: true, force: true });
   });
 
+  it("Cursor addAllowlist with createIfMissing:false does not recreate a deleted permissions.json", () => {
+    const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    homedirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-home-"));
+    const permPath = path.join(homedirOverride, ".cursor", "permissions.json");
+    // Simulate update after the user deleted the file for Cursor allow-all.
+    expect(fs.existsSync(permPath)).toBe(false);
+    cursor.addAllowlist!(tmpDir, "global", { createIfMissing: false });
+    expect(fs.existsSync(permPath)).toBe(false);
+    fs.rmSync(homedirOverride, { recursive: true, force: true });
+  });
+
+  it("Cursor addAllowlist with createIfMissing:false does not re-add argent after opt-out", () => {
+    const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    homedirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-home-"));
+    const permPath = path.join(homedirOverride, ".cursor", "permissions.json");
+    fs.mkdirSync(path.dirname(permPath), { recursive: true });
+    fs.writeFileSync(permPath, JSON.stringify({ mcpAllowlist: ["other:*"] }));
+    cursor.addAllowlist!(tmpDir, "global", { createIfMissing: false });
+    expect(readJsoncFile(permPath).mcpAllowlist).toEqual(["other:*"]);
+    fs.rmSync(homedirOverride, { recursive: true, force: true });
+  });
+
   it("addClaudePermission preserves a comment and foreign permissions in settings.json", () => {
     const settingsPath = path.join(tmpDir, ".claude", "settings.json");
     fs.mkdirSync(path.dirname(settingsPath), { recursive: true });

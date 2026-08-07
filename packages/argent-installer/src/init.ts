@@ -249,6 +249,7 @@ export async function init(args: string[]): Promise<void> {
       effectiveRoot,
       scope: normalizedScope,
       nonInteractive: parsed.nonInteractive,
+      noAllowlist: parsed.noAllowlist,
     });
     track("installation:allowlist_decision", { is_enabled: allowlist.enabled });
     if (allowlist.enabled && allowlist.lines.length > 0) {
