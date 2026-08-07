@@ -710,6 +710,66 @@ steps:
     expect(reads).toBe(5);
   });
 
+  // A blip on the read that ENDS the step is still a blip. Which poll it lands
+  // on used to decide the whole verdict: one poll earlier it restarted the hold
+  // and the step passed with a warning, on the last poll it stopped the run and
+  // skipped every later step. So a screen this check is explicit about wanting
+  // to pass — a video, a shimmer, a carousel, live-updating text — turned a run
+  // red on timing luck alone.
+  it("does not stop the run when only the read that ended the wait failed", async () => {
+    let firstReadAt: number | undefined;
+    let tick = 0;
+    // Never settles, so the step always exits through the bottom of the loop
+    // and its last read is the one that decides. Measured from the first read
+    // rather than from the run, the threshold sits midway between the closing
+    // two rounds of a 900ms step (600ms and 800ms in), so only the last throws.
+    currentTree = () => {
+      firstReadAt ??= Date.now();
+      if (Date.now() - firstReadAt >= 700) throw new Error("transient describe failure");
+      return screenWith(`frame ${tick++}`);
+    };
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, timeout: 900, minStableMs: 0 }
+  - echo: reached
+`
+    );
+    const r = await run("ready");
+    expect(r.ok).toBe(true);
+    const step = r.steps.find((s) => s.kind === "idle")!;
+    expect(step.status).toBe("pass");
+    expect(step.warning).toContain("never held still");
+    // Tolerated, not swallowed: the read that failed is still named.
+    expect(step.warning).toContain("transient describe failure");
+    // And the checks that actually carry the flow's verdict still run.
+    expect(r.steps.at(-1)).toMatchObject({ kind: "echo", status: "pass" });
+  });
+
+  // The same blip against the other window it used to redden: a screen that
+  // read back empty throughout is an observation about the app, and a transient
+  // on the closing read does not turn it into a window nobody could see.
+  it("still reports an empty screen as empty when the closing read failed", async () => {
+    let firstReadAt: number | undefined;
+    currentTree = () => {
+      firstReadAt ??= Date.now();
+      if (Date.now() - firstReadAt >= 700) throw new Error("transient describe failure");
+      return n({ role: "AXWindow", frame: FULL, children: [] });
+    };
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, timeout: 900, minStableMs: 0 }
+`
+    );
+    const step = (await run("ready")).steps.at(-1)!;
+    expect(step.status).toBe("pass");
+    expect(step.warning).toContain("never rendered content");
+    expect(step.warning).toContain("transient describe failure");
+  });
+
   // The same for a screen that goes blank in the middle: an observation that
   // resets both holds, not a gap and not a reason to give up.
   it("restarts the hold after the screen goes blank, and still settles", async () => {

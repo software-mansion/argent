@@ -1227,6 +1227,27 @@ const LOCALIZED_MOTION_WARNING =
  */
 const HUNG_TREE_READ_MS = 2_000;
 
+/**
+ * Evidence-gap bound for the post-loop verdict, and the idle twin of
+ * {@link CONDITION_DARK_TAIL_TOLERANCE_MS}: how long the tree source may have
+ * been failing at the end of the wait before "the source stopped answering" is
+ * the better account of the window than whatever the screen was doing.
+ *
+ * A tree-source blip is expected mid-settle — the loop restarts the hold and
+ * carries on — and the read that happens to END the step is no more meaningful
+ * than any other. Without this bound, one failed read on the last poll turned
+ * every benign outcome into a run-stopping error, while the identical
+ * transient one poll earlier passed with a warning: whether a flow survived a
+ * screen this step is explicit about wanting to pass came down to where the
+ * blip landed.
+ *
+ * Two polls is what one blip costs: up to a poll of sleep since the last read
+ * that answered, plus a poll's worth of latency for the failing one. A longer
+ * tail means consecutive reads went dark, which is the window this step cannot
+ * describe.
+ */
+const IDLE_DARK_TAIL_TOLERANCE_MS = IDLE_POLL_MS * 2;
+
 /** How the last tree read ended. Only `value` licenses a verdict about the app. */
 type TreeReadOutcome = "value" | "error" | "timeout";
 
@@ -1293,6 +1314,12 @@ async function waitForIdle(
   // and every arm of that round sets it.
   let lastRead!: TreeReadOutcome;
   let treeErrorMessage: string | undefined;
+  // Date.now() of the most recent read that ANSWERED — 0 until one does, which
+  // the `readsSucceeded === 0` guard below returns on before anything measures
+  // from it. Post-loop it anchors the dark tail: how long the window's final
+  // stretch went without a look at the screen (blank counts — it is an
+  // observation; see the blank branch).
+  let lastAnsweredReadAt = 0;
   let treeReadHung = false;
   let sawContent = false;
   let pixelsEverMoved = false;
@@ -1348,6 +1375,7 @@ async function waitForIdle(
     } else {
       lastRead = "value";
       readsSucceeded += 1;
+      lastAnsweredReadAt = Date.now();
       treeErrorMessage = undefined;
       // It answered, so whatever wedged it has cleared.
       treeReadHung = false;
@@ -1464,7 +1492,16 @@ async function waitForIdle(
   // session. One early success does not license a verdict drawn from a window
   // that went dark afterwards. (A read that merely ran out of budget is NOT
   // this case — it is the step ending, and the evidence below still stands.)
-  if (lastRead === "error" && treeErrorMessage !== undefined) {
+  //
+  // Measured as a tail, not as a single read: the source failing on the last
+  // poll and the source having stopped answering are different windows, and
+  // only the second is unreadable. See IDLE_DARK_TAIL_TOLERANCE_MS.
+  const darkTailMs = Date.now() - lastAnsweredReadAt;
+  if (
+    lastRead === "error" &&
+    treeErrorMessage !== undefined &&
+    darkTailMs > IDLE_DARK_TAIL_TOLERANCE_MS
+  ) {
     return unreadable(treeErrorMessage);
   }
   // The same window going dark the other way: the source answered, then stopped
@@ -1482,6 +1519,17 @@ async function waitForIdle(
         `app reads the same as a backgrounded one)`,
     };
   }
+  // A tolerated blip is not a silently dropped error: whichever warning below
+  // describes the window carries the failed read with it, the way
+  // waitForCondition appends its own. (The tree-only settle is the one verdict
+  // below that cannot be reached with a failed final read — that read cleared
+  // `treeSettledAtLastRead` — so it is left alone rather than given a note it
+  // could never print.)
+  const blipNote =
+    lastRead === "error" && treeErrorMessage !== undefined
+      ? ` (the read that ended the wait failed: ${treeErrorMessage})`
+      : "";
+
   // Readable throughout and never once carrying content: the screen rendered
   // nothing, which is not the same claim as "it never stopped moving".
   //
@@ -1498,7 +1546,8 @@ async function waitForIdle(
         `the UI tree stayed empty for ${timeoutMs}ms — the screen never rendered content, so ` +
         `there was nothing to settle. If the screen is meant to render accessible content, this ` +
         `is where it did not; if it is a canvas or a video surface, it has none to read. Gate ` +
-        `the next action on an element check either way.`,
+        `the next action on an element check either way.` +
+        blipNote,
     };
   }
   // Too few reads to have judged anything. A settle needs three of them
@@ -1523,7 +1572,8 @@ async function waitForIdle(
         `${MIN_STILL_INTERVALS + 1} of them spanning ${MIN_STILL_INTERVALS} ${IDLE_POLL_MS}ms ` +
         `polls — so this step ended without ever being able to tell whether the screen was ` +
         `moving. Raise its \`timeout:\`, and gate the next action on a stable element rather ` +
-        `than on stillness.`,
+        `than on stillness.` +
+        blipNote,
     };
   }
   // The tree was settled as of the last read and no pair of captures ever
@@ -1550,7 +1600,8 @@ async function waitForIdle(
       `ahead without waiting it out. Either something on it never stops (a video, a looping ` +
       `animation, a carousel, live-updating text) or the screen never finished loading. Look at ` +
       `what is moving, and make sure the next action is gated on a stable element rather than on ` +
-      `stillness.`,
+      `stillness.` +
+      blipNote,
   };
 }
 
