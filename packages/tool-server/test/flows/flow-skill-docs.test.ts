@@ -22,10 +22,18 @@ const FLOW_YAML = path.resolve(
   "../../../skills/skills/argent-create-flow/references/flow-yaml.md"
 );
 
+/**
+ * The text between two markers. BOTH are asserted: `split` on an absent
+ * separator returns a single-element array, so an unchecked `end` would widen
+ * the section silently to EOF — and the callers below then count snippets from
+ * the rest of the file instead of failing on the renamed heading.
+ */
 function between(file: string, start: string, end: string): string {
   const after = readFileSync(file, "utf8").split(start)[1];
   expect(after, `${start} is missing from ${file}`).toBeDefined();
-  return after!.split(end)[0]!;
+  const section = after!.split(end)[0]!;
+  expect(section, `${end} is missing from ${file} after ${start}`).not.toBe(after);
+  return section;
 }
 
 describe("create-flow selector-scope docs", () => {
