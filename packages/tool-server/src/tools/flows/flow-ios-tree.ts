@@ -355,6 +355,26 @@ export async function queryFullHierarchyTree(
         err
       );
     }
+    // Neither verdict — the applicationState probe resolveNativeTargetApp runs
+    // over EVERY connected app failed, so it reached no verdict at all. iOS
+    // suspends a backgrounded app within about a second and a suspended app
+    // stops answering that probe, so one stale connection rejects the whole
+    // read (the probe is a single Promise.all). That is not the "nothing is
+    // instrumented" state the relaunch advice below describes: the connections
+    // are live. Relaunching discards whatever state the flow built up, and when
+    // the unresponsive connection belongs to a DIFFERENT app than the one being
+    // driven, relaunching the target cannot fix the read at all.
+    const stillConnected = nativeApi.listConnectedBundleIds();
+    if (stillConnected.length > 0) {
+      throw wrapPreservingFailure(
+        `could not read the state of the native-devtools-connected apps, so none could be ` +
+          `auto-targeted (${firstClause(err)}). Connected: ${stillConnected.join(", ")}. ` +
+          `They are instrumented — do not relaunch. A suspended app stops answering: foreground ` +
+          `the app the flow drives with launch-app (it does not terminate), and terminate any ` +
+          `other connected app, then retry.`,
+        err
+      );
+    }
     throw wrapPreservingFailure(
       `could not target a native-devtools-connected app to read the view hierarchy from (${firstClause(err)}) — ` +
         `flow selectors require an instrumented process. launch-app does not terminate the app first: ` +

@@ -153,6 +153,71 @@ describe("flow iOS full-hierarchy source", () => {
     expect(error.message).not.toContain("guarantees instrumentation");
   });
 
+  it("does not call a suspended-but-connected app uninstrumented", async () => {
+    // iOS suspends a backgrounded app within ~1s; its devtools socket stays
+    // open but Application.getState stops answering and the RPC times out.
+    const api = {
+      listConnectedBundleIds: () => ["com.example.solo"],
+      getAppState: vi.fn(async () => {
+        throw new FailureError("ViewInspector RPC timed out: Application.getState", {
+          error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT,
+          failure_stage: "native_devtools_rpc_request",
+          failure_area: "tool_server",
+          error_kind: "timeout",
+        });
+      }),
+    } as unknown as NativeDevtoolsApi;
+
+    const error = await queryFullHierarchyTree(registryFor(api), DEVICE).catch((err) => err);
+
+    expect(getFailureSignal(error)).toMatchObject({
+      error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT,
+    });
+    // The dotted identifier is the actionable half of the clause — it names the
+    // RPC that hung, and keying the clause on a bare period used to chop it.
+    expect(error.message).toContain("(ViewInspector RPC timed out: Application.getState)");
+    expect(error.message).toContain("com.example.solo");
+    // The app IS instrumented: relaunching it throws the flow's state away.
+    expect(error.message).toContain("do not relaunch");
+    expect(error.message).toContain("launch-app");
+    expect(error.message).not.toContain("guarantees instrumentation");
+    expect(error.message).not.toContain("restart-app");
+  });
+
+  it("blames the unreadable connection, not the healthy frontmost app", async () => {
+    // A second instrumented app left suspended rejects the whole state probe,
+    // even though the app the flow drives is frontmost and readable — so
+    // relaunching the flow's own target could never fix it.
+    const api = {
+      listConnectedBundleIds: () => ["com.example.driven", "com.example.stale"],
+      getAppState: vi.fn(async (bundleId: string) => {
+        if (bundleId === "com.example.stale") {
+          throw new FailureError("ViewInspector RPC timed out: Application.getState", {
+            error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT,
+            failure_stage: "native_devtools_rpc_request",
+            failure_area: "tool_server",
+            error_kind: "timeout",
+          });
+        }
+        return {
+          bundleId,
+          applicationState: "active",
+          foregroundActiveSceneCount: 1,
+          foregroundInactiveSceneCount: 0,
+          backgroundSceneCount: 0,
+          unattachedSceneCount: 0,
+          isFrontmostCandidate: true,
+        };
+      }),
+    } as unknown as NativeDevtoolsApi;
+
+    const error = await queryFullHierarchyTree(registryFor(api), DEVICE).catch((err) => err);
+
+    expect(error.message).toContain("com.example.driven, com.example.stale");
+    expect(error.message).toContain("terminate any other connected app");
+    expect(error.message).not.toContain("restart-app");
+  });
+
   it("names restart-app (not launch-app) when the target loaded before instrumentation", async () => {
     const api = {
       listConnectedBundleIds: () => ["com.example.app"],
