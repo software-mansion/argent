@@ -242,6 +242,13 @@ describe("flow iOS full-hierarchy source", () => {
     // otherwise. So that blanket warning must not ride along.
     expect(error.message).not.toContain("native-describe-screen");
     expect(error.message).not.toContain("Do not fall back to the native-devtools feature tools");
+    // Scoped to the six tools that run the THROWING 3-arg precheck. Saying
+    // "the native-* tools" would sweep in native-devtools-status, which runs
+    // the 2-arg form and reports injectable:false rather than throwing — the
+    // one native-* tool that can confirm the state this sentence describes —
+    // and the native-profiler-* tools, which never precheck.
+    expect(error.message).toContain("the native-devtools feature tools refuse it too");
+    expect(error.message).not.toContain("the native-* tools");
     // The clause is trimmed at the sentence break, so the impossible advice in
     // the source's SECOND sentence never reaches the flow reason.
     expect(error.message).toContain(

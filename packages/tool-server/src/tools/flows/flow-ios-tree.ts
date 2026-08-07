@@ -413,9 +413,15 @@ export async function queryFullHierarchyTree(
         `read the view hierarchy from (${firstClause(err)}). Relaunch with restart-app (or a flow ` +
         `\`launch\` step): launch-app does not terminate, so on an app already running from ` +
         `Metro/Expo, Xcode, or its icon it only foregrounds that uninstrumented process. ` +
-        `Argent treats an Apple system app (com.apple.*) as non-injectable — the native-* tools ` +
-        `refuse it too — so if one never connects, drive it with raw point taps and ` +
-        `tool: await-ui-element steps.`,
+        // "the native-devtools FEATURE tools", not "the native-* tools": only
+        // the six that run the throwing 3-arg precheck refuse a com.apple.*
+        // bundle. native-devtools-status runs the 2-arg form and reports
+        // injectable:false instead, and the native-profiler-* tools do not
+        // precheck at all — so the broader claim would send an agent away from
+        // the one native-* tool that can confirm this state.
+        `Argent treats an Apple system app (com.apple.*) as non-injectable — the native-devtools ` +
+        `feature tools refuse it too — so if one never connects, drive it with raw point taps ` +
+        `and tool: await-ui-element steps.`,
       err
     );
   }
