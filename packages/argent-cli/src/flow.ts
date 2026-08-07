@@ -25,9 +25,13 @@ export interface StepReport {
   status: "pass" | "fail" | "skip" | "error";
   reason?: string;
   /**
-   * Legacy: older tool-servers passed a snapshot that adopted a missing
-   * baseline and annotated it with this caveat (a missing baseline now fails
-   * the step). Rendered for wire compat with a not-yet-updated server.
+   * A step that passed in a way that weakens it as proof — raised today by
+   * `await: { idle: true }`, which never fails a run and says here what its
+   * green actually bought (see StepReport.warning in the tool-server's
+   * flow-run). Also carries the caveat older tool-servers put on a snapshot
+   * that adopted a missing baseline, which now fails the step instead. Live
+   * either way: dropping the field would silently delete the only thing the
+   * readiness check reports.
    */
   warning?: string;
   tool?: string;
@@ -340,6 +344,11 @@ export function renderArtifactLines(report: FlowReport): string[] {
  * Batch mode prints only what needs attention: each fail/error step with its
  * under-lines, numbered by walking the full step list so the numbers match a
  * single-mode rerun of the same flow.
+ *
+ * A PASSING step carrying a warning needs attention too. `await: { idle: true }`
+ * only ever warns on a step that passed, and renderSummary counts every warning
+ * whatever its status — so skipping those here printed "1 warning" with the
+ * text nowhere on screen, which is the whole of what the step reports.
  */
 export function renderFailedSteps(report: FlowReport): string[] {
   const lines: string[] = [];
@@ -347,7 +356,7 @@ export function renderFailedSteps(report: FlowReport): string[] {
   for (const s of report.steps) {
     if (s.kind === "echo") continue;
     n++;
-    if (s.status !== "fail" && s.status !== "error") continue;
+    if (s.status !== "fail" && s.status !== "error" && !s.warning) continue;
     lines.push(renderStepLine(s, n, report.flow));
     if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
     if (s.artifacts && typeof s.artifacts === "object") {

@@ -1549,6 +1549,28 @@ describe("flow-finish-recording", () => {
     expect(result.summary).toEqual(["1. echo: Before tap", '2. tool: tap {"x":0.5}']);
   });
 
+  // `idle` has no recorder command — it is written by hand into the YAML,
+  // which the finish re-reads. Without a case here it fell through to the
+  // `tool:` default and the summary described the step as a tool call.
+  it("summarizes a hand-written idle step as the wait it is", async () => {
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "idle-summary", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", "idle-summary.yaml"),
+      `executionPrerequisite: ${JSON.stringify(PREREQ)}\nsteps:\n  - await: { idle: true }\n`,
+      "utf8"
+    );
+
+    const result = await flowFinishRecordingTool.execute(
+      {},
+      { name: "idle-summary", project_root: tmpDir }
+    );
+
+    expect(result.summary).toEqual(["1. await: screen idle"]);
+  });
+
   it("distinguishes contains, equals, and regex text comparisons in the summary", async () => {
     const name = "text-comparison-summary";
     await flowStartRecordingTool.execute(
