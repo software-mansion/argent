@@ -171,7 +171,14 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
     // listeners symmetrically — otherwise the upstream `cdp.events` outlives
     // our blueprint and would emit into a disposed event bus.
     const events = new TypedEventEmitter<ServiceEvents>();
+    // Distinguishes the two ways this service is torn down. An explicit
+    // teardown (server shutdown, a tool re-creating the debugger) leaves it
+    // false and the log file is removed; a `disconnected` means the renderer
+    // died, and the console logs it produced on the way out are what the
+    // developer is about to grep, so `dispose` keeps them.
+    let runtimeDied = false;
     const onDisconnected = (error?: Error) => {
+      runtimeDied = true;
       events.emit("terminated", error ?? new Error("Chromium CDP disconnected"));
     };
     cdp.events.on("disconnected", onDisconnected);
@@ -246,7 +253,7 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
         cdp.events.off("consoleAPICalled", onConsoleAPI);
         cdp.events.off("disconnected", onDisconnected);
         await consoleServer.close();
-        logWriter.close();
+        logWriter.close({ keepFile: runtimeDied });
         // Do NOT disconnect the cdp — it belongs to the ChromiumCdp service.
         // Disposing this blueprint must leave the underlying CDP session alive
         // for other consumers (screenshot, describe, gesture-tap, ...).

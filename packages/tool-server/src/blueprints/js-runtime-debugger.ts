@@ -268,7 +268,15 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
 
     const events = new TypedEventEmitter<ServiceEvents>();
 
+    // Distinguishes the two ways this service is torn down. An explicit
+    // teardown (server shutdown, a tool re-creating the debugger) leaves it
+    // false and the log file is removed; a `disconnected` means the app died,
+    // and the console logs it produced on the way out are what the developer
+    // is about to grep, so `dispose` keeps them.
+    let runtimeDied = false;
+
     cdp.events.on("disconnected", (error) => {
+      runtimeDied = true;
       events.emit(
         "terminated",
         error ??
@@ -286,7 +294,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       dispose: async () => {
         forgetDeviceAlias(api.logicalDeviceId);
         await consoleServer.close();
-        logWriter.close();
+        logWriter.close({ keepFile: runtimeDied });
         await cdp.disconnect();
       },
       events,

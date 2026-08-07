@@ -76,6 +76,7 @@ export class LogFileWriter {
     const timestamp = Date.now();
     const dir = path.join(os.homedir(), ".argent", "tmp");
     fs.mkdirSync(dir, { recursive: true });
+    pruneStaleLogs(dir);
     this.filePath = path.join(dir, `argent-logs-${port}-${timestamp}.log`);
     this.open();
   }
@@ -216,7 +217,13 @@ export class LogFileWriter {
     return { entries: filtered, total };
   }
 
-  close(): void {
+  /**
+   * Flush and close the handle. `keepFile` leaves the log on disk: the caller
+   * is shutting the writer down because the JS runtime died, and the entries
+   * captured before it died are the reason a developer would look. Everything
+   * kept this way is reclaimed by `pruneStaleLogs` on a later connect.
+   */
+  close(opts: { keepFile?: boolean } = {}): void {
     if (this.closed) return;
     this.closed = true;
     if (this.fd !== null) {
@@ -227,10 +234,41 @@ export class LogFileWriter {
       }
       this.fd = null;
     }
+    if (opts.keepFile) return;
     try {
       fs.unlinkSync(this.filePath);
     } catch {
       // file may already be gone
+    }
+  }
+}
+
+const STALE_LOG_AGE_MS = 24 * 60 * 60 * 1000;
+const LOG_NAME_RE = /^argent-logs-\d+-\d+\.log$/;
+
+/**
+ * Drop log files left behind by earlier sessions — the writer keeps its file
+ * when the runtime dies, and a tool-server killed outright never closes its
+ * writer at all, so without this the directory only grows. Age-based rather
+ * than delete-all: several tool-servers can run at once, and 24h is far longer
+ * than any debugger session, so a live writer's file is never a candidate.
+ */
+function pruneStaleLogs(dir: string): void {
+  const cutoff = Date.now() - STALE_LOG_AGE_MS;
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!LOG_NAME_RE.test(name)) continue;
+    const full = path.join(dir, name);
+    try {
+      if (fs.statSync(full).mtimeMs >= cutoff) continue;
+      fs.unlinkSync(full);
+    } catch {
+      // raced with another server, or not ours to remove
     }
   }
 }

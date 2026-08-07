@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { LogFileWriter, type RichLogEntry } from "../../src/utils/debugger/log-file-writer";
 
 let writer: LogFileWriter;
@@ -21,6 +23,54 @@ describe("LogFileWriter", () => {
 
   afterEach(() => {
     writer.close();
+  });
+
+  describe("stale-log pruning", () => {
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    let savedHome: string | undefined;
+    let tmpHome: string;
+    let logDir: string;
+
+    const age = (file: string, ms: number) => {
+      const when = new Date(Date.now() - ms);
+      fs.utimesSync(file, when, when);
+    };
+
+    beforeEach(() => {
+      savedHome = process.env.HOME;
+      tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "argent-logprune-"));
+      process.env.HOME = tmpHome;
+      logDir = path.join(tmpHome, ".argent", "tmp");
+      fs.mkdirSync(logDir, { recursive: true });
+    });
+
+    afterEach(() => {
+      if (savedHome === undefined) delete process.env.HOME;
+      else process.env.HOME = savedHome;
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    });
+
+    it("removes log files older than a day and leaves everything else", () => {
+      const stale = path.join(logDir, "argent-logs-1111-1700000000000.log");
+      const recent = path.join(logDir, "argent-logs-2222-1700000000000.log");
+      const foreign = path.join(logDir, "not-a-log.txt");
+      for (const f of [stale, recent, foreign]) fs.writeFileSync(f, "x");
+      age(stale, DAY_MS + 60_000);
+      age(foreign, DAY_MS + 60_000);
+      age(recent, 60 * 60 * 1000);
+
+      const pruner = new LogFileWriter(3333);
+
+      expect(fs.existsSync(stale)).toBe(false);
+      // A concurrent tool-server's live writer keeps touching its file, so an
+      // hour-old one is still in use.
+      expect(fs.existsSync(recent)).toBe(true);
+      // The directory is not exclusively ours to empty.
+      expect(fs.existsSync(foreign)).toBe(true);
+      // Never its own file, however the clock is set.
+      expect(fs.existsSync(pruner.getFilePath())).toBe(true);
+      pruner.close();
+    });
   });
 
   it("creates a flat log file in ~/.argent/tmp", () => {
