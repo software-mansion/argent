@@ -135,6 +135,90 @@ describe("flow iOS full-hierarchy source", () => {
     expect(selectorToFrame(truncated, { identifier: "deep-button" })).toBeUndefined();
   });
 
+  it("hoists more text into an identified container as the cap admits more of it", async () => {
+    // The cost side of the raised cap, pinned because FLOW_TREE_MAX_DEPTH's
+    // docblock now claims it. `assertReason`'s `text` arm quotes the matched
+    // node's hoisted subtreeText verbatim into a failing assert/await reason
+    // and nothing truncates it downstream, so descendants that a depth-40 read
+    // dropped now show up in what the agent reads.
+    const LABEL_AT = [20, 30, 41, 55]; // two inside the old cap, two past it
+    const buildRaw = (maxDepth: number) => {
+      let node: Record<string, unknown> | null = null;
+      for (let depth = 60; depth >= 1; depth--) {
+        const children: Record<string, unknown>[] = [];
+        if (node && depth < maxDepth) children.push(node);
+        if (LABEL_AT.includes(depth) && depth < maxDepth) {
+          children.push({
+            className: "UILabel",
+            label: `row-${depth}-content`,
+            frame: { x: 0, y: 0, width: 400, height: 20 },
+            windowFrame: { x: 0, y: 0, width: 400, height: 20 },
+            children: [],
+          });
+        }
+        node = {
+          className: "RNSScreenView",
+          // The container the selector names — hoisting stops at the next
+          // identified node, so everything below lands in ITS subtreeText.
+          ...(depth === 2 ? { identifier: "card" } : {}),
+          frame: { x: 0, y: 0, width: 400, height: 800 },
+          windowFrame: { x: 0, y: 0, width: 400, height: 800 },
+          children,
+        };
+      }
+      return {
+        windows: [
+          {
+            className: "UIWindow",
+            frame: { x: 0, y: 0, width: 400, height: 800 },
+            windowFrame: { x: 0, y: 0, width: 400, height: 800 },
+            children: [node as Record<string, unknown>],
+          },
+        ],
+      };
+    };
+    const apiWithCap = (deviceCap: number) =>
+      ({
+        listConnectedBundleIds: () => ["com.example.app"],
+        getAppState: vi.fn(async (bundleId: string) => ({
+          bundleId,
+          applicationState: "active",
+          foregroundActiveSceneCount: 1,
+          foregroundInactiveSceneCount: 0,
+          backgroundSceneCount: 0,
+          unattachedSceneCount: 0,
+          isFrontmostCandidate: true,
+        })),
+        requiresAppRestart: vi.fn(async () => false),
+        queryViewHierarchy: vi.fn(async (_bundleId, _method, params) =>
+          buildRaw(Math.min((params as { maxDepth: number }).maxDepth, deviceCap))
+        ),
+      }) as unknown as NativeDevtoolsApi;
+
+    const hoistedUnder = async (deviceCap: number): Promise<string> => {
+      const { tree } = await queryFullHierarchyTree(registryFor(apiWithCap(deviceCap)), DEVICE);
+      const find = (node: typeof tree): string => {
+        if (node.identifier === "card") return node.subtreeText ?? "";
+        for (const child of node.children ?? []) {
+          const inner = find(child);
+          if (inner) return inner;
+        }
+        return "";
+      };
+      return find(tree);
+    };
+
+    const shallow = await hoistedUnder(40);
+    const deep = await hoistedUnder(100);
+
+    expect(shallow).toContain("row-20-content");
+    expect(shallow).not.toContain("row-41-content");
+    expect(deep).toContain("row-41-content");
+    expect(deep).toContain("row-55-content");
+    // The quoted string genuinely grows — this is what reaches the agent.
+    expect(deep.length).toBeGreaterThan(shallow.length);
+  });
+
   it("keeps native-target FailureError metadata while replacing impossible advice", async () => {
     const api = {
       listConnectedBundleIds: () => [] as string[],

@@ -283,16 +283,26 @@ const FULL_HIERARCHY_FIELDS = [
  * stop matching), the cap carries generous headroom rather than hugging the
  * deepest observed measurement.
  *
- * Cost note: this tree is internal to selector resolution — `selectorToFrame`/
- * `evaluateCondition` consume it, and the tree itself is never returned — so a
- * deeper cap does NOT enlarge any tool result or agent context. (Text derived
- * from it can still reach the agent in small amounts: `compatibilityMissNote`
- * walks the whole tree and its output joins the step's `reason` — see
- * flow-actions.ts — so the cap does bound how far that note can look.) It
- * otherwise only grows the getFullHierarchy payload over the native-devtools
- * socket, and that payload is field-limited (`FULL_HIERARCHY_FIELDS`). In the measured production
- * tree, depth-40 was ~11KB and depth-48 ~15KB; past the tree's real depth a
- * higher cap adds nothing at all, so 100 stays modest.
+ * Cost note: the tree itself is never returned — `selectorToFrame` /
+ * `evaluateCondition` consume it — so no tool RESULT carries it. Text derived
+ * from it does reach the agent though, and one such path grows with this cap:
+ * `assertReason`'s `text` arm (flow-actions.ts) quotes `assertText(first)`,
+ * i.e. the matched node's hoisted `subtreeText` — every on-screen descendant's
+ * text up to the next identified node — verbatim into a failing `assert`/`await`
+ * reason, and nothing truncates it on the way out. Descendants a depth-40 read
+ * truncated away now hoist, so the quoted string grows with the cap: measured
+ * on a `testID`'d collection view with 60 mounted rows, one failing
+ * `assert { text }` came back at 87 chars under a device cap of 40 and 466
+ * under 100 (686 with no scroll container to clip the hoist). That is the
+ * trade this cap accepts, and it is worth it — under the old cap those
+ * selectors did not resolve AT ALL. `compatibilityMissNote` is NOT this path:
+ * it short-circuits on its first hit and quotes exactly one candidate, so it
+ * does not grow with the tree.
+ *
+ * Otherwise the cap only grows the getFullHierarchy payload over the
+ * native-devtools socket, which is field-limited (`FULL_HIERARCHY_FIELDS`). In
+ * the measured production tree, depth-40 was ~11KB and depth-48 ~15KB; past the
+ * tree's real depth a higher cap adds nothing at all, so 100 stays modest.
  */
 const FLOW_TREE_MAX_DEPTH = 100;
 
