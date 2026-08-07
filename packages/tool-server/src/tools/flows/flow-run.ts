@@ -22,6 +22,7 @@ import type {
 import {
   appIdForPlatform,
   assertSafeFlowName,
+  blockSteps,
   chromiumLaunchSpec,
   classifyOnDiskSpelling,
   describeSelector,
@@ -1654,9 +1655,10 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
         // line rather than vanishing — matching reportBlockSkipped.
         ...(step.kind === "echo" ? { message: step.message } : {}),
       });
-      // A when block's literal steps are known — expand them so the report
+      // A block directive's literal steps are known — expand them so the report
       // keeps one line per authored step no matter where the stop landed.
-      if (step.kind === "when") reportBlockSkipped(state, step.steps, childScope(scope));
+      const inner = blockSteps(step);
+      if (inner) reportBlockSkipped(state, inner, childScope(scope));
       continue;
     }
     // The flow was resolved as needing no device, yet a step that acts on one
@@ -1673,7 +1675,8 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
         ...depthOf(scope),
         reason: `step needs a device but the flow was resolved as device-free — pass an explicit device`,
       });
-      if (step.kind === "when") reportBlockSkipped(state, step.steps, childScope(scope));
+      const inner = blockSteps(step);
+      if (inner) reportBlockSkipped(state, inner, childScope(scope));
       continue;
     }
     if (state.signal?.aborted) {
@@ -1688,9 +1691,8 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
         ...depthOf(scope),
         ...(step.kind === "echo" ? { message: step.message } : {}),
       });
-      if (step.kind === "when") {
-        reportBlockSkipped(state, step.steps, childScope(scope), "run aborted");
-      }
+      const inner = blockSteps(step);
+      if (inner) reportBlockSkipped(state, inner, childScope(scope), "run aborted");
       continue;
     }
 
@@ -1720,8 +1722,8 @@ function describeWhenCondition(cond: WhenCondition): string {
  * run where the block was skipped (unmet guard, errored guard, hard stop, or
  * cancellation) produces the same report shape (one line per authored step,
  * at the same depth) as a run where it entered, and reports stay comparable
- * run-to-run. Nested when blocks expand (their literal steps are known); a
- * `run:` composition stays one line, matching how post-hard-stop skips report
+ * run-to-run. Nested block directives expand (their literal steps are known);
+ * a `run:` composition stays one line, matching how post-hard-stop skips report
  * a fragment that was never loaded. `scope` is the scope the steps would have
  * executed in — already the block's child scope, not the marker's.
  */
@@ -1742,7 +1744,8 @@ function reportBlockSkipped(
       ...depthOf(scope),
       ...(step.kind === "echo" ? { message: step.message } : {}),
     });
-    if (step.kind === "when") reportBlockSkipped(state, step.steps, childScope(scope), reason);
+    const inner = blockSteps(step);
+    if (inner) reportBlockSkipped(state, inner, childScope(scope), reason);
   }
 }
 
