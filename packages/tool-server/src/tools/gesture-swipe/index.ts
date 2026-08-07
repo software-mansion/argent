@@ -174,12 +174,12 @@ Pass momentum:false for a momentum-free swipe that lands exactly where the finge
     // authored × (steps-1)/steps (5% at the default duration, 50% at
     // durationMs 32); a momentum-free swipe's ease-out has already closed all but
     // (1/steps)^n of the travel — orders of magnitude nearer, but still not the
-    // end point, so the repeat is unconditional rather than gated on `!momentumFree`,
-    // and a momentum-free landing is what `scroll-to` always asks for. The duplicate sample
-    // does not damp the iOS fling, which is the reason it used to be withheld
-    // there: the same default swipe settles a scrollable page 806px down with
-    // the repeat against 803px without (n=14 each, run-to-run spread ~20px), so
-    // any effect is well inside the noise.
+    // end point, so the repeat is unconditional rather than gated on
+    // `!momentumFree` — and `scroll-to` always asks for momentum-free. The
+    // duplicate sample does not damp the iOS fling, which is the reason it used
+    // to be withheld there: the same default swipe settles a scrollable page
+    // 806px down with the repeat against 803px without (n=14 each, run-to-run
+    // spread ~20px), so any effect is well inside the noise.
     for (let i = 0; i <= steps; i++) {
       // Every frame below is a 16ms sleep, so without this a cancelled run keeps
       // driving the device for the rest of the duration - the client is gone and

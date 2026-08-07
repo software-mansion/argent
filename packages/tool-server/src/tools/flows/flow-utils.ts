@@ -1294,10 +1294,10 @@ export const SWIPE_MIN_TRAVEL = 0.03;
  * platforms, at 33ms on iOS.
  *
  * 150ms is 9 moves across 9 frames: 8 interpolated plus that repeat. It is also
- * the wall clock `settle`'s ease-out needs to be read as a stop instead of
- * inverting; gesture-swipe refuses `settle` below this same duration, a shorter
- * one being fitted as a flick rather than a stop (a fling back to the top of the
- * list on Android, 1.6x the plain swipe's on iOS). The floor is applied on every
+ * the wall clock `momentum: false`'s ease-out needs to be read as a stop instead
+ * of inverting; gesture-swipe refuses `momentum: false` below this same duration,
+ * a shorter one being fitted as a flick rather than a stop (a fling back to the
+ * top of the list on Android, 1.6x the plain swipe's on iOS). The floor is applied on every
  * platform, though Chromium's `gesture-drag` floors its own step count and so
  * never degenerates to a bare press/release: there the floor is margin rather
  * than a rescue. An envelope on faithful delivery, not a judgment that fast
@@ -1380,8 +1380,8 @@ function swipeByToYaml(by: { x?: number; y?: number }): { x?: number; y?: number
 /** Display spelling of a relative swipe delta (`x=-0.31, y=0.2`, absent axes
  * dropped) — the DELTA's spelling shared by the run report's stepTarget and the
  * recording summary, so the two never disagree on it. That is all they share:
- * the recording summary goes on to append an options tail (`(settle, 800ms)`)
- * that the report's target does not carry. */
+ * the recording summary goes on to append an options tail
+ * (`(momentum-free, 800ms)`) that the report's target does not carry. */
 export function swipeByLabel(by: { x?: number; y?: number }): string {
   return (["x", "y"] as const)
     .filter((axis) => by[axis] !== undefined)
