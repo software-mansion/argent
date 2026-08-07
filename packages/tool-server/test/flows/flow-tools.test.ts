@@ -2780,4 +2780,15 @@ describe("summarizeStep rendering", () => {
       "4. tool: screenshot {}"
     );
   });
+
+  it("renders no delay for a hand-edited delayMs that is not a number", () => {
+    // `fromYamlStep` copies `delayMs` across without checking its type, so a
+    // hand-edited `delayMs: soon` reaches the renderer as a string — which the
+    // types alone cannot catch. Dropping the runtime check for a plain
+    // `!== undefined` prints `(after soonms)` at the author.
+    const step = parseFlow(
+      'executionPrerequisite: ""\nsteps:\n  - tool: screenshot\n    args: {}\n    delayMs: soon\n'
+    ).steps[0];
+    expect(summarizeStep(step, 4)).toBe("4. tool: screenshot {}");
+  });
 });

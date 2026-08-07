@@ -167,10 +167,16 @@ function renderToolArgs(args: unknown): string {
   }
 }
 
-/** The pre-step sleep a replay performs, when the step carries one. */
-function delayLabel(step: FlowStep): string {
-  const delayMs = (step as { delayMs?: number }).delayMs;
-  return typeof delayMs === "number" ? ` (after ${delayMs}ms)` : "";
+/**
+ * The pre-step sleep a replay performs, when the step carries one. Narrowed to
+ * the one arm that has a `delayMs` — over the whole union the field could only
+ * be read through a cast, which is also what would stop the compiler checking
+ * it. The runtime `typeof` still earns its keep: `fromYamlStep` copies `delayMs`
+ * across unvalidated, so a hand-edited `delayMs: soon` arrives here as a string
+ * and must render nothing rather than `(after soonms)`.
+ */
+function delayLabel(step: Extract<FlowStep, { kind: "tool" }>): string {
+  return typeof step.delayMs === "number" ? ` (after ${step.delayMs}ms)` : "";
 }
 
 /** One human-readable line per recorded step, in the flow file's own spellings. */
