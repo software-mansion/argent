@@ -807,7 +807,8 @@ export function includesCI(haystack: string | undefined, needle: string): boolea
   // prevent, arriving through a selector field instead.
   //
   // Only an INVISIBLE-only needle does that, and only since this fold existed:
-  // `{ role: "​" }` folds to "" and matches every element on screen, where
+  // a `role` of a lone ZWSP (U+200B) folds to "" and matches every element on
+  // screen, where
   // at base it was a plain lowercased `String.includes` and matched none.
   // `text` is already covered by hasVisibleText's refinement; `role` and
   // `identifier` are not, so refuse it here, where every literal comparison
