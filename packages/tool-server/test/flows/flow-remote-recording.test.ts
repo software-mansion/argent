@@ -505,7 +505,10 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
         name: { type: "string" },
         flow_path: { type: "string" },
       },
-      oneOf: [{ required: ["name"] }, { required: ["flow_path"] }],
+      oneOf: [
+        { anyOf: [{ required: ["name"] }, { required: ["flow_name"] }] },
+        { required: ["flow_path"] },
+      ],
     });
   });
 
@@ -590,6 +593,29 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
       ).rejects.toThrow("flow_path file-input boundary");
     } finally {
       await fs.rm(flowPath, { force: true });
+    }
+  });
+
+  it("resolves an UPLOADED flow named through the flow_name alias", async () => {
+    // The remote path the alias exists to serve: a client with no shared
+    // filesystem interpolates `${project_root}/.argent/flows/${flow_name}.yaml`,
+    // uploads it, and the server runs the materialized temp copy. Nothing
+    // covered the alias on this route — only the co-located spellings — so the
+    // source resolver could reject it and every local test would stay green.
+    const uploaded = path.join(os.tmpdir(), "argent-upload-aliased.yaml");
+    await fs.writeFile(uploaded, "steps: []", "utf8");
+    try {
+      const resolved = await resolveFlowSource(
+        { flow_name: "aliased", project_root: CLIENT_ROOT, flow_file: uploaded },
+        {
+          clientPath: path.join(CLIENT_ROOT, ".argent", "flows", "aliased.yaml"),
+          presentOnHost: false,
+          viaUpload: true,
+        }
+      );
+      expect(resolved).toEqual({ filePath: uploaded, flowName: "aliased", viaUpload: true });
+    } finally {
+      await fs.rm(uploaded, { force: true });
     }
   });
 

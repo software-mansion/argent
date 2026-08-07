@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { z } from "zod";
 import type { Registry, ToolContext } from "@argent/registry";
 import { createRunSequenceTool } from "../src/tools/run-sequence";
 
@@ -354,5 +355,52 @@ describe("run-sequence", () => {
 
     expect(result.completed).toBe(1);
     expect(registry.invokeTool).toHaveBeenCalledTimes(1);
+  });
+
+  describe("a step whose args the sub-tool rejects", () => {
+    // A registry that knows gesture-tap's schema, so the step's args are
+    // actually validated the way a live registry validates them.
+    const registryKnowingGestureTap = () =>
+      ({
+        getTool: vi.fn((id: string) =>
+          id === "gesture-tap"
+            ? { id, zodSchema: z.object({ udid: z.string(), x: z.number(), y: z.number() }) }
+            : undefined
+        ),
+        invokeTool: vi.fn(async () => ({ ok: true })),
+      }) as unknown as Registry;
+
+    it("names only the keys the AUTHOR wrote, not the injected udid", async () => {
+      // `udid` is injected into every step — the tool's own docs tell authors to
+      // leave it out — so listing it beside the misspelling the list exists to
+      // expose points at a key they never typed.
+      const registry = registryKnowingGestureTap();
+      const tool = createRunSequenceTool(registry);
+
+      const result = await tool.execute(
+        {},
+        { udid: IOS, steps: [{ tool: "gesture-tap", args: { xx: 0.5, y: 0.3 } }] }
+      );
+
+      const error = (result.steps[0] as { error?: string }).error!;
+      expect(error).toContain("`x` is required");
+      expect(error).toContain("You sent: `xx`, `y`.");
+      expect(error).not.toContain("`udid`");
+      // Nothing was dispatched at the device.
+      expect(registry.invokeTool).not.toHaveBeenCalled();
+    });
+
+    it("still accepts a step that omits udid, since it is injected", async () => {
+      const registry = registryKnowingGestureTap();
+      const tool = createRunSequenceTool(registry);
+
+      const result = await tool.execute(
+        {},
+        { udid: IOS, steps: [{ tool: "gesture-tap", args: { x: 0.5, y: 0.3 } }] }
+      );
+
+      expect((result.steps[0] as { error?: string }).error).toBeUndefined();
+      expect(registry.invokeTool).toHaveBeenCalledTimes(1);
+    });
   });
 });

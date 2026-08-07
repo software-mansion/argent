@@ -454,7 +454,7 @@ describe("flow-add-step", () => {
       counts.push(result.stepCount);
       // The number `recorded` opens with IS the reported count, so the author
       // cannot be shown "3." while being told the flow holds one step.
-      expect(result.recorded.startsWith(`${result.stepCount}. `)).toBe(true);
+      expect(result.recorded?.startsWith(`${result.stepCount}. `)).toBe(true);
     }
 
     expect(counts).toEqual([1, 2, 3]);
@@ -1552,6 +1552,63 @@ describe("flow-add-step", () => {
     expect(parseFlow(await readFlowFile("compose-ambiguous")).steps).toEqual([]);
   });
 
+  // The alias spelling of the same dangerous shape. `flow_name` names a flow
+  // every bit as much as `name` does, so the bail-out has to see it: reading
+  // `name` alone lets the rewrite delete flow_path, substitute the file's stem,
+  // and RUN that flow — then record it as a plain `run:` success, permanently,
+  // with nothing saying the requested "checkout" was discarded.
+  it("hands a flow-execute that names flow_name and flow_path to flow-execute verbatim", async () => {
+    const registry = createMockRegistry({ "flow-execute": { result: null, throws: true } });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "compose-alias", project_root: tmpDir });
+    // A genuinely rewritable target: every check downstream of the bail-out
+    // accepts this flow_path, so the bail-out is the only thing standing
+    // between the caller's "checkout" and a swap to "login".
+    await writeSiblingFlow("login", "steps:\n  - echo: hi\n");
+    const args = {
+      flow_name: "checkout",
+      flow_path: path.join(tmpDir, ".argent", "flows", "login.yaml"),
+      project_root: tmpDir,
+    };
+
+    await expect(
+      tool.execute(
+        {},
+        {
+          name: "compose-alias",
+          project_root: tmpDir,
+          command: "flow-execute",
+          args: JSON.stringify(args),
+        }
+      )
+    ).rejects.toThrow();
+
+    expect(registry.invokeTool).toHaveBeenCalledWith("flow-execute", args);
+    // …so that flow-execute's own exactly-one-source rule is what rejects it.
+    const nested = (registry.invokeTool as any).mock.calls[0][1];
+    const parsed = createRunFlowTool(registry as unknown as Registry).zodSchema!.safeParse(nested);
+    expect(parsed.success).toBe(false);
+    expect(JSON.stringify(parsed.error?.issues)).toContain("Pass exactly one flow source");
+    // …and the in-process copy of that rule, which covers direct execute()
+    // callers, must reach the same verdict rather than complaining about the
+    // file-input boundary as if only flow_path had been given.
+    await expect(resolveFlowSource(nested)).rejects.toThrow("Pass exactly one flow source");
+    expect(parseFlow(await readFlowFile("compose-alias")).steps).toEqual([]);
+  });
+
+  it("resolves a direct execute() caller's flow_name the way it resolves name", async () => {
+    // The alias is folded in before resolveFlowSource for every call that comes
+    // through the tool, so the fold has to exist here too — otherwise a direct
+    // in-process caller passing only `flow_name` is told to pass a source it
+    // just passed.
+    await fs.mkdir(path.join(tmpDir, ".argent", "flows"), { recursive: true });
+    await writeSiblingFlow("aliased-direct", "steps:\n  - echo: hi\n");
+    const resolved = await resolveFlowSource({ flow_name: "aliased-direct", project_root: tmpDir });
+    expect(resolved.flowName).toBe("aliased-direct");
+    expect(resolved.filePath).toBe(path.join(tmpDir, ".argent", "flows", "aliased-direct.yaml"));
+  });
+
   it("throws on invalid JSON in args", async () => {
     const registry = createMockRegistry({
       tap: { result: { ok: true } },
@@ -2591,7 +2648,10 @@ describe("flow-read-prerequisite", () => {
         name: { type: "string" },
         flow_path: { type: "string" },
       },
-      oneOf: [{ required: ["name"] }, { required: ["flow_path"] }],
+      oneOf: [
+        { anyOf: [{ required: ["name"] }, { required: ["flow_name"] }] },
+        { required: ["flow_path"] },
+      ],
     });
   });
 
@@ -2676,6 +2736,34 @@ describe("flow-read-prerequisite", () => {
         { name: "gate", project_root: tmpDir, flow_path: path.join(tmpDir, "gate.yaml") }
       )
     ).rejects.toThrow("exactly one flow source");
+  });
+
+  it("accepts `flow_name` as an alias for `name` (parity with flow-execute)", async () => {
+    // An agent that learned the alias on flow-execute must not hit a bare
+    // "name required" here — the same tool reads the same flow.
+    const dir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "aliased.yaml"),
+      serializeFlow({
+        executionPrerequisite: "On the form",
+        steps: [{ kind: "echo", message: "hi" }],
+      })
+    );
+
+    const result = await flowReadPrerequisiteTool.execute(
+      {},
+      { flow_name: "aliased", project_root: tmpDir }
+    );
+
+    expect(result.flow).toBe("aliased");
+    expect(result.executionPrerequisite).toBe("On the form");
+  });
+
+  it("names the parameter it needs when neither `name` nor `flow_name` is present", async () => {
+    await expect(flowReadPrerequisiteTool.execute({}, { project_root: tmpDir })).rejects.toThrow(
+      /flow-read-prerequisite needs the flow's name/
+    );
   });
 });
 

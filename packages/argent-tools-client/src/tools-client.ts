@@ -54,15 +54,25 @@ export interface CreateToolsClientOptions {
  * stream cut mid-run). `errorKind`/`errorCode` carry the server's failure
  * signal (e.g. kind "validation" for a request the server deliberately
  * rejected) when it sent one; a pre-signal server leaves them undefined.
+ *
+ * `issues` is the schema-validation issue list a 400 carries beside its prose
+ * message — the machine-readable half, which a caller needs to map a rejected
+ * field back to the flag its user typed. Undefined for every other failure, and
+ * for a server too old to send it.
  */
 export class ToolInvocationError extends Error {
   readonly errorCode?: string;
   readonly errorKind?: string;
-  constructor(message: string, signal?: { errorCode?: string; errorKind?: string }) {
+  readonly issues?: readonly unknown[];
+  constructor(
+    message: string,
+    signal?: { errorCode?: string; errorKind?: string; issues?: readonly unknown[] }
+  ) {
     super(message);
     this.name = "ToolInvocationError";
     this.errorCode = signal?.errorCode;
     this.errorKind = signal?.errorKind;
+    this.issues = signal?.issues;
   }
 }
 
@@ -216,6 +226,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       note?: string;
       error_code?: string;
       error_kind?: string;
+      issues?: unknown;
     };
     if (!res.ok) {
       throw new ToolInvocationError(
@@ -223,6 +234,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         {
           errorCode: json.error_code,
           errorKind: json.error_kind,
+          issues: Array.isArray(json.issues) ? json.issues : undefined,
         }
       );
     }

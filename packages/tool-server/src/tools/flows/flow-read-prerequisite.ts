@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import { zodObjectToJsonSchema } from "@argent/registry";
 import type { FileInputSpec, ToolContext, ToolDefinition } from "@argent/registry";
 import { parseFlow } from "./flow-utils";
-import { resolveFlowSource } from "./flow-run";
+import { resolveFlowName, resolveFlowSource } from "./flow-run";
 
 const zodSchema = z
   .object({
@@ -11,12 +11,18 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        'Name of a saved flow to inspect from `.argent/flows` (e.g. "settings-explore"). Omit when flow_path is set.'
+        'Name of a saved flow to inspect from `.argent/flows` (e.g. "settings-explore"). Omit when flow_path is set; otherwise required, via `name` or its `flow_name` alias. Optional in the schema only so the alias is accepted.'
+      ),
+    flow_name: z
+      .string()
+      .optional()
+      .describe(
+        "Alias for `name` — same meaning, same `.argent/flows/<value>.yaml` resolution. If both are sent, `name` wins (the file-input specs are ordered to match), so send only one."
       ),
     project_root: z
       .string()
       .describe(
-        "Absolute path to the calling agent's project root — the cwd it is working in. With name, the saved flow is read from `.argent/flows/<name>.yaml` under this root; with flow_path, the prerequisite is read from that YAML instead, so pass the agent's cwd."
+        "Absolute path to the calling agent's project root — the cwd it is working in. With name (or its flow_name alias), the saved flow is read from `.argent/flows/<name>.yaml` under this root; with flow_path, the prerequisite is read from that YAML instead, so pass the agent's cwd."
       ),
     flow_file: z
       .string()
@@ -32,10 +38,22 @@ const zodSchema = z
       ),
   })
   .superRefine((params, ctx) => {
-    if ((params.name === undefined) === (params.flow_path === undefined)) {
+    // The alias counts as a name, matching flow-execute.
+    const named = params.name !== undefined || params.flow_name !== undefined;
+    if (named === (params.flow_path !== undefined)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "Pass exactly one flow source: name or flow_path.",
+        // Same split as flow-execute, and for the same reason: a call with NO
+        // source at all may well have named the flow under a key zod stripped,
+        // so that is the one that needs the alias spelled out. This tool is the
+        // documented pre-flight — the skill has agents call it BEFORE the run —
+        // so withholding the hint here means the tool they hit first is the one
+        // that stays quiet about the spelling it accepts.
+        message: named
+          ? "Pass exactly one flow source: name or flow_path."
+          : "Pass exactly one flow source: name or flow_path. flow-read-prerequisite needs the " +
+            "flow's name in `name` (`flow_name` is accepted as an alias) — it resolves " +
+            "<project_root>/.argent/flows/<name>.yaml.",
         path: ["flow_path"],
       });
     }
@@ -47,7 +65,10 @@ const inputSchema: Record<string, unknown> = {
   // the same exactly-one source rule visible to MCP and HTTP clients — the
   // identical addition flow-execute makes, so the pre-flight read advertises
   // the same contract as the run it precedes.
-  oneOf: [{ required: ["name"] }, { required: ["flow_path"] }],
+  oneOf: [
+    { anyOf: [{ required: ["name"] }, { required: ["flow_name"] }] },
+    { required: ["flow_path"] },
+  ],
 };
 
 // Mirror of flow-execute's specs, field for field: the documented pre-flight is
@@ -64,7 +85,19 @@ const fileInputs: FileInputSpec[] = [
     path: "${flow_path}",
     kind: "file",
     optional: true,
-    unwrapWhenSet: "name",
+    // Both spellings, matching flow-execute: the alias names a flow too, so a
+    // flow_name + flow_path call must reach zod's exactly-one rule rather than
+    // a 422 about the flow_path file.
+    unwrapWhenSet: ["name", "flow_name"],
+  },
+  // Two specs, one target — the alias survives the file-input boundary the same
+  // way flow-execute's does (the `name` spec is LAST so it wins the client's
+  // last-write-wins merge when both are sent, matching resolveFlowName).
+  {
+    target: "flow_file",
+    path: "${project_root}/.argent/flows/${flow_name}.yaml",
+    kind: "file",
+    skipWhenSet: "flow_path",
   },
   {
     target: "flow_file",
@@ -88,8 +121,10 @@ export const flowReadPrerequisiteTool: ToolDefinition<
   description: `Read the execution prerequisite of a flow without running it — a saved flow from the .argent/flows/ directory, or an explicit boundary-managed flow_path.
 Returns the prerequisite description so you can verify the required state is met before calling flow-execute.
 Use when you need to check what app/simulator state is required before executing a flow; pass the same flow
-source (name or flow_path) you will pass to flow-execute, so the prerequisite you read is the contract of
-the flow that will actually run.
+source you will pass to flow-execute, so the prerequisite you read is the contract of the flow that will
+actually run. Name exactly ONE: the flow's name in \`name\` (\`flow_name\` is accepted as an alias; \`name\`
+wins if both are sent), which resolves <project_root>/.argent/flows/<name>.yaml — or \`flow_path\`. Both,
+or neither, is refused.
 Fails if the flow file does not exist.`,
   zodSchema,
   inputSchema,
@@ -102,8 +137,14 @@ Fails if the flow file does not exist.`,
     // co-location boundary (never uploads, never raw server paths) and reports
     // its basename-derived logical name, while the name branch keeps the
     // flow_file containment under project_root.
+    // Same alias fold as flow-execute, and for the same reason: only a name
+    // call resolves one, since a flow_path call names no flow.
+    const named =
+      params.flow_path === undefined
+        ? resolveFlowName(params, "flow-read-prerequisite")
+        : undefined;
     const { filePath, flowName } = await resolveFlowSource(
-      params,
+      named === undefined ? params : { ...params, name: named },
       ctx?.fileInputs?.flow_file,
       ctx?.fileInputs?.flow_path
     );

@@ -8,6 +8,7 @@ import { isFlagEnabled } from "@argent/configuration-core";
 import { randomUUID, createHash } from "node:crypto";
 import {
   FAILURE_CODES,
+  describeParamIssues,
   getFailureSignal,
   type FailureSignal,
   type FileInputSpec,
@@ -745,7 +746,22 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
             },
             req.body
           );
-          res.status(400).json({ error: parseResult.error.message });
+          // Not `parseResult.error.message`: that is the raw issue JSON, which
+          // names the parameter the tool wanted and never the one the caller
+          // actually sent. See describeParamIssues.
+          //
+          // `issues` carries the machine-readable form alongside it. Prose is
+          // right for the agent reading the message, but a programmatic client
+          // needs the paths: `argent run` maps each issue back to the FLAG the
+          // user typed (`--x`, not `x`), prints the tool's help block under it,
+          // and exits 2 — none of which it can do from a sentence. It used to
+          // read the issue list out of the message body; a separate field lets
+          // the message be prose without taking that away, and lets the client
+          // recognize input validation STRUCTURALLY rather than by wording.
+          res.status(400).json({
+            error: describeParamIssues(parseResult.error, bodyArgs),
+            issues: parseResult.error.issues,
+          });
           return;
         }
         parsedData = parseResult.data;
@@ -976,6 +992,18 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const invalidInputErr = findErrorInCauseChain(err, InvalidToolInputError);
         if (invalidInputErr) {
           res.status(400).json({ error: invalidInputErr.message, ...errorSignalFields(err) });
+          return;
+        }
+        // A schema miss the REGISTRY caught, rather than the HTTP layer's own
+        // copy of the same check above. It reaches here only through a NESTED
+        // invoke — a flow-add-step sub-tool, a run-sequence step — where the
+        // outer call's own params parsed fine, so the same mistyped argument
+        // was a 400 sent directly and a 500 sent inside a recording. The
+        // failure already carries `error_kind: "validation"`, so a 500 has the
+        // body contradicting its own status; this is the classification the
+        // registry's signal was given, applied at the boundary that reads it.
+        if (getFailureSignal(err)?.error_code === FAILURE_CODES.TOOL_INPUT_INVALID) {
+          res.status(400).json({ error: formatErrorForAgent(err), ...errorSignalFields(err) });
           return;
         }
         const notImplementedErr = findErrorInCauseChain(err, NotImplementedOnPlatformError);

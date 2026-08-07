@@ -58,6 +58,37 @@ export function findMissingRequired(
 }
 
 /**
+ * The server's schema-validation issue list, from whichever channel carried it — or null when
+ * this failure did not carry one.
+ *
+ * Two channels, because the wire changed under us. A tool-server now answers a rejected call with
+ * PROSE in `error` (a sentence naming the caller's own keys, which is what an agent needs) and the
+ * issue list beside it in `issues`; before that, the issue list WAS the message. Reading the
+ * structured field first and falling back to parsing the message keeps this working against both,
+ * so a CLI does not have to match its server's version.
+ *
+ * Neither channel is trusted on faith: the payload still has to BE a non-empty list of issues, or
+ * this is not the validation failure it claims to be.
+ */
+function serverIssueList(err: unknown): ValidationIssue[] | null {
+  const carried = (err as { issues?: unknown } | null)?.issues;
+  if (Array.isArray(carried)) {
+    return carried.length > 0 && carried.every(isValidationIssue) ? carried : null;
+  }
+
+  const message = err instanceof Error ? err.message : typeof err === "string" ? err : null;
+  if (message === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(message);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) return null;
+  return parsed.every(isValidationIssue) ? parsed : null;
+}
+
+/**
  * Interpret a failed tool call as input validation, or return null to leave it alone.
  *
  * Recognition is structural — the shape of the issue list and the tool's own schema decide it,
@@ -71,17 +102,8 @@ export function describeServerValidationFailure(
   payload: Record<string, unknown>,
   schema: JsonSchema | undefined
 ): ValidationReport | null {
-  const message = err instanceof Error ? err.message : typeof err === "string" ? err : null;
-  if (message === null) return null;
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(message);
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(parsed) || parsed.length === 0) return null;
-  if (!parsed.every(isValidationIssue)) return null;
+  const parsed = serverIssueList(err);
+  if (parsed === null) return null;
 
   const properties = schema?.properties ?? {};
   // Every issue must address either a field this tool declares, or the payload as a whole (an
