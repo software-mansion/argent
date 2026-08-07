@@ -76,7 +76,7 @@ Decision order:
 - Interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot automatically.
   Call `screenshot` separately only for a baseline before any action or after a delay.
 - Always open apps with `launch-app` or `open-url` — never tap home screen icons.
-- If there is any chance the task ends in a recorded flow or QA test, do not interact with the app first: load `argent-create-flow` and start the recorder before the first launch or in-app action. A path already walked cannot be recorded retroactively.
+- If a task can require a saved flow, choose `argent-create-flow` or `argent-qa-flows` before the first launch or in-app action. Start the recorder before walking the path; recording is not retroactive.
 - Always use `run-sequence` when performing multiple sequential device actions where you don't need to observe the screen between steps. More in `argent-device-interact` skill.
 - When the session ends or the user says they are done: call `stop-all-simulator-servers` with `devices: [...]`
   naming the devices this session actually used. One tool-server is shared by every other agent using this
@@ -133,7 +133,7 @@ When: Explicit visual regression, screenshot diff, compare screenshots, before/a
 
 SCREEN RECORDING (VIDEO CAPTURE)
 Skill: `argent-screen-recording`
-When: The user wants a video of the device screen — recording a flow, interaction, animation, or bug reproduction as a clip, or documenting app behavior beyond what a still screenshot shows. Covers the start → interact → stop lifecycle, the reminder discipline that keeps a recording from being left running, and retrieving the mp4 artifact. Not for a replayable saved sequence: route that meaning of "record a flow" to `argent-create-flow`.
+When: The user wants an mp4 of an interaction, animation, or bug reproduction. Use `argent-create-flow` instead for a replayable sequence.
 Prompt keywords: record, recording, screen recording, video, capture video, clip, mp4
 
 RUNNING / BUILDING / DEBUGGING REACT NATIVE APP
@@ -158,18 +158,18 @@ When: App feels slow, user asks to optimize, reducing bundle size, improving sta
 
 INTERACTIVE UI TESTING (ONE-OFF, NOT SAVED)
 Skill: `argent-test-ui-flow`
-When: Verifying complete user flows, running interact → screenshot → verify loops, testing features by using the app, executing manual QA steps, or validating visible UI changes or visual behavior after implementation. Not for a test that must be saved and re-run — see GENERATED QA REGRESSION TESTS below.
+When: Running a one-off interact → screenshot → verify check with no saved regression artifact.
 
 RECORDING & REPLAYING FLOWS
 Use skill: `argent-create-flow`
-When: A multi-step interaction sequence needs to be repeated — re-profiling after a fix, A/B comparisons, user says "again" / "run that flow", or you worked through a complex path worth saving. Also use proactively: if you are about to repeat steps you already performed, record first, then replay. For a QA test case, ticket, or acceptance criteria to keep as a regression test, use `argent-qa-flows` (it loads this skill as its engine).
+When: Saving or replaying a repeatable path for profiling, A/B comparison, retry, or reuse. For acceptance-driven regression tests, use `argent-qa-flows`.
 Prompt keywords: flow, repeat, test X times
 
 GENERATED QA REGRESSION TESTS
 Use skill: `argent-qa-flows`
-When: The user gives a test case, ticket, or acceptance criteria to keep as a repeatable test — "generate a QA test", "turn this test case into a flow", "automate this regression check", "make a test that does X and checks Y". Orchestrates `argent-create-flow`, records the first walkthrough live, verifies each requested screen/state with stable evidence, and completes only after the unchanged full flow passes twice consecutively. iOS, Android, Chromium, and Vega (Fire TV — navigation is recorded `tool: tv-remote` steps in place of touch directives); not Apple TV or Android TV.
+When: Saving a test case, ticket, or acceptance criteria as a repeatable regression test. Requires stable evidence and two unchanged full passes. iOS, Android, Chromium, and Vega (D-pad navigation records as `tool: tv-remote` steps); not Apple TV or Android TV.
 Prompt keywords: QA test, regression test, test case, automate this test, automate an e2e test, keep this e2e test, generate a test
-Saved-artifact rule: one-off interactive check → `argent-test-ui-flow`; saved replayable path → `argent-create-flow`; saved test with acceptance criteria and two-pass proof → `argent-qa-flows`.
+Routing: one-off check → `argent-test-ui-flow`; saved path → `argent-create-flow`; saved acceptance test → `argent-qa-flows`.
 
 PROPOSING DESIGN VARIANTS FOR HUMAN SELECTION
 Use skill: `argent-lens`

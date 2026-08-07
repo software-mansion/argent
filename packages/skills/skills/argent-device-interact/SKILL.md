@@ -214,7 +214,7 @@ Instead of polling `screenshot`/`describe` in a loop, use `await-ui-element` to 
 - `selector`: `{ text?, identifier?, role? }` — every provided field must match. `text` matches the element's label or value and `role` its element role (e.g. `AXButton`, `button`, `TextView`, `StaticText`), both as case-insensitive substrings; `identifier` matches its accessibility id / resource-id / testID **exactly** (case-insensitive), also accepting the unqualified Android resource-id name (`submit` matches `com.example.app:id/submit`). The synthetic `ROOT` container `describe` prints is never matched, so a `role` like `AXGroup`/`html` won't trivially "match the screen".
 - Prefer a **specific** selector. A loose substring can match several elements, and the tool may then key off one you didn't mean: `text` reads the first **visible** match in **reading order** (top-to-bottom, left-to-right — the same order `describe` lists them, so it's the one you saw first; when no match is visible, the first match overall), while `visible`/`exists` are satisfied by **any** match. Disambiguate with a longer or more exact string, an `identifier`, or a `role` (e.g. pin to a text role like `StaticText` to skip a same-named button). On a `text` timeout the `note` quotes the matched element's text, so you can see which one it landed on.
 - `text` condition also needs `expectedText` (substring the matched element must contain).
-- `hidden` treats a selector that matches **nothing** as already-hidden, so a typo'd selector returns an instant (false) success. The result `note` flags when the selector never matched any element; treat that note as a failed check, not a pass, and find the real selector before continuing — a gate that cannot fail proves nothing on replay. (On iOS, if the accessibility backend is down the tree comes back empty; the tool will **not** report `hidden` success off such a degraded read and the `note` surfaces the boot hint instead.)
+- `hidden` passes when the selector matches nothing. If `note` says it never matched, treat the check as failed and fix the selector. On iOS, a degraded empty tree does not report `hidden` success; the note gives the recovery hint.
 - Optional `timeoutMs` (default 5000) and `pollIntervalMs` (default 400).
 
 Returns `{ success, elapsed }`; on a timeout `success` is `false` and a `note` explains what was seen.
@@ -227,9 +227,9 @@ Use after launch/navigation and before a raw tap, when an early-painted element 
 { "udid": "<UDID>", "timeoutMs": 3000, "minStableMs": 250 }
 ```
 
-Local iOS, Android, and Chromium. It polls the same tree as `describe` until a non-empty one stops changing, and reports a timeout as a soft `settled: false` rather than throwing — so continue only on `settled: true`. An idle wrong screen is still wrong: pair it with `await-ui-element` on a destination-specific element.
+On local iOS, Android, and Chromium, the tool waits for a non-empty `describe` tree to stop changing. Continue only when `settled: true`. Pair it with a destination-specific `await-ui-element`; stillness does not identify a screen.
 
-Live diagnosis only. Do not persist it in a flow and do not nest it in `run-sequence`. A flow's persistable equivalent is `await: { idle: true }`, which also compares screenshots — this tool reads the tree alone, so it returns while a transition is still animating over it.
+Use it only for live diagnosis. Do not record it or put it in `run-sequence`. Flows use `await: { idle: true }`, which also compares pixels. This live tool can return during a presentation-layer animation.
 
 ---
 
