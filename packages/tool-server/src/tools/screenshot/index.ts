@@ -154,7 +154,11 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
           scale: params.scale,
           downscaler: params.downscaler,
         });
-        const image = await requireArtifacts(ctx).register(capturedPath, { mimeType: "image/png" });
+        const image = await requireArtifacts(ctx).register({
+          hostPath: capturedPath,
+          kind: "screenshot",
+          mimeType: "image/png",
+        });
         return { image };
       }
 
@@ -162,7 +166,11 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
       // tvOS has no simulator-server backend, so capture via xcrun instead.
       if (device.platform === "ios" && (await isTvOsSimulator(params.udid))) {
         const pngPath = await tvScreenshot(params.udid, scale, signal);
-        const image = await requireArtifacts(ctx).register(pngPath, { mimeType: "image/png" });
+        const image = await requireArtifacts(ctx).register({
+          hostPath: pngPath,
+          kind: "screenshot",
+          mimeType: "image/png",
+        });
         return { image };
       }
 
@@ -171,7 +179,11 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
       // Vega device would throw), so capture directly here.
       if (device.platform === "vega") {
         const pngPath = await captureVegaScreenshotPng({ scale: params.scale });
-        const image = await requireArtifacts(ctx).register(pngPath, { mimeType: "image/png" });
+        const image = await requireArtifacts(ctx).register({
+          hostPath: pngPath,
+          kind: "screenshot",
+          mimeType: "image/png",
+        });
         return { image };
       }
 
@@ -183,7 +195,11 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
         signal,
         params.scale
       );
-      const image = await requireArtifacts(ctx).register(capturedPath, { mimeType: "image/png" });
+      const image = await requireArtifacts(ctx).register({
+        hostPath: capturedPath,
+        kind: "screenshot",
+        mimeType: "image/png",
+      });
       return { image };
     },
   };

@@ -23,6 +23,7 @@ export type {
   ArtifactHandle,
   ArtifactEntry,
   ArtifactListItem,
+  ArtifactKind,
   RegisterArtifactOptions,
 } from "./artifacts";
 export {

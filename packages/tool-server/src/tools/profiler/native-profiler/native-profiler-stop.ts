@@ -11,7 +11,7 @@ import { stopNativeProfilerIos, type IosStopResult } from "./platforms/ios";
 import { stopNativeProfilerAndroid, type AndroidStopResult } from "./platforms/android";
 import type { ExportDiagnostics } from "../../../utils/ios-profiler/export";
 import { requireArtifacts, type ArtifactHandle } from "../../../artifacts";
-import type { ArtifactStore } from "@argent/registry";
+import type { ArtifactKind, ArtifactStore } from "@argent/registry";
 
 const zodSchema = z.object({
   device_id: z
@@ -55,6 +55,13 @@ const capability = {
   android: { emulator: true, device: true, unknown: true },
 } as const;
 
+const EXPORTED_FILE_KIND_BY_KEY: Record<string, ArtifactKind> = {
+  cpu: "native-profile-cpu",
+  hangs: "native-profile-hangs",
+  leaks: "native-profile-leaks",
+  pftrace: "native-profile-trace",
+};
+
 /** Register each non-null exported file path as a downloadable artifact. */
 async function exportedFilesToArtifacts(
   store: ArtifactStore,
@@ -62,7 +69,12 @@ async function exportedFilesToArtifacts(
 ): Promise<Record<string, ArtifactHandle | null>> {
   const out: Record<string, ArtifactHandle | null> = {};
   for (const [key, filePath] of Object.entries(files)) {
-    out[key] = filePath ? await store.register(filePath) : null;
+    out[key] = filePath
+      ? await store.register({
+          hostPath: filePath,
+          kind: EXPORTED_FILE_KIND_BY_KEY[key] ?? "native-profile-trace",
+        })
+      : null;
   }
   return out;
 }
@@ -73,7 +85,7 @@ async function exportedFilesToArtifacts(
  * be stat'd at registration (e.g. a recovered session).
  */
 function registerTrace(store: ArtifactStore, traceFile: string): Promise<ArtifactHandle> {
-  return store.register(traceFile, { archive: "tar.gz" });
+  return store.register({ hostPath: traceFile, kind: "native-profile-trace", archive: "tar.gz" });
 }
 
 export const nativeProfilerStopTool: ToolDefinition<z.infer<typeof zodSchema>, StopResult> = {

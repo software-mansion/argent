@@ -41,6 +41,7 @@ describe("screenshot tool", () => {
     // the unreachable `127.0.0.1` media URL is no longer surfaced.
     expect(result.image).toMatchObject({
       __argentArtifact: true,
+      kind: "screenshot",
       filename: "screenshot.png",
       mimeType: "image/png",
       hostPath: "/tmp/screenshot.png",
