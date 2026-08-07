@@ -1393,7 +1393,13 @@ If a step was recorded by mistake, edit the .yaml to remove it. In host (local) 
         ctx?.signal?.aborted === true
       );
       if (refusal) {
-        const { stepCount, note } = await activeFlowState(session, true);
+        // Same predicate the mutation warning below reads, for the same reason:
+        // a refusal that provably ran nothing (a prerequisite notice, a cancel
+        // that landed before the first nested step) must not tell a superseded
+        // author their step "already ran on the device" — that is the exact
+        // misdirection `ranOnDevice` exists to prevent, and the two clauses
+        // describing one call have to agree.
+        const { stepCount, note } = await activeFlowState(session, refusal.mayHaveMutated);
         const mutationWarning = refusal.mayHaveMutated
           ? ` ${partialMutationWarning(
               params.command === RUN_TARGET_COMMAND ? "flow-execute" : "run-sequence"

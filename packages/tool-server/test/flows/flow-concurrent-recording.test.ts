@@ -105,7 +105,7 @@ function gateNextSubTool(): { reached: Promise<void>; release: () => void } {
 
 function createMockRegistry(): Registry {
   return {
-    invokeTool: vi.fn(async (id: string) => {
+    invokeTool: vi.fn(async (id: string, args?: unknown) => {
       if (id === "list-devices") return { devices: [] };
       // Yield a macrotask, so calls issued without an await in between all
       // finish their LIVE phase before any of them appends. This is NOT what
@@ -116,10 +116,21 @@ function createMockRegistry(): Registry {
       // the same starting gun.
       await new Promise((resolve) => setTimeout(resolve, 0));
       if (subToolGate) await subToolGate();
-      // The one tool here that returns a FAILED verdict instead of throwing, so
-      // a test can drive flow-add-step's refuse-to-record return.
+      // The two returns that drive flow-add-step's refuse-to-record path: a
+      // verdict reported by RETURNING rather than throwing. They differ in the
+      // half that matters here — this one ran a nested step at the device, the
+      // notice below provably ran nothing.
       if (id === "run-sequence") {
         return { completed: 0, total: 2, steps: [{ tool: "keyboard", error: "device went away" }] };
+      }
+      // The refusal that provably executed NOTHING, keyed on the target name so
+      // the other flow-execute cases keep the plain success above.
+      if (id === "flow-execute" && (args as { name?: string })?.name === "needs-prereq") {
+        return {
+          flow: "needs-prereq",
+          notice: "This flow has an execution prerequisite",
+          executionPrerequisite: "On login screen",
+        };
       }
       return { ok: true };
     }),
@@ -1373,6 +1384,37 @@ describe("a restart that lands while a step is still running", () => {
     expect((err as Error).message).toContain("restarted while this step was running");
     // Nothing was recorded, but the nested sequence DID run at the device.
     expect((err as Error).message).toContain("already ran on the device");
+    expect(await readMarkers(root, "alpha")).toEqual([]);
+  });
+
+  it("does not warn a superseded refusal that provably executed nothing", async () => {
+    // The other half of the same ternary. A `flow-execute` that answers with a
+    // prerequisite NOTICE runs no step at all, so the refusal above and the
+    // liveness error have to agree that nothing moved: the refusal omits its
+    // mutation warning for this shape, and telling the same author the step
+    // "already ran on the device" would send them undoing an action that never
+    // happened.
+    const root = await makeRoot("supersede-notice");
+    await start(root, "alpha");
+    await addStep(root, "alpha", "a1");
+
+    const gate = gateNextSubTool();
+    const refusing = addRawStep(root, "alpha", "flow-execute", {
+      name: "needs-prereq",
+      project_root: root,
+      device: "ABC",
+    });
+    await gate.reached;
+
+    const restarted = await start(root, "alpha");
+    expect(restarted.restarted).toBe(true);
+
+    gate.release();
+    const err = await captureFailure(refusing);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_NO_ACTIVE_RECORDING);
+    expect((err as Error).message).toContain("restarted while this step was running");
+    expect((err as Error).message).toContain("Nothing was added to the flow file");
+    expect((err as Error).message).not.toContain("already ran on the device");
     expect(await readMarkers(root, "alpha")).toEqual([]);
   });
 
