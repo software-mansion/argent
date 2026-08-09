@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import { PNG } from "pngjs";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
+import { isAndroidTv } from "../../utils/adb";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { captureVegaScreenshotPng } from "../../utils/vega-screen";
 import { FIRST_FRAME_WAIT_MS, httpScreenshot } from "../../utils/simulator-client";
@@ -129,14 +130,28 @@ const STATUS_BAR_MASK_FRACTION = 0.06;
  * The fraction of the frame {@link comparePixels} must ignore for this device,
  * because the system paints it and the app does not.
  *
- * Only iOS and Android put a status bar in the capture. A Chromium window's top
- * band is page content, and Vega and tvOS render full-screen with no system
- * chrome, so masking any of those would blind the check to real motion for
- * nothing. tvOS shares iOS's platform tag and is only distinguishable by the
- * runtime probe, which is memoized per UDID and already paid by the capture.
+ * Only a phone or tablet puts a status bar in the capture. A Chromium window's
+ * top band is page content, and Vega, tvOS and Android TV all render
+ * full-screen with no system chrome, so masking any of those would blind the
+ * check to real motion for nothing.
+ *
+ * Neither TV is distinguishable by its platform tag — tvOS is tagged `ios` and
+ * leanback is tagged `android` — so each takes the runtime probe its platform
+ * provides, the same pairing `await-screen-idle` resolves once per call.
+ * Both are memoized per device, and this is resolved once per step rather than
+ * once per poll.
+ *
+ * `ios-remote` is an iOS simulator driven through sim-remote and has the same
+ * status bar, so it masks like a local one (flow-run's platform guard folds it
+ * the same way). It is not probed for tvOS: the probe reads the LOCAL
+ * simulator list, which cannot see a device on another machine, so it would
+ * answer "not a TV" without having looked.
  */
 export async function statusBarMaskFraction(device: ActionEnv["device"]): Promise<number> {
-  if (device.platform === "android") return STATUS_BAR_MASK_FRACTION;
+  if (device.platform === "android") {
+    return (await isAndroidTv(device.id)) ? 0 : STATUS_BAR_MASK_FRACTION;
+  }
+  if (device.platform === "ios-remote") return STATUS_BAR_MASK_FRACTION;
   if (device.platform !== "ios") return 0;
   return (await isTvOsSimulator(device.id)) ? 0 : STATUS_BAR_MASK_FRACTION;
 }

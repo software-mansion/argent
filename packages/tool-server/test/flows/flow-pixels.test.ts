@@ -16,6 +16,7 @@ import {
   statusBarMaskFraction,
   type PixelFrame,
 } from "../../src/tools/flows/flow-pixels";
+import { isAndroidTv } from "../../src/utils/adb";
 import { isTvOsSimulator } from "../../src/utils/ios-devices";
 import { captureVegaScreenshotPng } from "../../src/utils/vega-screen";
 import { tvScreenshot } from "../../src/tools/screenshot";
@@ -30,6 +31,12 @@ vi.mock("../../src/utils/ios-devices", async (importOriginal) => ({
 vi.mock("../../src/utils/vega-screen", () => ({
   captureVegaScreenshotPng: vi.fn(),
 }));
+// Android TV is tagged `android` like a phone, so the mask asks adb which one
+// this serial is. A real probe would shell out per case.
+vi.mock("../../src/utils/adb", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/utils/adb")>()),
+  isAndroidTv: vi.fn(async () => false),
+}));
 vi.mock("../../src/tools/screenshot", () => ({ tvScreenshot: vi.fn() }));
 
 let tmpDir: string;
@@ -37,6 +44,7 @@ let tmpDir: string;
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-pixels-"));
   vi.mocked(isTvOsSimulator).mockReset().mockResolvedValue(false);
+  vi.mocked(isAndroidTv).mockReset().mockResolvedValue(false);
   vi.mocked(captureVegaScreenshotPng).mockReset();
   vi.mocked(tvScreenshot).mockReset();
 });
@@ -314,13 +322,23 @@ describe("comparePixels", () => {
 });
 
 describe("statusBarMaskFraction", () => {
-  // Only iOS and Android paint a status bar into the capture. Masking a
-  // Chromium window's top band would hide page content, and Vega / tvOS render
-  // full-screen with no system chrome at all.
+  // Only a phone or tablet paints a status bar into the capture. Masking a
+  // Chromium window's top band would hide page content, and Vega, tvOS and
+  // Android TV render full-screen with no system chrome at all.
   it("masks the band on Android", async () => {
     await expect(
       statusBarMaskFraction({ platform: "android", kind: "emulator", id: "emulator-5554" })
     ).resolves.toBe(0.06);
+  });
+
+  it("masks nothing on an Android TV, which shares the android platform tag", async () => {
+    // Leanback renders full-screen, so the 6% band is app content there — the
+    // same reason Vega and tvOS are excluded. Only the runtime probe can tell
+    // it from a phone.
+    vi.mocked(isAndroidTv).mockResolvedValue(true);
+    await expect(
+      statusBarMaskFraction({ platform: "android", kind: "emulator", id: "emulator-5554" })
+    ).resolves.toBe(0);
   });
 
   it("masks the band on an iOS simulator", async () => {
@@ -328,6 +346,17 @@ describe("statusBarMaskFraction", () => {
     await expect(
       statusBarMaskFraction({ platform: "ios", kind: "simulator", id: "ios-udid" })
     ).resolves.toBe(0.06);
+  });
+
+  it("masks the band on a remote iOS simulator too", async () => {
+    // sim-remote drives an ordinary iOS simulator, so its status bar ticks
+    // like a local one — and the run-level `pinStatusBar` does not cover the
+    // platform either. The tvOS probe reads the local simulator list, which
+    // cannot see another machine's device, so it is not asked.
+    await expect(
+      statusBarMaskFraction({ platform: "ios-remote", kind: "simulator", id: "remote:ios-udid" })
+    ).resolves.toBe(0.06);
+    expect(isTvOsSimulator).not.toHaveBeenCalled();
   });
 
   it("masks nothing on a tvOS simulator, which shares the iOS platform tag", async () => {
