@@ -1511,11 +1511,16 @@ async function waitForIdle(
   // Measured as a tail, not as a single read: the source failing on the last
   // poll and the source having stopped answering are different windows, and
   // only the second is unreadable. See IDLE_TOLERATED_DARK_READS.
-  if (
-    lastRead === "error" &&
-    treeErrorMessage !== undefined &&
-    darkReads > IDLE_TOLERATED_DARK_READS
-  ) {
+  //
+  // The tail is what decides, NOT how its last round happened to end. A round
+  // that runs out of budget mid-read ends as a `timeout` however dead the
+  // source is — the loop lets a round start on 200ms of budget, so any read
+  // slower than that is abandoned — and requiring `error` here discarded the
+  // whole accumulated tail with it: the dark rounds, the message, and the note
+  // that names it. `treeErrorMessage` survives an abandoned read and is cleared
+  // by a successful one, so it means exactly "the last read that came back did
+  // so as a failure", which is the tail this describes.
+  if (treeErrorMessage !== undefined && darkReads > IDLE_TOLERATED_DARK_READS) {
     return unreadable(treeErrorMessage);
   }
   // The same window going dark the other way: the source answered, then stopped
@@ -1540,8 +1545,8 @@ async function waitForIdle(
   // `treeSettledAtLastRead` — so it is left alone rather than given a note it
   // could never print.)
   const blipNote =
-    lastRead === "error" && treeErrorMessage !== undefined
-      ? ` (the read that ended the wait failed: ${treeErrorMessage})`
+    treeErrorMessage !== undefined
+      ? ` (the last read that came back failed: ${treeErrorMessage})`
       : "";
 
   // Readable throughout and never once carrying content: the screen rendered

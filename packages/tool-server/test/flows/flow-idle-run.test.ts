@@ -902,6 +902,40 @@ steps:
     expect(r.steps.at(-1)!.status).toBe("skip");
   });
 
+  // What makes a window unreadable is the dark tail, not the flavour of the
+  // last read in it. A closing round that simply ran out of budget ends as a
+  // `timeout` however dead the source is, and keying the guard on `error`
+  // discarded the whole tail with it — the dark rounds, the error, and the note
+  // that names it — so a source that had stopped answering passed silently
+  // whenever the deadline happened to land inside one read's latency.
+  it.each([1500, 1700])(
+    "errors on a dead source whichever way the closing round of a %sms wait ends",
+    async (timeout) => {
+      treeDelayMs = 150;
+      let reads = 0;
+      currentTree = () => {
+        reads += 1;
+        if (reads > 2) throw new Error("native-devtools is not connected");
+        return screenWith("Home");
+      };
+      await writeFlow(
+        "ready",
+        `executionPrerequisite: ""
+steps:
+  - await: { idle: true, timeout: ${timeout}, stableFor: 0 }
+  - echo: unreachable
+`
+      );
+      const r = await run("ready");
+      expect(r.ok).toBe(false);
+      const step = r.steps.find((s) => s.kind === "idle")!;
+      expect(step.status).toBe("error");
+      // The failure is named either way, rather than dropped with the tail.
+      expect(step.reason).toContain("native-devtools is not connected");
+      expect(r.steps.at(-1)!.status).toBe("skip");
+    }
+  );
+
   // The same blip against the other window it used to redden: a screen that
   // read back empty throughout is an observation about the app, and a transient
   // on the closing read does not turn it into a window nobody could see.
