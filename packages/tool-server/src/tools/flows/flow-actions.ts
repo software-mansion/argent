@@ -1224,6 +1224,20 @@ const LOCALIZED_MOTION_WARNING =
  * name, and that is the step ending. One abandoned with seconds of budget in
  * hand is a source that has wedged, and no verdict about the app may be drawn
  * from a window nobody could see through.
+ *
+ * The budget alone cannot make that split, because every read here is
+ * abandoned at the deadline: how much it had is a fact about the step's
+ * arithmetic, not about the source. What separates them is what the source has
+ * already shown it can do — so this is also the margin an abandoned read must
+ * beat the SLOWEST read that came back by. A source answering in 2.5s has
+ * proved a 2.1s read means nothing; one answering in 100ms has proved a 6.9s
+ * read is a wedge.
+ *
+ * Without that second term a static screen on a slow source hard-stopped the
+ * run: at 2500ms reads a 7500ms wait errored while a 6000ms one passed, and at
+ * the 5400ms Android reads this step is sized against, 6 of 10 ordinary
+ * timeouts errored on a screen that answered every read it was given time to
+ * finish.
  */
 const HUNG_TREE_READ_MS = 2_000;
 
@@ -1332,6 +1346,9 @@ async function waitForIdle(
   // A blank read clears it — it is an observation; see the blank branch.
   let darkReads = 0;
   let treeReadHung = false;
+  // The slowest read that came back at all. A source cannot be called wedged
+  // over a read cut off in less time than it has already been seen to need.
+  let slowestAnsweredReadMs = 0;
   let sawContent = false;
   let pixelsEverMoved = false;
   let captureFailed = false;
@@ -1345,13 +1362,22 @@ async function waitForIdle(
     // ViewInspector RPC, an `adb` that has stopped answering) ran the round
     // past the deadline — measured at 2.25s over an 8000ms budget.
     const roundBudget = Math.max(1, deadline - Date.now());
+    const roundStartedAt = Date.now();
+    // How long this round's read took to come back, timed on the read itself
+    // rather than on the round. A round is the SLOWER of its two halves, and
+    // what the hung-source check compares is how long this source takes to
+    // answer — not how long the capture running beside it took.
+    let answeredReadMs: number | undefined;
     // Read both signals from as close to one instant as possible: they describe
     // the same screen, and any gap between them is a window motion hides in.
     // They also travel over different channels (tree source vs. capture
     // backend), so serializing them would double the round without buying
     // anything.
     const [read, frame] = await Promise.all([
-      settleWithin(fetchFlowTree(env.registry, env.device), roundBudget, env.signal),
+      settleWithin(fetchFlowTree(env.registry, env.device), roundBudget, env.signal).then((r) => {
+        answeredReadMs = Date.now() - roundStartedAt;
+        return r;
+      }),
       capturePixelsWithin(env, deadline, firstCapture),
     ]);
     firstCapture = false;
@@ -1360,6 +1386,14 @@ async function waitForIdle(
     // about the app must never be derived from a run that was cancelled.
     if (env.signal?.aborted || read.type === "aborted") return ABORTED_OUTCOME;
 
+    // Every read that CAME BACK — with a tree or with a failure — is evidence
+    // of how slow this source can be while still answering. That is the only
+    // yardstick an abandoned read can be measured against; see
+    // HUNG_TREE_READ_MS.
+    if (read.type !== "timeout" && answeredReadMs !== undefined) {
+      slowestAnsweredReadMs = Math.max(slowestAnsweredReadMs, answeredReadMs);
+    }
+
     if (read.type === "timeout") {
       // The read did not come back inside the round. That is the absence of an
       // observation, not an observation: it neither refutes the last known
@@ -1367,11 +1401,18 @@ async function waitForIdle(
       // and the bottom decides what, if anything, it means.
       lastRead = "timeout";
       darkReads += 1;
-      // ...except for one thing it does say. A read abandoned with seconds of
-      // budget left is a source that has wedged, not a step that ran out of
-      // time, and the difference decides whether the bottom may describe the
-      // app at all.
-      if (roundBudget >= HUNG_TREE_READ_MS) treeReadHung = true;
+      // ...except for one thing it may say. A read abandoned with seconds of
+      // budget left, AND with seconds more than this source has ever needed to
+      // answer, is a source that has wedged rather than a step that ran out of
+      // time — and the difference decides whether the bottom may describe the
+      // app at all. A read cut off before it beat the source's own slowest
+      // answer proves nothing about it.
+      if (
+        roundBudget >= HUNG_TREE_READ_MS &&
+        roundBudget > slowestAnsweredReadMs + HUNG_TREE_READ_MS
+      ) {
+        treeReadHung = true;
+      }
     } else if (read.type === "error") {
       // A tree-source blip mid-animation is expected; keep polling. Only its
       // presence on the LAST read is reportable.

@@ -515,6 +515,36 @@ steps:
     expect(step.reason).not.toContain("never held still");
   });
 
+  // ...and the other side of that split. Every read here is abandoned at the
+  // deadline, so how much budget one had is a fact about the step's arithmetic
+  // rather than about the source: on its own it cannot tell a wedge from a
+  // source that is merely slow. Taking it on its own hard-stopped a run on the
+  // most settled screen there is — every read answering with the same tree —
+  // whenever the closing round happened to start with 2s in hand.
+  it("does not call a slow but answering source a wedged one", async () => {
+    // 2300ms reads in a 4600ms wait: the first answers, the second is cut off
+    // with 2100ms of budget — over the hung threshold, and under what this
+    // source has already been seen to need.
+    treeDelayMs = 2_300;
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, timeout: 4600, stableFor: 0 }
+  - echo: reached
+`
+    );
+    const r = await run("ready");
+    expect(r.ok).toBe(true);
+    const step = r.steps.find((s) => s.kind === "idle")!;
+    expect(step.status).toBe("pass");
+    // Not the wedged-source verdict, in whichever field it would have landed.
+    expect(`${step.reason ?? ""} ${step.warning ?? ""}`).not.toContain("answered and then stopped");
+    // What it actually was: too few looks to judge the screen by.
+    expect(step.warning).toContain("content on 1 read in 4600ms");
+    expect(r.steps.at(-1)).toMatchObject({ kind: "echo", status: "pass" });
+  });
+
   // A settle is three reads spanning two intervals. A step that got fewer has
   // no evidence either way, and both of the verdicts it used to reach for —
   // "the screen never stopped moving", "no screenshot could be read" — are
