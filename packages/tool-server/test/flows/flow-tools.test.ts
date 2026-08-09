@@ -2752,6 +2752,21 @@ describe("summarizeStep rendering", () => {
     expect(summarizeStep({ kind: "tap", x: 0.5, y: 0.3 }, 1)).toBe("1. tap: (0.5, 0.3)");
   });
 
+  it("renders the count it was given, across the range the file can carry", () => {
+    // Every other assertion that renders a count uses `times: 2`, so replacing
+    // `×${step.times}` with a constant `×2` left the whole suite green. The rest
+    // of the range is reachable: gesture-tap takes clickCount up to 10,
+    // flow-add-step records it as `times`, and parseTapTimes admits 2..10. Under
+    // that mutation a recorded triple-tap renders `×2` on the `recorded` line —
+    // the author's only per-step view of what was appended.
+    expect(summarizeStep({ kind: "tap", selector: { identifier: "b" }, times: 3 }, 1)).toBe(
+      '1. tap: {"id":"b"} ×3'
+    );
+    expect(summarizeStep({ kind: "tap", x: 0.5, y: 0.3, times: 10 }, 1)).toBe(
+      "1. tap: (0.5, 0.3) ×10"
+    );
+  });
+
   it("never renders ×1 — the file can't carry times: 1", () => {
     // parseTapTimes normalizes `times: 1` to absent, so a valid flow file never
     // spells a single tap with a count. summarizeStep renders the file's
