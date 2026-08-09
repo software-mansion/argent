@@ -703,17 +703,55 @@ steps:
     );
     const step = (await run("ready")).steps.at(-1)!;
     expect(step.status).toBe("pass");
-    // 1,2 hold; 3 is missing; 4 and 5 hold across the gap and settle. Six would
-    // mean round 4 was blinded by round 3's absence.
-    expect(captures).toBe(5);
-    // And one missed capture out of five is not "no screenshot could be read".
+    // 1,2 hold — one interval; 3 is missing, which measures no interval and
+    // refutes none; 4 holds across the gap for the second, and settles. Five
+    // would mean round 3's absence had cost the hold an interval it had
+    // already measured, six that it had blinded round 4 as well.
+    expect(captures).toBe(4);
+    // And one missed capture out of four is not "no screenshot could be read".
     expect(step.warning).toBeUndefined();
   });
 
-  // A capture that goes missing is the ABSENCE of visual evidence. Treating it
-  // as evidence of stillness is how a moving screen used to pass: the round
-  // that outran the deadline skipped its capture, and the skip stood in for
-  // "the pixels held".
+  // A missing frame is the absence of an observation, exactly as an abandoned
+  // tree read is — and the loop says so about the read a few lines up. Letting
+  // it DESTROY the combined hold instead meant a backend that merely drops a
+  // frame now and then could serve no hold longer than the gap between drops:
+  // the step burned its whole timeout on a screen that never moved, and then
+  // reported that the screen "could not be screenshotted on enough polls to
+  // compare a pair of them" on a run where two captures in three arrived and
+  // every compared pair read still.
+  it("rides over a dropped capture instead of restarting the hold", async () => {
+    let captures = 0;
+    currentFrame = () => (++captures % 3 === 0 ? undefined : frameAt(120));
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, stableFor: 900, timeout: 6000 }
+`
+    );
+    const started = Date.now();
+    const step = (await run("ready")).steps.at(-1)!;
+    const elapsed = Date.now() - started;
+    expect(step.status).toBe("pass");
+    // Every pair that was compared read still, so nothing about this pass is
+    // weakened — and it is a settle, not a step that ran out of budget.
+    expect(step.warning).toBeUndefined();
+    expect(elapsed).toBeGreaterThanOrEqual(900);
+    expect(elapsed).toBeLessThan(3_000);
+    // Captures did go missing; the point is that they cost only their own
+    // interval.
+    expect(captures).toBeGreaterThan(3);
+    // Room for the pre-fix behaviour — burning the whole 6000ms wait — to be
+    // reported as the failed assertion it is rather than as a harness timeout.
+  }, 15_000);
+
+  // The other half of that, and the reason a missing frame is never simply
+  // waved through: it is the ABSENCE of visual evidence, and treating it as
+  // evidence of stillness is how a moving screen used to pass — the round that
+  // outran the deadline skipped its capture, and the skip stood in for "the
+  // pixels held". Riding over one costs the hold nothing, but it can never
+  // MEASURE an interval either.
   it("never lets a missing capture stand in for stillness while the pixels move", async () => {
     let level = 0;
     currentFrame = () => frameAt((level += 60) % 240);

@@ -1375,7 +1375,10 @@ async function waitForIdle(
   let slowestAnsweredReadMs = 0;
   let sawContent = false;
   let pixelsEverMoved = false;
-  let captureFailed = false;
+  // Whether two captures were ever put side by side. NOT "a capture failed":
+  // the warning below is about a screen no pair could be read from, and one
+  // dropped frame in a run of twenty says nothing about that.
+  let comparedAPair = false;
   let firstCapture = true;
 
   for (;;) {
@@ -1502,18 +1505,28 @@ async function waitForIdle(
         treeSettledAtLastRead =
           treeStillIntervals >= MIN_STILL_INTERVALS && now - treeSince >= stableFor;
 
-        // A missing frame is the ABSENCE of visual evidence, never evidence of
-        // stillness. Letting it stand in for "the pixels held" is what turned a
-        // screen that never stopped moving into a pass.
-        let pixelsHeld = false;
+        // A missing frame is the ABSENCE of visual evidence — never evidence of
+        // stillness, which is what turned a screen that never stopped moving
+        // into a pass, and never evidence of motion either.
+        //
+        // Hence three states rather than two: `true` a compared pair held,
+        // `false` a compared pair moved, `undefined` no pair to compare. Only
+        // the middle one may break the hold. Reading the absence as `false`
+        // made a dropped frame DESTROY the hold rather than merely fail to
+        // extend it, which is the opposite of what this loop decides about an
+        // abandoned tree read a few lines up — and it meant a backend that
+        // drops the odd frame could serve no hold longer than the gap between
+        // drops.
+        let pixelsHeld: boolean | undefined;
         let localizedThisInterval = false;
-        if (frame === undefined) {
-          captureFailed = true;
-        } else {
+        if (frame !== undefined) {
           if (previousFrame !== undefined) {
+            comparedAPair = true;
             const change = comparePixels(previousFrame, frame, maskTopFraction);
-            if (change === "moving") pixelsEverMoved = true;
-            else {
+            if (change === "moving") {
+              pixelsEverMoved = true;
+              pixelsHeld = false;
+            } else {
               pixelsHeld = true;
               localizedThisInterval = change === "localized";
             }
@@ -1527,7 +1540,13 @@ async function waitForIdle(
           previousFrame = frame;
         }
 
-        if (treeHeld && pixelsHeld) {
+        if (!treeHeld || pixelsHeld === false) {
+          // Something was seen to move. Only an observation breaks the hold.
+          bothSince = now;
+          stillIntervals = 0;
+          heldForMs = 0;
+          localizedMotionDuringHold = false;
+        } else if (pixelsHeld === true) {
           stillIntervals += 1;
           heldForMs = now - bothSince;
           if (localizedThisInterval) localizedMotionDuringHold = true;
@@ -1536,12 +1555,12 @@ async function waitForIdle(
               ? { ok: true, warning: LOCALIZED_MOTION_WARNING }
               : { ok: true };
           }
-        } else {
-          bothSince = now;
-          stillIntervals = 0;
-          heldForMs = 0;
-          localizedMotionDuringHold = false;
         }
+        // Otherwise the tree held and no pair could be compared: this round
+        // measured no interval and refutes none, so the hold state is left
+        // exactly as it was. It cannot settle the screen on its own — an
+        // interval is only ever counted from a compared pair — so a run whose
+        // captures all go missing still ends at the bottom, never in a pass.
       }
     }
 
@@ -1692,13 +1711,21 @@ async function waitForIdle(
     };
   }
   // The tree was settled as of the last read and no pair of captures ever
-  // showed motion, yet the combined hold never completed. With captures
-  // arriving this is unreachable: a pair either agrees — and the tree was
+  // showed motion, yet the combined hold never completed. Once a pair has been
+  // compared this is unreachable: a pair either agrees — and the tree was
   // holding, so the hold would have run — or disagrees, which sets
-  // pixelsEverMoved. So `captureFailed` is what is left, and it is required
-  // here rather than assumed. The hierarchy genuinely held still, so this is a
-  // pass; half of the proof is missing, so it is a warned one.
-  if (treeSettledAtLastRead && !pixelsEverMoved && captureFailed) {
+  // pixelsEverMoved. So a run that never got a pair is what is left, and it is
+  // required here rather than assumed.
+  //
+  // Required as "never got a PAIR", not as "a capture failed once": the
+  // sentence below is about a screen that could not be screenshotted often
+  // enough to compare two of them, and a latch set by any single drop said that
+  // to authors whose captures had arrived on three polls in four and whose
+  // every compared pair read still.
+  //
+  // The hierarchy genuinely held still, so this is a pass; half of the proof is
+  // missing, so it is a warned one.
+  if (treeSettledAtLastRead && !pixelsEverMoved && !comparedAPair) {
     return {
       ok: true,
       warning:
