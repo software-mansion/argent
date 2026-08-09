@@ -19,6 +19,14 @@ vi.mock("../../src/utils/ios-devices", async (importOriginal) => ({
 let currentTree: () => DescribeNode;
 /** Simulates a tree source that is slow, or wedged when it exceeds the step. */
 let treeDelayMs = 0;
+/**
+ * The degradation flags a reader attaches to a read it could not trust — an
+ * unattached Vega toolkit, an iOS AX service that wants a relaunch. They ride
+ * along with an EMPTY tree, which is what makes the read blind rather than an
+ * observation that the screen drew nothing.
+ */
+let treeHint: string | undefined;
+let treeShouldRestart: boolean | undefined;
 vi.mock("../../src/tools/flows/flow-tree", () => ({
   fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => {
     // Pinned to the source this call started against, not to whatever the
@@ -34,6 +42,8 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
       tree: source(),
       source: "native-devtools",
       screen: { width: 390, height: 844 },
+      ...(treeHint === undefined ? {} : { hint: treeHint }),
+      ...(treeShouldRestart === undefined ? {} : { should_restart: treeShouldRestart }),
     };
   }),
 }));
@@ -171,6 +181,8 @@ beforeEach(async () => {
   currentTree = () => screenWith("Home");
   currentFrame = () => frameAt(120);
   treeDelayMs = 0;
+  treeHint = undefined;
+  treeShouldRestart = undefined;
   captureDelayMs = 0;
   captureFirstFlags.length = 0;
 });
@@ -1012,6 +1024,71 @@ steps:
 
   // Cancelling a run is not a verdict about the screen. The check has to stop
   // promptly and report a skip, never a pass, a warning or an error.
+  // An empty tree that arrives with a relaunch hint is the reader saying it
+  // could not see the app — not the app saying it drew nothing. Scoring it as
+  // an observation produced a verdict about the author's screen ("this is
+  // where it did not render content") from a window that was never readable,
+  // and pointed them away from the toolkit that never attached. The selector
+  // conditions have refused to read such a tree since they were written.
+  it("does not draw a verdict about the screen from a degraded empty read", async () => {
+    currentTree = () => n({ role: "AXWindow", frame: FULL, children: [] });
+    treeHint = "the automation toolkit is not attached — relaunch the app so it can attach";
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, timeout: 1200, stableFor: 0 }
+  - echo: unreachable
+`
+    );
+    const r = await run("ready");
+    expect(r.ok).toBe(false);
+    const step = r.steps.find((s) => s.kind === "idle")!;
+    expect(step.status).toBe("error");
+    // The window, named as the window — and the reader's own repair with it.
+    expect(step.reason).toContain("empty and degraded");
+    expect(step.reason).toContain("automation toolkit is not attached");
+    expect(step.reason).not.toContain("never rendered content");
+    expect(r.steps.at(-1)!.status).toBe("skip");
+  });
+
+  // `should_restart` is the same claim without a sentence attached.
+  it("treats a should_restart empty read as degraded too", async () => {
+    currentTree = () => n({ role: "AXWindow", frame: FULL, children: [] });
+    treeShouldRestart = true;
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, timeout: 1200, stableFor: 0 }
+`
+    );
+    const step = (await run("ready")).steps.at(-1)!;
+    expect(step.status).toBe("error");
+    expect(step.reason).toContain("empty and degraded");
+  });
+
+  // ...and the guard must not swallow the ordinary blank screen it sits next
+  // to. An empty tree with nothing attached to it IS an observation: the app
+  // rendered no accessible content, which is a warning and not a stop.
+  it("still reports an undegraded empty screen as an empty screen", async () => {
+    currentTree = () => n({ role: "AXWindow", frame: FULL, children: [] });
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, timeout: 1200, stableFor: 0 }
+  - echo: reached
+`
+    );
+    const r = await run("ready");
+    expect(r.ok).toBe(true);
+    const step = r.steps.find((s) => s.kind === "idle")!;
+    expect(step.status).toBe("pass");
+    expect(step.warning).toContain("the UI tree stayed empty");
+    expect(r.steps.at(-1)).toMatchObject({ kind: "echo", status: "pass" });
+  });
+
   it("stops on abort without judging the screen", async () => {
     let tick = 0;
     currentTree = () => screenWith(`frame ${tick++}`); // never settles

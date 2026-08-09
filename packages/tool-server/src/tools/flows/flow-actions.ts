@@ -4,6 +4,7 @@ import {
   type DescribeFrame,
   type DescribeNode,
   type DescribeSource,
+  type DescribeTreeData,
 } from "../describe/contract";
 import {
   selectorToFrame,
@@ -1271,7 +1272,27 @@ const HUNG_TREE_READ_MS = 2_000;
 const IDLE_TOLERATED_DARK_READS = 1;
 
 /** How the last tree read ended. Only `value` licenses a verdict about the app. */
-type TreeReadOutcome = "value" | "error" | "timeout";
+type TreeReadOutcome = "value" | "error" | "timeout" | "blind";
+
+/**
+ * Whether a read that ARRIVED still cannot be reasoned from: an empty tree that
+ * the reader itself flagged as degraded.
+ *
+ * The same guard `waitForCondition` applies, minus its `everMatched` term. That
+ * one exists so an empty read cannot confirm an element left the screen; this
+ * check has no such claim to protect, and an ordinary blank screen has to stay
+ * an observation here — it is what resets both holds, and what the "the UI tree
+ * stayed empty" warning is about.
+ *
+ * What is left is the flags the reader attaches when it could not see the app:
+ * an unattached Vega automation toolkit surfaces exactly this way
+ * (`flow-vega-tree.ts`), and so does an AX service asking to be relaunched.
+ * Scoring one as an observation draws a verdict about the author's screen from
+ * a window that was never readable.
+ */
+function isBlindTreeRead(data: DescribeTreeData): boolean {
+  return data.tree.children.length === 0 && Boolean(data.hint || data.should_restart);
+}
 
 /**
  * Wait until the screen has content and stops moving — in the UI tree AND in
@@ -1341,6 +1362,9 @@ async function waitForIdle(
   // and every arm of that round sets it.
   let lastRead!: TreeReadOutcome;
   let treeErrorMessage: string | undefined;
+  // The repair the reader named on the last degraded read, if it named one.
+  // Cleared by a read that carried a tree, the way treeErrorMessage is.
+  let blindHint: string | undefined;
   // Rounds since the last read that ANSWERED. Post-loop this is the dark tail:
   // how much of the window's final stretch went without a look at the screen.
   // A blank read clears it — it is an observation; see the blank branch.
@@ -1413,6 +1437,14 @@ async function waitForIdle(
       ) {
         treeReadHung = true;
       }
+    } else if (read.type === "value" && isBlindTreeRead(read.value)) {
+      // A read that arrived but cannot be reasoned from. Counted with the dark
+      // reads, not with the answers: the source responded, but not about the
+      // app. Like an abandoned read it is the absence of an observation, so the
+      // hold state is left exactly as it was.
+      lastRead = "blind";
+      darkReads += 1;
+      blindHint = read.value.hint;
     } else if (read.type === "error") {
       // A tree-source blip mid-animation is expected; keep polling. Only its
       // presence on the LAST read is reportable.
@@ -1431,14 +1463,16 @@ async function waitForIdle(
       readsSucceeded += 1;
       darkReads = 0;
       treeErrorMessage = undefined;
+      blindHint = undefined;
       // It answered, so whatever wedged it has cleared.
       treeReadHung = false;
       const tree = read.value.tree;
       if (tree.children.length === 0) {
-        // Blank or still loading — never "settled", and it resets both holds.
-        // Unlike a failed read this IS an observation, so it also clears the
-        // tree-only verdict: a screen showing nothing has not settled on
-        // anything.
+        // Blank or still loading, and undegraded — the reader vouches for the
+        // emptiness (the branch above took the reads it does not). Never
+        // "settled", and it resets both holds. Unlike a failed read this IS an
+        // observation, so it also clears the tree-only verdict: a screen
+        // showing nothing has not settled on anything.
         treeSignature = undefined;
         previousFrame = undefined;
         treeSince = 0;
@@ -1533,8 +1567,23 @@ async function waitForIdle(
       `Underlying error: ${underlying}`,
   });
 
+  // The other flavour: the source answered, and said it could not see the app.
+  // Its own repair is the right one here — an unattached toolkit or a dropped
+  // AX service is exactly what this shape means — so it is quoted rather than
+  // replaced.
+  const degraded = (): DirectiveOutcome => ({
+    ok: false,
+    indeterminate: true,
+    reason:
+      `the UI tree read back empty and degraded while waiting for the screen to settle, so the ` +
+      `screen was never observed — this is the reader reporting it could not see the app, not ` +
+      `the app rendering nothing` +
+      (blindHint === undefined ? "" : `. ${blindHint}`),
+  });
+
   if (readsSucceeded === 0) {
     if (treeErrorMessage !== undefined) return unreadable(treeErrorMessage);
+    if (lastRead === "blind" || blindHint !== undefined) return degraded();
     return {
       ok: false,
       indeterminate: true,
@@ -1563,6 +1612,12 @@ async function waitForIdle(
   // so as a failure", which is the tail this describes.
   if (treeErrorMessage !== undefined && darkReads > IDLE_TOLERATED_DARK_READS) {
     return unreadable(treeErrorMessage);
+  }
+  // A degraded tail is the same window, reached the other way: the reads kept
+  // arriving and kept saying nothing about the app. One is a blip like any
+  // other and rides out on the same tolerance.
+  if (lastRead === "blind" && darkReads > IDLE_TOLERATED_DARK_READS) {
+    return degraded();
   }
   // The same window going dark the other way: the source answered, then stopped
   // answering with seconds of budget still in hand. A failing read has a
