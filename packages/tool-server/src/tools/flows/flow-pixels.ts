@@ -24,8 +24,24 @@ export type PixelChange = "still" | "localized" | "moving";
 
 // Hard downscale: motion detection only needs to see a region of the screen
 // change, and a quarter-scale frame decodes ~16x faster. Every route honours
-// it, including Chromium — which reaches the scale a different way, see
-// captureChromiumPng.
+// it, but they do not all collect the saving, because what this constant buys
+// is a decode this process does not have to do.
+//
+// Three of the four keep the large frame out of here entirely: Chromium
+// rasterizes at the scale in the compositor (see captureChromiumPng), the
+// simulator-server scales inside its own process before it replies, and the
+// tvOS route hands the full-resolution capture to `sips`. Each leaves only the
+// small PNG to decode.
+//
+// Vega is the exception, and it is the route where this costs most.
+// `captureVegaScreenshotPng` (utils/vega-screen.ts) reads the emulator's
+// native-resolution PNG, resamples it with lanczos3 and writes it back out —
+// all synchronously — and then `capturePng` reads that file and decodes it a
+// second time. So that route pays a full-resolution decode on every poll
+// whatever this is set to, plus a resample and a re-encode, all of it blocking
+// the shared tool-server's event loop: the same cost captureChromiumPng's note
+// measures at ~79ms of every 200ms round and takes off the Chromium path.
+// Fixing it belongs in that capture helper, which the `screenshot` tool shares.
 const CAPTURE_SCALE = 0.25;
 
 // Per-pixel RGB tolerance, owned by this comparison and deliberately NOT
