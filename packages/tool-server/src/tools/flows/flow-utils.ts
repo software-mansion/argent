@@ -1717,13 +1717,33 @@ export const IDLE_POLL_MS = 200;
 export const IDLE_MIN_STILL_INTERVALS = 2;
 
 /**
- * What a settle costs before any hold is counted: the intervals it is measured
- * over, plus the budget the round that closes it needs to be allowed to start
- * ({@link IDLE_POLL_MS} again — see the runner's MIN_ROUND_BUDGET_MS). A
+ * The stretch a settle is measured over: the intervals it takes, at one poll
+ * each. Nothing can be concluded about motion in less.
+ */
+export const IDLE_SETTLE_SPAN_MS = IDLE_MIN_STILL_INTERVALS * IDLE_POLL_MS;
+
+/**
+ * The smallest `timeout:` that can contain a settle holding for `stableFor`. A
  * `timeout:` under this cannot produce a clean settle however still the screen
  * is, so the step would report on a screen it never had the chance to judge.
+ *
+ * The hold is measured ACROSS the polls, not after them: the runner starts the
+ * hold clock on the first read that carries content and settles on the first
+ * round that has both {@link IDLE_MIN_STILL_INTERVALS} agreeing intervals AND
+ * `stableFor` of elapsed hold. The two costs therefore overlap, and what the
+ * wait must contain is whichever of them is longer — plus one poll, the budget
+ * the closing round needs to be allowed to start (see the runner's
+ * MIN_ROUND_BUDGET_MS).
+ *
+ * Adding them instead over-demanded by up to {@link IDLE_SETTLE_SPAN_MS}, and
+ * taught a cost model the runner does not implement: `timeout: 1000,
+ * stableFor: 800` was rejected as impossible and settles in ~820ms, and the
+ * default hold was rejected at `timeout: 600` while settling in ~411ms. The
+ * two agree exactly at `stableFor: 0`, which is where the sum was derived.
  */
-export const IDLE_SETTLE_OVERHEAD_MS = (IDLE_MIN_STILL_INTERVALS + 1) * IDLE_POLL_MS;
+export function idleMinimumTimeoutMs(stableFor: number): number {
+  return Math.max(IDLE_SETTLE_SPAN_MS, stableFor) + IDLE_POLL_MS;
+}
 
 /**
  * Absolute ceiling on the hold, so an obviously wrong unit (seconds, or a
@@ -1814,16 +1834,17 @@ function parseIdleFields(raw: Record<string, unknown>, kind: "await" | "assert")
   // the identical `timeout: 100, stableFor: 250` was rejected).
   const timeoutMs = step.timeout ?? IDLE_DEFAULT_TIMEOUT_MS;
   const stableFor = step.stableFor ?? IDLE_DEFAULT_STABLE_FOR_MS;
-  const needed = stableFor + IDLE_SETTLE_OVERHEAD_MS;
+  const needed = idleMinimumTimeoutMs(stableFor);
   if (timeoutMs < needed) {
     badEntry(
       entry,
       `idle needs a timeout of at least ${needed}ms to hold still for ` +
         `${step.stableFor === undefined ? `the default ` : ``}${stableFor}ms: a settle is ` +
         `${IDLE_MIN_STILL_INTERVALS + 1} reads spanning ${IDLE_MIN_STILL_INTERVALS} ` +
-        `${IDLE_POLL_MS}ms polls, plus the ${IDLE_POLL_MS}ms of budget the closing round has to ` +
-        `have left to be allowed to start, and the wait has to contain all of that as well as ` +
-        `the hold. Raise ` +
+        `${IDLE_POLL_MS}ms polls, and the hold is counted across those polls rather than after ` +
+        `them — so the wait has to contain whichever of the two is longer, plus the ` +
+        `${IDLE_POLL_MS}ms of budget the closing round has to have left to be allowed to start. ` +
+        `Raise ` +
         `\`timeout\`${step.stableFor === undefined ? "" : " or lower `stableFor`"}`
     );
   }

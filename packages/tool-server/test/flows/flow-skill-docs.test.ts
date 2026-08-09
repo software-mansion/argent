@@ -7,7 +7,8 @@ import {
   IDLE_DEFAULT_TIMEOUT_MS,
   IDLE_MIN_STILL_INTERVALS,
   IDLE_POLL_MS,
-  IDLE_SETTLE_OVERHEAD_MS,
+  IDLE_SETTLE_SPAN_MS,
+  idleMinimumTimeoutMs,
   parseFlow,
 } from "../../src/tools/flows/flow-utils";
 import { createRunFlowTool } from "../../src/tools/flows/flow-run";
@@ -80,26 +81,37 @@ describe("create-flow SKILL.md scope snippets", () => {
     const skill = readFileSync(SKILL, "utf8");
     expect(skill).toContain(`default ${IDLE_DEFAULT_STABLE_FOR_MS}`);
     expect(skill).toContain(`default ${IDLE_DEFAULT_TIMEOUT_MS}`);
-    expect(skill).toContain(`${IDLE_SETTLE_OVERHEAD_MS}ms a settle costs`);
+    expect(skill).toContain(`${IDLE_SETTLE_SPAN_MS}ms a settle spans`);
     expect(skill).toContain(`${IDLE_POLL_MS}ms polls`);
-    // The gloss has to add up to the cost it explains: the polls the intervals
-    // span, plus the round-start floor. Without the second term it described
-    // 400ms while demanding 600.
-    expect(IDLE_SETTLE_OVERHEAD_MS).toBe((IDLE_MIN_STILL_INTERVALS + 1) * IDLE_POLL_MS);
+    // The gloss has to describe the span it names: the polls the intervals are
+    // measured over. The round-start floor is quoted separately because it is
+    // the one term that IS added.
+    expect(IDLE_SETTLE_SPAN_MS).toBe(IDLE_MIN_STILL_INTERVALS * IDLE_POLL_MS);
     expect(skill).toContain(`plus the ${IDLE_POLL_MS}ms of budget the closing round`);
+    // And the worked numbers it hands the author have to be the parser's.
+    expect(skill).toContain(
+      `the default ${IDLE_DEFAULT_STABLE_FOR_MS}ms hold needs ` +
+        `${idleMinimumTimeoutMs(IDLE_DEFAULT_STABLE_FOR_MS)}ms and an 800ms hold needs ` +
+        `${idleMinimumTimeoutMs(800)}ms`
+    );
   });
 
   it("the smallest timeout the skill's arithmetic allows is the one the parser accepts", () => {
-    // The skill tells an author the wait has to contain the hold plus the
-    // settle. Take it at its word and check the boundary both ways — a parser
-    // that demanded a millisecond more would make the documented sum a lie.
-    const smallest = IDLE_DEFAULT_STABLE_FOR_MS + IDLE_SETTLE_OVERHEAD_MS;
-    expect(() =>
-      parseFlow(`steps:\n  - await: { idle: true, timeout: ${smallest} }\n`)
-    ).not.toThrow();
-    expect(() =>
-      parseFlow(`steps:\n  - await: { idle: true, timeout: ${smallest - 1} }\n`)
-    ).toThrow(new RegExp(`at least ${smallest}ms`));
+    // The skill tells an author the wait has to contain the LONGER of the hold
+    // and the settle's span, plus the closing round's budget. Take it at its
+    // word on both sides of the max — a hold under the span and one over it —
+    // and check each boundary both ways, since a parser that demanded a
+    // millisecond more would make the documented arithmetic a lie.
+    for (const stableFor of [IDLE_DEFAULT_STABLE_FOR_MS, 800]) {
+      const smallest = Math.max(IDLE_SETTLE_SPAN_MS, stableFor) + IDLE_POLL_MS;
+      expect(idleMinimumTimeoutMs(stableFor)).toBe(smallest);
+      const step = (t: number): string =>
+        `steps:\n  - await: { idle: true, stableFor: ${stableFor}, timeout: ${t} }\n`;
+      expect(() => parseFlow(step(smallest)), `${stableFor}`).not.toThrow();
+      expect(() => parseFlow(step(smallest - 1)), `${stableFor}`).toThrow(
+        new RegExp(`at least ${smallest}ms`)
+      );
+    }
   });
 
   it("the paragraph's rejected `any` spelling really is rejected", () => {

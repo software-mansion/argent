@@ -248,6 +248,33 @@ steps:
     expect(elapsed).toBeLessThan(2_400);
   });
 
+  // The floor the parser enforces has to be one the runner can serve, or the
+  // parser is rejecting steps that work. This is the smallest wait it allows
+  // for an 800ms hold: the additive floor called it impossible and demanded
+  // 1400ms, while the settle lands at ~820ms because the hold is counted
+  // across the polls rather than after them.
+  it("settles inside the smallest timeout the parser allows for the hold", async () => {
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, timeout: 1000, stableFor: 800 }
+  - echo: reached
+`
+    );
+    const started = Date.now();
+    const r = await run("ready");
+    const elapsed = Date.now() - started;
+    expect(r.ok).toBe(true);
+    const step = r.steps.find((s) => s.kind === "idle")!;
+    expect(step.status).toBe("pass");
+    // A clean settle, not a step that ran out of budget and warned its way out.
+    expect(step.warning).toBeUndefined();
+    expect(elapsed).toBeGreaterThanOrEqual(750);
+    expect(elapsed).toBeLessThan(1_000);
+    expect(r.steps.at(-1)).toMatchObject({ kind: "echo", status: "pass" });
+  });
+
   it("warns, and does not fail, when the tree never stops changing", async () => {
     let tick = 0;
     currentTree = () => screenWith(`frame ${tick++}`);

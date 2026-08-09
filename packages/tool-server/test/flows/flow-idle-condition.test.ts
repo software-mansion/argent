@@ -66,35 +66,60 @@ describe("await { idle }", () => {
   // A wait that cannot contain the settle it asks for is a gate that fails on
   // every run — and fails blaming the app, which is the one thing it is not
   // evidence about. Caught at parse, deviceless, rather than against a live
-  // screen. The settle costs 600ms before any hold is counted: three reads
-  // spanning two 200ms polls, plus the budget the closing round has to start
-  // with.
+  // screen.
+  //
+  // The settle spans 400ms — three reads over two 200ms polls — and the hold is
+  // counted ACROSS those polls, not after them, so what the wait has to contain
+  // is the longer of the two plus the budget the closing round has to start
+  // with. Summing them instead rejected steps the runner satisfies: measured
+  // through the runner, `stableFor: 800` settles in ~820ms and the default hold
+  // in ~411ms, against a demand of 1400ms and 850ms.
   it("rejects a wait that could never contain the settle it asks for", () => {
     expect(() => parseSteps(`  - await: { idle: true, timeout: 500, stableFor: 1000 }\n`)).toThrow(
-      /idle needs a timeout of at least 1600ms to hold still for 1000ms/
+      /idle needs a timeout of at least 1200ms to hold still for 1000ms/
     );
     // With no explicit hold the DEFAULT is what has to fit — the spelling that
     // slipped through, since leaving `stableFor` out was the way past the
     // check that only looked at a written-out one.
     expect(() => parseSteps(`  - await: { idle: true, timeout: 100 }\n`)).toThrow(
-      /idle needs a timeout of at least 850ms to hold still for the default 250ms/
+      /idle needs a timeout of at least 600ms to hold still for the default 250ms/
     );
     // Which is the same step as writing the default out, so it is rejected the
     // same way.
     expect(() => parseSteps(`  - await: { idle: true, timeout: 100, stableFor: 250 }\n`)).toThrow(
-      /idle needs a timeout of at least 850ms/
+      /idle needs a timeout of at least 600ms/
     );
     // With no explicit timeout the default is what the hold has to fit inside.
     expect(() => parseSteps(`  - await: { idle: true, stableFor: 9000 }\n`)).toThrow(
-      /idle needs a timeout of at least 9600ms/
+      /idle needs a timeout of at least 9200ms/
+    );
+    // Under the span, the span is the floor and the hold does not add to it —
+    // both of these ask for the same 600ms.
+    expect(() => parseSteps(`  - await: { idle: true, timeout: 599, stableFor: 0 }\n`)).toThrow(
+      /idle needs a timeout of at least 600ms/
+    );
+    expect(() => parseSteps(`  - await: { idle: true, timeout: 599, stableFor: 400 }\n`)).toThrow(
+      /idle needs a timeout of at least 600ms/
     );
     // The boundary itself is legal on both sides.
-    expect(parseSteps(`  - await: { idle: true, timeout: 900, stableFor: 300 }\n`)).toEqual([
-      { kind: "idle", timeout: 900, stableFor: 300 },
+    expect(parseSteps(`  - await: { idle: true, timeout: 700, stableFor: 500 }\n`)).toEqual([
+      { kind: "idle", timeout: 700, stableFor: 500 },
     ]);
-    expect(() => parseSteps(`  - await: { idle: true, timeout: 899, stableFor: 300 }\n`)).toThrow(
-      /idle needs a timeout of at least 900ms/
+    expect(() => parseSteps(`  - await: { idle: true, timeout: 699, stableFor: 500 }\n`)).toThrow(
+      /idle needs a timeout of at least 700ms/
     );
+  });
+
+  // The floor is not merely smaller — it is the one the runner needs. A hold
+  // the parser calls impossible must not be one a still screen serves, which is
+  // what the additive sum produced: these are the two cases measured above.
+  it("accepts the smallest wait the runner can actually settle in", () => {
+    expect(parseSteps(`  - await: { idle: true, timeout: 1000, stableFor: 800 }\n`)).toEqual([
+      { kind: "idle", timeout: 1000, stableFor: 800 },
+    ]);
+    expect(parseSteps(`  - await: { idle: true, timeout: 600 }\n`)).toEqual([
+      { kind: "idle", timeout: 600 },
+    ]);
   });
 
   // The one near-miss the docs actively produce: every other condition is
