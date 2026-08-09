@@ -607,7 +607,9 @@ steps:
     const step = (await run("ready")).steps.at(-1)!;
     expect(step.status).toBe("pass");
     expect(step.warning).not.toContain("UI tree alone");
-    expect(step.warning).toContain("never held still for 800ms");
+    expect(step.warning).toContain(
+      "never held still for 2 consecutive 200ms intervals spanning 800ms"
+    );
   });
 
   // The localized flag describes the hold being REPORTED, so a hold that broke
@@ -689,6 +691,44 @@ steps:
     expect(r.steps.at(-1)!.warning).not.toContain("UI tree alone");
   });
 
+  // A settle needs an interval COUNT as well as a duration, and the count is
+  // the term a short wait usually misses. Naming only the duration reported a
+  // screen the run had watched go still as one that never held still — and at
+  // `stableFor: 0` it read "never held still for 0ms", a hold nothing can fail
+  // — then sent the author looking for a video or a carousel.
+  it("names the interval it fell short of, not a hold the screen did serve", async () => {
+    let reads = 0;
+    // Moving for the first four reads, then identical: one still interval,
+    // where a settle takes two. The 0ms hold is satisfied the instant that
+    // pair agrees.
+    currentTree = () => {
+      reads += 1;
+      return screenWith(reads <= 4 ? `frame ${reads}` : "Settled");
+    };
+    let frames = 0;
+    currentFrame = () => {
+      frames += 1;
+      return frameAt(frames <= 4 ? frames * 40 : 200);
+    };
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, stableFor: 0, timeout: 1100 }
+`
+    );
+    const step = (await run("ready")).steps.at(-1)!;
+    expect(step.status).toBe("pass");
+    expect(step.warning).not.toContain("never held still");
+    // What it did achieve, and the term it was short of.
+    expect(step.warning).toContain("still for the last");
+    expect(step.warning).toContain("1 200ms interval");
+    expect(step.warning).toContain("2 consecutive ones");
+    // The repair is the wait, not the app: nothing here is evidence of a video.
+    expect(step.warning).toContain("`timeout:`");
+    expect(step.warning).not.toContain("a video");
+  });
+
   // The default hold is what nearly every step runs with, so it is worth
   // pinning somewhere the number is actually used rather than only in a parser
   // message.
@@ -703,7 +743,7 @@ steps:
 `
     );
     expect((await run("ready")).steps.at(-1)!.warning).toContain(
-      "never held still for 250ms within 900ms"
+      "never held still for 2 consecutive 200ms intervals spanning 250ms within 900ms"
     );
   });
 

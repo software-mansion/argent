@@ -89,7 +89,8 @@ For a custom poll interval or bundleId, drop to an explicit `- tool: await-ui-el
 
 It **never fails a run.** Readiness is not an acceptance criterion, so every outcome short of a clean settle passes carrying a `warning` on the step — read it rather than stepping over it:
 
-- **the screen never held still** — it spent the timeout and went ahead. Plenty of healthy screens never stop (a video, a shimmer, a carousel, live-updating text); a screen that never finished loading looks the same from here.
+- **the screen never held still** — it spent the timeout and went ahead, and was still moving on the last interval. Plenty of healthy screens never stop (a video, a shimmer, a carousel, live-updating text); a screen that never finished loading looks the same from here.
+- **the screen was still for the last Nms** — the wait ran out mid-hold, so the settle was never confirmed. It names the term that was short: a second agreeing interval (one can be two samples either side of an animation's turning point) or the rest of `stableFor`. Raise `timeout` — this one is the wait being too short, not the screen moving.
 - **a small part of it was still changing** — a spinner, a caret, a progress dot, moving during the stretch of stillness the step settled on. Too small to be the screen moving, so the settle completed anyway; if it is a loading spinner, the screen was still loading when this step returned.
 - **the tree stayed empty** — the screen rendered no accessible content. Sometimes the app (a canvas, a video surface), sometimes a screen that never arrived.
 - **settled on the UI tree alone** — the screen could not be screenshotted often enough to compare a pair, so presentation-layer motion (a push, a fade, a dismissing modal) was not waited out.

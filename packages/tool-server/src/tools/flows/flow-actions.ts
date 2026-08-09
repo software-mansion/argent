@@ -1307,6 +1307,11 @@ async function waitForIdle(
   let previousFrame: PixelFrame | undefined;
   let bothSince = 0;
   let stillIntervals = 0;
+  // How long the hold running at the last observed interval had lasted. Kept
+  // so the report at the bottom can say what the wait reached rather than
+  // asserting it reached nothing — a settle needs an interval COUNT as well as
+  // a duration, and the count is the term a short wait usually misses.
+  let heldForMs = 0;
   // Small, persistent motion seen across the intervals that produced the
   // current hold. Cleared with the hold, so it only ever describes the settle
   // actually being reported.
@@ -1449,8 +1454,9 @@ async function waitForIdle(
 
         if (treeHeld && pixelsHeld) {
           stillIntervals += 1;
+          heldForMs = now - bothSince;
           if (localizedThisInterval) localizedMotionDuringHold = true;
-          if (stillIntervals >= MIN_STILL_INTERVALS && now - bothSince >= stableFor) {
+          if (stillIntervals >= MIN_STILL_INTERVALS && heldForMs >= stableFor) {
             return localizedMotionDuringHold
               ? { ok: true, warning: LOCALIZED_MOTION_WARNING }
               : { ok: true };
@@ -1458,6 +1464,7 @@ async function waitForIdle(
         } else {
           bothSince = now;
           stillIntervals = 0;
+          heldForMs = 0;
           localizedMotionDuringHold = false;
         }
       }
@@ -1600,14 +1607,38 @@ async function waitForIdle(
         `next step actually needs.`,
     };
   }
+  // The wait ended while a hold was running. A settle needs BOTH an interval
+  // count and a duration, so naming only the duration reported a screen that
+  // had demonstrably held still as one that never did — and with `stableFor: 0`
+  // it read as "never held still for 0ms", which nothing can fail. Name the
+  // term that was actually short, and give the advice that repairs it: the wait
+  // ran out, which is not the same as the screen never stopping.
+  if (stillIntervals > 0) {
+    const shortOf =
+      stillIntervals < MIN_STILL_INTERVALS
+        ? `a settle takes ${MIN_STILL_INTERVALS} consecutive ones — a single agreeing interval ` +
+          `can be two samples either side of an animation's turning point`
+        : `the hold asks for ${stableFor}ms of it`;
+    return {
+      ok: true,
+      warning:
+        `the screen was still for the last ${heldForMs}ms of the ${timeoutMs}ms wait, over ` +
+        `${stillIntervals} ${IDLE_POLL_MS}ms interval${stillIntervals === 1 ? "" : "s"} — but ` +
+        `${shortOf}, so the wait ran out before the settle could be confirmed rather than ` +
+        `because the screen never stopped. Raise this step's \`timeout:\`, and gate the next ` +
+        `action on a stable element rather than on stillness.` +
+        blipNote,
+    };
+  }
   return {
     ok: true,
     warning:
-      `the screen never held still for ${stableFor}ms within ${timeoutMs}ms, so this step went ` +
-      `ahead without waiting it out. Either something on it never stops (a video, a looping ` +
-      `animation, a carousel, live-updating text) or the screen never finished loading. Look at ` +
-      `what is moving, and make sure the next action is gated on a stable element rather than on ` +
-      `stillness.` +
+      `the screen never held still for ${MIN_STILL_INTERVALS} consecutive ${IDLE_POLL_MS}ms ` +
+      `intervals${stableFor > 0 ? ` spanning ${stableFor}ms` : ""} within ${timeoutMs}ms, and ` +
+      `was moving again on the last one, so this step went ahead without waiting it out. Either ` +
+      `something on it never stops (a video, a looping animation, a carousel, live-updating ` +
+      `text) or the screen never finished loading. Look at what is moving, and make sure the ` +
+      `next action is gated on a stable element rather than on stillness.` +
       blipNote,
   };
 }
