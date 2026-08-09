@@ -1362,8 +1362,13 @@ async function waitForIdle(
   // and every arm of that round sets it.
   let lastRead!: TreeReadOutcome;
   let treeErrorMessage: string | undefined;
-  // The repair the reader named on the last degraded read, if it named one.
-  // Cleared by a read that carried a tree, the way treeErrorMessage is.
+  // Whether the last read that CAME BACK was a degraded one, and the repair it
+  // named if it named one. Both are cleared by a read that carried a tree and
+  // survive an abandoned one, exactly as treeErrorMessage does — so a degraded
+  // tail is not thrown away by a closing round that merely ran out of budget.
+  // `should_restart` arrives without a hint, so the flag cannot be inferred
+  // from the message.
+  let treeReadBlind = false;
   let blindHint: string | undefined;
   // Rounds since the last read that ANSWERED. Post-loop this is the dark tail:
   // how much of the window's final stretch went without a look at the screen.
@@ -1447,6 +1452,7 @@ async function waitForIdle(
       // hold state is left exactly as it was.
       lastRead = "blind";
       darkReads += 1;
+      treeReadBlind = true;
       blindHint = read.value.hint;
     } else if (read.type === "error") {
       // A tree-source blip mid-animation is expected; keep polling. Only its
@@ -1466,6 +1472,7 @@ async function waitForIdle(
       readsSucceeded += 1;
       darkReads = 0;
       treeErrorMessage = undefined;
+      treeReadBlind = false;
       blindHint = undefined;
       // It answered, so whatever wedged it has cleared.
       treeReadHung = false;
@@ -1602,7 +1609,7 @@ async function waitForIdle(
 
   if (readsSucceeded === 0) {
     if (treeErrorMessage !== undefined) return unreadable(treeErrorMessage);
-    if (lastRead === "blind" || blindHint !== undefined) return degraded();
+    if (treeReadBlind) return degraded();
     return {
       ok: false,
       indeterminate: true,
@@ -1635,7 +1642,7 @@ async function waitForIdle(
   // A degraded tail is the same window, reached the other way: the reads kept
   // arriving and kept saying nothing about the app. One is a blip like any
   // other and rides out on the same tolerance.
-  if (lastRead === "blind" && darkReads > IDLE_TOLERATED_DARK_READS) {
+  if (treeReadBlind && darkReads > IDLE_TOLERATED_DARK_READS) {
     return degraded();
   }
   // The same window going dark the other way: the source answered, then stopped

@@ -1140,6 +1140,40 @@ steps:
     expect(step.reason).toContain("empty and degraded");
   });
 
+  // A degraded tail survives a closing round that merely ran out of budget,
+  // for the same reason a failing one does: the round that ends the wait is
+  // abandoned whenever the read outlasts the budget it was allowed to start
+  // with, and that says nothing about the source. `should_restart` is the
+  // spelling that arrives with no hint attached, so the tail cannot be
+  // recognised from the message alone.
+  it("keeps a degraded tail when the closing round runs out of budget", async () => {
+    treeDelayMs = 150;
+    // Set up front rather than from inside the source: a read the runner
+    // abandons still resolves later, and mutating shared state from there
+    // reports this case's degradation into the next one.  Harmless on the
+    // reads that carry a tree — only an EMPTY one is blind.
+    treeShouldRestart = true;
+    let reads = 0;
+    currentTree = () => {
+      reads += 1;
+      return reads > 2 ? n({ role: "AXWindow", frame: FULL, children: [] }) : screenWith("Home");
+    };
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, timeout: 1500, stableFor: 0 }
+  - echo: unreachable
+`
+    );
+    const r = await run("ready");
+    expect(r.ok).toBe(false);
+    const step = r.steps.find((s) => s.kind === "idle")!;
+    expect(step.status).toBe("error");
+    expect(step.reason).toContain("empty and degraded");
+    expect(r.steps.at(-1)!.status).toBe("skip");
+  });
+
   // ...and the guard must not swallow the ordinary blank screen it sits next
   // to. An empty tree with nothing attached to it IS an observation: the app
   // rendered no accessible content, which is a warning and not a stop.
