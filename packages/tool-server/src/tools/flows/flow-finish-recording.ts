@@ -221,6 +221,14 @@ export function summarizeStep(step: FlowStep, n: number): string {
       // so it only ever reaches an author through flow-finish-recording's
       // `summary`, which still returns `flowFile` beside it. Neither kind
       // carries a `delayMs` (only `tool` steps do), so no delayLabel here.
+      //
+      // That reasoning is NOT applied file-wide, and the arms below show it:
+      // `type.submit` (whose `false` suppresses the Enter press) and
+      // `await.timeout` also change what replays and still render nothing, as
+      // they did before the recorder shared this renderer. Neither kind is
+      // recorder-built, so both reach an author only through the finish
+      // `summary` — beside the `flowFile` that spells them out. Rendering them
+      // is a fair follow-up, not a gap this per-step view opened.
       const target = step.selector ? selectorLabel(step.selector) : `(${step.x}, ${step.y})`;
       // Only ×2..×10 is renderable: `times: 1` is the default and never lands in
       // the file (parseTapTimes normalizes it to absent), so rendering `×1` for
