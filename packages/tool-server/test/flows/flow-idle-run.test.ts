@@ -982,6 +982,40 @@ steps:
     expect(r.steps.at(-1)!.status).toBe("skip");
   });
 
+  // The dark tail is a CONSECUTIVE count, and that is what makes a blip a
+  // blip: the run of unanswered rounds at the END of the wait is the window
+  // the step cannot describe. Without the reset on a read that answers,
+  // `darkReads` becomes a total for the whole step, so two blips that were
+  // never consecutive — the case this design exists to ride out — sum past the
+  // tolerance and turn a passing step into a run-stopping error.
+  it("counts the dark tail from the last read that answered, not over the whole step", async () => {
+    let reads = 0;
+    currentTree = () => {
+      reads += 1;
+      // Fail on 2 and 4, answer on 1 and 3: two blips, never consecutive.
+      if (reads % 2 === 0) throw new Error("transient describe failure");
+      return screenWith("Home");
+    };
+    await writeFlow(
+      "ready",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, timeout: 700, stableFor: 0 }
+  - echo: reached
+`
+    );
+    const r = await run("ready");
+    // Four rounds fit, so the wait ends on the second blip — the position that
+    // makes the tail one read long and the step total two.
+    expect(reads).toBe(4);
+    expect(r.ok).toBe(true);
+    const step = r.steps.find((s) => s.kind === "idle")!;
+    expect(step.status).toBe("pass");
+    // Tolerated, not swallowed.
+    expect(step.warning).toContain("transient describe failure");
+    expect(r.steps.at(-1)).toMatchObject({ kind: "echo", status: "pass" });
+  });
+
   // What makes a window unreadable is the dark tail, not the flavour of the
   // last read in it. A closing round that simply ran out of budget ends as a
   // `timeout` however dead the source is, and keying the guard on `error`
