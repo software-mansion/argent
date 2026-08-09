@@ -69,13 +69,13 @@ export const PIXEL_THRESHOLD = 0.03;
 const MAX_RGB_DISTANCE_SQUARED = 255 * 255 * 3;
 const PIXEL_THRESHOLD_SQUARED = PIXEL_THRESHOLD * PIXEL_THRESHOLD * MAX_RGB_DISTANCE_SQUARED;
 
-// The screen is MOVING when at least this fraction of pixels changed —
-// counting only pixels that individually clear the per-pixel gate above. It is
-// sized for motion worth waiting out: a transition, a scroll, a fade, a
-// carousel. Anything smaller is reported separately (see below) rather than
-// resetting the settle, because a caret or a spinner never stops, and holding
-// a flow for the full timeout over one is worse than telling the author about
-// it.
+// The screen is MOVING when more than this fraction of pixels changed AND more
+// than MOTION_MIN_PIXELS of them did — counting only pixels that individually
+// clear the per-pixel gate above. It is sized for motion worth waiting out: a
+// transition, a scroll, a fade, a carousel. Anything smaller is reported
+// separately (see below) rather than resetting the settle, because a caret or a
+// spinner never stops, and holding a flow for the full timeout over one is
+// worse than telling the author about it.
 //
 // This fraction is NOT what bounds spatially uniform change (a fade, dim, tint
 // or scrim): such a change clears the per-pixel gate on either 100% of pixels
@@ -84,29 +84,62 @@ const PIXEL_THRESHOLD_SQUARED = PIXEL_THRESHOLD * PIXEL_THRESHOLD * MAX_RGB_DIST
 // the gate alone; loosening this fraction does not widen that blind spot.
 export const MOTION_FRACTION = 0.002;
 
-// Below MOTION_FRACTION but at or above this many CHANGED PIXELS, the change
-// is LOCALIZED: too small to be the screen moving, too large to be capture
-// noise. A spinner and a caret both sit in that gap — which is how a
+// The smallest change that may be called the screen MOVING, whatever the frame
+// measures. It exists because the ceiling scales with the frame while the
+// localized floor below does not, so without it the band between them closes as
+// the frame shrinks: 0.002 of a 100x75 Chromium capture is 15 pixels, leaving
+// [10, 15) to hold indicators that measure 50-66.
+//
+// Closing it is not a silent loss of a warning — it is the opposite verdict.
+// `moving` leaves the pixel half of the hold unheld, so the settle restarts
+// every round and the step runs to its deadline, then reports "the screen never
+// held still ... a video, a looping animation, a carousel" about exactly the
+// spinner the band exists to name separately. Measured on this comparison
+// before the floor: a 57-pixel indicator read `moving` on 400x300, 500x400 and
+// 700x520 CSS windows and `localized` only at 1200x800, so the same indicator
+// got opposite verdicts by window size alone.
+//
+// A hundred clears every indicator measured for the floor below (50-66) by half
+// again, and stays far under any real transition: on the smallest frame above
+// it is 1.3% of the capture, where a transition, a scroll or a carousel moves a
+// large share of it.
+const MOTION_MIN_PIXELS = 100;
+
+// ...and the floor itself is capped at this share of the frame, so it can never
+// do to a small frame what the fraction alone did: make one verdict
+// unreachable. A frame under ~1000 pixels is too small to hold an indicator at
+// all, so there is nothing there for the band to protect, and a change covering
+// a tenth of the screen is motion whatever its pixel count. Without the cap a
+// frame of exactly MOTION_MIN_PIXELS could change every pixel it has and still
+// not be called moving. Two orders of magnitude below any real capture, so on a
+// device it never binds.
+const MOTION_MIN_PIXELS_FRAME_SHARE = 0.1;
+
+// Below the motion threshold but at or above this many CHANGED PIXELS, the
+// change is LOCALIZED: too small to be the screen moving, too large to be
+// capture noise. A spinner and a caret both sit in that gap — which is how a
 // still-loading screen used to report as settled with nothing said about it.
 //
 // A COUNT, not a fraction, because what these indicators have in common is a
 // size in captured pixels rather than a share of the frame. Measured at
 // CAPTURE_SCALE: a live spinner changed 50-66 pixels on an iPhone 16 Pro
 // (302x656) and 57 on a Pixel 5 (270x585), and a blinking caret 50 on a
-// Pixel 7 (162k pixels) — all within a factor of two of each other across
-// three frame sizes. Expressed as a fraction those numbers only held at
-// phone size: 0.005% of a desktop-sized Chromium window is ~46 pixels, above
-// every indicator measured here, so the warning was silently off on exactly
-// the windows that are largest.
+// Pixel 7 (162k pixels) — all within a factor of two of each other while the
+// frames they sat in differ by more.
+//
+// The fraction this replaced (0.005% of frame area) had not yet lost any of
+// them: on the 2400x2558 Chromium window measured elsewhere in this file it
+// works out at 19 captured pixels, and every indicator above clears 19. What it
+// did was drift toward them as the window grew, having been derived only from
+// phone-sized frames — it would have swallowed the smallest of them on a
+// capture past ~1M pixels, with nothing in the number to say where that line
+// was. A count does not move.
 //
 // The floor is not zero because a capture pair is not guaranteed byte-identical
 // on every backend; two captures of a static iOS screen changed 0 pixels of
 // 237k. Ten sits an order of magnitude under the smallest indicator measured
 // and clear of that noise. One smaller than ten pixels stays invisible, which
 // is the residual limit of comparing whole frames.
-//
-// MOTION_FRACTION above stays a fraction: a transition, a scroll or a
-// carousel moves a share of the screen, which is what scales with it.
 const LOCALIZED_MOTION_MIN_PIXELS = 10;
 
 // Top band excluded from the comparison on a device with a system status bar,
@@ -401,7 +434,10 @@ export function comparePixels(a: PixelFrame, b: PixelFrame, maskTopFraction = 0)
     const db = a.data[o + 2] - b.data[o + 2];
     if (dr * dr + dg * dg + db * db > PIXEL_THRESHOLD_SQUARED) changed++;
   }
-  const fraction = changed / total;
-  if (fraction > MOTION_FRACTION) return "moving";
+  const motionThreshold = Math.max(
+    total * MOTION_FRACTION,
+    Math.min(MOTION_MIN_PIXELS, total * MOTION_MIN_PIXELS_FRAME_SHARE)
+  );
+  if (changed > motionThreshold) return "moving";
   return changed >= LOCALIZED_MOTION_MIN_PIXELS ? "localized" : "still";
 }

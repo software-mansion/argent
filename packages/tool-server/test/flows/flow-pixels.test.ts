@@ -184,18 +184,23 @@ describe("comparePixels", () => {
     expect(PIXEL_THRESHOLD).toBe(0.03);
   });
 
-  it("ignores a handful of changed pixels below the motion fraction", () => {
-    // 900 px, fraction 0.002 → ~1.8 px budget: one changed pixel is not the
-    // screen moving, three is.
+  it("ignores a handful of changed pixels below the motion threshold", () => {
+    // 900 px, so the fraction's budget is 1.8 pixels and the absolute floor is
+    // what decides: on a frame this small, the screen moving means a large
+    // share of it moved. A stray pixel or three is noise at any frame size —
+    // taking the fraction alone here made three of them the screen in motion.
     const base = solid(30, 30, [0, 0, 0]);
-    expect(comparePixels(base, withChangedPixels(solid(30, 30, [0, 0, 0]), 1, 255))).not.toBe(
+    expect(comparePixels(base, withChangedPixels(solid(30, 30, [0, 0, 0]), 1, 255))).toBe("still");
+    expect(comparePixels(base, withChangedPixels(solid(30, 30, [0, 0, 0]), 3, 255))).toBe("still");
+    // A fifth of the frame is not noise.
+    expect(comparePixels(base, withChangedPixels(solid(30, 30, [0, 0, 0]), 180, 255))).toBe(
       "moving"
     );
-    expect(comparePixels(base, withChangedPixels(solid(30, 30, [0, 0, 0]), 3, 255))).toBe("moving");
   });
 
-  // Every case above runs on a 30x30 frame, where the motion budget is 1.8
-  // pixels and anything visible trips it. A real capture at CAPTURE_SCALE is
+  // Every case above runs on a 30x30 frame, where the fraction's budget is 1.8
+  // pixels, the absolute floor decides instead, and any change that covers the
+  // frame trips it. A real capture at CAPTURE_SCALE is
   // 158k-198k pixels, and at that size the small-but-permanent movers a
   // readiness check exists to notice — a spinner above all — sit two orders of
   // magnitude below the same fraction. Measured on real captures taken at the
@@ -238,15 +243,56 @@ describe("comparePixels", () => {
 
     // The floor is a pixel COUNT, not a share of the frame: a spinner and a
     // caret are the same handful of captured pixels whatever window they sit
-    // in. As a fraction it only held at phone size — on a desktop-sized
-    // Chromium window the same 0.005% is ~46 pixels, above every indicator
-    // ever measured, so the warning was silently off on the largest windows.
+    // in, while the fraction it replaced was derived from phone-sized frames
+    // and drifted up toward them as the window grew.
     it("still sees a caret on a desktop-sized window", () => {
       const DESKTOP = [1200, 767] as const; // 920k px, where the old floor was ~46
       expect(comparePixels(...changed(DESKTOP, 10))).toBe("localized");
       expect(comparePixels(...changed(DESKTOP, 45))).toBe("localized");
       // And the floor still holds at that size: noise stays noise.
       expect(comparePixels(...changed(DESKTOP, 9))).toBe("still");
+    });
+
+    // The other end of the same requirement. The ceiling scales with the frame
+    // and the floor does not, so on a small capture the two used to meet and
+    // the band closed — and a closed band is not a lost warning but the
+    // opposite verdict: `moving` resets the hold every round, runs the step to
+    // its deadline and reports a carousel where a spinner was.
+    describe("on a frame small enough for the fraction to reach the floor", () => {
+      // A 400x300 CSS Chromium window at dpr 1: 7500 captured pixels, where
+      // 0.2% is 15 — under every indicator ever measured for the floor.
+      const SMALL = [100, 75] as const;
+
+      it.each([50, 57, 66])("still calls a %s-pixel indicator localized", (indicator) => {
+        expect(comparePixels(...changed(SMALL, indicator))).toBe("localized");
+      });
+
+      it("gives the same indicator the same verdict at every window size", () => {
+        const sizes = [SMALL, [125, 100], [175, 130], [300, 200]] as const;
+        for (const size of sizes) {
+          expect(comparePixels(...changed(size, 57)), `${size[0]}x${size[1]}`).toBe("localized");
+        }
+      });
+
+      it("still calls a real transition motion at that size", () => {
+        // 5% of a 7500-pixel frame — far more than the floor, and the least a
+        // transition on a window that small moves.
+        expect(comparePixels(...changed(SMALL, Math.round(SMALL[0] * SMALL[1] * 0.05)))).toBe(
+          "moving"
+        );
+      });
+
+      it("keeps noise below the localized floor there too", () => {
+        expect(comparePixels(...changed(SMALL, 9))).toBe("still");
+      });
+
+      it("never lets the floor grow past the frame it is applied to", () => {
+        // The floor must not close off a verdict the way the fraction did. On a
+        // 100-pixel frame an uncapped 100-pixel floor is unreachable: every
+        // pixel could change and the screen would still not be moving.
+        const TINY = [10, 10] as const;
+        expect(comparePixels(...changed(TINY, TINY[0] * TINY[1]))).toBe("moving");
+      });
     });
 
     // The two frames below are the ones the runner was actually caught
