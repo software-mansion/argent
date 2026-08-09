@@ -171,12 +171,26 @@ function renderToolArgs(args: unknown): string {
  * The pre-step sleep a replay performs, when the step carries one. Narrowed to
  * the one arm that has a `delayMs` — over the whole union the field could only
  * be read through a cast, which is also what would stop the compiler checking
- * it. The runtime `typeof` still earns its keep: `fromYamlStep` copies `delayMs`
- * across unvalidated, so a hand-edited `delayMs: soon` arrives here as a string
- * and must render nothing rather than `(after soonms)`.
+ * it.
+ *
+ * A runtime check is still needed, because `fromYamlStep` copies `delayMs`
+ * across unvalidated and `validateFlow` does not check it, so a hand-edited
+ * non-number survives a parse. The check has to be the RUNNER's, though, not a
+ * `typeof`: flow-run gates on truthiness and hands the raw value to
+ * `setTimeout` (`if (step.delayMs && !(await sleepOrAbort(step.delayMs, …)))`),
+ * which coerces it. A quoted `delayMs: "2000"` is not a number and sleeps two
+ * real seconds; `delayMs: .nan` IS a number and sleeps none. Testing `typeof`
+ * was therefore wrong in both directions — silent about a delay that happens,
+ * and claiming `(after NaNms)` for one that does not.
  */
 function delayLabel(step: Extract<FlowStep, { kind: "tool" }>): string {
-  return typeof step.delayMs === "number" ? ` (after ${step.delayMs}ms)` : "";
+  // The runner's own gate: a falsy `delayMs` (absent, 0, NaN) is never slept.
+  if (!step.delayMs) return "";
+  const ms = Number(step.delayMs);
+  // What `setTimeout` will actually wait. It floors anything under 1ms — and
+  // anything non-numeric, which coerces to NaN — to an immediate tick, so there
+  // is no delay to describe; an out-of-range value is clamped the same way.
+  return Number.isFinite(ms) && ms >= 1 ? ` (after ${ms}ms)` : "";
 }
 
 /** One human-readable line per recorded step, in the flow file's own spellings. */

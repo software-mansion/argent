@@ -2803,14 +2803,35 @@ describe("summarizeStep rendering", () => {
     );
   });
 
-  it("renders no delay for a hand-edited delayMs that is not a number", () => {
-    // `fromYamlStep` copies `delayMs` across without checking its type, so a
-    // hand-edited `delayMs: soon` reaches the renderer as a string — which the
-    // types alone cannot catch. Dropping the runtime check for a plain
-    // `!== undefined` prints `(after soonms)` at the author.
-    const step = parseFlow(
-      'executionPrerequisite: ""\nsteps:\n  - tool: screenshot\n    args: {}\n    delayMs: soon\n'
+  // `fromYamlStep` copies `delayMs` across without checking its type and
+  // `validateFlow` does not check it either, so a hand-edited non-number
+  // survives a parse and reaches the renderer. The line must describe what the
+  // RUNNER does with such a value — it gates on truthiness and hands the raw
+  // value to setTimeout — not what `typeof` says about it, since the two
+  // disagree in both directions.
+  const toolStepWithDelay = (yamlDelay: string) =>
+    parseFlow(
+      `executionPrerequisite: ""\nsteps:\n  - tool: screenshot\n    args: {}\n    delayMs: ${yamlDelay}\n`
     ).steps[0];
-    expect(summarizeStep(step, 4)).toBe("4. tool: screenshot {}");
+
+  it("renders no delay for a hand-edited delayMs the runner will not sleep", () => {
+    // `soon` coerces to NaN, which setTimeout floors to an immediate tick.
+    expect(summarizeStep(toolStepWithDelay("soon"), 4)).toBe("4. tool: screenshot {}");
+    // `.nan` IS a number, so a `typeof` check announced `(after NaNms)` — but
+    // it is falsy, so the runner's gate skips the sleep entirely.
+    expect(summarizeStep(toolStepWithDelay(".nan"), 4)).toBe("4. tool: screenshot {}");
+    // Same tick, same silence: neither reaches setTimeout's 1ms floor.
+    expect(summarizeStep(toolStepWithDelay("0"), 4)).toBe("4. tool: screenshot {}");
+    expect(summarizeStep(toolStepWithDelay("-5"), 4)).toBe("4. tool: screenshot {}");
+  });
+
+  it("renders the delay a quoted number really sleeps", () => {
+    // A quoted numeric is an ordinary slip in the hand-edit workflow, and it is
+    // not inert: the runner's gate is truthiness, and setTimeout coerces the
+    // string, so this waits two real seconds on every replay. A `typeof` check
+    // rendered nothing at all for it.
+    expect(summarizeStep(toolStepWithDelay('"2000"'), 4)).toBe(
+      "4. tool: screenshot {} (after 2000ms)"
+    );
   });
 });
