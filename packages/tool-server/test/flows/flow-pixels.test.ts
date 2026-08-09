@@ -8,6 +8,7 @@ import type { ActionEnv } from "../../src/tools/flows/flow-actions";
 import {
   capturePixelsWithin,
   FIRST_PIXEL_CAPTURE_TIMEOUT_MS,
+  MOTION_FRACTION,
   PIXEL_CAPTURE_TIMEOUT_MS,
   PIXEL_THRESHOLD,
   comparePixels,
@@ -296,12 +297,17 @@ describe("comparePixels", () => {
       });
 
       it("takes its fractions against the unmasked area, not the whole frame", () => {
-        // 1% of the REMAINING rows must still read as motion; measuring against
-        // the full frame would quietly raise every threshold by the mask.
+        // The count has to separate the two denominators, or the case passes
+        // under either and pins nothing: 0.2% of the 186334 visible pixels is
+        // 373, of the whole 198112-pixel frame 397, so only a count between
+        // them reads as motion against the visible area and as less than
+        // motion against the frame. 466 — 0.25% of either — cleared both.
         const visible = IPHONE[0] * (IPHONE[1] - 39);
-        expect(comparePixels(...changedInRows(Math.round(visible * 0.0025), 39), MASK)).toBe(
-          "moving"
-        );
+        const whole = IPHONE[0] * IPHONE[1];
+        const between = 380;
+        expect(between).toBeGreaterThan(visible * MOTION_FRACTION);
+        expect(between).toBeLessThanOrEqual(whole * MOTION_FRACTION);
+        expect(comparePixels(...changedInRows(between, 39), MASK)).toBe("moving");
       });
     });
   });

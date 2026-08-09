@@ -65,7 +65,7 @@ const PIXEL_THRESHOLD_SQUARED = PIXEL_THRESHOLD * PIXEL_THRESHOLD * MAX_RGB_DIST
 // — 500x this fraction — or none of them, so the fraction is never the
 // deciding term. What remains is the rate floor described above, a property of
 // the gate alone; loosening this fraction does not widen that blind spot.
-const MOTION_FRACTION = 0.002;
+export const MOTION_FRACTION = 0.002;
 
 // Below MOTION_FRACTION but at or above this many CHANGED PIXELS, the change
 // is LOCALIZED: too small to be the screen moving, too large to be capture
