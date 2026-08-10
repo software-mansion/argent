@@ -61,10 +61,7 @@ function repeatDocs(): string {
 
 // `…` marks an illustrative fragment (`within: <sel>`, and a deliberately
 // REJECTED spelling a doc contrasts against) — not runnable YAML.
-// `{ times }` is the same thing for a bound: the heading contrasting
-// `repeat: { times }` with `tap: { times }` names the KEY, not a count.
-const runnable = (snippet: string): boolean =>
-  !snippet.includes("…") && !snippet.includes("<sel>") && !snippet.includes("{ times }");
+const runnable = (snippet: string): boolean => !snippet.includes("…") && !snippet.includes("<sel>");
 
 describe("create-flow selector-scope docs", () => {
   it("keeps the core skill concise and routes every relation", () => {
@@ -178,7 +175,10 @@ describe("create-flow repeat snippets", () => {
     // is what an agent copying the pair ends up with.
     const bounds = [...repeatDocs().matchAll(/`-? ?(repeat: [^`]*)`/g)]
       .map((m) => m[1]!)
-      .filter(runnable);
+      // A bare `{ times }` names the KEY, not a count: the heading contrasting
+      // `repeat: { times }` with `tap: { times }` is not runnable YAML. A real
+      // count (`repeat: { times: 3 }`) doesn't match this string and IS run.
+      .filter((b) => runnable(b) && !b.includes("{ times }"));
     // Both bounds: the count and the drain.
     expect(new Set(bounds).size).toBeGreaterThanOrEqual(2);
     expect(bounds.some((b) => b.includes("until"))).toBe(true);
