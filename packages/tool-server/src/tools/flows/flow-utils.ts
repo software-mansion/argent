@@ -2869,8 +2869,8 @@ function parseRepeatSpec(raw: unknown, entry: unknown): RepeatSpec {
  *
  * Walks nested blocks via {@link blockSteps}. A `snapshot:` reached through a
  * `run:` fragment is invisible here (different file, resolved at run time) —
- * that is the same hole a fragment invoked twice by one flow already has, and
- * belongs to flow lint.
+ * execRunStep closes that hole at fragment load, the earliest the runner can
+ * see the fragment's steps, by failing the `run:` step itself.
  */
 function assertNoSnapshotInRepeat(steps: FlowStep[], entry: unknown): void {
   for (const step of steps) {

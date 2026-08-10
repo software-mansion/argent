@@ -193,7 +193,7 @@ The guard accepts one `exists`, `visible`, `hidden`, or `text` condition, or `{ 
 
 **`repeat: { times }` is not `tap: { times }`.** `tap: { on: X, times: 2 }` is ONE gesture — two presses inside the OS double-tap window, which is what makes a double-tap register. `repeat: 2` + `steps: [tap: X]` is two independent taps, each resolving the selector against a settled tree.
 
-`snapshot:` inside a repeat block is a **parse error**: a snapshot name maps to one baseline, but the step would compare against it once per iteration, and each iteration's screen legitimately differs. Put the snapshot after the block. (A `snapshot:` reached through a `run:` fragment inside the block is not caught at parse — the same hole a fragment invoked twice by one flow already has.)
+`snapshot:` inside a repeat block is a **parse error**: a snapshot name maps to one baseline, but the step would compare against it once per iteration, and each iteration's screen legitimately differs. Put the snapshot after the block. (A `snapshot:` reached through a `run:` fragment inside the block is still not caught at parse — it fails that `run:` step when the fragment loads, before any of the fragment's steps run.)
 
 ## Composition and platform limits
 

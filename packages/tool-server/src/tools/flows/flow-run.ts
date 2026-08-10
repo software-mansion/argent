@@ -1147,7 +1147,8 @@ drains until a condition holds — checked BEFORE each iteration, so an already-
 zero iterations and passes, and hitting \`max\` with it still unmet FAILS the step. Repeat is NOT
 retry: a failure inside any iteration is a real failure and hard-stops the flow, since re-running a
 side-effecting iteration would double-fire it. \`snapshot\` inside a repeat block is a parse error (one
-baseline, N comparisons). Distinct from \`tap: { times }\`, which is ONE multi-tap gesture.
+baseline, N comparisons); one reached through a \`run:\` fragment fails that \`run:\` step when the
+fragment loads. Distinct from \`tap: { times }\`, which is ONE multi-tap gesture.
 A flow that begins with a \`launch\` step is a self-contained e2e flow; one that doesn't runs against the
 device's current state. Device id is injected by the runner (flows store none) — pass \`device\` or
 \`platform\` to pick one, else the single booted device is used. On Chromium a \`launch\` step's value is an
@@ -1879,6 +1880,18 @@ interface RunStackEntry {
 interface StepScope {
   runStack: RunStackEntry[];
   depth: number;
+  /**
+   * True for a scope executing inside a `repeat:` body, at any block or `run:`
+   * distance below it. Stamped once by {@link execRepeatStep} on its body's
+   * scope and never cleared: {@link childScope} spreads the parent, so every
+   * derived scope — a nested block's, a composed fragment's — inherits it.
+   * The flag exists for one consumer, the snapshot fence in
+   * {@link execRunStep}: parse rejects a literal `snapshot:` in a repeat body
+   * (assertNoSnapshotInRepeat) but cannot see into a `run:` target, which
+   * resolves only at fragment load — so the load is where the refusal has to
+   * happen, and this is how the load knows it is under a repeat.
+   */
+  inRepeat?: boolean;
 }
 
 /** The flow name steps in this scope are attributed to (StepReport.flow). */
@@ -1940,7 +1953,12 @@ function scopeFlowDir(scope: StepScope): string {
   return path.dirname(scope.runStack[scope.runStack.length - 1]!.canonical);
 }
 
-/** The scope a nesting step's children execute in — one level deeper. */
+/**
+ * The scope a nesting step's children execute in — one level deeper. The
+ * spread carries every field not overridden, which is what makes `inRepeat`
+ * sticky: a scope derived from a repeat body's scope stays a repeat body's
+ * scope, through any nesting of blocks and `run:` hops.
+ */
 function childScope(
   scope: StepScope,
   overrides: Partial<Omit<StepScope, "depth">> = {}
@@ -2367,7 +2385,11 @@ async function execRepeatStep(
     structural: true,
     ...depthOf(scope),
   } as const;
-  const inner = childScope(scope);
+  // The body's scope carries the under-a-repeat mark for both bounds, and
+  // childScope's spread carries it onward — so a `run:` any number of blocks
+  // or composition hops below can refuse a fragment snapshot at load (the
+  // fence in execRunStep).
+  const inner = childScope(scope, { inRepeat: true });
 
   /** An iteration boundary marker: `iteration 2/3`, or `iteration 2` when the count isn't known ahead. */
   const pushIteration = (n: number, of?: number): void => {
@@ -2525,6 +2547,27 @@ async function execRepeatStep(
   }
 }
 
+/**
+ * The first `snapshot` step in a fragment's body, descending into nested
+ * blocks via {@link blockSteps} — the same walk assertNoSnapshotInRepeat does
+ * at parse, minus the throw: a hit here belongs to the `run:` step's report
+ * (the fragment file is legal on its own; the composition point under a
+ * repeat is what's wrong), so the caller phrases the failure, not the walker.
+ */
+function findFragmentSnapshot(
+  steps: FlowStep[]
+): Extract<FlowStep, { kind: "snapshot" }> | undefined {
+  for (const step of steps) {
+    if (step.kind === "snapshot") return step;
+    const nested = blockSteps(step);
+    if (nested) {
+      const found = findFragmentSnapshot(nested);
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
 async function execRunStep(
   state: ExecState,
   step: Extract<FlowStep, { kind: "run" }>,
@@ -2641,6 +2684,28 @@ async function execRunStep(
     fragment = parseFlow(await fs.readFile(canonical, "utf8"));
   } catch (err) {
     return fail(`could not load fragment "${target}": ${errMsg(err)}`);
+  }
+
+  // The parse fence (assertNoSnapshotInRepeat) refuses a literal `snapshot:`
+  // in a repeat body, but it walks one FILE: a fragment resolves only here, at
+  // run time, so a snapshot smuggled in through `run:` would get exactly the
+  // shape the parser refuses — one baseline, N comparisons against screens
+  // that legitimately differ per iteration, and under --update-baselines N
+  // green "baseline updated" lines leaving the LAST iteration's pixels as the
+  // baseline for the first iteration's screen. Loading the fragment is the
+  // earliest the runner can see its steps, so the refusal lives here — before
+  // the composition marker, failing the `run:` step itself like the load
+  // failures above, not a parse error: the fragment file is legal on its own,
+  // only this composition point is wrong. No descent into the fragment's own
+  // `run:` steps is needed: `inRepeat` rides childScope's spread into the
+  // scope that nested fragment loads under, so ITS load runs this same check.
+  if (scope.inRepeat) {
+    const snapshot = findFragmentSnapshot(fragment.steps);
+    if (snapshot) {
+      return fail(
+        `fragment "${target}" contains snapshot "${snapshot.name}", and this run: executes inside a repeat block — a snapshot name maps to one baseline, but the step would compare against it once per iteration, and each iteration's screen legitimately differs; move the snapshot after the block, or out of the fragment`
+      );
+    }
   }
 
   // Marker for the composition point, then expand the fragment's steps inline,

@@ -22,12 +22,23 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
   ),
 }));
 
+// Mock ONLY runSnapshot, the snapshot-step suite's idiom: the load-fence tests
+// below need a fragment whose snapshot must NEVER run under a repeat — the
+// mock's call count is the proof — and a control where the same fragment
+// outside one runs it to a cheap pass. The visual pipeline itself is
+// flow-visual's suite to pin.
+vi.mock("../../src/tools/flows/flow-visual", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/tools/flows/flow-visual")>()),
+  runSnapshot: vi.fn(),
+}));
+
 import {
   createRunFlowTool,
   type FlowRunResult,
   type StepReport,
 } from "../../src/tools/flows/flow-run";
 import { serializeFlow, parseFlow, type FlowStep } from "../../src/tools/flows/flow-utils";
+import { runSnapshot } from "../../src/tools/flows/flow-visual";
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
 let tmpDir: string;
@@ -138,6 +149,8 @@ beforeEach(async () => {
   currentHint = undefined;
   tapCount = 0;
   onTap = () => {};
+  vi.mocked(runSnapshot).mockReset();
+  vi.mocked(runSnapshot).mockResolvedValue({ status: "pass", reason: "diff 0.00% ≤ 0.5%" });
 });
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
@@ -1086,6 +1099,141 @@ describe("repeat: composition", () => {
       "repeat skip 2 times @0",
       'tap skip "Clear notification" @1',
     ]);
+  });
+});
+
+/**
+ * The parse fence rejects a literal `snapshot:` in a repeat body; these pin
+ * the runtime fence for the composed spelling of the same flow, which parse
+ * cannot see — a fragment resolves only at load, inside execRunStep. The
+ * refusal must land on the `run:` step, before any fragment step runs: N
+ * comparisons against one baseline is the shape the parser refuses, and under
+ * --update-baselines it silently leaves the last iteration's pixels as the
+ * baseline for the first iteration's screen.
+ */
+describe("repeat: snapshot smuggled in through a run: fragment", () => {
+  const SNAPSHOT: FlowStep = { kind: "snapshot", name: "home" };
+  const RUN_FRAG: FlowStep = { kind: "run", flow: "frag.yaml" };
+
+  it("fails the run: step at fragment load, before any fragment step executes", async () => {
+    currentTree = () => screen([notification()]);
+    await writeFlow("frag", { executionPrerequisite: "", steps: [TAP, SNAPSHOT] });
+    await writeFlow("smuggler", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "repeat", spec: { mode: "times", times: 2 }, steps: [RUN_FRAG] },
+        { kind: "echo", message: "after" },
+      ],
+    });
+
+    const result = await run("smuggler");
+
+    // The fence fires at load: no tap dispatched, no comparison made — the
+    // fragment's steps never started.
+    expect(result.ok).toBe(false);
+    expect(tapCount).toBe(0);
+    expect(vi.mocked(runSnapshot)).not.toHaveBeenCalled();
+    // Marker, iteration 1, the failing run: line — then the hard stop carries
+    // the trailing step to a skip. Iteration 2 is never reported: it would be
+    // a re-run of a step already reported, not an authored step left undone.
+    expect(attributed(result.steps)).toEqual([
+      "repeat pass smuggler 2 times @0",
+      "repeat pass smuggler iteration 1/2 @1",
+      "run error frag frag.yaml @1",
+      "echo skip smuggler after @0",
+    ]);
+    expect(result.steps[2]?.reason).toBe(
+      'fragment "frag.yaml" contains snapshot "home", and this run: executes inside a repeat ' +
+        "block — a snapshot name maps to one baseline, but the step would compare against it " +
+        "once per iteration, and each iteration's screen legitimately differs; move the " +
+        "snapshot after the block, or out of the fragment"
+    );
+    expect(counts(result)).toEqual({ ok: false, passed: 0, failed: 0, skipped: 0, errored: 1 });
+  });
+
+  it("still composes the same fragment outside any repeat — the fence is the block's, not the fragment's", async () => {
+    currentTree = () => screen([notification()]);
+    await writeFlow("frag", { executionPrerequisite: "", steps: [TAP, SNAPSHOT] });
+    await writeFlow("straight", { executionPrerequisite: "", steps: [RUN_FRAG] });
+
+    const result = await run("straight");
+
+    expect(result.ok).toBe(true);
+    expect(tapCount).toBe(1);
+    expect(vi.mocked(runSnapshot)).toHaveBeenCalledTimes(1);
+    expect(attributed(result.steps)).toEqual([
+      "run pass frag frag.yaml @0",
+      'tap pass frag "Clear notification" @1',
+      'snapshot pass frag "home" @1',
+    ]);
+  }, 15000);
+
+  it("propagates across a fragment chain — the nested fragment's own load refuses", async () => {
+    // repeat → frag1 → frag2(snapshot): frag1 loads clean (no snapshot among
+    // ITS steps) and starts executing; frag2's load fails frag1's run: step,
+    // because inRepeat rode childScope's spread across the first composition
+    // hop. The case a one-hop walk at the repeat boundary would miss.
+    currentTree = () => screen([notification()]);
+    await writeFlow("frag2", { executionPrerequisite: "", steps: [SNAPSHOT] });
+    await writeFlow("frag1", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "frag2.yaml" }],
+    });
+    await writeFlow("nested-smuggler", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "repeat",
+          spec: { mode: "times", times: 2 },
+          steps: [{ kind: "run", flow: "frag1.yaml" }],
+        },
+      ],
+    });
+
+    const result = await run("nested-smuggler");
+
+    expect(result.ok).toBe(false);
+    expect(vi.mocked(runSnapshot)).not.toHaveBeenCalled();
+    expect(attributed(result.steps)).toEqual([
+      "repeat pass nested-smuggler 2 times @0",
+      "repeat pass nested-smuggler iteration 1/2 @1",
+      "run pass frag1 frag1.yaml @1",
+      "run error frag2 frag2.yaml @2",
+    ]);
+    expect(result.steps[3]?.reason).toContain('fragment "frag2.yaml" contains snapshot "home"');
+  });
+
+  it("finds a snapshot behind a when: inside the fragment — the walk descends blocks", async () => {
+    // Same blockSteps descent the parse fence does: a guard around the
+    // snapshot changes nothing about the one-baseline/N-comparisons shape.
+    currentTree = () => screen([notification()]);
+    await writeFlow("guarded-snap", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "when",
+          condition: { kind: "ui", condition: "visible", selector: { text: "X" } },
+          steps: [SNAPSHOT],
+        },
+      ],
+    });
+    await writeFlow("guarded-smuggler", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "repeat",
+          spec: { mode: "times", times: 2 },
+          steps: [{ kind: "run", flow: "guarded-snap.yaml" }],
+        },
+      ],
+    });
+
+    const result = await run("guarded-smuggler");
+
+    expect(result.ok).toBe(false);
+    expect(vi.mocked(runSnapshot)).not.toHaveBeenCalled();
+    expect(result.steps[2]).toMatchObject({ kind: "run", status: "error" });
+    expect(result.steps[2]?.reason).toContain('contains snapshot "home"');
   });
 });
 
