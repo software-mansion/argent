@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
 import {
   nativeDevtoolsRef,
   precheckNativeDevtools,
@@ -53,6 +53,23 @@ Fails if native devtools are not connected or the app is not running.`,
 
     const blocked = await precheckNativeDevtools(api, params.udid, params.bundleId);
     if (blocked) return blocked;
+
+    /**
+     * `{count: 0}` reads as "the screen made no requests", so say when the
+     * truth is "nothing is capturing them", as the hierarchy tools do.
+     */
+    if (!api.isConnected(params.bundleId)) {
+      throw new FailureError(
+        `Native devtools not connected for bundleId: ${params.bundleId}. ` +
+          `No network log is being captured for it.`,
+        {
+          error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_CONNECTED,
+          error_kind: "not_found",
+          failure_area: "tool_server",
+          failure_stage: "native_network_logs_connection",
+        }
+      );
+    }
 
     api.activateNetworkInspection(params.bundleId);
 
