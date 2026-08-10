@@ -233,7 +233,7 @@ rg -n '(udid|device_id)' .argent/flows/<name>.yaml
 
 # 3. Unstable gate values: positional ids, and bare (loose) selectors in a condition
 rg -n '(-selector-\d+|selector-\d+\b)' .argent/flows/<name>.yaml
-rg -n '(await|assert):.*(visible|hidden|exists) *: *["'"'"'A-Za-z0-9]' .argent/flows/<name>.yaml
+rg -n '(visible|hidden|exists) *: *["'"'"'A-Za-z0-9]' .argent/flows/<name>.yaml
 
 # 4. Fixed sleeps, and navigation that skipped the UI
 rg -n '^\s*- wait:' .argent/flows/<name>.yaml
@@ -246,7 +246,7 @@ rg -n 'open-url' .argent/flows/<name>.yaml
 - For each remaining point/raw gesture, require the exception evidence and expected-result check from the **coordinate fallback gate** in [Reliability and recovery](reliability-and-recovery.md).
 - Require zero stored device ids and zero literal credentials.
 - **Reject every positional id in a gate.** Replace with a stable destination-only root or control id.
-- **Rewrite every bare-selector condition into an explicit map.** Grep 3's second pattern lists them (it matches `visible: Save`, not `visible: { text: Save }`).
+- **Rewrite every bare-selector condition into an explicit map.** Grep 3's second pattern lists them: it matches a condition key with a scalar after it — `visible: Save` — and not `visible:` opening a map. It covers `when:` guards too, which take the same loose fallback.
 - **Reject data-derived gate values** — a counter, count, username, timestamp, or any number the app computes. Read every `text:` gate and confirm its value is fixed by the app's code; use an anchored `{ matches: '^…$' }` when the full value matters.
 - **Every `wait:` must justify itself** — a preceding echo and a following `await:`/`assert:` that proves the state. Prefer replacing it with `await: { idle: true }`.
 - **Reject every `open-url` that stands in for a navigation** — restore the source screen and record the tap path live.
