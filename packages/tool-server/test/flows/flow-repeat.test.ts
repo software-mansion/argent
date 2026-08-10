@@ -853,6 +853,41 @@ describe("repeat: until", () => {
     expect(counts(result)).toEqual({ ok: false, passed: 2, failed: 1, skipped: 0, errored: 0 });
   }, 20000);
 
+  it("passes a drain that converges on exactly its max-th iteration", async () => {
+    // Three items, `max: 3` — the bound set to the number of items the author
+    // expects, the cap's common shape. The third tap empties the list, so the
+    // probe that finds the guard met is the same one at which `done >= max`
+    // first holds. Convergence wins: the cap fires only while the guard is
+    // still unmet, which makes `max` an inclusive bound — tested cap-first,
+    // this exact run would flip to the fail above with the same three taps.
+    currentTree = () => (tapCount >= 3 ? screen([]) : screen([notification()]));
+    await writeFlow("exact-max", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "repeat",
+          spec: {
+            mode: "until",
+            until: { kind: "ui", condition: "hidden", selector: { text: "Clear notification" } },
+            max: 3,
+          },
+          steps: [TAP],
+        },
+      ],
+    });
+
+    const result = await run("exact-max");
+
+    expect(result.ok).toBe(true);
+    expect(tapCount).toBe(3);
+    // The converged pass, no `(max)` tag — pinned on `reason` directly, so the
+    // string is the very one the renderers print.
+    expect(result.steps.at(-1)?.status).toBe("pass");
+    expect(result.steps.at(-1)?.reason).toBe('hidden text="Clear notification" after 3 iterations');
+    // Three taps plus the drain's own verdict; nothing failed at the cap.
+    expect(counts(result)).toEqual({ ok: true, passed: 4, failed: 0, skipped: 0, errored: 0 });
+  }, 20000);
+
   it("says `after 1 iteration`, singular, when one pass converges or a max of 1 caps", async () => {
     // The count in a drain's terminal reason can be exactly 1 in both
     // directions: a one-item list converges after a single pass, and `max: 1`
