@@ -220,11 +220,28 @@ describe("repeat: parse/serialize", () => {
     ).toThrow(/max applies only to `until`/i);
   });
 
-  it("rejects a zero, fractional, or oversized count", () => {
+  it("rejects a zero, fractional, oversized, or non-numeric bound at every spelling", () => {
+    // The bound check is reached from three sites — the bare-integer sugar,
+    // `{ times: N }`, and a drain's `max: N` — so each spelling is pinned on
+    // its own, against the message naming its own field. `max` is the drain's
+    // only exit besides convergence: unvalidated, `max: 0` or a non-number is
+    // an uncapped run, not a parse error.
     for (const bad of ["0", "1.5", "101"]) {
       expect(() => parseFlow(`steps:\n  - repeat: ${bad}\n    steps: [{ tap: A }]\n`)).toThrow(
-        /must be a literal integer between 1 and 100/i
+        /repeat\.times must be a literal integer between 1 and 100/i
       );
+    }
+    for (const bad of ["0", "1.5", "1000000000", "ab"]) {
+      expect(() =>
+        parseFlow(`steps:\n  - repeat: { times: ${bad} }\n    steps: [{ tap: A }]\n`)
+      ).toThrow(/repeat\.times must be a literal integer between 1 and 100/i);
+    }
+    for (const bad of ["0", "1.5", "101", "ab"]) {
+      expect(() =>
+        parseFlow(
+          `steps:\n  - repeat: { until: { hidden: Toast }, max: ${bad} }\n    steps: [{ tap: A }]\n`
+        )
+      ).toThrow(/repeat\.max must be a literal integer between 1 and 100/i);
     }
     // A quoted count is neither the integer sugar nor a bound map — it fails on
     // the shape, before any range check.
