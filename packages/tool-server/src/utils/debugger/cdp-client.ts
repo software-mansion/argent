@@ -250,12 +250,22 @@ export class CDPClient {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(
-          new FailureError(`CDP request ${method} (id=${id}) timed out`, {
-            error_code: FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
-            failure_stage: "debugger_cdp_send",
-            failure_area: "tool_server",
-            error_kind: "timeout",
-          })
+          // The message carries its own recovery guidance so skills don't have
+          // to re-explain this state: the runtime is reachable but not
+          // answering, which agents otherwise read as a transient worth
+          // retry-looping (each loop iteration waits out this full timeout).
+          new FailureError(
+            `CDP request ${method} (id=${id}) timed out — the runtime accepted the ` +
+              `connection but did not answer; it may be frozen, or paused at a breakpoint. ` +
+              `debugger-status can still report "connected" in this state (the socket is open). ` +
+              `Do not retry in a loop — restart the app, then reconnect and retry once.`,
+            {
+              error_code: FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
+              failure_stage: "debugger_cdp_send",
+              failure_area: "tool_server",
+              error_kind: "timeout",
+            }
+          )
         );
       }, timeout);
 
