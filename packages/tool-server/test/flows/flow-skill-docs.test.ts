@@ -124,7 +124,11 @@ describe("create-flow idle docs", () => {
     ];
     expect(spelled, `no spelling for ${listed} warnings`).toBeDefined();
     for (const file of WARNING_COUNT_CITATIONS) {
-      const quoted = readFileSync(file, "utf8").match(/(\w+) (?:different )?warnings/);
+      // Anchored on the linked citation, not on any "… warnings" phrase: these
+      // files also say things like "Read this file for selector warnings".
+      const quoted = readFileSync(file, "utf8").match(
+        /\[(?:which of the )?(\w+) (?:different )?warnings\]\(/
+      );
       expect(quoted, `${file} no longer cites the idle warning count`).not.toBeNull();
       expect(quoted![1], file).toBe(spelled);
     }
