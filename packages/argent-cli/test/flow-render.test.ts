@@ -281,17 +281,51 @@ describe("flow report rendering", () => {
     expect(lines[2]!.indexOf("repeat")).toBe(lines[3]!.indexOf("tap"));
   });
 
+  it("keeps a marker's label column aligned once numbering reaches three digits", () => {
+    // A marker's blank spans the width of the NEXT number to be issued, so a
+    // repeat block opening after step 99 lines up with its 3-digit body, not
+    // the 2-digit step it trails. `repeat: 100` is legal and re-reports its
+    // body each pass, so 100+ numbered steps is an easy report to produce.
+    const steps: StepReport[] = [];
+    for (let i = 0; i < 99; i++) {
+      steps.push({ index: i, kind: "tap", status: "pass", target: '"Pad"' });
+    }
+    steps.push({ index: 99, kind: "repeat", status: "pass", target: "2 times", structural: true });
+    steps.push({
+      index: 100,
+      kind: "repeat",
+      status: "pass",
+      target: "iteration 1/2",
+      depth: 1,
+      structural: true,
+    });
+    steps.push({ index: 101, kind: "tap", status: "pass", target: '"Clear"', depth: 1 });
+    steps.push({ index: 102, kind: "tap", status: "pass", target: '"Done"' });
+
+    const lines = renderReport(mkReport(steps)).split("\n");
+    // lines[0] is the header; [1..99] are steps 1–99, [100] the block marker,
+    // [101] the iteration marker, [102] step 100 (depth 1), [103] step 101.
+    expect(lines[99]).toBe('  ✓ 99 tap "Pad"');
+    expect(lines[100]).toBe("  ✓     repeat 2 times");
+    expect(lines[102]).toBe('  ✓ 100   tap "Clear"');
+    // Each marker's label shares a column with the 3-digit numbered line at
+    // its own depth — the alignment the block shape depends on.
+    expect(lines[100]!.indexOf("repeat")).toBe(lines[103]!.indexOf("tap"));
+    expect(lines[101]!.indexOf("repeat")).toBe(lines[102]!.indexOf("tap"));
+  });
+
   it("live step lines match the buffered renderer's for a repeat block", () => {
     const report = mkReport(REPEAT_STEPS);
     const buffered = renderReport(report).split("\n");
 
-    // Reproduce the live loop: structural markers print unnumbered, so the
-    // live sequence can't drift from the buffered one.
+    // Reproduce the live loop: structural markers print unnumbered but carry
+    // the running count (which sizes their blank), so the live sequence can't
+    // drift from the buffered one.
     const live: string[] = [];
     let n = 0;
     for (const s of report.steps) {
       if (s.structural === true) {
-        live.push(renderStepLine(s, undefined, report.flow));
+        live.push(renderStepLine(s, { unnumbered: n }, report.flow));
         continue;
       }
       n++;

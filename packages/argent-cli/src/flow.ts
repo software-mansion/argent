@@ -293,8 +293,9 @@ export function renderEchoLine(s: StepReport): string | undefined {
 /**
  * Whether a line marks block structure rather than a step that ran — a
  * `repeat:` block's opening and per-iteration markers. Such lines print but
- * take no step number (pass `undefined` to renderStepLine), keeping the CLI's
- * sequence in step with the counts the tool-server sends, which exclude them.
+ * take no step number (pass `{ unnumbered }` to renderStepLine), keeping the
+ * CLI's sequence in step with the counts the tool-server sends, which exclude
+ * them.
  * Untrusted wire data, so only a literal `true` counts: any other value leaves
  * the line numbered, which is exactly how a pre-structural server's report
  * reads today.
@@ -304,18 +305,36 @@ function isStructural(s: StepReport): boolean {
 }
 
 /**
- * A step line. `n` is the step's number, or undefined for a structural marker
- * — which keeps the glyph, the depth indent and every column, and simply
- * leaves the number blank: the block/iteration shape IS what these lines
- * convey, so hiding them (or renumbering around them) would lose it.
+ * A step line. `n` is the step's number, or `{ unnumbered: count }` for a
+ * structural marker — which keeps the glyph, the depth indent and every
+ * column, and leaves the number blank: the block/iteration shape IS what
+ * these lines convey, so hiding them (or renumbering around them) would lose
+ * it. `count` is how many step numbers have been issued so far, which sizes
+ * the blank to the numbers printed around it so the label column holds past
+ * step 99.
  */
-export function renderStepLine(s: StepReport, n: number | undefined, topFlow: string): string {
+export function renderStepLine(
+  s: StepReport,
+  n: number | { unnumbered: number },
+  topFlow: string
+): string {
   const where = s.flow && s.flow !== topFlow ? ` [${s.flow}]` : "";
   const what = s.tool ?? s.target;
   const label = what ? `${s.kind} ${what}` : s.kind;
   const reason = s.reason ? ` — ${s.reason}` : "";
   const glyph = s.status === "pass" && s.warning ? "⚠" : STATUS_GLYPH[s.status];
-  const num = n === undefined ? "  " : String(n).padStart(2);
+  // A marker's blank must span the numbers around it or the label column
+  // breaks once numbering reaches three digits. "Around" leans forward: a
+  // marker introduces the block body BELOW it, so the blank takes the width
+  // of the next number to be issued (`unnumbered + 1`). At the 99→100
+  // boundary that width is 3 — the marker lines up with the 3-digit body it
+  // opens, not the 2-digit step it happens to trail, and it cannot do both.
+  // The floor of 2 mirrors the padStart(2), so reports that never pass 99
+  // render byte-identically to before.
+  const num =
+    typeof n === "number"
+      ? String(n).padStart(2)
+      : " ".repeat(Math.max(2, String(n.unnumbered + 1).length));
   return `  ${glyph} ${num} ${stepIndent(s.depth)}${label}${where}${reason}`;
 }
 
@@ -845,7 +864,7 @@ export function renderReport(report: FlowReport): string {
     // sequence still counts what the summary counts. Nothing hangs under such
     // a line — warnings and artifacts belong to steps that ran.
     if (isStructural(s)) {
-      lines.push(renderStepLine(s, undefined, report.flow));
+      lines.push(renderStepLine(s, { unnumbered: n }, report.flow));
       continue;
     }
     n++;
@@ -1524,9 +1543,10 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
       return;
     }
     // Block structure: printed as it streams, but unnumbered — the live
-    // sequence has to end up matching the buffered report's.
+    // sequence has to end up matching the buffered report's, blank width
+    // included, so the marker carries the same count renderReport's would.
     if (isStructural(s)) {
-      console.log(renderStepLine(s, undefined, flowName));
+      console.log(renderStepLine(s, { unnumbered: liveIndex }, flowName));
       return;
     }
     liveIndex++;
