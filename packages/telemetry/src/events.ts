@@ -183,6 +183,7 @@ export const DEBUGGER_NOT_CONNECTED_REASONS = [
   "no_app_connected",
   "device_mismatch",
   "cdp_unreachable",
+  "runtime_unresponsive",
   "stale_connection",
   "reconnecting",
 ] as const;
@@ -194,11 +195,11 @@ export type DebuggerToolOutcome = (typeof DEBUGGER_TOOL_OUTCOMES)[number];
 /**
  * Emitted by debugger-status / debugger-log-registry: exactly once whenever the
  * tool returns a result, never on a thrown failure (unclassified faults, zod
- * rejects, and capability gates still emit tool:fail only).
- * Compensates for those tools no longer emitting tool:fail on not-connected
- * preconditions: outcome carries the coded reason (never error text), and
- * tool_invocation_id joins 1:1 against the tool:invoke / tool:complete pair
- * (which carry ai_client and duration).
+ * rejects, and capability gates still emit tool:fail only). Not-connected
+ * preconditions emit no tool:fail — this event is where they are counted:
+ * outcome carries the coded reason (never error text), and tool_invocation_id
+ * joins 1:1 against the tool:invoke / tool:complete pair (which carry
+ * ai_client and duration).
  */
 export interface DebuggerToolOutcomeProps {
   tool: "debugger-status" | "debugger-log-registry";

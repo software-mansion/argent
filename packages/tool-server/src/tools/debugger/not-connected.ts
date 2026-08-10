@@ -28,6 +28,13 @@ export interface DebuggerNotConnectedResult {
   guidance: string;
 }
 
+/**
+ * Guidance strings for Metro-backed targets (iOS / Android / Vega). Chromium
+ * ids get platform-corrected overrides below — on Chromium, launch-app cannot
+ * start anything (its handler is a documented no-op) and it re-resolves the
+ * very CDP service that just failed, so pointing an agent at it from a
+ * cdp_unreachable result would manufacture a guaranteed second failure.
+ */
 const GUIDANCE: Record<DebuggerNotConnectedReason, string> = {
   metro_not_running:
     "Metro is not running on this port. Do not retry in a loop — the result will not change " +
@@ -43,6 +50,11 @@ const GUIDANCE: Record<DebuggerNotConnectedReason, string> = {
   cdp_unreachable:
     "The runtime's CDP endpoint could not be reached. Verify the app is running " +
     "(launch-app), then call debugger-connect and retry once.",
+  runtime_unresponsive:
+    "The runtime accepted the debugger connection but did not answer within the " +
+    "timeout — it is likely frozen, or paused at a breakpoint. Do not retry in a " +
+    "loop (each attempt waits out the full timeout). Check the app; if it is hung, " +
+    "restart it (restart-app), then retry once.",
   stale_connection:
     "The cached debugger connection went stale; it has been discarded. Restart the app " +
     "(restart-app) if it is not running, then call debugger-connect — the next call " +
@@ -60,7 +72,17 @@ const NOT_CONNECTED_CODE_MAP: Record<string, DebuggerNotConnectedReason> = {
   [FAILURE_CODES.DEBUGGER_CDP_SOCKET_CLOSED_BEFORE_OPEN]: "cdp_unreachable",
   [FAILURE_CODES.DEBUGGER_CDP_NOT_CONNECTED]: "cdp_unreachable",
   [FAILURE_CODES.DEBUGGER_CDP_CONNECTION_CLOSED]: "cdp_unreachable",
+  // Reachable from the connect pipeline's enable/binding sends when the target
+  // accepts the socket but its JS runtime never answers (frozen, or paused at a
+  // breakpoint). Post-connect hangs are different: an OPEN socket still reports
+  // status "connected" (see the socket-state gate comment in debugger-status).
+  [FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT]: "runtime_unresponsive",
   [FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE]: "cdp_unreachable",
+  // "Reached but not CDP / malformed answer" — a non-CDP server squatting the
+  // debug port, an HTTP error status, or a non-JSON body. Same precondition
+  // class as the Metro arm's non-Metro-port-occupant (detail names what
+  // actually answered), so it must not escape as a thrown tool failure.
+  [FAILURE_CODES.CHROMIUM_CDP_INVALID_RESPONSE]: "cdp_unreachable",
   [FAILURE_CODES.CHROMIUM_CDP_NO_PAGE_TARGET]: "cdp_unreachable",
   [FAILURE_CODES.REGISTRY_SERVICE_TERMINATING]: "reconnecting",
 };
@@ -75,6 +97,23 @@ export function classifyNotConnected(err: unknown): DebuggerNotConnectedReason |
   return code ? NOT_CONNECTED_CODE_MAP[code] : undefined;
 }
 
+/**
+ * Reason guidance that must read differently on a Chromium target. Keyed
+ * sparsely: reasons without an override fall back to GUIDANCE.
+ */
+const CHROMIUM_GUIDANCE: Partial<Record<DebuggerNotConnectedReason, string>> = {
+  cdp_unreachable:
+    "The app's CDP endpoint could not be reached (or did not answer like CDP — see " +
+    "detail). launch-app cannot start a Chromium app; make sure the app is running " +
+    "with --remote-debugging-port (for an Electron app, boot-device with " +
+    "electronAppPath relaunches it), then retry once.",
+  runtime_unresponsive:
+    "The app accepted the debugger connection but did not answer within the " +
+    "timeout — it is likely frozen. Do not retry in a loop (each attempt waits out " +
+    "the full timeout). Restart the app (for an Electron app, boot-device with " +
+    "electronAppPath and force: true), then retry once.",
+};
+
 export function buildNotConnected(
   reason: DebuggerNotConnectedReason,
   err: unknown,
@@ -87,7 +126,7 @@ export function buildNotConnected(
     ...(isChromium ? {} : { port: params.port }),
     reason,
     detail: err instanceof Error ? err.message : String(err),
-    guidance: GUIDANCE[reason],
+    guidance: (isChromium ? CHROMIUM_GUIDANCE[reason] : undefined) ?? GUIDANCE[reason],
   };
 }
 

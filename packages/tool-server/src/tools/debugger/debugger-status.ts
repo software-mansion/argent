@@ -50,7 +50,7 @@ export function createDebuggerStatusTool(
     description: `Get JS runtime debugger connection status and diagnostic info.
 Use when you need to verify connectivity before using other debugger tools. Never fails when the runtime is simply unreachable — it returns a discriminated result instead:
 - { status: "connected", ... } with port, projectRoot (empty on Chromium and on legacy Metro, e.g. Vega), deviceName, appName, logicalDeviceId (absent on Vega), isNewDebugger (false on the legacy inspector), connected flag, loadedScripts count, and sourceMapReady (always true — waits for pending source maps before returning; no-op on Chromium).
-- { status: "not_connected", connected: false, reason, detail, guidance } (port omitted on Chromium) when Metro is not running (reason "metro_not_running"), no app is attached ("no_app_connected"), the device_id matches no target ("device_mismatch"), the CDP endpoint is unreachable ("cdp_unreachable"), the cached connection went stale ("stale_connection"), or a reconnect is in flight ("reconnecting"). Follow the guidance field — do not retry in a loop.`,
+- { status: "not_connected", connected: false, reason, detail, guidance } (port omitted on Chromium) when Metro is not running (reason "metro_not_running"), no app is attached ("no_app_connected"), the device_id matches no target ("device_mismatch"), the CDP endpoint is unreachable or answered malformed ("cdp_unreachable"), the runtime accepted the connection but never answered ("runtime_unresponsive"), the cached connection went stale ("stale_connection"), or a reconnect is in flight ("reconnecting"). Follow the guidance field — do not retry in a loop.`,
     zodSchema,
     capability: DEBUGGER_TOOL_CAPABILITY,
     // Resolved manually in execute so a not-connected precondition becomes a
@@ -78,21 +78,28 @@ Use when you need to verify connectivity before using other debugger tools. Neve
             return result;
           }
           // Metro path owns its CDPClient: discard the stale node so the next
-          // call reconnects fresh. Tradeoff acknowledged: dispose closes the
-          // LogFileWriter, so any logs surviving in the suppressed-close window
-          // are lost — read debugger-log-registry BEFORE status if post-crash
-          // logs matter. The concurrent terminated cascade may win the race and
-          // remove the node first; that end state is what we wanted, so a
-          // failed dispose is absorbed.
+          // call reconnects fresh. This branch fires when the WebSocket is
+          // CLOSING but the close event has not dispatched yet (the terminated
+          // cascade otherwise removes the node first). Tradeoff acknowledged:
+          // dispose closes the LogFileWriter, which DELETES the captured log
+          // file from disk — including a path a prior debugger-log-registry
+          // call returned. That loss is the price of a fresh reconnect;
+          // debugger-log-registry itself never triggers it (no socket gate
+          // there, see its comment). The concurrent terminated cascade may win
+          // the race and remove the node first; that end state is what we
+          // wanted, so a failed dispose is absorbed.
+          //
+          // Track BEFORE disposing: dispose forgets the device alias, and the
+          // outcome's platform classifies through it — tracking after would
+          // misreport a forwarded logicalDeviceId's platform (shape fallback).
+          trackDebuggerOutcome("debugger-status", "stale_connection", params, ctx);
           const ref = debuggerServiceRef(params);
           await registry.disposeService(typeof ref === "string" ? ref : ref.urn).catch(() => {});
-          const result = buildNotConnected(
+          return buildNotConnected(
             "stale_connection",
             new Error("Cached debugger connection is no longer open"),
             params
           );
-          trackDebuggerOutcome("debugger-status", "stale_connection", params, ctx);
-          return result;
         }
         trackDebuggerOutcome("debugger-status", "connected", params, ctx);
         return {

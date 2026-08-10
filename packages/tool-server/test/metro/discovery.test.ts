@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { getFailureSignal, FAILURE_CODES } from "@argent/registry";
 import { discoverMetro } from "../../src/utils/debugger/discovery";
 
 const mockFetch = vi.fn();
@@ -68,6 +69,45 @@ describe("discoverMetro", () => {
     const info = await discoverMetro(8081);
     expect(info.projectRoot).toBe("");
     expect(info.targets).toHaveLength(1);
+  });
+
+  // Metro dying BETWEEN probes: every network read in the sequence must land
+  // on the same classified failure as the initial connect — an unclassified
+  // fetch/stream error here surfaces as an opaque 500 that debugger-status /
+  // debugger-log-registry cannot map to a structured result.
+  describe("mid-sequence connection loss classifies as METRO_NOT_RUNNING", () => {
+    it("socket dies while reading the /status body", async () => {
+      const dyingBody = new ReadableStream({
+        start(controller) {
+          controller.error(new TypeError("terminated: other side closed"));
+        },
+      });
+      mockFetch.mockResolvedValueOnce(new Response(dyingBody));
+      let thrown: unknown;
+      try {
+        await discoverMetro(8081);
+      } catch (err) {
+        thrown = err;
+      }
+      expect((thrown as Error).message).toMatch(/^Metro at port 8081 is not running \(got: /);
+      expect((thrown as Error).message).toContain("Do not retry in a loop");
+      expect(getFailureSignal(thrown)?.error_code).toBe(FAILURE_CODES.DEBUGGER_METRO_NOT_RUNNING);
+    });
+
+    it("socket dies on the /json/list fetch", async () => {
+      mockFetch
+        .mockResolvedValueOnce(statusResponse("/Users/dev/myapp"))
+        .mockRejectedValueOnce(new TypeError("fetch failed"));
+      let thrown: unknown;
+      try {
+        await discoverMetro(8081);
+      } catch (err) {
+        thrown = err;
+      }
+      expect((thrown as Error).message).toMatch(/^Metro at port 8081 is not running \(got: /);
+      expect((thrown as Error).message).toContain("Do not retry in a loop");
+      expect(getFailureSignal(thrown)?.error_code).toBe(FAILURE_CODES.DEBUGGER_METRO_NOT_RUNNING);
+    });
   });
 
   it("throws when no targets are found", async () => {

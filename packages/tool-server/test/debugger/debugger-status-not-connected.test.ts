@@ -8,6 +8,7 @@ import {
   TypedEventEmitter,
   getFailureSignal,
   FAILURE_CODES,
+  FailureError,
   type ServiceBlueprint,
   type ServiceEvents,
 } from "@argent/registry";
@@ -32,6 +33,7 @@ import {
 } from "../../src/blueprints/chromium-js-runtime-debugger";
 import { resolveDevice } from "../../src/utils/device-info";
 import { createDebuggerStatusTool } from "../../src/tools/debugger/debugger-status";
+import { resetDeviceAliases } from "../../src/utils/debugger/device-alias";
 import type { DebuggerNotConnectedResult } from "../../src/tools/debugger/not-connected";
 import { freePort, startMockMetroCdp } from "./metro-cdp-harness";
 
@@ -163,6 +165,7 @@ afterEach(async () => {
   while (cleanups.length) await cleanups.pop()!();
   mockTrack.mockClear();
   vi.restoreAllMocks();
+  resetDeviceAliases();
 });
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -437,6 +440,112 @@ describe("debugger-status not-connected results", () => {
       "connected",
       "reconnecting",
     ]);
+  });
+
+  it("(j) runtime_unresponsive: a frozen runtime timing out during connect maps, not throws", async () => {
+    // A target that accepts the WebSocket but whose JS runtime never answers
+    // makes the connect pipeline's un-caught enable sends reject with
+    // DEBUGGER_CDP_REQUEST_TIMEOUT (cdp-client.ts). The tool must return the
+    // structured result — before this mapping existed, the most-likely state a
+    // diagnostic tool gets reached for produced an opaque 500 after the full
+    // CDP timeout.
+    const timeoutBlueprint: ServiceBlueprint<Record<string, never>, string> = {
+      namespace: JS_RUNTIME_DEBUGGER_NAMESPACE,
+      getURN: (payload) => `${JS_RUNTIME_DEBUGGER_NAMESPACE}:${payload}`,
+      factory: async () => {
+        throw new FailureError("CDP request Runtime.enable (id=3) timed out", {
+          error_code: FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
+          failure_stage: "debugger_cdp_send",
+          failure_area: "tool_server",
+          error_kind: "timeout",
+        });
+      },
+    };
+    const setup = makeSetup(timeoutBlueprint as ServiceBlueprint);
+    cleanups.push(() => setup.registry.dispose());
+
+    const result = (await setup.invoke({
+      port: 8081,
+      device_id: "mock-device",
+    })) as DebuggerNotConnectedResult;
+
+    expect(result.status).toBe("not_connected");
+    expect(result.reason).toBe("runtime_unresponsive");
+    expect(result.detail).toContain("timed out");
+    expect(result.guidance).toContain("Do not retry in a loop");
+    expect(setup.failed).toEqual([]);
+    expect(outcomeCalls()).toHaveLength(1);
+    expect(outcomeCalls()[0][1]).toMatchObject({ outcome: "runtime_unresponsive" });
+  });
+
+  it("(k) chromium non-CDP port occupant → cdp_unreachable, mirroring the Metro arm", async () => {
+    // A plain HTTP server squatting the debug port answers /json/version with
+    // 404 → CHROMIUM_CDP_INVALID_RESPONSE. Same precondition class as a
+    // non-Metro port occupant (which maps to metro_not_running on the Metro
+    // arm) — must be a structured result, not an HTTP 500.
+    const server = http.createServer((_req, res) => {
+      res.statusCode = 404;
+      res.end("not cdp");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    const port = (server.address() as AddressInfo).port;
+    const setup = makeSetup(chromiumCdpBlueprint, chromiumJsRuntimeDebuggerBlueprint);
+    cleanups.push(async () => {
+      await setup.registry.dispose();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+
+    const result = (await setup.invoke({
+      port: 8081,
+      device_id: `chromium-cdp-${port}`,
+    })) as DebuggerNotConnectedResult;
+
+    expect(result.status).toBe("not_connected");
+    expect(result.reason).toBe("cdp_unreachable");
+    expect("port" in result).toBe(false);
+    expect(result.detail).toContain("HTTP 404");
+    // Platform-correct guidance: launch-app is a no-op on Chromium and would
+    // re-resolve the failing service — the guidance must not send agents there.
+    expect(result.guidance).not.toMatch(/\(launch-app\)/);
+    expect(result.guidance).toContain("--remote-debugging-port");
+    expect(setup.failed).toEqual([]);
+    expect(outcomeCalls()[0][1]).toMatchObject({ outcome: "cdp_unreachable" });
+  });
+
+  it("(l) stale_connection outcome classifies platform BEFORE dispose forgets the alias", async () => {
+    const LOGICAL = "8b9223b1392be193fa9058e0cef5cefb2bddeb68";
+    const UDID = "BE1DCAD9-43CE-40C4-B8B2-9CB30BC03227";
+    const metro = await startMockMetroCdp({ logicalDeviceId: LOGICAL });
+    const setup = makeSetup(jsRuntimeDebuggerBlueprint);
+    cleanups.push(async () => {
+      await setup.registry.dispose();
+      await metro.close();
+    });
+
+    // Connect with the stable id; the factory learns LOGICAL → UDID.
+    const first = (await setup.invoke({ port: metro.port, device_id: UDID })) as Record<
+      string,
+      unknown
+    >;
+    expect(first.status).toBe("connected");
+    expect(first.logicalDeviceId).toBe(LOGICAL);
+
+    // Forward the logicalDeviceId (what the skill instructs) and hit the
+    // stale gate: the branch disposes the node, and dispose forgets the alias
+    // — so tracking after the dispose would shape-classify the 40-hex handle
+    // as android. The outcome must still say ios.
+    const urn = `${JS_RUNTIME_DEBUGGER_NAMESPACE}:${metro.port}:${UDID}`;
+    const api = await setup.registry.resolveService<JsRuntimeDebuggerApi>(urn);
+    vi.spyOn(api.cdp, "isConnected").mockReturnValue(false);
+
+    const stale = (await setup.invoke({
+      port: metro.port,
+      device_id: LOGICAL,
+    })) as DebuggerNotConnectedResult;
+    expect(stale.reason).toBe("stale_connection");
+
+    const staleOutcome = outcomeCalls().at(-1)![1];
+    expect(staleOutcome).toMatchObject({ outcome: "stale_connection", platform: "ios" });
   });
 
   it("(h) terminating window: a resolve racing an in-flight teardown maps to reconnecting", async () => {

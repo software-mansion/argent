@@ -26,7 +26,10 @@ export interface MockMetroCdp {
  * a scriptParsed; Runtime.evaluate answers a string so the addBinding probe
  * sees the binding as installed).
  */
-export async function startMockMetroCdp(): Promise<MockMetroCdp> {
+export async function startMockMetroCdp(opts?: {
+  /** Advertise this logicalDeviceId on the single target (default: none). */
+  logicalDeviceId?: string;
+}): Promise<MockMetroCdp> {
   let port = 0;
   const server = http.createServer((req, res) => {
     if (req.url === "/status") {
@@ -44,7 +47,10 @@ export async function startMockMetroCdp(): Promise<MockMetroCdp> {
             description: "[C++ connection]",
             webSocketDebuggerUrl: `ws://localhost:${port}/inspector/debug?device=0&page=1`,
             deviceName: "MockDevice",
-            reactNative: { capabilities: { prefersFuseboxFrontend: true } },
+            reactNative: {
+              capabilities: { prefersFuseboxFrontend: true },
+              ...(opts?.logicalDeviceId ? { logicalDeviceId: opts.logicalDeviceId } : {}),
+            },
           },
         ])
       );
