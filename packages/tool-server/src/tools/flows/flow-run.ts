@@ -183,7 +183,8 @@ export interface StepReport {
    * Machine-readable explanation of the outcome. Always set when the step did
    * not pass; also set on some passing reports whose result is self-narrating —
    * the `when:` guard marker (`condition met (…)`), snapshot passes (diff
-   * percentage, baseline written/updated), and a chromium `launch` whose
+   * percentage, baseline written/updated), a converged `repeat: { until }`
+   * drain (`<condition> after N iterations`), and a chromium `launch` whose
    * instance the runner booted and owns (naming it; a mid-run boot appends
    * `— run moved off <id>`, or `— retired <id> (same app relaunched)` when the
    * instance it left was the one killed — and `— run moved off <id>, retired
