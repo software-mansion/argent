@@ -4,8 +4,10 @@ import { jsRuntimeDebuggerBlueprint } from "../../src/blueprints/js-runtime-debu
 import { chromiumJsRuntimeDebuggerBlueprint } from "../../src/blueprints/chromium-js-runtime-debugger";
 
 /**
- * Truth tables for `recoverable()` on both debugger blueprints — the predicate
- * the registry's dispose-and-retry-once self-heal consults for a RUNNING node.
+ * Truth table for `recoverable()` on the Metro debugger blueprint — the
+ * predicate the registry's dispose-and-retry-once self-heal consults for a
+ * RUNNING node — plus a pin that the Chromium wrapper deliberately declares
+ * NO recoverable() at all.
  *
  * Metro (JsRuntimeDebugger): ONLY the send()-guard rejection (NOT_CONNECTED) is
  * recoverable — the one window where the node can still be RUNNING and the
@@ -14,9 +16,11 @@ import { chromiumJsRuntimeDebuggerBlueprint } from "../../src/blueprints/chromiu
  * then anyway), as is REQUEST_TIMEOUT (request may have taken effect; a hung
  * runtime is not fixed by reconnecting).
  *
- * Chromium: NOT_CONNECTED and CONNECTION_CLOSED — the tab-switch reconnect
- * window, where CDPClient.reconnect() rejects in-flight requests while both
- * nodes stay RUNNING and the discarded tab's side effects are moot.
+ * Chromium: recovery would dispose the wrapper node, whose dispose closes the
+ * LogFileWriter and thereby UNLINKS the session's captured console log — and
+ * it buys nothing, because a tab-switch reconnect re-points the same client
+ * object so the cached node heals for the next call without any dispose. See
+ * the blueprint comment.
  */
 
 function coded(
@@ -32,12 +36,8 @@ function coded(
 }
 
 const RECOVERABLE_METRO = [FAILURE_CODES.DEBUGGER_CDP_NOT_CONNECTED];
-const RECOVERABLE_CHROMIUM = [
-  FAILURE_CODES.DEBUGGER_CDP_NOT_CONNECTED,
-  FAILURE_CODES.DEBUGGER_CDP_CONNECTION_CLOSED,
-];
 
-// Codes that must be non-recoverable on BOTH blueprints.
+// Codes that must be non-recoverable on the Metro blueprint.
 const NEVER_RECOVERABLE = [
   FAILURE_CODES.DEBUGGER_METRO_NOT_RUNNING,
   FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS,
@@ -66,48 +66,31 @@ describe("jsRuntimeDebuggerBlueprint.recoverable (Metro)", () => {
   });
 });
 
-describe("chromiumJsRuntimeDebuggerBlueprint.recoverable", () => {
-  it.each(RECOVERABLE_CHROMIUM)("returns true for %s", (code) => {
-    expect(chromiumJsRuntimeDebuggerBlueprint.recoverable!(coded(code))).toBe(true);
-  });
-
-  it.each(NEVER_RECOVERABLE)("returns false for %s", (code) => {
-    expect(chromiumJsRuntimeDebuggerBlueprint.recoverable!(coded(code))).toBe(false);
-  });
-
-  it("best-effort semantics: a retry re-failing with NOT_CONNECTED is itself still recoverable-coded", () => {
-    // The CONNECTION_CLOSED rejection fires at the START of reconnect(), so an
-    // immediate registry retry can land before the new handshake completes and
-    // re-fail with a classified NOT_CONNECTED. That re-failure is bounded (the
-    // registry retries exactly once), but the code stays in the recoverable set
-    // so the failure the agent sees is precise, not unclassified.
-    expect(
-      chromiumJsRuntimeDebuggerBlueprint.recoverable!(
-        coded(FAILURE_CODES.DEBUGGER_CDP_NOT_CONNECTED)
-      )
-    ).toBe(true);
+describe("chromiumJsRuntimeDebuggerBlueprint has NO recovery", () => {
+  it("declares no recoverable() — the registry must never dispose-and-retry this node", () => {
+    // Load-bearing absence: Registry._recoverFailedServices treats a missing
+    // recoverable() as never-recover, so the wrapper node is never disposed on
+    // a failing call — which is what keeps the captured console log file on
+    // disk (dispose → LogFileWriter.close() → fs.unlinkSync). Reintroducing a
+    // recoverable() here re-opens the log-deletion hole this pin guards.
+    expect(chromiumJsRuntimeDebuggerBlueprint.recoverable).toBeUndefined();
   });
 });
 
-describe("recoverable() with non-FailureError inputs (both blueprints)", () => {
-  const blueprints = [
-    ["metro", jsRuntimeDebuggerBlueprint],
-    ["chromium", chromiumJsRuntimeDebuggerBlueprint],
-  ] as const;
-
-  it.each(blueprints)("%s: plain Error is not recoverable", (_name, bp) => {
-    expect(bp.recoverable!(new Error("socket hang up"))).toBe(false);
+describe("recoverable() with non-FailureError inputs (Metro)", () => {
+  it("plain Error is not recoverable", () => {
+    expect(jsRuntimeDebuggerBlueprint.recoverable!(new Error("socket hang up"))).toBe(false);
   });
 
-  it.each(blueprints)("%s: a bare string does not throw and is not recoverable", (_name, bp) => {
-    expect(bp.recoverable!("socket hang up")).toBe(false);
+  it("a bare string does not throw and is not recoverable", () => {
+    expect(jsRuntimeDebuggerBlueprint.recoverable!("socket hang up")).toBe(false);
   });
 
-  it.each(blueprints)("%s: undefined does not throw and is not recoverable", (_name, bp) => {
-    expect(bp.recoverable!(undefined)).toBe(false);
+  it("undefined does not throw and is not recoverable", () => {
+    expect(jsRuntimeDebuggerBlueprint.recoverable!(undefined)).toBe(false);
   });
 
-  it.each(blueprints)("%s: null does not throw and is not recoverable", (_name, bp) => {
-    expect(bp.recoverable!(null)).toBe(false);
+  it("null does not throw and is not recoverable", () => {
+    expect(jsRuntimeDebuggerBlueprint.recoverable!(null)).toBe(false);
   });
 });

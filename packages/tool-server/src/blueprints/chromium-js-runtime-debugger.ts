@@ -1,9 +1,7 @@
 import { WebSocketServer, WebSocket } from "ws";
 import * as http from "node:http";
 import {
-  FAILURE_CODES,
   TypedEventEmitter,
-  getFailureSignal,
   type DeviceInfo,
   type ServiceBlueprint,
   type ServiceEvents,
@@ -143,25 +141,22 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
     return { chromium: `${CHROMIUM_CDP_NAMESPACE}:${_payload}` };
   },
 
-  // Consulted by the registry's dispose-and-retry-once self-heal (RUNNING nodes
-  // only). The one production window where a call fails on this blueprint while
-  // both it and the ChromiumCdp dependency stay RUNNING is a tab switch:
-  // CDPClient.reconnect() rejects in-flight requests with CONNECTION_CLOSED (and
-  // late sends with NOT_CONNECTED) while suppressing the `disconnected` event,
-  // and the same client object comes back alive on the new tab. Retrying re-runs
-  // the tool against the (re)opening socket — side effects on the discarded tab
-  // are moot. Best-effort: an immediate retry can still land before the new
-  // handshake completes and re-fail with a classified NOT_CONNECTED. A genuinely
-  // dead Chromium socket instead fires ChromiumCdp's own terminated event, whose
-  // teardown cascades into this dependent — the node leaves RUNNING and the next
-  // call re-resolves fresh, no recovery involved.
-  recoverable(error: unknown): boolean {
-    const code = getFailureSignal(error)?.error_code;
-    return (
-      code === FAILURE_CODES.DEBUGGER_CDP_NOT_CONNECTED ||
-      code === FAILURE_CODES.DEBUGGER_CDP_CONNECTION_CLOSED
-    );
-  },
+  // Deliberately NO recoverable() here. The registry's self-heal disposes the
+  // recovering node before it retries, and this blueprint's dispose closes the
+  // LogFileWriter — which UNLINKS the session's captured console log from disk
+  // (log-file-writer.ts) — so a recovery pass would destroy the logs whether or
+  // not the retry then succeeds. It would also buy nothing: the one window
+  // where a call fails while this node and its ChromiumCdp dependency stay
+  // RUNNING is a tab switch, where CDPClient.reconnect() rejects in-flight
+  // requests with CONNECTION_CLOSED (late sends with NOT_CONNECTED) but
+  // re-points the SAME client object at the new tab — the cached node heals
+  // itself for the next call without any dispose. The failing call surfaces a
+  // classified error that debugger-status maps to a structured "reconnecting"
+  // result with retry-once guidance. A genuinely dead Chromium socket instead
+  // fires ChromiumCdp's own terminated event, whose teardown cascades into this
+  // dependent — the node leaves RUNNING and the next call re-resolves fresh.
+  // (Same log-preservation reasoning as debugger-log-registry's missing socket
+  // gate — see that tool's comment.)
 
   async factory(deps, payload, options) {
     const opts = options as ChromiumJsdFactoryOptions | undefined;

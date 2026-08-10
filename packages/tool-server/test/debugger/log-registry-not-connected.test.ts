@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
+import * as fs from "node:fs";
 import * as http from "node:http";
 import { AddressInfo } from "node:net";
 import {
@@ -217,6 +218,45 @@ describe("debugger-log-registry not-connected results", () => {
       outcome: "connected",
       tool_invocation_id: INVOCATION_ID,
     });
+  });
+
+  it("dead-socket asymmetry: NO gate, NO dispose — stats and the on-disk log file survive", async () => {
+    // Deliberate asymmetry with debugger-status: captured logs are readable
+    // over a dead socket, and a status-style gate would dispose the node —
+    // whose dispose closes the LogFileWriter and UNLINKS the log file — i.e.
+    // destroy exactly the post-crash logs the caller came for, while also
+    // dropping `file` from the result. This pin makes that regression loud.
+    const metro = await startMockMetroCdp();
+    const factorySpy = vi.fn(jsRuntimeDebuggerBlueprint.factory);
+    const setup = makeSetup({ ...jsRuntimeDebuggerBlueprint, factory: factorySpy });
+    cleanups.push(async () => {
+      await setup.registry.dispose();
+      await metro.close();
+    });
+
+    const first = (await setup.invoke({ port: metro.port, device_id: "mock-device" })) as Record<
+      string,
+      unknown
+    >;
+    expect(first.status).toBe("connected");
+    const logFile = first.file as string;
+    expect(fs.existsSync(logFile)).toBe(true);
+
+    // Kill the socket state without any close event dispatching.
+    const urn = `${JS_RUNTIME_DEBUGGER_NAMESPACE}:${metro.port}:mock-device`;
+    const api = await setup.registry.resolveService<{ cdp: { isConnected: () => boolean } }>(urn);
+    vi.spyOn(api.cdp, "isConnected").mockReturnValue(false);
+
+    const second = (await setup.invoke({ port: metro.port, device_id: "mock-device" })) as Record<
+      string,
+      unknown
+    >;
+    // Still the connected shape — stats plus the route back to the data.
+    expect(second.status).toBe("connected");
+    expect(second.file).toBe(logFile);
+    expect(fs.existsSync(logFile)).toBe(true);
+    // And no dispose happened: the cached node was reused as-is.
+    expect(factorySpy).toHaveBeenCalledTimes(1);
   });
 
   it("unexpected error: rethrows (toolFailed, no outcome event, no structured shape)", async () => {
