@@ -45,7 +45,9 @@ On iOS, Argent must launch the app for the full selector tree to exist, and only
 
 ### Chromium e2e flows
 
-**Default Chromium window size: `1366 × 768`.** Unless the user or test contract explicitly requires another window size, boot the target with `boot-device`, `electronAppPath`, and `electronArgs: ["--window-size=1366,768"]`. This is the native browser-window size, not page-viewport emulation. Do not record against an already-running target whose window size came from host or session state; launch a fresh target with the explicit size first. If the target cannot honor the requested size, stop and report the blocker instead of recording at a different size.
+**The app sets the Chromium window size, and no boot argument overrides it.** Electron ignores `--window-size`: the size comes from the app's own `BrowserWindow` options. Argent passes `electronArgs` straight through and never resizes the window, so there is nothing to request and nothing that can refuse a request.
+
+Boot the target with `boot-device` and `electronAppPath`, then take one `screenshot` and record its pixel dimensions. That capture size is the snapshot device class ([Flow YAML: Snapshots](flow-yaml.md#snapshots-and-standalone-runs)), so it must be the same when baselines are seeded and when CI replays. Prefer a fresh boot over an already-running target, whose window may carry a size from an earlier session. If the app sizes its window from host or session state, record that in the report — its snapshots reproduce only where that state repeats.
 
 Call `flow-start-recording` after that boot and before the first in-app action, then record the first-screen wait live. `restart-app` has no Chromium support, so the call errors and records nothing, and a recorded Chromium flow is always a fragment — its launch is written in during polish rather than captured, and any `executionPrerequisite` the recording declared must go with it (a launch-first flow must not carry one). During polish, insert a leading Chromium launch that preserves the same app path and arguments, for example:
 
@@ -54,10 +56,10 @@ steps:
   - launch:
       chromium:
         path: ../../app
-        args: ["--window-size=1366,768"]
+        args: ["--enable-feature-flag"]
 ```
 
-The path is relative to the flow file's own directory, `.argent/flows/`, so `../../app` means `<project_root>/app`; an absolute path is also accepted. Preserve any other live boot arguments, and keep exactly one `--window-size` argument. An explicit user or test-contract size replaces the default in both the live boot and saved launch. This packaging exception represents the same app boot used for the live walkthrough; it is not permission to rehearse the UI path.
+The path is relative to the flow file's own directory, `.argent/flows/`, so `../../app` means `<project_root>/app`; an absolute path is also accepted. Copy the live boot arguments verbatim, and omit `args` when the boot passed none. This packaging exception represents the same app boot used for the live walkthrough; it is not permission to rehearse the UI path.
 
 ### Fragments
 
