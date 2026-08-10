@@ -125,6 +125,7 @@ TV INTERACTION (APPLE TV / ANDROID TV / FIRE TV)
 Skill: `argent-tv-interact`
 When: Any TV target — a `list-devices` entry with `runtimeKind: "tv"` (Apple TV simulator or Android TV emulator) or `platform:"vega"` / `kind:"vvd"` (Amazon Fire TV / VVD), or the user mentions Apple TV / tvOS / Android TV / leanback / Vega / Fire TV. A TV UI is focus-driven, not touch-driven: drive it with `describe` (read focus) + `tv-remote` (D-pad presses) + `keyboard` (type); `gesture-*` tools do NOT apply. Covers booting the target, app lifecycle, focus navigation, typing, screenshots, and (Vega) VVD lifecycle + Fast Refresh + JS-runtime debugging (evaluate, console logs, network inspector).
 Prompt keywords: apple tv, tvos, android tv, leanback, vega, fire tv, vvd, d-pad
+Saved artifacts: on Vega, a replayable path is `argent-create-flow` and an acceptance-criteria regression test is `argent-qa-flows` — both record D-pad navigation as `tool: tv-remote` steps. Apple TV and Android TV have no saved-flow support; report that limitation.
 
 SCREENSHOT DIFF & VISUAL REGRESSION
 Skill: `argent-screenshot-diff`
@@ -166,7 +167,7 @@ Prompt keywords: flow, repeat, test X times
 
 GENERATED QA REGRESSION TESTS
 Use skill: `argent-qa-flows`
-When: The user gives a test case, ticket, or acceptance criteria to keep as a repeatable test — "generate a QA test", "turn this test case into a flow", "automate this regression check", "make a test that does X and checks Y". Orchestrates `argent-create-flow`, records the first walkthrough live, verifies each requested screen/state with stable evidence, and completes only after the unchanged full flow passes twice consecutively. iOS, Android, and Chromium.
+When: The user gives a test case, ticket, or acceptance criteria to keep as a repeatable test — "generate a QA test", "turn this test case into a flow", "automate this regression check", "make a test that does X and checks Y". Orchestrates `argent-create-flow`, records the first walkthrough live, verifies each requested screen/state with stable evidence, and completes only after the unchanged full flow passes twice consecutively. iOS, Android, Chromium, and Vega (Fire TV — navigation is recorded `tool: tv-remote` steps in place of touch directives); not Apple TV or Android TV.
 Prompt keywords: QA test, regression test, test case, automate this test, automate an e2e test, keep this e2e test, generate a test
 Saved-artifact rule: one-off interactive check → `argent-test-ui-flow`; saved replayable path → `argent-create-flow`; saved test with acceptance criteria and two-pass proof → `argent-qa-flows`.
 
