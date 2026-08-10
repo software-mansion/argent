@@ -176,7 +176,7 @@ npm run test:watch -w @argent/tool-server
    npx tsc --build --clean
    npm run knip
    ```
-   Run it this way round, not straight after step 3. The `--max-issues` ceiling is counted against an unbuilt tree, because that is what CI analyses; with `packages/*/dist` present knip finds eight fewer issues, so a built-tree run has that much phantom headroom and can pass locally while the Dead Code job fails. This leaves the tree unbuilt, so run `npm run build` again before re-running any test suite. If your change legitimately adds an export nothing imports yet, raise the `--max-issues` number in the same commit rather than deleting someone else's backlog — the bump is the part reviewers should see.
+   Run it this way round, not straight after step 3. The `--max-issues` ceiling is counted against an unbuilt tree, because that is what CI analyses; with `packages/*/dist` present knip finds fewer issues, so a built-tree run carries phantom headroom and can pass locally while the Dead Code job fails. This leaves the tree unbuilt, so run `npm run build` again before re-running any test suite. If your change legitimately adds an export nothing imports yet, raise the `--max-issues` number in the same commit rather than deleting someone else's backlog — the bump is the part reviewers should see.
 6. **Write a clear PR title** — it becomes part of the release changelog. Use the same prefix convention as commit messages (`feat:`, `fix:`, etc.).
 7. **Open the PR** against `main` and fill in the description with context on what changed and why.
 8. A maintainer will review and may request changes. Address feedback with new commits (don't force-push after review starts).
