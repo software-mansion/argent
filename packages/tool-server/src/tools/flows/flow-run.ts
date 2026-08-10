@@ -257,12 +257,16 @@ export interface StepReport {
    * This line marks block structure — a `repeat:` block's opening line and the
    * marker before each of its iterations — rather than a step that ran or an
    * outcome that was evaluated. Excluded from the counts and from the
-   * renderers' step numbering exactly as `echo` is, so `repeat: 3` over one tap
-   * reports the same numbers as those three taps pasted out; counted, the
-   * markers would scale the totals with the iteration count. A block's terminal
-   * line (a drain converged, cap reached, guard errored; either bound
-   * cancelled) is NOT structural — it is the block's verdict, and the cap's
-   * `fail` is the only thing making a drain that never converged report FAIL.
+   * renderers' step numbering exactly as `echo` is, so a completed `repeat: 3`
+   * over one tap reports the same numbers as those three taps pasted out —
+   * completed, because a block cut short by a failure does not pad its unrun
+   * iterations as skips (see {@link execRepeatStep}), and not on the MCP
+   * renderer, which numbers raw report entries exactly as it already does for
+   * `echo`. Counted, the markers would scale the totals with the iteration
+   * count. A block's terminal line (a drain converged, cap reached, guard
+   * errored; either bound cancelled) is NOT structural — it is the block's
+   * verdict, and the cap's `fail` is the only thing making a drain that never
+   * converged report FAIL.
    */
   structural?: boolean;
 }
@@ -1715,8 +1719,10 @@ function summarize(
     // `repeat:` block's opening and iteration markers) — neither is a test
     // step, and counting either would let the summary disagree with the
     // renderers' step numbering, which skips both. For the markers that also
-    // means the counts hold the directive's promise: `repeat: 3` over one tap
-    // reports what the three pasted taps report, instead of scaling with N.
+    // means a completed run's counts hold the directive's promise: `repeat: 3`
+    // over one tap reports what the three pasted taps report, instead of
+    // scaling with N — completed, because a block cut short by a failure does
+    // not pad its unrun iterations as skips (see execRepeatStep).
     if (s.kind === "echo" || s.structural) continue;
     if (s.status === "pass") passed++;
     else if (s.status === "fail") failed++;

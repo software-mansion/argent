@@ -689,10 +689,11 @@ export type UiWhenCondition = Extract<WhenCondition, { kind: "ui" }>;
  *
  * - `times`: a literal iteration count. Statically known, so the block is
  *   precisely equivalent to pasting its steps N times — which is the whole
- *   justification for the directive: compression, no new semantic power. The
- *   run's counts hold that equivalence too: the block and iteration marker
- *   lines report as structural (see StepReport.structural) and are counted no
- *   more than `echo` is.
+ *   justification for the directive: compression, no new semantic power. A
+ *   completed run's counts hold that equivalence too: the block and iteration
+ *   marker lines report as structural (see StepReport.structural) and are
+ *   counted no more than `echo` is — completed, because a block cut short by a
+ *   failure does not pad its unrun iterations as skips.
  * - `until`: drain a UI condition, checked BEFORE each iteration (so an
  *   already-satisfied guard runs zero iterations), bounded by `max`. Hitting
  *   `max` with the guard still unmet FAILS: a drain that didn't converge
