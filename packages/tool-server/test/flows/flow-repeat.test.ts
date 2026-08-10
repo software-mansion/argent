@@ -837,6 +837,52 @@ describe("repeat: composition", () => {
     ]);
   }, 15000);
 
+  it("nests directly under itself, re-running the whole inner block per outer pass", async () => {
+    // The multiplication the MAX_REPEAT_ITERATIONS docstring reasons about —
+    // the bound is per-block and nested blocks multiply — at the smallest
+    // product that shows it: one authored tap, 2 × 2 = 4 dispatched. The
+    // parse/serialize round-trip covers repeat-in-repeat as data only; this is
+    // the executing case, so it also pins where each line lands: the inner
+    // block's marker sits inside the outer iteration that re-introduced it,
+    // and its own iterations one level deeper again.
+    currentTree = () => screen([notification()]);
+    await writeFlow("squared", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "repeat",
+          spec: { mode: "times", times: 2 },
+          steps: [{ kind: "repeat", spec: { mode: "times", times: 2 }, steps: [TAP] }],
+        },
+      ],
+    });
+
+    const result = await run("squared");
+
+    expect(result.ok).toBe(true);
+    expect(tapCount).toBe(4);
+    const innerBlock = [
+      "repeat pass 2 times @1",
+      "repeat pass iteration 1/2 @2",
+      'tap pass "Clear notification" @2',
+      "repeat pass iteration 2/2 @2",
+      'tap pass "Clear notification" @2',
+    ];
+    expect(shape(result.steps)).toEqual([
+      "repeat pass 2 times @0",
+      "repeat pass iteration 1/2 @1",
+      ...innerBlock,
+      "repeat pass iteration 2/2 @1",
+      ...innerBlock,
+    ]);
+    // Outer and inner markers alike are block structure — only the taps count,
+    // on both sides of the nesting boundary.
+    expect(result.steps.filter((s) => s.structural)).toEqual(
+      result.steps.filter((s) => s.kind === "repeat")
+    );
+    expect(counts(result)).toEqual({ ok: true, passed: 4, failed: 0, skipped: 0, errored: 0 });
+  }, 15000);
+
   it("re-runs a run: fragment once per iteration, attributed to the fragment", async () => {
     // Both directions at once: a fragment invoked from inside a repeat body,
     // and a repeat block inside that fragment. The fragment is loaded and
