@@ -378,11 +378,79 @@ describe("repeat: parse/serialize", () => {
       "{ hidden: X, timeout: 5000 }",
       "{ hidden: '{{secret:APP_PASSWORD}}' }",
       "{ text: { in: A, contain: x } }",
+      // One guard per until-reachable error site inside parseWaitFields (the
+      // selector-shaped ones echo their own fragment and are pinned in the test
+      // below): stray guard key, non-map text body, comparator count, empty
+      // comparator, invalid regex pattern.
+      "{ visible: A, bogus: 1 }",
+      "{ text: nope }",
+      "{ text: { in: A } }",
+      "{ text: { in: A, contains: '' } }",
+      "{ text: { in: A, matches: '[' } }",
     ]) {
-      expect(() =>
-        parseFlow(`steps:\n  - repeat: { until: ${guard} }\n    steps: [{ tap: A }]\n`)
+      expect(
+        () => parseFlow(`steps:\n  - repeat: { until: ${guard} }\n    steps: [{ tap: A }]\n`),
+        guard
       ).toThrow(/repeat\.until\b.*: \{"repeat":\{"until":.*"steps":\[\{"tap":"A"\}\]\}$/s);
     }
+  });
+
+  it("names repeat.until at every until-reachable error site in the guard parser", () => {
+    // The guard shares parseWaitFields with await/assert, and every error site
+    // in there spells its label through directiveLabel — one exact-message
+    // sample per reachable site, so a single site reverting to the bare
+    // directive name (`until …`) fails here instead of hiding behind the sites
+    // the entry-echo loop above happens to hit first.
+    const cases: [string, RegExp][] = [
+      // top-level unknown key — rejectUnknownKeys(entry, b, …, label); the
+      // allowed-keys list doubles as proof `until` offers no `timeout`
+      [
+        "{ visible: A, bogus: 1 }",
+        /repeat\.until has unknown key `bogus` — allowed keys: exists, visible, hidden, text/,
+      ],
+      // text-body unknown key — the `${label}.text` spelling
+      [
+        "{ text: { in: A, contain: x } }",
+        /repeat\.until\.text has unknown key `contain` \(did you mean `contains`\?\)/,
+      ],
+      // text-condition field checks — badEntry(entry, `${label} text …`)
+      [
+        "{ text: nope }",
+        /repeat\.until text needs \{ in: <selector>, contains\|equals\|matches: <string> \}/,
+      ],
+      [
+        "{ text: { in: A } }",
+        /repeat\.until text needs exactly one of `contains`, `equals`, or `matches`/,
+      ],
+      ["{ text: { in: A, contains: '' } }", /repeat\.until text needs a non-empty `contains`/],
+      [
+        "{ text: { in: A, matches: '[' } }",
+        /repeat\.until text `matches` is not a valid regular expression/,
+      ],
+    ];
+    for (const [guard, message] of cases) {
+      expect(
+        () => parseFlow(`steps:\n  - repeat: { until: ${guard} }\n    steps: [{ tap: A }]\n`),
+        guard
+      ).toThrow(message);
+    }
+    // Selector-shaped errors go through parseSelector, whose two call sites
+    // spell the label `${label}.<condition>` and `${label}.text.in`. Unlike the
+    // sites above it echoes the selector fragment it was handed, not the whole
+    // repeat step — the label carries the path back to the step, so both parts
+    // are pinned together here.
+    expect(() =>
+      parseFlow("steps:\n  - repeat: { until: { visible: { txt: A } } }\n    steps: [{ tap: A }]\n")
+    ).toThrow(
+      /repeat\.until\.visible: selector has unknown key `txt` \(did you mean `text`\?\).*: \{"txt":"A"\}$/s
+    );
+    expect(() =>
+      parseFlow(
+        "steps:\n  - repeat: { until: { text: { in: { idd: list }, contains: x } } }\n    steps: [{ tap: A }]\n"
+      )
+    ).toThrow(
+      /repeat\.until\.text\.in: selector has unknown key `idd` \(did you mean `id`\?\).*: \{"idd":"list"\}$/s
+    );
   });
 
   it("rejects unknown keys in the bound and unknown siblings on the step", () => {

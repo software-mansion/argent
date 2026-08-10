@@ -831,6 +831,19 @@ describe("parseFlow", () => {
       );
     });
 
+    it("echoes the author's await/assert step in the error", () => {
+      // No caller passes an entry for await/assert, so the echoed step comes
+      // from parseWaitFields' own `entry` default (`{ [kind]: raw }`) — and
+      // that echo is the only part of the message identifying WHICH step is
+      // wrong, so it is pinned here alongside the label, for both directives.
+      expect(() => parseFlow("steps:\n  - await: { visible: Home, timeut: 5 }\n")).toThrow(
+        /await has unknown key `timeut`.*: \{"await":\{"visible":"Home","timeut":5\}\}$/s
+      );
+      expect(() => parseFlow("steps:\n  - assert: { text: { in: A, contians: x } }\n")).toThrow(
+        /assert\.text has unknown key `contians`.*: \{"assert":\{"text":\{"in":"A","contians":"x"\}\}\}$/s
+      );
+    });
+
     it("rejects a misspelled snapshot.maxMismatch key with a suggestion", async () => {
       expect(() => parseFlow("steps:\n  - snapshot: { name: home, maxMissmatch: 1.5 }\n")).toThrow(
         /snapshot has unknown key `maxMissmatch` \(did you mean `maxMismatch`\?\)/
