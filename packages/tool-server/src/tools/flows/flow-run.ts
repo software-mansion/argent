@@ -2083,8 +2083,9 @@ function describeWhenCondition(cond: WhenCondition): string {
  * `repeat: { until }`'s per-iteration check. "Indeterminate" is deliberately
  * NOT folded into "unmet": an unreadable tree is unknown, not false, and both
  * callers must treat it as an error — silently reading it as false would turn a
- * guarded dismissal into a green no-op, and would end a drain early while
- * claiming it converged.
+ * guarded dismissal into a green no-op, and would keep a drain iterating,
+ * driving side-effecting steps against a screen the runner cannot read, until
+ * it fails at the cap for a condition that may long since hold.
  */
 type GuardOutcome =
   | { outcome: "met" | "unmet" | "aborted" }
