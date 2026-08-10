@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { createToolsClient } from "../src/tools-client.js";
+import { createToolsClient, ToolInvocationError } from "../src/tools-client.js";
 
 let server: Server | undefined;
 
@@ -101,6 +101,43 @@ describe("callTool progress streaming", () => {
       "kaput"
     );
     expect(events).toEqual([{ index: 0 }]);
+  });
+
+  it("surfaces the terminal error line's failure signal as a ToolInvocationError", async () => {
+    await startServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+      res.end(
+        `${JSON.stringify({
+          event: "error",
+          error: "flow file is not valid YAML",
+          error_code: "FLOW_FILE_INVALID",
+          error_kind: "validation",
+        })}\n`
+      );
+    });
+
+    const { callTool } = createToolsClient();
+    const err = await callTool("streamy", {}, { onProgress: () => {} }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ToolInvocationError);
+    expect((err as ToolInvocationError).message).toBe("flow file is not valid YAML");
+    expect((err as ToolInvocationError).errorCode).toBe("FLOW_FILE_INVALID");
+    expect((err as ToolInvocationError).errorKind).toBe("validation");
+  });
+
+  it("surfaces a buffered JSON error response's failure signal the same way", async () => {
+    await startServer((_req, res) => {
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "application/json");
+      res.end(
+        JSON.stringify({ error: "boom", error_code: "FLOW_FILE_INVALID", error_kind: "validation" })
+      );
+    });
+
+    const { callTool } = createToolsClient();
+    const err = await callTool("streamy", {}).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ToolInvocationError);
+    expect((err as ToolInvocationError).message).toBe("boom");
+    expect((err as ToolInvocationError).errorKind).toBe("validation");
   });
 
   it("rejects when the stream ends without a terminal line (connection lost)", async () => {

@@ -146,11 +146,21 @@ export async function runSnapshot(
   env: ActionEnv,
   opts: {
     flowsDir: string;
+    /**
+     * The `__baselines__/<segment>` key, NOT necessarily the name the run
+     * reports under: it is the ROOT flow's canonical stem (`baselineKeyFor` in
+     * flow-run.ts), because it must identify the same file `flowsDir` does —
+     * a key and an anchor that disagree let two distinct flows share a store.
+     */
     flowName: string;
     name: string;
     maxMismatch: number;
     updateBaselines: boolean;
     cropOn?: FlowSelector;
+    /** The app this capture is taken from (flow-run's `snapshotAppIdentity` shape). */
+    appIdentity: string;
+    /** Run-scoped: the appIdentity each snapshot key was first captured from. */
+    seenKeys: Map<string, string>;
   }
 ): Promise<VisualOutcome> {
   // Wait for the UI to settle (a transition/reflow finished) so the capture is
@@ -213,6 +223,23 @@ export async function runSnapshot(
   const key = `${snapshotKey}.png`;
   const dir = baselineDir(opts.flowsDir, opts.flowName);
   const baselinePath = path.join(dir, key);
+
+  // The key deliberately carries no app component (it names a committed,
+  // machine-portable baseline file), so a run that moved onto another app can
+  // recompute a key it already captured — refuse that before any compare or
+  // baseline write, instead of silently sharing one file between two apps.
+  const priorApp = opts.seenKeys.get(snapshotKey);
+  if (priorApp !== undefined && priorApp !== opts.appIdentity) {
+    return {
+      status: "fail",
+      reason:
+        `snapshot "${opts.name}" was already captured in this run from a different app ` +
+        `(${priorApp}) — both captures would share the baseline ${key}, nothing was ` +
+        `compared. Give per-app snapshots distinct names`,
+      snapshotKey,
+    };
+  }
+  opts.seenKeys.set(snapshotKey, opts.appIdentity);
 
   // Under cropOn everything downstream (compare, baseline write, `current`
   // artifact) operates on the cropped image, written to its own scratch dir.

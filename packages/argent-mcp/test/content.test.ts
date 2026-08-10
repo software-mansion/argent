@@ -304,6 +304,27 @@ describe("flowRunToMcpContent", () => {
     expect(blocks[1]).toEqual({ type: "text", text: "[1] Hello" });
   });
 
+  it("renders run steps by their as-written path, with a stem fallback for legacy servers", async () => {
+    const input: FlowExecuteResult = {
+      flow: "f",
+      steps: [
+        // Two same-stem targets must render distinctly — the path is the label.
+        { index: 0, kind: "run", status: "pass", flow: "login", target: "ios/login.yaml" },
+        { index: 1, kind: "run", status: "pass", flow: "login", target: "android/login.yaml" },
+        // A pre-target tool-server sends only the stem.
+        { index: 2, kind: "run", status: "pass", flow: "login" },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input);
+    const texts = blocks
+      .filter((b): b is { type: "text"; text: string } => b.type === "text")
+      .map((b) => b.text);
+
+    expect(texts).toContain("[1] ✓ run ios/login.yaml");
+    expect(texts).toContain("[2] ✓ run android/login.yaml");
+    expect(texts).toContain("[3] ✓ run login");
+  });
+
   it("renders legacy tool error steps (status-less)", async () => {
     const input: FlowExecuteResult = {
       flow: "f",

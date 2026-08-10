@@ -14,10 +14,10 @@
   // — without that they are gated by neither pass and a new unused class
   // member costs nothing. Naming `classMembers` also turns knip's `isSkipLibs`
   // off (see `isSkipLibs` in its create-options), which suppresses 44 of the
-  // export/type findings the same run reports without it: 57/181 becomes
-  // 44/150. That, not the 12 classMembers findings it adds, is why the ceiling
+  // export/type findings the same run reports without it: 60/187 becomes
+  // 47/156. That, not the 12 classMembers findings it adds, is why the ceiling
   // is lower than the two counts alone would suggest — `--include-libs` with no
-  // classMembers at all reproduces 44/150 exactly.
+  // classMembers at all reproduces 47/156 exactly.
   //
   // The ceiling is one total across those classes, so it bounds the backlog
   // rather than each class: paying off one parked export does licence one new
@@ -29,10 +29,10 @@
   // catches that.
   //
   // Count it the way CI does, in a tree with no build output. With
-  // `isSkipLibs` off the whole 206-vs-199 difference hangs on a single path:
+  // `isSkipLibs` off the whole 215-vs-208 difference hangs on a single path:
   // whether packages/registry's `main`/`types` resolves to a file that exists.
   // Not on anything in that file — a zero-byte packages/registry/dist/index.js
-  // takes the count to 199 just as a real build does — and not on any other
+  // takes the count to 208 just as a real build does — and not on any other
   // workspace's, twelve of which move it by nothing at all. So `npm run knip`
   // passing after a local `tsc --build` is not evidence the job will pass; it
   // has seven slots of headroom CI does not. Remove the dist directories
@@ -74,7 +74,7 @@
     // invoked from the windows-latest job, where that is the default shell —
     // is declared here by hand.
     //
-    // Scope limit: only 11 of the 30 files under scripts/ are in the gate at
+    // Scope limit: only 12 of the 31 files under scripts/ are in the gate at
     // all, because knip analyzes JS/TS and nothing else. The other 19 — 15
     // `.sh` files, e2e-full/lib/report.py, ci/e2e-chromium-page.html, and
     // e2e-full's README and results/.gitignore — are invisible to it however
@@ -145,8 +145,12 @@
         // in react-profiler/pipeline/.../ast-index.ts, behind a one-shot flag.
         "tree-sitter",
         "tree-sitter-typescript",
-        // Runtime companion of the dynamically imported
-        // `@fails-components/webtransport`; loaded internally, never imported.
+        // Optional peers of @swmansion/argent-cloud-sdk, which leaves them to
+        // the host to declare. utils/moq-client.ts calls the SDK's
+        // `installNodeWebTransport()`, but the dynamic import of the polyfill
+        // sits inside the SDK's own /node entry, so no first-party file names
+        // it; the transport is a second hop, imported by the polyfill itself.
+        "@fails-components/webtransport",
         "@fails-components/webtransport-transport-http3-quiche",
 
         // --- Imported here but deliberately absent from this package.json.
@@ -186,9 +190,9 @@
   // contribute its test entries, and those are four patterns in every
   // workspace — `**/test/**`
   // plus `*{.,-,_}test`, `test-*` and `test` matched anywhere — each limited to
-  // {cjs,mjs,js,cts,mts,ts}. So all 380 JS/TS files under packages/*/test/ are
+  // {cjs,mjs,js,cts,mts,ts}. So all 420 JS/TS files under packages/*/test/ are
   // entries, and under packages/*/tests/ every name matching one of the three
-  // is too: of today's 15 that leaves registry/tests/helpers.ts as the only
+  // is too: of today's 16 that leaves registry/tests/helpers.ts as the only
   // reportable one, which is why it is the lone `tests/` entry in the
   // --production list below. A `tests/test-utils.ts` or `tests/test.ts` would
   // be just as invisible. The extension set is the escape hatch: it omits .tsx
@@ -200,14 +204,14 @@
   // re-exports is reached. One `export { x } from "./dead-module";` line in a
   // src/index.ts takes that module out of `files` altogether, and re-exporting
   // parked exports retires them from the count without deleting anything —
-  // three such lines in tool-server's entry take 206 to 203. So the ceiling
+  // three such lines in tool-server's entry take 215 to 212. So the ceiling
   // bounds what knip can see, not what is dead.
   //
   // `knip --production` is the lens that reports the whole class, and the repo
   // is not clean under it: 13 unused files — those two, seven root scripts,
   // packages/argent/scripts/{bundle-tools,observe,sync-readme}.cjs and
   // packages/registry/tests/helpers.ts — with the export/type backlog at
-  // 227/206. That run has classMembers off, so those two compare to the 57/181
-  // above, not to the ceiling's 44/150. Paying it down is a follow-up of its
+  // 243/212. That run has classMembers off, so those two compare to the 60/187
+  // above, not to the ceiling's 47/156. Paying it down is a follow-up of its
   // own.
 }

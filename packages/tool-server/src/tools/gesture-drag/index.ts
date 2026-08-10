@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
+import { assertChromiumWindowVisible } from "../../utils/chromium-visibility";
 import { resolveDevice } from "../../utils/device-info";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -57,6 +58,10 @@ Returns { dragged: true, timestampMs }. Fails if the Chromium CDP session is not
   async execute(services, params) {
     const timestampMs = Date.now();
     const chromium = services.chromium as ChromiumCdpApi;
+    // A drag interpolates ~60fps mouse moves; on a hidden (throttled) window
+    // each one stalls on compositor hit-testing (~5s), turning one drag into
+    // minutes of wall clock — refuse up front like gesture-scroll.
+    await assertChromiumWindowVisible(chromium, "drag", "chromium_drag_window_hidden");
     const vp = chromium.getViewport();
     const startPx = { x: params.fromX * vp.width, y: params.fromY * vp.height };
     const endPx = { x: params.toX * vp.width, y: params.toY * vp.height };

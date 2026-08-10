@@ -204,17 +204,36 @@ export async function connectCdp(port: number): Promise<{
 }
 
 /**
- * Best-effort domain enables. Failure is non-fatal — most CDP commands work
- * without the corresponding domain enabled, but Page.navigate / Input.* return
- * more useful errors when their domains are primed.
+ * Best-effort priming of a freshly (re)connected page session: domain enables
+ * plus focus emulation. Failure of any step is non-fatal — most CDP commands
+ * work without the corresponding domain enabled, but Page.navigate / Input.*
+ * return more useful errors when their domains are primed.
+ *
+ * Focus emulation makes the page believe it is focused even when the OS
+ * window is not (`document.hasFocus()` → true, focus/blur events behave as if
+ * foregrounded), so focus-gated app logic works while an agent drives an
+ * unfocused window. In current Chromium/Electron it goes further (A/B-verified
+ * live): it also pins the renderer's reported `document.visibilityState` to
+ * "visible" and keeps the input pipeline unthrottled even while the window is
+ * genuinely minimized. Session-scoped: it dies with the CDP session and must
+ * be re-applied after every reconnect — which happens automatically because
+ * the tab manager's onActivated calls this function again. Trade-off (same
+ * one Playwright accepts by enabling it unconditionally): while a session is
+ * attached the app can never observe a real blur or a real hidden state, so
+ * pause-on-hidden behavior (video, analytics) is unobservable during a test.
  */
-export async function enableCoreDomains(cdp: CDPClient): Promise<void> {
+export async function primePageSession(cdp: CDPClient): Promise<void> {
   for (const domain of ["Page", "DOM", "Runtime", "Accessibility"]) {
     try {
       await cdp.send(`${domain}.enable`);
     } catch {
       /* ignore */
     }
+  }
+  try {
+    await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+  } catch {
+    /* pre-79 runtimes lack the command; input still works, just unfocused */
   }
 }
 

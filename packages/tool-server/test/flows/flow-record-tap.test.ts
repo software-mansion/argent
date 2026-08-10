@@ -15,14 +15,10 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
 
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
-import {
-  clearActiveFlow,
-  clearActiveProjectRoot,
-  parseFlow,
-  setActiveProjectRoot,
-} from "../../src/tools/flows/flow-utils";
+import { __resetRecordingsForTesting, parseFlow } from "../../src/tools/flows/flow-utils";
 
 const DEVICE = "00000000-0000-0000-0000-0000000000AB"; // iOS UDID shape
+const FLOW = "rec";
 const PREREQ = "App on home screen";
 
 let tmpDir: string;
@@ -53,28 +49,31 @@ async function recordTap(point: { x: number; y: number }) {
   const tool = createFlowAddStepTool(mockRegistry());
   return tool.execute(
     {},
-    { command: "gesture-tap", args: JSON.stringify({ udid: DEVICE, ...point }) }
+    {
+      name: FLOW,
+      project_root: tmpDir,
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: DEVICE, ...point }),
+    }
   );
 }
 
 async function recordedSteps() {
-  const content = await fs.readFile(path.join(tmpDir, ".argent", "flows", "rec.yaml"), "utf8");
+  const content = await fs.readFile(path.join(tmpDir, ".argent", "flows", `${FLOW}.yaml`), "utf8");
   return parseFlow(content).steps;
 }
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-record-tap-"));
-  setActiveProjectRoot(tmpDir);
-  clearActiveFlow();
+  __resetRecordingsForTesting();
   await flowStartRecordingTool.execute(
     {},
-    { name: "rec", project_root: tmpDir, executionPrerequisite: PREREQ }
+    { name: FLOW, project_root: tmpDir, executionPrerequisite: PREREQ }
   );
 });
 
 afterEach(async () => {
-  clearActiveFlow();
-  clearActiveProjectRoot();
+  __resetRecordingsForTesting();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -128,6 +127,8 @@ describe("flow-add-step tap selector capture", () => {
     await tool.execute(
       {},
       {
+        name: FLOW,
+        project_root: tmpDir,
         command: "gesture-tap",
         args: JSON.stringify({ udid: DEVICE, x: 0.5, y: 0.52, clickCount: 2 }),
       }

@@ -52,7 +52,7 @@ Argent drives a growing set of targets through a single toolkit, each with the r
 
 #### Prerequisites
 
-- **Node.js 20.11** or later
+- **Node.js 20.12** or later
 - For iOS / tvOS: macOS with **Xcode** installed (Apple TV uses tvOS simulators — Xcode downloads the tvOS runtime on demand)
 - For Android / Android TV: **Android SDK Platform Tools** (`adb`) on `PATH`, and the **Android Emulator** package if you want to boot AVDs from Argent. Create AVDs via Android Studio or `avdmanager`.
 - For Fire TV (Vega): the **Vega SDK** (`vega` CLI) on `PATH`

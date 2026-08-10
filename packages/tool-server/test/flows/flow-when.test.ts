@@ -413,7 +413,7 @@ describe("when: execution", () => {
             condition: "visible",
             selector: { text: "What's new", loose: true },
           },
-          steps: [{ kind: "run", flow: "dismiss" }],
+          steps: [{ kind: "run", flow: "dismiss.yaml" }],
         },
         { kind: "echo", message: "after block" },
       ],
@@ -432,6 +432,15 @@ describe("when: execution", () => {
       "tap:pass:2",
       "echo:pass:0",
     ]);
+    // Attribution rides along at every depth: the marker belongs to the
+    // enclosing flow, the run: line and the fragment's expanded tap to the
+    // fragment's stem.
+    expect(entered.steps.map((s) => s.flow)).toEqual([
+      "run-in-when",
+      "dismiss",
+      "dismiss",
+      "run-in-when",
+    ]);
 
     currentTree = () =>
       screen([n({ label: "Home", frame: { x: 0, y: 0, width: 1, height: 0.1 } })]);
@@ -443,6 +452,11 @@ describe("when: execution", () => {
       "run:skip:1",
       "echo:pass:0",
     ]);
+    // The block-skip path must attribute the never-loaded run: line to its
+    // target stem — identical to the entered marker above — not to the
+    // enclosing flow, or the CLI would drop/mislabel its `[fragment]` suffix.
+    expect(skipped.steps.map((s) => s.flow)).toEqual(["run-in-when", "dismiss", "run-in-when"]);
+    expect(skipped.steps[1]).toMatchObject({ flow: "dismiss", target: "dismiss.yaml" });
   });
 
   it("treats a failure inside an entered block as a real failure (hard stop)", async () => {

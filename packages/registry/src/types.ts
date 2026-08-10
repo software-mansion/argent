@@ -111,11 +111,13 @@ export interface InvokeToolOptions {
    *
    * The outer request's AI client is inherited unchanged. The platform is
    * re-derived from each sub-tool's own `childArgs` (its `udid` / `device_id` /
-   * `avdName`), falling back to the outer request's platform when the sub-tool
-   * carries no device arg — an orchestrator like flow-execute has no platform of
-   * its own and a single flow can target several devices, so the child's device
-   * arg is the only correct platform source. Opaque to the registry — it neither
-   * reads nor validates the recorded metadata.
+   * `devices` / `avdName`), falling back to the outer request's platform when the
+   * sub-tool carries no device arg — an orchestrator like flow-execute has no
+   * platform of its own and a single flow can target several devices, so the
+   * child's device arg is the only correct platform source. (A replayed
+   * `stop-all-simulator-servers` step carries `devices`, injected by
+   * `bindDeviceArgs`, so it resolves rather than falling back.) Opaque to the
+   * registry — it neither reads nor validates the recorded metadata.
    */
   recordChildInvocation?: (toolInvocationId: string, childArgs?: unknown) => () => void;
   /**

@@ -54,6 +54,18 @@ export interface PngDiffResult {
     expected: Size;
     actual: Size;
   };
+  /**
+   * Set only when the inputs differed in resolution and were resampled to a
+   * common size in order to compare. Absent when the sizes already matched, so
+   * its presence IS the signal that the comparison carries resampling
+   * uncertainty — and that a green result means "equal after rescaling one of
+   * them", not "equal".
+   */
+  sizeNormalization?: {
+    baseline: Size;
+    current: Size;
+    comparedAt: Size;
+  };
   regions: DiffRegion[];
   textAnalysis?: TextAnalysis;
 }
@@ -93,6 +105,10 @@ interface DiffArtifactPaths {
 }
 
 const MAX_RGB_DISTANCE_SQUARED = 255 * 255 * 3;
+// Sized for a baseline PNG stored across sessions, machines and OS versions,
+// so it absorbs real drift. flow-pixels' PIXEL_THRESHOLD deliberately does NOT
+// mirror it (it compares two captures from one live session, a far lower noise
+// floor) — the two are independent by design; see the rationale there.
 const DEFAULT_THRESHOLD = 0.1;
 const DEFAULT_IGNORE_TOP_NORMALIZED_Y = 0.06;
 const DEFAULT_REGION_MERGE_DISTANCE = 8;
@@ -154,6 +170,19 @@ export async function diffPngFiles(options: DiffPngFilesOptions): Promise<PngDif
   const baseline = normalized.baseline;
   const current = normalized.current;
 
+  // Both operands are still in hand here, so the rescale can be reported without
+  // widening normalizeToCommonSize's contract. Undefined when nothing was
+  // resampled — callers key off presence, not a flag.
+  const sizeNormalization =
+    decodedBaseline.width === decodedCurrent.width &&
+    decodedBaseline.height === decodedCurrent.height
+      ? undefined
+      : {
+          baseline: { width: decodedBaseline.width, height: decodedBaseline.height },
+          current: { width: decodedCurrent.width, height: decodedCurrent.height },
+          comparedAt: { width: baseline.width, height: baseline.height },
+        };
+
   const totalPixels = baseline.width * baseline.height;
   const pixelDiff = markChangedPixels({
     baseline,
@@ -209,6 +238,7 @@ export async function diffPngFiles(options: DiffPngFilesOptions): Promise<PngDif
     contextDiffPath: artifactPaths.contextDiffPath,
     regions,
     textAnalysis,
+    ...(sizeNormalization && { sizeNormalization }),
   });
 }
 
