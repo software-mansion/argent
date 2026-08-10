@@ -118,7 +118,9 @@ Act on outcome 2 or 3 before the next action: return to the screen the tap start
 
 ### Typing
 
-Record the focus tap, then record `keyboard`. Use `describe` or an app validation marker to confirm the complete value appeared; for a secure field, do not expose the value in a screenshot or echo. If characters were lost, restore the field with direct MCP tool calls (never through `flow-add-step`). Do not record a duplicate typing step.
+Record the focus tap, then record `keyboard`. Use `describe` or an app validation marker to confirm the complete value appeared. If characters were lost, restore the field with direct MCP tool calls (never through `flow-add-step`). Do not record a duplicate typing step.
+
+**Never `describe` or `screenshot` a non-secure field you just filled from `{{secret:…}}`.** Only a password field is redacted; a plain text input hands the resolved value straight back into your context, and an API key, token, or licence code typed into one is the ordinary case. Submit or navigate away first, then verify the resulting screen.
 
 **`describe` reports focus on Chromium only.** iOS and Android leave the field unset — it is a Vega/D-pad signal there — so no live pre-typing focus check exists on those two platforms, and confirming the value afterwards is what proves the keys landed in the intended field. On Chromium, read `focused` before recording `keyboard`.
 
