@@ -7,7 +7,8 @@ import {
   IDLE_DEFAULT_TIMEOUT_MS,
   IDLE_MIN_STILL_INTERVALS,
   IDLE_POLL_MS,
-  IDLE_SETTLE_OVERHEAD_MS,
+  IDLE_SETTLE_SPAN_MS,
+  idleMinimumTimeoutMs,
   parseFlow,
 } from "../../src/tools/flows/flow-utils";
 import { createRunFlowTool } from "../../src/tools/flows/flow-run";
@@ -21,6 +22,20 @@ const FLOW_YAML = path.resolve(
   __dirname,
   "../../../skills/skills/argent-create-flow/references/flow-yaml.md"
 );
+/**
+ * The three surfaces that quote the number of `idle` warnings instead of
+ * listing them. They cite the reference rather than restating it, so a warning
+ * added to the list leaves all three saying the wrong count — which is exactly
+ * how "five different warnings" survived a sixth being added.
+ */
+const WARNING_COUNT_CITATIONS = [
+  path.resolve(__dirname, "../../../skills/skills/argent-create-flow/references/live-authoring.md"),
+  path.resolve(
+    __dirname,
+    "../../../skills/skills/argent-create-flow/references/reliability-and-recovery.md"
+  ),
+  path.resolve(__dirname, "../../../skills/skills/argent-qa-flows/SKILL.md"),
+];
 
 /**
  * The text between two markers. BOTH are asserted: `split` on an absent
@@ -79,28 +94,57 @@ describe("create-flow idle docs", () => {
     expect(description).toMatch(/unreadable|cannot be read|could not be read/);
   });
 
-  it("the reference's idle defaults and settle cost are the ones the parser enforces", () => {
+  it("the reference's idle defaults and settle span are the ones the parser enforces", () => {
     const reference = readFileSync(FLOW_YAML, "utf8");
     expect(reference).toContain(`default ${IDLE_DEFAULT_STABLE_FOR_MS}`);
     expect(reference).toContain(`default ${IDLE_DEFAULT_TIMEOUT_MS}`);
-    expect(reference).toContain(`${IDLE_SETTLE_OVERHEAD_MS}ms a settle costs`);
+    expect(reference).toContain(`${IDLE_SETTLE_SPAN_MS}ms a settle spans`);
     expect(reference).toContain(`${IDLE_POLL_MS}ms polls`);
-    // The gloss has to add up to the cost it explains: the polls the intervals
-    // span, plus the round-start floor.
-    expect(IDLE_SETTLE_OVERHEAD_MS).toBe((IDLE_MIN_STILL_INTERVALS + 1) * IDLE_POLL_MS);
+    // The gloss has to describe the span it names: the polls the intervals are
+    // measured over. The round-start floor is quoted separately because it is
+    // the one term that IS added.
+    expect(IDLE_SETTLE_SPAN_MS).toBe(IDLE_MIN_STILL_INTERVALS * IDLE_POLL_MS);
     expect(reference).toContain(`plus the ${IDLE_POLL_MS}ms of budget the closing round`);
+    // And the worked numbers it hands the author have to be the parser's.
+    expect(reference).toContain(
+      `the default ${IDLE_DEFAULT_STABLE_FOR_MS}ms hold needs ` +
+        `${idleMinimumTimeoutMs(IDLE_DEFAULT_STABLE_FOR_MS)}ms and an 800ms hold needs ` +
+        `${idleMinimumTimeoutMs(800)}ms`
+    );
+  });
+
+  it("every doc that quotes the number of idle warnings quotes the number the reference lists", () => {
+    const warnings = between(FLOW_YAML, "It **never fails a run.**", "\nOnly a tree source");
+    const listed = [...warnings.matchAll(/^- \*\*/gm)].length;
+    // Guard the reader itself: a section that stopped matching would count 0
+    // and then agree with nothing, which is not the failure we want reported.
+    expect(listed).toBeGreaterThan(1);
+    const spelled = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight"][
+      listed
+    ];
+    expect(spelled, `no spelling for ${listed} warnings`).toBeDefined();
+    for (const file of WARNING_COUNT_CITATIONS) {
+      const quoted = readFileSync(file, "utf8").match(/(\w+) (?:different )?warnings/);
+      expect(quoted, `${file} no longer cites the idle warning count`).not.toBeNull();
+      expect(quoted![1], file).toBe(spelled);
+    }
   });
 
   it("the smallest timeout the reference's arithmetic allows is the one the parser accepts", () => {
-    // The reference tells an author the wait has to contain the hold plus the
-    // settle. Take it at its word and check the boundary both ways — a parser
-    // that demanded a millisecond more would make the documented sum a lie.
-    const smallest = IDLE_DEFAULT_STABLE_FOR_MS + IDLE_SETTLE_OVERHEAD_MS;
-    expect(() =>
-      parseFlow(`steps:\n  - await: { idle: true, timeout: ${smallest} }\n`)
-    ).not.toThrow();
-    expect(() =>
-      parseFlow(`steps:\n  - await: { idle: true, timeout: ${smallest - 1} }\n`)
-    ).toThrow(new RegExp(`at least ${smallest}ms`));
+    // The reference tells an author the wait has to contain the LONGER of the
+    // hold and the settle's span, plus the closing round's budget. Take it at
+    // its word on both sides of the max — a hold under the span and one over
+    // it — and check each boundary both ways, since a parser that demanded a
+    // millisecond more would make the documented arithmetic a lie.
+    for (const stableFor of [IDLE_DEFAULT_STABLE_FOR_MS, 800]) {
+      const smallest = Math.max(IDLE_SETTLE_SPAN_MS, stableFor) + IDLE_POLL_MS;
+      expect(idleMinimumTimeoutMs(stableFor)).toBe(smallest);
+      const step = (t: number): string =>
+        `steps:\n  - await: { idle: true, stableFor: ${stableFor}, timeout: ${t} }\n`;
+      expect(() => parseFlow(step(smallest)), `${stableFor}`).not.toThrow();
+      expect(() => parseFlow(step(smallest - 1)), `${stableFor}`).toThrow(
+        new RegExp(`at least ${smallest}ms`)
+      );
+    }
   });
 });

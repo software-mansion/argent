@@ -162,19 +162,22 @@ The one condition that carries no selector, because stillness is a property of t
 
 The pixel half is why it exists: an iOS push or modal dismissal commits its hierarchy up front and then animates a layer for a few hundred milliseconds, and a cross-fade or scrim moves no node at all. A tree-only wait returns mid-transition.
 
-`stableFor` (default 250) is how long stillness must hold; it must be shorter than `timeout` (default 7500) or the gate could never pass, and parse rejects it. The wait also has to leave room for the hold plus the 600ms a settle costs — three reads spanning two 200ms polls, plus the 200ms of budget the closing round has to have left to be allowed to start — or the parser rejects the step. Stillness is measured across intervals, so a settle takes at least three reads: `stableFor: 0` means "the first two agreeing intervals", not "the first read".
+`stableFor` (default 250) is how long stillness must hold. `timeout` (default 7500) is the budget for the whole wait, and the parser rejects one that cannot contain a settle. A settle spans three reads across two 200ms polls. The floor is the longer of `stableFor` and the 400ms a settle spans, plus the 200ms of budget the closing round needs to start. The hold runs **during** those polls rather than after them, so the two costs overlap and only the longer one counts: the default 250ms hold needs 600ms and an 800ms hold needs 1000ms.
+
+Stillness is measured across intervals, so a settle takes at least three reads: `stableFor: 0` means "the first two agreeing intervals", not "the first read".
 
 It has no `assert` form — waiting is the whole point — and no `when:` form. Prefer it over `wait:` for any transition with no element to gate on.
 
 It **never fails a run.** Readiness is not an acceptance criterion, so every outcome short of a clean settle passes carrying a `warning` on the step. Read it rather than stepping over it:
 
-- **the screen never held still** — it spent the timeout and went ahead. Healthy screens often never stop (a video, a shimmer, a carousel, live-updating text, which on Android moves the tree as well as the pixels), and a screen that never finished loading looks exactly the same from here.
+- **the screen never held still** — it spent the timeout and went ahead, and was still moving on the last interval. Healthy screens often never stop (a video, a shimmer, a carousel, live-updating text, which on Android moves the tree as well as the pixels), and a screen that never finished loading looks exactly the same from here.
 - **a small part of it was still changing** — a spinner, a caret, a progress dot, moving through the stretch of stillness the step settled on. Too small to be the screen moving, so the settle completed anyway; if it is a loading spinner, the screen was still loading when this step returned.
+- **the screen was still for the last Nms** — the wait ran out mid-hold, so the settle was never confirmed. The warning names the term that was short: a second agreeing interval, because one alone can be two samples either side of an animation's turning point, or the rest of `stableFor`. Raise this step's `timeout:` — here the wait was too short, not the screen too busy.
 - **the tree stayed empty** — the screen rendered no accessible content. Sometimes the app (a canvas, a video surface), sometimes a screen that never arrived.
 - **settled on the UI tree alone** — no screenshot could be read often enough to compare a pair, so the hierarchy held still but presentation-layer motion above it (a push, a fade, a dismissing modal) was never waited out.
 - **too few reads** — a settle needs three of them spanning two intervals, and this step got fewer, so it ended without evidence either way. A slow tree source, or a window blank for most of the wait.
 
-Only a tree source that cannot be read stops the run, as an `errored` step — one that is still failing when the wait ends, one that answers and then wedges, or one that never answers within the step (that last may simply be slow: raise `timeout` before suspecting the app). That is a broken window, not a verdict about the app: the run is not ok and every later step is skipped. A single failed read is not that window: the hold restarts from the next good one, and a read that fails at the very end of the wait is named in the warning rather than stopping the run.
+Only a tree source that cannot be read stops the run, as an `errored` step — one that is still failing when the wait ends, one that answers and then wedges, one that answers with an empty tree it flags as degraded (an unattached Vega toolkit, an AX service asking to be relaunched), or one that never answers within the step (that last may simply be slow: raise `timeout` before suspecting the app). That is a broken window, not a verdict about the app: the run is not ok and every later step is skipped. A single failed read is not that window: the hold restarts from the next good one, and a read that fails at the very end of the wait is named in the warning rather than stopping the run.
 
 One more limit: it says nothing about **which** screen settled, so it never replaces the identity gate.
 
