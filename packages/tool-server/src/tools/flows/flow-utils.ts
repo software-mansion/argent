@@ -2783,20 +2783,26 @@ export const DEFAULT_REPEAT_MAX = 10;
  *
  * The guarantee is per-block, and only per-block: nested blocks multiply, and
  * nothing bounds the product. MAX_BLOCK_DEPTH does not — it is there to catch
- * cyclic aliases, so 19 levels of `repeat: 100` inside each other parse clean.
- * Two nested is 10^4 body executions, each paying for its own UI tree fetch;
- * three is 10^6, and since `state.reports` is retained whole in the run's
- * result the report array grows with the product too, which makes deep enough
- * an OOM rather than merely a slow run.
+ * cyclic aliases, so twenty levels of `repeat: 100` inside each other parse
+ * clean and only the twenty-first is a parse error. Two nested is 10^4 body
+ * executions, each paying for its own UI tree fetch; three is 10^6, and since
+ * `state.reports` is retained whole in the run's result the report array grows
+ * with the product too, which makes deep enough an OOM rather than merely a
+ * slow run.
  *
- * Capping the product was considered and rejected. Flows are hand-authored YAML
- * in the author's own repo, run by the author — there is no untrusted input
- * path, so the pathological case is reachable only through author error, where
- * the fix is the correct input. And there is no principled threshold to pick:
- * `repeat: 20` inside `repeat: 20` is 400 and entirely legitimate, a drain with
- * `max: 100` inside `repeat: 20` is 2000 and also legitimate — both sit well
- * above any cap that would catch the pathological case. Any number chosen
- * trades a rare self-inflicted hang for common false rejections of valid flows.
+ * Capping the product was considered and rejected. Not because every flow is
+ * trusted — the upload route carries foreign YAML, and its preflight
+ * (assertUploadSelfContained) rejects only `run:` and `snapshot` steps, so
+ * nested repeats sail through — but because a cap there bounds nothing: an
+ * uploader is a tool client whose connection can already drive the device
+ * indefinitely (a tap loop, flow runs back to back), so the pathological
+ * product enables nothing that connection could not already do. What remains
+ * is author error, where the fix is the correct input. And there is no
+ * principled threshold to pick: `repeat: 20` inside `repeat: 20` is 400 and
+ * entirely legitimate, a drain with `max: 100` inside `repeat: 20` is 2000 and
+ * also legitimate — both sit well above any cap that would catch the
+ * pathological case. Any number chosen trades a rare self-inflicted hang for
+ * common false rejections of valid flows.
  */
 const MAX_REPEAT_ITERATIONS = 100;
 
