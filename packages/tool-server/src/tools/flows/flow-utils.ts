@@ -2478,11 +2478,15 @@ function parseRotate(body: unknown, entry: unknown): FlowStep {
 }
 
 /**
- * Parse a `when:` guard — exactly one condition key: a UI condition
- * (exists|visible|hidden|text, the await/assert shapes) or `platform` (a
- * static per-run test). No `timeout` sibling: the guard is always evaluated
- * with the short assert grace, so a skipped block stays cheap on every clean
- * run.
+ * Parse a guard for either directive — a `when:` condition or a `repeat:`
+ * step's `until` — exactly one condition key: a UI condition
+ * (exists|visible|hidden|text, the await/assert shapes) or, for `when:` only,
+ * `platform` (a static per-run test). An `until` carrying `platform` is
+ * rejected with a pointer — the platform never changes between iterations, so
+ * that loop is infinite or empty by construction. No `timeout` sibling for
+ * either: the guard is always evaluated with the short assert grace, so a
+ * skipped `when:` block stays cheap on every clean run and a long `until`
+ * drain never multiplies a full await wait.
  */
 function parseWhenCondition(
   raw: unknown,
