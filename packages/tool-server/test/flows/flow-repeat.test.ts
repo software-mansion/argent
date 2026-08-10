@@ -805,6 +805,14 @@ describe("repeat: until", () => {
       'repeat pass hidden text="Clear notification" after 0 iterations @0',
     ]);
     expect(result.skipped).toBe(2);
+    // Each stand-in says WHY it was skipped, and it is this branch's own
+    // reason. Pinned on `reason` directly: {@link shape} folds
+    // `target ?? message ?? reason`, so on a line with a target — every
+    // stand-in above — it renders the target and the reason is invisible to
+    // it. Swapped with the errored branch's string, a PASSING zero-iteration
+    // drain would tell the operator its body was skipped because the "until
+    // guard errored".
+    expect(result.steps.slice(1, 3).map((s) => s.reason)).toEqual(["already met", "already met"]);
     // The converged verdict is the only pass here — the opening marker is not.
     expect(result.passed).toBe(1);
   });
@@ -845,6 +853,60 @@ describe("repeat: until", () => {
     expect(counts(result)).toEqual({ ok: false, passed: 2, failed: 1, skipped: 0, errored: 0 });
   }, 20000);
 
+  it("says `after 1 iteration`, singular, when one pass converges or a max of 1 caps", async () => {
+    // The count in a drain's terminal reason can be exactly 1 in both
+    // directions: a one-item list converges after a single pass, and `max: 1`
+    // is a legal bound (the range starts at 1). The `times` marker pins its
+    // `1 time` twice; these are the drain verdicts' — asserted on `reason`
+    // directly, so the string is the very one the renderers print.
+    currentTree = () => (tapCount >= 1 ? screen([]) : screen([notification()]));
+    await writeFlow("drains-in-one", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "repeat",
+          spec: {
+            mode: "until",
+            until: { kind: "ui", condition: "hidden", selector: { text: "Clear notification" } },
+            max: 5,
+          },
+          steps: [TAP],
+        },
+      ],
+    });
+    await writeFlow("capped-at-one", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "repeat",
+          spec: {
+            mode: "until",
+            until: { kind: "ui", condition: "hidden", selector: { text: "Clear notification" } },
+            max: 1,
+          },
+          steps: [TAP],
+        },
+      ],
+    });
+
+    const converged = await run("drains-in-one");
+    tapCount = 0;
+    currentTree = () => screen([notification()]); // never drains
+    const capped = await run("capped-at-one");
+
+    expect(converged.ok).toBe(true);
+    expect(converged.steps.at(-1)?.reason).toBe(
+      'hidden text="Clear notification" after 1 iteration'
+    );
+    expect(capped.ok).toBe(false);
+    expect(capped.steps.at(-1)?.reason).toBe(
+      'still not hidden text="Clear notification" after 1 iteration (max)'
+    );
+    // Both drains really made exactly one pass — the singular is the truth,
+    // not a happened-to-match template.
+    expect(tapCount).toBe(1);
+  }, 20000);
+
   it("errors the step when the guard cannot be evaluated", async () => {
     // A blind read is unknown, not false: it must not end a drain early NOR
     // keep it spinning.
@@ -862,6 +924,7 @@ describe("repeat: until", () => {
           },
           steps: [TAP],
         },
+        { kind: "echo", message: "after" },
       ],
     });
 
@@ -872,15 +935,71 @@ describe("repeat: until", () => {
     expect(tapCount).toBe(0);
     // No iteration ran, so the body reports one skip line — inside the block,
     // between the opening marker and the guard's error, which closes it. The
-    // error is the LAST line here, not the middle one.
+    // stand-in carries this branch's own reason, pinned directly for the same
+    // cause as the converged branch's "already met": {@link shape} renders a
+    // skipped tap's target, never its reason — and swapped, an errored drain
+    // would explain its un-run body with "already met".
     expect(result.steps[1]?.status).toBe("skip");
     expect(result.steps[1]?.depth).toBe(1);
+    expect(result.steps[1]?.reason).toBe("until guard errored");
     expect(result.steps[2]?.status).toBe("error");
     expect(result.steps[2]?.reason).toMatch(/could not evaluate until guard/i);
     // Same rule as the cap: the guard's error is an outcome and stays counted,
     // while the opening marker above it contributes no pass.
     expect(result.steps[2]?.structural).toBeUndefined();
     expect(result.passed).toBe(0);
+    // An unevaluable guard is a hard stop, exactly like the cap's fail above:
+    // the step after the block skips instead of running against a screen the
+    // runner just said it cannot read. A bare skip, not a stand-in — the
+    // hard-stop branch stamps no reason.
+    expect(shape(result.steps).at(-1)).toBe("echo skip after @0");
+    expect(result.steps.at(-1)?.reason).toBeUndefined();
+  }, 20000);
+
+  it("errors a later probe without re-listing the body — one iteration already reported", async () => {
+    // The `done === 0` bracketing above is for a body that never got to say
+    // anything. Here the first probe sees the notification (a trusted, unmet
+    // read) and the body runs; the tap flips the screen to the blind read that
+    // makes the SECOND probe indeterminate. The authored steps must NOT come
+    // back as stand-in skips — their lines are already in the report — and the
+    // guard's error still hard-stops the flow, carrying the trailing step to a
+    // skip: iterating on against an unreadable screen is the one thing this
+    // branch exists to prevent.
+    currentTree = () => (tapCount >= 1 ? screen([]) : screen([notification()]));
+    onTap = () => {
+      currentHint = "native-devtools disconnected";
+    };
+    await writeFlow("blind-later", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "repeat",
+          spec: {
+            mode: "until",
+            until: { kind: "ui", condition: "hidden", selector: { text: "Clear notification" } },
+            max: 5,
+          },
+          steps: [TAP],
+        },
+        { kind: "echo", message: "after" },
+      ],
+    });
+
+    const result = await run("blind-later");
+
+    expect(result.ok).toBe(false);
+    expect(tapCount).toBe(1);
+    // Strict equality is the proof: no skip line stands in for the tap between
+    // its executed pass and the error verdict that closes the block.
+    expect(shape(result.steps)).toEqual([
+      'repeat pass until hidden "Clear notification" (max 5) @0',
+      "repeat pass iteration 1 @1",
+      'tap pass "Clear notification" @1',
+      'repeat error could not evaluate until guard (hidden text="Clear notification"): ' +
+        "could not evaluate the condition — every read of the UI tree was empty or degraded @0",
+      "echo skip after @0",
+    ]);
+    expect(counts(result)).toEqual({ ok: false, passed: 1, failed: 0, skipped: 0, errored: 1 });
   }, 20000);
 });
 
@@ -1564,6 +1683,50 @@ describe("repeat: cancellation inside the block", () => {
     expect(result.ok).toBe(false);
   }, 15000);
 
+  it("adds no stand-in skips when the cancellation lands at a later guard probe", async () => {
+    // Same probe boundary, one iteration in. The trigger still fires from
+    // inside a tree fetch, but only once the first body has run: the first
+    // probe's whole window and the tap's own settle reads all see tapCount 0,
+    // and the tap dispatches before incrementing it, so the first fetch that
+    // aborts is the second probe's. The body's lines are already in the
+    // report, so nothing is re-listed — the cancellation line alone closes
+    // the block, exactly as when the abort is caught after the body.
+    const controller = new AbortController();
+    currentTree = () => {
+      if (tapCount >= 1) controller.abort();
+      return screen([notification()]);
+    };
+    await writeFlow("cancelled-at-later-probe", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "repeat",
+          spec: {
+            mode: "until",
+            until: { kind: "ui", condition: "hidden", selector: { text: "Clear notification" } },
+            max: 10,
+          },
+          steps: [TAP],
+        },
+      ],
+    });
+
+    const result = await run("cancelled-at-later-probe", controller.signal);
+
+    expect(tapCount).toBe(1);
+    // Strict equality is the proof: no skip line stands in for the tap between
+    // its executed pass and the cancellation line.
+    expect(shape(result.steps)).toEqual([
+      'repeat pass until hidden "Clear notification" (max 10) @0',
+      "repeat pass iteration 1 @1",
+      'tap pass "Clear notification" @1',
+      'repeat skip until hidden "Clear notification" (max 10) @0',
+    ]);
+    expect(result.steps.at(-1)?.reason).toBe("run aborted");
+    expect(result.aborted).toBe(true);
+    expect(counts(result)).toEqual({ ok: false, passed: 1, failed: 0, skipped: 1, errored: 0 });
+  }, 15000);
+
   it("adds no cancellation line when an iteration merely fails, in either bound", async () => {
     // `stopped` is set by an ordinary failure too. That exit stays silent: the
     // failing step's own line is the whole explanation, and "run aborted"
@@ -1586,6 +1749,7 @@ describe("repeat: cancellation inside the block", () => {
           },
           steps: [FAILS],
         },
+        { kind: "echo", message: "after" },
       ],
     });
 
@@ -1601,6 +1765,10 @@ describe("repeat: cancellation inside the block", () => {
       'repeat pass until hidden "Clear notification" (max 5) @0',
       "repeat pass iteration 1 @1",
       'assert fail visible "Nope" @1',
+      // Silent at the block, not at the flow: the failure still hard-stops —
+      // the step after the drain skips, exactly as after a times block's
+      // failure (the `fails-inside` test).
+      "echo skip after @0",
     ]);
     for (const result of [times, drain]) {
       expect(result.steps.some((s) => s.reason === "run aborted")).toBe(false);
