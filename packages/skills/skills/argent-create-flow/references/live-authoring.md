@@ -118,9 +118,11 @@ Act on outcome 2 or 3 before the next action: return to the screen the tap start
 
 ### Typing
 
-Record the focus tap, then use `describe` to confirm the field is focused before recording `keyboard`. Use `describe` or an app validation marker to confirm the complete value appeared; for a secure field, do not expose the value in a screenshot or echo. If characters were lost, restore the field with direct MCP tool calls (never through `flow-add-step`). Do not record a duplicate typing step.
+Record the focus tap, then record `keyboard`. Use `describe` or an app validation marker to confirm the complete value appeared; for a secure field, do not expose the value in a screenshot or echo. If characters were lost, restore the field with direct MCP tool calls (never through `flow-add-step`). Do not record a duplicate typing step.
 
-Polish folds the focus tap and keyboard step into `type:`, which at replay re-taps the field and waits for it to take focus before injecting keys. That wait is a best effort, not a guarantee — keys go wherever focus actually is, at replay as much as during the walkthrough — which is why the live `describe` check stays and why the value is verified after typing.
+**`describe` reports focus on Chromium only.** iOS and Android leave the field unset — it is a Vega/D-pad signal there — so no live pre-typing focus check exists on those two platforms, and confirming the value afterwards is what proves the keys landed in the intended field. On Chromium, read `focused` before recording `keyboard`.
+
+Polish folds the focus tap and keyboard step into `type:`, which at replay re-taps the field and waits for it to take focus before injecting keys. That replay wait reads the runner's own tree, which **does** report focus on iOS, Android, and Chromium. It is still best effort: an unconfirmed poll falls through to typing when its budget runs out rather than failing the step. So keys can go wherever focus actually is, which is why the value is verified after typing.
 
 Never record a credential literal. Use `{{secret:NAME}}`, resolved at run time from `ARGENT_SECRET_NAME` or a secrets file — see the `keyboard` section of `argent-device-interact` for the full source order.
 
