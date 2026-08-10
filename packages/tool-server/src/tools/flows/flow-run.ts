@@ -246,9 +246,10 @@ export interface StepReport {
   /**
    * Nesting depth for display: omitted at top level, +1 inside each nesting
    * step's expanded steps (a `when:` block's guarded steps, a `run:`
-   * fragment's steps). Renderers indent by it without knowing which directives
-   * nest — the report is a flat list with no block-end marker, so depth cannot
-   * be reconstructed downstream.
+   * fragment's steps, a `repeat:` block's iteration markers and body steps).
+   * Renderers indent by it without knowing which directives nest — the report
+   * is a flat list with no block-end marker, so depth cannot be reconstructed
+   * downstream.
    */
   depth?: number;
   /**

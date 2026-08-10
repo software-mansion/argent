@@ -41,8 +41,9 @@ export interface StepReport {
   target?: string;
   /**
    * Nesting depth: absent/0 at top level, +1 inside each nesting step
-   * (`when:` guarded steps, `run:` fragment steps). Renderers indent by it; a
-   * pre-depth tool-server sends none and the report renders flat, as before.
+   * (`when:` guarded steps, `run:` fragment steps, `repeat:` iteration markers
+   * and body steps). Renderers indent by it; a pre-depth tool-server sends
+   * none and the report renders flat, as before.
    */
   depth?: number;
   /**

@@ -230,8 +230,9 @@ export type FlowStepResult = {
   target?: string;
   /**
    * Nesting depth: absent/0 at top level, +1 inside each nesting step
-   * (`when:` guarded steps, `run:` fragment steps). The label is indented by
-   * it; a pre-depth tool-server sends none and the report renders flat.
+   * (`when:` guarded steps, `run:` fragment steps, `repeat:` iteration markers
+   * and body steps). The label is indented by it; a pre-depth tool-server
+   * sends none and the report renders flat.
    */
   depth?: number;
   /**
