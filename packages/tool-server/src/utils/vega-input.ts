@@ -158,8 +158,8 @@ export async function injectVegaButtons(buttons: RemoteButton[]): Promise<void> 
   await injectViaInputd(remoteButtonsToKeycodes(buttons).map((code) => `button_press ${code}`));
 }
 
-/** Press a single named key (keyboard tool `key` vocabulary). */
-export async function injectVegaNamedKey(name: string): Promise<void> {
+/** Resolve a named key (keyboard tool `key` vocabulary) to its inputd keycode, or throw. */
+export function resolveVegaNamedKeycode(name: string): string {
   const lower = name.toLowerCase();
   // Own-property check: a prototype key like "constructor" would otherwise pass
   // the falsy guard with a garbage value and reach inputd as a broken
@@ -178,7 +178,12 @@ export async function injectVegaNamedKey(name: string): Promise<void> {
       }
     );
   }
-  await injectViaInputd([`button_press ${code}`]);
+  return code;
+}
+
+/** Press a single named key (keyboard tool `key` vocabulary). */
+export async function injectVegaNamedKey(name: string): Promise<void> {
+  await injectViaInputd([`button_press ${resolveVegaNamedKeycode(name)}`]);
 }
 
 /** Type text into the focused field via `inputd-cli send_text`. */

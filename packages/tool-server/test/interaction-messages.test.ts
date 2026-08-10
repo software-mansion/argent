@@ -32,13 +32,11 @@ describe("tool interaction messages", () => {
       })
     ).toBe("Double-tapped at (50%, 25%)");
 
-    // `keyboard` picks its wording from which of `text` / `key` was given, and
-    // the two formatters do NOT cover the same shapes. `startedMsg` renders
-    // before the tool rejects a text+key request, so it still has to word one.
-    // `completedMsg` runs only after a call that succeeded, which leaves THREE
-    // reachable shapes — text alone, key alone, and neither, since an empty
-    // request is a documented no-op returning { typed:"", keys:0 } rather than
-    // an error (see keyboard-android.test.ts).
+    // `keyboard` picks its wording from which of `text` / `key` was given, and a
+    // combined call is a legal request shape, so BOTH formatters have to word
+    // four of them: text alone, key alone, both, and neither — an empty request
+    // is a documented no-op returning { typed:"", keys:0 } rather than an error
+    // (see keyboard-android.test.ts).
     const keyboard = definitions.get("keyboard")!.interaction!;
     expect(keyboard.startedMsg!({ params: { udid: "device-1", text: "hi" } })).toBe(
       "Entering text"
@@ -55,21 +53,18 @@ describe("tool interaction messages", () => {
     expect(keyboard.completedMsg!({ params: { udid: "device-1", key: "enter" }, result: {} })).toBe(
       "Pressed a key"
     );
-    // The third reachable shape. "Pressed a key" for a call that pressed nothing
-    // is inherited, not introduced here — pinned so the wording and the no-op
+    // The combined branch: without it, a `completedMsg` that dropped to the
+    // two-way text/key split would still satisfy every assertion above while
+    // reporting a text+enter call as plain "Entered text".
+    expect(
+      keyboard.completedMsg!({ params: { udid: "device-1", text: "hi", key: "enter" }, result: {} })
+    ).toBe("Entered text and pressed a key");
+    // The fourth shape. "Pressed a key" for a call that pressed nothing is
+    // inherited, not introduced here — pinned so the wording and the no-op
     // contract can only diverge deliberately.
     expect(keyboard.completedMsg!({ params: { udid: "device-1" }, result: {} })).toBe(
       "Pressed a key"
     );
-    // The shape that actually MOVED with the exclusivity rule: `completedMsg`
-    // used to have a third branch reading "Entered text and pressed a key".
-    // Nothing can reach it now — `execute` rejects the combination above the
-    // dispatch — but it is the only input that tells this formatter apart from
-    // its predecessor, so without it the assertions above stay green against the
-    // pre-change tool and pin nothing.
-    expect(
-      keyboard.completedMsg!({ params: { udid: "device-1", text: "hi", key: "enter" }, result: {} })
-    ).toBe("Entered text");
 
     expect(
       definitions.get("screenshot")!.interaction!.completedMsg!({
@@ -236,8 +231,6 @@ describe("tool interaction messages", () => {
     const definitions = definitionsById(createRegistry());
     const secret = "INTERACTION_MESSAGE_SECRET";
     const messages = [
-      // A text+key request is rejected by the tool, but `startedMsg` renders
-      // before that check — so it still has to keep both values out of the log.
       definitions.get("keyboard")!.interaction!.startedMsg!({
         params: { udid: "device-1", text: secret, key: secret },
       }),

@@ -3,15 +3,6 @@ import type { DeviceInfo } from "@argent/registry";
 import { typeSimulatorServer } from "../src/tools/keyboard/simulator-server-keys";
 import { makeChromiumImpl } from "../src/tools/keyboard/platforms/chromium";
 import { vegaImpl } from "../src/tools/keyboard/platforms/vega";
-import { injectAndroidNamedKey } from "../src/utils/android-input";
-
-const { adbShell } = vi.hoisted(() => ({
-  adbShell: vi.fn(async (_serial: string, _cmd: string, _opts?: unknown): Promise<string> => ""),
-}));
-vi.mock("../src/utils/adb", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../src/utils/adb")>()),
-  adbShell,
-}));
 
 vi.mock("../src/utils/vega-input", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/vega-input")>()),
@@ -24,7 +15,6 @@ import { injectVegaNamedKey, injectVegaText } from "../src/utils/vega-input";
 const IOS_SIM: DeviceInfo = { id: "TEST-UDID", platform: "ios", kind: "simulator" };
 const CHROMIUM: DeviceInfo = { id: "chromium-cdp-9222", platform: "chromium", kind: "app" };
 const VEGA: DeviceInfo = { id: "vega-serial", platform: "vega", kind: "vvd" };
-const SERIAL = "emulator-5554";
 
 // HID usage IDs (key-codes.ts): letters are 0x04 + (c - 'a'), so h=11, i=12.
 // Written as literals, not read back out of the map under test.
@@ -61,17 +51,17 @@ function cdpRecorder() {
   };
 }
 
-// `text` and `key` are mutually exclusive (#579), so ORDERING between the two is
-// no longer a thing any backend can express — the tests that pinned it went away
-// with the combination. What those tests also happened to pin, and what nothing
-// else covers, is that each backend faithfully emits the ONE action it was
-// given: the whole string rather than a prefix, one press per character rather
-// than two, no modifier held across a lowercase run, a real keyDown for a named
-// key rather than a bare keyUp, and the offending name in an unknown-key 400.
+// keyboard-key-order.test.ts pins the RELATIVE order of `text` and `key` in a
+// combined call. That is a two-parameter property, and it is green against a
+// backend that emits the two actions in the right order but emits either of them
+// wrongly — a prefix instead of the whole string, two presses per character, a
+// modifier held across a lowercase run, a bare keyUp for a named key, or an
+// unknown-key 400 that omits the name the caller has to correct.
 //
-// Those are single-parameter properties, so they survive the exclusivity rule.
-// They are pinned here against literal expectations — never against the same map
-// the code reads, which any value in that map would satisfy.
+// Those are single-parameter properties, so they belong beside the ordering
+// tests rather than inside them, one action per call. They are pinned here
+// against literal expectations — never against the same map the code reads,
+// which any value in that map would satisfy.
 describe("keyboard backends — emit exactly the action they were given", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -200,15 +190,9 @@ describe("keyboard backends — emit exactly the action they were given", () => 
     });
   });
 
-  describe("android", () => {
-    it("names the offending key when it is unknown", async () => {
-      // The surviving android assertion is the bare prefix /Unknown key/, which
-      // a message carrying neither the name nor the supported list satisfies —
-      // and the name is what a caller needs to retry a 400 on `key`.
-      await expect(injectAndroidNamedKey(SERIAL, "bogus")).rejects.toThrow(/Unknown key "bogus"/);
-      expect(adbShell).not.toHaveBeenCalled();
-    });
-  });
+  // No android section: `adb shell input` is a command line rather than an event
+  // stream, so keyboard-android.test.ts already pins the exact strings this file
+  // pins for the other three backends.
 
   describe("vega", () => {
     it("injects the text it was given, and nothing else", async () => {
