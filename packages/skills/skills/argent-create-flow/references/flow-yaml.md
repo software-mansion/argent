@@ -71,7 +71,12 @@ Two consequences, both load-bearing:
 - **On iOS and Android**, a missing id in `describe` is not proof that the flow selector cannot resolve: prefer the id and verify it in a scratch fragment. **On Chromium the reverse holds** — what `describe` does not show, no selector can reach, and an element it does show carrying none of those five attributes is invisible to the runner. Give that element a testid instead of hunting for another selector.
 - A live `await-ui-element` check can pass against the tool's tree and mean nothing to the runner. The recorded `tool:` step still replays (that tool reads the tree it passed against); it is the `await:`/`assert:` directive polish converts it into that may not resolve. Replay the flow after polish and treat an unresolved converted wait as a polish-time blocker, not a recording failure.
 
-When several visible nodes match, an exact text/identifier match beats a substring hit, then the smallest frame wins. Use a stricter map when that ranking could still select the wrong repeated element.
+When several nodes match, what the runner does with them depends on the directive:
+
+- **Action directives** (`tap`, `long-press`, `type`, `scroll-to`, `pinch`, `rotate`) take the most specific visible match. An exact text/identifier match beats a substring hit — a regex consuming the element's whole text counts as exact — then the smallest frame wins, then reading order.
+- **Conditions** (`await`, `assert`) do not rank. `exists` and `visible` hold when any match qualifies and `hidden` only when none does, so no single element is elected. `text` reads the **first visible match in reading order** (topmost, then leftmost).
+
+An action and a check therefore name different elements wherever a container aggregates a child's text — the everyday iOS `accessible` wrapper. `tap` hits the exact leaf; `text.in` reads the container above it, so `equals` fails against text that is correct on screen. Give the element an `id` or a [relational scope](#relational-scopes) whenever an action and a check must agree on it, and use a stricter map when the ranking could still elect the wrong repeated element.
 
 ### Relational scopes
 
