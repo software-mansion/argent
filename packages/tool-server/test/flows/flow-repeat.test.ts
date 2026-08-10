@@ -1300,6 +1300,146 @@ describe("repeat: composition", () => {
     ]);
   }, 15000);
 
+  it("attributes a fragment drain's converged and cap verdicts to the fragment", async () => {
+    // A drain's verdict is pushed by the repeat block itself, not by the run:
+    // step, so its `flow` stamp is the only thing telling the CLI which file
+    // the verdict came from (the `[frag]` suffix reads exactly this field).
+    // The two tests above pin the stamp on the markers; the drain suite pins
+    // the verdicts, but only at top level — where the stamp equals the root
+    // flow — and through {@link shape}, which never reads `flow`. Two
+    // fragments in one run put both evaluated verdicts across the boundary:
+    // the first drain converges, the second runs into its cap.
+    currentTree = () =>
+      screen([
+        notification(),
+        n({
+          label: "Done",
+          frame:
+            tapCount >= 1
+              ? { x: 0.1, y: 0.5, width: 0.5, height: 0.1 }
+              : { x: 0.1, y: 0.5, width: 0, height: 0 },
+        }),
+      ]);
+    await writeFlow("drainer", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "repeat",
+          spec: {
+            mode: "until",
+            until: { kind: "ui", condition: "visible", selector: { text: "Done" } },
+            max: 5,
+          },
+          steps: [TAP],
+        },
+      ],
+    });
+    await writeFlow("capper", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "repeat",
+          spec: {
+            mode: "until",
+            until: { kind: "ui", condition: "hidden", selector: { text: "Clear notification" } },
+            max: 2,
+          },
+          steps: [TAP],
+        },
+      ],
+    });
+    await writeFlow("verdicts", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "run", flow: "drainer.yaml" },
+        { kind: "run", flow: "capper.yaml" },
+      ],
+    });
+
+    const result = await run("verdicts");
+
+    expect(result.ok).toBe(false);
+    expect(tapCount).toBe(3);
+    expect(attributed(result.steps)).toEqual([
+      "run pass drainer drainer.yaml @0",
+      'repeat pass drainer until visible "Done" (max 5) @1',
+      "repeat pass drainer iteration 1 @2",
+      'tap pass drainer "Clear notification" @2',
+      'repeat pass drainer visible text="Done" after 1 iteration @1',
+      "run pass capper capper.yaml @0",
+      'repeat pass capper until hidden "Clear notification" (max 2) @1',
+      "repeat pass capper iteration 1 @2",
+      'tap pass capper "Clear notification" @2',
+      "repeat pass capper iteration 2 @2",
+      'tap pass capper "Clear notification" @2',
+      'repeat fail capper still not hidden text="Clear notification" after 2 iterations (max) @1',
+    ]);
+  }, 20000);
+
+  it("attributes a fragment drain's guard-error and cancellation lines to the fragment", async () => {
+    // The block's other two terminal lines — the guard's error and the shared
+    // cancellation line — are hard stops, so each needs its own run; one
+    // fragment serves both. Like the verdicts above they are pushed from
+    // inside the fragment's repeat, and only their `flow` stamp keeps them
+    // from reading as the caller's own.
+    await writeFlow("frag", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "repeat",
+          spec: {
+            mode: "until",
+            until: { kind: "ui", condition: "hidden", selector: { text: "Clear notification" } },
+            max: 5,
+          },
+          steps: [TAP],
+        },
+      ],
+    });
+    await writeFlow("caller", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "frag.yaml" }],
+    });
+
+    // A blind probe before any iteration: the stand-in skip and the guard's
+    // error verdict close the block, both saying `frag`.
+    currentTree = () => screen([]);
+    currentHint = "native-devtools disconnected";
+    const blind = await run("caller");
+
+    expect(blind.ok).toBe(false);
+    expect(attributed(blind.steps)).toEqual([
+      "run pass frag frag.yaml @0",
+      'repeat pass frag until hidden "Clear notification" (max 5) @1',
+      'tap skip frag "Clear notification" @2',
+      'repeat error frag could not evaluate until guard (hidden text="Clear notification"): ' +
+        "could not evaluate the condition — every read of the UI tree was empty or degraded @1",
+    ]);
+
+    // The same fragment cancelled mid-drain: the abort lands after the second
+    // tap and the block's cancellation line closes it, still saying `frag`.
+    currentHint = undefined;
+    currentTree = () => screen([notification()]); // nothing clears it; only the abort ends this
+    tapCount = 0;
+    const controller = new AbortController();
+    onTap = () => {
+      if (tapCount === 2) controller.abort();
+    };
+    const cancelled = await run("caller", controller.signal);
+
+    expect(cancelled.aborted).toBe(true);
+    expect(attributed(cancelled.steps)).toEqual([
+      "run pass frag frag.yaml @0",
+      'repeat pass frag until hidden "Clear notification" (max 5) @1',
+      "repeat pass frag iteration 1 @2",
+      'tap pass frag "Clear notification" @2',
+      "repeat pass frag iteration 2 @2",
+      'tap pass frag "Clear notification" @2',
+      'repeat skip frag until hidden "Clear notification" (max 5) @1',
+    ]);
+    expect(cancelled.steps.at(-1)?.reason).toBe("run aborted");
+  }, 30000);
+
   it("expands a repeat block's authored steps once when a hard stop precedes it", async () => {
     currentTree = () => screen([]);
     await writeFlow("stopped-before", {
