@@ -820,14 +820,48 @@ export function isStructuralBlockMarker(step: FlowStep): boolean {
 }
 
 /**
- * A flow is end-to-end iff it BEGINS by launching an app — its first step
- * (ignoring `echo` narration) is a `launch`. Such a flow controls its own
- * start state, so it is the natural standalone/suite entry point and must not
- * declare an `executionPrerequisite`. Everything else is a fragment.
+ * A flow is end-to-end iff it BEGINS by launching an app — its first
+ * executable step (ignoring `echo` narration) is a `launch`. "Begins" is
+ * judged on the flow as it would EXECUTE, i.e. as the PASTED-OUT form: a
+ * `times`-bounded `repeat:` block is precisely its body written N times (see
+ * RepeatSpec), so the scan descends into it — the first iteration's launch
+ * runs unconditionally at step 1, exactly where the unwrapped spelling puts
+ * it — and an all-narration body contributes nothing, so the scan continues
+ * with the steps after the block, as the inlined echoes would. Without the
+ * descent, `repeat: 1` around a leading launch would be a wrapper that parses
+ * an e2e flow as a fragment, letting it declare the `executionPrerequisite`
+ * that {@link validateFlow} exists to refuse. An `until` drain stays opaque,
+ * deliberately: its guard is checked BEFORE each iteration, so its body —
+ * launch included — may run zero times, and a conditional launch controls
+ * nothing (`when:` reads the same way; like any other executable step, either
+ * ends the scan as "not e2e"). Such a flow controls its own start state, so
+ * it is the natural standalone/suite entry point and must not declare an
+ * `executionPrerequisite`. Everything else is a fragment.
  */
 export function isE2eFlow(flow: FlowFile): boolean {
-  const first = flow.steps.find((s) => s.kind !== "echo");
-  return first?.kind === "launch";
+  return beginsWithLaunch(flow.steps) === true;
+}
+
+/**
+ * {@link isE2eFlow}'s scan, three-valued so a `times` block can be exactly as
+ * wide as its pasted-out body: `true` — the first executable step is a launch;
+ * `false` — it is something else, launch or not further down; `null` — these
+ * steps contribute no executable step at all, so an enclosing scan carries on
+ * after them (collapsing `null` to `false` at this level would let an all-echo
+ * block hide a launch that follows it).
+ */
+function beginsWithLaunch(steps: FlowStep[]): boolean | null {
+  for (const step of steps) {
+    if (step.kind === "echo") continue;
+    if (step.kind === "launch") return true;
+    if (step.kind === "repeat" && step.spec.mode === "times") {
+      const inner = beginsWithLaunch(step.steps);
+      if (inner !== null) return inner;
+      continue;
+    }
+    return false;
+  }
+  return null;
 }
 
 /**

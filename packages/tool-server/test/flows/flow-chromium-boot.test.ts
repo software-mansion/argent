@@ -1838,6 +1838,83 @@ describe("flow-execute prerequisite vs leading launch chain", () => {
     expect(bootElectronApp).not.toHaveBeenCalled();
   });
 
+  it("rejects a prerequisite fragment whose repeat: 1 block wraps the launch-bearing run:", async () => {
+    // A times block is its body pasted N times, so `repeat: 1` around the run:
+    // reaches e2e-a's launch at step 1 exactly as the unwrapped spelling above.
+    // Before the scan descended into times blocks it gave up here instead: no
+    // refusal and no hoist, so the acknowledged run auto-detected whatever
+    // browser was already open and green-passed the launch step against it —
+    // the wrapper bought silence, not equivalence.
+    const fragment = await writeFlow(
+      'executionPrerequisite: "the counter must already read taps: 1"\n' +
+        "steps:\n  - repeat: 1\n    steps:\n      - run: e2e-a\n"
+    );
+    await writeSiblingFlow(fragment, "e2e-a", "steps:\n  - launch: { chromium: ./app }\n");
+    const registry = makeRegistry();
+
+    const refusal = runFlow(registry, {
+      name: "repeat-wrapped-prereq",
+      project_root: PROJECT_ROOT,
+      flow_file: fragment,
+      prerequisiteAcknowledged: true,
+    });
+    // Same refusal as the unwrapped spelling, naming the launch-carrying file.
+    await expect(refusal).rejects.toThrow(/must not declare executionPrerequisite/i);
+    await expect(refusal).rejects.toThrow(/"e2e-a"/);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+    expect((registry.invokeTool as any).mock.calls).toEqual([]);
+  });
+
+  it("continues past an all-echo times block to the launch-bearing run: behind it", async () => {
+    // Pasted out, `repeat: 2` over narration is two echoes, and an echo-only
+    // prefix never hid the launch from this guard (the narrating-hop test
+    // above). The block contributes no executable step, so the scan resumes at
+    // the step after it rather than abandoning the walk.
+    const fragment = await writeFlow(
+      'executionPrerequisite: "the counter must already read taps: 1"\n' +
+        "steps:\n  - repeat: 2\n    steps:\n      - echo: warming up\n  - run: e2e-a\n"
+    );
+    await writeSiblingFlow(fragment, "e2e-a", "steps:\n  - launch: { chromium: ./app }\n");
+    const registry = makeRegistry();
+
+    const refusal = runFlow(registry, {
+      name: "echo-block-prereq",
+      project_root: PROJECT_ROOT,
+      flow_file: fragment,
+      prerequisiteAcknowledged: true,
+    });
+    await expect(refusal).rejects.toThrow(/must not declare executionPrerequisite/i);
+    await expect(refusal).rejects.toThrow(/"e2e-a"/);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+    expect((registry.invokeTool as any).mock.calls).toEqual([]);
+  });
+
+  it("still notices when the launch-bearing run: sits inside an until drain", async () => {
+    // The control for the two above: transparency is times-only. A drain's
+    // guard is checked BEFORE each iteration, so its body — the run: and the
+    // launch it reaches — may legitimately execute zero times; a launch that
+    // may never happen is no ground for refusal, and the ordinary handshake
+    // stands.
+    const fragment = await writeFlow(
+      'executionPrerequisite: "logged in"\n' +
+        "steps:\n  - repeat: { until: { hidden: Busy } }\n    steps:\n      - run: e2e-a\n"
+    );
+    await writeSiblingFlow(fragment, "e2e-a", "steps:\n  - launch: { chromium: ./app }\n");
+    const registry = makeRegistry();
+
+    const noticed = await runFlowRaw(registry, {
+      name: "drain-wrapped-prereq",
+      project_root: PROJECT_ROOT,
+      flow_file: fragment,
+    });
+
+    expect(noticed).toMatchObject({
+      notice: expect.stringContaining("prerequisite"),
+      executionPrerequisite: "logged in",
+    });
+    expect(bootElectronApp).not.toHaveBeenCalled();
+  });
+
   it("runs a chromium-pinned fragment whose leading run: reaches a launch, attaching to it", async () => {
     // The escape hatch the refusal exists to leave open. Pinned with `device`,
     // resolveRunDevice hoists no boot — so the run owns nothing at step 1 and

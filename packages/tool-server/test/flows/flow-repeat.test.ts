@@ -401,6 +401,86 @@ describe("repeat: parse/serialize", () => {
   });
 });
 
+describe("repeat: e2e classification", () => {
+  // isE2eFlow judges "begins by launching" on the flow as it would EXECUTE: a
+  // times block is its body pasted N times, so wrapping the leading launch in
+  // `repeat: 1` must not turn an e2e flow into a fragment that may declare the
+  // executionPrerequisite validateFlow exists to refuse.
+  it("refuses executionPrerequisite behind a times-wrapped leading launch, like the unwrapped form", () => {
+    // The same rejection the unwrapped spelling gets (flow-composition's
+    // "rejects an e2e flow that declares executionPrerequisite"): pasted out,
+    // `repeat: 1` IS that flow, marker line aside — the launch still runs
+    // unconditionally at step 1 and wipes the state the prerequisite demands.
+    expect(() =>
+      parseFlow(
+        "executionPrerequisite: nope\nsteps:\n  - repeat: 1\n    steps: [{ launch: com.acme.app }]\n"
+      )
+    ).toThrow(/must not declare executionPrerequisite/i);
+  });
+
+  it("sees through nested times blocks and echo narration at every level", () => {
+    // Arbitrary nesting and interleaved echoes are still the pasted flow: the
+    // first executable step remains the launch, however many wrappers and
+    // narration lines sit in front of it.
+    expect(() =>
+      parseFlow(
+        "executionPrerequisite: nope\n" +
+          "steps:\n" +
+          "  - echo: starting\n" +
+          "  - repeat: 2\n" +
+          "    steps:\n" +
+          "      - repeat: 3\n" +
+          "        steps: [{ echo: inner }, { launch: com.acme.app }]\n"
+      )
+    ).toThrow(/must not declare executionPrerequisite/i);
+  });
+
+  it("continues past an all-echo times body to the launch after the block", () => {
+    // Pasted out, `repeat: 2` over narration is just two echoes — and echoes
+    // never hid a launch from this check. Giving up at the block instead would
+    // make the wrapped spelling parse a prerequisite the inlined one refuses.
+    expect(() =>
+      parseFlow(
+        "executionPrerequisite: nope\n" +
+          "steps:\n" +
+          "  - repeat: 2\n" +
+          "    steps: [{ echo: warming up }]\n" +
+          "  - launch: com.acme.app\n"
+      )
+    ).toThrow(/must not declare executionPrerequisite/i);
+  });
+
+  it("does not call a flow e2e for a launch behind an until drain", () => {
+    // The transparency is times-only. A drain's guard is checked BEFORE each
+    // iteration, so an already-satisfied guard runs the body — launch included
+    // — zero times: a launch that may never happen controls no start state,
+    // and the prerequisite stays legal.
+    expect(() =>
+      parseFlow(
+        "executionPrerequisite: on the profile screen\n" +
+          "steps:\n" +
+          "  - repeat: { until: { hidden: Busy } }\n" +
+          "    steps: [{ launch: com.acme.app }]\n"
+      )
+    ).not.toThrow();
+  });
+
+  it("stops at the first real step inside the block — a tap-first body is a fragment", () => {
+    // The three-state scan's "false" arm through the descent: the body's tap is
+    // the flow's first executable step, so the launch after the block no longer
+    // leads and the flow is an ordinary fragment.
+    expect(() =>
+      parseFlow(
+        "executionPrerequisite: nope\n" +
+          "steps:\n" +
+          "  - repeat: 2\n" +
+          "    steps: [{ tap: A }]\n" +
+          "  - launch: com.acme.app\n"
+      )
+    ).not.toThrow();
+  });
+});
+
 describe("repeat: times", () => {
   it("runs the body N times, one iteration marker each", async () => {
     currentTree = () => screen([notification()]);
