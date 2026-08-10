@@ -1,9 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { platformFromArgs } from "../src/http";
-import {
-  rememberDeviceAlias,
-  resetDeviceAliases,
-} from "../src/utils/debugger/device-alias";
+import { rememberDeviceAlias, resetDeviceAliases } from "../src/utils/debugger/device-alias";
 
 /**
  * The platform on tool:invoke / tool:complete / tool:fail must agree with the

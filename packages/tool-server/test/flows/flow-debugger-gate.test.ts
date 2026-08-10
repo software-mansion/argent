@@ -85,6 +85,53 @@ describe("flow-execute with a debugger-status connectivity gate", () => {
     expect(gate.status).toBe("fail");
     expect(gate.reason).toMatch(/debugger not connected \(metro_not_running\)/);
     expect(gate.reason).toMatch(/Do not retry in a loop/);
+    // `detail` must reach the report: it is the only field that names what
+    // actually answered the port (and device_mismatch's guidance explicitly
+    // forwards the agent to it for the valid logicalDeviceIds).
+    expect(gate.reason).toContain(NOT_CONNECTED_RESULT.detail);
+    expect(gate.result).toEqual(NOT_CONNECTED_RESULT);
+    expect(result.ok).toBe(false);
+  });
+
+  it("maps a debugger-log-registry gate the same way — the second tool id is load-bearing", async () => {
+    // Narrowing the predicate to debugger-status alone would silently
+    // green-pass a log-registry connectivity gate; this pins the second arm.
+    const LOG_FLOW = `executionPrerequisite: ""
+steps:
+  - tool: debugger-log-registry
+    args:
+      port: 8081
+      device_id: X
+  - tool: gesture-tap
+    args:
+      udid: X
+      x: 0.5
+      y: 0.5
+`;
+    const flowsDir = path.join(PROJECT_ROOT, ".argent", "flows");
+    const file = path.join(flowsDir, "log-gated.yaml");
+    await fs.mkdir(flowsDir, { recursive: true });
+    await fs.writeFile(file, LOG_FLOW, "utf8");
+
+    const registry = makeRegistry(async (id) => {
+      if (id === "debugger-log-registry") return NOT_CONNECTED_RESULT;
+      return { tapped: true };
+    });
+    const tool = createRunFlowTool(registry);
+
+    const result = asRun(
+      await tool.execute(
+        {},
+        { name: "log-gated", project_root: PROJECT_ROOT, flow_file: file, device: "X" }
+      )
+    );
+
+    expect(registry.invokeTool).toHaveBeenCalledTimes(1);
+    const executed = result.steps.filter((s) => s.kind === "tool" && s.status !== "skip");
+    expect(executed).toHaveLength(1);
+    expect(executed[0].tool).toBe("debugger-log-registry");
+    expect(executed[0].status).toBe("fail");
+    expect(executed[0].reason).toContain(NOT_CONNECTED_RESULT.detail);
     expect(result.ok).toBe(false);
   });
 

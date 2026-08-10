@@ -85,7 +85,7 @@ To kill a Metro process, use the `stop-metro` tool (requires user confirmation).
 - **App must point at the same host/port as the running Metro.** Default: same machine, port 8081.
 - **iOS Simulator:** By default uses localhost; no extra config needed for same-machine Metro.
 
-**Verify Metro is reachable:** use the `debugger-status` tool. Any result other than `reason: "metro_not_running"` means Metro answered (`reason: "no_app_connected"` means the app has not attached yet — see §2.3).
+**Verify Metro is reachable:** use the `debugger-status` tool. `reason: "metro_not_running"` means Metro did not answer on that port — start it (§2.1). `reason: "no_app_connected"` or `"device_mismatch"` means Metro answered but the app side is off (see §2.3). `reason: "stale_connection"` or `"reconnecting"` says nothing about Metro — both come from the cached debugger connection's own state, before any Metro probe runs — so follow their `guidance` and re-check with another `debugger-status` call rather than concluding Metro is up.
 
 ### 2.3 Reload the App (Ensure New Bundle)
 

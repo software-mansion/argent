@@ -2195,11 +2195,20 @@ async function execLeafStep(
           };
         }
         if (isDebuggerNotConnectedResult(step.name, result)) {
+          // Keep `detail` in the report: it is the only place the underlying
+          // error text lives (device_mismatch's guidance points the agent at
+          // the logicalDeviceIds "listed in the detail message", and the
+          // metro_not_running `got:` fragment names what actually answered the
+          // port). The full structured result rides along like a passing
+          // step's would, so nothing the tool returned is dropped.
           return {
             ...base,
             status: "fail",
             tool: step.name,
-            reason: `debugger not connected (${result.reason}): ${result.guidance}`,
+            reason: `debugger not connected (${result.reason}): ${result.detail} — ${result.guidance}`,
+            result,
+            outputHint,
+            args,
           };
         }
         return { ...base, status: "pass", tool: step.name, result, outputHint, args };

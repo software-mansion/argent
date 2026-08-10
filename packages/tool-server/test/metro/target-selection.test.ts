@@ -123,8 +123,9 @@ describe("selectTarget", () => {
 
   it("the ambiguous-mismatch error carries the DEBUGGER_TARGET_DEVICE_MISMATCH signal", () => {
     // The message is contract (asserted above and matched on by agents); the
-    // signal unblinds telemetry (previously a plain Error → unclassified SIE)
-    // and lets debugger-status map it to the "device_mismatch" reason.
+    // signal gives telemetry a dedicated code — instead of the catch-all
+    // service-initialization bucket — and lets debugger-status map the error
+    // to the "device_mismatch" reason.
     const dev1 = makeTarget({ id: "dev1", reactNative: { logicalDeviceId: "aaa" } });
     const dev2 = makeTarget({ id: "dev2", reactNative: { logicalDeviceId: "bbb" } });
     let thrown: unknown;
