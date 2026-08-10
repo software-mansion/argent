@@ -29,14 +29,17 @@
   // catches that.
   //
   // Count it the way CI does, in a tree with no build output. With
-  // `isSkipLibs` off the whole 215-vs-208 difference hangs on a single path:
-  // whether packages/registry's `main`/`types` resolves to a file that exists.
-  // Not on anything in that file — a zero-byte packages/registry/dist/index.js
-  // takes the count to 208 just as a real build does — and not on any other
-  // workspace's, twelve of which move it by nothing at all. So `npm run knip`
-  // passing after a local `tsc --build` is not evidence the job will pass; it
-  // has seven slots of headroom CI does not. Remove the dist directories
-  // before trusting a number from this ceiling.
+  // `isSkipLibs` off the whole 215-vs-207 difference hangs on two workspaces
+  // resolving `main`/`types` to files that exist: packages/registry is worth
+  // seven of it and packages/configuration-core the eighth, whose built
+  // index.d.ts is what stops tool-server's re-export of SECRET_ENV_PREFIX
+  // being reported. Not on anything in those files — a zero-byte
+  // packages/registry/dist/index.js takes the count to 208 just as its real
+  // build does — and not on any other workspace's, eleven of which move it by
+  // nothing at all. So `npm run knip` passing after a local `tsc --build` is
+  // not evidence the job will pass; it has eight slots of headroom CI does
+  // not. Remove the dist directories before trusting a number from this
+  // ceiling.
   //
   // Never reported as unused: build output (git-ignored, so knip skips it as a
   // file, even where it moves the counts above),
