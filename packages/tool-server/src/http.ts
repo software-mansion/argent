@@ -965,7 +965,13 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const attribute = (message: string): string => {
           if (!deviceArg || !isExternalId(deviceArg)) return message;
           const hint = externalSupportHint(deviceArg);
-          return hint ? `${message} ${hint}` : message;
+          if (!hint) return message;
+          /**
+           * Not every thrown message ends in punctuation and appending to one
+           * that doesn't runs the two sentences together.
+           */
+          const separator = /[.!?]$/.test(message.trimEnd()) ? " " : ". ";
+          return `${message.trimEnd()}${separator}${hint}`;
         };
         if (wantsStream) {
           writeLine({
