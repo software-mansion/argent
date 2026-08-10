@@ -287,6 +287,23 @@ const jsDebuggerSchema = z.object({
   webSocketUrl,
 });
 
+/**
+ * Where to attach to the native-devtools agent already inside the app, instead
+ * of injecting Argent's own dylib.
+ *
+ * `DYLD_INSERT_LIBRARIES` and the agent's endpoint are simulator-wide launchd
+ * values, so two products arming their own injection overwrite each other. A
+ * provider that already injects re-serves its agent connection here instead.
+ *
+ * The socket speaks the same newline-delimited JSON envelope Argent's own
+ * agent does (`{ type: "Control" | "ViewInspector" | "CDP", payload }`),
+ * opening with a `Control` frame naming the connected `bundleId`.
+ */
+const nativeDevtoolsSchema = z.object({
+  /** Listening unix socket. 104 is the `sockaddr_un.sun_path` limit on macOS. */
+  socketPath: z.string().min(1).max(104),
+});
+
 const simulatorServerSchema = z.object({
   apiUrl: httpUrl,
   streamUrl: httpUrl,
@@ -324,6 +341,8 @@ export const providerDeviceSchema = z
      */
     metroPort: z.number().int().min(1).max(65535).optional(),
     name: z.string().min(1).max(128),
+    /** @see {@linkcode nativeDevtoolsSchema} */
+    nativeDevtools: nativeDevtoolsSchema.optional(),
     nativeId: z.string().min(1).max(256).regex(SAFE_NATIVE_ID),
     platform: z.enum(["ios", "android"]),
     simulatorServer: simulatorServerSchema.optional(),
@@ -416,6 +435,7 @@ export interface ExternalDevice {
   kind: "device" | "emulator" | "simulator";
   metroPort?: number;
   name: string;
+  nativeDevtools?: { socketPath: string };
   nativeId: string;
   platform: "android" | "ios";
   provider: {
@@ -631,6 +651,7 @@ function adoptDevice(record: ProviderRecord, raw: unknown): ExternalDevice | und
     kind: device.kind,
     ...(device.metroPort ? { metroPort: device.metroPort } : {}),
     name: device.name,
+    ...(device.nativeDevtools ? { nativeDevtools: device.nativeDevtools } : {}),
     nativeId: device.nativeId,
     platform: device.platform,
     provider: {

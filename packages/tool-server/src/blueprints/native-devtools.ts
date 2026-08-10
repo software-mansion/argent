@@ -9,7 +9,11 @@ import {
   type ServiceBlueprint,
   type ServiceEvents,
 } from "@argent/registry";
-import { assertExternalCapability } from "../utils/external-devices";
+import {
+  assertExternalCapability,
+  isExternalId,
+  lookupExternalDevice,
+} from "../utils/external-devices";
 import { pickIosHost, buildDyldInsertLibraries, type IosEndpoint } from "../utils/ios-host";
 
 // Re-exported for the env-merging unit test that imports it from this module.
@@ -386,6 +390,30 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
      */
     await assertExternalCapability(NATIVE_DEVTOOLS_NAMESPACE, device, "native-devtools");
 
+    /**
+     * A provider that grants this mechanism lends us the agent it already has
+     * in the app. Injecting our own instead would overwrite the simulator-wide
+     * `DYLD_INSERT_LIBRARIES` and endpoint it set, so attaching is the only
+     * supported shape on a device we did not boot.
+     */
+    const lentSocketPath = isExternalId(device.id)
+      ? (await lookupExternalDevice(device.id)).nativeDevtools?.socketPath
+      : undefined;
+
+    if (isExternalId(device.id) && !lentSocketPath) {
+      throw new FailureError(
+        `${NATIVE_DEVTOOLS_NAMESPACE} needs a socket to attach to on a provider-supplied device, ` +
+          `and this one published none. Argent will not inject its own agent here: that would ` +
+          `overwrite the injection its provider already armed.`,
+        {
+          error_code: FAILURE_CODES.NATIVE_DEVTOOLS_SOCKET_NOT_PUBLISHED,
+          failure_stage: "native_devtools_factory_options",
+          failure_area: "tool_server",
+          error_kind: "unsupported",
+        }
+      );
+    }
+
     const host = pickIosHost(device);
     // Remote sims can't use unix sockets because the QUIC reverse tunnel
     // only bridges TCP streams.
@@ -513,8 +541,11 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       });
     }
 
-    // Remove stale socket file from a crashed previous run (unix-only).
-    if (transport === "unix") {
+    /**
+     * Remove stale socket file from a crashed previous run (unix-only). Never
+     * in attach mode, that path is the provider's live socket, not ours.
+     */
+    if (transport === "unix" && !lentSocketPath) {
       try {
         fs.unlinkSync(socketPath);
       } catch {
@@ -522,8 +553,13 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       }
     }
 
-    // ── Socket server ─────────────────────────────────────────────────────────
-    const server = net.createServer((socket) => {
+    /**
+     * Drive one agent connection: the handshake, the network log it feeds and
+     * the RPC responses it answers with. Same wire protocol whether our dylib
+     * dialled in or we dialled out to a lent socket, so only who connects
+     * differs.
+     */
+    const serveAgentConnection = (socket: net.Socket) => {
       let bundleId: string | null = null;
       const rl = readline.createInterface({ input: socket });
 
@@ -612,18 +648,84 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       socket.on("error", () => {
         // errors are handled via the close event
       });
-    });
+    };
 
-    if (endpoint.transport === "tcp") {
+    // ── Socket server ───────────────────────────────────────────────────────
+    // In attach mode nothing dials us, so there is no listener to open.
+    const server = lentSocketPath ? null : net.createServer(serveAgentConnection);
+    let lentSocket: net.Socket | null = null;
+    /** Our own hang-up must not read as the provider dropping us. */
+    let disposed = false;
+
+    if (lentSocketPath) {
+      /**
+       * Dial the provider's socket, which plays the agent's side. Failing here
+       * beats degrading, the descriptor advertised it, so a refusal is worth
+       * saying out loud rather than surfacing later as empty results.
+       */
+      lentSocket = await new Promise<net.Socket>((resolve, reject) => {
+        const socket = net.connect(lentSocketPath);
+
+        const onError = (err: NodeJS.ErrnoException) => {
+          socket.destroy();
+
+          reject(
+            new FailureError(
+              `${NATIVE_DEVTOOLS_NAMESPACE} could not attach to the socket its provider published ` +
+                `at ${lentSocketPath}: ${err.code ?? err.message}. The provider may have stopped ` +
+                `serving it — run list-devices to see what it is offering now.`,
+              {
+                error_code: FAILURE_CODES.NATIVE_DEVTOOLS_ATTACH_FAILED,
+                error_kind: "network",
+                failure_area: "tool_server",
+                failure_stage: "native_devtools_attach",
+              }
+            )
+          );
+        };
+
+        socket.once("error", onError);
+
+        socket.once("connect", () => {
+          socket.off("error", onError);
+          resolve(socket);
+        });
+      });
+
+      serveAgentConnection(lentSocket);
+
+      /**
+       * A provider hangs up when the app it was lending goes away. We are the
+       * client here, so nothing re-dials on its own. Terminating lets the
+       * registry tear the service down and re-run this factory on the next
+       * call, which attaches to whatever the provider is serving then.
+       */
+      lentSocket.once("close", () => {
+        if (disposed) return;
+
+        events.emit(
+          "terminated",
+          new FailureError(
+            `${NATIVE_DEVTOOLS_NAMESPACE} lost the agent connection its provider was lending.`,
+            {
+              error_code: FAILURE_CODES.NATIVE_DEVTOOLS_ATTACH_LOST,
+              error_kind: "network",
+              failure_area: "tool_server",
+              failure_stage: "native_devtools_attach_lifecycle",
+            }
+          )
+        );
+      });
+    } else if (endpoint.transport === "tcp") {
       // `endpoint.port` is undefined here — bind ephemeral and write the
       // realized port back so each per-device instance gets its own.
       await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(endpoint.port ?? 0, "127.0.0.1", () => {
-          server.off("error", reject);
-          const addr = server.address();
+        server!.once("error", reject);
+        server!.listen(endpoint.port ?? 0, "127.0.0.1", () => {
+          server!.off("error", reject);
+          const addr = server!.address();
           if (addr === null || typeof addr === "string") {
-            server.close();
+            server!.close();
             reject(new Error("native-devtools server failed to bind a TCP port"));
             return;
           }
@@ -636,20 +738,27 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       // written — lands on our listener.
       await host.startProxy(udid, endpoint.port!);
     } else {
-      await bindNativeDevtoolsUnixSocket(server, socketPath);
+      await bindNativeDevtoolsUnixSocket(server!, socketPath);
     }
 
     // Tolerate ensureEnv failure: throwing here would leak `server` — the
     // registry's `_teardown` skips dispose when `node.instance` is never set.
-    // The watcher retries on subsequent polls.
-    await ensureEnvReady().catch(() => {});
+    // The watcher retries on subsequent polls. Attach mode has no env of ours
+    // to arm: the provider owns the injection.
+    if (!lentSocketPath) {
+      await ensureEnvReady().catch(() => {});
+    }
 
     // ── Public API ────────────────────────────────────────────────────────────
     const api: NativeDevtoolsApi = {
-      isEnvSetup: () => envSetup,
-      socketPath,
-      ensureEnvReady,
-      reverifyEnv,
+      /**
+       * Attach mode: the provider armed the injection, so the env is by
+       * definition ready and there is nothing of ours to re-apply.
+       */
+      isEnvSetup: () => (lentSocketPath ? true : envSetup),
+      socketPath: lentSocketPath ?? socketPath,
+      ensureEnvReady: lentSocketPath ? () => Promise.resolve() : ensureEnvReady,
+      reverifyEnv: lentSocketPath ? () => Promise.resolve() : reverifyEnv,
       getInitFailure: () => initFailure,
 
       isConnected: (bundleId) => connections.has(bundleId),
@@ -658,6 +767,12 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
 
       async requiresAppRestart(bundleId) {
         if (connections.has(bundleId)) return false;
+        /**
+         * Attach mode: relaunching would not help. The provider decides which
+         * app it serves us, and restarting the app it is running is its user's
+         * call, not ours.
+         */
+        if (lentSocketPath) return false;
         // Re-verify and re-set env — handles the case where the simulator was
         // rebooted and launchd cleared DYLD_INSERT_LIBRARIES. Must use
         // reverifyEnv (not ensureEnvReady): the latter latches after the first
@@ -746,13 +861,19 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     return {
       api,
       dispose: async () => {
+        disposed = true;
         for (const { socket } of connections.values()) {
           socket.destroy();
         }
         connections.clear();
         activatedBundleIds.clear();
-        server.close();
-        if (transport === "unix") {
+        /**
+         * Attach mode owns only its end of the connection: hang up and leave
+         * the provider's socket file and server exactly as they were.
+         */
+        lentSocket?.destroy();
+        server?.close();
+        if (transport === "unix" && !lentSocketPath) {
           try {
             fs.unlinkSync(socketPath);
           } catch {
@@ -770,7 +891,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
           );
         }
         pendingRpc.clear();
-        if (endpoint.transport === "tcp") {
+        if (endpoint.transport === "tcp" && !lentSocketPath) {
           await host.stopProxy(udid, endpoint.port!);
         }
       },

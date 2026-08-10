@@ -8,7 +8,11 @@ import {
 } from "../../../../blueprints/native-devtools";
 import { resolveNativeTargetApp } from "../../../../utils/native-target-app";
 import { isTvOsSimulator } from "../../../../utils/ios-devices";
-import { externalSupportHint, isExternalId } from "../../../../utils/external-devices";
+import {
+  externalSupportHint,
+  findExternalDevice,
+  isExternalId,
+} from "../../../../utils/external-devices";
 import { parseNativeDescribeScreenResult } from "../../../native-devtools/native-describe-contract";
 import { DescribeTreeData, parseDescribeResult, type DescribeNode } from "../../contract";
 import { adaptAXDescribeToDescribeResult } from "./ios-ax-adapter";
@@ -61,6 +65,14 @@ function emptyTree(): DescribeNode {
     frame: { x: 0, y: 0, width: 1, height: 1 },
     children: [],
   });
+}
+
+/**
+ * The only shape in which the fallback can run on a device we did not boot.
+ */
+function lendsNativeDevtools(deviceId: string): boolean {
+  const external = findExternalDevice(deviceId);
+  return Boolean(external?.capabilities.has("native-devtools") && external.nativeDevtools);
 }
 
 export interface DescribeIosParams {
@@ -150,13 +162,11 @@ export async function describeIos(
   }
 
   /**
-   * The native-devtools fallback injects Argent's dylib, which the provider
-   * has to grant and usually won't. Suppress it rather than let
-   * capability-denied replace describe's real empty-tree result, and say so.
-   * An unexplained "no elements" would send the agent hunting a bug that
-   * isn't there.
+   * Without a lent socket the fallback would inject our own dylib, which is
+   * refused here. Say so rather than let that error replace describe's real
+   * empty-tree result. An unexplained "no elements" reads as a bug.
    */
-  if (isExternalId(device.id)) {
+  if (isExternalId(device.id) && !lendsNativeDevtools(device.id)) {
     return {
       hint:
         hint ??

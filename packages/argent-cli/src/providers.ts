@@ -170,6 +170,42 @@ async function checkDevices(devices: ProviderDevice[], findings: Finding[]): Pro
       }
     }
 
+    if (device.nativeDevtools && !device.capabilities.includes("native-devtools")) {
+      findings.push(
+        warn(
+          `${label}: publishes a nativeDevtools socket but does not declare 'native-devtools', ` +
+            `so argent will never attach to it`
+        )
+      );
+    }
+
+    if (device.capabilities.includes("native-devtools")) {
+      if (device.platform !== "ios") {
+        findings.push(
+          error(`${label}: 'native-devtools' is an iOS-only capability in this argent version`)
+        );
+      } else if (!device.nativeDevtools) {
+        findings.push(
+          error(
+            `${label}: declares 'native-devtools' with no nativeDevtools socket — argent would ` +
+              `arm its own injection, overwriting the simulator-wide DYLD_INSERT_LIBRARIES and ` +
+              `agent endpoint you set. Re-serve your agent connection, or withhold the capability`
+          )
+        );
+      } else {
+        try {
+          fs.accessSync(device.nativeDevtools.socketPath, fs.constants.R_OK | fs.constants.W_OK);
+        } catch {
+          findings.push(
+            error(
+              `${label}: nativeDevtools socket '${device.nativeDevtools.socketPath}' is not ` +
+                `readable and writable by this user, so argent cannot attach to it`
+            )
+          );
+        }
+      }
+    }
+
     if (device.platform === "android" && device.capabilities.includes("simctl")) {
       findings.push(error(`${label}: 'simctl' is an iOS-only capability`));
     }

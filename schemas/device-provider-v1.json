@@ -167,6 +167,19 @@
             }
           },
           "required": ["webSocketUrl"]
+        },
+        "nativeDevtools": {
+          "type": "object",
+          "description": "Where to attach to the native-devtools agent already inside the app, instead of injecting Argent's own dylib. DYLD_INSERT_LIBRARIES and the agent's endpoint are simulator-wide launchd values, so two products arming their own injection overwrite each other, and two builds of the same agent in one process would duplicate its classes and swizzles. A provider that already injects should re-serve its agent connection here and stay the only one in the app. The socket speaks the same newline-delimited JSON envelope Argent's own agent does — { type: 'Control' | 'ViewInspector' | 'CDP', payload } — opening with a Control frame naming the connected bundleId.",
+          "properties": {
+            "socketPath": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 104,
+              "description": "Path to a listening unix socket. Bounded by sockaddr_un.sun_path, which is 104 bytes on macOS."
+            }
+          },
+          "required": ["socketPath"]
         }
       },
       "allOf": [
