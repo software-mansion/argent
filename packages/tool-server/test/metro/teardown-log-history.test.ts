@@ -22,7 +22,7 @@ import {
   type JsRuntimeDebuggerApi,
 } from "../../src/blueprints/js-runtime-debugger";
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
-import { debuggerLogRegistryTool } from "../../src/tools/debugger/debugger-log-registry";
+import { createDebuggerLogRegistryTool } from "../../src/tools/debugger/debugger-log-registry";
 import { __resetReapedSessionsForTesting } from "../../src/utils/reaped-sessions";
 
 let mockServer: http.Server;
@@ -80,7 +80,7 @@ beforeAll(async () => {
   registry = new Registry();
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
   registry.registerTool(debuggerConnectTool);
-  registry.registerTool(debuggerLogRegistryTool);
+  registry.registerTool(createDebuggerLogRegistryTool(registry));
 });
 
 afterAll(async () => {
