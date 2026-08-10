@@ -403,7 +403,12 @@ export function renderFailedSteps(report: FlowReport): string[] {
   const lines: string[] = [];
   let n = 0;
   for (const s of report.steps) {
-    if (s.kind === "echo") continue;
+    // Same skips as renderReport, or the number printed here disagrees with
+    // the single-mode rerun it sends the operator to. Skipping a structural
+    // marker outright drops no failure: the runner pushes markers with pass
+    // or skip status only — a repeat block's fail/error terminal lines are
+    // deliberately not structural (see execRepeatStep in the tool-server).
+    if (s.kind === "echo" || isStructural(s)) continue;
     n++;
     if (s.status !== "fail" && s.status !== "error" && !s.warning) continue;
     lines.push(renderStepLine(s, n, report.flow));

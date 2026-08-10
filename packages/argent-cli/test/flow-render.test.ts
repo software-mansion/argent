@@ -392,6 +392,29 @@ describe("flow report rendering", () => {
     ]);
   });
 
+  it("renderFailedSteps numbers past structural markers to match a single-mode rerun", () => {
+    // A drain that hit its cap: the repeat block's markers plus the failing
+    // verdict line the tool-server pushes at the enclosing depth — no target,
+    // reason only, and NOT structural (the verdict is the block's assertion).
+    const report = mkReport([
+      ...REPEAT_STEPS,
+      {
+        index: 5,
+        kind: "repeat",
+        status: "fail",
+        reason: 'still not hidden "Spinner" after 2 iterations (max)',
+      },
+    ]);
+    const failed = renderFailedSteps(report);
+    // Step 3: the two taps take 1 and 2, the three markers take none — the
+    // sequence a single-mode rerun of the same flow prints. A walk that
+    // counted the markers would say 6 (off by 1+N per entered block).
+    expect(failed).toEqual(['  ✗  3 repeat — still not hidden "Spinner" after 2 iterations (max)']);
+    // Pin the equivalence directly: the batch line must be byte-identical to
+    // the line renderReport prints for the same report.
+    expect(renderReport(report).split("\n")).toContain(failed[0]!);
+  });
+
   it("renderFailedSteps includes errored steps and their warnings", () => {
     expect(
       renderFailedSteps(
