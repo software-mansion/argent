@@ -24,7 +24,7 @@ An element-seeking swipe follows the same rule: if its purpose is to reveal a ta
 
 ### Run the gate on the warning, not at audit time
 
-Work this gate the moment `flow-add-step` warns that it kept a raw point, while the screen that produced it is still on the device:
+Work this gate the moment `flow-add-step` warns that it kept a raw point — and equally when it silently recorded a role-only selector, which warns about nothing — while the screen that produced it is still on the device:
 
 1. On iOS, make an evidenced full-tree probe before keeping the point: query each plausible id/label with `native-find-views`; when there is no useful query term, call `native-full-hierarchy` with narrow `fields` and `maxDepth: 100`. Record the relevant match or no-match result with the exception evidence. `describe` and the leaf-only `native-describe-screen` are accessibility projections and are never sufficient evidence that no flow selector exists. A recorder warning only proves automatic derivation failed; it does not rule out a sibling or child label that can safely receive the tap.
 2. On other platforms, inspect the deepest available app tree: `debugger-component-tree` for React Native, otherwise `describe`. On Android no tool exposes the runner's tree at all, so step 3 is the only way to confirm a candidate there. Prefer an id on iOS and Android even when trimmed discovery omits it; on Chromium the runner's tree is a [subset of `describe`](flow-yaml.md#the-runner-tree-is-not-the-discovery-tree), so an element absent there has no selector at all.

@@ -104,9 +104,15 @@ Step 1 is what makes step 3 falsifiable, so it must carry the **same** selector 
 
 ### Taps
 
-`flow-add-step` cannot receive a flow selector directly. Locate the element by id/text first, then record `gesture-tap` at the center of its discovered frame. The recorder reads the **pre-tap** tree and stores a strict `tap: { id: ... }` or `tap: { text: ... }` selector. The live coordinates are transport for the gesture, not an acceptable final locator.
+`flow-add-step` cannot receive a flow selector directly. Locate the element by id/text first, then record `gesture-tap` at the center of its discovered frame. The live coordinates are transport for the gesture, not an acceptable final locator.
 
-When the element cannot be addressed the recorder keeps the raw point, appends the step anyway, and **warns with the reason and the retarget**. Act on that warning before the next action: to replace a kept coordinate, return to the screen the tap started from — with direct MCP calls, never through `flow-add-step` — record the corrected tap, and delete the coordinate step after `flow-finish-recording`. Do not leave both. Keep a point only after the **coordinate fallback gate** in [Reliability and recovery](reliability-and-recovery.md#coordinate-fallback-gate).
+The recorder reads the **pre-tap** tree and derives the selector in a fixed order — `id`, then `text`, then the element's `role` — which gives three outcomes. Only two of them warn, so read the returned flow file after every recorded tap:
+
+1. **`tap: { id: ... }` or `tap: { text: ... }`** — the good case.
+2. **`tap: { role: ... }`, appended with no warning at all.** An icon-only button carrying neither id nor visible label lands here. `role` matches as a case-insensitive substring, so a replay screen holding a second control of that role can win the [ranking](flow-yaml.md#the-runner-tree-is-not-the-discovery-tree), and the tap lands on the wrong control and reports a pass. Treat it exactly like a kept coordinate: re-record against an id/text target, or clear it through the coordinate fallback gate.
+3. **A kept raw point**, appended with a **warning naming the reason and the retarget**.
+
+Act on outcome 2 or 3 before the next action: return to the screen the tap started from — with direct MCP calls, never through `flow-add-step` — record the corrected tap, and delete the weak step after `flow-finish-recording`. Do not leave both. Keep a point or a bare role only after the **coordinate fallback gate** in [Reliability and recovery](reliability-and-recovery.md#coordinate-fallback-gate).
 
 **Never record a tap on the on-screen keyboard.** Some platforms expose the whole keyboard as ONE addressable node, so a tap on a key records a selector for the keyboard and replays at its centre — a different key, reported as a pass. The recorder cannot tell that node from a legitimate large control. Type with `keyboard`, which polish folds into `type:`.
 
@@ -214,8 +220,9 @@ Both screen changes carry the pair. Each `idle` gate is added during polish — 
 Review the file before replay. Run all four greps and resolve every hit.
 
 ```text
-# 1. Coordinates and raw gestures
+# 1. Weak targets: coordinates, raw gestures, and role selectors
 rg -n '(\{ *x:|^ +(x|centerX|fromX|toX):|gesture-(tap|swipe|scroll|drag|pinch|rotate|custom))' .argent/flows/<name>.yaml
+rg -n -B2 '^ +role:' .argent/flows/<name>.yaml
 
 # 2. Stored device ids
 rg -n '(udid|device_id)' .argent/flows/<name>.yaml
@@ -230,6 +237,7 @@ rg -n 'open-url' .argent/flows/<name>.yaml
 ```
 
 - Convert every element-targeting point to a selector. Each coordinate `tap:` warned you when it was recorded; this grep is the second chance, not the first, so every remaining hit has to defend itself.
+- **A `role:` that is the only key under a `tap:`/`long-press:` is the recorder's silent fallback** — it warned you about nothing. Replace it with an id/text selector, or clear it through the coordinate fallback gate. A `role:` sitting beside another field or a scope (`within`, `after`, `next`) is a deliberate selector and needs no defence.
 - Convert every raw gesture used only to find an element to `scroll-to`.
 - For each remaining point/raw gesture, require the exception evidence and expected-result check from the **coordinate fallback gate** in [Reliability and recovery](reliability-and-recovery.md).
 - Require zero stored device ids and zero literal credentials.
