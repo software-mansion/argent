@@ -44,7 +44,14 @@ export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
   "gesture-tap": 1500,
   "gesture-pinch": 1500,
   "gesture-rotate": 1500,
-  "run-sequence": 15000,
+  // run-sequence never waits for settle itself (only a ~100 ms inter-step gap,
+  // overridable per step), so this bounds the final step's settle. Its allowed
+  // steps are in-app interactions only (gestures/button/keyboard/rotate/tv-remote/
+  // await-ui-element — no launch-app/open-url), which settle within the ~1.5 s
+  // their standalone tools get, so 3 s covers them with margin. The old 15 s only
+  // added dead wait on a screen that never settles (a spinner/video), blurred at
+  // any cap.
+  "run-sequence": 3000,
   "button": 1500,
   "rotate": 1000,
   "keyboard": 300,
