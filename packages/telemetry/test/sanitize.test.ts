@@ -575,6 +575,53 @@ describe("sanitize", () => {
     });
   });
 
+  describe("tool:fail invalid_params validator", () => {
+    const base = { tool: "launch-app", duration_ms: 1 };
+
+    it("accepts camelCase schema names — the /i flag is load-bearing", () => {
+      // A third of registered tools declare camelCase zod keys (bundleId,
+      // avdName, maxNodes, ...). arrayOf is all-or-nothing, so dropping the
+      // case-insensitive flag would silently void the whole property for any
+      // call whose failing param is camelCase.
+      const out = sanitize("tool:fail", {
+        ...base,
+        invalid_params: ["bundleId", "electronAppPath", "unrecognized_keys"],
+      });
+      expect(out.invalid_params).toEqual(["bundleId", "electronAppPath", "unrecognized_keys"]);
+    });
+
+    it("accepts exactly 16 names — the emit-side cap must fit through", () => {
+      // http.ts caps the derived list at 16 before emitting; the sanitize cap
+      // must not be tighter, or every capped emission silently loses the
+      // property.
+      const names = Array.from({ length: 16 }, (_, i) => `param_${i}`);
+      const out = sanitize("tool:fail", { ...base, invalid_params: names });
+      expect(out.invalid_params).toEqual(names);
+    });
+
+    it("drops the whole property at 17 names", () => {
+      const names = Array.from({ length: 17 }, (_, i) => `param_${i}`);
+      const out = sanitize("tool:fail", { ...base, invalid_params: names });
+      expect("invalid_params" in out).toBe(false);
+    });
+
+    it("drops the whole property when one element is not an identifier", () => {
+      const out = sanitize("tool:fail", {
+        ...base,
+        invalid_params: ["port", "not a name!"],
+      });
+      expect("invalid_params" in out).toBe(false);
+    });
+
+    it("drops an element longer than 64 characters (whole property voided)", () => {
+      const out = sanitize("tool:fail", {
+        ...base,
+        invalid_params: ["a".repeat(65)],
+      });
+      expect("invalid_params" in out).toBe(false);
+    });
+  });
+
   describe("sensitive-arg drop tests", () => {
     it.each([
       ["keyboard.text", { text: "hunter2" }],

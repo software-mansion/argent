@@ -144,8 +144,12 @@ export class Registry {
 
       // Build the per-invocation context: caller options (e.g. signal) plus the
       // registry-owned artifact store, so any tool can register host files via
-      // `ctx.artifacts` without declaring a per-tool service.
-      const ctx: ToolContext = { ...options, artifacts: this.artifacts };
+      // `ctx.artifacts` without declaring a per-tool service. The invocation id
+      // is always populated — when the caller supplied none, the id minted
+      // above (the one toolInvoked/toolCompleted carry) is exposed here, so an
+      // event a tool emits keyed on ctx.toolInvocationId joins the lifecycle
+      // pair on every dispatch path, not only attributed HTTP requests.
+      const ctx: ToolContext = { ...options, toolInvocationId, artifacts: this.artifacts };
 
       const runOnce = async (): Promise<TResult> => {
         const resolvedServices: Record<string, unknown> = {};

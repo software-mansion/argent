@@ -39,6 +39,7 @@ import {
   UnsupportedOperationError,
 } from "./utils/capability";
 import { resolveDevice } from "./utils/device-info";
+import { canonicalDeviceId } from "./utils/debugger/device-alias";
 import { refineTvPlatform } from "./utils/telemetry-platform";
 import { deriveInvalidParams } from "./utils/invalid-params";
 import type { Server as HttpServer } from "node:http";
@@ -181,7 +182,14 @@ type HttpFailureMeta = {
 function inferPlatform(deviceId: string | null): TelemetryPlatform | null {
   if (!deviceId) return null;
   try {
-    return refineTvPlatform(resolveDevice(deviceId).platform, deviceId);
+    // Telemetry-only: rewrite a forwarded Metro logicalDeviceId back to the id
+    // the caller connected with (iOS UDID / Android serial) before classifying.
+    // Without this, tool:invoke/complete/fail on debugger tools that accept the
+    // forwarded id would report a different platform than debugger:tool_outcome
+    // for the same tool_invocation_id (the opaque hex handle shape-classifies
+    // as android). Unaliased ids pass through unchanged.
+    const canonical = canonicalDeviceId(deviceId) ?? deviceId;
+    return refineTvPlatform(resolveDevice(canonical).platform, canonical);
   } catch {
     return null;
   }
@@ -224,8 +232,9 @@ function extractInvocationMeta(
  * through the runtime-kind cache and refines to `tvos` / `android-tv` once that
  * cache is warm (coarse `ios` / `android` until then); only the `avdName`-only
  * fallback is unconditionally coarse.
+ * Exported for tests (the alias-consistency pin in http-platform-alias.test.ts).
  */
-function platformFromArgs(data: unknown): TelemetryPlatform | null {
+export function platformFromArgs(data: unknown): TelemetryPlatform | null {
   if (!data || typeof data !== "object") return null;
   const deviceArg = extractDeviceArg(data);
   if (deviceArg) return inferPlatform(deviceArg) ?? null;
