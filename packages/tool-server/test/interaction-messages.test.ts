@@ -47,11 +47,14 @@ describe("tool interaction messages", () => {
     expect(keyboard.startedMsg!({ params: { udid: "device-1", text: "hi", key: "enter" } })).toBe(
       "Entering text and pressing a key"
     );
-    // The fourth shape, on this formatter too. Breaking only `startedMsg`'s
-    // empty-request branch (`params.text === undefined && params.key !== undefined`,
-    // so `keyboard {}` falls through to "Entering text") was green against the
-    // whole suite while the mirror-image edit on `completedMsg` was caught —
-    // so the comment above held for one of the two formatters it names.
+    // The fourth shape, on this formatter too. The two formatters are
+    // symmetric, not asymmetric: `completedMsg` appears in no other test file,
+    // `startedMsg` only in this file's secret-leak check (which every branch
+    // string satisfies), so neither empty-request branch is pinned anywhere
+    // else. Narrowing BOTH to `params.text === undefined && params.key !==
+    // undefined` — so `keyboard {}` falls through to "Entering text" /
+    // "Entered text" — stays green across the whole suite once this assertion
+    // and its `completedMsg` twin below are removed. Both are load-bearing.
     expect(keyboard.startedMsg!({ params: { udid: "device-1" } })).toBe("Pressing a key");
     expect(keyboard.completedMsg!({ params: { udid: "device-1", text: "hi" }, result: {} })).toBe(
       "Entered text"
