@@ -144,10 +144,13 @@ describe("android-input — injection", () => {
   });
 
   it("types the text's case verbatim (no fold at the `input text` sink)", async () => {
-    // Every other fixture in this file is all-lowercase, so a `toLowerCase()`
-    // slip inside `injectAndroidText` — after the assert, where a shared
-    // normalise with the sibling `resolveAndroidNamedKeycode` (which DOES fold
-    // case, deliberately) would land — was green against the whole suite.
+    // No other fixture carries an uppercase letter INTO `injectAndroidText`.
+    // The two that are not all-lowercase reach it by neither route: "ENTER"
+    // goes to `injectAndroidNamedKey`, which folds case deliberately, and
+    // "hello WORLD 123 …" calls `assertTypeableAndroidText` on its own. So a
+    // `toLowerCase()` slip inside `injectAndroidText` — after the assert, where
+    // a shared normalise with the sibling `resolveAndroidNamedKeycode` would
+    // land — was green against the whole suite.
     // Nothing downstream guarantees case either: `shellQuote` only quotes and
     // `assertTypeableAndroidText` accepts A-Z untouched, so the mirror-image
     // `toUpperCase()` is the only direction that was red.
