@@ -215,6 +215,46 @@ describe("requirements no target could satisfy are rejected at parse", () => {
     ).toEqual({ platform: ["ios", "chromium"], runtimeKind: "tv" });
   });
 
+  it("judges launch coverage only over the platforms the runtime kind leaves viable", () => {
+    // vega is always tv, so a mobile requirement never reaches it — the launch
+    // owes it no app id.
+    expect(() =>
+      parseFlow(
+        "requires: { platform: [ios, android, vega], runtimeKind: mobile }\n" +
+          "steps: [{ launch: { ios: com.a, android: com.a } }]"
+      )
+    ).not.toThrow();
+  });
+
+  it("keeps the blessed mixed combination legal once a launch step exists", () => {
+    // Only ios can be a TV here, and `native` covers it; chromium owes nothing.
+    expect(() =>
+      parseFlow(
+        "requires: { platform: [ios, chromium], runtimeKind: tv }\n" +
+          "steps: [{ launch: { native: com.a } }]"
+      )
+    ).not.toThrow();
+  });
+
+  it("refuses a runtime-kind-only block whose launches serve no platform of that kind", () => {
+    // chromium is always mobile, so no tv target anywhere can run this file —
+    // without the check it would parse clean and then skip silently forever.
+    let err: unknown;
+    try {
+      parseFlow("requires: { runtimeKind: tv }\nsteps: [{ launch: { chromium: /some/app } }]");
+    } catch (e) {
+      err = e;
+    }
+    expect((err as Error).message).toMatch(/can never be satisfied/);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIRES_UNSATISFIABLE);
+  });
+
+  it("allows a runtime-kind-only block when a shared native id serves a viable platform", () => {
+    expect(() =>
+      parseFlow("requires: { runtimeKind: tv }\nsteps: [{ launch: { native: com.a } }]")
+    ).not.toThrow();
+  });
+
   it("refuses a launch declaring no app id for a required platform", () => {
     expect(() =>
       parseFlow("requires: { platform: [ios, android] }\nsteps: [{ launch: { ios: com.a } }]")
@@ -529,13 +569,16 @@ describe("a cleanup flow that only scopes a device", () => {
 
 describe("the chromium hoist", () => {
   it("refuses before booting when the requirements rule chromium out", async () => {
-    // A `requires` naming only a runtimeKind constrains no launch, so parse-time
-    // validation cannot catch this — and the check has to precede the boot: the
+    // Parse-time validation is per-file, so a chromium launch reached through a
+    // `run:` chain escapes it — and the check has to precede the boot: the
     // instance is registered for teardown only once resolveRunDevice returns, so
     // a refusal after booting would strand a live Electron process.
+    await writeFlow("boot-chromium", {
+      steps: [{ kind: "launch", app: { chromium: "/nonexistent/app" } }],
+    });
     await writeFlow("tv-only", {
       requires: { runtimeKind: "tv" },
-      steps: [{ kind: "launch", app: { chromium: "/nonexistent/app" } }],
+      steps: [{ kind: "run", flow: "boot-chromium.yaml" }],
     });
     const { registry } = mockRegistry([]);
 

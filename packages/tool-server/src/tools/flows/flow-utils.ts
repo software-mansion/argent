@@ -3001,19 +3001,45 @@ function validateRequires(flow: FlowFile): void {
     );
   }
 
-  if (!platform) return;
-  // A launch declaring no id for the run's platform is a run-time error
-  // (flow-run's runLaunch), so a launch missing an id for a platform the flow
-  // claims to support is that same error, decidable here without a device.
-  for (const { app, allowed } of launchesInScope(flow.steps, platform)) {
-    const missing = allowed.filter((p) => appIdForPlatform(app, p) === null);
-    if (missing.length > 0) {
-      throw unsatisfiable(
-        `a launch step declares no app id for ${missing.join(", ")}, which requires.platform ` +
-          `says the flow supports — add the missing launch ${missing.length > 1 ? "entries" : "entry"}, ` +
-          `or narrow requires.platform`
-      );
+  if (platform) {
+    // A launch declaring no id for the run's platform is a run-time error
+    // (flow-run's runLaunch), so a launch missing an id for a platform the flow
+    // claims to support is that same error, decidable here without a device.
+    // A platform runtimeKind already rules out can never host a run, so it
+    // owes no id.
+    const viable = runtimeKind
+      ? platform.filter((p) => platformCanPresent(p, runtimeKind))
+      : platform;
+    for (const { app, allowed } of launchesInScope(flow.steps, viable)) {
+      const missing = allowed.filter((p) => appIdForPlatform(app, p) === null);
+      if (missing.length > 0) {
+        throw unsatisfiable(
+          `a launch step declares no app id for ${missing.join(", ")}, which requires.platform ` +
+            `says the flow supports — add the missing launch ${missing.length > 1 ? "entries" : "entry"}, ` +
+            `or narrow requires.platform`
+        );
+      }
     }
+    return;
+  }
+
+  if (!runtimeKind) return;
+  // Asymmetry with the branch above: a declared platform list is a per-platform
+  // promise (every viable listed platform must be served), but an undeclared
+  // one is an open set — one viable platform served by every launch in its
+  // scope suffices.
+  const candidates = LAUNCH_PLATFORMS.filter((p) => platformCanPresent(p, runtimeKind));
+  const served = (p: WhenPlatform): boolean => {
+    for (const { app } of launchesInScope(flow.steps, [p])) {
+      if (appIdForPlatform(app, p) === null) return false;
+    }
+    return true;
+  };
+  if (!candidates.some(served)) {
+    throw unsatisfiable(
+      `no platform that is ever "${runtimeKind}" (${candidates.join(", ")}) has an app id in ` +
+        `every launch step — add launch entries for one of them, or drop requires.runtimeKind`
+    );
   }
 }
 

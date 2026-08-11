@@ -1378,8 +1378,9 @@ async function resolveRunDevice(
       // decidable here — and must be decided BEFORE the boot: the instance is
       // only registered for teardown once this function returns, so a refusal
       // after booting would strand a live Electron process. Parse-time
-      // validation does not cover this (a `requires` naming only a runtimeKind
-      // constrains no launch), which is why the check belongs on this path.
+      // validation does not cover this (it is per-file, and a chromium launch
+      // reached through a `run:` chain escapes it), which is why the check
+      // belongs on this path.
       assertPlatformMeetsRequires(
         "chromium",
         flow.requires,
