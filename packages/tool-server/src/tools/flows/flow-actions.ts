@@ -1417,7 +1417,11 @@ async function waitForIdle(
     // backend), so serializing them would double the round without buying
     // anything.
     const [read, frame] = await Promise.all([
-      settleWithin(fetchFlowTree(env.registry, env.device, env.launchedNativeApp), roundBudget, env.signal).then((r) => {
+      settleWithin(
+        fetchFlowTree(env.registry, env.device, env.launchedNativeApp),
+        roundBudget,
+        env.signal
+      ).then((r) => {
         answeredReadMs = Date.now() - roundStartedAt;
         return r;
       }),
