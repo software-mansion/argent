@@ -47,6 +47,12 @@ describe("tool interaction messages", () => {
     expect(keyboard.startedMsg!({ params: { udid: "device-1", text: "hi", key: "enter" } })).toBe(
       "Entering text and pressing a key"
     );
+    // The fourth shape, on this formatter too. Breaking only `startedMsg`'s
+    // empty-request branch (`params.text === undefined && params.key !== undefined`,
+    // so `keyboard {}` falls through to "Entering text") was green against the
+    // whole suite while the mirror-image edit on `completedMsg` was caught —
+    // so the comment above held for one of the two formatters it names.
+    expect(keyboard.startedMsg!({ params: { udid: "device-1" } })).toBe("Pressing a key");
     expect(keyboard.completedMsg!({ params: { udid: "device-1", text: "hi" }, result: {} })).toBe(
       "Entered text"
     );
