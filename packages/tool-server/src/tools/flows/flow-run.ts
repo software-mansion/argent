@@ -2397,7 +2397,15 @@ async function execRunStep(
     try {
       await assertDeviceMeetsRequires(state.device, fragment.requires);
     } catch (err) {
-      return fail(`fragment "${target}" cannot run on this device: ${errMsg(err)}`);
+      // An unverifiable requirement was never established as a mismatch, so
+      // its prefix must not assert one as fact the way the unmet prefix does.
+      const unverified =
+        getFailureSignal(err)?.error_code === FAILURE_CODES.FLOW_REQUIREMENTS_UNVERIFIABLE;
+      return fail(
+        unverified
+          ? `fragment "${target}" may not run on this device (its requires could not be verified): ${errMsg(err)}`
+          : `fragment "${target}" cannot run on this device: ${errMsg(err)}`
+      );
     }
   }
 

@@ -577,6 +577,28 @@ describe("composed fragments", () => {
     });
   });
 
+  it("error under a prefix that does not assert a mismatch when the check is unverifiable", async () => {
+    // An unreadable kind never established that the device fails the
+    // requirement, so the step reason must not state "cannot run" as fact.
+    await writeFlow("tv-bit", { requires: { runtimeKind: "tv" } });
+    await writeFlow("parent", {
+      steps: [OK_STEP, { kind: "run", flow: "tv-bit.yaml" }],
+    });
+    runtimeKinds.delete(ANDROID);
+    const { registry } = mockRegistry();
+
+    const result = await run(registry, "parent", { device: ANDROID });
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[1]).toMatchObject({
+      kind: "run",
+      status: "error",
+      reason: expect.stringMatching(/may not run on this device/),
+    });
+    expect(result.steps[1].reason).toMatch(/could not be verified/);
+    expect(result.steps[1].reason).not.toMatch(/cannot run on this device/);
+  });
+
   it("run when the device satisfies them", async () => {
     await writeFlow("ios-bit", { requires: { platform: ["ios"] } });
     await writeFlow("parent", { steps: [{ kind: "run", flow: "ios-bit.yaml" }] });
