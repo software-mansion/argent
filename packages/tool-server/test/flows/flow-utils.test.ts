@@ -1110,6 +1110,17 @@ describe("native launch shorthand", () => {
     expect(appIdForPlatform(app, "android")).toBe("com.acme.app.debug");
   });
 
+  it("appIdForPlatform serves a remote simulator from the ios entry", async () => {
+    // The parser rejects an `ios-remote` launch key, so folding to `ios` is
+    // the only way a map entry can serve a remote sim…
+    expect(appIdForPlatform({ ios: "com.acme.app" }, "ios-remote")).toBe("com.acme.app");
+    // …and the specific key beats native after folding, where the unfolded
+    // lookup would fall through to the native bundle.
+    expect(appIdForPlatform({ ios: "com.acme.app", native: "com.acme.other" }, "ios-remote")).toBe(
+      "com.acme.app"
+    );
+  });
+
   it("native never applies to chromium (chromium takes a path, not an id)", async () => {
     expect(appIdForPlatform({ native: "com.acme.app" }, "chromium")).toBeNull();
     expect(chromiumLaunchSpec({ native: "com.acme.app" })).toBeNull();

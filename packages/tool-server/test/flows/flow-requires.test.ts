@@ -363,6 +363,26 @@ describe("an explicitly targeted run", () => {
     expect((await run(registry, "ios-mobile", { device: IOS_REMOTE })).ok).toBe(true);
   });
 
+  it("launches the ios bundle on a remote simulator the requires fold admitted", async () => {
+    // The requires fold admits a remote sim and the parse check certifies the
+    // file via its `ios` entry, so the launch lookup must fold too: unfolded it
+    // falls through to `native` and launches the wrong bundle.
+    await writeFlow("ios-e2e", {
+      requires: { platform: ["ios"] },
+      steps: [{ kind: "launch", app: { ios: "com.acme.app", native: "com.acme.other" } }],
+    });
+    const { registry, invokeTool } = mockRegistry();
+
+    const result = await run(registry, "ios-e2e", { device: IOS_REMOTE });
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0]).toMatchObject({ kind: "launch", status: "pass" });
+    expect(invokeTool).toHaveBeenCalledWith(
+      "restart-app",
+      expect.objectContaining({ bundleId: "com.acme.app" })
+    );
+  });
+
   it("refuses a mobile remote simulator on a tv requirement, naming its kind", async () => {
     await writeFlow("tv-only", { requires: { runtimeKind: "tv" } });
     const { registry } = mockRegistry();

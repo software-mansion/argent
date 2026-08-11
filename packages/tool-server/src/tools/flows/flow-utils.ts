@@ -823,6 +823,10 @@ export function isE2eFlow(flow: FlowFile): boolean {
  * want {@link chromiumLaunchSpec}, which also carries the CLI args.
  */
 export function appIdForPlatform(launch: Launch | undefined, platform: string): string | null {
+  // A remote simulator is an iOS target and the parser rejects an `ios-remote`
+  // launch key, so without this fold (mirroring the `when:` guard and requires
+  // folds) no map entry could ever serve one.
+  if (platform === "ios-remote") platform = "ios";
   if (launch === undefined) return null;
   if (typeof launch === "string") return launch;
   if (platform === "chromium") {
