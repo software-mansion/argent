@@ -334,7 +334,16 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
   const phone = { id: SERIAL, platform: "android", kind: "handset" } as unknown as DeviceInfo;
 
   beforeEach(() => {
-    adbShell.mockClear();
+    // `mockReset`, not `mockClear`: several tests below queue one-shot values
+    // (`mockResolvedValueOnce` / `mockRejectedValueOnce`) to drive the failure
+    // paths, and `mockClear` empties `mock.calls` WITHOUT dropping an
+    // unconsumed queue entry. Every entry happens to be consumed today, so a
+    // leak is invisible — until one of those tests fails early, at which point
+    // its leftover rejection would surface in an unrelated test and hide the
+    // real failure. `mockReset` also restores the `async () => ""` given to
+    // `vi.fn`, so the default transport still resolves. Matches `isAndroidTv`
+    // on the next line.
+    adbShell.mockReset();
     typeTv.mockClear();
     isAndroidTv.mockReset();
     isAndroidTv.mockResolvedValue(false);
@@ -516,7 +525,9 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
 // test rather than a silent regression to a deep ENOENT on an adb-less host.
 describe("keyboard tool — android adb preflight (via dispatchByPlatform)", () => {
   beforeEach(() => {
-    adbShell.mockClear();
+    // Same reason as the describe above — this one also has to survive a
+    // one-shot value left behind by the last test to run there.
+    adbShell.mockReset();
     ensureDeps.mockClear();
     ensureDeps.mockResolvedValue(undefined);
     isAndroidTv.mockReset();
