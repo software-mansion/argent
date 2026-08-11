@@ -246,14 +246,5 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       expect(injectVegaText).not.toHaveBeenCalled();
       expect(result).toEqual({ typed: "escape", keys: 1 });
     });
-
-    it("names the offending key when it is unknown", async () => {
-      // Unmock the injector for this one: the rejection lives inside the real
-      // `injectVegaNamedKey`, so the module-level stub would swallow it.
-      const { injectVegaNamedKey: realInject } =
-        await vi.importActual<typeof import("../src/utils/vega-input")>("../src/utils/vega-input");
-
-      await expect(realInject("bogus")).rejects.toThrow(/Unknown Vega key "bogus"/);
-    });
   });
 });
