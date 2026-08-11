@@ -129,8 +129,11 @@ error stops the batch and counts the remaining flows skipped.
 A flow may declare a \`requires:\` block (platform / runtimeKind) naming the
 targets it supports. In a directory run a flow the target does not satisfy is
 skipped, so one command runs a mixed suite; running that same flow on its own
-is an error instead, since you asked for it by name. A run where every flow was
-skipped exits 2 — nothing ran, which is not a pass.
+is an error instead, since you asked for it by name. Skipping needs the check
+to have ANSWERED: a requirement that could not be verified (the device's
+runtime kind was unreadable) fails the flow instead, so a broken probe cannot
+pose as a filter. A run where no step executed exits 2 — nothing ran, which is
+not a pass.
 
 Runs require the auto-started local tool server;
 ARGENT_TOOLS_URL and \`argent link\` routing are not supported.
