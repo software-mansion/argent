@@ -9,9 +9,13 @@ import {
   invokeOnDevice,
   waitForFrame,
   offscreenHint,
+  createTreeReadSink,
+  selectorMissEvidence,
+  DEFAULT_ACTION_TIMEOUT_MS,
   type ActionEnv,
 } from "./flow-actions";
 import { describeSelector, type FlowSelector } from "./flow-utils";
+import type { DirectiveEvidence } from "./flow-failure";
 import { diffPngFiles } from "../screenshot-diff/screenshot-diff";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 
@@ -45,6 +49,11 @@ export interface VisualOutcome {
    */
   snapshotKey?: string;
   artifacts?: SnapshotArtifacts;
+  /**
+   * What the snapshot saw while failing — the classified cause plus the diff
+   * numbers. Consumed and stripped by the failure assembler; never on the wire.
+   */
+  evidence?: DirectiveEvidence;
 }
 
 /** Read width/height from a PNG IHDR (bytes 16–23, big-endian). */
@@ -189,12 +198,20 @@ export async function runSnapshot(
   // "compare" the whole screen against a cropped baseline.
   let cropFrame: DescribeFrame | undefined;
   if (opts.cropOn !== undefined) {
-    const frame = await waitForFrame(env, opts.cropOn);
+    const sink = createTreeReadSink();
+    const frame = await waitForFrame(env, opts.cropOn, sink);
     if (frame === "aborted") {
       return { status: "skip", reason: "run aborted while resolving cropOn" };
     }
     if (frame === undefined) {
-      return { status: "fail", reason: offscreenHint(opts.cropOn) };
+      return {
+        status: "fail",
+        reason: offscreenHint(opts.cropOn),
+        // A cropOn miss is a SELECTOR failure, not a snapshot one — it is the
+        // same not-found/not-visible split every directive gets, so it earns
+        // the same candidates and the same codes.
+        evidence: selectorMissEvidence(opts.cropOn, sink, DEFAULT_ACTION_TIMEOUT_MS),
+      };
     }
     cropFrame = frame;
   }
@@ -276,6 +293,11 @@ export async function runSnapshot(
           snapshotKey,
           // No crop exists to show, so attach the full capture (already registered).
           artifacts: { current: shot.image },
+          evidence: {
+            code: "snapshot-crop-empty",
+            selector: opts.cropOn,
+            expected: { kind: "snapshot", snapshotKey, maxMismatch: opts.maxMismatch },
+          },
         };
       }
       currentPath = croppedPath;
@@ -310,6 +332,11 @@ export async function runSnapshot(
           `current screen, then review and commit it`,
         snapshotKey,
         artifacts: { current: await currentArtifact() },
+        evidence: {
+          code: "snapshot-baseline-missing",
+          expected: { kind: "snapshot", snapshotKey, maxMismatch: opts.maxMismatch },
+          hint: `re-run with --update-baselines to adopt ${key}, then review and commit it`,
+        },
       };
     }
 
@@ -360,6 +387,11 @@ export async function runSnapshot(
             baseline: await store.register(baselinePath, { mimeType: "image/png" }),
             current: await currentArtifact(),
           },
+          evidence: {
+            code: "snapshot-dimension-mismatch",
+            expected: { kind: "snapshot", snapshotKey, maxMismatch: opts.maxMismatch },
+            observation: { dimensions: { expected, actual } },
+          },
         };
       }
 
@@ -383,7 +415,17 @@ export async function runSnapshot(
         });
         keepInOutputDir = result.contextDiffPath;
       }
-      return { status: "fail", reason, snapshotKey, artifacts };
+      return {
+        status: "fail",
+        reason,
+        snapshotKey,
+        artifacts,
+        evidence: {
+          code: "snapshot-diff",
+          expected: { kind: "snapshot", snapshotKey, maxMismatch: opts.maxMismatch },
+          observation: { mismatchPercentage: result.mismatchPercentage },
+        },
+      };
     } finally {
       await cleanupDiffDir(outputDir, keepInOutputDir);
     }

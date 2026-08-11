@@ -112,6 +112,7 @@ describe("parseRunArgs", () => {
       updateBaselines: false,
       recursive: false,
       json: false,
+      reporter: [],
     });
   });
 
@@ -132,6 +133,7 @@ describe("parseRunArgs", () => {
       updateBaselines: true,
       recursive: false,
       json: false,
+      reporter: [],
     });
     expect(parseRunArgs(["--json", "checkout.yaml"]).json).toBe(true);
   });
@@ -180,6 +182,7 @@ describe("parseRunArgs", () => {
       updateBaselines: false,
       recursive: false,
       json: false,
+      reporter: [],
     });
   });
 
@@ -191,6 +194,7 @@ describe("parseRunArgs", () => {
       updateBaselines: false,
       recursive: false,
       json: false,
+      reporter: [],
     });
   });
 
@@ -222,6 +226,20 @@ describe("parseRunArgs", () => {
     expect(() => parseRunArgs(["checkout.yaml", "--platfrom=ios"])).toThrow(/unknown flag/);
   });
 
+  it("collects --reporter specs in order, and validates each one at parse time", () => {
+    expect(
+      parseRunArgs(["checkout", "--reporter", "default", "--reporter=junit:out.xml"]).reporter
+    ).toEqual(["default", "junit:out.xml"]);
+    // A bad spec must fail before the run starts: discovering it after a
+    // 40-second flow, with the report file missing, is the worse failure.
+    expect(() => parseRunArgs(["checkout", "--reporter", "junit"])).toThrow(FlagParseException);
+    expect(() => parseRunArgs(["checkout", "--reporter=junit:"])).toThrow(
+      "--reporter junit requires a path"
+    );
+    expect(() => parseRunArgs(["checkout", "--reporter=tap:x"])).toThrow(/unknown format/);
+    expect(() => parseRunArgs(["checkout", "--reporter"])).toThrow("--reporter requires a value");
+  });
+
   it("rejects extra positional arguments", () => {
     expect(() => parseRunArgs(["checkout.yaml", "extra.yaml"])).toThrow(
       "flow run accepts one flow name, YAML file path, or directory path"
@@ -238,6 +256,7 @@ describe("parseRunArgs", () => {
       updateBaselines: false,
       recursive: false,
       json: false,
+      reporter: [],
     });
     // The marker relaxes flag parsing, not the one-positional rule.
     expect(() => parseRunArgs(["--", "a", "b"])).toThrow(
@@ -1369,6 +1388,135 @@ describe("argent flow run", () => {
     expect(errs.join("\n")).toContain('"checkout" did not produce a run report');
   });
 
+  it("renders the live-tail branch a streaming tool-server actually takes", async () => {
+    // `callTool` never invoked `onProgress` anywhere in this file, so `liveSteps`
+    // was always 0 and the buffered renderer owned every assertion — the branch
+    // a modern streaming server takes was unreached. Drive it: emit the steps
+    // live, then hand back the final report.
+    const finalReport = report({
+      ok: false,
+      passed: 1,
+      failed: 1,
+      steps: [
+        { index: 0, kind: "launch", status: "pass", durationMs: 3100 },
+        {
+          index: 1,
+          kind: "assert",
+          status: "fail",
+          target: "visible id=cta",
+          reason: 'no element matched selector id="cta"',
+          failure: {
+            code: "selector-not-found",
+            determinacy: "indeterminate",
+            message: 'no element matched selector id="cta"',
+            screen: { state: "unavailable", reason: "never-readable" },
+            candidates: [],
+            candidateCount: 0,
+          },
+        },
+      ],
+    });
+    toolsClientMock.callTool.mockImplementation(
+      async (_name: string, _payload: unknown, opts?: { onProgress?: (e: unknown) => void }) => {
+        for (const step of finalReport.steps as StepFixture[]) opts?.onProgress?.(step);
+        return { data: finalReport };
+      }
+    );
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
+
+    const out = logs.join("\n");
+    // The live header (no device) rather than `renderReport`'s (with one) —
+    // proof the branch under test is the one that ran.
+    expect(out).toContain('Flow "checkout"');
+    expect(out).not.toContain('Flow "checkout" on UDID-1');
+    expect(out).toContain("  ✓  1 launch");
+    expect(out).toContain("  ✗  2 assert visible id=cta");
+    // The three things this branch is responsible for emitting itself.
+    expect(out).toContain("Failures:");
+    expect(out).toContain("     selector-not-found: no element matched selector");
+    expect(out).toContain("FAIL");
+    // ...and the stderr note that only an indeterminate failure earns.
+    expect(errs.join("\n")).toContain("not a failed assertion");
+  });
+
+  it("writes JUnit XML at the literal --reporter path and keeps the failing verdict", async () => {
+    const dir = await fsp.mkdtemp(path.join(tmpdir(), "flow-reporter-"));
+    try {
+      const dest = path.join(dir, "nested", "junit.xml");
+      toolsClientMock.callTool.mockResolvedValue({
+        data: report({
+          ok: false,
+          passed: 1,
+          failed: 1,
+          durationMs: 8900,
+          steps: [
+            { index: 0, kind: "launch", status: "pass", durationMs: 3100 },
+            {
+              index: 1,
+              kind: "tap",
+              status: "fail",
+              target: '"Checkout"',
+              durationMs: 5002,
+              reason: 'no visible element matched selector text="Checkout"',
+              failure: {
+                code: "selector-not-found",
+                message: 'no visible element matched selector text="Checkout"',
+                selector: { described: 'text="Checkout"' },
+                screen: { state: "available", elementCount: 47, elements: [] },
+                candidates: [],
+                candidateCount: 0,
+              },
+            },
+          ],
+        }),
+      });
+
+      await expect(
+        flow(["run", checkoutPath, "--reporter", `junit:${dest}`], opts)
+      ).rejects.toThrow("process.exit:1");
+
+      const xml = await fsp.readFile(dest, "utf8");
+      expect(xml).toContain('<testsuite name="checkout" tests="2" failures="1"');
+      expect(xml).toContain('<testcase classname="checkout" name="02 tap &quot;Checkout&quot;"');
+      expect(xml).toContain('<failure type="selector-not-found"');
+      // The failure block reaches the terminal too, above the verdict.
+      const out = logs.join("\n");
+      expect(out).toContain("     selector-not-found: no visible element matched selector");
+      expect(out.indexOf("Failures:")).toBeLessThan(out.indexOf("FAIL —"));
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("exits 2 without calling the tool when a --reporter spec is unusable", async () => {
+    await expect(flow(["run", "checkout", "--reporter", "junit"], opts)).rejects.toThrow(
+      "process.exit:2"
+    );
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    expect(errs.join("\n")).toContain("--reporter junit requires a path");
+  });
+
+  it("warns but does not change the verdict when the report file cannot be written", async () => {
+    const dir = await fsp.mkdtemp(path.join(tmpdir(), "flow-reporter-"));
+    try {
+      // A directory where the file should go: the write fails, the run does not.
+      // Failing a build on argent's own I/O would turn the reporter into a
+      // source of CI flake.
+      const dest = path.join(dir, "junit.xml");
+      await fsp.mkdir(dest);
+
+      await expect(flow(["run", checkoutPath, `--reporter=junit:${dest}`], opts)).rejects.toThrow(
+        "process.exit:0"
+      );
+
+      expect(errs.join("\n")).toContain("warning: could not write report");
+      expect(logs.join("\n")).toContain("PASS — 1 passed");
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("exits 2 on an unknown subcommand", async () => {
     await expect(flow(["frobnicate"], opts)).rejects.toThrow("process.exit:2");
     expect(errs.join("\n")).toContain('Unknown flow subcommand "frobnicate"');
@@ -1481,6 +1629,95 @@ describe("argent flow run <dir>", () => {
     // Passing steps stay silent in batch mode.
     expect(out).not.toMatch(/✓ {2}1 tap/);
     expect(out).toContain("PASS — 2 flows: 2 passed, 0 failed, 0 skipped");
+  });
+
+  it("writes ONE JUnit file holding a testsuite per flow, and the failure blocks", async () => {
+    // The gap this pins: `--reporter` parsed and validated on a directory run,
+    // then wrote nothing and said nothing — while `argent flow run
+    // .argent/flows -r --reporter junit:…` is the canonical CI invocation and
+    // per-suite attribution is the whole point of the reporter.
+    const dir = await fsp.mkdtemp(path.join(tmpdir(), "flow-batch-reporter-"));
+    try {
+      const dest = path.join(dir, "junit.xml");
+      toolsClientMock.callTool
+        .mockResolvedValueOnce({ data: report({ flow: "a-login" }) })
+        .mockResolvedValueOnce({
+          data: report({
+            flow: "b-checkout",
+            ok: false,
+            passed: 0,
+            failed: 1,
+            steps: [
+              {
+                index: 0,
+                kind: "assert",
+                status: "fail",
+                target: "visible id=cta",
+                reason: 'no element matched selector id="cta"',
+                failure: {
+                  code: "selector-not-found",
+                  message: 'no element matched selector id="cta"',
+                  selector: { described: 'id="cta"' },
+                  screen: { state: "available", elementCount: 12, elements: [] },
+                  candidates: [],
+                  candidateCount: 0,
+                },
+              },
+            ],
+          }),
+        });
+
+      await expect(flow(["run", flowsDir, "--reporter", `junit:${dest}`], opts)).rejects.toThrow(
+        "process.exit:1"
+      );
+
+      const xml = await fsp.readFile(dest, "utf8");
+      // One document, one suite per flow, counters summed across them.
+      expect(xml).toContain('<testsuites name="argent flow" tests="2" failures="1" errors="0"');
+      expect(xml).toContain('<testsuite name="a-login" tests="1" failures="0"');
+      expect(xml).toContain('<testsuite name="b-checkout" tests="1" failures="1"');
+      expect(xml).toContain('<failure type="selector-not-found"');
+      // Each suite names the flow file it actually ran, so a reader can tell
+      // which of the two a failure belongs to.
+      expect(xml).toContain(
+        `<property name="argent.flowFile" value="${path.join(flowsDir, "b-checkout.yaml")}"/>`
+      );
+      // ...and the terminal gets the block, not just the one-line reason.
+      expect(logs.join("\n")).toContain("     selector-not-found: no element matched selector");
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("gives a REJECTED flow its own errored suite instead of reporting green", async () => {
+    // A flow the tool-server rejects before it runs (bad YAML, unknown step
+    // key) produces no report. Filtering those out left the file claiming
+    // `failures="0" errors="0"` for a run that printed FAIL and exited 1 —
+    // the one thing a CI artifact must never do.
+    const dir = await fsp.mkdtemp(path.join(tmpdir(), "flow-batch-rejected-"));
+    try {
+      const dest = path.join(dir, "junit.xml");
+      toolsClientMock.callTool
+        .mockResolvedValueOnce({ data: report({ flow: "a-login" }) })
+        .mockRejectedValueOnce(
+          new ToolInvocationError('b-checkout.yaml: unknown step kind "tapp"', {
+            errorKind: "validation",
+          })
+        );
+
+      await expect(flow(["run", flowsDir, "--reporter", `junit:${dest}`], opts)).rejects.toThrow(
+        "process.exit:1"
+      );
+
+      const xml = await fsp.readFile(dest, "utf8");
+      // The document's counters agree with the exit code.
+      expect(xml).toContain('<testsuites name="argent flow" tests="1" failures="0" errors="1"');
+      expect(xml).toContain('<testsuite name="b-checkout"');
+      // ...and the suite says WHY, rather than "the run failed with no failing step".
+      expect(xml).toContain("unknown step kind");
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("forwards run flags to every flow in the batch", async () => {

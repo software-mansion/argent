@@ -41,6 +41,9 @@ export { EVENT_NAMES } from "./events.js";
 export { describeCrash } from "./crash-diagnostics.js";
 export type { CrashDiagnostics, CrashPhase } from "./crash-diagnostics.js";
 export { isDebugEnabled } from "./debug.js";
+// Not telemetry-specific, but this is where the ci-info detector lives: the
+// CLI uses it to tailor guidance for a run nobody is watching.
+export { isCi } from "./ci-detect.js";
 export { getConsentState, isEnabled } from "./consent.js";
 // Persists the consent flag — for recording an initial first-run choice. Use
 // markDisabled() (not this) for a live opt-out that should also drain and reset

@@ -493,6 +493,14 @@ steps:
     const step = r.steps.at(-1)!;
     expect(step.status).toBe("error");
     expect(step.reason).toContain("never answered within the step's 800ms");
+    // Classified, or the assembler falls through to a post-hoc read against
+    // the very source that just wedged — and hangs for as long as it likes.
+    expect(step.failure).toMatchObject({
+      code: "tree-source-unavailable",
+      category: "environment",
+      determinacy: "indeterminate",
+    });
+    expect(step.failure?.screen.state).toBe("unavailable");
   });
 
   // The sibling of the case above, and the one that used to slip through: a
@@ -525,6 +533,13 @@ steps:
     expect(step.reason).toContain("foreground");
     // And it must not be dressed up as a verdict about what was on screen.
     expect(step.reason).not.toContain("never held still");
+    expect(step.failure).toMatchObject({
+      code: "tree-source-unavailable",
+      determinacy: "indeterminate",
+    });
+    // The screen slot is SUPPRESSED — the report must not chase a post-hoc
+    // read of a source it has just declared wedged.
+    expect(step.failure?.screen.state).toBe("unavailable");
   });
 
   // ...and the other side of that split. Every read here is abandoned at the
@@ -851,6 +866,18 @@ steps:
     expect(step.reason).toContain("could not read the UI tree");
     expect(step.reason).toContain("foreground");
     expect(step.reason).toContain("native-devtools is not connected");
+    // The underlying error survives into the payload as `screen.detail`: it is
+    // the ONLY statement of why the step failed, and the classified code is
+    // what stops the assembler reading the source that just threw.
+    expect(step.failure).toMatchObject({
+      code: "tree-source-unavailable",
+      category: "environment",
+      determinacy: "indeterminate",
+    });
+    expect(step.failure?.screen).toMatchObject({
+      state: "unavailable",
+      detail: expect.stringContaining("native-devtools is not connected"),
+    });
     // An indeterminate readiness check stops the run rather than recording a
     // regression the app never had.
     expect(r.steps.at(-1)!.status).toBe("skip");
@@ -1121,6 +1148,15 @@ steps:
     expect(step.reason).toContain("empty and degraded");
     expect(step.reason).toContain("automation toolkit is not attached");
     expect(step.reason).not.toContain("never rendered content");
+    // The reader's own repair reaches the structured payload too, and the
+    // screen slot stays suppressed: an empty tree is not "the app was blank".
+    expect(step.failure).toMatchObject({
+      code: "tree-source-unavailable",
+      category: "environment",
+      determinacy: "indeterminate",
+    });
+    expect(step.failure?.hint).toContain("automation toolkit is not attached");
+    expect(step.failure?.screen.state).toBe("unavailable");
     expect(r.steps.at(-1)!.status).toBe("skip");
   });
 
