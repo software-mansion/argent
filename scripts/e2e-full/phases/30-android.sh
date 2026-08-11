@@ -69,6 +69,14 @@ run_phase() {
   assert_ok   "$P" rotate portrait  "{\"udid\":\"$DEV\",\"orientation\":\"Portrait\"}"
   assert_ok   "$P" keyboard text "{\"udid\":\"$DEV\",\"text\":\"hello e2e\"}"
   assert_ok   "$P" keyboard key  "{\"udid\":\"$DEV\",\"key\":\"enter\"}"
+  # Both halves in ONE call. Android is the only backend that runs `text` and
+  # `key` as two separate `adb` invocations, so a combined request is the shape
+  # that can drop a half or 400 on this platform while the two calls above stay
+  # green. `keys` = 9 codepoints + 1 keyevent proves both ran.
+  # This does NOT observe the ORDER: the tier has no focused, readable text
+  # field. keyboard-android.test.ts pins the exact command sequence instead.
+  assert_field "$P" keyboard text-and-key \
+    "{\"udid\":\"$DEV\",\"text\":\"hello e2e\",\"key\":\"enter\"}" '.keys' '10'
   assert_ok   "$P" run-sequence seq "{\"udid\":\"$DEV\",\"steps\":[{\"tool\":\"button\",\"args\":{\"button\":\"home\"}},{\"tool\":\"gesture-tap\",\"args\":{\"x\":0.5,\"y\":0.5}}]}"
 
   # --- url navigation -------------------------------------------------------
