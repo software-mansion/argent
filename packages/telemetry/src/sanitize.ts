@@ -303,4 +303,3 @@ export function sanitize(event: string, raw: Record<string, unknown>): Record<st
   }
   return out;
 }
-
