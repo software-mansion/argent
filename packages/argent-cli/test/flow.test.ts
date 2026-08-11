@@ -1641,6 +1641,9 @@ describe("argent flow run <dir>", () => {
     expect(parsed.skipped).toBe(2);
     expect(parsed.flows.every((f) => f.status === "skip")).toBe(true);
     expect(parsed.flows[0]?.skipReason).toBe("requires unmet");
+    // The explanation still reaches stderr with --json: a CI leg that archives
+    // stdout and surfaces stderr must not get an exit-2 build with an empty log.
+    expect(errs.join("\n")).toContain("No step executed");
   });
 
   // The pre-`requires:` idiom for platform-specific flows: every step behind a

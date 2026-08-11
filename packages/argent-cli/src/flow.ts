@@ -1228,15 +1228,18 @@ async function runFlowDirectory(
     );
   } else {
     console.log(`\n${renderBatchSummary(counts, ranNothing)}`);
-    if (ranNothing) {
-      console.error(
-        `No step executed: every flow in ${dir} was skipped or passed vacuously (all steps ` +
-          `when:-skipped). Check the requires: blocks and when: guards against the target ` +
-          `this run selected.`
-      );
-    }
   }
-  if (ranNothing) return exitAfterFlush(2);
+  // On stderr in --json mode too: the per-flow error prints above go to stderr
+  // regardless, and a CI leg that archives stdout and surfaces stderr must not
+  // get an exit-2 build with an empty log.
+  if (ranNothing) {
+    console.error(
+      `No step executed: every flow in ${dir} was skipped or passed vacuously (all steps ` +
+        `when:-skipped). Check the requires: blocks and when: guards against the target ` +
+        `this run selected.`
+    );
+    return exitAfterFlush(2);
+  }
   return exitAfterFlush(counts.failed === 0 ? 0 : 1);
 }
 
