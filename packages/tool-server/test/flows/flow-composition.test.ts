@@ -2251,6 +2251,67 @@ describe("flow composition (run:)", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("passes the run's Metro port down to a nested flow-execute", async () => {
+    // A `run:` fragment inherits `metroPort` by construction — it shares one
+    // ExecState — so the raw `tool: flow-execute` form must not disagree about
+    // which bundler a dev-client launch opens. Without this the inner run always
+    // used the default, and the two composition forms recovered onto different
+    // Metros.
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tool", name: "flow-execute", args: { name: "b-only" } }],
+    });
+
+    const registry = mockRegistry({ name: {}, project_root: {}, device: {} });
+    await createRunFlowTool(registry).execute(
+      {},
+      { name: "main", project_root: tmpDir, device: DEVICE, metroPort: 8085 }
+    );
+
+    expect(registry.invokeTool).toHaveBeenCalledWith(
+      "flow-execute",
+      expect.objectContaining({ metroPort: 8085 })
+    );
+  });
+
+  it("leaves a nested flow-execute alone when the run took the default port", async () => {
+    // The inner run resolves the same default itself, so injecting it would only
+    // add noise to every nested step's reported args.
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tool", name: "flow-execute", args: { name: "b-only" } }],
+    });
+
+    const registry = mockRegistry({ name: {}, project_root: {}, device: {} });
+    await createRunFlowTool(registry).execute(
+      {},
+      { name: "main", project_root: tmpDir, device: DEVICE }
+    );
+
+    expect(registry.invokeTool).toHaveBeenCalledWith(
+      "flow-execute",
+      expect.not.objectContaining({ metroPort: expect.anything() })
+    );
+  });
+
+  it("keeps a port the nested step names for itself", async () => {
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tool", name: "flow-execute", args: { name: "b-only", metroPort: 8090 } }],
+    });
+
+    const registry = mockRegistry({ name: {}, project_root: {}, device: {} });
+    await createRunFlowTool(registry).execute(
+      {},
+      { name: "main", project_root: tmpDir, device: DEVICE, metroPort: 8085 }
+    );
+
+    expect(registry.invokeTool).toHaveBeenCalledWith(
+      "flow-execute",
+      expect.objectContaining({ metroPort: 8090 })
+    );
+  });
+
   it("detects a cyclic run reference", async () => {
     await writeFlow("a", { executionPrerequisite: "", steps: [{ kind: "run", flow: "b.yaml" }] });
     await writeFlow("b", { executionPrerequisite: "", steps: [{ kind: "run", flow: "a.yaml" }] });

@@ -25,13 +25,14 @@ export interface StepReport {
   status: "pass" | "fail" | "skip" | "error";
   reason?: string;
   /**
-   * A step that passed in a way that weakens it as proof — raised today by
+   * A step that passed in a way that weakens it as proof — raised by
    * `await: { idle: true }`, which never fails a run and says here what its
-   * green actually bought (see StepReport.warning in the tool-server's
-   * flow-run). Also carries the caveat older tool-servers put on a snapshot
-   * that adopted a missing baseline, which now fails the step instead. Live
-   * either way: dropping the field would silently delete the only thing the
-   * readiness check reports.
+   * green actually bought, and by a `launch` that had to get past the
+   * expo-dev-client server chooser to start the app (see StepReport.warning in
+   * the tool-server's flow-run). Also carries the caveat older tool-servers put
+   * on a snapshot that adopted a missing baseline, which now fails the step
+   * instead. Live either way: dropping the field would silently delete the only
+   * thing those steps report.
    */
   warning?: string;
   tool?: string;
@@ -138,6 +139,10 @@ Subcommands:
 Options (run):
   --device <id>          Device id to run against (auto-detected when omitted)
   --platform <p>         ios | android | chromium | vega — narrow auto-detection
+  --metro-port <port>    Port of the Metro bundler the app must load from
+                         (default 8081). Applies when a launch lands on the
+                         expo-dev-client "DEVELOPMENT SERVERS" chooser: the run
+                         opens the server listed on this port. Android only
   --update-baselines     Write/refresh screenshot baselines instead of diffing
   --output <dir>         Also write failed snapshot images (baseline/current/diff)
                          under <dir>/<flow>/ — a stable path for CI artifact
@@ -170,6 +175,12 @@ export function parseRunArgs(argv: string[]): {
   flowRef?: string;
   device?: string;
   platform?: string;
+  /**
+   * Metro port a `launch` opens from the expo-dev-client chooser. Kept as the
+   * raw token: `flow-execute` coerces and validates it, and duplicating that
+   * here would be a second opinion on what a port is.
+   */
+  metroPort?: string;
   output?: string;
   updateBaselines: boolean;
   recursive: boolean;
@@ -254,6 +265,7 @@ export function parseRunArgs(argv: string[]): {
       out.recursive = true;
     } else if (flag === "--device") out.device = takeValue("--device");
     else if (flag === "--platform") out.platform = takeValue("--platform");
+    else if (flag === "--metro-port") out.metroPort = takeValue("--metro-port");
     else if (flag === "--output") out.output = takeValue("--output");
     // Any other flag-shaped token is an error — a typo like --platfrom must
     // not silently fall back to device auto-detection. --help/-h never reach
@@ -1055,6 +1067,10 @@ function buildRunPayload(
   };
   if (args.device) payload.device = args.device;
   if (args.platform) payload.platform = args.platform;
+  // Forwarded as typed: flow-execute's schema coerces the token and rejects a
+  // non-port, so a typo fails the call with the schema's own message instead of
+  // silently running against the default bundler.
+  if (args.metroPort !== undefined) payload.metroPort = args.metroPort;
   if (args.updateBaselines) payload.updateBaselines = true;
   return payload;
 }

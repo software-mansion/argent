@@ -5,6 +5,7 @@ Read this file for selector warnings, raw coordinates, unavailable trees, swallo
 - [Coordinate fallback gate](#coordinate-fallback-gate)
 - [iOS selector recovery](#ios-selector-recovery)
 - [Other tree sources](#tree-source-recovery-on-android-chromium-and-vega)
+- [Expo dev-client chooser](#expo-dev-client-chooser)
 - [Strong transition gates](#strong-transition-gates)
 - [Obscured targets](#obscured-targets-and-persistent-overlays)
 - [Replay diagnosis](#diagnose-a-replay-failure)
@@ -77,6 +78,17 @@ While the required source is down, selector failures and raw-point capture are v
 | Vega     | Toolkit returns no page source   | Relaunch an app built with automation support          |
 
 On Android, healthy `describe` output does not prove the flow tree is available. It can fall back to legacy `uiautomator`, while the runner refuses that trimmed fallback.
+
+## Expo dev-client chooser
+
+An expo dev build can start on the `DEVELOPMENT SERVERS` chooser in place of the app. On Android, `launch:` does this recovery for you. The step opens the server on the `metroPort` of `flow-execute`, then waits for the chooser to go away. The step passes with the warning `app opened behind the expo dev-client launcher`.
+
+- Android only. The runner probes for the chooser on Android alone, because an iOS dev build reaches Metro at a stable `localhost`. On iOS, `metroPort` does nothing, and a chooser stays on the screen for the remaining steps to read.
+- When Metro is not on port 8081, set `metroPort`.
+- When more than one bundler is available, set `metroPort`.
+- Do not write a `when:` block to tap the chooser. The launch dismisses the chooser before your step can run, so the step meets a different screen. The order of the rows also changes between launches.
+- If the chooser has no live row for the port, the launch fails. Start Metro on that port, or correct `metroPort`. This failure is about the bundler, not about the app.
+- The chooser goes away when the bundler starts to serve. The app is not ready at that moment. Gate the next step on an element the app itself draws.
 
 ## Strong transition gates
 

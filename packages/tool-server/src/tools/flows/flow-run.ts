@@ -51,7 +51,7 @@ import {
   stepRequiresDevice,
   type FlowPlatform,
 } from "./flow-device";
-import { nestedOrchestratorOutcome } from "./flow-nested-outcome";
+import { FLOW_EXECUTE_TOOL_ID, nestedOrchestratorOutcome } from "./flow-nested-outcome";
 import {
   runDirective,
   invokeOnDevice,
@@ -72,6 +72,7 @@ import { bootElectronApp, killChromiumByPortAndWait } from "../devices/boot-elec
 import { untrackChromiumPort } from "../../utils/chromium-discovery";
 import { parseChromiumCdpPort, resolveDevice } from "../../utils/device-info";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
+import { dismissDevLauncher, DEFAULT_METRO_PORT } from "./flow-dev-launcher";
 import { describeVega } from "../describe/platforms/vega";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
 
@@ -111,6 +112,14 @@ const zodSchema = z
       .optional()
       .describe(
         "Restrict auto-detection to this platform when several devices are booted. `chromium` does more than filter: with no `device` it SELECTS the self-boot branch for an e2e flow - the runner boots an Electron instance from the `launch` step's chromium value and tears it down after the run (a single-key `launch: { chromium: … }` map selects it on its own, without this parameter). When it selects that branch it never falls back to device auto-detection (a fragment, or an e2e launch map with no `chromium` key, still does), and the launch value must be a real Electron app path on the tool-server host: a bare-string `launch:` - what the recorder writes - holds an installed-app bundle id, so passing `chromium` for one fails the whole run with `Electron boot: path does not exist`. Edit the launch to `{ chromium: <app path> }` first."
+      ),
+    metroPort: z.coerce
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe(
+        `ANDROID ONLY. Port of the Metro bundler this run's app must load from (default ${DEFAULT_METRO_PORT}). It applies only when a \`launch\` step lands on the expo-dev-client "DEVELOPMENT SERVERS" chooser, which is probed for on Android alone (an iOS dev build reaches Metro at a stable localhost, so it rarely shows the chooser; there this parameter does nothing). The runner then opens the listed server on this port and waits for the chooser to go away. Set this to the port of the Metro YOU started when it is not the default, or when more than one bundler is up: the runner never guesses which bundler the flow wants, so a chooser listing no live server on this port fails the launch step outright rather than opening another one.`
       ),
     updateBaselines: z
       .boolean()
@@ -191,8 +200,13 @@ export interface StepReport {
   reason?: string;
   /**
    * The step passed, but the WAY it passed weakens it as proof. Rendered as a
-   * "⚠" suffix by the MCP client, and under the step line by the CLI. Raised by
-   * `await: { idle: true }`: the screen never settled at all (it waits, then
+   * "⚠" suffix by the MCP client, and under the step line by the CLI.
+   *
+   * Raised by a `launch` that had to get past the expo-dev-client chooser: the
+   * app did start, but from a screen the flow does not describe, and only after
+   * the runner opened a bundler for it (see flow-dev-launcher.ts).
+   *
+   * Also raised by `await: { idle: true }`: the screen never settled at all (it waits, then
    * goes ahead); something small on it never stopped, which is what a spinner
    * looks like; it rendered no content to settle; too few reads came back with
    * content for it to judge anything; or its captures never produced a
@@ -453,6 +467,21 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   // it, or a cancelled gate would read as a launch that verified readiness.
   if (signal?.aborted) return ABORTED_OUTCOME;
   if (gate) return { ok: false, reason: gate };
+
+  // The tree source is up, so the screen can be read — but on a dev build what
+  // it shows may be the expo-dev-client chooser rather than the app. Getting
+  // past it belongs to the launch: every later step resolves selectors against
+  // whatever is on screen now, and none of them would fail in a way that names
+  // the chooser. See flow-dev-launcher.ts.
+  const launcher = await dismissDevLauncher(env, bundleId, state.metroPort);
+  if (signal?.aborted) return ABORTED_OUTCOME;
+  if (launcher.handled && !launcher.ok) return { ok: false, reason: launcher.reason };
+  if (launcher.handled) {
+    return {
+      ok: true,
+      warning: `app opened behind the expo dev-client launcher — dismissed it via ${launcher.url}`,
+    };
+  }
   return { ok: true };
 }
 
@@ -772,6 +801,12 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    * CLI's `--output` directory all keep the as-written name.
    */
   baselineKey: string;
+  /**
+   * Metro port a `launch` step opens from the expo-dev-client chooser when it
+   * lands on one ({@link dismissDevLauncher}). Caller-supplied, because only the
+   * caller knows which bundler it started; {@link DEFAULT_METRO_PORT} otherwise.
+   */
+  metroPort: number;
   updateBaselines: boolean;
   reports: StepReport[];
   stopped: boolean;
@@ -914,7 +949,11 @@ export function createRunFlowTool(
     },
     description: `Run a saved flow from the .argent/flows/ directory, or an explicit boundary-managed flow_path.
 Steps run in order: \`launch\` starts an app from scratch (terminate + relaunch) and waits until it is
-ready; \`tool\` calls dispatch through the registry; \`tap\`/\`long-press\`/\`type\` resolve a selector to an
+ready. On ANDROID, a dev build can start onto the expo-dev-client "DEVELOPMENT SERVERS" chooser in place
+of the app; the step then opens the server on \`metroPort\`, waits for the chooser to go away, and reports
+that it did so as a step warning, so that every later selector reads the app and not the chooser. The
+chooser leaves the screen when the bundler starts serving, which is not the same as the app being ready —
+gate the next step on something the app itself draws. \`tool\` calls dispatch through the registry; \`tap\`/\`long-press\`/\`type\` resolve a selector to an
 element and act on it (\`tap: { on, times: 2 }\` double-taps; \`long-press: { on, duration }\` presses and
 holds; \`tap\`/\`long-press\` alternatively take a raw normalized point — bare \`{ x, y }\` or \`on: { x, y }\`;
 any selector may scope its matches geometrically, the CSS combinators read off frames: \`within: <selector>\`
@@ -1086,6 +1125,7 @@ returns a notice with the prerequisite instead of running.`,
         flowsDir,
         viaUpload,
         baselineKey: baselineKeyFor(canonicalPath, flowName),
+        metroPort: params.metroPort ?? DEFAULT_METRO_PORT,
         updateBaselines: Boolean(params.updateBaselines),
         reports: [],
         stopped: false,
@@ -2112,7 +2152,15 @@ async function execLeafStep(
       // A run cancelled mid-launch is a skip (matching the pre-step guard and
       // the directives), never a step failure — the app did nothing wrong.
       if (r.aborted) return { ...base, status: "skip", reason: r.reason };
-      return { ...base, status: r.ok ? "pass" : "error", reason: r.reason };
+      return {
+        ...base,
+        status: r.ok ? "pass" : "error",
+        reason: r.reason,
+        // A launch that had to get past the dev-client chooser passed, but not
+        // by starting where the flow assumes — the same "how it passed" channel
+        // the directives use, and the only place the run says so.
+        ...(r.warning !== undefined ? { warning: r.warning } : {}),
+      };
     }
 
     case "tap":
@@ -2204,6 +2252,21 @@ async function execLeafStep(
         step.args,
         state.deviceIsExplicit
       );
+      // A nested `flow-execute` is this same run one level down — same device,
+      // same app — so the bundler this run targets is the one it must target
+      // too. A `run:` fragment inherits `metroPort` by construction (it shares
+      // one ExecState), and the two composition forms must not disagree on which
+      // Metro a dev-client launch opens. Only a non-default port is passed on:
+      // the default is what the inner run would resolve anyway, so injecting it
+      // would only add noise to every nested step's reported args. An explicit
+      // value on the step still wins — there the author named a bundler for it.
+      if (
+        step.name === FLOW_EXECUTE_TOOL_ID &&
+        args.metroPort === undefined &&
+        state.metroPort !== DEFAULT_METRO_PORT
+      ) {
+        args.metroPort = state.metroPort;
+      }
       const outputHint = registry.getTool(step.name)?.outputHint;
       if (step.delayMs && !(await sleepOrAbort(step.delayMs, signal))) {
         return { ...base, status: "skip", tool: step.name, reason: "run aborted during delay" };

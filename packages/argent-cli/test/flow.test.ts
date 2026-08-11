@@ -142,6 +142,20 @@ describe("parseRunArgs", () => {
     expect(parseRunArgs(["flows"]).recursive).toBe(false);
   });
 
+  it("takes the Metro port a dev-client launch should open", () => {
+    // The token is passed through as written; flow-execute's schema owns what a
+    // port is, so the CLI does not get a second opinion on it.
+    expect(parseRunArgs(["checkout.yaml", "--metro-port", "8085"]).metroPort).toBe("8085");
+    expect(parseRunArgs(["checkout.yaml", "--metro-port=8085"]).metroPort).toBe("8085");
+    expect(parseRunArgs(["checkout.yaml"]).metroPort).toBeUndefined();
+  });
+
+  it("rejects --metro-port with no value rather than running on the default", () => {
+    expect(() => parseRunArgs(["checkout.yaml", "--metro-port"])).toThrow(
+      "--metro-port requires a value"
+    );
+  });
+
   it("throws when --recursive is given an inline value", () => {
     expect(() => parseRunArgs(["flows", "--recursive=1"])).toThrow(FlagParseException);
     expect(() => parseRunArgs(["flows", "--recursive=1"])).toThrow(
@@ -366,6 +380,26 @@ describe("argent flow run", () => {
 
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
     expect(errs.join("\n")).toContain("--platform requires a value");
+  });
+
+  it("forwards the Metro port to flow-execute", async () => {
+    // Without a flag for it, a CI run through `argent flow run` had no route to
+    // the parameter at all: a dev-client launch could only ever open 8081.
+    await expect(
+      flow(["run", checkoutPath, "--device=SIM-1", "--metro-port=8085"], opts)
+    ).rejects.toThrow("process.exit:0");
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledWith(
+      "flow-execute",
+      {
+        flow_path: checkoutPath,
+        project_root: process.cwd(),
+        prerequisiteAcknowledged: true,
+        device: "SIM-1",
+        metroPort: "8085",
+      },
+      { onProgress: expect.any(Function) }
+    );
   });
 
   it("forwards --flag=value forms to flow-execute like the space-separated ones", async () => {

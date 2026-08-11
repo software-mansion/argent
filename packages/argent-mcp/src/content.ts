@@ -211,13 +211,14 @@ export type FlowStepResult = {
   status?: "pass" | "fail" | "skip" | "error";
   reason?: string;
   /**
-   * A step that passed in a way that weakens it as proof — raised today by
+   * A step that passed in a way that weakens it as proof — raised by
    * `await: { idle: true }`, which never fails a run and says here what its
-   * green actually bought (see StepReport.warning in the tool-server's
-   * flow-run). Also carries the caveat older tool-servers put on a snapshot
-   * that adopted a missing baseline, which now fails the step instead. Live
-   * either way: dropping the field would silently delete the only thing the
-   * readiness check reports.
+   * green actually bought, and by a `launch` that had to get past the
+   * expo-dev-client server chooser to start the app (see StepReport.warning in
+   * the tool-server's flow-run). Also carries the caveat older tool-servers put
+   * on a snapshot that adopted a missing baseline, which now fails the step
+   * instead. Live either way: dropping the field would silently delete the only
+   * thing those steps report.
    */
   warning?: string;
   tool?: string;
