@@ -21,6 +21,7 @@ const VEGA: DeviceInfo = { id: "vega-serial", platform: "vega", kind: "vvd" };
 const HID_H = 11;
 const HID_I = 12;
 const HID_ENTER = 40;
+const HID_ESCAPE = 41;
 const HID_LEFT_SHIFT = 225;
 
 function registryWith(api: unknown) {
@@ -112,24 +113,33 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       ]);
     });
 
-    it("presses the named key it was asked for, by its own keycode", async () => {
+    // TWO keys, because one cannot tell "presses the key it was asked for" from
+    // "always presses Enter" — every other named-key assertion on this backend
+    // uses `enter`, so `await pressKeyCode(NAMED_KEYS.enter)` in place of the
+    // resolved code is green across the whole suite. With `escape` here it is
+    // red, and `key: "escape"` silently submitting the dialog the caller was
+    // dismissing stays caught.
+    it.each([
+      ["enter", HID_ENTER],
+      ["escape", HID_ESCAPE],
+    ])("presses %s by its own keycode, not a hardcoded Enter", async (key, code) => {
       const { events, api } = hidRecorder();
 
       const result = await typeSimulatorServer(registryWith(api), IOS_SIM, {
         udid: IOS_SIM.id,
-        key: "enter",
+        key,
         delayMs: 0,
       });
 
-      // The literal is the point: comparing against NAMED_KEYS.enter would be
-      // satisfied by any value that map happens to hold. `enter` is the key the
-      // flow `type` directive submits with and the one the two-call path
-      // documents everywhere, so a wrong code here is a silent mis-submit.
+      // The literals are the point: comparing against NAMED_KEYS[key] would be
+      // satisfied by any value that map happens to hold.
       expect(events).toEqual([
-        ["Down", HID_ENTER],
-        ["Up", HID_ENTER],
+        ["Down", code],
+        ["Up", code],
       ]);
-      expect(result.keys).toBe(1);
+      // The whole result, not just `keys`: with no text given, `typed` echoes
+      // the key name, so `typed: params.text ?? ""` is caught here too.
+      expect(result).toEqual({ typed: key, keys: 1 });
     });
 
     it("names the offending key when it is unknown", async () => {
@@ -163,18 +173,25 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       expect(events.filter((e) => e.type === "char").map((e) => e.text)).toEqual(["h", "i"]);
     });
 
-    it("dispatches a real keyDown for a named key, not just a keyUp", async () => {
+    // Two keys, for the same reason as the simulator-server pair above: pinning
+    // only `enter` cannot separate "dispatches the key it was asked for" from a
+    // branch that overwrites `named` with CHROMIUM_NAMED_KEYS.enter.
+    it.each([
+      ["enter", "Enter"],
+      ["escape", "Escape"],
+    ])("dispatches %s itself, not a hardcoded Enter", async (key, domKey) => {
       const { events, api } = cdpRecorder();
 
-      await makeChromiumImpl(registryWith(api)).handler(
+      const result = await makeChromiumImpl(registryWith(api)).handler(
         {},
-        { udid: CHROMIUM.id, key: "enter", delayMs: 0 },
+        { udid: CHROMIUM.id, key, delayMs: 0 },
         CHROMIUM
       );
 
       // A dropped keyDown is a no-op for any `keydown` or submit-on-Enter
       // listener while still answering a success shape.
-      expect(events.filter((e) => e.type === "keyDown").map((e) => e.key)).toEqual(["Enter"]);
+      expect(events.filter((e) => e.type === "keyDown").map((e) => e.key)).toEqual([domKey]);
+      expect(result).toEqual({ typed: key, keys: 1 });
     });
 
     it("names the offending key when it is unknown", async () => {
@@ -200,6 +217,19 @@ describe("keyboard backends — emit exactly the action they were given", () => 
 
       expect(vi.mocked(injectVegaText).mock.calls.map((c) => c[0])).toEqual(["hi"]);
       expect(injectVegaNamedKey).not.toHaveBeenCalled();
+    });
+
+    it("forwards the key it was given to the injector, not a hardcoded one", async () => {
+      // vega-injection.test.ts drives `injectVegaNamedKey` directly, so nothing
+      // there pins that the BACKEND passes `params.key` through — replacing it
+      // with a literal "enter" is green everywhere else. On Fire TV `escape`
+      // maps to KEY_BACK, so that slip turns "go back" into select on the
+      // focused tile.
+      const result = await vegaImpl.handler({}, { udid: VEGA.id, key: "escape" }, VEGA);
+
+      expect(vi.mocked(injectVegaNamedKey).mock.calls.map((c) => c[0])).toEqual(["escape"]);
+      expect(injectVegaText).not.toHaveBeenCalled();
+      expect(result).toEqual({ typed: "escape", keys: 1 });
     });
 
     it("names the offending key when it is unknown", async () => {
