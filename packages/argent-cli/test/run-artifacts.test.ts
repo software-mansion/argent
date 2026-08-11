@@ -129,6 +129,7 @@ describe("CLI run — artifact materialization end-to-end", () => {
     return {
       [ARTIFACT_MARKER]: true,
       id: "loc-1",
+      kind: "screenshot",
       filename: "shot.png",
       mimeType: "image/png",
       size: st.size,
@@ -159,6 +160,7 @@ describe("CLI run — artifact materialization end-to-end", () => {
       image: {
         [ARTIFACT_MARKER]: true,
         id: "rem-1",
+        kind: "screenshot",
         filename: "shot.png",
         mimeType: "image/png",
         size: PNG.length,
