@@ -60,10 +60,13 @@ describe("typeTv — the TV keyboard backend", () => {
     const type = vi.fn(async () => {});
     resolveTvApi.mockResolvedValue({ type });
 
-    const result = await typeTv(registry, ANDROID_TV, { udid: ANDROID_TV.id, text: "hi there" });
+    // "Hi there", not "hi there": an all-lowercase fixture cannot separate
+    // "hands the service the text it was given" from "hands it a case-folded
+    // copy", and `typed` echoes the request rather than what `type` received.
+    const result = await typeTv(registry, ANDROID_TV, { udid: ANDROID_TV.id, text: "Hi there" });
 
-    expect(type).toHaveBeenCalledWith("hi there");
-    expect(result).toEqual({ typed: "hi there", keys: 8 });
+    expect(type).toHaveBeenCalledWith("Hi there");
+    expect(result).toEqual({ typed: "Hi there", keys: 8 });
   });
 
   it("counts `keys` by codepoint, not UTF-16 unit", async () => {

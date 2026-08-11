@@ -60,6 +60,7 @@ function cdpRecorder() {
 // CDP descriptors (chromium-keys.ts), written as literals rather than read back
 // out of the maps under test. Letters: code Key<UPPER>, vk = uppercase charcode.
 const CDP_H = { key: "h", code: "KeyH", windowsVirtualKeyCode: 72 };
+const CDP_H_UPPER = { key: "H", code: "KeyH", windowsVirtualKeyCode: 72 };
 const CDP_I = { key: "i", code: "KeyI", windowsVirtualKeyCode: 73 };
 const CDP_ENTER = { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 };
 const CDP_ESCAPE = { key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 };
@@ -190,9 +191,14 @@ describe("keyboard backends — emit exactly the action they were given", () => 
     it("emits the whole keyDown/char/keyUp triple per character, in order", async () => {
       const { events, api } = cdpRecorder();
 
+      // "Hi", not "hi": with an all-lowercase fixture a `.toLowerCase()` on the
+      // way to `charToChromiumKey` emits the same stream, and neither `typed`
+      // (which echoes the unmutated request) nor `keys` (a count) can see a
+      // fold. That is the gap the sibling android test names — a case-sensitive
+      // login field silently receiving `passw0rd` on the `{{secret:…}}` path.
       await makeChromiumImpl(registryWith(api)).handler(
         {},
-        { udid: CHROMIUM.id, text: "hi", delayMs: 0 },
+        { udid: CHROMIUM.id, text: "Hi", delayMs: 0 },
         CHROMIUM
       );
 
@@ -209,9 +215,9 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       // the event — and no test under test/ asserted that field for this
       // backend.
       expect(events).toEqual([
-        { type: "keyDown", ...CDP_H },
-        { type: "char", text: "h" },
-        { type: "keyUp", ...CDP_H },
+        { type: "keyDown", ...CDP_H_UPPER },
+        { type: "char", text: "H" },
+        { type: "keyUp", ...CDP_H_UPPER },
         { type: "keyDown", ...CDP_I },
         { type: "char", text: "i" },
         { type: "keyUp", ...CDP_I },
@@ -274,9 +280,12 @@ describe("keyboard backends — emit exactly the action they were given", () => 
 
   describe("vega", () => {
     it("injects the text it was given, and nothing else", async () => {
-      await vegaImpl.handler({}, { udid: VEGA.id, text: "hi" }, VEGA);
+      // "Hi" for the same reason as the chromium fixture: an all-lowercase
+      // string cannot separate "injects the text it was given" from "injects a
+      // case-folded copy", at `vega.ts`'s call or inside `injectVegaText`.
+      await vegaImpl.handler({}, { udid: VEGA.id, text: "Hi" }, VEGA);
 
-      expect(vi.mocked(injectVegaText).mock.calls.map((c) => c[0])).toEqual(["hi"]);
+      expect(vi.mocked(injectVegaText).mock.calls.map((c) => c[0])).toEqual(["Hi"]);
       expect(injectVegaNamedKey).not.toHaveBeenCalled();
     });
 

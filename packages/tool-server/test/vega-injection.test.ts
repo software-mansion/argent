@@ -86,8 +86,12 @@ describe("injectVegaText", () => {
   });
 
   it("shell-quotes the text so a quote/space can't break out of the command", async () => {
-    await injectVegaText("it's a test");
-    expect(lastScript()).toContain("send_text 'it'\\''s a test'");
+    // Capital "I" so the fixture also pins the case at the `send_text` sink:
+    // with an all-lowercase string a `.toLowerCase()` here emits the identical
+    // command, and the keyboard backend's `typed` echoes the request rather
+    // than what was sent — the same hole the android `input text` test names.
+    await injectVegaText("It's a test");
+    expect(lastScript()).toContain("send_text 'It'\\''s a test'");
   });
 });
 
