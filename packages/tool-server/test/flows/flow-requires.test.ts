@@ -33,6 +33,7 @@ const IOS = "00000000-0000-0000-0000-0000000000ab";
 const IOS_TV = "00000000-0000-0000-0000-0000000000cd";
 const IOS_REMOTE = "remote:00000000-0000-0000-0000-0000000000ef";
 const ANDROID = "emulator-5554";
+const ANDROID_2 = "emulator-5556";
 const CHROMIUM = "chromium-cdp-9222";
 
 let tmpDir: string;
@@ -431,28 +432,65 @@ describe("requirements narrow device auto-detection", () => {
     await writeFlow("ios-only", { requires: { platform: ["ios"] } });
     const { registry } = mockRegistry([androidEntry(ANDROID)]);
 
-    await expect(run(registry, "ios-only")).rejects.toMatchObject({
-      message: expect.stringMatching(/No booted device satisfies this flow's requires/),
-    });
+    const err = await run(registry, "ios-only").catch((e: unknown) => e);
+
+    expect((err as Error).message).toMatch(/No booted device satisfies this flow's requires/);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNMET);
   });
 
-  it("names the unreadable kind that ruled a device out, rather than listing it as eligible", async () => {
-    // Without the kind the listing reads as a device that should have matched.
+  it("reports an unreadable kind as unverifiable, naming the device it never judged", async () => {
+    // "Could not be read" is not "wrong kind": on the skip code a mixed
+    // directory run prints PASS with this flow never executed.
     await writeFlow("tv-only", { requires: { runtimeKind: "tv" } });
     const { registry } = mockRegistry([androidEntry(ANDROID)]);
 
-    await expect(run(registry, "tv-only")).rejects.toThrow(
+    const err = await run(registry, "tv-only").catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNVERIFIABLE);
+    expect((err as Error).message).toMatch(
+      new RegExp(`runtime kind of ${ANDROID} could not be read`)
+    );
+    expect((err as Error).message).toMatch(
       new RegExp(`Available devices: ${ANDROID} \\(android, device, kind unknown\\)`)
     );
+  });
+
+  it("stays unverifiable when a readable mismatch sits next to the unread device", async () => {
+    // The mobile emulator is a real exclusion, but one unanswered candidate is
+    // enough to bar the skip: the flow's target may be the device nobody read.
+    await writeFlow("tv-only", { requires: { runtimeKind: "tv" } });
+    const { registry } = mockRegistry([androidEntry(ANDROID, "mobile"), androidEntry(ANDROID_2)]);
+
+    const err = await run(registry, "tv-only").catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNVERIFIABLE);
+    expect((err as Error).message).toMatch(
+      new RegExp(`runtime kind of ${ANDROID_2} could not be read`)
+    );
+  });
+
+  it("keeps the skip when a platform mismatch already excluded the unread device", async () => {
+    // The emulator fails the readable platform half, so its unread kind never
+    // mattered: nothing unverified stands between the flow and the skip.
+    await writeFlow("ios-tv", { requires: { platform: ["ios"], runtimeKind: "tv" } });
+    const { registry } = mockRegistry([androidEntry(ANDROID)]);
+
+    const err = await run(registry, "ios-tv").catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNMET);
   });
 
   it("names the actual kind when the listing could report it", async () => {
     await writeFlow("tv-only", { requires: { runtimeKind: "tv" } });
     const { registry } = mockRegistry([androidEntry(ANDROID, "mobile")]);
 
-    await expect(run(registry, "tv-only")).rejects.toThrow(
+    const err = await run(registry, "tv-only").catch((e: unknown) => e);
+
+    expect((err as Error).message).toMatch(
       new RegExp(`Available devices: ${ANDROID} \\(android, device, mobile\\)`)
     );
+    // Every exclusion was decided on a kind that WAS read, so the skip stands.
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNMET);
   });
 
   it("keeps the kind out of the ambiguity message, where it is noise", async () => {
