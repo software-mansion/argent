@@ -392,6 +392,24 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     expect(cmds).toEqual(["input text 'abc'", "input keyevent 66"]); // text, then KEYCODE_ENTER
   });
 
+  it("still presses the key when `text` is an empty string", async () => {
+    // `if (params.text)` skips the injection for "", leaving the key press as
+    // the only work — and narrowing the guard this branch moved to
+    // `if (params.key && params.text !== "")`, which drops that press
+    // silently, was green across all 297 files. Verified on a Pixel_3a:
+    // `{text:"", key:"backspace"}` turns a field holding `abc` into `ab`.
+    // `typed` echoes the empty text rather than the key name, because `??`
+    // does not fall through on "" — pinned as observed, not endorsed.
+    adbShell.mockClear();
+    const res = await impl.handler(
+      {},
+      { udid: SERIAL, text: "", key: "enter" } as KeyboardParams,
+      phone
+    );
+    expect(adbShell.mock.calls.map((c) => c[1])).toEqual(["input keyevent 66"]);
+    expect(res).toEqual({ typed: "", keys: 1 });
+  });
+
   it("presses a named key after ALL segments of `%`-split text", async () => {
     // The text-then-key rule has to hold against the multi-call shape too:
     // `%`-bearing text becomes one `input text` per segment, and an Enter
