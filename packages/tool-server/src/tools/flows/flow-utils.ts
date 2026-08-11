@@ -3043,9 +3043,15 @@ function validateRequires(flow: FlowFile): void {
   }
 }
 
-/** Validate cross-field invariants that are checkable without other files. */
-export function validateFlow(flow: FlowFile): void {
-  validateRequires(flow);
+/**
+ * Validate cross-field invariants that are checkable without other files.
+ * `skipRequires` exists for the recording append path alone: a `requires` block
+ * hand-written mid-take legitimately precedes the launch steps that will
+ * satisfy it, so appends must stay possible — flow-finish-recording and the
+ * run path are the gates that judge the whole flow.
+ */
+export function validateFlow(flow: FlowFile, opts?: { skipRequires?: boolean }): void {
+  if (!opts?.skipRequires) validateRequires(flow);
   if (isE2eFlow(flow) && flow.executionPrerequisite) {
     throw new FailureError(
       "A flow that starts with a launch step must not declare executionPrerequisite — it launches its own app and controls its start state. Drop the leading launch to make it a fragment, or drop executionPrerequisite.",
@@ -3059,8 +3065,8 @@ export function validateFlow(flow: FlowFile): void {
   }
 }
 
-/** Parse a YAML flow file into a FlowFile. */
-export function parseFlow(content: string): FlowFile {
+/** Parse a YAML flow file into a FlowFile. `opts` forwards to {@link validateFlow}. */
+export function parseFlow(content: string, opts?: { skipRequires?: boolean }): FlowFile {
   const trimmed = content.trim();
   if (trimmed.length === 0) {
     return { executionPrerequisite: "", steps: [] };
@@ -3128,7 +3134,7 @@ export function parseFlow(content: string): FlowFile {
       : { requires: parseRequires(parsed.requires as unknown) }),
     steps,
   };
-  validateFlow(flow);
+  validateFlow(flow, opts);
   return flow;
 }
 
@@ -3500,7 +3506,9 @@ export async function writeNewFlowFile(filePath: string, content: string): Promi
  */
 export async function countStepsOnDisk(filePath: string): Promise<number | undefined> {
   try {
-    return parseFlow(await fs.readFile(filePath, "utf8")).steps.length;
+    // skipRequires: a take mid-edit on its requires block still has countable
+    // steps, and reporting no count would understate the loss.
+    return parseFlow(await fs.readFile(filePath, "utf8"), { skipRequires: true }).steps.length;
   } catch {
     return undefined;
   }
@@ -3509,12 +3517,14 @@ export async function countStepsOnDisk(filePath: string): Promise<number | undef
 /** Read and parse the flow file, append a step, write it back. */
 export async function appendStep(filePath: string, step: FlowStep): Promise<string> {
   const content = await fs.readFile(filePath, "utf8");
-  const flow = parseFlow(content);
+  // skipRequires, or a mid-take requires block would fail every append —
+  // including this parse of the file as it already stands.
+  const flow = parseFlow(content, { skipRequires: true });
   flow.steps.push(step);
   // Re-validate with the new step: a leading `launch` recorded into a
   // prerequisite-bearing recording must error here (nothing written), not
   // produce a file that fails to parse at replay.
-  validateFlow(flow);
+  validateFlow(flow, { skipRequires: true });
   const updated = serializeFlow(flow);
   await writeFlowFile(filePath, updated);
   return updated;
@@ -3613,7 +3623,9 @@ export async function appendStepToFlow(
     session.lastTouchedSeq = touch();
     if (session.persist === "host") {
       const flowFile = await appendStep(session.filePath, step);
-      session.flow = parseFlow(flowFile);
+      // As lenient as the append that just accepted this content: the file may
+      // be mid-take on its requires block.
+      session.flow = parseFlow(flowFile, { skipRequires: true });
       // Count inside the lock, off the just-refreshed `session.flow`: a caller
       // reading `session.flow.steps.length` after this returns would be racing
       // a concurrent same-key append, which can reassign `session.flow` between
@@ -3628,7 +3640,9 @@ export async function appendStepToFlow(
       // in-memory copy is the ONLY copy, so leaving the rejected step in it
       // poisons the recording — every later append, and the finish itself,
       // would re-hit the same error with no way to recover.
-      validateFlow(session.flow);
+      // skipRequires for the same reason as appendStep: an append never judges
+      // the whole flow.
+      validateFlow(session.flow, { skipRequires: true });
       const flowFile = serializeFlow(session.flow);
       return {
         savedTo: clientFileDirective(session.filePath, flowFile),

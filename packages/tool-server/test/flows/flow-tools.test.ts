@@ -3,7 +3,12 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Registry, ToolContext } from "@argent/registry";
-import { ArtifactStore, zodObjectToJsonSchema } from "@argent/registry";
+import {
+  ArtifactStore,
+  FAILURE_CODES,
+  getFailureSignal,
+  zodObjectToJsonSchema,
+} from "@argent/registry";
 
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
@@ -1976,6 +1981,69 @@ describe("flow-finish-recording", () => {
       '2. when: text {"id":"status"} == "Ready" (1 step)',
       '3. when: text {"id":"total"} matches /^Total: \\$\\d+\\.\\d{2}$/ (2 steps)',
     ]);
+  });
+});
+
+// ── A requires block hand-written mid-take ───────────────────────────
+
+describe("a requires block hand-written mid-take", () => {
+  // Hand-editing the .yaml mid-recording is the documented way to write a
+  // `requires:` block, so the file can legitimately claim platforms its
+  // recorded launches do not cover yet. That intermediate state must stay
+  // appendable — flow-finish-recording is the gate that judges the whole flow.
+
+  /** requires claims android too, but the only launch carries an ios id. */
+  const MID_TAKE: FlowFile = {
+    executionPrerequisite: "",
+    requires: { platform: ["ios", "android"] },
+    steps: [{ kind: "launch", app: { ios: "com.example.app" } }],
+  };
+
+  it("keeps recording steps onto the not-yet-covered take", async () => {
+    const registry = createMockRegistry({ tap: { result: { ok: true } } });
+    const addStep = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "mid-take", project_root: tmpDir });
+    await overwriteFlowFile("mid-take", MID_TAKE);
+
+    await addStep.execute(
+      {},
+      { name: "mid-take", project_root: tmpDir, command: "tap", args: '{"x":0.5}' }
+    );
+
+    expect(parseFlow(await readFlowFile("mid-take"), { skipRequires: true }).steps).toEqual([
+      ...MID_TAKE.steps,
+      { kind: "tool", name: "tap", args: { x: 0.5 } },
+    ]);
+  });
+
+  it("fails the finish while the block is uncovered, recoverably", async () => {
+    await flowStartRecordingTool.execute({}, { name: "mid-take-finish", project_root: tmpDir });
+    await overwriteFlowFile("mid-take-finish", MID_TAKE);
+    const session = await getRecordingSession(tmpDir, "mid-take-finish");
+
+    const err = await flowFinishRecordingTool
+      .execute({}, { name: "mid-take-finish", project_root: tmpDir })
+      .then(
+        () => undefined,
+        (e: unknown) => e
+      );
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIRES_UNSATISFIABLE);
+    expect((err as Error).message).toContain("declares no app id for android");
+
+    // The session survived the failed finish, so a repair (the missing android
+    // id) followed by a retried finish succeeds.
+    expect(await getRecordingSession(tmpDir, "mid-take-finish")).toBe(session);
+    await overwriteFlowFile("mid-take-finish", {
+      ...MID_TAKE,
+      steps: [{ kind: "launch", app: { ios: "com.example.app", android: "com.example.app" } }],
+    });
+    const finished = await flowFinishRecordingTool.execute(
+      {},
+      { name: "mid-take-finish", project_root: tmpDir }
+    );
+    expect(finished.steps).toBe(1);
+    expect(await getRecordingSession(tmpDir, "mid-take-finish")).toBeUndefined();
   });
 });
 
