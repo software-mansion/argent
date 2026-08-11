@@ -761,6 +761,17 @@ export type FlowRequires = {
   composed?: true;
 };
 
+/**
+ * Human-readable form of a `requires` block, for the messages a caller has to
+ * act on. Mirrors the YAML spelling so the remedy is the line they wrote.
+ */
+export function describeRequires(requires: FlowRequires): string {
+  const parts: string[] = [];
+  if (requires.platform) parts.push(`platform: [${requires.platform.join(", ")}]`);
+  if (requires.runtimeKind) parts.push(`runtimeKind: ${requires.runtimeKind}`);
+  return parts.join(", ");
+}
+
 export type FlowFile = {
   /** Fragments only: documented entry-state contract. "" when unset. */
   executionPrerequisite: string;
@@ -3607,6 +3618,21 @@ export async function countStepsOnDisk(filePath: string): Promise<number | undef
     // skipRequires: a take mid-edit on its requires block still has countable
     // steps, and reporting no count would understate the loss.
     return parseFlow(await fs.readFile(filePath, "utf8"), { skipRequires: true }).steps.length;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The `requires:` block the flow file on disk declares, or undefined when the
+ * file is missing or does not parse. For flow-start-recording's reset:
+ * `requires` is the one FlowFile field no tool can write back, so the truncate
+ * carries it forward instead of silently unfencing the flow. skipRequires so
+ * even a coverage-violating block survives the reset rather than vanishing.
+ */
+export async function requiresOnDisk(filePath: string): Promise<FlowRequires | undefined> {
+  try {
+    return parseFlow(await fs.readFile(filePath, "utf8"), { skipRequires: true }).requires;
   } catch {
     return undefined;
   }

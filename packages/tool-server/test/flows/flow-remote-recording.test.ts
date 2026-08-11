@@ -20,7 +20,11 @@ import {
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import { createRunFlowTool, resolveFlowSource } from "../../src/tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../../src/tools/flows/flow-read-prerequisite";
-import { __resetRecordingsForTesting, parseFlow } from "../../src/tools/flows/flow-utils";
+import {
+  __resetRecordingsForTesting,
+  getRecordingSession,
+  parseFlow,
+} from "../../src/tools/flows/flow-utils";
 
 /**
  * Remote-mode flow behavior: the agent's project_root does NOT exist on this
@@ -1003,6 +1007,32 @@ describe("concurrent recordings against a remote client", () => {
     expect(flow.steps[0]).toMatchObject({ kind: "echo", message: "second take" });
 
     // Still nothing on this host: the client's root was never created here.
+    await expect(fs.stat(CLIENT_ROOT)).rejects.toThrow();
+  });
+
+  it("carries the replaced session's requires block into the restart directive", async () => {
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "remote-flow", project_root: CLIENT_ROOT },
+      remoteCtx()
+    );
+    // In client mode the in-memory copy is the only copy this host has, so it
+    // is the only place a requires block can survive from. Plant one directly:
+    // a live session carrying one is exactly what a previous carry produces.
+    const session = await getRecordingSession(CLIENT_ROOT, "remote-flow");
+    session!.flow.requires = { runtimeKind: "tv" };
+
+    const restarted = await flowStartRecordingTool.execute(
+      {},
+      { name: "remote-flow", project_root: CLIENT_ROOT },
+      remoteCtx()
+    );
+
+    const directive = restarted.savedTo as { content: string };
+    expect(parseFlow(directive.content).requires).toEqual({ runtimeKind: "tv" });
+    expect(restarted.message).toContain(
+      "requires block (runtimeKind: tv) - edit the YAML to change it"
+    );
     await expect(fs.stat(CLIENT_ROOT)).rejects.toThrow();
   });
 

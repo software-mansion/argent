@@ -287,6 +287,64 @@ describe("flow-start-recording edge cases", () => {
     expect(result.restarted).toBeUndefined();
     expect(result.discardedSteps).toBeUndefined();
   });
+
+  it("carries the on-disk requires block through the reset and says so", async () => {
+    // The re-record repair path: a fenced flow sits on disk with NO live
+    // session. `requires` has no tool that writes it back, so the reset must
+    // not silently turn the flow into a run-anywhere one.
+    const requires = { platform: ["ios" as const], runtimeKind: "tv" as const };
+    await fs.mkdir(flowsDirFor(tmpDir), { recursive: true });
+    await overwriteFlowFile("fenced", {
+      executionPrerequisite: "",
+      requires,
+      steps: [{ kind: "echo", message: "old take" }],
+    });
+
+    const result = await flowStartRecordingTool.execute(
+      {},
+      { name: "fenced", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const flow = parseFlow(result.flowFile);
+    expect(flow.steps).toEqual([]);
+    expect(flow.requires).toEqual(requires);
+    expect(parseFlow(await readFlowFile("fenced")).requires).toEqual(requires);
+    expect(result.message).toContain(
+      "requires block (platform: [ios], runtimeKind: tv) - edit the YAML to change it"
+    );
+  });
+
+  it("mentions no requires block when the replaced file had none", async () => {
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "unfenced", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    await flowInsertEchoTool.execute(
+      {},
+      { name: "unfenced", project_root: tmpDir, message: "old take" }
+    );
+
+    const result = await flowStartRecordingTool.execute(
+      {},
+      { name: "unfenced", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    expect(result.message).not.toContain("requires");
+    expect(parseFlow(result.flowFile).requires).toBeUndefined();
+  });
+
+  it("carries nothing when the on-disk file does not parse", async () => {
+    await fs.mkdir(flowsDirFor(tmpDir), { recursive: true });
+    await fs.writeFile(path.join(flowsDirFor(tmpDir), "broken.yaml"), "steps: [unclosed\n", "utf8");
+
+    const result = await flowStartRecordingTool.execute(
+      {},
+      { name: "broken", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    expect(result.message).not.toContain("requires");
+    expect(parseFlow(result.flowFile).requires).toBeUndefined();
+  });
 });
 
 // ── flow-add-echo ────────────────────────────────────────────────────
