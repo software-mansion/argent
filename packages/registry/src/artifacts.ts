@@ -130,6 +130,11 @@ export interface RegisterArtifactOptions {
 export class ArtifactStore {
   private readonly entries = new Map<string, ArtifactEntry>();
 
+  /**
+   * @public
+   * Knip's `classMembers` pass is workspace-local, so it cannot see that every
+   * caller is in tool-server (`screenshot-diff`, `screen-recording-stop`).
+   */
   async register(hostPath: string, opts?: RegisterArtifactOptions): Promise<ArtifactHandle> {
     const filename = opts?.filename ?? basename(hostPath);
     const mimeType = opts?.mimeType ?? inferMimeType(hostPath);
@@ -166,6 +171,11 @@ export class ArtifactStore {
     return this.entries.get(id);
   }
 
+  /**
+   * @public
+   * Knip's `classMembers` pass is workspace-local, so it cannot see the only
+   * caller: the tool-server `/artifacts` route.
+   */
   list(): ArtifactListItem[] {
     return [...this.entries.entries()].map(([id, entry]) => ({
       id,
