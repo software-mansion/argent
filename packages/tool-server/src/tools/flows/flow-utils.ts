@@ -1388,7 +1388,7 @@ function toYamlStep(step: FlowStep): YamlStep {
 // authoring-error case, in full.
 const MAX_ENTRY_RENDER_CHARS = 200;
 
-function badEntry(raw: unknown, detail: string): never {
+function renderEntry(raw: unknown): string {
   // A cyclic YAML alias materializes as a cyclic object — JSON.stringify
   // would throw and mask the validation message, so fall back to a marker.
   let rendered: string;
@@ -1401,7 +1401,11 @@ function badEntry(raw: unknown, detail: string): never {
     const elided = rendered.length - MAX_ENTRY_RENDER_CHARS;
     rendered = `${rendered.slice(0, MAX_ENTRY_RENDER_CHARS)}…(+${elided} chars)`;
   }
-  throw new FailureError(`Unrecognized flow entry (${detail}): ${rendered}`, {
+  return rendered;
+}
+
+function badEntry(raw: unknown, detail: string): never {
+  throw new FailureError(`Unrecognized flow entry (${detail}): ${renderEntry(raw)}`, {
     error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
     failure_stage: "flow_file_parse_step",
     failure_area: "tool_server",
@@ -1968,6 +1972,18 @@ const LAUNCH_MAP_KEYS = ["native", ...LAUNCH_PLATFORMS] as const;
 // Keys a `requires:` block accepts — the closed vocabulary of FlowRequires.
 const REQUIRES_KEYS = ["platform", "runtimeKind"] as const;
 
+// `requires` is a top-level key, not a step, so its parse errors carry the
+// file-level classification of parseFlow's top-level-key check, not
+// badEntry's step-shaped one.
+function badRequires(raw: unknown, detail: string): never {
+  throw new FailureError(`Invalid flow file: ${detail}: ${renderEntry({ requires: raw })}`, {
+    error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+    failure_stage: "flow_file_parse",
+    failure_area: "tool_server",
+    error_kind: "validation",
+  });
+}
+
 /**
  * Parse `requires.platform`: one platform or a list of them, normalized to a
  * list. The two spellings mean the same thing (unlike a selector, where bare
@@ -1978,18 +1994,18 @@ function parseRequiredPlatforms(raw: unknown, value: unknown): WhenPlatform[] {
   const list = Array.isArray(value) ? value : [value];
   const oneOf = `one of ${LAUNCH_PLATFORMS.join(", ")}`;
   if (list.length === 0) {
-    badEntry({ requires: raw }, `requires.platform must name at least ${oneOf}`);
+    badRequires(raw, `requires.platform must name at least ${oneOf}`);
   }
   const out: WhenPlatform[] = [];
   for (const p of list) {
     if (typeof p !== "string" || !(LAUNCH_PLATFORMS as readonly string[]).includes(p)) {
-      badEntry({ requires: raw }, `requires.platform must be ${oneOf} (or a list of them)`);
+      badRequires(raw, `requires.platform must be ${oneOf} (or a list of them)`);
     }
     // A repeat narrows nothing, so it is a copy/paste slip rather than an
     // intent — and rejecting it keeps the parsed list a faithful image of the
     // file, which the serialize/parse identity relies on.
     if (out.includes(p as WhenPlatform)) {
-      badEntry({ requires: raw }, `requires.platform lists "${p}" twice`);
+      badRequires(raw, `requires.platform lists "${p}" twice`);
     }
     out.push(p as WhenPlatform);
   }
@@ -2004,20 +2020,24 @@ function parseRequiredPlatforms(raw: unknown, value: unknown): WhenPlatform[] {
  */
 function parseRequires(raw: unknown): FlowRequires {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    badEntry({ requires: raw }, `requires must be a map of ${REQUIRES_KEYS.join(" / ")}`);
+    badRequires(raw, `requires must be a map of ${REQUIRES_KEYS.join(" / ")}`);
   }
   const b = raw as Record<string, unknown>;
-  rejectUnknownKeys({ requires: raw }, b, REQUIRES_KEYS, "requires");
+  const unknown = Object.keys(b).filter((k) => !(REQUIRES_KEYS as readonly string[]).includes(k));
+  if (unknown.length > 0) {
+    badRequires(
+      raw,
+      `requires has ${describeUnknownKeys(unknown, REQUIRES_KEYS)} — ` +
+        `allowed keys: ${REQUIRES_KEYS.join(", ")}`
+    );
+  }
 
   const out: FlowRequires = {};
   if (b.platform !== undefined) out.platform = parseRequiredPlatforms(raw, b.platform);
   if (b.runtimeKind !== undefined) {
     const kind = b.runtimeKind;
     if (typeof kind !== "string" || !(RUNTIME_KINDS as readonly string[]).includes(kind)) {
-      badEntry(
-        { requires: raw },
-        `requires.runtimeKind must be one of ${RUNTIME_KINDS.join(", ")}`
-      );
+      badRequires(raw, `requires.runtimeKind must be one of ${RUNTIME_KINDS.join(", ")}`);
     }
     out.runtimeKind = kind as FlowRuntimeKind;
   }
@@ -2025,8 +2045,8 @@ function parseRequires(raw: unknown): FlowRequires {
   // half-written edit than an intent, and "runs anywhere" already has a
   // spelling: no block at all.
   if (Object.keys(out).length === 0) {
-    badEntry(
-      { requires: raw },
+    badRequires(
+      raw,
       `requires must declare at least one of: ${REQUIRES_KEYS.join(", ")} ` +
         `(omit the block entirely for a flow that runs anywhere)`
     );

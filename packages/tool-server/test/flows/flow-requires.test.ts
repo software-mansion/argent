@@ -173,6 +173,26 @@ describe("parsing a requires block", () => {
       /requires.runtimeKind must be one of mobile, tv/
     );
   });
+
+  it("classifies its parse errors as an invalid file, like the top-level-key check", () => {
+    // `requires` is a top-level key, not a step: the step-shaped
+    // FLOW_ENTRY_UNRECOGNIZED / flow_file_parse_step classification would point
+    // prose and telemetry at a step that does not exist.
+    for (const yaml of [
+      "requires: {}\nsteps: []",
+      "requires: { platform: [windows] }\nsteps: []",
+    ]) {
+      let err: unknown;
+      try {
+        parse(yaml);
+      } catch (e) {
+        err = e;
+      }
+      expect((err as Error).message).toMatch(/^Invalid flow file:/);
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_FILE_INVALID);
+      expect(getFailureSignal(err)?.failure_stage).toBe("flow_file_parse");
+    }
+  });
 });
 
 describe("requirements no target could satisfy are rejected at parse", () => {
