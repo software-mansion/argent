@@ -39,18 +39,30 @@ function hidRecorder() {
   };
 }
 
-/** Records the ordered CDP events the chromium backend dispatches. */
+/**
+ * Records the ordered CDP events the chromium backend dispatches, WHOLE — every
+ * field, not a projection. A filtered view (`.filter(keyDown).map(key)`) cannot
+ * see a dropped keyUp, a zeroed `windowsVirtualKeyCode`, or a `char` emitted
+ * out of order, all of which the iOS section catches by pinning its full stream.
+ */
 function cdpRecorder() {
-  const events: Array<{ type: string; key?: string; text?: string }> = [];
+  const events: Array<Record<string, unknown>> = [];
   return {
     events,
     api: {
-      dispatchKeyEvent: async (e: { type: string; key?: string; text?: string }) => {
+      dispatchKeyEvent: async (e: Record<string, unknown>) => {
         events.push(e);
       },
     },
   };
 }
+
+// CDP descriptors (chromium-keys.ts), written as literals rather than read back
+// out of the maps under test. Letters: code Key<UPPER>, vk = uppercase charcode.
+const CDP_H = { key: "h", code: "KeyH", windowsVirtualKeyCode: 72 };
+const CDP_I = { key: "i", code: "KeyI", windowsVirtualKeyCode: 73 };
+const CDP_ENTER = { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 };
+const CDP_ESCAPE = { key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 };
 
 // keyboard-key-order.test.ts pins the RELATIVE order of `text` and `key` in a
 // combined call. That is a two-parameter property, and it is green against a
@@ -156,7 +168,7 @@ describe("keyboard backends — emit exactly the action they were given", () => 
   });
 
   describe("chromium", () => {
-    it("dispatches a keyDown per character, in order", async () => {
+    it("emits the whole keyDown/char/keyUp triple per character, in order", async () => {
       const { events, api } = cdpRecorder();
 
       await makeChromiumImpl(registryWith(api)).handler(
@@ -165,21 +177,35 @@ describe("keyboard backends — emit exactly the action they were given", () => 
         CHROMIUM
       );
 
-      // Filtered to keyDown: the backend puts the same `key` on the keyUp, so an
-      // unfiltered `.some()` would be satisfied by the release alone.
-      expect(events.filter((e) => e.type === "keyDown").map((e) => e.key)).toEqual(["h", "i"]);
-      // The `char` event is what actually delivers the codepoint to the field;
-      // a descriptor reduced to "Unidentified" would still emit the keyDowns.
-      expect(events.filter((e) => e.type === "char").map((e) => e.text)).toEqual(["h", "i"]);
+      // The exact ordered stream, matching what the iOS section does with its
+      // HID events. Three projections (keyDown->key, char->text, keyDown->key
+      // for the named key) left four defect classes green against the whole
+      // suite: deleting either keyUp dispatch, forcing every
+      // `windowsVirtualKeyCode` to 0, and emitting `char` BEFORE `keyDown`.
+      //
+      // `char` carries the codepoint to the field, and the release matters to
+      // any `keyup` listener. `windowsVirtualKeyCode` has its consequence
+      // recorded at chromium-keys.ts:6-9 — apps on the deprecated keyCode API
+      // (React Native Web's Pressable) see `keyCode === 0` and silently drop
+      // the event — and no test under test/ asserted that field for this
+      // backend.
+      expect(events).toEqual([
+        { type: "keyDown", ...CDP_H },
+        { type: "char", text: "h" },
+        { type: "keyUp", ...CDP_H },
+        { type: "keyDown", ...CDP_I },
+        { type: "char", text: "i" },
+        { type: "keyUp", ...CDP_I },
+      ]);
     });
 
     // Two keys, for the same reason as the simulator-server pair above: pinning
     // only `enter` cannot separate "dispatches the key it was asked for" from a
     // branch that overwrites `named` with CHROMIUM_NAMED_KEYS.enter.
     it.each([
-      ["enter", "Enter"],
-      ["escape", "Escape"],
-    ])("dispatches %s itself, not a hardcoded Enter", async (key, domKey) => {
+      ["enter", CDP_ENTER],
+      ["escape", CDP_ESCAPE],
+    ])("dispatches %s itself, not a hardcoded Enter", async (key, desc) => {
       const { events, api } = cdpRecorder();
 
       const result = await makeChromiumImpl(registryWith(api)).handler(
@@ -188,9 +214,14 @@ describe("keyboard backends — emit exactly the action they were given", () => 
         CHROMIUM
       );
 
-      // A dropped keyDown is a no-op for any `keydown` or submit-on-Enter
-      // listener while still answering a success shape.
-      expect(events.filter((e) => e.type === "keyDown").map((e) => e.key)).toEqual([domKey]);
+      // Whole stream again: a dropped keyDown is a no-op for any `keydown` or
+      // submit-on-Enter listener, and a dropped keyUp for any `keyup` one,
+      // while both still answer a success shape. A named key emits no `char`
+      // (chromium.ts:72-87) — pinning the exact pair records that too.
+      expect(events).toEqual([
+        { type: "keyDown", ...desc },
+        { type: "keyUp", ...desc },
+      ]);
       expect(result).toEqual({ typed: key, keys: 1 });
     });
 
