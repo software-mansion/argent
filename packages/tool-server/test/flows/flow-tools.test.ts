@@ -1807,6 +1807,61 @@ describe("flow-finish-recording", () => {
     expect(result.requiresPrompt).toContain("`requires: { platform: [ios] }` is the likely answer");
   });
 
+  it("suggests both platforms when launches are split across platform guards", async () => {
+    // The ios half must not shadow the android half: suggesting [ios] alone
+    // would validate and then skip every android run of a live branch.
+    await flowStartRecordingTool.execute({}, { name: "split-launch", project_root: tmpDir });
+    await overwriteFlowFile("split-launch", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "ios" },
+          steps: [{ kind: "launch", app: { ios: "com.example.app" } }],
+        },
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "android" },
+          steps: [{ kind: "launch", app: { android: "com.example.app" } }],
+        },
+      ],
+    });
+
+    const result = await flowFinishRecordingTool.execute(
+      {},
+      { name: "split-launch", project_root: tmpDir }
+    );
+
+    expect(result.requiresPrompt).toContain(
+      "`requires: { platform: [ios, android] }` is the likely answer"
+    );
+  });
+
+  it("excludes a platform an unguarded launch cannot serve", async () => {
+    // For ios the android-guarded block is out of scope, so the ios-only launch
+    // suffices; for android that same unguarded launch is in scope with no
+    // android id, so android is not suggestible despite its guarded launch.
+    await flowStartRecordingTool.execute({}, { name: "unguarded-ios", project_root: tmpDir });
+    await overwriteFlowFile("unguarded-ios", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: { ios: "com.example.app" } },
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "android" },
+          steps: [{ kind: "launch", app: { android: "com.example.app" } }],
+        },
+      ],
+    });
+
+    const result = await flowFinishRecordingTool.execute(
+      {},
+      { name: "unguarded-ios", project_root: tmpDir }
+    );
+
+    expect(result.requiresPrompt).toContain("`requires: { platform: [ios] }` is the likely answer");
+  });
+
   it("suggests nothing when the launch names every platform", async () => {
     // A bare app id runs anywhere, so it narrows nothing and must not be
     // dressed up as a recommendation.

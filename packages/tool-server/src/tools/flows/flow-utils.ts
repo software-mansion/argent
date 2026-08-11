@@ -2996,6 +2996,28 @@ function* launchesInScope(
   }
 }
 
+/**
+ * How these steps' launches relate to one platform under
+ * `requires: { platform: [platform] }`: "unserved" when a launch in the
+ * platform's scope declares no id for it (the block would fail validation),
+ * "served" when at least one launch is in scope and every one declares an id,
+ * and "no-launch" when nothing would launch at all — valid, but the launches
+ * say nothing about the platform. Shared by {@link validateRequires} and
+ * flow-finish-recording's requires hint, so the hint can never suggest a block
+ * the validator refuses.
+ */
+export function launchCoverage(
+  steps: FlowStep[],
+  platform: WhenPlatform
+): "served" | "unserved" | "no-launch" {
+  let sawLaunch = false;
+  for (const { app } of launchesInScope(steps, [platform])) {
+    sawLaunch = true;
+    if (appIdForPlatform(app, platform) === null) return "unserved";
+  }
+  return sawLaunch ? "served" : "no-launch";
+}
+
 function unsatisfiable(detail: string): FailureError {
   return new FailureError(`This flow's requires block can never be satisfied: ${detail}`, {
     error_code: FAILURE_CODES.FLOW_REQUIRES_UNSATISFIABLE,
@@ -3051,13 +3073,7 @@ function validateRequires(flow: FlowFile): void {
   // one is an open set — one viable platform served by every launch in its
   // scope suffices.
   const candidates = LAUNCH_PLATFORMS.filter((p) => platformCanPresent(p, runtimeKind));
-  const served = (p: WhenPlatform): boolean => {
-    for (const { app } of launchesInScope(flow.steps, [p])) {
-      if (appIdForPlatform(app, p) === null) return false;
-    }
-    return true;
-  };
-  if (!candidates.some(served)) {
+  if (!candidates.some((p) => launchCoverage(flow.steps, p) !== "unserved")) {
     throw unsatisfiable(
       `no platform that is ever "${runtimeKind}" (${candidates.join(", ")}) has an app id in ` +
         `every launch step — add launch entries for one of them, or drop requires.runtimeKind`

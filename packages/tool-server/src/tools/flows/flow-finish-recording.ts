@@ -2,7 +2,7 @@ import { z } from "zod";
 import * as fs from "node:fs/promises";
 import type { ToolDefinition } from "@argent/registry";
 import {
-  appIdForPlatform,
+  launchCoverage,
   requireRecordingSession,
   clearRecordingSession,
   withFlowFileLock,
@@ -19,30 +19,16 @@ import {
 } from "./flow-utils";
 import type { TextMatchMode } from "../../utils/ui-tree-match";
 
-/** The first `launch` step anywhere in the flow, including inside a `when:` block. */
-function firstLaunch(steps: FlowStep[]): Extract<FlowStep, { kind: "launch" }> | undefined {
-  for (const step of steps) {
-    if (step.kind === "launch") return step;
-    if (step.kind === "when") {
-      const nested = firstLaunch(step.steps);
-      if (nested) return nested;
-    }
-  }
-  return undefined;
-}
-
 /**
- * The platforms a recorded `launch` already limits the flow to, or null when it
- * limits nothing (a bare app id, or no launch at all). A launch declaring no id
- * for the run's platform is a run-time error, so this is the one part of the
- * answer the file already knows — worth offering rather than making the agent
- * re-derive it.
+ * The platforms the flow's launch steps already limit it to, or null when they
+ * limit nothing (a bare app id, or no launch at all). A platform is offered iff
+ * some launch in its scope would run and every one declares an id for it — the
+ * validator's own walk, so the hint can never suggest a block that fails
+ * validation or skips a reachable `when:` branch.
  */
 function launchPlatforms(flow: FlowFile): WhenPlatform[] | null {
-  const launch = firstLaunch(flow.steps);
-  if (!launch) return null;
-  const named = LAUNCH_PLATFORMS.filter((p) => appIdForPlatform(launch.app, p) !== null);
-  return named.length > 0 && named.length < LAUNCH_PLATFORMS.length ? [...named] : null;
+  const named = LAUNCH_PLATFORMS.filter((p) => launchCoverage(flow.steps, p) === "served");
+  return named.length > 0 && named.length < LAUNCH_PLATFORMS.length ? named : null;
 }
 
 /**
