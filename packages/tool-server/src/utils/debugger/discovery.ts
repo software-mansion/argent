@@ -90,9 +90,10 @@ export async function discoverMetro(port: number): Promise<MetroInfo> {
 
   // Optional: only source-map / file:line resolution needs it, and its absence
   // costs a location rather than yielding a wrong one (source fragments fail
-  // closed; SourceMapsRegistry still matches by alias and suffix). Legacy Metro
-  // (RN 0.72, which Vega forks) never sends it, and hard-failing there would
-  // also take down evaluate, console logs and the network inspector.
+  // closed; SourceMapsRegistry never reads it — it only registers maps from
+  // Debugger.scriptParsed). Legacy Metro (RN 0.72, which Vega forks) never
+  // sends it, and hard-failing there would also take down evaluate, console
+  // logs and the network inspector.
   const projectRoot = statusRes.headers.get("X-React-Native-Project-Root") ?? "";
 
   let listRes: Response;
