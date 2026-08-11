@@ -48,9 +48,12 @@ function registryWith(api: unknown) {
 // These are not order-only, so do not reduce them to a "did the key come last"
 // check. The exact sequences and counts below (the HID stream's length plus its
 // last down, the chromium keyDown list, the android command pair) are what catch
-// a named key dispatched as a bare keyUp, and the four unknown-key tests are the
-// only place the offending key's NAME in the 400 is pinned on any backend — the
-// surviving assertions elsewhere match bare prefixes.
+// a named key dispatched as a bare keyUp. The four unknown-key tests are also
+// the only place the offending key's NAME in the 400 is pinned on iOS, chromium
+// and vega — `vega-injection.test.ts` matches the bare `/Unknown Vega key/i`
+// prefix, and nothing else names the key at all. Android is the exception:
+// `keyboard-android.test.ts` pins `/Unknown key "nope"/` on its own, so
+// stripping the name there reddens both files.
 // keyboard-backend-fidelity.test.ts covers the single-parameter properties these
 // cannot see; it deliberately does not repeat what is pinned here.
 describe("keyboard text+key ordering", () => {
