@@ -111,6 +111,29 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       expect(result).toEqual({ typed: "hi", keys: 2 });
     });
 
+    it("leaves the characters before an un-typeable one on the device", async () => {
+      // This backend validates per character inside the dispatch loop, so a
+      // rejection is NOT all-or-nothing: "h" is already pressed when "é"
+      // throws. The tool description tells agents exactly that, and nothing
+      // pinned it in either direction — hoisting a whole-string pre-check up
+      // here (the other reasonable design, and what Android/Vega/TV do) was
+      // green across the whole suite while making the description false.
+      const { events, api } = hidRecorder();
+
+      await expect(
+        typeSimulatorServer(registryWith(api), IOS_SIM, {
+          udid: IOS_SIM.id,
+          text: "hé",
+          delayMs: 0,
+        })
+      ).rejects.toThrow(/No keycode for character "é"/);
+
+      expect(events).toEqual([
+        ["Down", HID_H],
+        ["Up", HID_H],
+      ]);
+    });
+
     it("shifts only the character that needs it", async () => {
       const { events, api } = hidRecorder();
 
@@ -192,6 +215,27 @@ describe("keyboard backends — emit exactly the action they were given", () => 
         { type: "keyDown", ...CDP_I },
         { type: "char", text: "i" },
         { type: "keyUp", ...CDP_I },
+      ]);
+    });
+
+    it("leaves the characters before an un-typeable one on the device", async () => {
+      // The mirror of the simulator-server case above: chromium also validates
+      // per character inside the loop, so the whole triple for "h" is already
+      // dispatched when "é" throws.
+      const { events, api } = cdpRecorder();
+
+      await expect(
+        makeChromiumImpl(registryWith(api)).handler(
+          {},
+          { udid: CHROMIUM.id, text: "hé", delayMs: 0 },
+          CHROMIUM
+        )
+      ).rejects.toThrow(/No CDP key descriptor for character "é"/);
+
+      expect(events).toEqual([
+        { type: "keyDown", ...CDP_H },
+        { type: "char", text: "h" },
+        { type: "keyUp", ...CDP_H },
       ]);
     });
 
