@@ -98,12 +98,18 @@ describe("injectVegaNamedKey", () => {
   });
 
   it("presses each named key with its own keycode (not one hardcoded value)", async () => {
-    // The map's literal values are pinned in vega-input.test.ts; this pins that
-    // the lookup READS the map, for every entry in it. `enter` is the only key
-    // any other test here presses, so a lookup that resolved every name to one
-    // code — the realistic fold/refactor slip — is green everywhere else, and
-    // `arrow-down`, `backspace`, `escape`, `tab` and f1–f12 would all submit the
-    // field instead of navigating. Twin of the android exhaustive test.
+    // Half of a two-part scheme, and vacuous without the other half: this
+    // compares the emitted code against the same map the resolver reads, so it
+    // pins that the lookup READS the map, for every entry in it — not that any
+    // entry holds the right value. vega-input.test.ts pins all 24 literals; it
+    // used to spot-check 8, which left a wrong value for `backspace`, `delete`,
+    // `tab`, `space`, three of the arrows or f2–f10 satisfying both tests.
+    //
+    // What this half catches is a lookup that resolved every name to one code —
+    // the realistic fold/refactor slip. Only `enter` and `arrow-down` are
+    // pressed by other tests in this file, so such a fold is green everywhere
+    // else while `backspace`, `escape`, `tab` and f1–f12 all submit the field
+    // instead of navigating. Twin of the android exhaustive test.
     for (const [name, keycode] of Object.entries(NAMED_KEYCODES)) {
       adbShell.mockClear();
       adbShell.mockResolvedValue(SIZE_OK);
