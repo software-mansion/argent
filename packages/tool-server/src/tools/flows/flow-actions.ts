@@ -64,18 +64,11 @@ export interface ActionEnv {
   device: DeviceInfo;
   signal?: AbortSignal;
   /**
-   * Bundle id of the last successful native `launch:` in this RUN, shared with
-   * nested `run:` flows (ExecState is per-run). Undefined until a launch runs;
-   * cleared by `tool:` steps that can change the foreground app (launch-app,
-   * restart-app, open-url, button, reinstall-app).
-   *
-   * iOS tree reads use it only where auto-targeting cannot answer, both
-   * following from it resolving out of the connected list rather than into it:
-   * as an arbiter when auto-resolution times out, and to name the app whose
-   * disconnection needs explaining when that list is empty (see
-   * `queryFullHierarchyTree`). Never to override a resolution that answered.
+   * App id of the run's most recent successful `launch` step. Pins iOS tree
+   * reads to the app under test instead of auto-resolving (see
+   * `fetchFlowTree`); unset for runs with no launch step.
    */
-  launchedNativeApp?: string;
+  launchedAppId?: string;
   /**
    * Run-scoped memo of a tree source that answered nothing: written by a
    * {@link settleTree} that failed every read attempt, cleared by any directive
@@ -395,7 +388,7 @@ function provenTreeOutage(env: ActionEnv): Error | undefined {
  * frame, and the settle that took already cleared it.
  */
 function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
-  return fetchFlowTree(env.registry, env.device, env.launchedNativeApp).then((data) => {
+  return fetchFlowTree(env.registry, env.device, env.launchedAppId).then((data) => {
     if (env.treeOutage) env.treeOutage.proven = undefined;
     return data;
   });

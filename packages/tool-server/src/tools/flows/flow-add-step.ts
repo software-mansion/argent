@@ -75,7 +75,7 @@ const REPLAY_TREE_SOURCES: Record<string, DescribeSource> = {
 
 /**
  * The app this recording last started, from the recorder's `launch` steps — the
- * session's stand-in for the runner's {@link ActionEnv.launchedNativeApp}. Last
+ * session's stand-in for the runner's {@link ActionEnv.launchedAppId}. Last
  * rather than first: a mid-recording relaunch retargets what follows, exactly as
  * a nested `launch:` retargets a run.
  */

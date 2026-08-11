@@ -27,13 +27,13 @@ import type { DescribeTreeData } from "../describe/contract";
 export async function fetchFlowTree(
   registry: Registry,
   device: DeviceInfo,
-  launchedNativeApp?: string
+  launchedAppId?: string
 ): Promise<DescribeTreeData> {
   const source = FLOW_TREE_SOURCES[device.platform];
   // Only `ios-remote` is left, and `fetchTree` throws its not-supported error
   // naming the platform.
   if (!source) return fetchTree(registry, device);
-  return source(registry, device, launchedNativeApp);
+  return source(registry, device, launchedAppId);
 }
 
 /** The source {@link fetchFlowTree} reads on each platform that has one. */
@@ -43,12 +43,14 @@ const FLOW_TREE_SOURCES: Partial<
     (
       registry: Registry,
       device: DeviceInfo,
-      launchedNativeApp?: string
+      launchedAppId?: string
     ) => Promise<DescribeTreeData>
   >
 > = {
-  ios: (registry, device, launchedNativeApp) =>
-    queryFullHierarchyTree(registry, device, launchedNativeApp),
+  // Only iOS consumes the pin (see queryFullHierarchyTree for why it matters);
+  // the other tree sources are per-device and never auto-resolve.
+  ios: (registry, device, launchedAppId) =>
+    queryFullHierarchyTree(registry, device, launchedAppId),
   android: (registry, device) => queryAndroidFullHierarchy(registry, device),
   chromium: (registry, device) => queryChromiumTree(registry, device),
   vega: (_registry, device) => queryVegaTree(device),
