@@ -95,15 +95,27 @@ describe("getRemoteSimulatorRuntimeKind", () => {
     expect(await getRemoteSimulatorRuntimeKind(UDID)).toBeUndefined();
   });
 
-  it("returns undefined instead of throwing when sim-remote is unreachable", async () => {
+  it("propagates a sim-remote failure verbatim instead of answering undefined", async () => {
+    // Undefined means "the listing doesn't know this udid" and its caller turns
+    // it into a bare refusal; an unreachable sim-remote must instead surface the
+    // CLI's own message, per the module's error contract.
     unreachable = true;
-    expect(await getRemoteSimulatorRuntimeKind(UDID)).toBeUndefined();
+    await expect(getRemoteSimulatorRuntimeKind(UDID)).rejects.toThrow(
+      /sim-remote simctl list devices --json failed: sim-remote: no orchestrator/
+    );
   });
 
-  it("returns undefined instead of throwing when the payload is JSON but not a listing", async () => {
+  it("skips a runtime entry that is not a device array rather than throwing", async () => {
+    listing = { devices: { [IOS_RUNTIME]: "nope", [TVOS_RUNTIME]: [sim(UDID)] } };
+    expect(await getRemoteSimulatorRuntimeKind(UDID)).toBe("tv");
+  });
+
+  it("wraps a JSON payload that is not a listing in a descriptive error", async () => {
     // An orchestrator that answers `{"error":...}` at exit 0 parses fine, and
     // must not reach the caller as a raw TypeError.
     listing = { error: "not authorized" };
-    expect(await getRemoteSimulatorRuntimeKind(UDID)).toBeUndefined();
+    await expect(getRemoteSimulatorRuntimeKind(UDID)).rejects.toThrow(
+      /sim-remote simctl list devices --json returned JSON without a devices map/
+    );
   });
 });

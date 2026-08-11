@@ -199,7 +199,9 @@ function platformMeets(platform: Platform, required: readonly WhenPlatform[]): b
  * Undefined means "could not be told" — a simulator its listing doesn't know,
  * or an Android target that dropped off adb. Callers refuse rather than waving
  * it through: a TV requirement nobody verified is exactly the silent pass this
- * block exists to prevent.
+ * block exists to prevent. A probe whose transport itself fails (sim-remote
+ * auth, a broken simctl/adb) REJECTS with that failure's own message instead of
+ * folding into undefined, so the caller can name the real fault.
  */
 async function probeRuntimeKind(device: DeviceInfo): Promise<FlowRuntimeKind | undefined> {
   switch (device.platform) {
@@ -273,7 +275,18 @@ export async function assertDeviceMeetsRequires(
   if (!requires.runtimeKind) return;
 
   const declared = `This flow declares requires: { ${describeRequires(requires)} }.`;
-  const kind = await probeRuntimeKind(device);
+  let kind: FlowRuntimeKind | undefined;
+  try {
+    kind = await probeRuntimeKind(device);
+  } catch (err) {
+    // Still the unverifiable code — a directory run must fail this one flow,
+    // not abort the batch — but the probe's own message (sim-remote stderr,
+    // auth failures) is what the user has to act on, so carry it verbatim.
+    throw requirementsUnverifiableError(
+      `${declared} Probing the runtime kind of device ${device.id} (${device.platform}) ` +
+        `failed: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
   if (kind === undefined) {
     throw requirementsUnverifiableError(
       `${declared} The runtime kind of device ${device.id} could not be determined ` +

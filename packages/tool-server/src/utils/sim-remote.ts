@@ -81,7 +81,9 @@ const remoteRuntimeKindCache = new Map<string, "mobile" | "tv">();
 
 /**
  * Resolve the runtime kind ("mobile" | "tv") of a remote simulator, or undefined
- * when the listing doesn't know the udid (or `sim-remote` can't be reached).
+ * when the listing answered but doesn't know the udid. A `sim-remote` failure
+ * (missing binary, expired auth, orchestrator down) propagates instead — per the
+ * module's contract, so the CLI's stderr reaches the agent verbatim.
  *
  * The remote analogue of `getSimulatorRuntimeKind`: `classifyDevice` tags every
  * `remote:`-prefixed id `ios-remote` by shape alone, so a caller that must tell
@@ -93,19 +95,21 @@ export async function getRemoteSimulatorRuntimeKind(
   const bare = stripRemotePrefix(udid);
   const cached = remoteRuntimeKindCache.get(bare);
   if (cached) return cached;
-  try {
-    const listed = await simctlListDevices();
-    for (const [runtimeId, devices] of Object.entries(listed.devices)) {
-      // Mirror `listRemoteIosSimulators`' availability filter, so a simulator
-      // `list-devices` hides can't be the one that answers here.
-      if (!devices.some((d) => d.udid === bare && d.isAvailable !== false)) continue;
-      const kind = runtimeId.includes("tvOS") ? "tv" : "mobile";
-      remoteRuntimeKindCache.set(bare, kind);
-      return kind;
-    }
-  } catch {
-    // A payload that parses but isn't shaped like a listing is as unanswerable
-    // as an unreachable orchestrator, and owes the caller the same undefined.
+  const listed = await simctlListDevices();
+  // A payload that parses but isn't a listing (e.g. `{"error":...}` at exit 0)
+  // gets the same descriptive wrap as non-JSON output, not a raw TypeError.
+  const byRuntime = (listed as { devices?: unknown } | null)?.devices;
+  if (typeof byRuntime !== "object" || byRuntime === null) {
+    throw new Error("sim-remote simctl list devices --json returned JSON without a devices map");
+  }
+  for (const [runtimeId, devices] of Object.entries(byRuntime)) {
+    if (!Array.isArray(devices)) continue;
+    // Mirror `listRemoteIosSimulators`' availability filter, so a simulator
+    // `list-devices` hides can't be the one that answers here.
+    if (!devices.some((d: SimRemoteDevice) => d.udid === bare && d.isAvailable !== false)) continue;
+    const kind = runtimeId.includes("tvOS") ? "tv" : "mobile";
+    remoteRuntimeKindCache.set(bare, kind);
+    return kind;
   }
   return undefined;
 }
@@ -119,7 +123,11 @@ export async function getRemoteSimulatorRuntimeKind(
  * phone simulator into an error.
  */
 export async function isRemoteTvOsSimulator(udid: string): Promise<boolean> {
-  return (await getRemoteSimulatorRuntimeKind(udid)) === "tv";
+  try {
+    return (await getRemoteSimulatorRuntimeKind(udid)) === "tv";
+  } catch {
+    return false;
+  }
 }
 
 /** Test-only: clear the remote runtime-kind memo so cases don't leak verdicts. */

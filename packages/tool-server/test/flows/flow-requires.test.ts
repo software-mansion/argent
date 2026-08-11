@@ -16,17 +16,25 @@ import {
 // no mock. Spread the originals so the rest of each module keeps working — the
 // runner reaches into them for unrelated reasons.
 const runtimeKinds = new Map<string, "mobile" | "tv">();
+// A probe can also REJECT (sim-remote auth, broken adb/simctl) — distinct from
+// answering undefined, which means "the listing doesn't know this device".
+const probeFailures = new Map<string, string>();
+const probe = async (id: string) => {
+  const failure = probeFailures.get(id);
+  if (failure) throw new Error(failure);
+  return runtimeKinds.get(id);
+};
 vi.mock("../../src/utils/ios-devices", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  getSimulatorRuntimeKind: vi.fn(async (udid: string) => runtimeKinds.get(udid)),
+  getSimulatorRuntimeKind: vi.fn(async (udid: string) => probe(udid)),
 }));
 vi.mock("../../src/utils/adb", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  getAndroidRuntimeKind: vi.fn(async (serial: string) => runtimeKinds.get(serial)),
+  getAndroidRuntimeKind: vi.fn(async (serial: string) => probe(serial)),
 }));
 vi.mock("../../src/utils/sim-remote", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  getRemoteSimulatorRuntimeKind: vi.fn(async (udid: string) => runtimeKinds.get(udid)),
+  getRemoteSimulatorRuntimeKind: vi.fn(async (udid: string) => probe(udid)),
 }));
 
 const IOS = "00000000-0000-0000-0000-0000000000ab";
@@ -103,6 +111,7 @@ async function run(
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-requires-"));
   runtimeKinds.clear();
+  probeFailures.clear();
   runtimeKinds.set(IOS, "mobile");
   runtimeKinds.set(IOS_TV, "tv");
   runtimeKinds.set(IOS_REMOTE, "mobile");
@@ -400,6 +409,24 @@ describe("an explicitly targeted run", () => {
 
     await expect(run(registry, "tv-only", { device: IOS_REMOTE })).rejects.toThrow(
       /could not be determined/
+    );
+  });
+
+  it("carries a failed probe's own message into the unverifiable refusal", async () => {
+    // A sim-remote auth failure is not "the listing doesn't know this udid":
+    // the user gets the CLI's message verbatim, still under the unverifiable
+    // code so a directory run fails this flow alone, not the batch.
+    await writeFlow("tv-only", { requires: { runtimeKind: "tv" } });
+    probeFailures.set(IOS_REMOTE, "sim-remote simctl list devices failed: not authenticated");
+    const { registry } = mockRegistry();
+
+    const err = await run(registry, "tv-only", { device: IOS_REMOTE }).catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNVERIFIABLE);
+    expect(getFailureSignal(err)?.error_kind).toBe("validation");
+    expect((err as Error).message).toMatch(/This flow declares requires/);
+    expect((err as Error).message).toMatch(
+      /sim-remote simctl list devices failed: not authenticated/
     );
   });
 });
