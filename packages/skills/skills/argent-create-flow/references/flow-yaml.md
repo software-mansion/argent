@@ -215,6 +215,8 @@ A `run:` target is a YAML path resolved against the directory of the flow file c
 
 `argent flow run <name> [--device <id>] [--platform ios|android|chromium|vega] [--update-baselines] [--output <dir>] [--json]` runs without an LLM and exits non-zero on failure.
 
+A directory argument runs every flow in it and reports the `passed/failed/skipped` counts under a `PASS`/`FAIL`/`NONE RAN` verdict. `NONE RAN` exits 2 when no flow executed a step, so a suite filtered to nothing — or one whose only "passes" had every step `when:`-skipped — cannot read as green; `--json` prints one aggregate object whose `ok` agrees. A flow whose [`requires:`](#target-requirements) the target does not satisfy is skipped and the batch continues, but a requirement that could not be _verified_ fails that flow instead.
+
 A screenshot is human evidence. A `snapshot:` is executable visual verification. A missing baseline or excessive mismatch fails. A `cropOn` size change also fails. Use snapshots for color, layout, size, spacing, typography, clipping, overflow, images, icons, or stable component appearance. Use full screen for global changes and `cropOn` for one component.
 
 Do not use a snapshot as the only proof of navigation, persistence, data, accessibility state, logs, or network behavior. Avoid unstable timestamps, live data, ads, animation, and device drift. First establish deterministic state, identity, and readiness.
