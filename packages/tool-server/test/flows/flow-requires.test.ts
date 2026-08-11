@@ -43,6 +43,7 @@ const IOS_REMOTE = "remote:00000000-0000-0000-0000-0000000000ef";
 const ANDROID = "emulator-5554";
 const ANDROID_2 = "emulator-5556";
 const CHROMIUM = "chromium-cdp-9222";
+const VEGA = "amazon-4a27df03c9777152";
 
 let tmpDir: string;
 
@@ -80,6 +81,18 @@ const androidEntry = (serial: string, runtimeKind?: "mobile" | "tv"): ListedDevi
   state: "device",
   serial,
   ...(runtimeKind ? { runtimeKind } : {}),
+});
+// Neither carries a runtimeKind: the listing never reports one for the two
+// constant platforms, so a requires match has to come from the constant fold.
+const vegaEntry = (serial: string): ListedDevice => ({
+  platform: "vega",
+  state: "running",
+  serial,
+});
+const chromiumEntry = (id: string): ListedDevice => ({
+  platform: "chromium",
+  state: "Running",
+  id,
 });
 
 /** A single step that needs a device and always succeeds. */
@@ -207,9 +220,16 @@ describe("parsing a requires block", () => {
 
 describe("requirements no target could satisfy are rejected at parse", () => {
   it("refuses a tv requirement on chromium alone", () => {
-    expect(() =>
-      parseFlow("requires: { platform: [chromium], runtimeKind: tv }\nsteps: []")
-    ).toThrow(/can never be satisfied.*chromium never is/s);
+    let err: unknown;
+    try {
+      parseFlow("requires: { platform: [chromium], runtimeKind: tv }\nsteps: []");
+    } catch (e) {
+      err = e;
+    }
+    expect((err as Error).message).toMatch(/can never be satisfied.*chromium never is/s);
+    // Pins the code the platform+kind contradiction throws under - rethrowing
+    // this branch as a plain parse error would keep the prose green.
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIRES_UNSATISFIABLE);
   });
 
   it("refuses a mobile requirement on vega alone", () => {
@@ -291,6 +311,22 @@ describe("requirements no target could satisfy are rejected at parse", () => {
       )
     ).not.toThrow();
   });
+
+  it("holds a launch behind a non-platform guard to every required platform", () => {
+    // A visible: guard narrows nothing about the platform, so its launch still
+    // owes ios an id - kills a launchesInScope mutation that skips launches
+    // under non-platform guards instead of passing `allowed` through.
+    expect(() =>
+      parseFlow(
+        [
+          "requires: { platform: [ios] }",
+          "steps:",
+          "  - when: { visible: { id: banner } }",
+          "    steps: [{ launch: { android: com.a } }]",
+        ].join("\n")
+      )
+    ).toThrow(/declares no app id for ios/);
+  });
 });
 
 describe("an explicitly targeted run", () => {
@@ -346,6 +382,24 @@ describe("an explicitly targeted run", () => {
     const { registry } = mockRegistry();
 
     expect((await run(registry, "tv-only", { device: IOS_TV })).ok).toBe(true);
+  });
+
+  it("passes an explicit vega device on a tv requirement with nothing probed", async () => {
+    // No probe mock answers for VEGA: kills a probeRuntimeKind mutation whose
+    // vega arm stops answering "tv" by definition (undefined refuses as
+    // unverifiable, "mobile" as unmet).
+    await writeFlow("tv-only", { requires: { runtimeKind: "tv" } });
+    const { registry } = mockRegistry();
+
+    expect((await run(registry, "tv-only", { device: VEGA })).ok).toBe(true);
+  });
+
+  it("passes an explicit chromium device on a mobile requirement with nothing probed", async () => {
+    // Same pin for probeRuntimeKind's chromium arm, which is always "mobile".
+    await writeFlow("mobile-only", { requires: { runtimeKind: "mobile" } });
+    const { registry } = mockRegistry();
+
+    expect((await run(registry, "mobile-only", { device: CHROMIUM })).ok).toBe(true);
   });
 
   it("refuses rather than assumes when the runtime kind cannot be read", async () => {
@@ -462,6 +516,24 @@ describe("requirements narrow device auto-detection", () => {
     const { registry } = mockRegistry([iosEntry(IOS_TV, "tv"), androidEntry(ANDROID)]);
 
     expect((await run(registry, "tv-only")).device).toBe(IOS_TV);
+  });
+
+  it("admits a listed vega device by its constant kind, with no listing field", async () => {
+    // Kills a listedRuntimeKind mutation whose vega arm reads the (absent)
+    // listing field instead of answering "tv" - the device would be excluded
+    // as unread and the run refused.
+    await writeFlow("tv-only", { requires: { runtimeKind: "tv" } });
+    const { registry } = mockRegistry([vegaEntry(VEGA), androidEntry(ANDROID, "mobile")]);
+
+    expect((await run(registry, "tv-only")).device).toBe(VEGA);
+  });
+
+  it("admits a listed chromium device by its constant kind, with no listing field", async () => {
+    // Same pin for listedRuntimeKind's chromium arm, which is always "mobile".
+    await writeFlow("mobile-only", { requires: { runtimeKind: "mobile" } });
+    const { registry } = mockRegistry([chromiumEntry(CHROMIUM), iosEntry(IOS_TV, "tv")]);
+
+    expect((await run(registry, "mobile-only")).device).toBe(CHROMIUM);
   });
 
   it("reports requirements unmet — not a device-resolution failure — when nothing matches", async () => {
