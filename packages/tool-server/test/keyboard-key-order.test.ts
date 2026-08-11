@@ -44,6 +44,15 @@ function registryWith(api: unknown) {
 // fires enter into the still-empty field, which blurs it and leaks the text to
 // app-level key commands (the React Native dev menu opens on a bare "d" when
 // nothing is focused) — the regression behind these tests.
+//
+// These are not order-only, so do not reduce them to a "did the key come last"
+// check. The exact sequences and counts below (the HID stream's length plus its
+// last down, the chromium keyDown list, the android command pair) are what catch
+// a named key dispatched as a bare keyUp, and the four unknown-key tests are the
+// only place the offending key's NAME in the 400 is pinned on any backend — the
+// surviving assertions elsewhere match bare prefixes.
+// keyboard-backend-fidelity.test.ts covers the single-parameter properties these
+// cannot see; it deliberately does not repeat what is pinned here.
 describe("keyboard text+key ordering", () => {
   it("simulator-server: presses the named key after the text", async () => {
     const downs: number[] = [];

@@ -64,15 +64,23 @@ const CDP_I = { key: "i", code: "KeyI", windowsVirtualKeyCode: 73 };
 const CDP_ENTER = { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 };
 const CDP_ESCAPE = { key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 };
 
-// keyboard-key-order.test.ts pins the RELATIVE order of `text` and `key` in a
-// combined call. That is a two-parameter property, and it is green against a
-// backend that emits the two actions in the right order but emits either of them
-// wrongly — a prefix instead of the whole string, two presses per character, a
-// modifier held across a lowercase run, a bare keyUp for a named key, or an
-// unknown-key 400 that omits the name the caller has to correct.
+// Single-parameter fidelity: does each backend emit exactly the action it was
+// given, one action per call?
 //
-// Those are single-parameter properties, so they belong beside the ordering
-// tests rather than inside them, one action per call. They are pinned here
+// keyboard-key-order.test.ts pins the RELATIVE order of `text` and `key` in a
+// combined call, but it is not order-only — four of its eight tests assert exact
+// sequences and counts, and its four unknown-key tests name the offending key.
+// Between them those already catch a bare keyUp for a named key (on both
+// backends where that is expressible) and a 400 that omits the name the caller
+// has to correct (on all four). Do not loosen its `toEqual` / `toHaveLength`
+// assertions on the theory that they only check ordering.
+//
+// What ordering cannot see is a backend that emits the two actions in the right
+// order but emits one of them wrongly: a prefix instead of the whole string, two
+// presses per character, a modifier held across the lowercase remainder (its
+// text is "hi", so it has no shift to lose), a named key that is always Enter
+// whatever was asked for, a CDP event stream missing its releases or its
+// `char`, or a `typed` echo that drops the key name. Those are pinned here,
 // against literal expectations — never against the same map the code reads,
 // which any value in that map would satisfy.
 describe("keyboard backends — emit exactly the action they were given", () => {
@@ -153,18 +161,6 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       // the key name, so `typed: params.text ?? ""` is caught here too.
       expect(result).toEqual({ typed: key, keys: 1 });
     });
-
-    it("names the offending key when it is unknown", async () => {
-      const { api } = hidRecorder();
-
-      await expect(
-        typeSimulatorServer(registryWith(api), IOS_SIM, {
-          udid: IOS_SIM.id,
-          key: "bogus",
-          delayMs: 0,
-        })
-      ).rejects.toThrow(/Unknown key "bogus"/);
-    });
   });
 
   describe("chromium", () => {
@@ -223,18 +219,6 @@ describe("keyboard backends — emit exactly the action they were given", () => 
         { type: "keyUp", ...desc },
       ]);
       expect(result).toEqual({ typed: key, keys: 1 });
-    });
-
-    it("names the offending key when it is unknown", async () => {
-      const { api } = cdpRecorder();
-
-      await expect(
-        makeChromiumImpl(registryWith(api)).handler(
-          {},
-          { udid: CHROMIUM.id, key: "bogus", delayMs: 0 },
-          CHROMIUM
-        )
-      ).rejects.toThrow(/Unknown key "bogus"/);
     });
   });
 
