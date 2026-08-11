@@ -51,7 +51,7 @@ function requiresPrompt(flow: FlowFile): string | undefined {
     `ones it was never recorded on. Ask the user whether it should be restricted, and if so add ` +
     `the block to the YAML yourself (there is no tool for it):\n` +
     `  requires:\n` +
-    `    platform: [ios, android]   # one platform or a list; ios covers a remote simulator\n` +
+    `    platform: [ios, android]   # one platform or a list; ios covers a remote simulator (--device remote:<udid> runs only — auto-detection never lists one)\n` +
     `    runtimeKind: tv            # tv (Apple TV / Android TV / Fire TV), or mobile for everything else\n` +
     `Both keys are optional and ANDed. Leaving the block out is the right answer for a genuinely ` +
     `portable flow; restrict it when the scenario is platform-specific (a platform-only screen, an ` +

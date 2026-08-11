@@ -49,7 +49,7 @@ requires:
   runtimeKind: tv
 ```
 
-`platform` takes one platform or a list, and `ios` covers a remote simulator. `runtimeKind` is `tv` — a focus-driven remote environment, so Apple TV, Android TV, or Fire TV — or `mobile`, which is everything else, Chromium included. The keys are ANDed, so the block above means Apple TV or Android TV and excludes Fire TV, which `runtimeKind: tv` alone would admit.
+`platform` takes one platform or a list, and `ios` covers a remote simulator too, though only on a run pointed at one with `--device remote:<udid>` — a booted remote simulator is never an auto-detection candidate. `runtimeKind` is `tv` — a focus-driven remote environment, so Apple TV, Android TV, or Fire TV — or `mobile`, which is everything else, Chromium included. The keys are ANDed, so the block above means Apple TV or Android TV and excludes Fire TV, which `runtimeKind: tv` alone would admit.
 
 **No block means the flow runs anywhere**, so every existing flow is unaffected. Requirements also narrow device auto-detection: an ios-only flow picks the booted simulator instead of failing as ambiguous when an emulator is up beside it.
 
