@@ -28,15 +28,11 @@ export interface JsonSchema {
   description?: string;
 }
 
-export interface FlagParseResult {
+interface FlagParseResult {
   args: Record<string, unknown>;
   positional: string[];
   helpRequested: boolean;
   rawArgs: string | null; // raw --args value, if any; "-" means stdin
-}
-
-export interface FlagParseError {
-  message: string;
 }
 
 export class FlagParseException extends Error {}

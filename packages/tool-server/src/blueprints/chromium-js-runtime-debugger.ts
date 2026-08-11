@@ -110,9 +110,6 @@ function makeStubSourceResolver(): SourceResolver {
 }
 
 class StubSourceMapsRegistry extends SourceMapsRegistry {
-  constructor() {
-    super("");
-  }
   override async waitForPending(): Promise<void> {
     // Nothing to await: no source map is ever registered on the Chromium path.
   }

@@ -650,7 +650,7 @@ function keyFromBaselinePath(artifacts: Record<string, unknown>): string | null 
  * vanish from the output. Runs after the optional `--output` export, which has
  * already replaced the failed snapshots' handles with durable local copies.
  */
-export function resolveArtifactDisplayPaths(report: FlowReport): void {
+function resolveArtifactDisplayPaths(report: FlowReport): void {
   for (const s of report.steps) {
     if (!s.artifacts || typeof s.artifacts !== "object") continue;
     for (const [role, value] of Object.entries(s.artifacts)) {

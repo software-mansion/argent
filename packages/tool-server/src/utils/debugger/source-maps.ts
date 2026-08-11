@@ -60,13 +60,6 @@ export async function readCappedJson(
   return JSON.parse(Buffer.concat(chunks).toString("utf-8"));
 }
 
-export interface GeneratedPosition {
-  scriptUrl: string;
-  scriptId: string;
-  line1Based: number;
-  column0Based: number;
-}
-
 interface RegisteredMap {
   scriptUrl: string;
   scriptId: string;
@@ -77,11 +70,6 @@ interface RegisteredMap {
 export class SourceMapsRegistry {
   private maps: RegisteredMap[] = [];
   private pendingRegistrations: Promise<void>[] = [];
-  private projectRoot: string;
-
-  constructor(projectRoot: string) {
-    this.projectRoot = projectRoot;
-  }
 
   /**
    * Begin fetching and registering a source map from a Debugger.scriptParsed event.
@@ -100,84 +88,6 @@ export class SourceMapsRegistry {
   async waitForPending(): Promise<void> {
     await Promise.allSettled(this.pendingRegistrations);
     this.pendingRegistrations = [];
-  }
-
-  /**
-   * Resolve an original source file + line to its generated position in the bundle.
-   *
-   * `filePath` may be project-relative ("src/Foo.tsx"), absolute, or aliased
-   * ("/[metro-project]/App.tsx").
-   */
-  toGeneratedPosition(
-    filePath: string,
-    line1Based: number,
-    column0Based: number = 0
-  ): GeneratedPosition | null {
-    const candidates = this.buildSourceCandidates(filePath);
-
-    for (const map of this.maps) {
-      for (const candidate of candidates) {
-        if (!map.sources.some((s) => s === candidate)) continue;
-
-        try {
-          const pos = map.consumer.generatedPositionFor({
-            source: candidate,
-            line: line1Based,
-            column: column0Based,
-            bias: SourceMapConsumer.LEAST_UPPER_BOUND,
-          });
-          if (pos.line !== null) {
-            return {
-              scriptUrl: map.scriptUrl,
-              scriptId: map.scriptId,
-              line1Based: pos.line,
-              column0Based: pos.column ?? 0,
-            };
-          }
-        } catch {
-          // try next candidate
-        }
-      }
-    }
-
-    return null;
-  }
-
-  /** Matching entry in a registered map's `sources`, or null. */
-  findMatchingSource(filePath: string): string | null {
-    const candidates = this.buildSourceCandidates(filePath);
-    for (const map of this.maps) {
-      for (const candidate of candidates) {
-        if (map.sources.includes(candidate)) return candidate;
-      }
-    }
-    return null;
-  }
-
-  private buildSourceCandidates(filePath: string): string[] {
-    const normalized = filePath.replace(/\\/g, "/").replace(/^\.\//, "");
-    const candidates: string[] = [];
-
-    if (normalized.startsWith("/")) {
-      candidates.push(normalized);
-    }
-
-    candidates.push(`/[metro-project]/${normalized}`);
-
-    if (this.projectRoot) {
-      candidates.push(`${this.projectRoot}/${normalized}`);
-    }
-
-    const suffix = normalized.startsWith("/") ? normalized : `/${normalized}`;
-    for (const map of this.maps) {
-      for (const src of map.sources) {
-        if (src.endsWith(suffix) && !candidates.includes(src)) {
-          candidates.push(src);
-        }
-      }
-    }
-
-    return candidates;
   }
 
   private async doRegister(

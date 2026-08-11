@@ -43,7 +43,7 @@ export type IosEndpoint =
  * native-devtools): each threads its setup/teardown through one implementation
  * instead of an `if (isRemote)` ladder.
  */
-export interface IosHost {
+interface IosHost {
   readonly kind: "local" | "remote";
   /** When true, the host can only carry TCP traffic (sim-remote tunnel can't bridge unix sockets). */
   readonly requiresTcp: boolean;
@@ -470,7 +470,7 @@ const ACCESSIBILITY_DEFAULT_FLAGS = [
   "ApplicationAccessibilityEnabled",
 ];
 
-export const remoteIosHost: IosHost = {
+const remoteIosHost: IosHost = {
   kind: "remote",
   requiresTcp: true,
   setupNativeDevtoolsEnv: setupNativeDevtoolsEnvRemote,

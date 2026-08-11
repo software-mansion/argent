@@ -21,7 +21,7 @@ const TEMP_RUNNER_MARKERS = [
   ".bun\\install\\cache",
 ];
 
-export function isTempRunnerPath(binaryPath: string): boolean {
+function isTempRunnerPath(binaryPath: string): boolean {
   return TEMP_RUNNER_MARKERS.some((marker) => binaryPath.includes(marker));
 }
 
@@ -131,7 +131,7 @@ export function isDeclaredLocally(projectRoot: string): boolean {
  * from the project root (handles hoisted and pnpm layouts). Null when
  * unresolvable: not installed, or Yarn PnP without its resolver loaded.
  */
-export function resolveLocalArgentDir(projectRoot: string): string | null {
+function resolveLocalArgentDir(projectRoot: string): string | null {
   try {
     const req = createRequire(path.join(projectRoot, "package.json"));
     // No `exports` map today, so the package.json subpath resolves; the catch
@@ -143,7 +143,7 @@ export function resolveLocalArgentDir(projectRoot: string): string | null {
   }
 }
 
-export interface LocalInstallProbe {
+interface LocalInstallProbe {
   /**
    * Resolvable on disk, or declared in the manifest under Yarn PnP (which has
    * no node_modules and whose resolver isn't loaded here).

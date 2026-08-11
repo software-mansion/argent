@@ -199,7 +199,7 @@ export function adaptFullHierarchyToDescribeResult(raw: unknown): DescribeNode {
  * size (points) the frames were normalized against — the rotate directive needs
  * the aspect ratio for its physical-circle geometry.
  */
-export function adaptFullHierarchy(raw: unknown): {
+function adaptFullHierarchy(raw: unknown): {
   tree: DescribeNode;
   screen?: { width: number; height: number };
 } {

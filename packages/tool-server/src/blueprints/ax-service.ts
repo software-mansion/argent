@@ -22,7 +22,7 @@ export {
 
 export const AX_SERVICE_NAMESPACE = "AXService";
 
-export type AXServiceTransport = "unix" | "tcp";
+type AXServiceTransport = "unix" | "tcp";
 
 type AxServiceFactoryOptions = Record<string, unknown> & {
   device: DeviceInfo;

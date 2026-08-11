@@ -3,7 +3,7 @@ import type { CDPClient } from "../utils/debugger/cdp-client";
 import { connectCdp, primePageSession } from "./cdp-session";
 import { ClipboardSyncState, setClipboardText } from "./clipboard";
 import { FpsTracker } from "./fps";
-import { sendButton, sendKey, sendRotate, sendTouch, sendWheel, sendCharInsert } from "./input";
+import { sendButton, sendKey, sendRotate, sendTouch, sendWheel } from "./input";
 import { goBack, goForward, navigate, reload } from "./navigation";
 import { ScreencastManager } from "./screencast";
 import { captureScreenshot, copyScreenshotToClipboard } from "./screenshot";
@@ -43,9 +43,7 @@ export type {
   ViewportSize,
 } from "./types";
 
-export { sendCharInsert } from "./input";
-
-export interface CreateChromiumServerOpts {
+interface CreateChromiumServerOpts {
   /** Argent device id; screenshot filename prefix. */
   deviceId: string;
   /** CDP port from the Chromium process's --remote-debugging-port. */
@@ -171,9 +169,8 @@ export async function createChromiumServer(
 export { ensureCdpReachable, discoverPrimaryPage } from "./cdp-session";
 export type { TabInfo, TabsManager } from "./tabs";
 export type { NetworkManager, NetworkRequestRecord } from "./network";
-export type { Cookie, SetCookieParams, DeleteCookieParams, StorageType } from "./storage";
+export type { Cookie } from "./storage";
 
 export { setClipboardText } from "./clipboard";
 
 export type { CDPClient };
-export { sendCharInsert as __sendCharInsert };

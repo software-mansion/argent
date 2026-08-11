@@ -175,7 +175,7 @@ export const ABORTED_OUTCOME: DirectiveOutcome = {
 };
 
 /** The condition/action steps {@link runDirective} handles. */
-export type DirectiveStep = Extract<
+type DirectiveStep = Extract<
   FlowStep,
   {
     kind:

@@ -4,22 +4,22 @@
   // `npm run knip`; .github/workflows/knip.yml enforces it.
   //
   // Every issue type knip reports is an error by default, so this file sets no
-  // `rules`. The pre-existing backlog is bounded instead: `npm run knip` runs
-  // knip twice, first over the classes that must be clean, then over the parked
-  // ones under `--max-issues`. That second pass names `classMembers`,
-  // `nsExports` and `nsTypes` explicitly because they sit in knip's own
-  // `defaultExcludedIssueTypes` — without that neither pass gates them, and a
-  // new unused class member costs nothing. Naming `classMembers` also turns
-  // knip's `isSkipLibs` off, which moves the export and type counts, so a run
-  // that names it is not comparable to one that does not.
+  // `rules`. There is no parked backlog either: `--max-issues 0` means the whole
+  // report must be empty, and a single new unused export fails the job.
   //
-  // The ceiling is one total across those classes rather than one per class, so
-  // paying off a parked export licences a new one elsewhere in the same PR.
+  // `npm run knip` still runs knip twice because the two flags partition the
+  // issue types rather than layering. `--include` is restrictive, so the pass
+  // that names `classMembers`, `nsExports` and `nsTypes` — which it must, since
+  // they sit in knip's own `defaultExcludedIssueTypes` and are otherwise gated
+  // by neither pass — reports nothing else, and the first pass covers the rest.
+  // Naming `classMembers` also turns knip's `isSkipLibs` off, which moves the
+  // export and type counts, so a run that names it is not comparable to one
+  // that does not.
   //
-  // Count it the way CI does, against a tree with no build output: whether a
-  // workspace resolves `main`/`types` to a file that exists moves the total by
-  // itself, so a run after a local `tsc --build` carries phantom headroom and is
-  // no evidence the job will pass.
+  // Run it the way CI does, against a tree with no build output: whether a
+  // workspace resolves `main`/`types` to a file that exists changes what knip
+  // reaches, so a run after a local `tsc --build` is no evidence the job will
+  // pass.
   "$schema": "https://unpkg.com/knip@5/schema.json",
 
   // Makes a stale exemption here fail the job instead of printing a hint below
@@ -83,6 +83,25 @@
       ],
     },
 
+    // Knip's `classMembers` analysis is syntactic and workspace-local: it finds
+    // member references only inside the workspace that declares the class, so a
+    // member called exclusively from another workspace reads as unused. All
+    // three below are declared here and called from tool-server —
+    // `registry.artifacts.register(...)` / `.list()` in the artifact route and
+    // the screenshot tool, `events.off(...)` in the tool-server entry point.
+    //
+    // Verified rather than assumed: adding a `this.artifacts.list()` call inside
+    // this workspace makes the `list` finding disappear on its own, with the
+    // cross-workspace call sites untouched.
+    //
+    // `ignoreMembers` matches by NAME across this workspace, so it also covers a
+    // future `register`/`list`/`off` on some other class here. That is the
+    // narrowest form knip offers; scoping it to this workspace keeps the far
+    // larger tool-server surface fully gated.
+    "packages/registry": {
+      "ignoreMembers": ["register", "list", "off"],
+    },
+
     // tool-server reaches a few packages in ways knip can't trace statically.
     // `ignoreDependencies` works in both directions, so this one list silences
     // two different issue classes; they are kept apart below so each entry's
@@ -136,6 +155,6 @@
   //
   // Reachability has a wider hole still: whatever a workspace's entry re-exports
   // is reached, so one `export { x } from "./dead-module";` in a src/index.ts
-  // takes that module out of `files` altogether. The ceiling bounds what knip
-  // can see, not what is dead.
+  // takes that module out of `files` altogether. A clean run means nothing knip
+  // can see is dead — not that nothing is.
 }

@@ -3,7 +3,7 @@ import { join } from "path";
 
 const _require = require;
 
-export interface TreeSitterNode {
+interface TreeSitterNode {
   startPosition: { row: number; column: number };
   endPosition: { row: number; column: number };
   text: string;
@@ -21,13 +21,13 @@ interface ParserInstance {
 
 type ParserCtor = new () => ParserInstance;
 
-export interface ComponentMatch {
+interface ComponentMatch {
   file: string;
   line: number; // 1-based
   col: number; // 0-based
 }
 
-export interface ComponentIndexEntry {
+interface ComponentIndexEntry {
   file: string;
   line: number; // 1-based
   col: number; // 0-based
@@ -40,9 +40,9 @@ export interface ComponentIndexEntry {
   otherMatches?: ComponentMatch[];
 }
 
-export type ComponentIndex = Map<string, ComponentIndexEntry>;
+type ComponentIndex = Map<string, ComponentIndexEntry>;
 
-export interface AstIndexResult {
+interface AstIndexResult {
   index: ComponentIndex;
   treeSitterAvailable: boolean;
   indexedFiles: number;

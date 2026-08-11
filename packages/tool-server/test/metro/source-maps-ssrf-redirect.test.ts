@@ -57,7 +57,7 @@ describe("source-map SSRF — redirect vector (PR #194 Issue 2)", () => {
     const attackerMapUrl = `http://127.0.0.1:${redirPort}/evil.map`;
     expect(isAllowedSourceMapURL(attackerMapUrl)).toBe(true); // first hop passes the gate
 
-    const reg = new SourceMapsRegistry("/tmp");
+    const reg = new SourceMapsRegistry();
     reg.registerFromScriptParsed(
       "http://127.0.0.1:" + redirPort + "/bundle.js",
       "1",

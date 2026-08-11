@@ -65,7 +65,4 @@ export class ClipboardSyncState {
   set(enabled: boolean): void {
     this.enabled = enabled;
   }
-  isEnabled(): boolean {
-    return this.enabled;
-  }
 }
