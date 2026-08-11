@@ -71,12 +71,21 @@ describe("typeTv — the TV keyboard backend", () => {
 
   it("counts `keys` by codepoint, not UTF-16 unit", async () => {
     // Matches the vega and simulator-server backends: a non-BMP char is one key.
+    //
+    // APPLE_TV, not ANDROID_TV: the Android TV service runs
+    // `assertTypeableAndroidText` (`blueprints/android-tv-control.ts:256`),
+    // which 400s an emoji, so on a real Android TV this call cannot reach the
+    // asserted result — the stubbed `resolveTvApi` is the only reason it does.
+    // Apple TV rejects newlines alone (`blueprints/tv-control.ts:468-474`), so
+    // the case is genuinely reachable there. The property itself is unaffected:
+    // `typeTv` computes `[...text].length` before either service is involved.
     const type = vi.fn(async () => {});
     resolveTvApi.mockResolvedValue({ type });
 
-    const result = await typeTv(registry, ANDROID_TV, { udid: ANDROID_TV.id, text: "a😀" });
+    const result = await typeTv(registry, APPLE_TV, { udid: APPLE_TV.id, text: "A😀" });
 
-    expect(result).toEqual({ typed: "a😀", keys: 2 });
+    expect(type).toHaveBeenCalledWith("A😀");
+    expect(result).toEqual({ typed: "A😀", keys: 2 });
   });
 
   it("no-ops on an empty request without resolving the service", async () => {
