@@ -85,23 +85,14 @@
 
     // Knip's `classMembers` analysis is syntactic and workspace-local: it finds
     // member references only inside the workspace that declares the class, so a
-    // member called exclusively from another workspace reads as unused. All
-    // three below are declared here and called from tool-server —
-    // `registry.artifacts.register(...)` / `.list()` in the artifact route and
-    // the screenshot tool, `events.off(...)` in the tool-server entry point.
+    // member called exclusively from another workspace reads as unused. Three
+    // members in `packages/registry` hit this. They are exempted at the
+    // declaration with a `@public` JSDoc tag rather than by name here, because
+    // `ignoreMembers` matches a NAME across the whole workspace - it would also
+    // hide a future dead `register`/`list`/`off` on any other class there - and
+    // because nothing emits a configuration hint for `ignoreMembers`, so
+    // `treatConfigHintsAsErrors` could never report the entry as stale.
     //
-    // Verified rather than assumed: adding a `this.artifacts.list()` call inside
-    // this workspace makes the `list` finding disappear on its own, with the
-    // cross-workspace call sites untouched.
-    //
-    // `ignoreMembers` matches by NAME across this workspace, so it also covers a
-    // future `register`/`list`/`off` on some other class here. That is the
-    // narrowest form knip offers; scoping it to this workspace keeps the far
-    // larger tool-server surface fully gated.
-    "packages/registry": {
-      "ignoreMembers": ["register", "list", "off"],
-    },
-
     // tool-server reaches a few packages in ways knip can't trace statically.
     // `ignoreDependencies` works in both directions, so this one list silences
     // two different issue classes; they are kept apart below so each entry's

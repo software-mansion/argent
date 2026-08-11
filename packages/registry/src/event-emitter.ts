@@ -9,6 +9,11 @@ export class TypedEventEmitter<
     return this;
   }
 
+  /**
+   * @public
+   * Knip's `classMembers` pass is workspace-local, so it cannot see the callers
+   * in tool-server (`index.ts`, `preview.ts`, `blueprints/js-runtime-debugger.ts`).
+   */
   off<K extends keyof T>(event: K, listener: T[K]): this {
     this.listeners.get(event)?.delete(listener);
     return this;
