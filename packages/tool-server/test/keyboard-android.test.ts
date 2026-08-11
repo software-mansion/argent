@@ -437,6 +437,25 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     expect(adbShell.mock.calls.map((c) => c[1])).toEqual(["input text 'hi'"]);
   });
 
+  it("leaves the whole text applied when the key press itself fails", async () => {
+    // The mirror of the test above, and the shape the text-then-key order newly
+    // creates: the text has fully landed, then the keyevent throws. The call
+    // rejects with no result, and `adb input` has no rollback — so a caller that
+    // retries verbatim types the value twice and only then submits ("hihi").
+    // At the previous key-then-text order the mirror was key-landed/text-failed,
+    // and a multi-segment text-only call could already leave a prefix applied;
+    // what is new is the whole-text-applied instance, where the retry duplicates
+    // the entire value rather than a prefix. Pinned so the observable shape (all
+    // text commands issued, keyevent attempted, throw propagated) is a deliberate
+    // contract rather than an accident of ordering.
+    adbShell.mockClear();
+    adbShell.mockResolvedValueOnce("").mockRejectedValueOnce(new Error("adb: device offline"));
+    await expect(
+      impl.handler({}, { udid: SERIAL, text: "hi", key: "enter" } as KeyboardParams, phone)
+    ).rejects.toThrow(/device offline/);
+    expect(adbShell.mock.calls.map((c) => c[1])).toEqual(["input text 'hi'", "input keyevent 66"]);
+  });
+
   it("reports the text error, not the key error, when BOTH halves are invalid", async () => {
     // Pinning which of the two 400s wins is all the hoisted
     // `assertTypeableAndroidText` buys — resolving the key up front already
