@@ -55,6 +55,17 @@ const zodSchema = z.object({
     .describe(
       "Whether the drag releases with momentum; default true (a constant-speed drag). Pass false to decelerate into the release point (ease-out) so an app deriving fling from pointer release velocity (carousels, drag libraries) reads ~0 and applies little to no momentum — use it when the drag must land exactly at the endpoint. Deceleration needs wall clock: under ~100ms the whole drag fits inside the velocity window a page averages over (tens of ms), so some fling survives, and under ~70ms its extra frames cannot dispatch fast enough to fit durationMs. Keep durationMs at its default when the fling must be fully suppressed."
     ),
+  // `settle` was `momentum`'s earlier spelling, with the opposite polarity.
+  // Unlike the swipe's it never reached a release - only this stack's builds -
+  // but a recording or caller from those builds still carries it, and this
+  // non-strict object would strip it and run the flinging default.
+  settle: z
+    .never({
+      error:
+        "gesture-drag's `settle` was renamed to `momentum`, with the opposite sense - write `momentum: false` for the momentum-free drag that `settle: true` used to mean (plain `settle: false` was the default, so just drop it)",
+    })
+    .optional()
+    .describe("Retired: renamed to `momentum` with the opposite sense. Pass `momentum: false`."),
 });
 
 type Params = z.infer<typeof zodSchema>;
