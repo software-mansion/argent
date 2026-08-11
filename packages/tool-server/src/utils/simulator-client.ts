@@ -31,7 +31,7 @@ const DEFAULT_SCREENSHOT_SCALE = 0.3;
 // https://github.com/software-mansion/argent/issues/391). Poll past that
 // transient instead of surfacing it as a hard failure.
 const NO_IMAGE_ERROR = /no image to export/i;
-const FIRST_FRAME_WAIT_MS = 6_000;
+export const FIRST_FRAME_WAIT_MS = 6_000;
 const FIRST_FRAME_POLL_MS = 250;
 
 /**

@@ -3,9 +3,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { FAILURE_CODES, FailureError, type Registry, type ToolDefinition } from "@argent/registry";
 import {
-  getActiveFlow,
-  getRecordingSession,
-  appendStepToActiveFlow,
+  requireRecordingSession,
+  appendStepToFlow,
   parseFlow,
   assertSafeFlowName,
   classifyOnDiskSpelling,
@@ -15,6 +14,7 @@ import {
   type FlowStep,
   type RecordingSession,
 } from "./flow-utils";
+import { summarizeStep } from "./flow-finish-recording";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { resolveDevice } from "../../utils/device-info";
 import { stripDeviceKeys } from "./flow-device";
@@ -29,7 +29,15 @@ import {
 } from "../../utils/ui-tree-match";
 
 const zodSchema = z.object({
-  command: z.string().describe('MCP tool name (e.g. "tap", "screenshot", "launch-app")'),
+  name: z
+    .string()
+    .describe("Name of the flow being recorded — the one passed to flow-start-recording."),
+  project_root: z
+    .string()
+    .describe(
+      "Absolute path to the project root of the flow being recorded — the same value passed to flow-start-recording. Together with `name` it identifies which recording this step belongs to."
+    ),
+  command: z.string().describe('MCP tool name (e.g. "gesture-tap", "screenshot", "launch-app")'),
   args: z
     .string()
     .optional()
@@ -209,7 +217,8 @@ async function rewriteSiblingFlowPath(
   // anchors a relative root at the tool SERVER's cwd, which bears no relation
   // to the calling agent's, so a relative root would pass or fail by accident
   // of where the server was started. flow-execute itself demands an absolute
-  // root (setActiveProjectRoot), so this refuses nothing that could have run.
+  // root (`assertValidProjectRoot`, called by `resolveFlowSource` before either
+  // of its branches), so this refuses nothing that could have run.
   const projectRoot = args.project_root;
   if (typeof projectRoot !== "string" || !path.isAbsolute(projectRoot)) {
     throw invalid(
@@ -302,22 +311,23 @@ async function rewriteSiblingFlowPath(
  * actually ran, carrying the caller's own project_root.
  */
 async function captureRunTarget(
-  session: RecordingSession | null,
+  session: RecordingSession,
   args: Record<string, unknown>
 ): Promise<{ flow?: string; warning?: string }> {
   const name = typeof args.name === "string" ? args.name : undefined;
   if (name === undefined) {
     return { warning: "flow-execute call had no flow name; kept the raw step" };
   }
-  if (!session || session.persist !== "host") {
+  if (session.persist !== "host") {
     return {
       warning: `kept the raw flow-execute step — run: composition is host-resolved, so a remote recording can't reference "${name}" portably`,
     };
   }
   try {
     assertSafeFlowName(name);
-    // Resolve against the recording's own flows dir (the running flow-execute
-    // may have mutated the active-project-root global), not getFlowsDir() —
+    // Resolve against THIS recording's own flows dir, not the project root the
+    // nested flow-execute ran under: `run:` composes siblings of the flow being
+    // recorded, which is not necessarily the project that nested call ran in —
     // and against the recording's REAL file, because the runner resolves the
     // recorded `run:` against the canonical containing-file directory
     // (scopeFlowDir in flow-run.ts). When the recording is itself a symlink,
@@ -426,29 +436,35 @@ async function captureRunTarget(
   }
 }
 
-export function createFlowAddStepTool(
-  registry: Registry
-): ToolDefinition<
+export function createFlowAddStepTool(registry: Registry): ToolDefinition<
   z.infer<typeof zodSchema>,
-  { message: string; toolResult: unknown; flowFile: string; savedTo: FlowSavedTo }
+  {
+    message: string;
+    toolResult: unknown;
+    stepCount: number;
+    recorded: string;
+    savedTo: FlowSavedTo;
+  }
 > {
   return {
     id: "flow-add-step",
     interaction: {
-      startedMsg: ({ params }) => `Adding ${params.command} step to recorded flow`,
-      completedMsg: ({ params }) => `Added ${params.command} step to recorded flow`,
+      // Name the flow: recordings are concurrent, so several of these lines can
+      // interleave in one log and "the recorded flow" would not identify which.
+      startedMsg: ({ params }) => `Adding ${params.command} step to flow ${params.name}`,
+      completedMsg: ({ params }) => `Added ${params.command} step to flow ${params.name}`,
       failedMsg: ({ params, failureSignal }) =>
-        `Failed to add ${params.command} step to recorded flow: ${failureSignal.error_code}`,
+        `Failed to add ${params.command} step to flow ${params.name}: ${failureSignal.error_code}`,
     },
-    description: `Execute a tool call and record it as a step in the active flow. Use when recording a flow with flow-start-recording and you want to run and capture each action. A coordinate \`gesture-tap\` is recorded as a portable \`tap: { selector }\` step when the tapped element has stable text/identifier (otherwise coordinates are kept with a warning); a \`restart-app\` is recorded as a \`launch\` step (record one FIRST to make the flow a self-contained e2e flow; restart-app has no chromium support, so a chromium flow records as a fragment — add the \`launch: { chromium: <app path> }\` line to the YAML afterward, deleting the executionPrerequisite line if one was recorded: a flow that starts with a launch must not declare it). Returns { message, toolResult, flowFile } on success. If it fails an error is returned and nothing is recorded.
-If a step was recorded by mistake, edit the .yaml file directly to remove it.`,
+    description: `Execute a tool call and record it as a step in the flow named by \`name\` + \`project_root\` (the recording must already be open — see flow-start-recording). Use when recording a flow and you want to run and capture each action. A coordinate \`gesture-tap\` is recorded as a portable \`tap: { selector }\` step when the tapped element has stable text/identifier (otherwise coordinates are kept with a warning); a \`restart-app\` is recorded as a \`launch\` step (record one FIRST to make the flow a self-contained e2e flow; restart-app has no chromium support, so a chromium flow records as a fragment — add the \`launch: { chromium: <app path> }\` line to the YAML afterward, deleting the executionPrerequisite line if one was recorded: a flow that starts with a launch must not declare it).
+Returns { message, toolResult, stepCount, recorded, savedTo } on success. If it fails an error is returned and nothing is recorded.
+If a step was recorded by mistake, edit the .yaml to remove it — against a remote client, only after \`flow-finish-recording\`: the in-memory copy is authoritative there, and every write serializes it over your edit.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params, ctx) {
-      const flowName = getActiveFlow();
+      const session = await requireRecordingSession(params.project_root, params.name);
       const args: Record<string, unknown> = params.args ? JSON.parse(params.args) : {};
 
-      const session = getRecordingSession();
       // A nested flow-execute must never carry a raw flow_path into the live
       // invoke — it has no boundary metadata there and would be rejected.
       if (params.command === RUN_TARGET_COMMAND) await rewriteSiblingFlowPath(session, args);
@@ -530,12 +546,16 @@ If a step was recorded by mistake, edit the .yaml file directly to remove it.`,
         };
       }
 
-      const { flowFile, savedTo } = await appendStepToActiveFlow(step);
+      const { savedTo, stepCount } = await appendStepToFlow(session, step);
 
       return {
-        message: `Step added to "${flowName}" flow${warning ? ` — ${warning}` : ""}`,
+        message: `Step added to "${params.name}" flow${warning ? ` — ${warning}` : ""}`,
         toolResult,
-        flowFile,
+        stepCount,
+        recorded: summarizeStep(step, stepCount),
+        // Host mode: a path. Client mode: the directive that carries the YAML
+        // to the client, which IS the persistence mechanism there — the one
+        // place the full file still has to travel per step.
         savedTo,
       };
     },

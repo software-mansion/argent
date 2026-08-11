@@ -137,6 +137,7 @@ function newSession(): NativeProfilerSessionApi {
     captureProcess: null,
     cpuFilterPid: null,
     deviceId: DEVICE_ID,
+    disposed: false,
     exportedFiles: null,
     lastExitInfo: null,
     mallocStackLogging: null,

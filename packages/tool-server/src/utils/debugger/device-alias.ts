@@ -58,7 +58,48 @@ export function forgetDeviceAlias(logicalDeviceId: string | undefined): void {
   if (logicalDeviceId) logicalIdToConnectId.delete(logicalDeviceId);
 }
 
+/**
+ * Connect ids that ARE a Metro `logicalDeviceId` — the case the alias above has
+ * nothing to record, because the two ids are the same string.
+ *
+ * It happens whenever two or more devices share one Metro: `selectTarget`
+ * refuses to guess which target a udid or serial means and tells the caller to
+ * re-target with the logicalDeviceId, so that is what the debugger service ends
+ * up keyed by. Nothing joins such an id back to a device — Metro never sees the
+ * udid — so a teardown scoped to `list-devices` ids cannot reach the session,
+ * and its serial still matches that device's other services, so the miss is
+ * invisible. `stop-all-simulator-servers` reads this to say so.
+ *
+ * Recorded at connect, which is the only place the two ids are compared, and
+ * dropped on dispose alongside the alias.
+ */
+const logicalKeyedConnectIds = new Set<string>();
+
+/**
+ * Note that `connectDeviceId` is itself the `logicalDeviceId` Metro echoed, so
+ * no device-scoped teardown can name the session it keys. No-op otherwise.
+ */
+export function rememberLogicalKeyedDevice(
+  logicalDeviceId: string | undefined,
+  connectDeviceId: string
+): void {
+  if (logicalDeviceId && logicalDeviceId === connectDeviceId) {
+    logicalKeyedConnectIds.add(connectDeviceId.toLowerCase());
+  }
+}
+
+/** Whether `deviceId` keys a session only its logicalDeviceId can address. */
+export function isLogicalKeyedDevice(deviceId: string | undefined): boolean {
+  return deviceId !== undefined && logicalKeyedConnectIds.has(deviceId.toLowerCase());
+}
+
+/** Drop the logical-keyed marker when its debugger connection is disposed. */
+export function forgetLogicalKeyedDevice(connectDeviceId: string): void {
+  logicalKeyedConnectIds.delete(connectDeviceId.toLowerCase());
+}
+
 /** Test-only: clear all learned aliases. */
 export function resetDeviceAliases(): void {
   logicalIdToConnectId.clear();
+  logicalKeyedConnectIds.clear();
 }

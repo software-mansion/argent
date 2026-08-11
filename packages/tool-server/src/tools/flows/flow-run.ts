@@ -22,6 +22,7 @@ import type {
 import {
   appIdForPlatform,
   assertSafeFlowName,
+  assertValidProjectRoot,
   chromiumLaunchSpec,
   classifyOnDiskSpelling,
   describeSelector,
@@ -29,7 +30,6 @@ import {
   getFlowPath,
   parseFlow,
   runTargetName,
-  setActiveProjectRoot,
   type FlowFile,
   type FlowSelector,
   type FlowStep,
@@ -42,10 +42,12 @@ import type { TextMatchMode, WaitCondition } from "../../utils/ui-tree-match";
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { isUnmetUiWaitResult } from "../await-ui-element";
+import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
 import {
   resolveFlowDevice,
   bindDeviceArgs,
   flowRequiresDevice,
+  flowScopesDevice,
   stepRequiresDevice,
   type FlowPlatform,
 } from "./flow-device";
@@ -102,12 +104,14 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        "Device id to run against (iOS UDID, Android/Vega serial, Chromium id). Auto-detected when omitted."
+        "Device id to run against (iOS UDID, Android/Vega serial, Chromium id) — the id list-devices reports. Auto-detected when omitted, but only when exactly one booted device matches (optionally narrowed by `platform`); with several booted the run fails and lists them, so pass this explicitly whenever more than one device is up."
       ),
     platform: z
       .enum(LAUNCH_PLATFORMS)
       .optional()
-      .describe("Restrict auto-detection to this platform when several devices are booted."),
+      .describe(
+        "Restrict auto-detection to this platform when several devices are booted. `chromium` does more than filter: with no `device` it SELECTS the self-boot branch for an e2e flow - the runner boots an Electron instance from the `launch` step's chromium value and tears it down after the run (a single-key `launch: { chromium: … }` map selects it on its own, without this parameter). When it selects that branch it never falls back to device auto-detection (a fragment, or an e2e launch map with no `chromium` key, still does), and the launch value must be a real Electron app path on the tool-server host: a bare-string `launch:` - what the recorder writes - holds an installed-app bundle id, so passing `chromium` for one fails the whole run with `Electron boot: path does not exist`. Edit the launch to `{ chromium: <app path> }` first."
+      ),
     updateBaselines: z
       .boolean()
       .optional()
@@ -185,6 +189,17 @@ export interface StepReport {
    * the runner does not own reports no reason.
    */
   reason?: string;
+  /**
+   * The step passed, but the WAY it passed weakens it as proof. Rendered as a
+   * "⚠" suffix by the MCP client, and under the step line by the CLI. Raised by
+   * `await: { idle: true }`: the screen never settled at all (it waits, then
+   * goes ahead); something small on it never stopped, which is what a spinner
+   * looks like; it rendered no content to settle; too few reads came back with
+   * content for it to judge anything; or its captures never produced a
+   * comparable pair, leaving stillness proved on the UI tree alone without the
+   * presentation-layer motion the pixel half exists to catch.
+   */
+  warning?: string;
   /** Underlying tool id for `tool` steps. */
   tool?: string;
   /** Tool result for `tool` steps. */
@@ -730,6 +745,12 @@ function noChromiumAppReason(device: DeviceInfo): string {
 interface ExecState extends Omit<ActionEnv, "device"> {
   device: DeviceInfo | null;
   /**
+   * Whether {@link device} is the one the CALLER named, rather than one
+   * auto-detected from what happens to be booted. Only a named device may
+   * override a scope a recording already carries — see {@link bindDeviceArgs}.
+   */
+  deviceIsExplicit: boolean;
+  /**
    * The ROOT flow file's canonical (realpath'd) directory — the anchor for
    * snapshot baselines and a chromium launch's relative app path, so a
    * symlinked root flow anchors beside its real file. `run:` targets instead
@@ -906,7 +927,13 @@ reads "inside card inside list", each container's frame inside the next);
 (\`pinch: { on?, scale }\` — scale > 1 in, < 1 out; screen center when \`on\` is omitted); \`rotate\` is the
 two-finger rotation gesture (\`rotate: { on?, by }\` — degrees, + clockwise, within ±3000°; screen center
 when \`on\` is omitted; distinct from the \`rotate\` tool, which changes device orientation); \`await\` waits
-for a UI condition; \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
+for a UI condition, and additionally takes the one condition that has no selector: \`idle: true\` waits
+until the screen has content and stops moving in BOTH the UI tree and the rendered pixels (it never
+fails a run — a screen that never settles passes carrying a \`warning\`, which is what makes it safe to
+persist; the one outcome that does stop the run is an \`error\` for a tree source that could not be read
+at all — a broken window rather than a verdict about the app, which leaves the run not-ok and skips
+every later step; it says nothing about WHICH screen settled — a dropped tap leaves the source screen
+perfectly idle — so pair it with the element check that names the destination); \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
 diffs a screenshot — or, with \`cropOn: <selector>\`, one element's cropped region — against a stored
 baseline (a missing baseline fails the step — set updateBaselines to adopt the current screen; a
 cropped element whose size drifted fails on dimensions); \`echo\` annotates; \`run\` executes another flow
@@ -1054,6 +1081,7 @@ returns a notice with the prerequisite instead of running.`,
         registry,
         ctx,
         device,
+        deviceIsExplicit: Boolean(params.device),
         signal,
         flowsDir,
         viaUpload,
@@ -1148,14 +1176,38 @@ async function resolveRunDevice(
     // Checked after the chromium boot path, which only applies to a flow led by
     // a `launch` step — and a launch needs a device, so the two never compete.
     if (!flowRequiresDevice(registry, flow.steps)) {
-      return { device: null, booted: null };
+      if (!flowScopesDevice(registry, flow.steps)) return { device: null, booted: null };
+      // A flow that only SCOPES to a device (a cleanup flow) takes one when one
+      // is unambiguous, so the teardown stays narrowed to the run device and
+      // cannot reap what another agent is mid-session on. When resolution has
+      // no single answer — nothing booted, or several — that is not a question
+      // a sweep has an answer to, so run it unscoped rather than failing the
+      // flow. Swallowed only here: every other caller genuinely needs the
+      // device, and the diagnosis in the error is the useful thing there.
+      //
+      // And swallowed only for THAT answer. `resolveFlowDevice` also reaches
+      // `list-devices` through the registry, so a bare catch also absorbed an
+      // adb/simctl failure, a dead sub-tool, an abort — and the teardown step
+      // then ran unscoped and reported pass, which is the machine-wide sweep
+      // this whole path exists to avoid. Anything that is not the ambiguity
+      // rethrows and fails the run.
+      try {
+        return {
+          device: await resolveFlowDevice(registry, ctx, resolveOpts(params)),
+          booted: null,
+        };
+      } catch (err) {
+        if (getFailureSignal(err)?.error_code !== FAILURE_CODES.FLOW_DEVICE_RESOLUTION) throw err;
+        return { device: null, booted: null };
+      }
     }
   }
-  const device = await resolveFlowDevice(registry, ctx, {
-    device: params.device,
-    platform: params.platform as FlowPlatform | undefined,
-  });
+  const device = await resolveFlowDevice(registry, ctx, resolveOpts(params));
   return { device, booted: null };
+}
+
+function resolveOpts(params: Params): { device?: string; platform?: FlowPlatform } {
+  return { device: params.device, platform: params.platform as FlowPlatform | undefined };
 }
 
 /**
@@ -1515,6 +1567,10 @@ function stepTarget(step: FlowStep): string | undefined {
     case "await":
     case "assert":
       return conditionLabel(step, selectorLabel);
+    case "idle":
+      // The caller already prints the kind, and this step has no target beyond
+      // the screen itself: returning one would render as "idle screen idle".
+      return undefined;
     case "when":
       return step.condition.kind === "platform"
         ? `platform ${step.condition.platform}`
@@ -2064,6 +2120,7 @@ async function execLeafStep(
     case "type":
     case "await":
     case "assert":
+    case "idle":
     case "scroll-to":
     case "pinch":
     case "rotate": {
@@ -2075,7 +2132,25 @@ async function execLeafStep(
         // A run cancelled mid-directive is a skip (matching the pre-step guard
         // and `wait`), never a step failure — the app did nothing wrong.
         if (r.aborted) return { ...base, status: "skip", reason: r.reason };
-        return { ...base, status: r.ok ? "pass" : "fail", reason: r.reason };
+        // `indeterminate` is `idle`'s only non-passing outcome: a screen that
+        // merely kept moving passes with a warning, and so does one that
+        // rendered nothing, so what is left here is a wait that could not run
+        // at all — a tree source that failed, or one that answered and then
+        // wedged. Scoring that `fail` would make CI
+        // read an environment problem as a regression and a QA author reset a
+        // pass streak over it. `error` keeps the run non-ok while saying
+        // plainly that the app was never judged. Scoped to `idle`, whose whole
+        // verdict rests on being able to observe the screen; the selector
+        // conditions keep their existing `fail` mapping.
+        if (!r.ok && r.indeterminate && step.kind === "idle") {
+          return { ...base, status: "error", reason: r.reason };
+        }
+        return {
+          ...base,
+          status: r.ok ? "pass" : "fail",
+          reason: r.reason,
+          ...(r.warning !== undefined ? { warning: r.warning } : {}),
+        };
       } catch (err) {
         return { ...base, status: "error", reason: errMsg(err) };
       }
@@ -2113,10 +2188,22 @@ async function execLeafStep(
     }
 
     case "tool": {
-      // With no device, the step reached here only because its tool declares no
-      // device argument, so there is nothing to inject — binding still strips
-      // any device key the recorded args carried.
-      const args = bindDeviceArgs(registry, step.name, device?.id ?? "", step.args);
+      // A device-less run reaches here only for a tool declaring none of
+      // `DEVICE_ARG_KEYS` — a target key — so binding injects no target and
+      // merely strips any device key the recorded args carried. The `?? ""` is
+      // unreachable for those and must stay unreachable: injecting the empty
+      // string would not fail the step, it would silently retarget it at no
+      // device. A SCOPE key (`devices`) does reach here device-free, which is
+      // the cleanup-flow case `bindDeviceArgs` guards by keeping whatever the
+      // recording scoped — and, when the run device was only auto-detected, it
+      // keeps that even with a device resolved.
+      const args = bindDeviceArgs(
+        registry,
+        step.name,
+        device?.id ?? "",
+        step.args,
+        state.deviceIsExplicit
+      );
       const outputHint = registry.getTool(step.name)?.outputHint;
       if (step.delayMs && !(await sleepOrAbort(step.delayMs, signal))) {
         return { ...base, status: "skip", tool: step.name, reason: "run aborted during delay" };
@@ -2142,6 +2229,23 @@ async function execLeafStep(
             status: nested.status,
             tool: step.name,
             reason: nested.reason,
+            result,
+            outputHint,
+            args,
+          };
+        }
+        if (isDebuggerNotConnectedResult(step.name, result)) {
+          // Keep `detail` in the report: it is the only place the underlying
+          // error text lives (device_mismatch's guidance points the agent at
+          // the logicalDeviceIds "listed in the detail message", and the
+          // metro_not_running `got:` fragment names what actually answered the
+          // port). The full structured result rides along like a passing
+          // step's would, so nothing the tool returned is dropped.
+          return {
+            ...base,
+            status: "fail",
+            tool: step.name,
+            reason: `debugger not connected (${result.reason}): ${result.detail} — ${result.guidance}`,
             result,
             outputHint,
             args,
@@ -2193,8 +2297,13 @@ function errMsg(err: unknown): string {
  * name must then appear in that flow's own directory listing byte-for-byte — a
  * case-insensitive filesystem opens files under spellings no directory entry
  * carries, and the name is what keys the report and `__baselines__/` (see
- * {@link classifyOnDiskSpelling}). Name and project_root are validated in every
- * branch.
+ * {@link classifyOnDiskSpelling}). Name is validated on the branch that has one;
+ * project_root is validated up front, before either branch, since only the
+ * `name` branch would otherwise reach a check.
+ *
+ * Resolution is pure: it reads and mutates no shared state, so replaying a flow
+ * in one project can never rebind the paths of a recording in progress in
+ * another (or in the same project on another agent).
  */
 export async function resolveFlowSource(
   params: {
@@ -2218,7 +2327,14 @@ export async function resolveFlowSource(
     });
   }
 
-  setActiveProjectRoot(params.project_root);
+  // Before either branch, so both are covered. `getFlowPath` validates the root
+  // on the `name` branch only, and deleting `setActiveProjectRoot` — which ran
+  // here, unconditionally, and whose body is today's assertValidProjectRoot —
+  // removed the check on the `flow_path` branch entirely, letting relative and
+  // ".."-bearing roots through. Nothing reads project_root on that branch
+  // today, so this restores a guardrail rather than fixing a live exploit; it
+  // is here so a future reader of it does not have to establish that.
+  assertValidProjectRoot(params.project_root);
 
   if (params.flow_path !== undefined) {
     if (flowPathInput?.viaUpload) {
@@ -2390,7 +2506,7 @@ export async function resolveFlowSource(
 
   const flowName = params.name!;
   assertSafeFlowName(flowName);
-  const expected = getFlowPath(flowName);
+  const expected = getFlowPath(params.project_root, flowName);
   // A path the boundary materialized from uploaded content is a fresh temp
   // file this process itself created (see file-inputs.ts) — trusted as-is, and
   // returned ahead of the on-disk-spelling gate below deliberately: the only

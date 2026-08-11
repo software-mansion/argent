@@ -46,7 +46,9 @@ import {
   isExternalId,
   revalidateExternalDevice,
 } from "./utils/external-devices";
+import { canonicalDeviceId } from "./utils/debugger/device-alias";
 import { refineTvPlatform } from "./utils/telemetry-platform";
+import { deriveInvalidParams } from "./utils/invalid-params";
 import type { Server as HttpServer } from "node:http";
 import {
   CHROMIUM_CDP_NAMESPACE,
@@ -150,6 +152,22 @@ function extractDeviceArg(data: unknown): string | null {
   const record = data as Record<string, unknown>;
   if (typeof record.udid === "string") return record.udid;
   if (typeof record.device_id === "string") return record.device_id;
+  // `devices: string[]` is a third spelling, used only by
+  // `stop-all-simulator-servers`' scoped teardown. A call can name several
+  // devices of different platforms; the first is enough for the coarse
+  // telemetry platform.
+  //
+  // Live today, not latent. Of this function's three consumers only the
+  // capability gate is gated — and `stop-all-simulator-servers` declares no
+  // capability, so `devices` never reaches that one. The other two are ungated
+  // and do read it: `emitHttpFailure` classifies a rejected call straight from
+  // `req.body` (a `.strict()` rejection of the `udids` slip is a real 400 on a
+  // body that carries `devices`), and `platformFromArgs` via
+  // `deriveChildInvocationMeta` attributes a sub-tool from its own args — which
+  // for a replayed teardown step is exactly `devices`.
+  if (Array.isArray(record.devices) && typeof record.devices[0] === "string") {
+    return record.devices[0];
+  }
   return null;
 }
 
@@ -161,12 +179,14 @@ type InvocationMeta = {
   device_provider?: string;
   platform?: TelemetryPlatform;
 } & AiTelemetryProps;
-// Only coarse platform context is retained for failure telemetry. The raw
-// device id (UDID / serial) is used transiently to infer platform and never
-// stored or forwarded.
+// Only coarse context is retained for failure telemetry. The raw device id
+// (UDID / serial) is used transiently to infer platform and never stored or
+// forwarded; invalid_params carries schema-declared parameter NAMES only (see
+// deriveInvalidParams), never values or user-typed keys.
 type HttpFailureMeta = {
   device_provider?: string;
   platform?: TelemetryPlatform;
+  invalid_params?: string[];
 } & AiTelemetryProps;
 
 // `refineTvPlatform` — splitting a TV target out of its coarse mobile platform
@@ -177,7 +197,14 @@ type HttpFailureMeta = {
 function inferPlatform(deviceId: string | null): TelemetryPlatform | null {
   if (!deviceId) return null;
   try {
-    return refineTvPlatform(resolveDevice(deviceId).platform, deviceId);
+    // Telemetry-only: rewrite a forwarded Metro logicalDeviceId back to the id
+    // the caller connected with (iOS UDID / Android serial) before classifying.
+    // Without this, tool:invoke/complete/fail on debugger tools that accept the
+    // forwarded id would report a different platform than debugger:tool_outcome
+    // for the same tool_invocation_id (the opaque hex handle shape-classifies
+    // as android). Unaliased ids pass through unchanged.
+    const canonical = canonicalDeviceId(deviceId) ?? deviceId;
+    return refineTvPlatform(resolveDevice(canonical).platform, canonical);
   } catch {
     return null;
   }
@@ -219,11 +246,13 @@ function extractInvocationMeta(
 
 /**
  * Telemetry platform from a tool call's device arg, or null when it carries none.
- * A `udid` / `device_id` resolves through the runtime-kind cache and refines to
- * `tvos` / `android-tv` once that cache is warm (coarse `ios` / `android` until
- * then); only the `avdName`-only fallback is unconditionally coarse.
+ * A `udid` / `device_id` (or the first of a scoped stop-all's `devices`) resolves
+ * through the runtime-kind cache and refines to `tvos` / `android-tv` once that
+ * cache is warm (coarse `ios` / `android` until then); only the `avdName`-only
+ * fallback is unconditionally coarse.
+ * Exported for tests (the alias-consistency pin in http-platform-alias.test.ts).
  */
-function platformFromArgs(data: unknown): TelemetryPlatform | null {
+export function platformFromArgs(data: unknown): TelemetryPlatform | null {
   if (!data || typeof data !== "object") return null;
   const deviceArg = extractDeviceArg(data);
   if (deviceArg) return inferPlatform(deviceArg) ?? null;
@@ -239,9 +268,12 @@ function platformFromArgs(data: unknown): TelemetryPlatform | null {
 /**
  * Attribution for a sub-tool an orchestrator dispatches: the outer request's AI
  * client is inherited unchanged, but the platform is re-derived from the child's
- * OWN device arg. Orchestrators like flow-execute carry no platform (and a flow
- * can span several devices), so the child's `udid` is the only correct source;
- * the parent's platform is the fallback when the child has no device arg.
+ * OWN device arg — `udid` / `device_id` / `devices` / `avdName`, whichever it
+ * spells. Orchestrators like flow-execute carry no platform (and a flow can span
+ * several devices), so the child's device arg is the only correct source; the
+ * parent's platform is the fallback when the child has none. A replayed
+ * `stop-all-simulator-servers` step is the `devices` case, and it resolves here
+ * rather than falling back.
  */
 function deriveChildInvocationMeta(parentMeta: InvocationMeta, childArgs: unknown): InvocationMeta {
   const childPlatform = platformFromArgs(childArgs);
@@ -678,7 +710,8 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
 
       const emitHttpFailure = (
         signal: FailureSignal,
-        parsedDataForMeta: unknown = req.body
+        parsedDataForMeta: unknown = req.body,
+        extraMeta?: Pick<HttpFailureMeta, "invalid_params">
       ): void => {
         if (!options?.recordFailure) return;
         const failedDeviceArg = extractDeviceArg(parsedDataForMeta);
@@ -689,6 +722,9 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           {
             ...(provider ? { device_provider: provider } : {}),
             ...(platform ? { platform } : {}),
+            ...(extraMeta?.invalid_params?.length
+              ? { invalid_params: extraMeta.invalid_params }
+              : {}),
             ...aiMeta,
           },
           signal,
@@ -749,6 +785,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       if (def.zodSchema) {
         const parseResult = def.zodSchema.safeParse(bodyArgs);
         if (!parseResult.success) {
+          const declared = new Set(Object.keys(def.zodSchema.shape ?? {}));
           emitHttpFailure(
             {
               error_code: FAILURE_CODES.HTTP_ZOD_VALIDATION_FAILED,
@@ -756,7 +793,8 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
               failure_area: "http",
               error_kind: "validation",
             },
-            req.body
+            req.body,
+            { invalid_params: deriveInvalidParams(parseResult.error, declared) }
           );
           res.status(400).json({ error: parseResult.error.message });
           return;
@@ -770,11 +808,17 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // Cross-platform tools double-check inside their dispatch helper, so
       // non-HTTP callers (run-sequence, flow-run) are also covered.
       //
-      // Tools spell the device parameter two ways — `udid` (legacy iOS-only
-      // tools and gestures) and `device_id` (debugger / profiler / network
-      // tools). Honour both so an Android serial reaching an iOS-only
-      // device_id-tool is rejected at the gate instead of falling through
-      // to the deeper blueprint error (which surfaces as a generic 500).
+      // Tools spell the device parameter three ways — `udid` (legacy iOS-only
+      // tools and gestures), `device_id` (debugger / profiler / network tools),
+      // and `devices` (only `stop-all-simulator-servers`' scoped teardown).
+      // `extractDeviceArg` honours all three so an Android serial reaching an
+      // iOS-only device_id-tool is rejected at the gate instead of falling
+      // through to the deeper blueprint error (which surfaces as a generic 500).
+      // Only the first two ever reach THIS gate — the `devices` tool declares
+      // no capability. That is a fact about the gate alone: telemetry reads
+      // `devices` today through two ungated consumers (see `extractDeviceArg`).
+      // The third spelling is honoured here so it behaves like the others the
+      // day a capability-bearing tool takes a device list.
       const deviceArg = extractDeviceArg(parsedData);
       if (def.capability && deviceArg) {
         try {

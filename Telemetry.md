@@ -1,6 +1,6 @@
 # Argent Privacy Notice (Telemetry)
 
-Effective date: 13 July 2026 · Version: 1.02
+Effective date: 31 July 2026 · Version: 1.03
 
 This notice is a product-specific supplement to the [Software Mansion Privacy Policy](https://swmansion.com/) (the "Policy") and applies to telemetry collected by Argent, a Software Mansion Software Product. Capitalised terms used but not defined here (including Personal Data, Usage Data, Legitimate Interest, EEA and Software Mansion Software Product) have the meaning given to them in the Policy. Where this notice and the Policy differ in respect of Argent telemetry, this notice prevails.
 
@@ -67,7 +67,9 @@ When you use the Argent Lens design-review flow (previewing and choosing between
 
 ### Diagnostics
 
-- the fact that an error occurred (event type and code only — never the error content or message).
+- the fact that an error occurred (event type and code only — never the error content or message);
+- when a tool call is rejected because its parameters fail validation: which parameter names failed. These names come exclusively from Argent's own published tool schemas — never the values you supplied, and never key names you typed that are not part of the schema (an unrecognised key is recorded only as the fixed marker "unrecognized_keys", not the key itself);
+- the outcome of a debugger connectivity check, recorded as one of a fixed set of coded reasons (for example: connected, Metro not running, no app attached) — never the underlying error text.
 
 ### Identifiers
 
@@ -78,7 +80,7 @@ When you use the Argent Lens design-review flow (previewing and choosing between
 
 To be explicit, Argent telemetry never includes:
 
-- tool inputs or arguments;
+- tool input or argument values (for a rejected call we record only which schema-declared parameter names failed validation, as described under Diagnostics — never their values, and never key names that are not part of Argent's own schemas);
 - file paths or file names;
 - source code or its contents;
 - application data;

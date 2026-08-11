@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import supertest from "supertest";
-import type { Response } from "superagent";
+import type { Response } from "supertest";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
 import {
   FAILURE_CODES,

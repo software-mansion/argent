@@ -32,7 +32,7 @@ For implementation tasks that modify visible UI, this workflow can also serve as
 4. **Verify**: Check the returned screenshot for expected results. If it shows a loading/transitional state, prefer blocking until it settles with `await-ui-element` (expected element `visible`, or a spinner `hidden`) over a guessed delay — but only with a selector you can trust (`text`/`identifier`/`role`) that the screen is known to have or that you saw in a prior `describe`; a guessed one just times out. Otherwise use a short fixed wait. Pick evidence by what's being asserted:
    - **Visual** (layout, spacing, color, typography, image/icon rendering, clipping, overflow, text rendering): prefer `screenshot-diff` against the baseline captured in step 1 — it surfaces pixel-visible changes the auto-screenshot might miss. Fall back to visual inspection of the auto-screenshot only when a stable baseline isn't available.
    - **Structural** (navigation state, element existence, accessibility labels/values, selection, hierarchy, route): verify with `describe`, `debugger-component-tree`, or `native-describe-screen`.
-   - **Runtime / log / network** (console errors, API calls, persistence, timing): verify with `view-network-logs`, `debugger-log-registry`, `debugger-evaluate`, or targeted tests.
+   - **Runtime / log / network** (console errors, API calls, persistence, timing): verify with `view-network-logs`, `debugger-log-registry`, `debugger-evaluate`, or targeted tests. Note `debugger-log-registry` returns `{ status: "not_connected", reason, guidance }` with no log file when the debugger is unreachable — that is not evidence about the app; follow its `guidance` to reconnect, then re-verify.
    - **Mixed**: collect evidence for each relevant class.
    - Report the combined verdict: expected behavior, observed behavior, evidence used, and any blocker for requested visual diffing.
 5. **Repeat** for each step in the flow.
@@ -108,7 +108,7 @@ Steps:
 - If tap misses target: re-run discovery tool (`describe` / `debugger-component-tree`), retry once with new coordinates.
 - If a permission dialog or modal is visible: re-run `describe` first. Stay in screenshot-driven navigation only when the overlay is not exposed reliably, then switch back to `describe` / `debugger-component-tree` as soon as it is dismissed.
 - If tap fails twice at same coordinates: stop, re-discover, report if element not found.
-- If a **saved flow** fails during `flow-execute` replay (as opposed to live test steps above): follow `argent-create-flow` skill §10 for structured diagnosis and correction.
+- If a **saved flow** fails during `flow-execute` replay (as opposed to live test steps above): follow `argent-create-flow`'s [Diagnose a replay failure](../argent-create-flow/references/reliability-and-recovery.md#diagnose-a-replay-failure) — classify the failure, inspect the actual screen, repair the smallest justified unit, then replay the full flow.
 
 ## Tips
 
