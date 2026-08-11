@@ -19,7 +19,7 @@ const WRAPPER_PATTERNS = [/^Forget\((.+)\)$/, /^Memo\((.+)\)$/, /^ForwardRef\((.
 
 const MAX_WRAPPER_DEPTH = 4;
 
-export interface StrippedName {
+interface StrippedName {
   baseName: string;
   hasForget: boolean;
   hasMemo: boolean;
@@ -44,7 +44,7 @@ export function stripComponentWrappers(raw: string): StrippedName {
   return { baseName: name, hasForget, hasMemo, hasForwardRef };
 }
 
-export interface ComponentAnnotation {
+interface ComponentAnnotation {
   displayName: string;
   tag: string;
   rawName: string;
@@ -66,7 +66,7 @@ export function annotateComponentName(raw: string): ComponentAnnotation {
   return { displayName: baseName, tag, rawName: raw };
 }
 
-export type ComponentNameResolution =
+type ComponentNameResolution =
   | { kind: "exact"; rawName: string; alsoMatching: string[] }
   | { kind: "display"; rawName: string; query: string }
   | { kind: "ambiguous"; query: string; candidates: string[] }
