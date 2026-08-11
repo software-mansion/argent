@@ -312,22 +312,27 @@ describe("flow report rendering", () => {
   });
 
   it("renderBatchSummary mirrors the step summary's verdict shape", () => {
-    expect(renderBatchSummary({ total: 3, passed: 2, failed: 1, skipped: 0 })).toBe(
+    expect(renderBatchSummary({ total: 3, passed: 2, failed: 1, skipped: 0 }, false)).toBe(
       "FAIL — 3 flows: 2 passed, 1 failed, 0 skipped"
     );
-    expect(renderBatchSummary({ total: 1, passed: 1, failed: 0, skipped: 0 })).toBe(
+    expect(renderBatchSummary({ total: 1, passed: 1, failed: 0, skipped: 0 }, false)).toBe(
       "PASS — 1 flow: 1 passed, 0 failed, 0 skipped"
     );
     // A skip beside a pass does not turn the verdict — a requires-filtered
     // flow is not a fault, and something did run.
-    expect(renderBatchSummary({ total: 2, passed: 1, failed: 0, skipped: 1 })).toBe(
+    expect(renderBatchSummary({ total: 2, passed: 1, failed: 0, skipped: 1 }, false)).toBe(
       "PASS — 2 flows: 1 passed, 0 failed, 1 skipped"
     );
     // Nothing ran at all: neither PASS nor FAIL, matching the exit code.
-    expect(renderBatchSummary({ total: 2, passed: 0, failed: 0, skipped: 2 })).toBe(
+    expect(renderBatchSummary({ total: 2, passed: 0, failed: 0, skipped: 2 }, true)).toBe(
       "NONE RAN — 2 flows: 0 passed, 0 failed, 2 skipped"
     );
-    expect(renderBatchSummary({ total: 0, passed: 0, failed: 0, skipped: 0 })).toBe(
+    // A flow-level pass can be vacuous (all steps when:-skipped), so the
+    // caller's zero-executed-steps verdict overrides the flow counts.
+    expect(renderBatchSummary({ total: 2, passed: 1, failed: 0, skipped: 1 }, true)).toBe(
+      "NONE RAN — 2 flows: 1 passed, 0 failed, 1 skipped"
+    );
+    expect(renderBatchSummary({ total: 0, passed: 0, failed: 0, skipped: 0 }, false)).toBe(
       "PASS — 0 flows: 0 passed, 0 failed, 0 skipped"
     );
   });

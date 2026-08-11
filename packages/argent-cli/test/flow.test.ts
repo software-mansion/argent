@@ -1619,7 +1619,7 @@ describe("argent flow run <dir>", () => {
 
     // Not "PASS": the verdict has to agree with the non-zero exit.
     expect(logs.join("\n")).toContain("NONE RAN — 2 flows: 0 passed, 0 failed, 2 skipped");
-    expect(errs.join("\n")).toContain("No flow ran");
+    expect(errs.join("\n")).toContain("No step executed");
   });
 
   it("reports a fully-skipped batch as not ok in --json", async () => {
@@ -1641,6 +1641,70 @@ describe("argent flow run <dir>", () => {
     expect(parsed.skipped).toBe(2);
     expect(parsed.flows.every((f) => f.status === "skip")).toBe(true);
     expect(parsed.flows[0]?.skipReason).toBe("requires unmet");
+  });
+
+  // The pre-`requires:` idiom for platform-specific flows: every step behind a
+  // `when: { platform: … }` guard, so the report is a flow-level pass that
+  // executed nothing.
+  const vacuousPass = (): Record<string, unknown> =>
+    report({
+      flow: "a-login",
+      ok: true,
+      passed: 0,
+      failed: 0,
+      errored: 0,
+      skipped: 2,
+      steps: [
+        { index: 0, kind: "tap", status: "skip" },
+        { index: 1, kind: "assert", status: "skip" },
+      ],
+    });
+
+  const requiresUnmet = (): ToolInvocationError =>
+    new ToolInvocationError("requires unmet", {
+      errorCode: "FLOW_REQUIREMENTS_UNMET",
+      errorKind: "validation",
+    });
+
+  it("exits 2 when the only flow-level pass executed zero steps beside a requires skip", async () => {
+    // A vacuous pass must not defeat the nothing-ran guard: not one step
+    // executed anywhere in this suite, so it is NONE RAN, not green.
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({ data: vacuousPass() })
+      .mockRejectedValueOnce(requiresUnmet());
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs.join("\n")).toContain("NONE RAN — 2 flows: 1 passed, 0 failed, 1 skipped");
+    expect(errs.join("\n")).toContain("No step executed");
+  });
+
+  it("reports a vacuous-pass-beside-skips batch as not ok in --json", async () => {
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({ data: vacuousPass() })
+      .mockRejectedValueOnce(requiresUnmet());
+
+    await expect(flow(["run", flowsDir, "--json"], opts)).rejects.toThrow("process.exit:2");
+
+    const parsed = JSON.parse(logs.join("\n")) as { ok: boolean; passed: number };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.passed).toBe(1);
+  });
+
+  it("keeps FAIL and exit 1 when a vacuous pass sits beside a failed flow", async () => {
+    toolsClientMock.callTool.mockResolvedValueOnce({ data: vacuousPass() }).mockResolvedValueOnce({
+      data: report({
+        flow: "b-checkout",
+        ok: false,
+        passed: 0,
+        failed: 1,
+        steps: [{ index: 0, kind: "assert", status: "fail", reason: "never visible" }],
+      }),
+    });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+    expect(logs.join("\n")).toContain("FAIL — 2 flows: 1 passed, 1 failed, 0 skipped");
   });
 
   it("stops the batch on a server error the signal does not mark as validation", async () => {

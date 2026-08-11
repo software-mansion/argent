@@ -376,18 +376,22 @@ export function renderFailedSteps(report: FlowReport): string[] {
 
 /**
  * Flow-level verdict of a directory run, mirroring renderSummary's shape. A
- * batch that found flows but ran none of them — every one filtered out by its
- * `requires:` — is neither PASS nor FAIL: nothing proved anything, so it gets
- * its own word rather than a "PASS" that contradicts the non-zero exit.
+ * batch that found flows but ran none of them is neither PASS nor FAIL:
+ * nothing proved anything, so it gets its own word rather than a "PASS" that
+ * contradicts the non-zero exit. The caller decides `ranNothing` from executed
+ * steps, not the flow counts here, because a flow whose steps were all
+ * `when:`-skipped still classifies as a flow-level pass.
  */
-export function renderBatchSummary(counts: {
-  total: number;
-  passed: number;
-  failed: number;
-  skipped: number;
-}): string {
-  const verdict =
-    counts.failed > 0 ? "FAIL" : counts.total > 0 && counts.passed === 0 ? "NONE RAN" : "PASS";
+export function renderBatchSummary(
+  counts: {
+    total: number;
+    passed: number;
+    failed: number;
+    skipped: number;
+  },
+  ranNothing: boolean
+): string {
+  const verdict = counts.failed > 0 ? "FAIL" : ranNothing ? "NONE RAN" : "PASS";
   return `${verdict} — ${counts.total} flow${counts.total === 1 ? "" : "s"}: ${counts.passed} passed, ${counts.failed} failed, ${counts.skipped} skipped`;
 }
 
@@ -1208,21 +1212,27 @@ async function runFlowDirectory(
     failed: results.filter((r) => r.status === "fail").length,
     skipped: results.filter((r) => r.status === "skip").length,
   };
-  // A batch where nothing ran is not a pass. Every flow being filtered out is
-  // as easily a mistyped `requires` (or a target nobody meant to run against)
-  // as a deliberate no-op, and "PASS — 12 flows: 0 passed" reads as success
-  // either way, so the exit code has to disagree.
-  const ranNothing = counts.passed === 0 && counts.failed === 0 && counts.total > 0;
+  // A batch where nothing ran is not a pass, and "ran" means executed steps,
+  // not flows: a flow whose steps all sat behind `when:` guards is a flow-level
+  // pass with zero steps executed, and such a vacuous pass must not green-light
+  // a suite where a mistyped `requires` filtered everything else out. Failures
+  // still dominate (exit 1): a rejected file is a red result, not an empty one.
+  const executedSteps = results.reduce(
+    (n, r) => n + (r.report ? r.report.passed + r.report.failed + r.report.errored : 0),
+    0
+  );
+  const ranNothing = counts.failed === 0 && counts.total > 0 && executedSteps === 0;
   if (args.json) {
     console.log(
       JSON.stringify({ ok: counts.failed === 0 && !ranNothing, ...counts, flows: results }, null, 2)
     );
   } else {
-    console.log(`\n${renderBatchSummary(counts)}`);
+    console.log(`\n${renderBatchSummary(counts, ranNothing)}`);
     if (ranNothing) {
       console.error(
-        `No flow ran: every flow in ${dir} was skipped. Check the requires: blocks against ` +
-          `the target this run selected.`
+        `No step executed: every flow in ${dir} was skipped or passed vacuously (all steps ` +
+          `when:-skipped). Check the requires: blocks and when: guards against the target ` +
+          `this run selected.`
       );
     }
   }
