@@ -1457,9 +1457,24 @@ function resolveOpts(
  */
 function assertParamsMeetRequires(params: Params, requires: FlowRequires | undefined): void {
   if (!requires) return;
-  const named = params.device ? resolveDevice(params.device).platform : params.platform;
-  if (!named) return; // nothing named — auto-detection judges it later
-  assertPlatformMeetsRequires(named, requires, `the ${named} target this run was pointed at`);
+  if (params.device) {
+    const shape = resolveDevice(params.device).platform;
+    // Name the shape call: a mistyped --device (a device name, say) falls
+    // through to android and must not read as a requires problem.
+    assertPlatformMeetsRequires(
+      shape,
+      requires,
+      `device "${params.device}", whose id shape classifies it as ${shape} ` +
+        `(no device listing is consulted - a device name is not a device id)`
+    );
+    return;
+  }
+  if (!params.platform) return; // nothing named — auto-detection judges it later
+  assertPlatformMeetsRequires(
+    params.platform,
+    requires,
+    `the ${params.platform} target this run was pointed at`
+  );
 }
 
 /**

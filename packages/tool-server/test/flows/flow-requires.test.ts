@@ -299,7 +299,18 @@ describe("an explicitly targeted run", () => {
     const { registry } = mockRegistry();
 
     await expect(run(registry, "ios-only", { device: ANDROID })).rejects.toThrow(
-      /excludes the android target/
+      /excludes device "emulator-5554", whose id shape classifies it as android/
+    );
+  });
+
+  it("names the literal id and the shape call when --device is not a device id", async () => {
+    // A device name falls through classifyDevice's android fallback; the
+    // refusal must point at the id, not read as a requires problem.
+    await writeFlow("ios-only", { requires: { platform: ["ios"] } });
+    const { registry } = mockRegistry();
+
+    await expect(run(registry, "ios-only", { device: "iPhone 17 Pro" })).rejects.toThrow(
+      /device "iPhone 17 Pro", whose id shape classifies it as android \(no device listing is consulted - a device name is not a device id\)/
     );
   });
 
