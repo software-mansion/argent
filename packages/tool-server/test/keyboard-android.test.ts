@@ -143,6 +143,25 @@ describe("android-input — injection", () => {
     expect(cmd).toBe("input text 'wi fi'");
   });
 
+  it("types the text's case verbatim (no fold at the `input text` sink)", async () => {
+    // Every other fixture in this file is all-lowercase, so a `toLowerCase()`
+    // slip inside `injectAndroidText` — after the assert, where a shared
+    // normalise with the sibling `resolveAndroidNamedKeycode` (which DOES fold
+    // case, deliberately) would land — was green against the whole suite.
+    // Nothing downstream guarantees case either: `shellQuote` only quotes and
+    // `assertTypeableAndroidText` accepts A-Z untouched, so the mirror-image
+    // `toUpperCase()` is the only direction that was red.
+    //
+    // `typed` echoes `params.text` rather than reading the device
+    // (platforms/android.ts:46), so a case regression answers
+    // `{ typed: "Passw0rd!", keys: 9 }` while the field holds `passw0rd!` —
+    // success to every consumer, android-only, and exactly where case-sensitive
+    // login fields and `{{secret:…}}` injection land.
+    adbShell.mockClear();
+    await injectAndroidText(SERIAL, "Passw0rd!");
+    expect(adbShell.mock.calls.map((c) => c[1])).toEqual(["input text 'Passw0rd!'"]);
+  });
+
   it("does not shell out for empty text", async () => {
     adbShell.mockClear();
     await injectAndroidText(SERIAL, "");
@@ -185,7 +204,9 @@ describe("android-input — injection", () => {
   it("rejects an unknown named key as invalid input (→ HTTP 400)", async () => {
     // InvalidToolInputError (not a plain Error) so the HTTP layer maps it to 400
     // — an unknown key is a caller mistake, not an internal server fault.
-    await expect(injectAndroidNamedKey(SERIAL, "nope")).rejects.toThrow(/Unknown key/);
+    // The NAME is part of the contract: it is what a caller needs to retry, and
+    // a bare `/Unknown key/` prefix left stripping it green in this file.
+    await expect(injectAndroidNamedKey(SERIAL, "nope")).rejects.toThrow(/Unknown key "nope"/);
     await expect(injectAndroidNamedKey(SERIAL, "nope")).rejects.toBeInstanceOf(
       InvalidToolInputError
     );

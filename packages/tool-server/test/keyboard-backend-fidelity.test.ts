@@ -223,8 +223,10 @@ describe("keyboard backends — emit exactly the action they were given", () => 
   });
 
   // No android section: `adb shell input` is a command line rather than an event
-  // stream, so keyboard-android.test.ts already pins the exact strings this file
-  // pins for the other three backends.
+  // stream, so keyboard-android.test.ts pins the exact strings there — including
+  // the case-preservation property this file's iOS section covers as "shifts only
+  // the character that needs it", which on android has no modifier to observe and
+  // shows up only as the literal command line.
 
   describe("vega", () => {
     it("injects the text it was given, and nothing else", async () => {
