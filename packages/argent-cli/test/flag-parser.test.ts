@@ -514,3 +514,47 @@ describe("boolean value syntax is discoverable from --help", () => {
     }
   });
 });
+
+/**
+ * A tool carrying a retired key: `z.never().optional().describe(...)` (e.g.
+ * gesture-swipe's `settle`) serializes via zodObjectToJsonSchema to
+ * `{description, not: {}}` with no `type`. Rendered as a flag row it would read
+ * as `--settle <value>  any`: an offer, indistinguishable in shape from the
+ * live optional flags, and the e2e harness (see the legend test above) would
+ * pick it up as a real flag.
+ */
+const retiredSchema: JsonSchema = {
+  type: "object",
+  properties: {
+    durationMs: { type: "number", description: "Total gesture duration in milliseconds" },
+    momentum: { type: "boolean", description: "Whether the swipe releases with momentum" },
+    settle: {
+      description:
+        "Retired: renamed to `momentum` with the opposite sense. Pass `momentum: false`.",
+      not: {},
+    },
+  },
+};
+
+describe("retired (never-typed) keys in usage", () => {
+  it("renders no flag row for the retired key", () => {
+    for (const line of formatSchemaUsage(retiredSchema).split("\n")) {
+      if (line.trimStart().startsWith("--")) expect(line).not.toContain("settle");
+    }
+  });
+
+  it("still surfaces the field and its retirement, without doubling 'Retired:'", () => {
+    const usage = formatSchemaUsage(retiredSchema);
+    expect(usage).toMatch(
+      /^ {2}Retired: settle - renamed to `momentum` with the opposite sense\. Pass `momentum: false`\.$/m
+    );
+    expect(usage).not.toMatch(/Retired:.*Retired:/);
+  });
+
+  it("keeps the live flags rendering as before", () => {
+    const usage = formatSchemaUsage(retiredSchema);
+    expect(usage).toMatch(/^ {2}--durationMs <value> {2}number {2}Total gesture duration/m);
+    expect(usage).toMatch(/^ {2}--momentum\s+boolean {2}Whether the swipe/m);
+    expect(usage).toMatch(/Booleans:/);
+  });
+});

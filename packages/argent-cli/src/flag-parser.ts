@@ -29,6 +29,7 @@ export interface JsonSchema {
   items?: JsonSchema;
   enum?: unknown[];
   description?: string;
+  not?: JsonSchema;
 }
 
 export interface FlagParseResult {
@@ -51,6 +52,15 @@ function isScalarType(type: string | undefined): boolean {
 /** Fields that can only be passed as JSON, because a flag value cannot express their shape. */
 function isJsonField(prop: JsonSchema | undefined): boolean {
   return prop?.type === "object" || (prop?.type === "array" && !isScalarType(prop.items?.type));
+}
+
+/**
+ * A retired key: `z.never()` (declared-and-refused, so the server can name the
+ * replacement) serializes to `{"not": {}}` with no `type`. Matched so usage can
+ * render it as a retirement notice rather than offer it as a flag.
+ */
+function isRetiredField(prop: JsonSchema): boolean {
+  return prop.not !== undefined && Object.keys(prop.not).length === 0;
 }
 
 /**
@@ -331,20 +341,31 @@ export function formatSchemaUsage(schema: JsonSchema | undefined): string {
   const lines: string[] = [];
   const entries = Object.entries(schema.properties);
   if (entries.length === 0) return "  (no parameters)";
+  const live = entries.filter(([, prop]) => !isRetiredField(prop));
 
   // Determine column width for flag names so types align.
   let maxFlagLen = 0;
-  for (const [name, prop] of entries) {
+  for (const [name, prop] of live) {
     const display = renderFlagName(name, prop);
     if (display.length > maxFlagLen) maxFlagLen = display.length;
   }
 
-  for (const [name, prop] of entries) {
+  for (const [name, prop] of live) {
     const flag = renderFlagName(name, prop).padEnd(maxFlagLen, " ");
     const typeLabel = renderType(prop);
     const req = required.has(name) ? " (required)" : "";
     const desc = prop.description ? `  ${prop.description}` : "";
     lines.push(`  ${flag}  ${typeLabel}${req}${desc}`);
+  }
+
+  // Retired keys get a notice, not a flag row: a row would offer them in the
+  // same shape as the live optional flags. Like the legend below, the line must
+  // not start with `--` after the indent. A leading "Retired: " in the
+  // description is dropped; the label already says it.
+  for (const [name, prop] of entries) {
+    if (!isRetiredField(prop)) continue;
+    const desc = (prop.description ?? "").replace(/^Retired:\s*/, "");
+    lines.push(`  Retired: ${name}${desc ? ` - ${desc}` : ""}`);
   }
 
   // One legend rather than widening every flag row: the value syntax is the
@@ -356,7 +377,7 @@ export function formatSchemaUsage(schema: JsonSchema | undefined): string {
   // /^[[:space:]]*--/ as a flag row and takes the first --token as its name, so
   // a legend beginning with a flag would inject a phantom flag into every
   // tool model it builds.
-  if (entries.some(([, prop]) => prop.type === "boolean")) {
+  if (live.some(([, prop]) => prop.type === "boolean")) {
     lines.push(
       "",
       "  Booleans: --flag, --flag true, or --flag 1 sets true; --flag false, --flag 0, " +
