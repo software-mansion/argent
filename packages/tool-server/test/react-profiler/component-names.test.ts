@@ -1,4 +1,9 @@
 import { describe, it, expect } from "vitest";
+import type {
+  ComponentAnnotation,
+  ComponentNameResolution,
+  StrippedName,
+} from "../../src/utils/react-profiler/component-names";
 import {
   stripComponentWrappers,
   annotateComponentName,
@@ -58,7 +63,7 @@ describe("stripComponentWrappers", () => {
   });
 
   it("reports which wrappers were present", () => {
-    const s = stripComponentWrappers("Memo(Forget(Foo))");
+    const s: StrippedName = stripComponentWrappers("Memo(Forget(Foo))");
     expect(s.hasMemo).toBe(true);
     expect(s.hasForget).toBe(true);
     expect(s.hasForwardRef).toBe(false);
@@ -67,7 +72,8 @@ describe("stripComponentWrappers", () => {
 
 describe("annotateComponentName", () => {
   it("keeps the tag wording and ordering the report has always used", () => {
-    expect(annotateComponentName("Forget(Foo)")).toEqual({
+    const ann: ComponentAnnotation = annotateComponentName("Forget(Foo)");
+    expect(ann).toEqual({
       displayName: "Foo",
       tag: " [React Compiler]",
       rawName: "Forget(Foo)",
@@ -135,10 +141,21 @@ describe("resolveComponentName", () => {
   });
 });
 
+// Narrow a resolution to the two outcomes renderComponentNameMiss accepts,
+// failing the test if the resolver returned anything else.
+function expectMiss(
+  r: ComponentNameResolution
+): Extract<ComponentNameResolution, { kind: "ambiguous" | "missing" }> {
+  if (r.kind !== "ambiguous" && r.kind !== "missing") {
+    throw new Error(`expected a non-resolving outcome, got "${r.kind}"`);
+  }
+  return r;
+}
+
 describe("renderComponentNameMiss", () => {
   it("hands back exact strings to retry with on an ambiguity", () => {
     const r = resolveComponentName("Widget", ["Memo(Widget)", "ForwardRef(Widget)"]);
-    const out = renderComponentNameMiss(r as never);
+    const out = renderComponentNameMiss(expectMiss(r));
     expect(out).toContain("ambiguous");
     expect(out).toContain("`Memo(Widget)`");
     expect(out).toContain("`ForwardRef(Widget)`");
@@ -147,7 +164,7 @@ describe("renderComponentNameMiss", () => {
 
   it("quantifies the session so a miss can be told from an empty capture", () => {
     const r = resolveComponentName("Nope", REAL_SESSION_NAMES);
-    const out = renderComponentNameMiss(r as never, { fiberRenders: 313, commits: 16 });
+    const out = renderComponentNameMiss(expectMiss(r), { fiberRenders: 313, commits: 16 });
     expect(out).toContain("313 fiber renders across 16 commits");
     expect(out).toContain("profiler-commit-query");
   });
