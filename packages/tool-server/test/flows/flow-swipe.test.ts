@@ -1485,9 +1485,9 @@ describe("swipe: post-dispatch settle", () => {
   });
 
   it("waits out the animation after a momentum: false swipe too", async () => {
-    // `momentum` zeroes the finger's release velocity — it says nothing about
-    // the app's own animations (a dismissed card, a paging carousel), so the
-    // wait is not conditional on it.
+    // `momentum: false` zeroes the finger's release velocity — it says nothing
+    // about the app's own animations (a dismissed card, a paging carousel), so
+    // the wait is not conditional on it.
     const { result, events } = await runLoggedSwipe({
       kind: "swipe",
       by: { y: -0.5 },
