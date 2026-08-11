@@ -558,15 +558,19 @@ describe("requirements narrow device auto-detection", () => {
 describe("composed fragments", () => {
   it("error the run: step when the run device cannot satisfy them", async () => {
     // Not a skip: a fragment silently not running would leave a green report
-    // for a scenario that only half happened.
+    // for a scenario that only half happened. Composed after the first
+    // executable step — a LEADING fragment's block folds into the run's own
+    // and is refused at entry instead (see the leading-chain describe below).
     await writeFlow("android-bit", { requires: { platform: ["android"] } });
-    await writeFlow("parent", { steps: [{ kind: "run", flow: "android-bit.yaml" }] });
+    await writeFlow("parent", {
+      steps: [OK_STEP, { kind: "run", flow: "android-bit.yaml" }],
+    });
     const { registry } = mockRegistry();
 
     const result = await run(registry, "parent", { device: IOS });
 
     expect(result.ok).toBe(false);
-    expect(result.steps[0]).toMatchObject({
+    expect(result.steps[1]).toMatchObject({
       kind: "run",
       status: "error",
       reason: expect.stringMatching(/cannot run on this device/),
@@ -579,6 +583,115 @@ describe("composed fragments", () => {
     const { registry } = mockRegistry();
 
     expect((await run(registry, "parent", { device: IOS })).ok).toBe(true);
+  });
+});
+
+describe("requires folded along the leading run: chain", () => {
+  // Every file the leading walk enters is certain to execute before step 1, so
+  // its block constrains the whole run's start exactly as the root's does.
+
+  it("narrows auto-detection with a leading fragment's block", async () => {
+    // The reusable fragment is the natural home for the constraint; a root
+    // that merely composes it inherits the narrowing.
+    await writeFlow("android-frag", { requires: { platform: ["android"] } });
+    await writeFlow("composed", { steps: [{ kind: "run", flow: "android-frag.yaml" }] });
+    const { registry } = mockRegistry([iosEntry(IOS), androidEntry(ANDROID)]);
+
+    expect((await run(registry, "composed")).device).toBe(ANDROID);
+  });
+
+  it("skips — not reds — a composing root pointed at an excluded device", async () => {
+    await writeFlow("android-frag", { requires: { platform: ["android"] } });
+    await writeFlow("composed", { steps: [{ kind: "run", flow: "android-frag.yaml" }] });
+    const { registry } = mockRegistry([iosEntry(IOS)]);
+
+    const err = await run(registry, "composed", { device: IOS }).catch((e: unknown) => e);
+
+    // The skip code — not FLOW_DEVICE_RESOLUTION and not a red run: step — so
+    // a directory run pointed at ios filters the flow out instead of failing.
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNMET);
+    // The block is nobody's single declaration, so the message says so.
+    expect((err as Error).message).toMatch(/composed fragments together declare/);
+  });
+
+  it("skips on an excluded platform param too, before listing any device", async () => {
+    await writeFlow("android-frag", { requires: { platform: ["android"] } });
+    await writeFlow("composed", { steps: [{ kind: "run", flow: "android-frag.yaml" }] });
+    const { registry, invokeTool } = mockRegistry([iosEntry(IOS)]);
+
+    const err = await run(registry, "composed", { platform: "ios" }).catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNMET);
+    expect(invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("refuses the chromium hoist before booting when a leading fragment requires tv", async () => {
+    // The tv block lives on a fragment the chain crosses, not the root — the
+    // refusal must still precede the boot: the requirements error, never the
+    // boot-shaped "Electron boot: path does not exist".
+    await writeFlow("boot-chromium", {
+      steps: [{ kind: "launch", app: { chromium: "/nonexistent/app" } }],
+    });
+    await writeFlow("tv-frag", {
+      requires: { runtimeKind: "tv" },
+      steps: [{ kind: "run", flow: "boot-chromium.yaml" }],
+    });
+    await writeFlow("composed", { steps: [{ kind: "run", flow: "tv-frag.yaml" }] });
+    const { registry } = mockRegistry([]);
+
+    const err = await run(registry, "composed").catch((e: unknown) => e);
+
+    expect((err as Error).message).toMatch(/chromium is always mobile/);
+    expect((err as Error).message).not.toMatch(/Electron boot/);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNMET);
+  });
+
+  it("rejects an unsatisfiable fold, naming both files", async () => {
+    // A broken composition goes red once — a silent skip would hide it in
+    // every directory run forever.
+    await writeFlow("android-frag", { requires: { platform: ["android"] } });
+    await writeFlow("composed", {
+      requires: { platform: ["ios"] },
+      steps: [{ kind: "run", flow: "android-frag.yaml" }],
+    });
+    const { registry } = mockRegistry([iosEntry(IOS), androidEntry(ANDROID)]);
+
+    const err = await run(registry, "composed").catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIRES_UNSATISFIABLE);
+    // Validation, so a directory run fails this flow alone, not the batch.
+    expect(getFailureSignal(err)?.error_kind).toBe("validation");
+    expect((err as Error).message).toMatch(/"composed"/);
+    expect((err as Error).message).toMatch(/"android-frag"/);
+  });
+
+  it("does not fold a fragment composed after the first executable step", async () => {
+    // A mid-run block is conditional on reaching its step and is judged there
+    // (the run: step check); folding it would let a fragment the run may never
+    // reach veto device selection.
+    await writeFlow("android-frag", { requires: { platform: ["android"] } });
+    await writeFlow("root", {
+      steps: [OK_STEP, { kind: "run", flow: "android-frag.yaml" }],
+    });
+    const { registry } = mockRegistry([iosEntry(IOS), androidEntry(ANDROID)]);
+
+    await expect(run(registry, "root")).rejects.toThrow(/2 booted devices matched/);
+  });
+
+  it("does not fold a fragment behind a when: guard", async () => {
+    await writeFlow("android-frag", { requires: { platform: ["android"] } });
+    await writeFlow("root", {
+      steps: [
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "android" },
+          steps: [{ kind: "run", flow: "android-frag.yaml" }],
+        },
+      ],
+    });
+    const { registry } = mockRegistry([iosEntry(IOS), androidEntry(ANDROID)]);
+
+    await expect(run(registry, "root")).rejects.toThrow(/2 booted devices matched/);
   });
 });
 

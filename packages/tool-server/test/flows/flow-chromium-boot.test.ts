@@ -1984,7 +1984,7 @@ describe("flow-execute prerequisite vs leading launch chain", () => {
   });
 
   it("keeps best-effort behavior when the leading run: chain is broken", async () => {
-    // A missing sibling makes the chain unreadable: leadingLaunch yields null,
+    // A missing sibling makes the chain unreadable: leadingRun finds no launch,
     // so no new rejection fires — the notice comes back as before, and an
     // acknowledged run proceeds to device resolution (the broken run: target is
     // reported at step time, exactly as on main).

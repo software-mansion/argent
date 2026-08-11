@@ -152,6 +152,19 @@ function describeRequires(requires: FlowRequires): string {
   return parts.join(", ");
 }
 
+/**
+ * Who declares the block a refusal cites: a block folded across a leading
+ * `run:` chain (marked `composed` by foldLeadingRequires) is no single file's
+ * declaration, so blaming "this flow" would send the author to a line the root
+ * file does not contain.
+ */
+function declaredRequires(requires: FlowRequires): string {
+  const block = `requires: { ${describeRequires(requires)} }`;
+  return requires.composed
+    ? `This flow and its composed fragments together declare ${block}`
+    : `This flow declares ${block}`;
+}
+
 function requirementsError(code: FailureCode, message: string): FailureError {
   return new FailureError(message, {
     error_code: code,
@@ -242,7 +255,7 @@ export function assertPlatformMeetsRequires(
   subject: string
 ): void {
   if (!requires) return;
-  const declared = `This flow declares requires: { ${describeRequires(requires)} }, which excludes`;
+  const declared = `${declaredRequires(requires)}, which excludes`;
   const remedy = "Run it against a matching target, or relax the requirement.";
 
   if (requires.platform && !platformMeets(platform, requires.platform)) {
@@ -274,7 +287,7 @@ export async function assertDeviceMeetsRequires(
   );
   if (!requires.runtimeKind) return;
 
-  const declared = `This flow declares requires: { ${describeRequires(requires)} }.`;
+  const declared = `${declaredRequires(requires)}.`;
   let kind: FlowRuntimeKind | undefined;
   try {
     kind = await probeRuntimeKind(device);
@@ -380,15 +393,18 @@ export async function resolveFlowDevice(
       if (unread.length > 0) {
         const ids = unread.map((d) => deviceEntryId(d) ?? "?").join(", ");
         throw requirementsUnverifiableError(
-          `This flow declares requires: { ${describeRequires(requires)} }. The runtime kind of ` +
+          `${declaredRequires(requires)}. The runtime kind of ` +
             `${ids} could not be read from the listing, so whether the flow applies is unknown. ` +
             `The device may still be booting: re-list, pass --device to probe it fresh, or drop ` +
             `runtimeKind. ${available}`
         );
       }
       throw requirementsUnmetError(
-        `No booted device satisfies this flow's requires: { ${describeRequires(requires)} }. ` +
-          available
+        (requires.composed
+          ? `No booted device satisfies the requires this flow and its composed fragments ` +
+            `together declare: `
+          : `No booted device satisfies this flow's requires: `) +
+          `{ ${describeRequires(requires)} }. ${available}`
       );
     }
     const what = opts.platform

@@ -753,6 +753,12 @@ export type FlowRequires = {
    */
   platform?: WhenPlatform[];
   runtimeKind?: FlowRuntimeKind;
+  /**
+   * Set only by {@link foldLeadingRequires}, never parsed from YAML: the block
+   * was folded across `run:` composition, so refusal messages must attribute
+   * it to the flow plus its fragments rather than claim one file declares it.
+   */
+  composed?: true;
 };
 
 export type FlowFile = {
@@ -1973,7 +1979,8 @@ export const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
 // Keys a launch map accepts: the platforms plus the `native` shared-id shorthand.
 const LAUNCH_MAP_KEYS = ["native", ...LAUNCH_PLATFORMS] as const;
 
-// Keys a `requires:` block accepts — the closed vocabulary of FlowRequires.
+// Keys a `requires:` block accepts — FlowRequires' YAML vocabulary (the
+// `composed` marker is fold-only, never parsed).
 const REQUIRES_KEYS = ["platform", "runtimeKind"] as const;
 
 // `requires` is a top-level key, not a step, so its parse errors carry the
@@ -3045,6 +3052,93 @@ function validateRequires(flow: FlowFile): void {
         `every launch step — add launch entries for one of them, or drop requires.runtimeKind`
     );
   }
+}
+
+/** One leading-chain file's requires block, named so a fold conflict can point at it. */
+export interface RequiresContribution {
+  flow: string;
+  requires: FlowRequires;
+}
+
+function unsatisfiableTogether(detail: string): FailureError {
+  return new FailureError(
+    `The requires blocks this run composes can never be satisfied together: ${detail}. ` +
+      `Relax one of the blocks, or drop the run: composition.`,
+    {
+      error_code: FAILURE_CODES.FLOW_REQUIRES_UNSATISFIABLE,
+      failure_stage: "flow_file_validate",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
+  );
+}
+
+/**
+ * Fold the requires blocks a run's leading `run:` chain contributes — the
+ * root's plus one per fragment entered before the first executable step — into
+ * the single block run setup judges. Every entered file is certain to execute
+ * before step 1, so each block constrains the whole run's start: platform
+ * lists intersect and runtimeKinds must agree (absent = unconstrained). A fold
+ * no target could ever satisfy throws, naming the blocks that collide — a
+ * broken composition should go red once, not skip silently. Returns the root's
+ * block untouched when no fragment contributed; a folded block carries
+ * `composed` so refusal messages can attribute it honestly.
+ */
+export function foldLeadingRequires(
+  rootFlow: string,
+  rootRequires: FlowRequires | undefined,
+  fragments: RequiresContribution[]
+): FlowRequires | undefined {
+  if (fragments.length === 0) return rootRequires;
+  const contributions = rootRequires
+    ? [{ flow: rootFlow, requires: rootRequires }, ...fragments]
+    : fragments;
+
+  let platform: WhenPlatform[] | undefined;
+  const platformOwners: string[] = [];
+  let runtimeKind: FlowRuntimeKind | undefined;
+  let kindOwner = "";
+  const names = (owners: string[]): string => owners.map((o) => `"${o}"`).join(" and ");
+  for (const { flow, requires } of contributions) {
+    if (requires.platform) {
+      const prior = platform;
+      const next = prior ? requires.platform.filter((p) => prior.includes(p)) : requires.platform;
+      if (prior && next.length === 0) {
+        throw unsatisfiableTogether(
+          `${names(platformOwners)} require${platformOwners.length > 1 ? "" : "s"} platform: ` +
+            `[${prior.join(", ")}] and "${flow}" requires platform: ` +
+            `[${requires.platform.join(", ")}] — no platform satisfies both`
+        );
+      }
+      platform = next;
+      platformOwners.push(flow);
+    }
+    if (requires.runtimeKind) {
+      if (runtimeKind && runtimeKind !== requires.runtimeKind) {
+        throw unsatisfiableTogether(
+          `"${kindOwner}" requires runtimeKind: ${runtimeKind} and "${flow}" requires ` +
+            `runtimeKind: ${requires.runtimeKind}`
+        );
+      }
+      runtimeKind = requires.runtimeKind;
+      kindOwner ||= flow;
+    }
+  }
+  // Cross-file only: a single file pairing a platform list with a kind none of
+  // it can present is already refused at parse (validateRequires).
+  const kind = runtimeKind;
+  if (platform && kind && !platform.some((p) => platformCanPresent(p, kind))) {
+    throw unsatisfiableTogether(
+      `${names(platformOwners)} leave${platformOwners.length > 1 ? "" : "s"} platform: ` +
+        `[${platform.join(", ")}] and "${kindOwner}" requires runtimeKind: ${kind}, ` +
+        `which no platform in that list ever presents`
+    );
+  }
+  return {
+    ...(platform ? { platform } : {}),
+    ...(runtimeKind ? { runtimeKind } : {}),
+    composed: true,
+  };
 }
 
 /**
