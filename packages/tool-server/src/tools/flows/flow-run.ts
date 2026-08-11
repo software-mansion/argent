@@ -1196,10 +1196,14 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
       // The half of the run's requirements decidable from the call alone, run
       // before anything else touches a device: the caller named a platform (or
       // a device, whose platform is its id's shape) the leading chain's folded
-      // requires exclude. Sits ahead of the prerequisite handshake so a caller
-      // is never asked to establish state for a run that cannot happen, and
-      // ahead of the chromium hoist so no app is booted for one. The
-      // runtimeKind half needs a device and lands with the resolution below.
+      // requires exclude. For such a caller this sits ahead of the
+      // prerequisite handshake — they are never asked to establish state for a
+      // run that cannot happen — and ahead of the chromium hoist, so no app is
+      // booted for one. A caller who named nothing is judged only by the
+      // resolution below, AFTER the handshake: what matters is the device
+      // landscape at acknowledge time (the prerequisite setup may itself boot
+      // the satisfying device), so refusing on the pre-notice listing would
+      // reject runs the setup was about to make possible.
       assertParamsMeetRequires(params, leading.requires);
 
       // Run-time analog of validateFlow's e2e-has-prerequisite rule: parse sees
