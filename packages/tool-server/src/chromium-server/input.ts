@@ -214,6 +214,3 @@ export async function sendRotate(
     },
   });
 }
-
-// Re-exported for tests + downstream callers that want to convert without
-// duplicating the math.
