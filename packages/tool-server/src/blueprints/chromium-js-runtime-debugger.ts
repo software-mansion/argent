@@ -116,9 +116,6 @@ function makeStubSourceResolver(): SourceResolver {
 }
 
 class StubSourceMapsRegistry extends SourceMapsRegistry {
-  constructor() {
-    super("");
-  }
   override async waitForPending(): Promise<void> {
     // No Metro source-map fetch loop on Chromium — page scripts already carry
     // their own //# sourceMappingURL=data:... or rely on the browser devtools'

@@ -96,8 +96,3 @@ export async function ensureAndroidDevtoolsInstalled(serial: string): Promise<vo
 
   installedHelpers.set(key, true);
 }
-
-/** Test-only helper to reset the install cache between unit tests. */
-export function __resetAndroidDevtoolsInstallCache(): void {
-  installedHelpers.clear();
-}

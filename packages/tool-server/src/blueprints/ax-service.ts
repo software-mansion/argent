@@ -23,7 +23,7 @@ export {
 
 export const AX_SERVICE_NAMESPACE = "AXService";
 
-export type AXServiceTransport = "unix" | "tcp";
+type AXServiceTransport = "unix" | "tcp";
 
 // Same DeviceInfo-via-options pattern as the other iOS-only blueprints.
 type AxServiceFactoryOptions = Record<string, unknown> & {

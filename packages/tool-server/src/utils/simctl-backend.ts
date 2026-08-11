@@ -1,28 +1,15 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { simctlArgsForUdid } from "./ios-device-sets";
 import { simctlLaunch, simctlTerminate } from "./sim-remote";
 
-const execFileAsync = promisify(execFile);
-
 /**
- * Strategy for the simctl verbs that a tool handler shells out to. Lets a
- * single iOS handler serve both local sims (`xcrun simctl`) and remote sims
- * (`sim-remote simctl`) without an `isRemote` branch inside the handler body.
+ * Strategy for the simctl verbs that a tool handler shells out to, so the
+ * shared iOS handler carries no `isRemote` branch in its body. Only the remote
+ * sim needs it: the local iOS impl shells out to `xcrun` itself because it also
+ * has to inject the native-devtools DYLD env before the app starts.
  */
 export interface SimctlBackend {
   launch(udid: string, bundleId: string): Promise<void>;
   terminate(udid: string, bundleId: string): Promise<void>;
 }
-
-export const localSimctl: SimctlBackend = {
-  async launch(udid, bundleId) {
-    await execFileAsync("xcrun", await simctlArgsForUdid(udid, ["launch", udid, bundleId]));
-  },
-  async terminate(udid, bundleId) {
-    await execFileAsync("xcrun", await simctlArgsForUdid(udid, ["terminate", udid, bundleId]));
-  },
-};
 
 export const remoteSimctl: SimctlBackend = {
   launch: simctlLaunch,

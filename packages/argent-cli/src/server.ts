@@ -102,7 +102,7 @@ function logsCmd(follow: boolean): void {
   child.on("exit", (code) => process.exit(code ?? 0));
 }
 
-export interface StartFlags {
+interface StartFlags {
   port: number | null;
   host: string;
   idleTimeoutMinutes: number;

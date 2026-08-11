@@ -9,7 +9,7 @@
  * split out as a pure function so it can be unit-tested without a socket.
  */
 
-export interface SseEvent {
+interface SseEvent {
   /** The `event:` field (defaults to "message" per the SSE spec). */
   event: string;
   /** The joined `data:` field(s) — for our frames, a JSON string. */

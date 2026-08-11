@@ -18,7 +18,7 @@ export interface CDPTarget {
   };
 }
 
-export interface MetroInfo {
+interface MetroInfo {
   port: number;
   projectRoot: string;
   targets: CDPTarget[];

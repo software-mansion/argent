@@ -1,6 +1,6 @@
 import type { ChildProcess } from "child_process";
 
-export interface ShutdownTimings {
+interface ShutdownTimings {
   /** SIGINT → exit window. */
   graceMs: number;
   /** SIGTERM → exit window if SIGINT was ignored. */
@@ -9,7 +9,7 @@ export interface ShutdownTimings {
   killMs: number;
 }
 
-export interface ShutdownResult {
+interface ShutdownResult {
   /** True if SIGINT alone was enough to bring the child down. */
   clean: boolean;
   /** The signal that ultimately produced the exit (or was last attempted). */

@@ -25,7 +25,7 @@ import type { UiHangStateBreakdownEntry } from "./types";
  * Android's cpu-hotspots.sql now carries this mapping through; iOS does not pass
  * one (the arg defaults undefined), so iOS classification is unchanged.
  */
-export type NativeFrameClass = "app" | "system";
+type NativeFrameClass = "app" | "system";
 
 /**
  * Mapping names that denote the Linux kernel image (not a user-space module).
@@ -105,9 +105,9 @@ export function classifyNativeFrame(
  * sleep (usually I/O). A hang dominated by "S"/"D" is a *wait*, not CPU-bound
  * work — so "move heavy work off the main thread" would be the wrong fix.
  */
-export type HangCpuKind = "executing" | "runnable" | "blocked";
+type HangCpuKind = "executing" | "runnable" | "blocked";
 
-export interface HangBlockingSummary {
+interface HangBlockingSummary {
   dominantState: string;
   kind: HangCpuKind;
 }

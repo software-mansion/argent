@@ -31,17 +31,15 @@ jobs:
         run: npm ci --ignore-scripts
 
       # Knip reads source directly (mapping each package's dist entry back to
-      # src), so no workspace build is required. The first pass reports the
-      # enforced classes on their own, keeping a real failure from landing
-      # underneath the parked backlog.
+      # src), so no workspace build is required. The two passes partition the
+      # issue types between them (see knip.jsonc); both must come back empty.
       - name: Knip
         id: knip
         run: npm run knip
 
-      # A ceiling breach announces nothing — knip just exits 1 under parked
-      # findings that name files and symbols exactly like a real one. Section
-      # headers are the only thing that tells the two apart.
+      # The report names the file and symbol but not what to do about it, and
+      # the answer differs per section.
       - name: Explain the failure
         if: failure() && steps.knip.outcome == 'failure'
         run: |
-          echo "::error::Dead Code failed. If the only sections above are the parked ones — unused exports, unused exported types, unused exported class members, or either of their in-used-namespace variants — the second pass exceeded the --max-issues ceiling in package.json, and knip exits on that silently; knip.jsonc explains the ceiling and why it must be counted against a tree with no build output. Any other section is a first-pass finding, and names what to change."
+          echo "::error::Dead Code failed. There is no allowance to fall back on — the gate runs at --max-issues 0, so every section above is a real finding introduced by this change. For an unused export or type, drop the export keyword when the symbol is still used inside its own file, or delete it outright when it is not; for anything else, the section header names the class. Reproduce it locally with npm run knip against a tree with no build output, which is how CI runs it — knip.jsonc explains why that matters."

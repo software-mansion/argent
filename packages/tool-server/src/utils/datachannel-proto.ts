@@ -13,14 +13,7 @@
  * server.
  */
 
-export {
-  encodeButton,
-  encodeKey,
-  encodeRotate,
-  encodeScreenshot,
-  encodeTouch,
-  encodeWheel,
-} from "@swmansion/argent-cloud-sdk";
+export { encodeButton, encodeKey, encodeRotate, encodeTouch } from "@swmansion/argent-cloud-sdk";
 
 export type {
   ButtonName,

@@ -3,7 +3,7 @@ import type { CDPClient } from "../utils/debugger/cdp-client";
 import { connectCdp, primePageSession } from "./cdp-session";
 import { ClipboardSyncState, setClipboardText } from "./clipboard";
 import { FpsTracker } from "./fps";
-import { sendButton, sendKey, sendRotate, sendTouch, sendWheel, sendCharInsert } from "./input";
+import { sendButton, sendKey, sendRotate, sendTouch, sendWheel } from "./input";
 import { goBack, goForward, navigate, reload } from "./navigation";
 import { ScreencastManager } from "./screencast";
 import { captureScreenshot, copyScreenshotToClipboard } from "./screenshot";
@@ -43,9 +43,7 @@ export type {
   ViewportSize,
 } from "./types";
 
-export { sendCharInsert } from "./input";
-
-export interface CreateChromiumServerOpts {
+interface CreateChromiumServerOpts {
   /** Argent device id, used for screenshot filename prefix + diagnostics. */
   deviceId: string;
   /** CDP port the Chromium process exposed via --remote-debugging-port. */
@@ -186,7 +184,7 @@ export async function createChromiumServer(
 export { ensureCdpReachable, discoverPrimaryPage } from "./cdp-session";
 export type { TabInfo, TabsManager } from "./tabs";
 export type { NetworkManager, NetworkRequestRecord } from "./network";
-export type { Cookie, SetCookieParams, DeleteCookieParams, StorageType } from "./storage";
+export type { Cookie } from "./storage";
 
 // Re-exported so the http-api / blueprint can call them directly without
 // pulling them out of a ChromiumServer instance.
@@ -194,4 +192,3 @@ export { setClipboardText } from "./clipboard";
 
 // Internal re-export so tests can stub these without going through the full factory.
 export type { CDPClient };
-export { sendCharInsert as __sendCharInsert };

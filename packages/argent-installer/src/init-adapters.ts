@@ -9,7 +9,7 @@ import {
 import type { InstallMode } from "./install-record.js";
 import { InitCancelled } from "./init-args.js";
 
-export interface AdapterSelection {
+interface AdapterSelection {
   selected: McpConfigAdapter[];
   detected: McpConfigAdapter[];
 }

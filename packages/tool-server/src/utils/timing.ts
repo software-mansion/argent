@@ -20,7 +20,7 @@ export function sleepOrAbort(ms: number, signal?: AbortSignal): Promise<boolean>
   });
 }
 
-export type Settled<T> =
+type Settled<T> =
   | { type: "value"; value: T }
   // `error` is `cause.message`; `cause` keeps the rejection's own Error instance
   // for a caller that rethrows it rather than just quoting it.

@@ -8,7 +8,7 @@
 // the deprecated keyCode API (e.g. React Native Web's Pressable) need all
 // three set or they will see `keyCode === 0` and silently drop the event.
 
-export interface ChromiumNamedKey {
+interface ChromiumNamedKey {
   key: string;
   code: string;
   windowsVirtualKeyCode: number;

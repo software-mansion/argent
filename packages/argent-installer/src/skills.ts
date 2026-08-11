@@ -14,9 +14,9 @@ import {
   SKILLS_DIR,
 } from "./utils.js";
 
-export type SkillScope = "project" | "global";
+type SkillScope = "project" | "global";
 
-export interface SkillScopeResult {
+interface SkillScopeResult {
   scope: SkillScope;
   /** Number of bundled skills that were re-synced into this scope. */
   synced: number;
@@ -28,7 +28,7 @@ export interface SkillScopeResult {
   pruneError: string | null;
 }
 
-export interface SkillRefreshTelemetrySummary {
+interface SkillRefreshTelemetrySummary {
   scope_count: number;
   synced_count: number;
   pruned_count: number;
@@ -164,7 +164,7 @@ export function formatSkillRefreshSummary(results: readonly SkillScopeResult[]):
   return lines.length > 0 ? lines.join("\n") : null;
 }
 
-export function summarizeSkillRefreshForTelemetry(
+function summarizeSkillRefreshForTelemetry(
   results: readonly SkillScopeResult[]
 ): SkillRefreshTelemetrySummary {
   return {
@@ -181,7 +181,7 @@ export function summarizeSkillRefreshForTelemetry(
 // and the INSTALL_SKILLS_REFRESH_FAILED signal for both post-bump re-sync
 // flows — init-triggered update and `argent update` — which differ only in
 // the failure_stage naming the flow.
-export type SkillRefreshStage = "installer_skills_refresh" | "installer_update_skills_refresh";
+type SkillRefreshStage = "installer_skills_refresh" | "installer_update_skills_refresh";
 
 export function reportSkillRefresh(projectRoot: string, stage: SkillRefreshStage): void {
   const results = refreshArgentSkills(projectRoot);

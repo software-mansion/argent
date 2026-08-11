@@ -88,7 +88,7 @@ function ensureLensAppBundle(electronBin: string): string | null {
  * tool-server's port is already ephemeral in production
  * (`argent-tools-client/src/launcher.ts` uses `findFreePort`).
  */
-export interface PreviewWindowManager {
+interface PreviewWindowManager {
   /** Spawn the window if not running; foreground + (re)load otherwise. */
   ensureOpen(url: string): void;
   /** Ask the window to play the close animation and exit. */
@@ -97,7 +97,7 @@ export interface PreviewWindowManager {
   dispose(): void;
 }
 
-export interface PreviewWindowManagerOptions {
+interface PreviewWindowManagerOptions {
   /** Override for tests / unusual installs (default: `require("electron")`). */
   electronBinaryPath?: string;
   /** Override for tests (default: `@argent/preview-window/dist/main.js`). */

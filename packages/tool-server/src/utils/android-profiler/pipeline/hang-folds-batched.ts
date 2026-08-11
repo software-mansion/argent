@@ -9,7 +9,7 @@ import type { AndroidHangStateRow, AndroidHangGcRow } from "../types";
  * Per-hang annotation data, keyed by the caller-assigned hang index. Hangs with
  * no thread_state rows get an empty `state`; no GC overlap → empty `gc`.
  */
-export interface HangFoldsBatched {
+interface HangFoldsBatched {
   state: Map<number, AndroidHangStateRow[]>;
   gc: Map<number, AndroidHangGcRow[]>;
 }
@@ -23,7 +23,7 @@ export interface HangWindowInput {
   endNs: number;
 }
 
-export interface RunBatchedHangFoldsOptions {
+interface RunBatchedHangFoldsOptions {
   tracePath: string;
   /** Sanitised process / package name. Caller validates the alphabet. */
   target: string;

@@ -16,7 +16,7 @@ import type { HermesCpuProfile, HermesProfileNode } from "../types/input";
 import type { CpuCommitHotspot } from "../types/output";
 
 /** Prefix used to name profiler-injected hook functions in the Hermes runtime. */
-export const ARGENT_PROFILER_PREFIX = "__argent_";
+const ARGENT_PROFILER_PREFIX = "__argent_";
 
 /** Returns true if `name` is an argent-injected profiler function. */
 export function isArgentProfilerFunction(name: string): boolean {

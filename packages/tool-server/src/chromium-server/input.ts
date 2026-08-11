@@ -2,8 +2,6 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { CDPClient } from "../utils/debugger/cdp-client";
 import type { ButtonType, KeyDirection, Point, Rotation, TouchType, ViewportSize } from "./types";
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
 function clampPx(value: number, max: number): number {
   if (!Number.isFinite(value)) {
     throw new FailureError(`Chromium input: non-finite coordinate ${value}`, {
@@ -87,16 +85,6 @@ export async function sendKey(
   if (desc.text !== undefined) payload.text = desc.text;
   if (desc.code !== undefined) payload.windowsVirtualKeyCode = desc.code;
   await cdp.send("Input.dispatchKeyEvent", payload);
-}
-
-/**
- * Send a CDP key event AND, when typing a printable character with `Down`,
- * also dispatch a `char` event so the renderer actually receives the
- * codepoint in focused inputs. Sim-server callers expect typing to "just
- * work"; the bare keyDown alone doesn't insert text in modern Chromium.
- */
-export async function sendCharInsert(cdp: CDPClient, text: string): Promise<void> {
-  await cdp.send("Input.dispatchKeyEvent", { type: "char", text });
 }
 
 /**
@@ -229,4 +217,3 @@ export async function sendRotate(
 
 // Re-exported for tests + downstream callers that want to convert without
 // duplicating the math.
-export const __test = { toCssPixels, clampPx, sleep };
