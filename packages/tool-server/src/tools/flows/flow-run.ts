@@ -321,7 +321,7 @@ export const LAUNCH_TO_VERDICT_MS = POST_LAUNCH_SETTLE_MS + NATIVE_READY_TIMEOUT
 
 /**
  * `tool:` steps that can change or relaunch the foreground app — running one
- * invalidates {@link ActionEnv.launchedNativeApp} and spends
+ * invalidates {@link ActionEnv.launchedAppId} and spends
  * {@link ActionEnv.treeOutage}. `button` is included for its `home` case;
  * distinguishing button kinds here would couple this list to that tool's arg
  * schema for little gain.
@@ -618,11 +618,9 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   // it, or a cancelled gate would read as a launch that verified readiness.
   if (signal?.aborted) return ABORTED_OUTCOME;
   if (gate) return { ok: false, reason: gate };
-  // Remember the launched app for the rest of the RUN (nested `run:` flows
-  // share this state, so a nested launch retargets the whole run — see
-  // ActionEnv.launchedNativeApp). iOS tree reads use it to explain a read they
-  // could not take, and to arbitrate a target auto-resolution stalled out on.
-  state.launchedNativeApp = bundleId;
+  // Pins later tree reads; nested `run:` fragments share this state and
+  // inherit it.
+  state.launchedAppId = bundleId;
   return { ok: true };
 }
 
@@ -2443,14 +2441,14 @@ async function execLeafStep(
       }
       try {
         // These sub-tools can change (or relaunch) the foreground app, so the
-        // `launch:`-derived hint no longer names what is on screen, and a
-        // relaunch is the repair a proven tree outage asks for by name - the
-        // same clear `runLaunch` makes for the directive spelling. Cleared
-        // BEFORE invoking: a tool that throws mid-way may still have switched
-        // apps, and a stale hint is worse than no hint (tree reads fall back to
-        // plain auto-resolution, today's behavior).
+        // pin no longer names what is on screen, and a relaunch is the repair a
+        // proven tree outage asks for by name - the same clear `runLaunch`
+        // makes for the directive spelling. Cleared BEFORE invoking: a tool
+        // that throws mid-way may still have switched apps, and a stale pin is
+        // worse than none (tree reads fall back to plain auto-resolution, the
+        // pre-pin behavior).
         if (FOREGROUND_CHANGING_TOOLS.has(step.name)) {
-          state.launchedNativeApp = undefined;
+          state.launchedAppId = undefined;
           if (state.treeOutage) state.treeOutage.proven = undefined;
         }
         // A nested orchestrator runs its tools outside this run's holder -
@@ -2521,15 +2519,15 @@ async function execLeafStep(
             args,
           };
         }
-        // The launch-derived hint the clear above spent, restored for the two
-        // tools whose args name the app they just started: they change WHICH
-        // app is in front, not whether the run has one, so discarding the id
-        // drops the iOS tree source back to auto-targeting's "Launch or restart
-        // the app first" — the very advice the measured diagnosis replaces.
-        // After the invoke, like `runLaunch`: a tool that threw started nothing.
+        // The pin the clear above spent, restored for the two tools whose args
+        // name the app they just started: they change WHICH app is in front,
+        // not whether the run has one, so discarding the id drops the iOS tree
+        // source back to auto-targeting's "Launch or restart the app first" —
+        // the very advice the measured diagnosis replaces. After the invoke,
+        // like `runLaunch`: a tool that threw started nothing.
         if (step.name === "launch-app" || step.name === "restart-app") {
           const launched = (args as { bundleId?: unknown }).bundleId;
-          if (typeof launched === "string") state.launchedNativeApp = launched;
+          if (typeof launched === "string") state.launchedAppId = launched;
         }
         return { ...base, status: "pass", tool: step.name, result, outputHint, args };
       } catch (err) {

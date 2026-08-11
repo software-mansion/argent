@@ -64,21 +64,11 @@ export interface ActionEnv {
   device: DeviceInfo;
   signal?: AbortSignal;
   /**
-   * Bundle id of the last successful native `launch:` in this RUN — nested
-   * `run:` flows share it (ExecState is per-run, so a nested launch updates
-   * the whole run's hint, matching "a nested e2e launch restarts its app").
-   * Undefined until a launch runs, so a fragment brought to its entry state out
-   * of band has none. Cleared by `tool:` steps that can change the foreground
-   * app (launch-app, restart-app, open-url, button, reinstall-app).
-   *
-   * iOS tree reads use it for the two things auto-targeting cannot do, both
-   * following from it resolving only out of the connected list: as an arbiter
-   * when auto-resolution itself times out, and to name the app whose
-   * disconnection needs explaining when that list is empty — see
-   * `queryFullHierarchyTree`. Never to override a resolution that answered, so
-   * foreground-likeness guards keep firing whenever the app answers at all.
+   * App id of the run's most recent successful `launch` step. Pins iOS tree
+   * reads to the app under test instead of auto-resolving (see
+   * `fetchFlowTree`); unset for runs with no launch step.
    */
-  launchedNativeApp?: string;
+  launchedAppId?: string;
   /**
    * Run-scoped memo of a tree source that answered nothing: set by a
    * {@link settleTree} that failed every read attempt, cleared by the next
@@ -462,7 +452,7 @@ function provenTreeOutage(env: ActionEnv): Error | undefined {
  * cleared it.
  */
 function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
-  return fetchFlowTree(env.registry, env.device, env.launchedNativeApp).then((data) => {
+  return fetchFlowTree(env.registry, env.device, env.launchedAppId).then((data) => {
     if (env.treeOutage) env.treeOutage.proven = undefined;
     return data;
   });

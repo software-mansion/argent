@@ -1,4 +1,4 @@
-import { FAILURE_CODES, getFailureSignal, type DeviceInfo, type Registry } from "@argent/registry";
+import type { DeviceInfo, Registry } from "@argent/registry";
 import {
   buildAppStateMessage,
   isInjectableBundleId,
@@ -322,16 +322,15 @@ async function unreadableHierarchyReason(
  * `fetchFlowTree`), so the caller's retry loop either rides out a transient
  * failure or surfaces this message as the step's failure reason.
  *
- * `launchedNativeApp` is the app this run's `launch:` step started, when it had
- * one. It serves the two reads auto-targeting cannot, both following from it
- * resolving only out of the connected list: with that list empty it names the
- * app whose disconnection needs explaining, and when auto-resolution's own probe
- * times out mid-stall it arbitrates the target.
+ * `bundleId` is the app this run's `launch:` step started, when it had one. It
+ * pins the read to that app instead of auto-resolving over every connection,
+ * and with the connected list empty it names the app whose disconnection needs
+ * explaining.
  */
 export async function queryFullHierarchyTree(
   registry: Registry,
   device: DeviceInfo,
-  launchedNativeApp?: string
+  bundleId?: string
 ): Promise<DescribeTreeData> {
   let nativeApi: NativeDevtoolsApi;
   try {
@@ -343,46 +342,25 @@ export async function queryFullHierarchyTree(
       { cause: err }
     );
   }
-  // Auto-targeting draws its candidates from `listConnectedBundleIds`, the same
-  // map `appConnectionState` reads, so an empty list is exactly the set of
-  // states that explain a missing connection — and the error it raises there
+  // The pin does not come from `listConnectedBundleIds`, the map auto-targeting
+  // draws its candidates from, so it survives a disconnection auto-targeting
+  // could not describe: an empty list is exactly the set of states
+  // `appConnectionState` explains, and the error auto-targeting raises there
   // ("Launch or restart the app first") is the restart loop this measurement
-  // exists to break. The flow's launched id does not come from that map, so it
-  // survives the disconnection auto-targeting could not describe.
+  // exists to break.
   //
   // Tested directly rather than by catching the throw: its failure code travels
   // on a module-local symbol, so a duplicate `@argent/registry` instance would
   // read it as absent and silently fall back to the stock message.
-  if (launchedNativeApp !== undefined && nativeApi.listConnectedBundleIds().length === 0) {
-    throw new Error(await unreadableHierarchyReason(nativeApi, launchedNativeApp));
+  if (bundleId !== undefined && nativeApi.listConnectedBundleIds().length === 0) {
+    throw new Error(await unreadableHierarchyReason(nativeApi, bundleId));
   }
-  // resolveNativeTargetApp's remaining errors already carry the actionable next
-  // step, so they propagate unwrapped — with one exception. Auto-resolution's
-  // `Application.getState` probe hops onto the app's MAIN thread; an app whose
-  // main thread is momentarily pinned (heavy cold start: first Hermes parse,
-  // Lottie decode) times that probe out even though it is exactly the app the
-  // flow launched and is about to read. When that happens — and ONLY on the
-  // timeout failure — fall back to the app this run's `launch:` started,
-  // provided its devtools connection is still up. A resolution that ANSWERS
-  // (including the deliberate "single app but backgrounded" error) is always
-  // preferred: the arbiter never overrides a guard that fired, it only rides out
-  // a probe the stall made unanswerable.
-  let target: { bundleId: string };
-  try {
-    target = await resolveNativeTargetApp(nativeApi, undefined);
-  } catch (err) {
-    const timedOut =
-      getFailureSignal(err)?.error_code === FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT;
-    if (
-      timedOut &&
-      launchedNativeApp !== undefined &&
-      nativeApi.listConnectedBundleIds().includes(launchedNativeApp)
-    ) {
-      target = { bundleId: launchedNativeApp };
-    } else {
-      throw err;
-    }
-  }
+  // An explicit bundleId (the launched app) skips the getState fan-out over
+  // every connection - injection is simulator-wide, and one suspended system
+  // process that never answers getState fails every auto-resolved read.
+  // resolveNativeTargetApp's own errors (no connected app / ambiguous frontmost)
+  // already carry the actionable next step, so they propagate unwrapped.
+  const target = await resolveNativeTargetApp(nativeApi, bundleId);
 
   const rawResult = (await nativeApi.queryViewHierarchy(
     target.bundleId,
