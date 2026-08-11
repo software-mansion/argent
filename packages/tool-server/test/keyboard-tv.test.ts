@@ -16,8 +16,11 @@ const registry = {} as Registry;
 
 // `typeTv` was reachable only through `vi.mock` stubs — `keyboard-android.test.ts`
 // replaces the whole module — so nothing exercised the real one. Deleting its
-// `key` rejection outright (plus the now-unused import) typechecked and left the
-// whole suite byte-identical at 296 files / 3088 tests.
+// `key` rejection outright (plus the now-unused import) typechecks and, with
+// this file removed, leaves the rest of the suite byte-identical: same file and
+// test counts, nothing red. Re-run it that way rather than trusting a recorded
+// total — the count moves with every commit, so a stale figure reads as a
+// failed reproduction.
 //
 // That guard is load-bearing beyond its own file: `flow-actions.ts`'s `runType`
 // splits "type, then submit" into two keyboard calls precisely BECAUSE a TV
