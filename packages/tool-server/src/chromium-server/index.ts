@@ -1,5 +1,4 @@
 import { TypedEventEmitter } from "@argent/registry";
-import type { CDPClient } from "../utils/debugger/cdp-client";
 import { connectCdp, primePageSession } from "./cdp-session";
 import { ClipboardSyncState, setClipboardText } from "./clipboard";
 import { FpsTracker } from "./fps";
@@ -189,6 +188,3 @@ export type { Cookie } from "./storage";
 // Re-exported so the http-api / blueprint can call them directly without
 // pulling them out of a ChromiumServer instance.
 export { setClipboardText } from "./clipboard";
-
-// Internal re-export so tests can stub these without going through the full factory.
-export type { CDPClient };
