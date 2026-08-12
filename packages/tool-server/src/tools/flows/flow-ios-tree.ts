@@ -1,12 +1,13 @@
-import { FAILURE_CODES, FailureError } from "@argent/registry";
+import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
 import type { DeviceInfo, Registry } from "@argent/registry";
 import {
   buildAppStateMessage,
   isInjectableBundleId,
   nativeDevtoolsRef,
+  type NativeAppState,
   type NativeDevtoolsApi,
 } from "../../blueprints/native-devtools";
-import { resolveNativeTargetApp } from "../../utils/native-target-app";
+import { chooseFrontmostConnectedApp, resolveNativeTargetApp } from "../../utils/native-target-app";
 import { flattenHoisting, type FlatNode } from "./flow-tree-flatten";
 import {
   type DescribeFrame,
@@ -380,6 +381,36 @@ export async function queryFullHierarchyTree(
           failure_stage: "flow_tree_pinned_target",
           failure_area: "tool_server",
           error_kind: "not_found",
+        }
+      );
+    }
+    // Connected only proves the process is alive. The pin bypasses
+    // auto-resolve's frontmost guard, and a flow can leave the app without
+    // clearing the pin (e.g. a tap that opens another app) - the dylib serves
+    // getFullHierarchy for a backgrounded-but-not-suspended app too, so an
+    // unguarded read would describe a screen that is not on screen. Probe ONLY
+    // the pinned app, never siblings: one suspended sibling's getState is the
+    // fan-out failure the pin exists to avoid. The probe itself hops onto the
+    // app's MAIN thread, which a heavy cold start (first Hermes parse, asset
+    // decode) can pin past the RPC timeout - a probe the stall made
+    // unanswerable is not an answer of "backgrounded", so ride it out and read
+    // the pin. Every probe that DOES answer still decides.
+    let pinnedState: NativeAppState | undefined;
+    try {
+      pinnedState = await nativeApi.getAppState(bundleId);
+    } catch (err) {
+      if (getFailureSignal(err)?.error_code !== FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT) {
+        throw err;
+      }
+    }
+    if (pinnedState && !chooseFrontmostConnectedApp([pinnedState])) {
+      throw new FailureError(
+        `${bundleId} (the launched app) is not foreground-like (applicationState=${pinnedState.applicationState}, foregroundActiveScenes=${pinnedState.foregroundActiveSceneCount}, foregroundInactiveScenes=${pinnedState.foregroundInactiveSceneCount}) - a step in this flow left the app (e.g. a tap that opened another app), so a read of its hierarchy would describe a screen that is not on screen. Launch it again (a flow \`launch\` step) or make the flow return to it before reading the UI.`,
+        {
+          error_code: FAILURE_CODES.NATIVE_TARGET_SINGLE_APP_NOT_FOREGROUND,
+          failure_stage: "flow_tree_pinned_target",
+          failure_area: "tool_server",
+          error_kind: "validation",
         }
       );
     }
