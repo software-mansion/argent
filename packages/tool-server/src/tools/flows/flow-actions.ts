@@ -940,8 +940,8 @@ async function waitForFocus(
 }
 
 interface ScrollResolve {
-  /** The target's frame once it became visible. */
-  frame?: DescribeFrame;
+  /** The target was seen at its most-visible state. */
+  found?: boolean;
   /** Why the scroll stopped without finding the target. */
   reason?: string;
   /** The run was cancelled mid-scroll. */
@@ -1016,7 +1016,7 @@ async function scrollIncrement(
 /**
  * Scroll until `target` is as visible as it can get within the scroll viewport
  * along the scroll axis — fully inside it, or (for a target as tall/wide as the
- * viewport or larger) spanning it — returning its frame. Each round settles the
+ * viewport or larger) spanning it. Each round settles the
  * tree, checks the target, then — if it isn't fully in view — does one
  * momentum-free increment. Stopping only once the target has cleared the entry
  * edge (not on the first sliver) is what keeps a following `tap`/`snapshot`
@@ -1050,9 +1050,9 @@ async function scrollIncrement(
  * previous one moved the target's own entry edge (the fingerprint alone cannot
  * stop the loop when the gesture's own side effects keep the tree churning);
  * and MAX_EDGE_NUDGES caps the retries. Once the
- * axis check has accepted a frame the step can only pass, and only
- * nudge-sized gestures are dispatched — a round that loses the target stops
- * at the accepted frame.
+ * axis check has accepted the target the step can only pass, and only
+ * nudge-sized gestures are dispatched — a round that loses the target ends
+ * the loop as a pass.
  */
 async function scrollToVisible(
   env: ActionEnv,
@@ -1062,10 +1062,11 @@ async function scrollToVisible(
 ): Promise<ScrollResolve> {
   let prevFp: string | undefined;
   let nudges = 0;
-  // The last axis-accepted frame: once set, every exit path returns it rather
-  // than a failure, so a nudge gone sideways (target transiently unresolved,
-  // iterations exhausted) can never fail a step that had its target visible.
-  let accepted: DescribeFrame | undefined;
+  // Latched once the axis check accepts the target: from then on every exit
+  // path reports success rather than a failure, so a nudge gone sideways
+  // (target transiently unresolved, iterations exhausted) can never fail a
+  // step that had its target visible.
+  let accepted = false;
   // The target's entry-edge coordinate at the moment the previous nudge went
   // out - the nudge loop's direct progress signal. The region fingerprint
   // cannot stop the loop when the gesture's own side effects keep the tree
@@ -1089,12 +1090,12 @@ async function scrollToVisible(
     try {
       tree = await settleTree(env);
     } catch (err) {
-      // Post-acceptance (a nudge round) a tree-source outage ends the loop at
-      // the accepted frame - a nudge may delay a step but never fail one whose
-      // target was already visible. A search round keeps propagating: a step
-      // that still needs the tree and cannot read it must fail loudly.
+      // Post-acceptance (a nudge round) a tree-source outage ends the loop as
+      // a pass - a nudge may delay a step but never fail one whose target was
+      // already visible. A search round keeps propagating: a step that still
+      // needs the tree and cannot read it must fail loudly.
       if (!accepted) throw err;
-      return { frame: accepted };
+      return { found: true };
     }
     if (!tree) return { aborted: true }; // settleTree only returns undefined on abort
 
@@ -1105,7 +1106,7 @@ async function scrollToVisible(
     if (!region) {
       // Post-acceptance (a nudge round) a vanished container is best-effort
       // territory, not a failure — the target was already fully visible.
-      if (accepted) return { frame: accepted };
+      if (accepted) return { found: true };
       return { reason: `scroll container ${describeSelector(within!)} is not visible` };
     }
 
@@ -1116,7 +1117,7 @@ async function scrollToVisible(
     // scroll container the target lives in. Set only in nudge rounds.
     let nudgeRegion: DescribeFrame | undefined;
     if (frame && axisFullyInside(frame, direction, region)) {
-      accepted = frame;
+      accepted = true;
       // The clip must be a container that actually scrolls, on BOTH paths:
       // against one that doesn't (the FULL_SCREEN fallback, or a `within`
       // naming a card or a text pane) the deficit is unclosable — a pinned
@@ -1148,7 +1149,7 @@ async function scrollToVisible(
         tvVeto ??= env.device.platform === "ios" && (await isTvOsSimulator(env.device.id));
         if (!tvVeto) nudge = edgeNudgeDistance(frame, direction, clip);
       }
-      if (nudge === 0 || clip === undefined || nudges >= MAX_EDGE_NUDGES) return { frame };
+      if (nudge === 0 || clip === undefined || nudges >= MAX_EDGE_NUDGES) return { found: true };
       // Progress check (see prevEntryEdge): a nudge that didn't move the
       // target will not be repeated - accept the flush landing. Down/right
       // scrolls carry content toward the start (the coordinate decreases);
@@ -1159,17 +1160,17 @@ async function scrollToVisible(
           direction === "down" || direction === "right"
             ? prevEntryEdge - entryEdge
             : entryEdge - prevEntryEdge;
-        if (moved < EDGE_EPS) return { frame };
+        if (moved < EDGE_EPS) return { found: true };
       }
       prevEntryEdge = entryEdge;
       nudgeRegion = clip;
     }
     // Post-acceptance, a round that no longer re-accepts the target (transient
-    // re-render, a snap list paging in response to the nudge) must stop at the
-    // accepted frame: the loop never reverses, so there is no recovery gesture,
-    // and falling through would dispatch a default half-clip increment —
+    // re-render, a snap list paging in response to the nudge) must stop as a
+    // pass: the loop never reverses, so there is no recovery gesture, and
+    // falling through would dispatch a default half-clip increment -
     // uncounted plain-search scrolling past the already-found target.
-    if (accepted && nudge === 0) return { frame: accepted };
+    if (accepted && nudge === 0) return { found: true };
 
     // Fingerprint only the scrolled content: a continuously-animating node
     // outside it (a spinner, a ticking clock) would keep a wider fingerprint
@@ -1195,7 +1196,7 @@ async function scrollToVisible(
     const fp = treeFingerprint(tree, (node) => scope.some((r) => framesOverlap(node.frame, r)));
     if (prevFp !== undefined && fp === prevFp) {
       // End of the scroll — accept the target wherever it landed (best effort).
-      if (frame) return { frame };
+      if (frame) return { found: true };
       return {
         reason: `reached the end of the scroll without finding ${describeSelector(target)}`,
       };
@@ -1215,13 +1216,13 @@ async function scrollToVisible(
         // increment keeps propagating: a step that still needs scrolling and
         // cannot scroll must fail loudly.
         if (env.signal?.aborted) return { aborted: true };
-        return { frame: accepted };
+        return { found: true };
       }
     } else {
       await scrollIncrement(env, direction, anchorRegion);
     }
   }
-  if (accepted) return { frame: accepted }; // iterations ran out mid-nudge
+  if (accepted) return { found: true }; // iterations ran out mid-nudge
   return {
     reason: `${describeSelector(target)} not found after ${MAX_SCROLL_ITERATIONS} scroll attempts`,
   };
@@ -1287,7 +1288,7 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
     case "scroll-to": {
       const r = await scrollToVisible(env, step.target, step.direction, step.within);
       if (r.aborted) return ABORTED_OUTCOME;
-      return { ok: Boolean(r.frame), reason: r.reason };
+      return { ok: r.found === true, reason: r.reason };
     }
     case "pinch":
       return runPinch(env, step);
