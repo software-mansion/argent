@@ -73,6 +73,7 @@ describe("queryFullHierarchyTree surfaces the measured diagnosis", () => {
   function registryWith(connected: string[], overrides: Partial<NativeDevtoolsApi> = {}): Registry {
     const api = {
       listConnectedBundleIds: () => connected,
+      isConnected: (bundleId: string) => connected.includes(bundleId),
       getAppState: async (bundleId: string) => ({
         bundleId,
         applicationState: "active",
