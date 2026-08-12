@@ -94,11 +94,19 @@
     // Nothing about this is specific to class members. Every cross-workspace
     // reference is invisible the same way; the other issue types simply have no
     // finding to raise here. They are exempted at the declaration with a
-    // `@public` JSDoc tag rather than by name here, because
-    // `ignoreMembers` matches a NAME across the whole workspace - it would also
-    // hide a future dead `register`/`list`/`off` on any other class there - and
-    // because nothing emits a configuration hint for `ignoreMembers`, so
-    // `treatConfigHintsAsErrors` could never report the entry as stale.
+    // `@public` JSDoc tag rather than by name here, for one reason: scope.
+    // `ignoreMembers` matches a NAME across the whole workspace, so it would
+    // also hide a future dead `register`/`list`/`off` on any other class in
+    // `packages/registry`. `@public` binds to the one member it is written on.
+    //
+    // What it does NOT buy is a stale check. `treatConfigHintsAsErrors` cannot
+    // report either form: knip emits no hint for an `ignoreMembers` name that
+    // suppresses nothing, and it emits a tag hint only for tags in the exclude
+    // half of the `tags` option, which this repo does not set. Both were
+    // measured — a bogus `ignoreMembers` name and a redundant `@public` each
+    // leave the run at exit 0, while a bogus `ignoreDependencies` name fails it.
+    // So when one of these three stops being earned, nothing says so, and the
+    // JSDoc at each member is the only record a re-audit has.
     //
     // tool-server reaches a few packages in ways knip can't trace statically.
     // `ignoreDependencies` works in both directions, so this one list silences
