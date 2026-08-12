@@ -19,8 +19,18 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
   ),
 }));
 
+// The nudge gate probes the runtime kind of an iOS-shaped UDID (a tvOS sim
+// classifies as plain "ios") via `xcrun simctl list` - stubbed so no test
+// shells out. Default not-tv keeps every existing iOS geometry on its touch
+// nudge path; the tvOS case overrides per-test.
+vi.mock("../../src/utils/ios-devices", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/utils/ios-devices")>()),
+  isTvOsSimulator: vi.fn(async () => false),
+}));
+
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow } from "../../src/tools/flows/flow-utils";
+import { isTvOsSimulator } from "../../src/utils/ios-devices";
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
 const ANDROID_DEVICE = "emulator-5554"; // Android serial shape → touch path, non-iOS
@@ -114,6 +124,7 @@ function asRun(r: FlowRunResult | { notice: string }): FlowRunResult {
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-scroll-"));
+  vi.mocked(isTvOsSimulator).mockReset().mockResolvedValue(false);
 });
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
@@ -2025,5 +2036,40 @@ describe("scroll-to directive", () => {
     expect(result.steps[0].status).toBe("pass");
     expect(swipes).toHaveLength(0);
     expect(scrolls).toHaveLength(0);
+  });
+
+  it("never nudges on a tvOS simulator - touch input is rejected there", async () => {
+    // A tvOS sim's UDID has the same GUID shape as an iOS one, so it
+    // classifies as platform "ios", and this is the exact geometry the first
+    // edge-nudge test dispatches for on a phone sim (flush at 0.87..0.97 in a
+    // full-bleed scroller - that test, running on the default not-tv mock, is
+    // this one's mobile control). But the simulator-server rejects touch for
+    // tvOS: before the nudge existed, an already-visible target was the only
+    // scroll-to shape that could succeed on Apple TV, and it must stay a
+    // zero-gesture pass - the runtime-kind probe vetoes the phase.
+    vi.mocked(isTvOsSimulator).mockResolvedValue(true);
+    currentTree = () =>
+      screen([
+        fullScreenScroller(),
+        n({ label: "Order #1234", frame: { x: 0.1, y: 0.87, width: 0.8, height: 0.1 } }),
+      ]);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes);
+
+    await writeFlow("tvos-no-nudge", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "tvos-no-nudge", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(0);
+    expect(isTvOsSimulator).toHaveBeenCalledWith(DEVICE);
   });
 });

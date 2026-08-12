@@ -22,6 +22,7 @@ import {
 } from "../../utils/ui-tree-match";
 import { settleWithin, sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
+import { isTvOsSimulator } from "../../utils/ios-devices";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
 import {
@@ -1078,6 +1079,9 @@ async function scrollToVisible(
   // nudge minus ~0.01 slop moves >= 0.04), so MAX_EDGE_NUDGES keeps its
   // purpose for genuine partial progress.
   let prevEntryEdge: number | undefined;
+  // Nudge veto for tvOS simulators, resolved lazily at most once per call
+  // (the probe shells out to simctl) - see the gate below.
+  let tvVeto: boolean | undefined;
   for (let i = 0; i < MAX_SCROLL_ITERATIONS; i++) {
     if (env.signal?.aborted) return { aborted: true };
 
@@ -1136,7 +1140,13 @@ async function scrollToVisible(
       const nudgeable =
         (direction === "down" || direction === "right") && env.device.platform !== "chromium";
       if (clip !== undefined && nudgeable) {
-        nudge = edgeNudgeDistance(frame, direction, clip);
+        // tvOS veto: a tvOS sim classifies as plain "ios" by UDID shape while
+        // the simulator-server rejects touch for it - before the nudge
+        // existed, an already-visible target was the only scroll-to shape
+        // that could succeed on Apple TV, and it must stay a zero-gesture
+        // pass. An unknown runtime resolves as not-tv (nudges proceed).
+        tvVeto ??= env.device.platform === "ios" && (await isTvOsSimulator(env.device.id));
+        if (!tvVeto) nudge = edgeNudgeDistance(frame, direction, clip);
       }
       if (nudge === 0 || clip === undefined || nudges >= MAX_EDGE_NUDGES) return { frame };
       // Progress check (see prevEntryEdge): a nudge that didn't move the
