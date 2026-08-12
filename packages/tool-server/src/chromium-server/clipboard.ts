@@ -66,13 +66,14 @@ export async function setClipboardText(cdp: CDPClient, text: string): Promise<vo
  * Sim-server has bidirectional clipboard sync (OS ↔ device). On Chromium the
  * direction that matters is "set the renderer's clipboard from a tool call",
  * which `setClipboardText` covers. A true sync would require the Chromium app
- * to opt in via main-process IPC — outside what CDP can offer. This is a
- * no-op stub that records the desired state so future native-side coordination
- * has a place to hook in.
+ * to opt in via main-process IPC — outside what CDP can offer.
+ *
+ * So this accepts the flag and discards it. It holds no field: nothing can read
+ * the desired state back, and a stored one would only look like state the rest
+ * of the server consults. What the type buys is the seam — `setClipboardSync`
+ * resolves like the other commands, so the WS `clipboardSync` route needs no
+ * not-yet-implemented branch, and a future native bridge lands here.
  */
 export class ClipboardSyncState {
-  private enabled = false;
-  set(enabled: boolean): void {
-    this.enabled = enabled;
-  }
+  set(_enabled: boolean): void {}
 }
