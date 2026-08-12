@@ -2099,6 +2099,54 @@ describe("repeat: cancellation inside the block", () => {
     }
   }, 20000);
 
+  it("closes every enclosing block with its own line when the abort lands in a nested repeat", async () => {
+    // One cancellation, two blocks cut short: the inner repeat closes itself,
+    // the leftover outer-body step skips, then the outer block closes too.
+    // Each line carries its own block's bound, so the two `run aborted`
+    // entries are told apart by target, not just by the depth indent — and
+    // `skipped` carries one per level: a level without its line would read as
+    // an all-pass block whose marker promised iterations that never ran.
+    currentTree = () => screen([notification()]);
+    const controller = abortDuringTap(2);
+    await writeFlow("cancelled-in-nested", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "repeat",
+          spec: { mode: "times", times: 2 },
+          steps: [
+            { kind: "repeat", spec: { mode: "times", times: 3 }, steps: [TAP] },
+            { kind: "wait", ms: 1 },
+          ],
+        },
+      ],
+    });
+
+    const result = await run("cancelled-in-nested", controller.signal);
+
+    expect(tapCount).toBe(2);
+    expect(shape(result.steps)).toEqual([
+      "repeat pass 2 times @0",
+      "repeat pass iteration 1/2 @1",
+      "repeat pass 3 times @1",
+      "repeat pass iteration 1/3 @2",
+      'tap pass "Clear notification" @2',
+      "repeat pass iteration 2/3 @2",
+      'tap pass "Clear notification" @2',
+      "repeat skip 3 times @1",
+      "wait skip run aborted @1",
+      "repeat skip 2 times @0",
+    ]);
+    for (const line of [result.steps.at(-3), result.steps.at(-1)]) {
+      expect(line?.reason).toBe("run aborted");
+      expect(line?.structural).toBeUndefined();
+    }
+    expect(result.aborted).toBe(true);
+    // Two taps ran; the skips are the wait's stand-in plus one cancellation
+    // line per enclosing level.
+    expect(counts(result)).toEqual({ ok: false, passed: 2, failed: 0, skipped: 3, errored: 0 });
+  }, 15000);
+
   it("reports a cancellation caught at the drain's guard probe unchanged", async () => {
     const controller = new AbortController();
     // Abort from inside the tree fetch, so the run is cancelled while the guard

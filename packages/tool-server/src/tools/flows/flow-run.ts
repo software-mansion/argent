@@ -2467,6 +2467,13 @@ async function execRepeatStep(
    * and a flow with several repeat blocks would tell them apart only by the
    * depth indent. The drain's converged / cap / errored lines take no target
    * for the mirror-image reason: their reasons already spell out the condition.
+   *
+   * A cancellation inside nested repeats ends with one of these lines per
+   * enclosing block, innermost first: every level was cut short, and a level
+   * without its line would read as an all-pass block whose marker promised
+   * iterations that never ran — the shape this line exists to prevent. The
+   * lines are told apart by target and depth, and each is its own block's
+   * outcome, so a single cancellation deliberately counts one skip per level.
    */
   const pushAborted = (): void => {
     pushReport(state, {
