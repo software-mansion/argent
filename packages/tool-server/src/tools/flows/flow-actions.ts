@@ -11,6 +11,7 @@ import {
   findAll,
   evaluateCondition,
   firstInReadingOrder,
+  frameArea,
   frameContains,
   isVisible,
   assertText,
@@ -761,6 +762,22 @@ function isScrollContainer(node: DescribeNode): boolean {
 }
 
 /**
+ * Depth-first visit of every visible scroll container in the tree - the one
+ * traversal anchorScrollFrames, targetScrollerFrame and scrollerRegion each
+ * reduce differently.
+ */
+function forEachVisibleScrollContainer(
+  tree: DescribeNode,
+  visit: (node: DescribeNode) => void
+): void {
+  const walk = (node: DescribeNode): void => {
+    if (isScrollContainer(node) && isVisible(node)) visit(node);
+    for (const child of node.children) walk(child);
+  };
+  walk(tree);
+}
+
+/**
  * Frames of every visible scroll container whose frame contains the swipe
  * anchor. The OS routes a scroll gesture to a scroller hit-tested at the
  * anchor, so the container that will actually move is always among these. ALL
@@ -773,17 +790,9 @@ function isScrollContainer(node: DescribeNode): boolean {
  */
 function anchorScrollFrames(tree: DescribeNode, anchor: { x: number; y: number }): DescribeFrame[] {
   const frames: DescribeFrame[] = [];
-  const walk = (node: DescribeNode): void => {
-    if (
-      isScrollContainer(node) &&
-      isVisible(node) &&
-      frameContains(node.frame, anchor.x, anchor.y)
-    ) {
-      frames.push(node.frame);
-    }
-    for (const child of node.children) walk(child);
-  };
-  walk(tree);
+  forEachVisibleScrollContainer(tree, (node) => {
+    if (frameContains(node.frame, anchor.x, anchor.y)) frames.push(node.frame);
+  });
   return frames;
 }
 
@@ -840,11 +849,9 @@ function targetScrollerFrame(
   const slack = (side: ScrollDirection): number =>
     side === direction ? EDGE_AVOID_SCREEN_EPS : EDGE_EPS;
   let best: DescribeFrame | undefined;
-  const walk = (node: DescribeNode): void => {
+  forEachVisibleScrollContainer(tree, (node) => {
     const f = node.frame;
     if (
-      isScrollContainer(node) &&
-      isVisible(node) &&
       f.x <= frame.x + slack("left") &&
       f.y <= frame.y + slack("up") &&
       f.x + f.width >= frame.x + frame.width - slack("right") &&
@@ -855,13 +862,11 @@ function targetScrollerFrame(
         f.width === frame.width &&
         f.height === frame.height
       ) &&
-      (best === undefined || f.width * f.height < best.width * best.height)
+      (best === undefined || frameArea(f) < frameArea(best))
     ) {
       best = f;
     }
-    for (const child of node.children) walk(child);
-  };
-  walk(tree);
+  });
   return best;
 }
 
@@ -881,11 +886,9 @@ function targetScrollerFrame(
  */
 function scrollerRegion(tree: DescribeNode, region: DescribeFrame): DescribeFrame | undefined {
   let found = false;
-  const walk = (node: DescribeNode): void => {
+  forEachVisibleScrollContainer(tree, (node) => {
     const f = node.frame;
     if (
-      isScrollContainer(node) &&
-      isVisible(node) &&
       f.x === region.x &&
       f.y === region.y &&
       f.width === region.width &&
@@ -893,9 +896,7 @@ function scrollerRegion(tree: DescribeNode, region: DescribeFrame): DescribeFram
     ) {
       found = true;
     }
-    for (const child of node.children) walk(child);
-  };
-  walk(tree);
+  });
   return found ? region : undefined;
 }
 

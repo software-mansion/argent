@@ -684,7 +684,7 @@ export function frameContains(frame: DescribeFrame, x: number, y: number): boole
   return x >= frame.x && x <= frame.x + frame.width && y >= frame.y && y <= frame.y + frame.height;
 }
 
-function frameArea(frame: DescribeFrame): number {
+export function frameArea(frame: DescribeFrame): number {
   return frame.width * frame.height;
 }
 
