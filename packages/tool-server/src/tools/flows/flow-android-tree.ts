@@ -100,12 +100,12 @@ function childNodes(node: ParsedXmlNode): ParsedXmlNode[] {
  * Project a uiautomator XML node for the shared flatten (see
  * `flow-tree-flatten`). A view is emitted as a leaf when it carries a
  * `resource-id` (React Native `testID`), a label, or a specific semantic role —
- * or holds input focus, which the type directive's focus wait reads — and has
- * an on-screen frame; system chrome is skipped; an identified node — or a
- * password field — shields its text so hoisting scopes to the nearest
- * identified ancestor. A password field never contributes its secret: its own
- * text is the `[password]` placeholder and its raw `text` is never read into
- * the leaf value.
+ * or holds input focus, which the type directive's focus wait reads, or is
+ * framework-marked scrollable — and has an on-screen frame; system chrome is
+ * skipped; an identified node — or a password field — shields its text so
+ * hoisting scopes to the nearest identified ancestor. A password field never
+ * contributes its secret: its own text is the `[password]` placeholder and its
+ * raw `text` is never read into the leaf value.
  */
 function projectAndroidNode(
   node: ParsedXmlNode,
@@ -130,6 +130,7 @@ function projectAndroidNode(
   // role target, including controls whose role is the class-name fallback
   // (SeekBar, Spinner, ProgressBar, and app-specific widgets).
   const hasSemanticRole = !isUiAutomatorLayoutContainer(className);
+  const isScrollable = attrs.scrollable === "true";
 
   // The node's own visible text mirrors what `nodeText` reads off the leaf
   // (label plus a distinct text value) — never the secret behind a password.
@@ -144,9 +145,14 @@ function projectAndroidNode(
   // Keep any view a selector could address — a resource-id (RN testID), label,
   // or concrete semantic role — plus the focused view, which the type
   // directive's focus wait needs even when it carries neither (an anonymous
-  // EditText). Pure layout scaffolding is dropped — but its children are still
-  // walked, so a testID nested under an unlabelled container survives.
-  if (!skip && (identifier || label || hasSemanticRole || isFocused)) {
+  // EditText), and any scrollable view: the scroll-to nudge resolves a
+  // target's scroll container by geometric containment over emitted leaves,
+  // and an id-less RN ScrollView / Compose LazyColumn (a scrollable bare
+  // ViewGroup / View) would otherwise yield no candidate - the nudge would
+  // silently skip on Android while the same app nudges on iOS. Pure static
+  // layout scaffolding is dropped — but its children are still walked, so a
+  // testID nested under an unlabelled container survives.
+  if (!skip && (identifier || label || hasSemanticRole || isFocused || isScrollable)) {
     frame = rect ? normalizeRect(rect, screenW, screenH) : null;
     if (frame) {
       leaf = { role, frame, children: [] };
@@ -155,7 +161,7 @@ function projectAndroidNode(
       if (hasValue) leaf.value = rawText;
       if (attrs.clickable === "true") leaf.clickable = true;
       if (attrs["long-clickable"] === "true") leaf.longClickable = true;
-      if (attrs.scrollable === "true") leaf.scrollable = true;
+      if (isScrollable) leaf.scrollable = true;
       if (attrs.checkable === "true") leaf.checkable = true;
       if (attrs.checked === "true") leaf.checked = true;
       if (attrs.enabled === "false") leaf.disabled = true;
@@ -187,10 +193,10 @@ function projectAndroidNode(
 /**
  * Flatten a full-hierarchy `uiautomator`-schema XML dump into the
  * flat-leaves-under-one-root shape the other describe adapters emit, keeping
- * only views with a `resource-id`, label, or specific semantic role and an
- * on-screen frame. Layout scaffolding is dropped while its selectable
- * descendants are preserved — the same trade the iOS full-hierarchy adapter
- * makes.
+ * only views with a `resource-id`, label, specific semantic role, focus, or a
+ * scrollable flag, and an on-screen frame. Other layout scaffolding is dropped
+ * while its selectable descendants are preserved — the same trade the iOS
+ * full-hierarchy adapter makes.
  */
 export function adaptFullAndroidHierarchyToDescribeResult(
   xml: string,

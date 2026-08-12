@@ -793,7 +793,8 @@ function anchorScrollFrames(tree: DescribeNode, anchor: { x: number; y: number }
  * floating bar drawn inside the scroller's rect) geometrically passes this
  * gate even though no scroll moves it — the deficit progress check in
  * scrollToVisible bounds that case to a single small gesture. And a scroller
- * the adapters don't emit at all (an id-less pure-layout container) yields no
+ * the adapters don't emit at all (on Chromium, an anonymous overflow scroller
+ * - the touch adapters keep every framework-marked scrollable node) yields no
  * candidate, so the nudge silently skips: the safe direction, since a flush
  * landing is exactly the pre-nudge behavior, while a guessed screen-derived
  * clip risks scrolling (or pressing) an unrelated element.

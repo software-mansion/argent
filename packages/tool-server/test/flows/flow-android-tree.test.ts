@@ -91,6 +91,55 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
     expect(tree.children).toHaveLength(2);
   });
 
+  // The scroll-to nudge resolves a target's scroll container by geometric
+  // containment over emitted leaves. An id-less, label-less RN ScrollView
+  // dumps as a scrollable android.view.ViewGroup (and a Compose LazyColumn as
+  // a scrollable bare android.view.View) - pure layout classes - so without
+  // the scrollable keep the scroller never becomes a leaf, the gate finds no
+  // candidate, and the nudge silently skips on Android while the same app
+  // nudges on iOS.
+  it("keeps an anonymous scrollable container as a leaf", () => {
+    const rnXml = (scrollable: string) => `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.view.ViewGroup"${scrollable} package="com.acme.app" bounds="[0,0][1080,1920]">
+      <node index="0" class="android.widget.TextView" text="Row 1" package="com.acme.app" bounds="[0,100][1080,200]" />
+    </node>
+  </node>
+</hierarchy>`;
+
+    // RN ScrollView shape: kept with the class-fallback role and the
+    // scrollable flag, so the container gate can match it geometrically.
+    const tree = adaptFullAndroidHierarchyToDescribeResult(
+      rnXml(' scrollable="true"'),
+      SCREEN_W,
+      SCREEN_H
+    );
+    const scrollers = findAll(tree, { role: "ViewGroup" });
+    expect(scrollers).toHaveLength(1);
+    expect(scrollers[0]!.scrollable).toBe(true);
+    expect(scrollers[0]!.frame.height).toBeCloseTo(1, 5);
+
+    // The same node without the flag stays pruned scaffolding.
+    const pruned = adaptFullAndroidHierarchyToDescribeResult(rnXml(""), SCREEN_W, SCREEN_H);
+    expect(findAll(pruned, { role: "ViewGroup" })).toHaveLength(0);
+  });
+
+  it("keeps a scrollable bare View (Compose LazyColumn shape) as a leaf", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.view.View" scrollable="true" package="com.acme.app" bounds="[0,0][1080,1920]">
+      <node index="0" class="android.widget.TextView" text="Item 1" package="com.acme.app" bounds="[0,100][1080,200]" />
+    </node>
+  </node>
+</hierarchy>`;
+    const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+    const scrollers = findAll(tree, { role: "View" });
+    expect(scrollers).toHaveLength(1);
+    expect(scrollers[0]!.scrollable).toBe(true);
+  });
+
   it("never leaks a password field's text as its value", () => {
     const tree = adaptFullAndroidHierarchyToDescribeResult(RN_XML, SCREEN_W, SCREEN_H);
     const pw = findAll(tree, { identifier: "password" });

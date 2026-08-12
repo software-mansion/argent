@@ -1462,6 +1462,57 @@ describe("scroll-to directive", () => {
     expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.06, 5);
   });
 
+  it("nudges against an Android scroller kept only for its scrollable flag", async () => {
+    // The Android adapter shape after the scrollable keep-gate fix
+    // (flow-android-tree): an id-less RN ScrollView dumps as a scrollable
+    // android.view.ViewGroup - no identifier, no label, class-fallback role -
+    // and used to be pruned as layout scaffolding, so the container gate found
+    // no candidate and the nudge silently skipped on Android while the same
+    // app nudged on iOS. Kept as a `scrollable: true` leaf it satisfies the
+    // gate via the flag alone ("ViewGroup" fails the role's /scroll/i test):
+    // the row flush at 0.87..0.97 (clearance 0.03, deficit 0.07) gets one
+    // nudge of 0.07 x 1.5 = 0.105 (above the 0.05 floor; headroom 0.87, so
+    // its 0.435 half-cap does not bite), anchored at the scroller's centre.
+    const androidScroller = () =>
+      n({ role: "ViewGroup", scrollable: true, frame: { x: 0, y: 0, width: 1, height: 1 } });
+    const flush = screen([
+      androidScroller(),
+      n({ label: "Order #1234", frame: { x: 0.1, y: 0.87, width: 0.8, height: 0.1 } }),
+    ]);
+    const padded = screen([
+      androidScroller(),
+      n({ label: "Order #1234", frame: { x: 0.1, y: 0.75, width: 0.8, height: 0.1 } }),
+    ]);
+    let nudged = false;
+    currentTree = () => (nudged ? padded : flush);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      nudged = true;
+    });
+
+    await writeFlow("android-anon-scroller", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute(
+        {},
+        { name: "android-anon-scroller", project_root: tmpDir, device: ANDROID_DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(1);
+    // Momentum-free, deficit-sized (0.07 x 1.5), anchored at the scroller centre.
+    expect(swipes[0].settle).toBe(true);
+    expect(swipes[0].fromY).toBeCloseTo(0.5, 5);
+    expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.105, 5);
+  });
+
   it("stops after one nudge when the target does not move, despite tree churn", async () => {
     // The reviewer's three-press repro distilled: the target sits in a
     // scroller flush at the screen bottom and CANNOT move (deficit 0.08 every
