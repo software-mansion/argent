@@ -1090,17 +1090,17 @@ describe("scroll-to directive", () => {
     expect(swipes).toHaveLength(1);
   });
 
-  it("never nudges a pinned target that sits outside every scroll container", async () => {
-    // Reviewer repro 1, in the flat-leaves shape the adapters emit: a list
-    // leaf and, below it, a pinned bottom bar holding the checkout button —
-    // all SIBLINGS. The button is flush at the screen bottom (0.9..0.98 —
-    // the raw screen-edge arithmetic reads a 0.08 deficit) but no scroll can
-    // ever move it: the list's rect (ending at 0.96, inside the near-edge
-    // band, so it WOULD pass the screen-edge gate as a clip) merely overlaps
-    // the button's top sliver — it does not CONTAIN it, and overlap is not
-    // containment. The gate must skip the nudge outright — pass with ZERO
-    // gestures — where the screen-derived clip dispatched a swipe into the
-    // list and scrolled unrelated rows away.
+  it("bounds a nudge at a pinned bottom-bar target to a single gesture", async () => {
+    // The residual the entry-edge slack accepts, in the flat-leaves shape the
+    // adapters emit: a list leaf (ending at 0.96) and, below it, a pinned
+    // bottom bar holding the checkout button - all SIBLINGS. The button
+    // (0.9..0.98) overhangs the list's entry edge by 0.02, and with leaf
+    // frames clamped to the screen that is indistinguishable in the tree from
+    // a row mid-reveal, so the list resolves as the clip and one nudge goes
+    // out (deficit 0.12, travel 0.18, anchored at the list's centre) even
+    // though no scroll can ever move the button. The deficit progress check
+    // is the bound: the button did not budge, so the second round accepts the
+    // flush landing - exactly ONE wasted gesture, never a failure.
     currentTree = () =>
       screen([
         n({ role: "AXScrollArea", frame: { x: 0, y: 0, width: 1, height: 0.96 } }),
@@ -1124,6 +1124,44 @@ describe("scroll-to directive", () => {
     const tool = createRunFlowTool(registry);
     const result = asRun(
       await tool.execute({}, { name: "pinned-bar", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].fromY).toBeCloseTo(0.48, 5);
+    expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.18, 5);
+  });
+
+  it("never nudges a bar sitting mostly below its scroller's entry edge", async () => {
+    // A bar overhanging the entry edge by more than the slack (list 0..0.9,
+    // button 0.86..0.98, overhang 0.08) dispatches nothing. Two independent
+    // guards decline it - containment (overhang > EDGE_AVOID_SCREEN_EPS) and
+    // the screen-edge gate (clip end 0.9 < 0.95) - and the slack's derivation
+    // ties them: a gate-passing clip can never see overhang above 0.045, so
+    // the deep-overhang shape is unreachable for the nudge by construction.
+    currentTree = () =>
+      screen([
+        n({ role: "AXScrollArea", frame: { x: 0, y: 0, width: 1, height: 0.9 } }),
+        n({ label: "Row 1", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 } }),
+        n({
+          identifier: "checkout-button",
+          label: "Checkout",
+          frame: { x: 0.1, y: 0.86, width: 0.8, height: 0.12 },
+        }),
+      ]);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes);
+
+    await writeFlow("deep-overhang-bar", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { identifier: "checkout-button" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "deep-overhang-bar", project_root: tmpDir, device: DEVICE })
     );
 
     expect(result.ok).toBe(true);
@@ -1305,6 +1343,88 @@ describe("scroll-to directive", () => {
     const tool = createRunFlowTool(registry);
     const result = asRun(
       await tool.execute({}, { name: "inset-scroller", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(0);
+  });
+
+  it("nudges a row overhanging its inset scroller's entry edge (screen-clamped frame)", async () => {
+    // The iOS shape the entry-edge slack exists for: a list inset under an
+    // overlaying tab bar (y 0..0.96) with a row mid-reveal at 0.86..0.99.
+    // Leaf frames are clamped to the SCREEN, not the scroller, so the row
+    // overhangs the list's bottom by 0.03 - far past float rounding, within
+    // the 0.05 entry-edge slack. The axis check accepts it against the full
+    // screen (0.99 <= 1 - 0.005), the list passes the screen-edge gate (0.96
+    // >= 0.95), and the nudge fires: deficit 0.1 - (0.96 - 0.99) = 0.13,
+    // headroom 0.86, travel min(0.13 x 1.5, 0.43) = 0.195, anchored at the
+    // list's centre (y 0.48). With symmetric EDGE_EPS slack no candidate
+    // resolved here and the step passed with the row visually half-cut.
+    const insetScroller = () =>
+      n({ role: "AXScrollArea", frame: { x: 0, y: 0, width: 1, height: 0.96 } });
+    const flush = screen([
+      insetScroller(),
+      n({ label: "Order #1234", frame: { x: 0.1, y: 0.86, width: 0.8, height: 0.13 } }),
+    ]);
+    // Post-nudge the row sits at 0.73..0.86: clearance 0.1, deficit 0 - done.
+    const padded = screen([
+      insetScroller(),
+      n({ label: "Order #1234", frame: { x: 0.1, y: 0.73, width: 0.8, height: 0.13 } }),
+    ]);
+    let nudged = false;
+    currentTree = () => (nudged ? padded : flush);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      nudged = true;
+    });
+
+    await writeFlow("inset-overhang", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "inset-overhang", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].settle).toBe(true);
+    expect(swipes[0].fromY).toBeCloseTo(0.48, 5);
+    expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.195, 5);
+  });
+
+  it("keeps the strict EDGE_EPS slack on the non-entry sides", async () => {
+    // Same direction, but the overhang is on the LEFT - not the entry edge.
+    // A scroller inset from the left (x 0.1..1.0) and a chip sticking 0.05
+    // past its left border (x 0.05..0.85, y 0.87..0.97): exactly the amount
+    // the entry edge would admit. Every other condition for a nudge holds -
+    // the scroller's bottom (1.0) is a screen edge, deficit 0.07, headroom
+    // 0.87 - so a symmetric EDGE_AVOID_SCREEN_EPS slack would resolve the
+    // candidate and dispatch a 0.105 swipe. But only the entry edge is
+    // screen-clamp territory; a left overhang means the chip does not live
+    // in this scroller, and no candidate may resolve: zero gestures.
+    currentTree = () =>
+      screen([
+        n({ role: "AXScrollArea", frame: { x: 0.1, y: 0, width: 0.9, height: 1 } }),
+        n({ label: "Wide chip", frame: { x: 0.05, y: 0.87, width: 0.8, height: 0.1 } }),
+      ]);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes);
+
+    await writeFlow("left-overhang", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Wide chip" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "left-overhang", project_root: tmpDir, device: DEVICE })
     );
 
     expect(result.ok).toBe(true);

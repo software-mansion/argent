@@ -781,35 +781,59 @@ function anchorScrollFrames(tree: DescribeNode, anchor: { x: number; y: number }
  * containment over the emitted scroller leaves is the only available "lives
  * inside" test. Every visible scroll container whose frame contains the
  * accepted frame — walked at any depth, so a nested shape works too — is a
- * candidate, with EDGE_EPS slack per edge (adapter clipping and float
- * rounding can leave a flush row a hair outside its scroller's rect), and
- * the smallest-area candidate wins: in a nested pair the inner scroller is
- * the one whose viewport actually clips the target, and reading the outer
- * page scroller instead would mistake an inset sub-list's own border for
- * the screen edge. A node whose frame IS the accepted frame is the target
- * itself (an addressable scroller can be scrolled TO), never its container.
+ * candidate, and the smallest-area candidate wins: in a nested pair the inner
+ * scroller is the one whose viewport actually clips the target, and reading
+ * the outer page scroller instead would mistake an inset sub-list's own
+ * border for the screen edge. A node whose frame IS the accepted frame is the
+ * target itself (an addressable scroller can be scrolled TO), never its
+ * container.
+ *
+ * Containment slack is per side. Leaf frames are clamped to the SCREEN, never
+ * to the scroller: iOS emits laid-out rects (normalizeFrame clamps to [0,1]),
+ * so a row mid-reveal in a scroller inset from the screen edge - a list under
+ * an overlaying tab bar - can overhang the scroller's entry edge by far more
+ * than float rounding. (Android bounds arrive pre-clipped to the scroll
+ * container by uiautomator; a Chromium result is never used, since Chromium
+ * never nudges.) The entry
+ * edge for `direction` - the candidate's bottom for `down`, right for
+ * `right`, top for `up`, left for `left`, mirroring entryEdgeDeficit -
+ * therefore allows EDGE_AVOID_SCREEN_EPS of target overhang. That is a bound,
+ * not a guess: a nudge needs the clip's entry edge within
+ * EDGE_AVOID_SCREEN_EPS of the screen edge, and an accepted shape-1 target's
+ * entry edge sits at most 1 - EDGE_EPS, so no nudgeable case can overhang
+ * further. The other three sides keep the EDGE_EPS float-rounding hair.
  *
  * Two accepted limitations. An overlay pinned OVER a scroller (a FAB, a
  * floating bar drawn inside the scroller's rect) geometrically passes this
- * gate even though no scroll moves it — the deficit progress check in
- * scrollToVisible bounds that case to a single small gesture. And a scroller
- * the adapters don't emit at all (on Chromium, an anonymous overflow scroller
- * - the touch adapters keep every framework-marked scrollable node) yields no
+ * gate even though no scroll moves it - and the entry-edge slack widens that
+ * to an overlay overhanging the entry edge with its start side inside, on
+ * iOS indistinguishable in the tree from a row mid-reveal - the deficit
+ * progress check in scrollToVisible bounds either case to a single small
+ * gesture. And a scroller the adapters don't emit at all (on Chromium, an
+ * anonymous overflow scroller - the touch adapters keep every
+ * framework-marked scrollable node) yields no
  * candidate, so the nudge silently skips: the safe direction, since a flush
  * landing is exactly the pre-nudge behavior, while a guessed screen-derived
  * clip risks scrolling (or pressing) an unrelated element.
  */
-function targetScrollerFrame(tree: DescribeNode, frame: DescribeFrame): DescribeFrame | undefined {
+function targetScrollerFrame(
+  tree: DescribeNode,
+  frame: DescribeFrame,
+  direction: ScrollDirection
+): DescribeFrame | undefined {
+  // Sides named by the direction that reveals from them (see the docstring).
+  const slack = (side: ScrollDirection): number =>
+    side === direction ? EDGE_AVOID_SCREEN_EPS : EDGE_EPS;
   let best: DescribeFrame | undefined;
   const walk = (node: DescribeNode): void => {
     const f = node.frame;
     if (
       isScrollContainer(node) &&
       isVisible(node) &&
-      f.x <= frame.x + EDGE_EPS &&
-      f.y <= frame.y + EDGE_EPS &&
-      f.x + f.width >= frame.x + frame.width - EDGE_EPS &&
-      f.y + f.height >= frame.y + frame.height - EDGE_EPS &&
+      f.x <= frame.x + slack("left") &&
+      f.y <= frame.y + slack("up") &&
+      f.x + f.width >= frame.x + frame.width - slack("right") &&
+      f.y + f.height >= frame.y + frame.height - slack("down") &&
       !(
         f.x === frame.x &&
         f.y === frame.y &&
@@ -1071,7 +1095,9 @@ async function scrollToVisible(
       // names is itself a scroller; otherwise, as for a target inside no
       // scroller at all, there is no nudge and the step passes exactly as if
       // the phase didn't exist.
-      const clip = within ? scrollerRegion(tree, region) : targetScrollerFrame(tree, frame);
+      const clip = within
+        ? scrollerRegion(tree, region)
+        : targetScrollerFrame(tree, frame, direction);
       // Start-edge landings (`up`/`left`) stay flush: at the container's
       // start limit — undetectable in the tree, and exactly where an
       // up-scroll-to typically lands — the continuation drag IS
