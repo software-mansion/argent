@@ -809,10 +809,15 @@ export function isBlockStep(step: FlowStep): step is BlockStep {
  * miss the other. Five sites synthesize a marker — the one that executes the
  * block, plus the four that report one that never ran (hard stop, device-free
  * flow, cancellation, an enclosing block skipped) — and the flag decides both
- * the run's counts and the renderers' step numbering. Stamped by only some of
- * them, the same `repeat:` block takes a step number when it is skipped over and
- * none when it runs, sliding every later step's number between two runs of one
- * flow. `echo` never had that problem: the renderers derive it from `kind`
+ * the run's counts and the renderers' step numbering. Four of them stamp it;
+ * the device-free branch deliberately does not — its line is an `error`, which
+ * a structural stamp would drop from `errored`, handing a green PASS to a run
+ * that could not execute a step (reasoned through at the branch, and
+ * unreachable for a `repeat:` today since stepRequiresDevice answers true for
+ * it). Stamped by some of the skip paths and not others, the same `repeat:`
+ * block takes a step number when it is skipped over and none when it runs,
+ * sliding every later step's number between two runs of one flow. `echo` never
+ * had that problem: the renderers derive it from `kind`
  * alone, so every producer gets it right for free. A wire flag has to be stamped
  * by each producer, and this is the one question they all ask.
  */
