@@ -1090,6 +1090,112 @@ describe("scroll-to directive", () => {
     expect(swipes).toHaveLength(1);
   });
 
+  it("passes on the accepted frame when the nudge's gesture backend throws", async () => {
+    // Reviewer repro: the target is fully visible (accepted at 0.87..0.97,
+    // 0.07 deficit, one nudge) but the gesture backend is down - the swipe
+    // rejects with a service dependency error. Before acceptance returned
+    // without touching the device a defensive scroll-to over an on-screen
+    // target could not fail; the nudge must keep that guarantee, so the throw
+    // ends the loop at the accepted frame instead of failing the step.
+    currentTree = () =>
+      screen([
+        fullScreenScroller(),
+        n({ label: "Order #1234", frame: { x: 0.1, y: 0.87, width: 0.8, height: 0.1 } }),
+      ]);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      throw new Error(
+        "[Tool:gesture-swipe] Service dependency failed: [SimulatorServer:emulator-5554] simulator-server exited with code before becoming ready"
+      );
+    });
+
+    await writeFlow("throwing-nudge", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "throwing-nudge", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    // Exactly the one failed dispatch was attempted (recorded before the throw).
+    expect(swipes).toHaveLength(1);
+  });
+
+  it(
+    "passes on the accepted frame when the tree source dies after the nudge",
+    { timeout: 10_000 },
+    async () => {
+      // The other device interaction a nudge round adds: the next round's
+      // settle read. The nudge dispatches fine, then every tree fetch fails -
+      // settleTree exhausts its window and throws the outage. Post-acceptance
+      // that throw must also end the loop at the accepted frame; a search
+      // round's outage keeps failing the step (settleTree's own contract).
+      let nudged = false;
+      currentTree = () => {
+        if (nudged) throw new Error("native devtools disconnected");
+        return screen([
+          fullScreenScroller(),
+          n({ label: "Order #1234", frame: { x: 0.1, y: 0.87, width: 0.8, height: 0.1 } }),
+        ]);
+      };
+
+      const swipes: SwipeCall[] = [];
+      const registry = mockRegistry(swipes, () => {
+        nudged = true;
+      });
+
+      await writeFlow("outage-after-nudge", {
+        executionPrerequisite: "",
+        steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+      });
+
+      const tool = createRunFlowTool(registry);
+      const result = asRun(
+        await tool.execute({}, { name: "outage-after-nudge", project_root: tmpDir, device: DEVICE })
+      );
+
+      expect(result.ok).toBe(true);
+      expect(result.steps[0].status).toBe("pass");
+      expect(swipes).toHaveLength(1);
+    }
+  );
+
+  it("still fails a search scroll when the gesture backend throws", async () => {
+    // The guard must not over-catch: pre-acceptance the target still needs
+    // scrolling, so a throwing backend means the step genuinely cannot
+    // complete - the throw propagates and the step errors (the pre-existing
+    // behavior, pinned so the nudge guard stays scoped to accepted frames).
+    currentTree = () =>
+      screen([n({ label: "Top", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 } })]);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      throw new Error(
+        "[Tool:gesture-swipe] Service dependency failed: [SimulatorServer:emulator-5554] simulator-server exited with code before becoming ready"
+      );
+    });
+
+    await writeFlow("throwing-search", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "throwing-search", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0].status).toBe("error");
+    expect(result.steps[0].reason).toContain("simulator-server");
+    expect(swipes).toHaveLength(1);
+  });
+
   it("bounds a nudge at a pinned bottom-bar target to a single gesture", async () => {
     // The residual the entry-edge slack accepts, in the flat-leaves shape the
     // adapters emit: a list leaf (ending at 0.96) and, below it, a pinned

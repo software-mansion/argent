@@ -349,9 +349,10 @@ function axisFullyInside(
 // it engages only when that container's entry edge effectively is a screen
 // edge (an inset container already clears screen chrome), and gives up —
 // accepting the flush landing — when no scrolling clip resolves, the previous
-// nudge failed to move the target, the target has no headroom, or the
-// attempts run out. A nudge can therefore delay a step but never fail one
-// that was already visible.
+// nudge failed to move the target, the target has no headroom, the
+// attempts run out, or a post-acceptance device interaction (the nudge
+// gesture or the next round's settle read) throws. A nudge can therefore
+// delay a step but never fail one that was already visible.
 //
 // Touch platforms only, and only END-edge (`down`/`right`) landings.
 // Chromium is out entirely: no OS chrome overlays a browser viewport, so
@@ -1080,7 +1081,17 @@ async function scrollToVisible(
   for (let i = 0; i < MAX_SCROLL_ITERATIONS; i++) {
     if (env.signal?.aborted) return { aborted: true };
 
-    const tree = await settleTree(env);
+    let tree: DescribeNode | undefined;
+    try {
+      tree = await settleTree(env);
+    } catch (err) {
+      // Post-acceptance (a nudge round) a tree-source outage ends the loop at
+      // the accepted frame - a nudge may delay a step but never fail one whose
+      // target was already visible. A search round keeps propagating: a step
+      // that still needs the tree and cannot read it must fail loudly.
+      if (!accepted) throw err;
+      return { frame: accepted };
+    }
     if (!tree) return { aborted: true }; // settleTree only returns undefined on abort
 
     // Anchor the gesture inside the container (so the right nested scroller
@@ -1184,8 +1195,21 @@ async function scrollToVisible(
     // A nudge anchors in the container that owns the target (latching the
     // gesture to the scroller that can actually move it); a search increment
     // keeps the plain region anchor.
-    if (nudge > 0) nudges++;
-    await scrollIncrement(env, direction, anchorRegion, nudge > 0 ? nudge : undefined);
+    if (nudge > 0) {
+      nudges++;
+      try {
+        await scrollIncrement(env, direction, anchorRegion, nudge);
+      } catch {
+        // A throwing gesture backend must not fail a step whose target was
+        // already visible - a nudge may delay a step, never fail it. A search
+        // increment keeps propagating: a step that still needs scrolling and
+        // cannot scroll must fail loudly.
+        if (env.signal?.aborted) return { aborted: true };
+        return { frame: accepted };
+      }
+    } else {
+      await scrollIncrement(env, direction, anchorRegion);
+    }
   }
   if (accepted) return { frame: accepted }; // iterations ran out mid-nudge
   return {
