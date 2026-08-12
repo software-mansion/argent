@@ -366,12 +366,12 @@ describe("repeat: parse/serialize", () => {
     ).toThrow(/repeat\.until takes no \{\{secret/i);
   });
 
-  it("points every until error at the repeat step the author wrote", () => {
+  it("points every until error at the repeat bound the author wrote", () => {
     // The guard is not a step: an error echoing it alone would show a
-    // `{"until":…}` entry that appears nowhere in the file, unlike every other
-    // repeat error. Each message names `repeat.until` for the same reason — the
-    // entry shown carries both `repeat:` and `steps:`, so a bare `until` would
-    // leave the author to work out which key is being complained about.
+    // `{"until":…}` entry that appears nowhere in the file, so the echo is the
+    // `{ repeat: … }` wrap — a key the author wrote, and bounded by the bound
+    // rather than the step's body (the truncation test below). Each message
+    // names `repeat.until` to point inside that wrap.
     for (const guard of [
       "{ platform: ios }",
       "{}",
@@ -391,8 +391,29 @@ describe("repeat: parse/serialize", () => {
       expect(
         () => parseFlow(`steps:\n  - repeat: { until: ${guard} }\n    steps: [{ tap: A }]\n`),
         guard
-      ).toThrow(/repeat\.until\b.*: \{"repeat":\{"until":.*"steps":\[\{"tap":"A"\}\]\}$/s);
+      ).toThrow(/repeat\.until\b.*: \{"repeat":\{"until":\{.*\}\}\}$/s);
     }
+  });
+
+  it("echoes the bound untruncated when a long steps-first body precedes it", () => {
+    // YAML mapping keys are unordered: with `steps:` written first, an echo of
+    // the whole step would hit the 200-char render cap before reaching
+    // `repeat`, truncating away the very part the message names. The
+    // `{ repeat: … }` wrap is bounded by the bound, so the `$`-anchored full
+    // echo below cannot be pushed off by the body at either error site.
+    const longBody = [
+      '      - tap: { text: "Load more results from the server and then some more" }',
+      '      - await: { visible: "Results loaded successfully after a long wait" }',
+      '      - tap: { text: "Dismiss the notification banner at the top of screen" }',
+    ].join("\n");
+    expect(() =>
+      parseFlow(`steps:\n  - steps:\n${longBody}\n    repeat: { until: { visible: A, zzz: 1 } }\n`)
+    ).toThrow(
+      /repeat\.until has unknown key `zzz`.*: \{"repeat":\{"until":\{"visible":"A","zzz":1\}\}\}$/s
+    );
+    expect(() => parseFlow(`steps:\n  - steps:\n${longBody}\n    repeat: 0\n`)).toThrow(
+      /repeat\.times must be a literal integer between 1 and 100.*: \{"repeat":0\}$/s
+    );
   });
 
   it("names repeat.until at every until-reachable error site in the guard parser", () => {

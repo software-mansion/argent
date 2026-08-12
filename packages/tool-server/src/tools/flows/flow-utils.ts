@@ -2494,9 +2494,9 @@ function parseWhenCondition(
   directive: GuardDirective = "when",
   // The entry the errors echo back. A `when:` step opens with its own key, so
   // wrapping the condition rebuilds a fragment the author can find in the file;
-  // an `until` lives inside a `repeat:` step, so parseRepeatSpec passes that
-  // step instead of letting the default synthesize a `{ until: … }` entry that
-  // appears nowhere.
+  // an `until` lives inside a `repeat:` step, so parseRepeatSpec passes the
+  // same one-key wrap under `repeat:` — bounded by the bound like `when:`'s,
+  // rather than a `{ until: … }` entry that appears nowhere.
   entry: unknown = { [directive]: raw }
 ): WhenCondition {
   const label = directiveLabel(directive);
@@ -2858,9 +2858,8 @@ function parseRepeatSpec(raw: unknown, entry: unknown): RepeatSpec {
     }
     return { mode: "times", times: parseRepeatCount(b.times, entry, "times") };
   }
-  // Pass the step: every other repeat error already echoes it, and an `until`
-  // error that echoed the guard alone would show a `{ until: … }` entry the
-  // author never wrote.
+  // Pass the `{ repeat: … }` entry, not the guard alone: a bare `{ until: … }`
+  // is a fragment the author never wrote.
   const until = parseWhenCondition(b.until, "until", entry);
   // parseWhenCondition rejects `platform` for `until`, so the UI arm is the
   // only one that can reach here — narrow rather than re-test.
@@ -2913,7 +2912,10 @@ function parseRepeatStep(raw: Record<string, unknown>, depth: number): FlowStep 
       "a repeat step takes exactly { repeat: <count | { until, max? }>, steps: [...] }"
     );
   }
-  const spec = parseRepeatSpec(raw.repeat, raw);
+  // Bound errors echo `{ repeat: … }`, not the whole step: keys are unordered,
+  // so a steps-first long body would push the part the message names past the
+  // MAX_ENTRY_RENDER_CHARS truncation.
+  const spec = parseRepeatSpec(raw.repeat, { repeat: raw.repeat });
   const steps = parseBlockSteps(raw, depth, "repeat needs a non-empty steps list to run");
   assertNoSnapshotInRepeat(steps, raw);
   return { kind: "repeat", spec, steps };
