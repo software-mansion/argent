@@ -1100,7 +1100,7 @@ order), \`next: <selector>\` (CSS \`+\` — the nearest such follower, which unl
 non-matching neighbour rather than failing), plus \`any: true\` (CSS \`*\` — legal only WITH a scope and
 never beside text/id/role). Scopes nest to disambiguate — \`within: { id: card, within: { id: list } }\`
 reads "inside card inside list", each container's frame inside the next);
-\`scroll-to\` scrolls (momentum-free) until a target is visible; \`pinch\` zooms
+\`scroll-to\` scrolls (momentum-free) until a target is visible and, on touch devices, nudged clear of the screen edge it entered from - so an already-visible target flush at that edge can still move the viewport; \`pinch\` zooms
 (\`pinch: { on?, scale }\` — scale > 1 in, < 1 out; screen center when \`on\` is omitted); \`rotate\` is the
 two-finger rotation gesture (\`rotate: { on?, by }\` — degrees, + clockwise, within ±3000°; screen center
 when \`on\` is omitted; distinct from the \`rotate\` tool, which changes device orientation); \`await\` waits
