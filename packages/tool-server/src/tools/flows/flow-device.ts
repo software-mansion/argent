@@ -229,8 +229,12 @@ export function stepRequiresDevice(registry: Registry, step: FlowStep): boolean 
     // here makes flowRequiresDevice say yes, so resolveRunDevice resolves a
     // device and throws `No booted device found. Pass a device id or platform
     // explicitly.` ahead of step 1 — naming neither the repeat nor the fact
-    // that the same steps unwrapped would have run device-free. Kept for one
-    // answer per step kind.
+    // that the same steps unwrapped would have run device-free. Second cost,
+    // same mechanism: the blanket "yes" spans the whole flow, so a
+    // `devices`-scoped cleanup tool that resolves opportunistically on its own
+    // (the flowScopesDevice path) throws that same refusal once wrapped in a
+    // block — flowScopesDevice does not recurse into block children, so it
+    // could not see the tool either way. Kept for one answer per step kind.
     case "when":
     case "repeat":
     case "run":
