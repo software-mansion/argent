@@ -97,8 +97,9 @@ function stepIndent(depth: number | undefined): string {
   return "  ".repeat(Math.min(depth, MAX_RENDER_DEPTH));
 }
 
-function printHelp(): void {
-  console.log(`Usage: argent flow <subcommand> [options]
+function printHelp(toStderr = false): void {
+  const print = toStderr ? console.error : console.log;
+  print(`Usage: argent flow <subcommand> [options]
 
 Run a YAML flow without an LLM in the loop. \`run\` takes any of these forms:
 
@@ -148,6 +149,7 @@ Options (run):
                          overwritten
   -r, --recursive        With a directory path, also run flows in subdirectories
   --json                 Print the raw JSON report
+  --json-stream          Print progress and the final report as NDJSON (single flow only)
   --help, -h             Show this help
   --                     End of options — only needed for a flow whose name
                          starts with "-" (\`argent flow run -- -nightly\`)
@@ -174,11 +176,13 @@ export function parseRunArgs(argv: string[]): {
   updateBaselines: boolean;
   recursive: boolean;
   json: boolean;
+  jsonStream: boolean;
 } {
   const out = {
     updateBaselines: false,
     recursive: false,
     json: false,
+    jsonStream: false,
   } as ReturnType<typeof parseRunArgs>;
   // Positionals are collected through one helper so the end-of-options marker
   // below cannot drift from the ordinary path in what it accepts.
@@ -247,6 +251,9 @@ export function parseRunArgs(argv: string[]): {
     } else if (flag === "--json") {
       noValue("--json");
       out.json = true;
+    } else if (flag === "--json-stream") {
+      noValue("--json-stream");
+      out.jsonStream = true;
     } else if (flag === "--recursive" || flag === "-r") {
       // Bare `-r` never carries an inline value (the `=` split applies to
       // `--` tokens only), so noValue guards just the long form.
@@ -259,6 +266,9 @@ export function parseRunArgs(argv: string[]): {
     // not silently fall back to device auto-detection. --help/-h never reach
     // this parser: flow() intercepts them before calling parseRunArgs.
     else throw new FlagParseException(`unknown flag ${tok}`);
+  }
+  if (out.json && out.jsonStream) {
+    throw new FlagParseException("--json and --json-stream cannot be combined");
   }
   return out;
 }
@@ -1059,6 +1069,22 @@ function buildRunPayload(
   return payload;
 }
 
+/** Write one machine-readable flow record. Each record occupies exactly one line. */
+function writeJsonStreamRecord(record: Record<string, unknown>): void {
+  console.log(JSON.stringify(record));
+}
+
+/** Mirror a tool invocation failure without putting human text on stdout. */
+function writeJsonStreamError(err: unknown): void {
+  const message = err instanceof Error ? err.message : String(err);
+  writeJsonStreamRecord({
+    event: "error",
+    error: message,
+    ...(err instanceof ToolInvocationError && err.errorCode ? { error_code: err.errorCode } : {}),
+    ...(err instanceof ToolInvocationError && err.errorKind ? { error_kind: err.errorKind } : {}),
+  });
+}
+
 /**
  * Durable diff output: copy failed-snapshot images out of the tool-server's
  * cache before any renderer prints paths, so every output mode shows the
@@ -1221,7 +1247,13 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
   // value-taking flag (`--device --help` would otherwise throw "requires a
   // value" instead of printing help).
   if (rest.includes("--help") || rest.includes("-h")) {
-    printHelp();
+    // Once streaming is requested stdout belongs exclusively to NDJSON. Help
+    // is still useful, but it is a diagnostic and therefore belongs on stderr.
+    printHelp(
+      rest.some(
+        (tok) => tok === "--json-stream" || tok.startsWith("--json-stream=")
+      )
+    );
     return;
   }
 
@@ -1231,7 +1263,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
   } catch (err) {
     if (err instanceof FlagParseException) {
       console.error(`Error: ${err.message}\n`);
-      printHelp();
+      printHelp(rest.some((tok) => tok === "--json-stream" || tok.startsWith("--json-stream=")));
       return exitAfterFlush(2);
     }
     throw err;
@@ -1240,7 +1272,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     console.error(
       "argent flow run <flow|flow.yaml|dir> requires a flow name, a YAML file path, or a directory path."
     );
-    printHelp();
+    printHelp(args.jsonStream);
     return exitAfterFlush(2);
   }
 
@@ -1307,6 +1339,10 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     }
   }
   if (isDirectory) {
+    if (args.jsonStream) {
+      console.error("--json-stream supports a single flow; directory runs are not supported.");
+      return exitAfterFlush(2);
+    }
     return runFlowDirectory(resolvedPath, args, projectRoot, options);
   }
   if (args.recursive) {
@@ -1479,6 +1515,10 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
   let liveIndex = 0;
   const onStepReport = (event: unknown): void => {
     const s = event as StepReport;
+    if (args.jsonStream) {
+      writeJsonStreamRecord({ event: "progress", data: s });
+      return;
+    }
     if (liveSteps === 0) console.log(`Flow "${flowName}"`);
     liveSteps++;
     if (s.kind === "echo") {
@@ -1506,23 +1546,34 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     // --output copies are fetched, below.
     report = resp.data as FlowReport;
   } catch (err) {
+    if (args.jsonStream) writeJsonStreamError(err);
     console.error(err instanceof Error ? err.message : String(err));
     return exitAfterFlush(1);
   }
 
-  if (!report || !("steps" in report)) {
-    console.error(`"${flowName}" did not produce a run report.`);
+  if (!report || typeof report !== "object" || !("steps" in report)) {
+    const message = `"${flowName}" did not produce a run report.`;
+    if (args.jsonStream) writeJsonStreamError(new Error(message));
+    console.error(message);
     return exitAfterFlush(2);
   }
 
-  await exportAndResolveArtifacts(
-    report,
-    args.output ? path.resolve(args.output) : undefined,
-    flowPath,
-    baseUrl
-  );
+  try {
+    await exportAndResolveArtifacts(
+      report,
+      args.output ? path.resolve(args.output) : undefined,
+      flowPath,
+      baseUrl
+    );
+  } catch (err) {
+    if (args.jsonStream) writeJsonStreamError(err);
+    console.error(err instanceof Error ? err.message : String(err));
+    return exitAfterFlush(1);
+  }
 
-  if (args.json) {
+  if (args.jsonStream) {
+    writeJsonStreamRecord({ event: "result", data: report });
+  } else if (args.json) {
     console.log(JSON.stringify(report, null, 2));
   } else if (liveSteps > 0) {
     // Steps already printed live — emit only what the final report knows:
