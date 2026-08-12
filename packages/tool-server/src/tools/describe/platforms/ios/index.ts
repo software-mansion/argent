@@ -41,18 +41,19 @@ const TVOS_HINT =
   "(up/down/left/right/select/back/menu/home) to move focus, and `keyboard` to type. " +
   "See the argent-tv-interact skill.";
 
-// Apple system apps (`com.apple.*`) cannot be relied on to load argent's dylib,
-// so the native-devtools fallback can't read their view hierarchy and restarting
-// them would never help — returning `should_restart` here puts the agent in an
-// unbounded restart-app → describe loop. This hint is reached only once
-// `describe`'s own ax-service path has already returned empty, so it leads with
-// `screenshot` (re-recommending `describe` would be circular) and shares the
-// `native-*` dead-end warning verbatim with the precheck throw and
-// `native-devtools-status`.
+// Apple system apps (`com.apple.*`) are not targets argent's native devtools
+// support: they are never the app under test, and reads against system
+// processes hang or describe offscreen UI - so the native-devtools fallback is
+// refused for them and restarting would not help; returning `should_restart`
+// here would put the agent in an unbounded restart-app → describe loop. This
+// hint is reached only once `describe`'s own ax-service path has already
+// returned empty, so it leads with `screenshot` (re-recommending `describe`
+// would be circular) and shares the `native-*` dead-end warning verbatim with
+// the precheck throw and `native-devtools-status`.
 const NON_INJECTABLE_HINT =
-  "This is an Apple system app (com.apple.*), which cannot be relied on to load argent's native-devtools " +
-  "instrumentation — the native view hierarchy is unavailable and restarting the app will NOT " +
-  "help. Take a `screenshot` to see the screen and interact by coordinate. " +
+  "This is an Apple system app (com.apple.*) - not a target argent's native-devtools " +
+  "instrumentation supports: the native view hierarchy is unavailable and restarting the app " +
+  "will NOT help. Take a `screenshot` to see the screen and interact by coordinate. " +
   NON_INJECTABLE_NATIVE_WARNING;
 
 function emptyTree(): DescribeNode {
@@ -118,24 +119,30 @@ export async function describeIos(
     return { tree, source: "ax-service", hint };
   }
 
-  // The launchd env carrying the bootstrap dylib is simulator-wide, so a system
+  // A system app is not a supported native-devtools target: pointing the
+  // fallback at one either hangs on a background-launched process or, when its
+  // process is not connected, makes `requiresAppRestart` report true and
+  // `should_restart` loop forever. Measuring the state instead does not help:
+  // the launchd env carrying the bootstrap dylib is simulator-wide, so a system
   // app's process inherits the very tokens the measurement reads and scores as
-  // injected — landing on `stale_process` (restart-app) or `unregistered`
-  // (restart the tool-server) by nothing but its age. Both are wrong for an app
-  // no restart can help, and the first rebuilds the restart-app → describe loop.
-  // Return the (empty) AX result with the terminal screenshot hint instead.
-  // The gate sits BEFORE the native-devtools fallback: injectability is a
-  // static property of the explicit bundle id, so the terminal hint must not
-  // depend on service resolution succeeding (a downed ios-remote tunnel or a
-  // dispose race would otherwise swallow it into the generic catch below), and
-  // no native-devtools service is spawned for an app that may never inject.
-  // Auto-resolution (no bundleId) needs no gate — it only ever yields a
-  // connected, hence injected, app. If the ax-service was degraded (sim not
-  // booted through argent, so `hint` is DEGRADED_HINT), keep that re-boot
-  // guidance: a proper boot may let the ax-service read this system app's tree
-  // (Settings et al. expose a full AX tree), at which point `describe` — not a
-  // screenshot — is the right tool. On a healthy sim `hint` is undefined and
-  // this falls back to the terminal non-injectable hint.
+  // injected - landing on `stale_process` (restart-app) or `unregistered`
+  // (restart the tool-server) by nothing but its age. Return the (empty) AX result with the
+  // terminal screenshot hint instead of restarting. The gate sits BEFORE the
+  // native-devtools fallback: the refusal is a static property of the explicit
+  // bundle id, so the terminal hint must not depend on service resolution
+  // succeeding (a downed ios-remote tunnel or a dispose race would otherwise
+  // swallow it into the generic catch below), and no native-devtools service
+  // is spawned for an app the gate refuses.
+  // Auto-resolution (no bundleId) stays ungated: it only ever yields a
+  // connected app, so the dylib is provably loaded and the read servable - a
+  // connected system process could still win frontmost election there, and
+  // filtering those connections out is a follow-up. If the ax-service was
+  // degraded (sim not booted through argent, so `hint` is DEGRADED_HINT), keep
+  // that re-boot guidance: a proper boot may let the ax-service read this
+  // system app's tree (Settings et al. expose a full AX tree), at which point
+  // `describe` — not a screenshot — is the right tool. On a healthy sim
+  // `hint` is undefined and this falls back to the terminal non-injectable
+  // hint.
   if (params.bundleId && !isInjectableBundleId(params.bundleId)) {
     return { tree, source: "ax-service", hint: hint ?? NON_INJECTABLE_HINT };
   }

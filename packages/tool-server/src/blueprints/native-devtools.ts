@@ -24,19 +24,25 @@ export type NativeDevtoolsTransport = "unix" | "tcp";
 export const NATIVE_DEVTOOLS_NAMESPACE = "NativeDevtools";
 
 /**
- * Whether the Argent native devtools dylib can ever be injected into an app.
+ * Whether an app is a supported target for Argent's native devtools. Despite the
+ * name this is a policy gate, not a physical one: injection is simulator-wide
+ * (`launchctl setenv DYLD_INSERT_LIBRARIES` in the simulator's launchd), so
+ * processes the simulator spawns afterwards - Apple system apps included - do
+ * load the dylib and do connect (CI spindumps caught MobileCal parked serving
+ * a ViewInspector RPC). "Injectable" here means "should Argent target it";
+ * the name stays because every call site keys off it.
  *
- * Apple system / built-in apps (bundle ids under `com.apple.`) are platform
- * binaries shipped with library validation enabled, so the simulator may refuse
- * to honour `DYLD_INSERT_LIBRARIES` for them — and no amount of relaunching
- * changes which way it goes. It is runtime-dependent: #453 recorded
- * `connected: false` for `com.apple.Preferences` on iOS 26.5, an E2E run
- * `connected: true` (both dylibs mapped) on 18.5. The predicate answers "not
- * injectable" for both, because an app that MIGHT connect is no basis for a
- * retry loop either. Third-party apps the user installs carry
- * no such restriction and inject normally. Treating the `com.apple.` prefix as
- * non-injectable gives the native-* tools a terminal signal instead of an
- * unbounded restart-app → retry loop.
+ * We refuse `com.apple.` bundle ids anyway: a system app is never the app
+ * under test, and the system-app connections observed so far are
+ * background-launched processes (Spotlight workers, first-boot migrations like
+ * MobileCal) that may never service their main queue - reads against them hang
+ * until the RPC timeout or describe UI nobody sees. Whether one connects at all
+ * is runtime-dependent too: #453 recorded `connected: false` for
+ * `com.apple.Preferences` on iOS 26.5, an E2E run `connected: true` (both
+ * dylibs mapped) on 18.5. Whether a deliberately foregrounded system app's read
+ * would succeed is unverified, so the conservative refusal stands until someone
+ * needs that case - and it keeps the terminal signal that spares the native-*
+ * tools an unbounded restart-app → retry loop.
  *
  * The prefix is matched case-insensitively: iOS treats bundle ids
  * case-insensitively for launch and uniqueness, and Apple reserves the
@@ -327,21 +333,22 @@ export async function precheckNativeDevtools(
   udid: string,
   bundleId?: string
 ): Promise<NativeDevtoolsPrecheckBlock | null> {
-  // Terminal case first: an Apple system app, which injection cannot be relied
-  // on for. Injectability is a static property of the bundle id, knowable
-  // without any env state, so this fires before the env plumbing below — a
+  // Terminal case first: an app the native tools refuse to target (Apple
+  // system app). The refusal is a static property of the bundle id, knowable
+  // without any env state, so this fires before the env plumbing below - a
   // given-up sim or a transient ensureEnvReady failure must not mask the
   // terminal signal behind init_failed's "re-boot the simulator" guidance (a
-  // reboot cannot make a system app injectable), and no env-setup work is spent
-  // on an app that may never load the dylib. Throwing (rather than returning a
+  // reboot does not change the verdict), and no env-setup work is spent on an
+  // app the gate refuses anyway. Throwing (rather than returning a
   // restart-required block) makes the native-* feature tools surface a hard
-  // error instead of an unbounded restart→retry loop that can never succeed. The
-  // 2-arg overload (bundleId undefined) must NOT throw: native-devtools-status
-  // reports the state instead, and launch-app / restart-app run it too —
-  // launching or restarting a system app is legitimate, it just may not inject.
+  // error instead of instructing an unbounded restart→retry loop the gate
+  // would keep refusing. The 2-arg overload (bundleId undefined) must NOT
+  // throw: native-devtools-status reports the state instead, and launch-app /
+  // restart-app run it too - launching or restarting a system app is
+  // legitimate, it just isn't a native-devtools target.
   if (bundleId !== undefined && !isInjectableBundleId(bundleId)) {
     throw new FailureError(
-      `${bundleId} is an Apple system app: it is a platform binary with library validation, so Argent native devtools cannot be relied on to inject into it — treat it as unavailable rather than retrying. ` +
+      `${bundleId} is an Apple system app - not a supported target for Argent native devtools: system processes load the dylib only as a side effect of simulator-wide injection, and reads against them hang or describe offscreen UI, so this is terminal - do not restart and retry. ` +
         NON_INJECTABLE_RECOVERY,
       {
         error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE,

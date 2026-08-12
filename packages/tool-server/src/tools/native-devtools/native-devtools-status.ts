@@ -81,10 +81,10 @@ Returns { envSetup, appRunning, connected, requiresRestart, state, message, next
 - state: why devtools are or aren't live, measured from the running process. "connected"; "not_running"; "stale_process" (the process cannot reach this simulator's devtools endpoint — launched either before argent's instrumentation was in place or against an earlier tool-server's listener — so restart-app fixes it); "unregistered" (the process IS injected and pointed at this simulator's devtools endpoint yet the service never registered it, so restarting the app cannot help); "connecting" (the process IS injected but launched moments ago and is still connecting, so waiting is what helps); "indeterminate" (the process could not be inspected). Omitted when injectable is false, which is terminal on its own.
 - message: the remedy for that state, in full. Omitted when connected or non-injectable. Prefer it over inferring one from the booleans — it is the only field that can tell you to stop restarting the app.
 - nextLaunchWillBeInjected: if you launch this bundle now, native devtools env setup is already in place (always false for a non-injectable app)
-- injectable: whether native devtools can be relied on to inject into this app. Apple system apps (bundle ids under com.apple.) are platform binaries with library validation, so the dylib cannot be counted on to load into them — it has been observed both loading and not loading, depending on the simulator runtime.
+- injectable: whether this app is a supported target for Argent native devtools. Apple system apps (bundle ids under com.apple.) are not: they are never the app under test, and reads against system processes hang or describe offscreen UI, so the native tools refuse them.
 
 Call this before using app-scoped native hierarchy tools or native-network-logs.
-If injectable is false: treat this as TERMINAL — injection cannot be relied on for this app, and no relaunch changes which way it goes. Do NOT restart/retry. Use the standard \`describe\` tool (its accessibility path reads the screen without injection) or \`screenshot\` (then interact by coordinate). Do not fall back to the native-devtools feature tools (native-describe-screen, native-find-views, native-full-hierarchy, native-network-logs, native-view-at-point, native-user-interactable-view-at-point) — they run the same injection precheck and fail with the same non-injectable error.
+If injectable is false: this is a TERMINAL state - the app is not a supported native-devtools target. Do NOT restart/retry. Use the standard \`describe\` tool (its accessibility path reads the screen without injection) or \`screenshot\` (then interact by coordinate). Do not fall back to the native-devtools feature tools (native-describe-screen, native-find-views, native-full-hierarchy, native-network-logs, native-view-at-point, native-user-interactable-view-at-point) — they run the same injection precheck and fail with the same non-injectable error.
 If appRunning is false and nextLaunchWillBeInjected is true: use launch-app normally.
 If requiresRestart is true: call restart-app once, then proceed with the native feature. Read state before acting on a second such reading — indeterminate reaches this rule too, and its line below bounds it at that one restart.
 If state is unregistered: do NOT restart the app again — it already launched under the terms a restart would recreate. Restart the tool-server (\`argent server stop && argent server start --detach\`), then retry. If it reads unregistered again after that restart, stop: the process loads argent's dylib but never dials, and no further restart on either side changes it — treat native devtools as unavailable, then use \`describe\` or \`screenshot\` and drive by coordinate.
@@ -102,17 +102,18 @@ Fails if the simulator server is not running for the given UDID.`,
 
     const api = services.nativeDevtools as NativeDevtoolsApi;
 
-    // Terminal case first, mirroring precheckNativeDevtools: non-injectable
-    // apps (Apple system apps) may never load the dylib no matter how many
-    // times they relaunch, and injectability is a static property of the
-    // bundle id — so a broken env must not mask this terminal state behind the
-    // precheck's init_failed block, whose "re-boot the simulator" guidance can
-    // never make a system app injectable. Report a terminal state so agents
-    // stop looping restart-app → retry: no restart is required and the next
-    // launch will not be injected either. appRunning/connected are still
-    // measured and envSetup derived exactly as below, but no env init or
-    // re-verify runs for an app that may never inject — so that reading is
-    // whatever the last attempt left rather than a fresh one.
+    // Terminal case first, mirroring precheckNativeDevtools: Apple system
+    // apps are not supported native-devtools targets, and that refusal is a
+    // static property of the bundle id no relaunch changes - so a broken env
+    // must not mask this terminal state behind the precheck's init_failed
+    // block, whose "re-boot the simulator" guidance does not change the
+    // verdict either. Report a terminal state so agents stop looping
+    // restart-app → retry: requiresRestart and nextLaunchWillBeInjected are
+    // pinned false because no restart or relaunch makes the app a supported
+    // target. appRunning/connected are still measured and envSetup is read
+    // from the cached latch - unlike the injectable path below, there is no
+    // point running the precheck's env init or reverifying the env for an app
+    // the gate refuses anyway.
     if (!isInjectableBundleId(params.bundleId)) {
       // A system app CAN carry the injection on some runtimes (#453 saw one
       // way, an E2E run the other), and a live connection is what settles it
