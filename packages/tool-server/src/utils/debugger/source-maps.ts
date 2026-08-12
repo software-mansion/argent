@@ -1,5 +1,3 @@
-import { SourceMapConsumer } from "source-map-js";
-
 // SSRF guard: an attacker-set //# sourceMappingURL must not turn the
 // tool-server into a fetcher of arbitrary host-network URLs. Metro, the only
 // legitimate caller, emits http://localhost:<port>/<bundle>.map over CDP.
@@ -60,20 +58,25 @@ export async function readCappedJson(
   return JSON.parse(Buffer.concat(chunks).toString("utf-8"));
 }
 
-interface RegisteredMap {
-  scriptUrl: string;
-  scriptId: string;
-  consumer: SourceMapConsumer;
-  sources: string[];
-}
-
+/**
+ * Fetches the source map a `Debugger.scriptParsed` event points at, so that
+ * `waitForPending()` gives callers a defined moment when Metro has served every
+ * map the session asked for — which is all `debugger-status` reports as
+ * `sourceMapReady`.
+ *
+ * Nothing keeps the parsed map. The registry used to index them for
+ * `toGeneratedPosition` / `findMatchingSource`, and both went with the sweep
+ * that removed their last callers, so holding a `SourceMapConsumer` per script
+ * only retained memory nothing could reach. The fetch itself stays, under the
+ * loopback allowlist and the 64 MiB cap above.
+ */
 export class SourceMapsRegistry {
-  private maps: RegisteredMap[] = [];
   private pendingRegistrations: Promise<void>[] = [];
 
   /**
-   * Begin fetching and registering a source map from a Debugger.scriptParsed event.
-   * Returns immediately; `waitForPending()` blocks until all maps are loaded.
+   * Begin fetching the source map a Debugger.scriptParsed event points at.
+   * Takes the whole event shape, though only the URL is read now. Returns
+   * immediately; use `waitForPending()` to block until every fetch has settled.
    */
   registerFromScriptParsed(
     scriptUrl: string,
@@ -96,33 +99,19 @@ export class SourceMapsRegistry {
     sourceMapURL: string
   ): Promise<void> {
     try {
-      let rawData: unknown;
-
       if (sourceMapURL.startsWith("data:")) {
         const base64Part = sourceMapURL.split(",")[1];
         if (!base64Part) return;
-        const decoded = Buffer.from(base64Part, "base64").toString("utf-8");
-        rawData = JSON.parse(decoded);
-      } else {
-        if (!isAllowedSourceMapURL(sourceMapURL)) return;
-        // The redirect target is never re-validated, so without
-        // `redirect: "error"` an allowlisted loopback URL could 302 us onto
-        // an internal host. Metro never redirects .map URLs.
-        const res = await fetch(sourceMapURL, { redirect: "error" });
-        if (!res.ok) return;
-        rawData = await readCappedJson(res);
+        JSON.parse(Buffer.from(base64Part, "base64").toString("utf-8"));
+        return;
       }
-
-      const consumer = new SourceMapConsumer(rawData as any);
-      const consumerSources = (consumer as any).sources;
-      const rawSources = (rawData as any)?.sources;
-      const sources: string[] = Array.isArray(consumerSources)
-        ? Array.from(consumerSources)
-        : Array.isArray(rawSources)
-          ? rawSources.slice()
-          : [];
-
-      this.maps.push({ scriptUrl, scriptId, consumer, sources });
+      if (!isAllowedSourceMapURL(sourceMapURL)) return;
+      // The redirect target is never re-validated, so without
+      // `redirect: "error"` an allowlisted loopback URL could 302 us onto
+      // an internal host. Metro never redirects .map URLs.
+      const res = await fetch(sourceMapURL, { redirect: "error" });
+      if (!res.ok) return;
+      await readCappedJson(res);
     } catch {
       // unusable source map — skip
     }
