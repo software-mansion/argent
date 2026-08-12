@@ -83,11 +83,18 @@
       ],
     },
 
-    // Knip's `classMembers` analysis is syntactic and workspace-local: it finds
-    // member references only inside the workspace that declares the class, so a
-    // member called exclusively from another workspace reads as unused. Three
-    // members in `packages/registry` hit this. They are exempted at the
-    // declaration with a `@public` JSDoc tag rather than by name here, because
+    // Three members in `packages/registry` are reported unused even though
+    // tool-server calls all three. The cause is the unbuilt tree, the same one
+    // the note at the top of this file describes: every workspace resolves
+    // `main`/`types` to a `dist/` that is not there, so `@argent/registry`
+    // resolves to nothing and the edge from tool-server never forms. Build the
+    // tree first and all three findings go away on their own — which is why the
+    // exemption is needed at all, since CI never builds.
+    //
+    // Nothing about this is specific to class members. Every cross-workspace
+    // reference is invisible the same way; the other issue types simply have no
+    // finding to raise here. They are exempted at the declaration with a
+    // `@public` JSDoc tag rather than by name here, because
     // `ignoreMembers` matches a NAME across the whole workspace - it would also
     // hide a future dead `register`/`list`/`off` on any other class there - and
     // because nothing emits a configuration hint for `ignoreMembers`, so
