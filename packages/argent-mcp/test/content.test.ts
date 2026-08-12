@@ -11,6 +11,7 @@ import {
   isScreenshotDiffResult,
   flowRunToMcpContent,
   type FlowExecuteResult,
+  type FlowStepResult,
 } from "../src/content.js";
 import { ARTIFACT_MARKER, type ArtifactHandle } from "@argent/tools-client";
 
@@ -323,6 +324,46 @@ describe("flowRunToMcpContent", () => {
     expect(texts).toContain("[1] ✓ run ios/login.yaml");
     expect(texts).toContain("[2] ✓ run android/login.yaml");
     expect(texts).toContain("[3] ✓ run login");
+  });
+
+  it("numbers a repeat block's marker lines like any raw entry, structural ignored", async () => {
+    // Deliberate divergence from the CLI, which leaves markers unnumbered and
+    // uncounted (see the tool-server's StepReport.structural docstring): this
+    // renderer numbers raw report entries, the treatment `echo` already gets —
+    // so a repeat: 3 over one tap heads (8 steps) and ends at [8] here where
+    // the CLI reports 4 numbered steps. Pinned so the divergence stays chosen.
+    const marker = (index: number, target: string): FlowStepResult =>
+      ({ index, kind: "repeat", status: "pass", target, structural: true }) as FlowStepResult;
+    const tap = (index: number, depth?: number): FlowStepResult => ({
+      index,
+      kind: "tap",
+      status: "pass",
+      target: '"Clear"',
+      ...(depth === undefined ? {} : { depth }),
+    });
+    const input: FlowExecuteResult = {
+      flow: "f",
+      passed: 4,
+      steps: [
+        marker(0, "3 times"),
+        { ...marker(1, "iteration 1/3"), depth: 1 } as FlowStepResult,
+        tap(2, 1),
+        { ...marker(3, "iteration 2/3"), depth: 1 } as FlowStepResult,
+        tap(4, 1),
+        { ...marker(5, "iteration 3/3"), depth: 1 } as FlowStepResult,
+        tap(6, 1),
+        tap(7),
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input);
+    const texts = blocks
+      .filter((b): b is { type: "text"; text: string } => b.type === "text")
+      .map((b) => b.text);
+
+    expect(texts[0]).toBe('Running flow "f" (8 steps)');
+    expect(texts).toContain("[1] ✓ repeat 3 times");
+    expect(texts).toContain("[2] ✓   repeat iteration 1/3");
+    expect(texts).toContain('[8] ✓ tap "Clear"');
   });
 
   it("renders legacy tool error steps (status-less)", async () => {
