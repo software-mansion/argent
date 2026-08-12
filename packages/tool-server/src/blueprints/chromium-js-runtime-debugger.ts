@@ -115,14 +115,6 @@ function makeStubSourceResolver(): SourceResolver {
   };
 }
 
-class StubSourceMapsRegistry extends SourceMapsRegistry {
-  override async waitForPending(): Promise<void> {
-    // No Metro source-map fetch loop on Chromium — page scripts already carry
-    // their own //# sourceMappingURL=data:... or rely on the browser devtools'
-    // own resolution path.
-  }
-}
-
 export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, string> = {
   namespace: CHROMIUM_JS_RUNTIME_DEBUGGER_NAMESPACE,
 
@@ -233,7 +225,13 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
     // re-attempt addBinding themselves and surface their own errors loudly.
     await cdp.addBinding("__argent_callback").catch(() => {});
 
-    const sourceMaps = new StubSourceMapsRegistry();
+    // The base registry IS the stub here. Nothing calls
+    // `registerFromScriptParsed` on a Chromium session — page scripts carry
+    // their own //# sourceMappingURL=data:... or rely on the browser
+    // devtools' own resolution — so it holds no pending registrations and
+    // `waitForPending()` resolves at once, which is what `debugger-status`
+    // reports as `sourceMapReady`.
+    const sourceMaps = new SourceMapsRegistry();
     const sourceResolver = makeStubSourceResolver();
 
     const api: JsRuntimeDebuggerApi = {
