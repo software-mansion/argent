@@ -38,8 +38,10 @@ jobs:
         run: npm run knip
 
       # The report names the file and symbol but not what to do about it, and
-      # the answer differs per section.
+      # the answer differs per section. Give all three remedies: a finding whose
+      # only caller is out of knip's reach reads exactly like a dead one, and
+      # the build, the tests and this gate all stay green on a wrong delete.
       - name: Explain the failure
         if: failure() && steps.knip.outcome == 'failure'
         run: |
-          echo "::error::Dead Code failed. There is no allowance to fall back on — the gate runs at --max-issues 0, so every section above is a real finding introduced by this change. For an unused export or type, drop the export keyword when the symbol is still used inside its own file, or delete it outright when it is not; for anything else, the section header names the class. Reproduce it locally with npm run knip against a tree with no build output, which is how CI runs it — knip.jsonc explains why that matters."
+          echo "::error::Dead Code failed. There is no allowance to fall back on — the gate runs at --max-issues 0, so every section above is a real finding introduced by this change. For an unused export or type, there are three remedies. Drop the export keyword if the symbol is still used inside its own file. Delete it if nothing uses it. Add a /** @public */ tag if the only caller is somewhere knip cannot see — another workspace, because CI analyses an unbuilt tree and cross-workspace edges do not form, or the argent-private submodule, which is in ignoreWorkspaces and is not checked out in this job. Look for that caller before you delete, because nothing here will fail if you get it wrong. For anything else, the section header names the class. Reproduce it locally with npm run knip against a tree with no build output, which is how CI runs it — knip.jsonc explains why that matters."
