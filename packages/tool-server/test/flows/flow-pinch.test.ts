@@ -182,10 +182,7 @@ describe("pinch: execution", () => {
     expect(args).not.toHaveProperty("endCenterY");
   });
 
-  it("defaults to the screen center when no selector is given (no tree read)", async () => {
-    currentTree = () => {
-      throw new Error("must not read the tree for a selector-less pinch");
-    };
+  it("defaults to the screen center when no selector is given", async () => {
     await writeFlow("pinch-center", {
       executionPrerequisite: "",
       steps: [{ kind: "pinch", scale: 0.5 }],

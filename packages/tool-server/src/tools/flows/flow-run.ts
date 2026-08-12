@@ -441,6 +441,13 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   const env = deviceEnv(state);
   const { registry, device, signal } = env;
 
+  // Relaunching is the repair the tree source asks for by name when it refuses
+  // an app that loaded no instrumentation, so a verdict recorded before it is
+  // spent. Cleared up front rather than on success: nothing after this point
+  // leaves the source in the state the memo describes, and a gesture can follow
+  // a launch with no read in between to clear it (see ActionEnv.treeOutage).
+  if (state.treeOutage) state.treeOutage.proven = undefined;
+
   if (device.platform === "chromium") return runChromiumLaunch(state, app);
 
   const bundleId = appIdForPlatform(app, device.platform);
@@ -1106,6 +1113,10 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
         device,
         deviceIsExplicit: Boolean(params.device),
         signal,
+        // One holder for the whole run, including nested `run:` flows, which
+        // share this state. `deviceEnv` spreads the reference, so what one
+        // step's settle learns about the tree source the next one already has.
+        treeOutage: {},
         flowsDir,
         viaUpload,
         baselineKey: baselineKeyFor(canonicalPath, flowName),
