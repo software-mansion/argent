@@ -96,7 +96,7 @@ Commands:
   enable      Enable a feature flag (global by default, --scope project for project)
   disable     Disable a feature flag (global by default, --scope project for project)
   flags       Show current feature-flag state
-  providers   Inspect external device providers (\`providers check\` validates them)
+  providers   Inspect and manage external device providers (list / check / publish / withdraw / prune)
   config      Manage configuration (list / get / set / unset, project & global)
   secrets     List the secrets a {{secret:NAME}} placeholder can type, and their sources
   telemetry   Manage opt-out telemetry (status / enable / disable)

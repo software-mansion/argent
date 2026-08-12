@@ -13,10 +13,10 @@
   },
   "references": [
     { "path": "../configuration-core" },
+    { "path": "../device-providers" },
     { "path": "../registry" },
     { "path": "../telemetry" },
-    { "path": "../argent-tools-client" },
-    { "path": "../tool-server" }
+    { "path": "../argent-tools-client" }
   ],
   "include": ["src/**/*"]
 }

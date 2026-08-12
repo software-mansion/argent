@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/software-mansion/argent/schemas/device-provider-v1.json",
+  "$id": "https://github.com/software-mansion/argent/packages/device-providers/schemas/device-provider-v1.json",
   "title": "Argent external device provider, contract version 1",
-  "description": "A provider descriptor written to `~/.argent/providers/<any-name>.json`, listing the provider's identity and the devices it is currently offering. See `packages/tool-server/src/utils/external-devices.ts` for the implementation these definitions mirror.",
+  "description": "A provider descriptor written to `~/.argent/providers/<any-name>.json`, listing the provider's identity and the devices it is currently offering. See `packages/device-providers/src/contract.ts` for the zod schemas these definitions mirror; `packages/device-providers/test/schema-parity.test.ts` fails the build if the two drift.",
   "$defs": {
     "providerId": {
       "type": "string",
@@ -29,13 +29,13 @@
       "anyOf": [
         {
           "enum": [
-            "simulator-server",
-            "simctl",
             "adb",
             "ax-service",
-            "native-profiler",
             "js-debugger",
-            "native-devtools"
+            "native-devtools",
+            "native-profiler",
+            "simctl",
+            "simulator-server"
           ]
         },
         {
@@ -46,7 +46,7 @@
     "providerRecord": {
       "type": "object",
       "title": "Provider descriptor (~/.argent/providers/<any-name>.json)",
-      "required": ["schemaVersion", "id", "name", "devices"],
+      "required": ["devices", "id", "name", "schemaVersion"],
       "properties": {
         "schemaVersion": {
           "const": 1,
@@ -64,6 +64,11 @@
         "supportUrl": {
           "$ref": "#/$defs/httpUrl",
           "description": "Where Argent points users when something fails on this provider's device. Strongly recommended: without it, the provider's bugs land in Argent's tracker."
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The process that wrote this file. Argent's runtime ignores it entirely; its only job is to let tooling (`argent providers prune`) remove descriptors left behind by a provider that died without withdrawing. Omit it and a crashed instance's descriptor has to be removed by hand."
         },
         "workspace": {
           "type": "object",
@@ -95,17 +100,17 @@
     "providerDevice": {
       "type": "object",
       "title": "One device a provider is offering",
-      "required": ["nativeId", "platform", "kind", "name", "state", "capabilities"],
+      "required": ["capabilities", "kind", "name", "nativeId", "platform", "state"],
       "properties": {
         "nativeId": {
           "$ref": "#/$defs/nativeId"
         },
         "platform": {
-          "enum": ["ios", "android"],
+          "enum": ["android", "ios"],
           "description": "Must agree with what nativeId's shape implies, or Argent rejects the device \u2014 classification stays single-sourced."
         },
         "kind": {
-          "enum": ["simulator", "emulator", "device"]
+          "enum": ["device", "emulator", "simulator"]
         },
         "name": {
           "type": "string",

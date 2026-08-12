@@ -9,9 +9,9 @@ const WORKSPACE_ROOT = path.resolve(__dirname, "../../..");
 
 // esbuild entry points (source) and bundle outputs.
 const TOOLS_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/tool-server/src/index.ts");
-const EXTERNAL_DEVICES_ENTRY = path.resolve(
+const DEVICE_PROVIDERS_ENTRY = path.resolve(
   WORKSPACE_ROOT,
-  "packages/tool-server/src/utils/external-devices.ts"
+  "packages/device-providers/src/index.ts"
 );
 const ARCHIVE_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/archive/src/index.ts");
 const REGISTRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/registry/src/index.ts");
@@ -56,12 +56,7 @@ const ALIASES = {
   "@argent/cli": CLI_ENTRY,
   "@argent/configuration-core": CONFIGURATION_ENTRY,
   "@argent/telemetry": TELEMETRY_ENTRY,
-  // `argent providers check` validates against the very schemas the tool-server
-  // enforces at runtime, so the CLI deep-imports that one module. Aliased to
-  // source like every other workspace dep — and deliberately NOT an alias for
-  // the whole of @argent/tool-server, which would drag the entire tool graph
-  // into the CLI bundle.
-  "@argent/tool-server/dist/utils/external-devices.js": EXTERNAL_DEVICES_ENTRY,
+  "@argent/device-providers": DEVICE_PROVIDERS_ENTRY,
 };
 
 // Build-time constants for @argent/telemetry. The PostHog project token is a

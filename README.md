@@ -169,6 +169,7 @@ project already opted into local mode (a committed `.argent/install.json`, or
 | `argent enable`    | Enable a predefined feature flag (`--scope project` for project-local)                                                                                                                                    |
 | `argent disable`   | Disable a feature flag (`--scope project` for project-local)                                                                                                                                              |
 | `argent flags`     | List available feature flags and their state                                                                                                                                                              |
+| `argent providers` | Inspect and manage external device providers: `list` / `check` / `publish` / `withdraw` / `prune`                                                                                                         |
 | `argent telemetry` | Manage telemetry: `status` / `enable` / `disable`                                                                                                                                                         |
 
 ## Supported Editors

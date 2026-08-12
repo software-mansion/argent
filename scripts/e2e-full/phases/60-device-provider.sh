@@ -48,17 +48,15 @@ _spawn_sim_server() { # native-id subcommand
   return 1
 }
 
-# Publish the descriptor naming the simulator-server we just spawned. This is
-# the entire provider side of the contract — no server, no port, no auth.
-# Sets: PROV_DESCRIPTOR.
-_publish_descriptor() { # native-id platform kind capabilities-json
-  local native="$1" platform="$2" kind="$3" capabilities="$4"
-  local dir="$HOME/.argent/providers"
-  mkdir -p "$dir"
-  PROV_DESCRIPTOR="$dir/$PROVIDER_ID.json"
+# Modification time in seconds — BSD and GNU stat spell it differently.
+_mtime() { # path
+  stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0
+}
 
-  # tmp + rename, exactly as the contract requires of a real provider: argent
-  # reads concurrently and must never see a half-written file.
+# The descriptor document, on stdout. Shared by the hand-rolled write below and
+# the `providers publish` round-trip at the end, so both publish the same bytes.
+_descriptor_json() { # native-id platform kind capabilities-json
+  local native="$1" platform="$2" kind="$3" capabilities="$4"
   jq -nc \
     --arg id "$PROVIDER_ID" --arg nativeId "$native" --arg platform "$platform" \
     --arg kind "$kind" --arg api "$PROV_API_URL" \
@@ -71,8 +69,24 @@ _publish_descriptor() { # native-id platform kind capabilities-json
         name:"E2E provider device",
         state:(if $platform=="ios" then "Booted" else "device" end),
         capabilities:$capabilities,
-        simulatorServer:{apiUrl:$api,streamUrl:$stream,version:"e2e"}}]}' \
-    >"$PROV_DESCRIPTOR.tmp"
+        simulatorServer:{apiUrl:$api,streamUrl:$stream,version:"e2e"}}]}'
+}
+
+# Publish the descriptor naming the simulator-server we just spawned. This is
+# the entire provider side of the contract; no server, no port, no auth.
+#
+# Hand-rolled rather than going through `argent providers publish`. Writing the
+# file yourself is the contract of record and the only path open to a provider
+# that cannot spawn a Node CLI. The CLI transport is exercised at the end.
+# Sets: `PROV_DESCRIPTOR`.
+_publish_descriptor() { # native-id platform kind capabilities-json
+  local dir="$HOME/.argent/providers"
+  mkdir -p "$dir"
+  PROV_DESCRIPTOR="$dir/$PROVIDER_ID.json"
+
+  # tmp + rename, exactly as the contract requires of a real provider. Argent
+  # reads concurrently and must never see a half-written file.
+  _descriptor_json "$@" >"$PROV_DESCRIPTOR.tmp"
   mv "$PROV_DESCRIPTOR.tmp" "$PROV_DESCRIPTOR"
 }
 
@@ -130,6 +144,16 @@ run_phase() {
     pass "$P" providers-check conformant
   else
     fail "$P" providers-check conformant "$(printf '%s' "$CLI_OUT" | tr '\n' ' ' | cut -c1-200)"
+  fi
+
+  # `providers list` is what support asks a user to run, so it has to see the
+  # hand-rolled descriptor above. No CLI-published state in between.
+  if argent_cli providers list --json &&
+    printf '%s' "$CLI_OUT" | jq -e --arg id "$PROVIDER_ID" \
+      'any(.providers[]?; .id==$id and (.devices|length)==1)' >/dev/null 2>&1; then
+    pass "$P" providers-list "the hand-written descriptor is listed"
+  else
+    fail "$P" providers-list "descriptor listed" "$(printf '%s' "$CLI_OUT" | tr '\n' ' ' | cut -c1-200)"
   fi
 
   # --- discovery ------------------------------------------------------------
@@ -221,6 +245,66 @@ run_phase() {
     pass "$P" gesture-tap "works again once the provider re-offers the device"
   else
     fail "$P" gesture-tap "works again after re-offer" "rc=$RT_RC"
+  fi
+
+  # --- the CLI transport ----------------------------------------------------
+  # Everything above wrote the descriptor by hand. A provider that can spawn a
+  # node CLI should go through `argent providers` instead, so its validator
+  # ships with the tool-server that reads the result. Withdraw the hand-written
+  # file, republish the same document through the CLI, and check argent sees the
+  # device either way.
+  if argent_cli providers withdraw "$PROVIDER_ID" && [ ! -f "$PROV_DESCRIPTOR" ]; then
+    pass "$P" providers-withdraw "removed $PROV_DESCRIPTOR"
+  else
+    fail "$P" providers-withdraw removed "$(printf '%s' "$CLI_OUT" | tr '\n' ' ' | cut -c1-200)"
+  fi
+
+  run_tool list-devices '{}'
+  if printf '%s' "$RT_JSON" | jq -e --arg id "$DEV" 'any(.devices[]?; .id==$id)' >/dev/null 2>&1; then
+    fail "$P" providers-withdraw "device gone from list-devices" "$DEV is still listed"
+  else
+    pass "$P" providers-withdraw "device gone from list-devices"
+  fi
+
+  local DOC="$E2E_WORK/provider-descriptor.json"
+  _descriptor_json "$NATIVE" "$PLATFORM" "$KIND" "$CAPS" >"$DOC"
+
+  # `--pid` is the providers's, never the CLI's: the CLI exits immediately, so
+  # its own pid would be dead on arrival. `$$` is this harness, standing in for
+  # one.
+  if argent_cli providers publish --stdin --pid "$$" <"$DOC" &&
+    [ -f "$HOME/.argent/providers/$PROVIDER_ID.json" ]; then
+    pass "$P" providers-publish "wrote the canonical <id>.json"
+  else
+    fail "$P" providers-publish "canonical path" "$(printf '%s' "$CLI_OUT" | tr '\n' ' ' | cut -c1-200)"
+  fi
+
+  run_tool list-devices '{}'
+  if printf '%s' "$RT_JSON" | jq -e --arg id "$DEV" 'any(.devices[]?; .id==$id)' >/dev/null 2>&1; then
+    pass "$P" providers-publish "the published device is discoverable"
+  else
+    fail "$P" providers-publish "device discoverable" "$(printf '%s' "$RT_JSON" | tr '\n' ' ' | cut -c1-200)"
+  fi
+
+  # An identical republish must not touch the file. What makes publishing on
+  # every device change cheap enough to wire straight to session events.
+  local MTIME_BEFORE MTIME_AFTER
+  MTIME_BEFORE=$(_mtime "$HOME/.argent/providers/$PROVIDER_ID.json")
+  argent_cli providers publish --stdin --pid "$$" <"$DOC" || true
+  MTIME_AFTER=$(_mtime "$HOME/.argent/providers/$PROVIDER_ID.json")
+  if [ "$MTIME_BEFORE" = "$MTIME_AFTER" ]; then
+    pass "$P" providers-publish "an identical republish left the file alone"
+  else
+    fail "$P" providers-publish "identical republish is a no-op" "mtime moved $MTIME_BEFORE -> $MTIME_AFTER"
+  fi
+
+  # prune only removes descriptors whose declared pid is gone, and $$ is here.
+  if argent_cli providers prune --json &&
+    printf '%s' "$CLI_OUT" | jq -e '.pruned == []' >/dev/null 2>&1 &&
+    [ -f "$HOME/.argent/providers/$PROVIDER_ID.json" ]; then
+    pass "$P" providers-prune "left a live provider's descriptor in place"
+  else
+    fail "$P" providers-prune "live descriptor kept" "$(printf '%s' "$CLI_OUT" | tr '\n' ' ' | cut -c1-200)"
   fi
 
   # --- non-interference -----------------------------------------------------
