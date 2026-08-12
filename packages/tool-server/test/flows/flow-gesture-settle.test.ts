@@ -848,9 +848,10 @@ describe("a proven outage is spent only on the device that proved it", () => {
 });
 
 // The settle's deadline is tested only after a read RETURNS, so the window
-// bounds how many reads it issues and never how long it waits on one. That is
-// deliberate: budgeting the read to what is left of the window would put a 3s
-// cap on `ViewHierarchy.getFullHierarchy`, which #778 raised to a 15s RPC tier
+// bounds how many reads it issues - never how long it waits on one, and never
+// below the SETTLE_MIN_READS floor. That is deliberate: budgeting the read to
+// what is left of the window would put a 3s cap on
+// `ViewHierarchy.getFullHierarchy`, which #778 raised to a 15s RPC tier
 // precisely so an iOS cold-start stall is ridden out instead of failed. The
 // abort in the block below is the one thing that does cut such a read short.
 describe("the settle window bounds its retries, not the read in flight", () => {
@@ -859,7 +860,7 @@ describe("the settle window bounds its retries, not the read in flight", () => {
   // so the margin is the only part of this test's cost there is to keep down.
   const SLOW_READ_MS = 3_500;
 
-  it("waits out a read slower than the whole window", async () => {
+  it("waits out every read slower than the whole window", async () => {
     readDelayMs = SLOW_READ_MS;
     await writeFlow("tap-slow-read", {
       executionPrerequisite: "",
@@ -871,13 +872,14 @@ describe("the settle window bounds its retries, not the read in flight", () => {
     const elapsed = Date.now() - startedAt;
 
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:pass"]);
-    // Exactly one read: it answered past the deadline, so the window ended on
-    // it and issued no second. A read cut off at the deadline would leave that
-    // count identical - the wait is what separates the two.
-    expect(readsBeforeFirstGesture()).toBe(1);
-    expect(elapsed).toBeGreaterThanOrEqual(SLOW_READ_MS);
-    // The gesture goes out on a tree that converged on nothing, but a read did
-    // come back, so this is no outage and the step is not warned about one.
+    // Two reads, neither cut short: the first answered past the deadline, and
+    // the floor owes a second even though the window is spent. Reads cut off at
+    // the deadline would leave that count identical - the elapsed time is what
+    // separates the two, and it covers BOTH reads.
+    expect(readsBeforeFirstGesture()).toBe(2);
+    expect(elapsed).toBeGreaterThanOrEqual(2 * SLOW_READ_MS);
+    // The floor read is what the settle converges on here, and a read did come
+    // back, so this is no outage and the step is not warned about one.
     expect(gestures()[0]).toMatchObject({ tool: "gesture-tap", args: { x: 0.4, y: 0.6 } });
     expect(result.steps[0].warning).toBeUndefined();
   }, 15_000);

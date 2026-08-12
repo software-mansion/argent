@@ -220,6 +220,20 @@ const FOCUS_REPORTING_SOURCES: ReadonlySet<DescribeSource> = new Set([
 const SETTLE_POLL_MS = 250;
 const SETTLE_TIMEOUT_MS = 3000;
 
+// Read attempts every settle makes before it may conclude anything, enforced
+// even once the window has closed. A read can fail by TIMING OUT, and every
+// tree source's RPC timeout outlasts the 3s window (the shortest is iOS's 5s),
+// so the window fits only one such read: without a floor, "every read in the
+// window failed", which the throw below reports as a tree-source outage, would
+// collapse into "the first read was slow", erroring a step on one transient
+// blip with no retry at all. The second read is not bounded by the window
+// either, and a read is several RPCs deep, each on its own timeout, so a wedged
+// source costs two full reads and tens of seconds, and a source that answers
+// slowly pays a second read where it used to end on one. `await`/`assert` have
+// always had this floor in `waitForCondition`'s final poll; this is the same
+// guarantee for the directives that resolve through a settle.
+const SETTLE_MIN_READS = 2;
+
 // `scroll-to`: a bounded number of momentum-free increments. Each travels half
 // the clip window along the scroll axis (half the screen when no `within`
 // container is named) — < 1 viewport, so consecutive viewports overlap and a
@@ -428,25 +442,26 @@ function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
  * from landing mid-deceleration (where a scroll view swallows it) or acting on a
  * frame that has already moved.
  *
- * Throws when EVERY read in the window failed: that is a tree-source outage
+ * Throws when EVERY read attempt failed: that is a tree-source outage
  * (e.g. native devtools disconnected mid-run — `fetchFlowTree` refuses to
  * degrade to a trimmed tree), not a mid-animation blip, and swallowing it would
  * convert the outage into a misleading "element not found" downstream. The
  * throw lands in the step's structured report via `execLeafStep`'s catch.
  *
+ * "Every attempt" is at least {@link SETTLE_MIN_READS} of them: the deadline
+ * bounds the polling, never the number of reads taken, so a read slow enough to
+ * outlast the window on its own is retried rather than treated as the whole
+ * evidence.
+ *
  * `skipProvenOutage` rethrows {@link ActionEnv.treeOutage} instead of buying
  * that window again. Not a shorter budget: a threshold low enough to spare a
  * source serving no tree at all would also abandon the mid-navigation blip the
- * retry above exists for. But the memo is a prediction: one window mints it,
- * nothing re-tests it, and on iOS a window can be one stalled read. The
- * deadline below is only tested after a read RETURNS, and the read a window
- * issues is `ViewHierarchy.getFullHierarchy` on the 15s RPC tier #778 gave it,
- * behind a serial 5s `Application.getState` probe, so a 3000ms window can spend
- * ~20s on the single sample it then mints the verdict from. Being wrong costs a
- * settle, not a step: {@link settleForGesture} swallows the throw - and says
- * so, warning every gesture it spares, so a run whose prediction was wrong
- * reports which greens went out unsettled. Any directive read that comes back
- * retires it, as does a relaunch.
+ * retry above exists for. But the memo is a prediction: one window mints it and
+ * nothing re-tests it. Being wrong costs a settle, not a step:
+ * {@link settleForGesture} swallows the throw - and says so, warning every
+ * gesture it spares, so a run whose prediction was wrong reports which greens
+ * went out unsettled. Any directive read that comes back retires it, as does a
+ * relaunch.
  *
  * What it costs: an outage that lasted a full window, in a run that then never
  * reads the tree again and never relaunches, leaves later gestures unsettled
@@ -463,6 +478,7 @@ export async function settleTree(
   let prevFp: string | undefined;
   let prevTree: DescribeNode | undefined;
   let lastError: Error | undefined;
+  let reads = 0;
   for (;;) {
     if (env.signal?.aborted) return undefined;
     // Inside the loop so the abort above still wins, but only ever true on the
@@ -481,6 +497,7 @@ export async function settleTree(
       // transient describe failure mid-navigation — retry until the deadline
       lastError = read.cause;
     }
+    reads += 1;
     // The abort can land while the read above is in flight (e.g. the HTTP
     // client disconnecting mid-flow trips the run's AbortController). Without
     // this re-check the two-identical-reads return below — or the deadline's
@@ -495,6 +512,10 @@ export async function settleTree(
       prevTree = tree;
     }
     if (Date.now() >= deadline) {
+      // Owed another attempt: retry back-to-back rather than sleeping out a
+      // poll interval the window no longer has (`waitForCondition`'s final
+      // poll does the same). Bounded — `reads` rises on every pass.
+      if (reads < SETTLE_MIN_READS) continue;
       if (prevTree === undefined && lastError !== undefined) {
         if (env.treeOutage) env.treeOutage.proven = { deviceId: env.device.id, error: lastError };
         throw lastError;
