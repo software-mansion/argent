@@ -349,7 +349,8 @@ function axisFullyInside(
 // gesture into whatever sits under its centre.
 // Best-effort by design:
 // it engages only when that container's entry edge effectively is a screen
-// edge (an inset container already clears screen chrome), and gives up —
+// edge (an inset container is read as sitting above its own chrome - see
+// EDGE_AVOID_SCREEN_EPS), and gives up —
 // accepting the flush landing — when no scrolling clip resolves, the previous
 // nudge failed to move the target, the target has no headroom, the
 // attempts run out, or a post-acceptance device interaction (the nudge
@@ -374,14 +375,27 @@ function axisFullyInside(
 // bar), which is what any scroll of that screen does — and the progress check
 // bounds that to one wasted gesture (see scrollToVisible for the gate).
 const EDGE_AVOID_PADDING = 0.1; // clears the home indicator (~0.04) and a typical tab bar (~0.1)
-const EDGE_AVOID_SCREEN_EPS = 0.05; // clip edge within this of a screen edge = chrome can overlap it
+// Classifier between the two shapes that put a clip edge near a screen edge: a
+// container flush at the screen (inset ~0..0.02, its content can land under
+// chrome - nudge) and one inset by its own chrome (a list sitting above its
+// tab bar, inset ~the bar's height - already clear, skip). The threshold sits
+// between the two populations, not at the chrome height itself: raising it to
+// the ~0.1 a tab bar measures would misread every list-above-its-bar screen as
+// needing a nudge. Residual: a container inset 0.05..0.1 by something OTHER
+// than the chrome overlaying it is misread as clear - rare, because insets
+// normally come from the chrome and match its height.
+const EDGE_AVOID_SCREEN_EPS = 0.05;
 const MAX_EDGE_NUDGES = 3; // touch slop makes a nudge undershoot — allow a re-measure retry or two
 
 // A nudge asks for 1.5× the deficit: touch slop eats the first ~0.01 of a
 // swipe's travel before scrolling engages, so a deficit-sized nudge lands
 // short and would need a second round almost every time. The overshoot is
-// capped at half the headroom, so it can never carry the target near the
-// opposite edge.
+// capped at half the headroom, which always leaves the target at least half
+// its room at the opposite edge - at least 0.05, since anything with less
+// than 0.1 of headroom never nudges. For a target taller than 0.8 of the clip
+// that guaranteed clearance sits inside the top status-bar band: an accepted
+// trade, since entry-edge chrome (tab bar, home indicator) occludes taps
+// while a status bar only overlays pixels.
 const EDGE_NUDGE_OVERSHOOT = 1.5;
 
 /**
@@ -423,8 +437,9 @@ function entryEdgeDeficit(
 /**
  * Travel for one edge-avoid nudge, or 0 when none should happen: the accepted
  * `frame` already sits (to within `EDGE_EPS`) `EDGE_AVOID_PADDING` clear of the
- * clip's entry edge, that edge isn't a screen edge (an inset container's own
- * border already clears screen chrome), or there is no room to move — the
+ * clip's entry edge, that edge isn't a screen edge (an inset container is
+ * read as sitting above its own chrome - see EDGE_AVOID_SCREEN_EPS), or
+ * there is no room to move — the
  * headroom (the target's distance to the opposite clip edge, which a spanning
  * shape-2 target has none of) must fit at least twice the minimum scroll
  * gesture, since the travel is capped at `headroom / 2` and a shorter swipe
@@ -881,8 +896,16 @@ function targetScrollerFrame(
  * nudge's own gesture — unclosable by construction — while the swipe scrolls
  * the page the step never named.
  *
- * Frame identity, not containment: `region` came from this same tree, so the
- * node it was resolved from is the one to classify.
+ * Frame identity, not containment - and deliberately not node identity: what
+ * the nudge needs certified is "does a gesture at this rect's centre scroll
+ * this rect's content", and the OS answers that by hit-testing geometry, not
+ * by which node the selector happened to resolve. ANY visible scroller
+ * occupying exactly this rect makes the deficit closable, so a `within`
+ * naming a static pane co-located with a scroller (a full-bleed wrapper over
+ * a full-bleed list, a UIScrollView's own content view) passes - and should:
+ * the gesture lands on the co-located scroller and moves the same rect. The
+ * shape this gate exists to refuse - a card or text pane strictly inside a
+ * scrollable page - shares its frame with no scroller and still declines.
  */
 function scrollerRegion(tree: DescribeNode, region: DescribeFrame): DescribeFrame | undefined {
   let found = false;
