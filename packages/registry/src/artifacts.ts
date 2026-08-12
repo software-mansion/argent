@@ -146,8 +146,9 @@ export class ArtifactStore {
 
   /**
    * @public
-   * Knip's `classMembers` pass is workspace-local, so it cannot see that every
-   * caller is in tool-server (`screenshot-diff`, `screen-recording-stop`).
+   * Every caller is in tool-server (`screenshot-diff`, `screen-recording-stop`),
+   * and the dead-code gate runs against an unbuilt tree, where a cross-workspace
+   * edge cannot form. See `knip.jsonc`.
    */
   async register(opts: RegisterArtifactOptions): Promise<ArtifactHandle> {
     const { hostPath, kind } = opts;
@@ -188,8 +189,9 @@ export class ArtifactStore {
 
   /**
    * @public
-   * Knip's `classMembers` pass is workspace-local, so it cannot see the only
-   * caller: the tool-server `/artifacts` route.
+   * The only caller is the tool-server `/artifacts` route, and the dead-code
+   * gate runs against an unbuilt tree, where a cross-workspace edge cannot
+   * form. See `knip.jsonc`.
    */
   list(): ArtifactListItem[] {
     return [...this.entries.entries()].map(([id, entry]) => ({

@@ -11,8 +11,9 @@ export class TypedEventEmitter<
 
   /**
    * @public
-   * Knip's `classMembers` pass is workspace-local, so it cannot see the callers
-   * in tool-server (`index.ts`, `preview.ts`, `blueprints/js-runtime-debugger.ts`).
+   * Every caller is in another workspace (tool-server, telemetry), and the
+   * dead-code gate runs against an unbuilt tree, where a cross-workspace edge
+   * cannot form. See `knip.jsonc`.
    */
   off<K extends keyof T>(event: K, listener: T[K]): this {
     this.listeners.get(event)?.delete(listener);
