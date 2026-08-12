@@ -1151,9 +1151,11 @@ A \`repeat:\` block (bound + \`steps:\`) runs the same steps several times: \`re
 count (1-100; exactly equivalent to pasting the steps 3 times), \`repeat: { until: <condition>, max?: 10 }\`
 drains until a condition holds — checked BEFORE each iteration, so an already-satisfied guard runs
 zero iterations and passes, and hitting \`max\` (default 10, same 1-100 bound as a count) with it
-still unmet FAILS the step. Repeat is NOT
-retry: a failure inside any iteration is a real failure and hard-stops the flow, since re-running a
-side-effecting iteration would double-fire it. \`snapshot\` inside a repeat block is a parse error (one
+still unmet FAILS the step. Repeat is NOT retry: a failure inside any iteration is a real failure
+and hard-stops the flow, since re-running a
+side-effecting iteration would double-fire it. A \`tool:\` step's full result stays in the report once
+per iteration with nothing truncating it, so a repeat over a result-heavy tool (a screenshot)
+multiplies that payload by the count. \`snapshot\` inside a repeat block is a parse error (one
 baseline, N comparisons); one reached through a \`run:\` fragment fails that \`run:\` step when the
 fragment loads, and a nested \`tool: flow-execute\` whose flow contains one is refused before it
 starts. Distinct from \`tap: { times }\`, which is ONE multi-tap gesture.
