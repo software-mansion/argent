@@ -538,6 +538,132 @@ describe("describe full-hierarchy adapter", () => {
     expect(findAll(tree, { identifier: "grid" })[0]!.subtreeText).toBe("Cell 1");
   });
 
+  // Cell classes contain the TableView/CollectionView substrings but do not
+  // scroll their content. Reporting them as AXScrollArea made every row a
+  // scroll container, and the edge-avoid nudge's smallest-containing-scroller
+  // resolution then picked the cell over its list - see targetScrollerFrame.
+  it("does not classify cell classes as scroll areas", () => {
+    const raw = {
+      windows: [
+        {
+          className: "UIWindow",
+          frame: SCREEN,
+          windowFrame: SCREEN,
+          children: [
+            {
+              className: "UITableView",
+              identifier: "list",
+              windowFrame: SCREEN,
+              children: [
+                {
+                  className: "UITableViewCell",
+                  identifier: "cell",
+                  windowFrame: { x: 0, y: 100, width: 400, height: 50 },
+                  children: [
+                    {
+                      className: "UITableViewCellContentView",
+                      identifier: "cell-content",
+                      windowFrame: { x: 0, y: 100, width: 400, height: 50 },
+                      children: [
+                        {
+                          className: "UILabel",
+                          label: "Row 14",
+                          windowFrame: { x: 16, y: 110, width: 200, height: 30 },
+                          children: [],
+                        },
+                      ],
+                    },
+                  ],
+                },
+                {
+                  // SwiftUI List / collection cells hit the same substrings.
+                  className: "ListTableViewCell",
+                  identifier: "swiftui-cell",
+                  windowFrame: { x: 0, y: 150, width: 400, height: 50 },
+                  children: [],
+                },
+                {
+                  className: "AnyListCollectionViewCell",
+                  identifier: "swiftui-collection-cell",
+                  windowFrame: { x: 0, y: 200, width: 400, height: 50 },
+                  children: [],
+                },
+                {
+                  className: "UICollectionViewCell",
+                  identifier: "grid-cell",
+                  windowFrame: { x: 0, y: 250, width: 400, height: 50 },
+                  children: [],
+                },
+              ],
+            },
+            {
+              className: "UICollectionView",
+              identifier: "grid",
+              windowFrame: { x: 0, y: 400, width: 400, height: 200 },
+              children: [],
+            },
+            {
+              className: "UIScrollView",
+              identifier: "pane",
+              windowFrame: { x: 0, y: 600, width: 400, height: 200 },
+              children: [],
+            },
+          ],
+        },
+      ],
+    };
+    const tree = adaptFullHierarchyToDescribeResult(raw);
+
+    // The scrollers themselves keep the role...
+    for (const id of ["list", "grid", "pane"]) {
+      expect(findAll(tree, { identifier: id })[0]!.role).toBe("AXScrollArea");
+    }
+    // ...while every cell shape falls back to a plain group.
+    for (const id of [
+      "cell",
+      "cell-content",
+      "swiftui-cell",
+      "swiftui-collection-cell",
+      "grid-cell",
+    ]) {
+      expect(findAll(tree, { identifier: id })[0]!.role).toBe("AXGroup");
+    }
+  });
+
+  // The scroll-clip flag rides on the same role, so a cell must not clip
+  // either: a badge hanging outside its cell's rect (the overflowing-parent
+  // shape above, with a Cell class name) stays in the tree.
+  it("does not scroll-clip a child overflowing its cell", () => {
+    const raw = {
+      windows: [
+        {
+          className: "UIWindow",
+          frame: SCREEN,
+          windowFrame: SCREEN,
+          children: [
+            {
+              className: "UITableViewCell",
+              identifier: "cell",
+              windowFrame: { x: 0, y: 300, width: 400, height: 50 },
+              children: [
+                {
+                  className: "RCTView",
+                  identifier: "badge",
+                  label: "3 unread",
+                  // Entirely outside the cell's frame, on screen.
+                  windowFrame: { x: 360, y: 270, width: 40, height: 24 },
+                  children: [],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const tree = adaptFullHierarchyToDescribeResult(raw);
+    expect(findAll(tree, { identifier: "badge" })).toHaveLength(1);
+  });
+
   // Scoping: text belongs to its NEAREST identified ancestor. A self-identified
   // descendant claims its own text, so an outer container does not swallow it —
   // otherwise a screen-root testID would match any text anywhere beneath it.

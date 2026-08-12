@@ -112,7 +112,13 @@ function roleFromClassName(cn: string | undefined): string {
   if (/(Label|Text)/i.test(cn)) return "AXStaticText";
   if (/Image/i.test(cn)) return "AXImage";
   if (/(Slider|Stepper|Switch|ProgressView)/i.test(cn)) return "AXAdjustable";
-  if (/(ScrollView|TableView|CollectionView)/i.test(cn)) return "AXScrollArea";
+  // Cells are excluded: UITableViewCell / ListTableViewCell etc. contain the
+  // TableView/CollectionView substrings but do not scroll their content, and
+  // the edge-avoid nudge resolves a target's container to the smallest
+  // containing scroller - a scrollable-flagged cell would shadow its list.
+  if (/(ScrollView|TableView|CollectionView)/i.test(cn) && !/Cell/i.test(cn)) {
+    return "AXScrollArea";
+  }
   return "AXGroup";
 }
 

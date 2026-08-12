@@ -1407,6 +1407,61 @@ describe("scroll-to directive", () => {
     expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.105, 5);
   });
 
+  it("resolves the list, not its row cell, as the nudge clip on the iOS table shape", async () => {
+    // The tree the fixed full-hierarchy adapter emits for a UIKit table
+    // reached through a text selector: a full-bleed AXScrollArea list, the
+    // row's cell as a plain (non-scroll) AXGroup leaf, and the label the text
+    // resolves to inside it - all flat siblings. The adapter used to flag
+    // every cell AXScrollArea too (class names contain TableView), and the
+    // smallest-containing-scroller resolution then picked the CELL as the
+    // clip: its end edge (0.942) fails the screen-edge gate, so no nudge was
+    // dispatched and the label stayed 0.06 off the screen bottom - the
+    // landing this phase exists to avoid. With the cell a plain group the
+    // clip is the LIST (end edge 1.0, gate passes): label at 0.89..0.94 gives
+    // clearance 0.06, deficit 0.04, travel 0.04 x 1.5 = 0.06 (above the 0.05
+    // floor; headroom 0.89, so its 0.445 half-cap does not bite), anchored at
+    // the list's centre.
+    const cellAt = (y: number, children: DescribeNode[]) => [
+      fullScreenScroller(),
+      n({
+        role: "AXGroup",
+        identifier: "row-14-cell",
+        frame: { x: 0, y, width: 1, height: 0.063 },
+      }),
+      ...children,
+    ];
+    const flush = screen(
+      cellAt(0.879, [n({ label: "Row 14", frame: { x: 0.1, y: 0.89, width: 0.8, height: 0.05 } })])
+    );
+    const padded = screen(
+      cellAt(0.739, [n({ label: "Row 14", frame: { x: 0.1, y: 0.75, width: 0.8, height: 0.05 } })])
+    );
+    let nudged = false;
+    currentTree = () => (nudged ? padded : flush);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      nudged = true;
+    });
+
+    await writeFlow("ios-table-cell", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Row 14" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "ios-table-cell", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].settle).toBe(true);
+    expect(swipes[0].fromY).toBeCloseTo(0.5, 5);
+    expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.06, 5);
+  });
+
   it("stops after one nudge when the target does not move, despite tree churn", async () => {
     // The reviewer's three-press repro distilled: the target sits in a
     // scroller flush at the screen bottom and CANNOT move (deficit 0.08 every
