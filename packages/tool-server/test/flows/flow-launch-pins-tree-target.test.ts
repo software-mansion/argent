@@ -135,6 +135,64 @@ describe("launch pins the flow tree target", () => {
     expect(treePins.every((pin) => pin === APP)).toBe(true);
   });
 
+  it("a raw tool step clears the pin - later reads auto-resolve again", async () => {
+    // The tool step's effect on the screen is opaque to the runner (it could
+    // be launch-app, open-url, button {home}...), so the pin must not survive
+    // it: reads before the tool step carry the launched app, reads after none.
+    await writeFlow("escaped", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: APP },
+        { kind: "assert", condition: "visible", selector: { identifier: "ready" } },
+        { kind: "tool", name: "screenshot", args: {} },
+        { kind: "assert", condition: "visible", selector: { identifier: "ready" } },
+      ],
+    });
+
+    const result = await run("escaped", mockRegistry());
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "launch:pass",
+      "assert:pass",
+      "tool:pass",
+      "assert:pass",
+    ]);
+    const firstUnpinned = treePins.indexOf(undefined);
+    expect(firstUnpinned).toBeGreaterThan(0);
+    expect(treePins.slice(0, firstUnpinned).every((pin) => pin === APP)).toBe(true);
+    expect(treePins.slice(firstUnpinned).every((pin) => pin === undefined)).toBe(true);
+  });
+
+  it("a later launch re-pins after a tool step cleared the pin", async () => {
+    const OTHER = "com.acme.other";
+    await writeFlow("repinned", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: APP },
+        { kind: "assert", condition: "visible", selector: { identifier: "ready" } },
+        { kind: "tool", name: "screenshot", args: {} },
+        { kind: "launch", app: OTHER },
+        { kind: "assert", condition: "visible", selector: { identifier: "ready" } },
+      ],
+    });
+
+    const result = await run("repinned", mockRegistry());
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "launch:pass",
+      "assert:pass",
+      "tool:pass",
+      "launch:pass",
+      "assert:pass",
+    ]);
+    // First reads carry the first app, final reads the second - the second
+    // launch must overwrite (not keep-if-set) the cleared pin.
+    const firstOther = treePins.indexOf(OTHER);
+    expect(firstOther).toBeGreaterThan(0);
+    expect(treePins.slice(0, firstOther).every((pin) => pin === APP)).toBe(true);
+    expect(treePins.slice(firstOther).every((pin) => pin === OTHER)).toBe(true);
+  });
+
   it("a run with no launch step keeps the auto-resolve fallback (no pin)", async () => {
     await writeFlow("unpinned", {
       executionPrerequisite: "App is running",

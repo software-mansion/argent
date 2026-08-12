@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
+import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
 import type { DeviceInfo, Registry } from "@argent/registry";
 import type { NativeAppState, NativeDevtoolsApi } from "../../src/blueprints/native-devtools";
 import { queryFullHierarchyTree } from "../../src/tools/flows/flow-ios-tree";
@@ -7,7 +7,8 @@ import { queryFullHierarchyTree } from "../../src/tools/flows/flow-ios-tree";
 // Simulator-wide injection means background system processes also connect,
 // and a suspended one never answers getState - auto-resolve Promise.alls
 // getState over every connection, so one such sibling fails every read while
-// the app under test is healthy. A pinned read must never touch that fan-out.
+// the app under test is healthy. A pinned read probes ONLY the pinned app
+// (to prove it is still frontmost), never a sibling.
 
 const IOS_DEVICE = {
   id: "00000000-0000-0000-0000-0000000000ab",
@@ -49,9 +50,14 @@ function windowSpanning() {
  * The healthy app under test plus a poisoned sibling whose getState only ever
  * times out; records state probes, hierarchy reads, and env-repair calls
  * (requiresAppRestart / reverifyEnv). `connected` overrides the connection set
- * to model a dropped pin.
+ * to model a dropped pin; `states` overrides per-app state to model a
+ * backgrounded pin; `probeFailures` makes an app's own getState throw.
  */
-function poisonedApi(connected: string[] = [APP, POISONER]) {
+function poisonedApi(
+  connected: string[] = [APP, POISONER],
+  states: Record<string, NativeAppState> = {},
+  probeFailures: Record<string, Error> = {}
+) {
   const probed: string[] = [];
   const queried: string[] = [];
   const repaired: string[] = [];
@@ -60,10 +66,13 @@ function poisonedApi(connected: string[] = [APP, POISONER]) {
     isConnected: (id: string) => connected.includes(id),
     getAppState: async (id: string) => {
       probed.push(id);
+      if (probeFailures[id]) {
+        throw probeFailures[id];
+      }
       if (id === POISONER) {
         throw new Error("ViewInspector RPC timed out: Application.getState");
       }
-      return appState(id);
+      return states[id] ?? appState(id);
     },
     requiresAppRestart: async (id: string) => {
       repaired.push(`requiresAppRestart:${id}`);
@@ -90,14 +99,94 @@ function registryFor(api: NativeDevtoolsApi): Registry {
 }
 
 describe("queryFullHierarchyTree - pinned target vs poisoned auto-resolve", () => {
-  it("a pinned read skips the getState fan-out and reads the pinned app", async () => {
+  it("a pinned read probes only the pinned app - the poisoned sibling is never touched", async () => {
     const { api, probed, queried, repaired } = poisonedApi();
     const { tree, source } = await queryFullHierarchyTree(registryFor(api), IOS_DEVICE, APP);
     expect(source).toBe("native-devtools");
     expect(tree.children.length).toBeGreaterThan(0);
-    expect(probed).toEqual([]);
+    // The frontmost check probes the pinned app itself and nothing else - a
+    // sibling probe would reintroduce the fan-out failure the pin avoids.
+    expect(probed).toEqual([APP]);
     expect(queried).toEqual([APP]);
     expect(repaired).toEqual([]);
+  });
+
+  it("a pinned read of a backgrounded app refuses to describe an off-screen hierarchy", async () => {
+    // The pin bypasses auto-resolve's frontmost guard, so the pinned path must
+    // re-check it: connected-but-backgrounded means something (a tap into
+    // another app, home) left the app, and its hierarchy is not what's on
+    // screen.
+    const backgrounded: NativeAppState = {
+      bundleId: APP,
+      applicationState: "background",
+      foregroundActiveSceneCount: 0,
+      foregroundInactiveSceneCount: 0,
+      backgroundSceneCount: 1,
+      unattachedSceneCount: 0,
+      isFrontmostCandidate: false,
+    };
+    const { api, probed, queried, repaired } = poisonedApi([APP, POISONER], {
+      [APP]: backgrounded,
+    });
+    const err: unknown = await queryFullHierarchyTree(registryFor(api), IOS_DEVICE, APP).then(
+      () => {
+        throw new Error("expected the backgrounded-pin read to throw");
+      },
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(Error);
+    const message = (err as Error).message;
+    expect(message).toContain(`${APP} (the launched app) is not foreground-like`);
+    expect(message).toContain("applicationState=background");
+    expect(getFailureSignal(err)?.error_code).toBe(
+      FAILURE_CODES.NATIVE_TARGET_SINGLE_APP_NOT_FOREGROUND
+    );
+    expect(probed).toEqual([APP]);
+    expect(queried).toEqual([]);
+    expect(repaired).toEqual([]);
+  });
+
+  it("a pinned read rides out a frontmost probe the stalled main thread cannot answer", async () => {
+    // Application.getState hops onto the app's main thread, which a heavy cold
+    // start (first Hermes parse, asset decode) can pin past the RPC timeout. An
+    // unanswerable probe is not an answer of "backgrounded", and the pin names
+    // the app this run launched, so the read goes ahead instead of failing the
+    // step.
+    const { api, probed, queried } = poisonedApi(
+      [APP, POISONER],
+      {},
+      {
+        [APP]: new FailureError("ViewInspector RPC timed out: Application.getState", {
+          error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT,
+          failure_stage: "native_devtools_rpc_request",
+          failure_area: "tool_server",
+          error_kind: "timeout",
+        }),
+      }
+    );
+    const { tree } = await queryFullHierarchyTree(registryFor(api), IOS_DEVICE, APP);
+    expect(tree.children.length).toBeGreaterThan(0);
+    expect(probed).toEqual([APP]);
+    expect(queried).toEqual([APP]);
+  });
+
+  it("a pinned read propagates a frontmost probe failure that is not a timeout", async () => {
+    // Only a stall is ridden out; anything the probe actually reports is a
+    // failure the read must not paper over.
+    const { api, queried } = poisonedApi(
+      [APP, POISONER],
+      {},
+      {
+        [APP]: new FailureError("boom", {
+          error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_ERROR,
+          failure_stage: "native_devtools_rpc_response",
+          failure_area: "tool_server",
+          error_kind: "subprocess",
+        }),
+      }
+    );
+    await expect(queryFullHierarchyTree(registryFor(api), IOS_DEVICE, APP)).rejects.toThrow(/boom/);
+    expect(queried).toEqual([]);
   });
 
   it("a pinned read of a dropped connection names the drop and runs no env repair", async () => {
