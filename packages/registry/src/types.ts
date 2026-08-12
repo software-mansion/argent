@@ -129,6 +129,15 @@ export interface InvokeToolOptions {
    * the final return value remains the complete, authoritative result.
    */
   emitProgress?: (event: unknown) => void;
+  /**
+   * True when this invocation is a flow `tool:` step dispatched from inside a
+   * `repeat:` body, at any composition distance. Set by the flow runner and
+   * forwarded by invokeSubTool so it survives orchestrator nesting
+   * (run-sequence etc.); consumed by flow-execute, which refuses a
+   * snapshot-bearing flow and seeds its own run's repeat scope so deeper hops
+   * keep refusing. Opaque to the registry.
+   */
+  inRepeatFlowScope?: boolean;
 }
 
 /**

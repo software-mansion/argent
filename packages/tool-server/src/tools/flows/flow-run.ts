@@ -1154,7 +1154,8 @@ zero iterations and passes, and hitting \`max\` with it still unmet FAILS the st
 retry: a failure inside any iteration is a real failure and hard-stops the flow, since re-running a
 side-effecting iteration would double-fire it. \`snapshot\` inside a repeat block is a parse error (one
 baseline, N comparisons); one reached through a \`run:\` fragment fails that \`run:\` step when the
-fragment loads. Distinct from \`tap: { times }\`, which is ONE multi-tap gesture.
+fragment loads, and a nested \`tool: flow-execute\` whose flow contains one is refused before it
+starts. Distinct from \`tap: { times }\`, which is ONE multi-tap gesture.
 A flow that begins with a \`launch\` step is a self-contained e2e flow; one that doesn't runs against the
 device's current state. Device id is injected by the runner (flows store none) — pass \`device\` or
 \`platform\` to pick one, else the single booted device is used. On Chromium a \`launch\` step's value is an
@@ -1197,6 +1198,29 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
       const flowsDir = path.dirname(canonicalPath);
       const flow = parseFlow(await fs.readFile(canonicalPath, "utf8"));
       if (viaUpload) assertUploadSelfContained(flow);
+      // The third composition route into a repeat body, `tool: flow-execute`:
+      // parse fences the literal spelling and execRunStep fences `run:`, but a
+      // nested invocation resolves its flow only here, so the dispatching run
+      // marks the invocation (inRepeatFlowScope) and this is where the same
+      // one-baseline/N-comparisons shape is refused — before any device work.
+      // The root-scope seed below keeps deeper run:/tool hops refusing too.
+      if (ctx?.inRepeatFlowScope) {
+        const snapshot = findFragmentSnapshot(flow.steps);
+        if (snapshot) {
+          throw new FailureError(
+            `flow "${flowName}" contains snapshot "${snapshot.name}", and this flow-execute runs ` +
+              `inside a repeat block — a snapshot name maps to one baseline, but the step would ` +
+              `compare against it once per iteration, and each iteration's screen legitimately ` +
+              `differs; move the snapshot after the block, or out of the composed flow`,
+            {
+              error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+              failure_stage: "flow_repeat_snapshot_composition",
+              failure_area: "tool_server",
+              error_kind: "validation",
+            }
+          );
+        }
+      }
       // One seed for all three `run:` walks — the prerequisite guard, the
       // chromium hoist, and the executor itself — so none can accept a chain
       // another refuses.
@@ -1323,6 +1347,9 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
         await execSteps(state, flow.steps, {
           runStack: [rootEntry],
           depth: 0,
+          // A repeat-scoped invocation seeds the whole run as under-a-repeat,
+          // so deeper `run:` and `tool: flow-execute` hops hit their fences.
+          ...(ctx?.inRepeatFlowScope ? { inRepeat: true } : {}),
         });
       } finally {
         // Sample the cancel flag before teardown: a client disconnect during
@@ -1891,13 +1918,16 @@ interface StepScope {
   /**
    * True for a scope executing inside a `repeat:` body, at any block or `run:`
    * distance below it. Stamped once by {@link execRepeatStep} on its body's
-   * scope and never cleared: {@link childScope} spreads the parent, so every
-   * derived scope — a nested block's, a composed fragment's — inherits it.
-   * The flag exists for one consumer, the snapshot fence in
-   * {@link execRunStep}: parse rejects a literal `snapshot:` in a repeat body
-   * (assertNoSnapshotInRepeat) but cannot see into a `run:` target, which
+   * scope — or seeded on a run's root scope when its own invocation arrived
+   * repeat-scoped (`inRepeatFlowScope`) — and never cleared: {@link childScope}
+   * spreads the parent, so every derived scope — a nested block's, a composed
+   * fragment's — inherits it. Two consumers, both snapshot fences: the one in
+   * {@link execRunStep} (parse rejects a literal `snapshot:` in a repeat body
+   * via assertNoSnapshotInRepeat but cannot see into a `run:` target, which
    * resolves only at fragment load — so the load is where the refusal has to
-   * happen, and this is how the load knows it is under a repeat.
+   * happen, and this is how the load knows it is under a repeat), and the
+   * `tool:` dispatch in {@link execLeafStep}, which stamps the flag onto the
+   * invocation so a nested flow-execute can refuse the same shape at entry.
    */
   inRepeat?: boolean;
 }
@@ -2707,7 +2737,9 @@ async function execRunStep(
   // failures above, not a parse error: the fragment file is legal on its own,
   // only this composition point is wrong. No descent into the fragment's own
   // `run:` steps is needed: `inRepeat` rides childScope's spread into the
-  // scope that nested fragment loads under, so ITS load runs this same check.
+  // scope that nested fragment loads under, so ITS load runs this same check —
+  // and a `tool: flow-execute` below rides the same flag into its invocation
+  // options instead, where the nested run's own entry fence takes over.
   if (scope.inRepeat) {
     const snapshot = findFragmentSnapshot(fragment.steps);
     if (snapshot) {
@@ -2876,7 +2908,16 @@ async function execLeafStep(
         if (isNestedOrchestratorTool(step.name) && state.treeOutage) {
           state.treeOutage.proven = undefined;
         }
-        const result = await invokeSubTool(registry, ctx, step.name, args);
+        // A repeat scope rides the invocation options so a nested flow-execute
+        // — at any orchestrator distance — refuses a snapshot-bearing flow the
+        // way execRunStep's fence refuses a fragment.
+        const result = await invokeSubTool(
+          registry,
+          ctx,
+          step.name,
+          args,
+          scope.inRepeat ? { inRepeatFlowScope: true } : undefined
+        );
         if (isUnmetUiWaitResult(step.name, result)) {
           const note = (result as { note?: string }).note;
           return {

@@ -1617,6 +1617,184 @@ describe("repeat: snapshot smuggled in through a run: fragment", () => {
 });
 
 /**
+ * The third composition route into a repeat body — a raw `tool: flow-execute`
+ * step, the form flow-add-step keeps when the target is not a resolvable
+ * sibling and always produces for a remote recording. The dispatching run
+ * stamps the invocation (inRepeatFlowScope), invokeSubTool forwards it, and
+ * the nested flow-execute refuses a snapshot-bearing flow at entry — before
+ * any device work — then seeds its own run's scope so deeper hops, `run:` or
+ * `tool:`, keep refusing.
+ */
+describe("repeat: snapshot smuggled in through a nested tool: flow-execute", () => {
+  const SNAPSHOT: FlowStep = { kind: "snapshot", name: "home" };
+
+  /**
+   * A registry whose flow-execute is the real tool, invoked the way the real
+   * registry would invoke it: the caller's options become the nested ctx
+   * (ToolContext extends InvokeToolOptions) — the exact channel the
+   * repeat-scope flag rides. getTool declares `device` for it, like the real
+   * schema, so bindDeviceArgs hands the run device to each nested hop (#607).
+   * Everything else keeps the shared mock's behavior.
+   */
+  function nestedRunRegistry(): Registry {
+    const registry = {
+      invokeTool: vi.fn(async (id: string, args?: unknown, opts?: unknown) => {
+        if (id === "list-devices") return { devices: [] };
+        if (id === "gesture-tap") {
+          tapCount++;
+          onTap();
+          return { tapped: true };
+        }
+        if (id === "flow-execute") return flowTool.execute({}, args as never, opts as never);
+        return { ok: true };
+      }),
+      getTool: vi.fn((id: string) => {
+        if (id === "gesture-tap") return { inputSchema: { properties: { udid: {} } } };
+        if (id === "flow-execute") {
+          return { inputSchema: { properties: { name: {}, project_root: {}, device: {} } } };
+        }
+        return undefined;
+      }),
+    } as unknown as Registry;
+    const flowTool = createRunFlowTool(registry);
+    return registry;
+  }
+
+  async function runNested(name: string): Promise<FlowRunResult> {
+    const tool = createRunFlowTool(nestedRunRegistry());
+    return asRun(await tool.execute({}, { name, project_root: tmpDir, device: DEVICE }));
+  }
+
+  it("errors the tool step at nested-flow entry, before any nested step or device work", async () => {
+    currentTree = () => screen([notification()]);
+    await writeFlow("snapper", { executionPrerequisite: "", steps: [TAP, SNAPSHOT] });
+    await writeFlow("smuggler", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "repeat",
+          spec: { mode: "times", times: 2 },
+          steps: [
+            { kind: "tool", name: "flow-execute", args: { name: "snapper", project_root: tmpDir } },
+          ],
+        },
+        { kind: "echo", message: "after" },
+      ],
+    });
+
+    const result = await runNested("smuggler");
+
+    // The fence fires at the nested flow's entry: no tap dispatched, no
+    // comparison made — nothing of the composed flow started.
+    expect(result.ok).toBe(false);
+    expect(tapCount).toBe(0);
+    expect(vi.mocked(runSnapshot)).not.toHaveBeenCalled();
+    expect(shape(result.steps.slice(0, 2))).toEqual([
+      "repeat pass 2 times @0",
+      "repeat pass iteration 1/2 @1",
+    ]);
+    expect(result.steps[2]).toMatchObject({
+      kind: "tool",
+      status: "error",
+      tool: "flow-execute",
+      depth: 1,
+    });
+    expect(result.steps[2]?.reason).toBe(
+      'flow "snapper" contains snapshot "home", and this flow-execute runs inside a repeat ' +
+        "block — a snapshot name maps to one baseline, but the step would compare against it " +
+        "once per iteration, and each iteration's screen legitimately differs; move the " +
+        "snapshot after the block, or out of the composed flow"
+    );
+    expect(result.steps[3]).toMatchObject({ kind: "echo", status: "skip" });
+    expect(counts(result)).toEqual({ ok: false, passed: 0, failed: 0, skipped: 0, errored: 1 });
+  });
+
+  it("still nests the same flow-execute outside any repeat — the fence is the block's, not the tool's", async () => {
+    currentTree = () => screen([notification()]);
+    await writeFlow("snapper", { executionPrerequisite: "", steps: [TAP, SNAPSHOT] });
+    await writeFlow("straight", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "tool", name: "flow-execute", args: { name: "snapper", project_root: tmpDir } },
+      ],
+    });
+
+    const result = await runNested("straight");
+
+    expect(result.ok).toBe(true);
+    expect(tapCount).toBe(1);
+    expect(vi.mocked(runSnapshot)).toHaveBeenCalledTimes(1);
+    expect(result.steps[0]).toMatchObject({ kind: "tool", status: "pass", tool: "flow-execute" });
+  }, 15000);
+
+  it("stays fenced across a run: hop inside the nested flow — the seeded scope refuses at fragment load", async () => {
+    currentTree = () => screen([notification()]);
+    await writeFlow("frag", { executionPrerequisite: "", steps: [SNAPSHOT] });
+    await writeFlow("hopper", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "frag.yaml" }],
+    });
+    await writeFlow("run-hop-smuggler", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "repeat",
+          spec: { mode: "times", times: 2 },
+          // hopper passes the entry check (no literal snapshot among its
+          // steps) and starts executing; frag's load then hits execRunStep's
+          // fence because the nested run's root scope was seeded.
+          steps: [
+            { kind: "tool", name: "flow-execute", args: { name: "hopper", project_root: tmpDir } },
+          ],
+        },
+      ],
+    });
+
+    const result = await runNested("run-hop-smuggler");
+
+    expect(result.ok).toBe(false);
+    expect(vi.mocked(runSnapshot)).not.toHaveBeenCalled();
+    expect(result.steps[2]).toMatchObject({ kind: "tool", status: "fail", tool: "flow-execute" });
+    expect(result.steps[2]?.reason).toContain('flow "hopper" failed');
+    expect(result.steps[2]?.reason).toContain('fragment "frag.yaml" contains snapshot "home"');
+  }, 15000);
+
+  it("stays fenced across a tool hop — the flag re-propagates into the deeper invocation", async () => {
+    await writeFlow("deep-snapper", { executionPrerequisite: "", steps: [SNAPSHOT] });
+    await writeFlow("relay", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "tool",
+          name: "flow-execute",
+          args: { name: "deep-snapper", project_root: tmpDir },
+        },
+      ],
+    });
+    await writeFlow("tool-hop-smuggler", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "repeat",
+          spec: { mode: "times", times: 2 },
+          steps: [
+            { kind: "tool", name: "flow-execute", args: { name: "relay", project_root: tmpDir } },
+          ],
+        },
+      ],
+    });
+
+    const result = await runNested("tool-hop-smuggler");
+
+    expect(result.ok).toBe(false);
+    expect(vi.mocked(runSnapshot)).not.toHaveBeenCalled();
+    expect(result.steps[2]).toMatchObject({ kind: "tool", status: "fail", tool: "flow-execute" });
+    expect(result.steps[2]?.reason).toContain('flow "relay" failed');
+    expect(result.steps[2]?.reason).toContain('flow "deep-snapper" contains snapshot "home"');
+  }, 15000);
+});
+
+/**
  * A `repeat:` marker is scaffolding because of what the line IS, not because of
  * the path that reported it. Four sites report a block that will not run — a
  * hard stop, a cancellation, an enclosing block skipped, and the device-free
