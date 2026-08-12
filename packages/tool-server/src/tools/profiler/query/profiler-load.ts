@@ -26,6 +26,7 @@ import {
   inFlightGuardMessage,
 } from "../../../utils/profiler-shared/capture-guard";
 import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
+import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
 // session_id is interpolated into on-disk file paths
 // (`react-profiler-${id}_cpu.json`, `native-profiler-${id}_raw_cpu.xml`, …).
@@ -64,11 +65,9 @@ const zodSchema = z.object({
         "Required for load_react and load_native modes."
     ),
   port: metroPortField,
-  device_id: z
-    .string()
-    .describe(
-      "Target device id from `list-devices`. Used to cache the loaded React session under the correct port+device key, and required to resolve the native profiler session for load_native."
-    ),
+  device_id: metroDeviceIdParam(
+    "Target device id from `list-devices`. Used to cache the loaded React session under the correct port+device key, and required to resolve the native profiler session for load_native."
+  ),
   app_process: z
     .string()
     .optional()

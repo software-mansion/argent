@@ -293,8 +293,26 @@ const POST_LAUNCH_SETTLE_MS = 1500;
  * start would fail the first directive with a raw tree-source error; gating
  * the launch step reports the problem where it belongs, with a relaunch hint.
  */
-const NATIVE_READY_TIMEOUT_MS = 8000;
+// 15s (was 8s): the injected dylib's connect is gated on the app's main
+// thread, and a heavy first-ever cold start (Hermes first parse, asset
+// decode on a loaded host) can pin it past 8s. Matches the 15s
+// getFullHierarchy RPC tier — both wait out the same class of stall.
+const NATIVE_READY_TIMEOUT_MS = 15000;
 const NATIVE_READY_POLL_MS = 250;
+
+/**
+ * `tool:` steps that can change or relaunch the foreground app — running one
+ * invalidates {@link ActionEnv.launchedNativeApp}. `button` is included for
+ * its `home` case; distinguishing button kinds here would couple this list to
+ * that tool's arg schema for little gain.
+ */
+const FOREGROUND_CHANGING_TOOLS = new Set([
+  "launch-app",
+  "restart-app",
+  "reinstall-app",
+  "open-url",
+  "button",
+]);
 
 /**
  * Poll until native-devtools is connected for `bundleId`. Returns true once
@@ -453,6 +471,11 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   // it, or a cancelled gate would read as a launch that verified readiness.
   if (signal?.aborted) return ABORTED_OUTCOME;
   if (gate) return { ok: false, reason: gate };
+  // Remember the launched app for the rest of the RUN (nested `run:` flows
+  // share this state, so a nested launch retargets the whole run — see
+  // ActionEnv.launchedNativeApp). iOS tree reads use it only when target
+  // auto-resolution times out mid-stall.
+  state.launchedNativeApp = bundleId;
   return { ok: true };
 }
 
@@ -2209,6 +2232,14 @@ async function execLeafStep(
         return { ...base, status: "skip", tool: step.name, reason: "run aborted during delay" };
       }
       try {
+        // These sub-tools can change (or relaunch) the foreground app, so the
+        // `launch:`-derived hint no longer names what is on screen. Cleared
+        // BEFORE invoking: a tool that throws mid-way may still have switched
+        // apps, and a stale hint is worse than no hint (tree reads fall back
+        // to plain auto-resolution, today's behavior).
+        if (FOREGROUND_CHANGING_TOOLS.has(step.name)) {
+          state.launchedNativeApp = undefined;
+        }
         const result = await invokeSubTool(registry, ctx, step.name, args);
         if (isUnmetUiWaitResult(step.name, result)) {
           const note = (result as { note?: string }).note;
