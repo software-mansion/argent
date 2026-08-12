@@ -795,7 +795,7 @@ describe("scroll-to directive", () => {
   it("accepts the flush landing when the nudge reveals nothing (end of scroll)", async () => {
     // The target is the last element: it sits 0.02 from the screen bottom and
     // the container can't move. The nudge is attempted once and the tree
-    // doesn't budge — the deficit progress check (the target's own frame is
+    // doesn't budge — the progress check (the target's own frame is
     // the direct signal a nudge worked) accepts the flush landing before the
     // end-of-scroll fingerprint even gets to repeat — best effort, never a
     // failure.
@@ -968,8 +968,8 @@ describe("scroll-to directive", () => {
 
   it("gives up after MAX_EDGE_NUDGES and accepts the under-padded landing", async () => {
     // A snapping list absorbs most of each nudge but does creep: every round
-    // shows genuine progress (the deficit shrinks 0.02 ≥ EDGE_EPS: 0.08 →
-    // 0.06 → 0.04, so the progress check keeps allowing retries) yet stays
+    // shows genuine progress (the entry edge moves 0.02 ≥ EDGE_EPS: 0.98 →
+    // 0.96 → 0.94, so the progress check keeps allowing retries) yet stays
     // short of padding, with a distinct tree each round (so end-of-scroll
     // never fires either). The nudge budget (3) is then the bound that stops
     // the chase, and the step still passes — acceptance is never revoked.
@@ -1098,7 +1098,7 @@ describe("scroll-to directive", () => {
     // frames clamped to the screen that is indistinguishable in the tree from
     // a row mid-reveal, so the list resolves as the clip and one nudge goes
     // out (deficit 0.12, travel 0.18, anchored at the list's centre) even
-    // though no scroll can ever move the button. The deficit progress check
+    // though no scroll can ever move the button. The progress check
     // is the bound: the button did not budge, so the second round accepts the
     // flush landing - exactly ONE wasted gesture, never a failure.
     currentTree = () =>
@@ -1274,9 +1274,9 @@ describe("scroll-to directive", () => {
     // slip through: the nudge would anchor at the card's centre and scroll the
     // page, a container the step never named, and it could never succeed —
     // the clip travels WITH the target under its own gesture, so the deficit
-    // (0.073 here) is identical afterwards and only the progress check ends
-    // it. The clip must therefore be scrollable itself, not merely sit in
-    // something scrollable.
+    // (0.073 here) is identical afterwards - a chase only the nudge budget
+    // would end. The clip must therefore be scrollable itself, not merely sit
+    // in something scrollable.
     currentTree = () =>
       screen([
         n({
@@ -1639,8 +1639,8 @@ describe("scroll-to directive", () => {
     // round), while the gesture's own side effects — a press counter the
     // swipe committed as a press — keep OTHER text in the region churning, so
     // the end-of-scroll fingerprint never repeats and cannot stop the loop.
-    // The deficit progress check must: after one dispatched nudge the deficit
-    // has not shrunk by EDGE_EPS, so the flush landing is accepted with
+    // The progress check must: after one dispatched nudge the target's entry
+    // edge has not moved by EDGE_EPS, so the flush landing is accepted with
     // exactly ONE gesture. (Before the check, this shape burned the whole
     // MAX_EDGE_NUDGES budget — three real presses on the app.)
     let presses = 0;
@@ -1672,6 +1672,47 @@ describe("scroll-to directive", () => {
     expect(result.ok).toBe(true);
     expect(result.steps[0].status).toBe("pass");
     expect(swipes).toHaveLength(1);
+  });
+
+  it("does not read a clip that moved between rounds as nudge progress", async () => {
+    // Reviewer repro (Android, collapsing app bar): the clip is re-derived
+    // every round, and here the scroller grows between rounds - its end edge
+    // moves 0.955 -> 0.97, toward the screen edge - while the target's frame
+    // is byte-identical (bottom 0.95). A clip-relative deficit would read
+    // 0.095 -> 0.08: 0.015 >= EDGE_EPS of "progress" the target never made,
+    // buying a second gesture. The target's own entry edge is the signal: it
+    // did not move, so the first nudge is also the last.
+    const scrollerOfHeight = (height: number) =>
+      n({ role: "AXScrollArea", frame: { x: 0, y: 0, width: 1, height } });
+    const row = () =>
+      n({ label: "Order #1234", frame: { x: 0.1, y: 0.85, width: 0.8, height: 0.1 } });
+    let nudged = false;
+    currentTree = () =>
+      nudged ? screen([scrollerOfHeight(0.97), row()]) : screen([scrollerOfHeight(0.955), row()]);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      nudged = true;
+    });
+
+    await writeFlow("moving-clip", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "moving-clip", project_root: tmpDir, device: ANDROID_DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    // Exactly the one nudge (0.095 deficit x 1.5), anchored at the round-1
+    // scroller's centre - no follow-up bought by the clip's own movement.
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].settle).toBe(true);
+    expect(swipes[0].fromY).toBeCloseTo(0.4775, 5);
+    expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.1425, 5);
   });
 
   it("skips the start-edge nudge — at the limit the drag is pull-to-refresh", async () => {

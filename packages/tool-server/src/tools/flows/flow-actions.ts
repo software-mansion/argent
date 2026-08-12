@@ -382,11 +382,24 @@ const MAX_EDGE_NUDGES = 3; // touch slop makes a nudge undershoot — allow a re
 const EDGE_NUDGE_OVERSHOOT = 1.5;
 
 /**
+ * The coordinate of the target's entry edge along the scroll axis - frame end
+ * for `down`/`right`, frame start for `up`/`left`. The nudge loop's progress
+ * signal (see scrollToVisible): unlike the clip-relative deficit it reads
+ * nothing from the clip, so a clip that moves between rounds cannot fake
+ * target movement.
+ */
+function entryEdgeCoord(frame: DescribeFrame, direction: ScrollDirection): number {
+  const vertical = direction === "down" || direction === "up";
+  const fStart = vertical ? frame.y : frame.x;
+  return direction === "down" || direction === "right"
+    ? fStart + (vertical ? frame.height : frame.width)
+    : fStart;
+}
+
+/**
  * How far the target's entry edge still is from sitting `EDGE_AVOID_PADDING`
- * clear of the clip's entry edge (<= 0 once padded enough). Split out of
- * {@link edgeNudgeDistance} because the nudge loop also reads it as its
- * progress signal: a follow-up nudge is only allowed when the previous one
- * shrank this deficit (see scrollToVisible).
+ * clear of the clip's entry edge (<= 0 once padded enough) - the geometry
+ * {@link edgeNudgeDistance} sizes a nudge's travel from.
  */
 function entryEdgeDeficit(
   frame: DescribeFrame,
@@ -807,7 +820,7 @@ function anchorScrollFrames(tree: DescribeNode, anchor: { x: number; y: number }
  * floating bar drawn inside the scroller's rect) geometrically passes this
  * gate even though no scroll moves it - and the entry-edge slack widens that
  * to an overlay overhanging the entry edge with its start side inside, on
- * iOS indistinguishable in the tree from a row mid-reveal - the deficit
+ * iOS indistinguishable in the tree from a row mid-reveal - the
  * progress check in scrollToVisible bounds either case to a single small
  * gesture. And a scroller the adapters don't emit at all (on Chromium, an
  * anonymous overflow scroller - the touch adapters keep every
@@ -1032,7 +1045,7 @@ async function scrollIncrement(
  * end-of-scroll fingerprint — scoped, like the gesture, to the scrollers under
  * the round's actual anchor — accepts the flush landing when a nudge moves
  * nothing; a per-round progress check allows a follow-up nudge only when the
- * previous one shrank the entry-edge deficit (the fingerprint alone cannot
+ * previous one moved the target's own entry edge (the fingerprint alone cannot
  * stop the loop when the gesture's own side effects keep the tree churning);
  * and MAX_EDGE_NUDGES caps the retries. Once the
  * axis check has accepted a frame the step can only pass, and only
@@ -1051,16 +1064,19 @@ async function scrollToVisible(
   // than a failure, so a nudge gone sideways (target transiently unresolved,
   // iterations exhausted) can never fail a step that had its target visible.
   let accepted: DescribeFrame | undefined;
-  // Entry-edge deficit at the moment the previous nudge went out — the nudge
-  // loop's direct progress signal. The region fingerprint cannot stop the
-  // loop when the gesture's own side effects keep the tree changing (a press
-  // counter ticked by a swipe the OS committed as a press, a spinner the
-  // nudge woke): only the target's own frame says whether the nudge worked,
-  // so a follow-up nudge is allowed only when the deficit shrank by at least
-  // EDGE_EPS. Touch-slop undershoot still passes (a floored 0.05 nudge minus
-  // ~0.01 slop moves >= 0.04), so MAX_EDGE_NUDGES keeps its purpose for
-  // genuine partial progress.
-  let prevDeficit: number | undefined;
+  // The target's entry-edge coordinate at the moment the previous nudge went
+  // out - the nudge loop's direct progress signal. The region fingerprint
+  // cannot stop the loop when the gesture's own side effects keep the tree
+  // changing (a press counter ticked by a swipe the OS committed as a press,
+  // a spinner the nudge woke), and the clip-relative deficit is no signal
+  // either - the clip is re-derived every round and can itself move (a
+  // collapsing app bar), shifting the deficit with zero target movement: only
+  // the target's own frame says whether the nudge worked, so a follow-up
+  // nudge is allowed only when the entry edge moved at least EDGE_EPS in the
+  // scrolled direction. Touch-slop undershoot still passes (a floored 0.05
+  // nudge minus ~0.01 slop moves >= 0.04), so MAX_EDGE_NUDGES keeps its
+  // purpose for genuine partial progress.
+  let prevEntryEdge: number | undefined;
   for (let i = 0; i < MAX_SCROLL_ITERATIONS; i++) {
     if (env.signal?.aborted) return { aborted: true };
 
@@ -1112,11 +1128,19 @@ async function scrollToVisible(
         nudge = edgeNudgeDistance(frame, direction, clip);
       }
       if (nudge === 0 || clip === undefined || nudges >= MAX_EDGE_NUDGES) return { frame };
-      // Progress check (see prevDeficit): a nudge that didn't move the target
-      // closer to padding will not be repeated — accept the flush landing.
-      const deficit = entryEdgeDeficit(frame, direction, clip);
-      if (prevDeficit !== undefined && prevDeficit - deficit < EDGE_EPS) return { frame };
-      prevDeficit = deficit;
+      // Progress check (see prevEntryEdge): a nudge that didn't move the
+      // target will not be repeated - accept the flush landing. Down/right
+      // scrolls carry content toward the start (the coordinate decreases);
+      // up/left the mirror.
+      const entryEdge = entryEdgeCoord(frame, direction);
+      if (prevEntryEdge !== undefined) {
+        const moved =
+          direction === "down" || direction === "right"
+            ? prevEntryEdge - entryEdge
+            : entryEdge - prevEntryEdge;
+        if (moved < EDGE_EPS) return { frame };
+      }
+      prevEntryEdge = entryEdge;
       nudgeRegion = clip;
     }
     // Post-acceptance, a round that no longer re-accepts the target (transient
