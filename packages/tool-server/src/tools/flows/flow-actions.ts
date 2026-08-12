@@ -64,9 +64,11 @@ export interface ActionEnv {
   device: DeviceInfo;
   signal?: AbortSignal;
   /**
-   * App id of the run's most recent successful `launch` step. Pins iOS tree
-   * reads to the app under test instead of auto-resolving (see
-   * `fetchFlowTree`); unset for runs with no launch step.
+   * App id of the run's most recent successful `launch` step; cleared by raw
+   * `tool:` steps (their effect on the foreground app is opaque) and by a
+   * launch attempt until it succeeds. Chromium launches hand off before the
+   * assignment, so chromium runs never set it. Only iOS tree reads consume it,
+   * pinning the app under test instead of auto-resolving (see `fetchFlowTree`).
    */
   launchedAppId?: string;
   /**
