@@ -1,3 +1,4 @@
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { DeviceInfo, Registry } from "@argent/registry";
 import {
   buildAppStateMessage,
@@ -339,6 +340,28 @@ export async function queryFullHierarchyTree(
   // resolveNativeTargetApp's own errors (no connected app / ambiguous frontmost)
   // already carry the actionable next step, so they propagate unwrapped.
   const target = await resolveNativeTargetApp(nativeApi, bundleId);
+
+  if (bundleId) {
+    // The pin was proven connected at launch, but the app can crash or be
+    // killed later - the socket close removes it from the connections map. Gate
+    // on isConnected (a pure map lookup), never requiresAppRestart: its miss
+    // path runs reverifyEnv - a full env re-setup with 10s simctl timeouts -
+    // and tree reads poll every 300ms, so a dead pin would drive that repair
+    // once per poll and three failures latch the device's process-wide
+    // give-up. Injection is not in question either: the pinned app launched
+    // with the instrumentation loaded, so a missing connection means it's gone.
+    if (!nativeApi.isConnected(bundleId)) {
+      throw new FailureError(
+        `${bundleId} lost its devtools connection after launch (the app crashed, was terminated, or its socket closed) - relaunch it (launch-app, or a flow \`launch\` step) so the full view hierarchy is readable`,
+        {
+          error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_CONNECTED,
+          failure_stage: "flow_tree_pinned_target",
+          failure_area: "tool_server",
+          error_kind: "not_found",
+        }
+      );
+    }
+  }
 
   const rawResult = (await nativeApi.queryViewHierarchy(
     target.bundleId,
