@@ -1,5 +1,4 @@
 import { TypedEventEmitter } from "@argent/registry";
-import type { CDPClient } from "../utils/debugger/cdp-client";
 import { connectCdp, primePageSession } from "./cdp-session";
 import { ClipboardSyncState, setClipboardText } from "./clipboard";
 import { FpsTracker } from "./fps";
@@ -172,5 +171,3 @@ export type { NetworkManager, NetworkRequestRecord } from "./network";
 export type { Cookie } from "./storage";
 
 export { setClipboardText } from "./clipboard";
-
-export type { CDPClient };
