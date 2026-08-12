@@ -577,11 +577,18 @@ async function probeAgainstRunnerTree(
  * replay tree keeps. A describe-derived selector could fail — or hit a
  * different element — at replay while recording reported success.
  *
- * The launched app is passed because a recording relaunches the app AFTER this
- * tool-server bound its listener: the first tap reads during the connect
- * window, where that id is the only one the iOS tree source can measure, and it
- * yields a measured reason instead of auto-targeting's "Launch or restart the
- * app first".
+ * The launched app the read is given plays the part it plays at replay (see
+ * `ActionEnv`): on iOS it pins the read to that app instead of auto-resolving
+ * the frontmost connection, so the recorder resolves against the target replay
+ * will. The recorder is where that matters most — a recording relaunches the
+ * app AFTER this tool-server bound its listener, so the first tap reads during
+ * the connect window, whose measured messages say NOT to restart the app.
+ * Without it the kept-coordinates warning quotes auto-targeting's "Launch or
+ * restart the app first" instead.
+ *
+ * A pinned read is verified still foreground-like - not frontmost - so it keeps
+ * reading the launched app where auto-resolve would refuse a tie as ambiguous
+ * and would elect a uniquely-active sibling.
  */
 async function captureTapSelector(
   registry: Registry,

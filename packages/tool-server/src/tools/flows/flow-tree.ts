@@ -47,8 +47,10 @@ const FLOW_TREE_SOURCES: Partial<
     ) => Promise<DescribeTreeData>
   >
 > = {
-  // Only iOS consumes the pin (see queryFullHierarchyTree for why it matters);
-  // the other tree sources are per-device and never auto-resolve.
+  // Only iOS consumes the pin (see queryFullHierarchyTree for why it matters).
+  // The platforms below resolve their tree source per-device and never
+  // auto-resolve; ios-remote has no entry here at all and falls through to
+  // fetchFlowTree's not-supported throw.
   ios: (registry, device, launchedAppId) =>
     queryFullHierarchyTree(registry, device, launchedAppId),
   android: (registry, device) => queryAndroidFullHierarchy(registry, device),
