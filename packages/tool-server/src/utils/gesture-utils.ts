@@ -82,3 +82,68 @@ export function sendTouchEvent(
     second_y: y2 ?? null,
   });
 }
+
+/** One dispatched frame of a two-finger gesture, in normalized coordinates. */
+export interface TwoFingerFrame {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+/**
+ * Tolerance for the on-screen check. A gesture spanning the full screen lands
+ * exactly on 0 or 1, and the arithmetic that gets there can drift a few ulps
+ * (a real rotate frame produces 0.09999999999999998), so the comparison is
+ * inclusive with a little slack rather than a bare `< 0`.
+ */
+const ON_SCREEN_EPSILON = 1e-9;
+
+/**
+ * First finger position in `frames` that falls outside the screen, or undefined
+ * if every one is on it.
+ *
+ * Checked against the frames that will actually be dispatched rather than
+ * derived analytically: a pinch is affine in time so its endpoints would bound
+ * it, but a rotate sweep is not — an arc from 0° to 180° has both endpoints near
+ * the centre line while the frame at 90° reaches a full radius away.
+ *
+ * Callers must run this BEFORE dispatching anything. A finger that goes
+ * off-screen mid-gesture is reported by Android as a system gesture (the
+ * notification shade, back, or home) instead of reaching the app, and rejecting
+ * after the first `Down` would leave a synthetic finger held on the glass.
+ */
+export function findOffScreenFinger(
+  frames: TwoFingerFrame[]
+):
+  | { frameIndex: number; frameCount: number; finger: 1 | 2; axis: "x" | "y"; value: number }
+  | undefined {
+  for (const [frameIndex, frame] of frames.entries()) {
+    const candidates = [
+      { finger: 1 as const, axis: "x" as const, value: frame.x1 },
+      { finger: 1 as const, axis: "y" as const, value: frame.y1 },
+      { finger: 2 as const, axis: "x" as const, value: frame.x2 },
+      { finger: 2 as const, axis: "y" as const, value: frame.y2 },
+    ];
+    for (const candidate of candidates) {
+      if (candidate.value < -ON_SCREEN_EPSILON || candidate.value > 1 + ON_SCREEN_EPSILON) {
+        // Rounded for the message: the raw sum carries float noise
+        // (-0.025000000000000022), which reads as false precision.
+        return {
+          frameIndex,
+          frameCount: frames.length,
+          ...candidate,
+          value: Number(candidate.value.toFixed(6)),
+        };
+      }
+    }
+  }
+  return undefined;
+}
+
+/** How far past which edge a coordinate went, for an error message. */
+export function describeOffScreenEdge(axis: "x" | "y", value: number): string {
+  const past = value < 0 ? -value : value - 1;
+  const edge = axis === "y" ? (value < 0 ? "top" : "bottom") : value < 0 ? "left" : "right";
+  return `${past.toFixed(3).replace(/\.?0+$/, "")} past the ${edge} edge`;
+}

@@ -2,7 +2,13 @@ import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
-import { sendTouchEvent } from "../../utils/gesture-utils";
+import {
+  sendTouchEvent,
+  findOffScreenFinger,
+  describeOffScreenEdge,
+  type TwoFingerFrame,
+} from "../../utils/gesture-utils";
+import { InvalidToolInputError } from "../../utils/capability";
 import { sleep } from "../../utils/timing";
 
 const zodSchema = z.object({
@@ -82,7 +88,7 @@ export const gesturePinchTool: ToolDefinition<Params, Result> = {
 startDistance > endDistance = pinch in (zoom out). startDistance < endDistance = pinch out (zoom in).
 Typical values: startDistance 0.2, endDistance 0.6 for a zoom-in pinch at screen center.
 Auto-generates interpolated frames at ~60fps. The angle parameter controls the axis (0 = horizontal, 90 = vertical). Optional endCenterX/endCenterY drift the centroid linearly over the gesture (omitted = fixed center).
-Use when you need to zoom in or out on a map, image, or zoomable view. Returns { pinched: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
+Use when you need to zoom in or out on a map, image, or zoomable view. Returns { pinched: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device, or if the computed finger positions fall outside 0-1 — reduce the distance, move the center, or use endCenterX/endCenterY. Note a finger that merely lands NEAR an edge can still be grabbed by a system gesture (the Android notification shade sits at the top edge), so keep some margin.`,
   zodSchema,
   capability,
   services: (params) => ({
@@ -99,8 +105,10 @@ Use when you need to zoom in or out on a map, image, or zoomable view. Returns {
     const endCenterX = params.endCenterX ?? params.centerX;
     const endCenterY = params.endCenterY ?? params.centerY;
 
-    let timestampMs = 0;
-
+    // Build every frame before touching the device: a finger that leaves the
+    // screen has to be caught while nothing has been dispatched, or the gesture
+    // is already half-sent when it is rejected.
+    const frames: TwoFingerFrame[] = [];
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
       const dist = params.startDistance + (params.endDistance - params.startDistance) * t;
@@ -108,15 +116,35 @@ Use when you need to zoom in or out on a map, image, or zoomable view. Returns {
       const cx = params.centerX + (endCenterX - params.centerX) * t;
       const cy = params.centerY + (endCenterY - params.centerY) * t;
 
-      const x1 = cx - halfDist * cosA;
-      const y1 = cy - halfDist * sinA;
-      const x2 = cx + halfDist * cosA;
-      const y2 = cy + halfDist * sinA;
+      frames.push({
+        x1: cx - halfDist * cosA,
+        y1: cy - halfDist * sinA,
+        x2: cx + halfDist * cosA,
+        y2: cy + halfDist * sinA,
+      });
+    }
 
+    const offScreen = findOffScreenFinger(frames);
+    if (offScreen) {
+      const when = offScreen.frameIndex === 0 ? "at the start of" : "during";
+      throw new InvalidToolInputError(
+        `gesture-pinch: finger ${offScreen.axis} = ${offScreen.value} ${when} the gesture is ` +
+          `off-screen (must be 0–1). centerX ${params.centerX} / centerY ${params.centerY} with ` +
+          `startDistance ${params.startDistance} at angle ${angleDeg} puts a finger ` +
+          `${describeOffScreenEdge(offScreen.axis, offScreen.value)} — the OS reads an off-screen ` +
+          `touch as a system gesture (on Android, the notification shade) instead of a pinch, so the ` +
+          `app never sees it. Reduce the distance, move the center, or set endCenterX/endCenterY to ` +
+          `drift the centroid inward as the fingers spread.`
+      );
+    }
+
+    let timestampMs = 0;
+
+    for (const [i, frame] of frames.entries()) {
       const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
       if (i === 0) timestampMs = Date.now();
 
-      sendTouchEvent(api, type, x1, y1, x2, y2);
+      sendTouchEvent(api, type, frame.x1, frame.y1, frame.x2, frame.y2);
       if (i < steps) await sleep(16);
     }
 

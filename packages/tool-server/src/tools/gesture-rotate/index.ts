@@ -7,7 +7,13 @@ import {
 } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
-import { sendTouchEvent } from "../../utils/gesture-utils";
+import {
+  sendTouchEvent,
+  findOffScreenFinger,
+  describeOffScreenEdge,
+  type TwoFingerFrame,
+} from "../../utils/gesture-utils";
+import { InvalidToolInputError } from "../../utils/capability";
 import { sleep } from "../../utils/timing";
 
 const zodSchema = z
@@ -108,7 +114,7 @@ export const gestureRotateTool: ToolDefinition<Params, Result> = {
 endAngle > startAngle = clockwise rotation. Typical values: radius 0.15, startAngle 0, endAngle 90 for a 90° clockwise turn. A single radius applies to both axes, so on a non-square screen it traces a physical ellipse (finger separation varies through the turn); pass radiusX+radiusY (fractions of width/height with radiusX·width = radiusY·height) for a physically circular orbit instead.
 Auto-generates interpolated frames at ~60fps.
 Unlike gesture-pinch which moves fingers linearly to zoom, this orbits fingers in an arc to change orientation.
-Use when you need to rotate a map, image picker, or any rotateable UI element. Returns { rotated: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
+Use when you need to rotate a map, image picker, or any rotateable UI element. Returns { rotated: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device, or if any swept finger position falls outside 0-1 — reduce the radius, move the center, or sweep a narrower arc. Note a finger that merely lands NEAR an edge can still be grabbed by a system gesture, so keep some margin.`,
   zodSchema,
   inputSchema,
   capability,
@@ -123,6 +129,39 @@ Use when you need to rotate a map, image picker, or any rotateable UI element. R
     const radiusX = params.radiusX ?? params.radius!;
     const radiusY = params.radiusY ?? params.radius!;
 
+    // Build the swept frames before dispatching. Unlike a pinch, an arc is not
+    // monotonic between its endpoints — 0°→180° starts and ends near the centre
+    // line while passing a full radius away at 90° — so the only reliable check
+    // is over the frames that will actually be sent.
+    const frames: TwoFingerFrame[] = [];
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const angleDeg = params.startAngle + (params.endAngle - params.startAngle) * t;
+      const angleRad = (angleDeg * Math.PI) / 180;
+
+      frames.push({
+        x1: params.centerX + radiusX * Math.cos(angleRad),
+        y1: params.centerY + radiusY * Math.sin(angleRad),
+        x2: params.centerX - radiusX * Math.cos(angleRad),
+        y2: params.centerY - radiusY * Math.sin(angleRad),
+      });
+    }
+
+    const offScreen = findOffScreenFinger(frames);
+    if (offScreen) {
+      const sweptDeg =
+        params.startAngle +
+        (params.endAngle - params.startAngle) * (offScreen.frameIndex / Math.max(1, steps));
+      throw new InvalidToolInputError(
+        `gesture-rotate: finger ${offScreen.axis} = ${offScreen.value} at ${Math.round(sweptDeg)}° ` +
+          `of the sweep is off-screen (must be 0–1). centerX ${params.centerX} / centerY ` +
+          `${params.centerY} with radiusX ${radiusX} / radiusY ${radiusY} puts a finger ` +
+          `${describeOffScreenEdge(offScreen.axis, offScreen.value)} — the OS reads an off-screen ` +
+          `touch as a system gesture instead of a rotation, so the app never sees it. Reduce the ` +
+          `radius, move the center away from that edge, or sweep a narrower arc.`
+      );
+    }
+
     let timestampMs = 0;
     // Last dispatched finger positions, so an abort can lift from where the
     // fingers actually are.
@@ -131,7 +170,7 @@ Use when you need to rotate a map, image picker, or any rotateable UI element. R
     let lastX2 = 0;
     let lastY2 = 0;
 
-    for (let i = 0; i <= steps; i++) {
+    for (const [i, frame] of frames.entries()) {
       if (ctx?.signal?.aborted) {
         // Once Down has been dispatched, the synthetic fingers are on the glass —
         // send a terminal Up so a cancelled run doesn't leave them held down.
@@ -143,23 +182,14 @@ Use when you need to rotate a map, image picker, or any rotateable UI element. R
         throw err;
       }
 
-      const t = i / steps;
-      const angleDeg = params.startAngle + (params.endAngle - params.startAngle) * t;
-      const angleRad = (angleDeg * Math.PI) / 180;
-
-      const x1 = params.centerX + radiusX * Math.cos(angleRad);
-      const y1 = params.centerY + radiusY * Math.sin(angleRad);
-      const x2 = params.centerX - radiusX * Math.cos(angleRad);
-      const y2 = params.centerY - radiusY * Math.sin(angleRad);
-
       const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
       if (i === 0) timestampMs = Date.now();
 
-      sendTouchEvent(api, type, x1, y1, x2, y2);
-      lastX1 = x1;
-      lastY1 = y1;
-      lastX2 = x2;
-      lastY2 = y2;
+      sendTouchEvent(api, type, frame.x1, frame.y1, frame.x2, frame.y2);
+      lastX1 = frame.x1;
+      lastY1 = frame.y1;
+      lastX2 = frame.x2;
+      lastY2 = frame.y2;
       if (i < steps) await sleep(16);
     }
 
