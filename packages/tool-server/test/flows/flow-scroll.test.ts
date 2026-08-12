@@ -832,6 +832,10 @@ describe("scroll-to directive", () => {
     expect(result.ok).toBe(true);
     expect(result.steps[0].status).toBe("pass");
     expect(swipes).toHaveLength(1);
+    // The one gesture is nudge-sized (0.08 deficit x 1.5 = 0.12) at the
+    // scroller centre - not the 0.5 half-region search increment.
+    expect(swipes[0].fromY).toBeCloseTo(0.5, 5);
+    expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.12, 5);
   });
 
   it("skips the nudge when the scroll container is inset from the screen edge", async () => {
@@ -1011,6 +1015,20 @@ describe("scroll-to directive", () => {
     expect(result.ok).toBe(true);
     expect(result.steps[0].status).toBe("pass");
     expect(swipes).toHaveLength(3);
+    // Each round re-measures the deficit from that round's tree: entry edges
+    // 0.98 / 0.96 / 0.94 give deficits 0.08 / 0.06 / 0.04, so the travels
+    // shrink round by round (deficit x 1.5; the 0.45+ headroom half-caps never
+    // bite) - a loop reusing the first round's travel would send 0.12 thrice.
+    expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.12, 5);
+    expect(swipes[1].fromY - swipes[1].toY).toBeCloseTo(0.09, 5);
+    expect(swipes[2].fromY - swipes[2].toY).toBeCloseTo(0.06, 5);
+    // Every round anchors at the full-bleed scroller's centre.
+    expect(swipes[0].fromX).toBeCloseTo(0.5, 5);
+    expect(swipes[0].fromY).toBeCloseTo(0.5, 5);
+    expect(swipes[1].fromX).toBeCloseTo(0.5, 5);
+    expect(swipes[1].fromY).toBeCloseTo(0.5, 5);
+    expect(swipes[2].fromX).toBeCloseTo(0.5, 5);
+    expect(swipes[2].fromY).toBeCloseTo(0.5, 5);
   });
 
   it("stops at the accepted frame when a nudge round loses the target", async () => {
@@ -1099,6 +1117,10 @@ describe("scroll-to directive", () => {
     expect(result.ok).toBe(true);
     expect(result.steps[0].status).toBe("pass");
     expect(swipes).toHaveLength(1);
+    // The one gesture is nudge-sized (0.08 deficit x 1.5 = 0.12) anchored at
+    // the pane centre - not the pane's 0.25 half-extent search increment.
+    expect(swipes[0].fromY).toBeCloseTo(0.75, 5);
+    expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.12, 5);
   });
 
   it("passes on the accepted frame when the nudge's gesture backend throws", async () => {
@@ -1789,6 +1811,10 @@ describe("scroll-to directive", () => {
     expect(result.ok).toBe(true);
     expect(result.steps[0].status).toBe("pass");
     expect(swipes).toHaveLength(1);
+    // The one gesture is nudge-sized (0.08 deficit x 1.5 = 0.12) at the
+    // scroller centre - not the 0.5 half-region search increment.
+    expect(swipes[0].fromY).toBeCloseTo(0.5, 5);
+    expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.12, 5);
   });
 
   it("does not read a clip that moved between rounds as nudge progress", async () => {
