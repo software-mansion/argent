@@ -1133,6 +1133,43 @@ describe("flow-execute chromium boot", () => {
     expect(bootElectronApp).not.toHaveBeenCalled();
   });
 
+  it("does not boot when the launch hides in a snapshot-bearing fragment inside a times block", async () => {
+    // The fourth refusal kind: under a repeat scope execRunStep refuses a
+    // snapshot-bearing fragment at load, so the launch behind it never runs —
+    // booting for it would spawn an app the run can never use (and, with the
+    // app already open, report a single-instance lock instead of the fence).
+    const top = await writeFlow("steps:\n  - repeat: 1\n    steps:\n      - run: frag.yaml\n");
+    await writeSiblingFlow(
+      top,
+      "frag",
+      "steps:\n  - launch: { chromium: ./app }\n  - snapshot: home\n"
+    );
+    const registry = makeRegistry(async (id: string) =>
+      id === "list-devices" ? { devices: [] } : {}
+    );
+
+    await expect(
+      runFlow(registry, { name: "snap-frag", project_root: PROJECT_ROOT, flow_file: top })
+    ).rejects.toThrow(/No booted device found/);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+
+    // The executor's verdict on the same chain, pinned so it actually runs:
+    // the run: errors with the fence's message and no launch line appears.
+    const result = await runFlow(registry, {
+      name: "snap-frag",
+      project_root: PROJECT_ROOT,
+      flow_file: top,
+      device: "chromium-cdp-9999",
+    });
+
+    expect(result.ok).toBe(false);
+    const failed = result.steps.find((s) => s.status === "error");
+    expect(failed).toMatchObject({ kind: "run" });
+    expect(failed?.reason).toContain('fragment "frag.yaml" contains snapshot "home"');
+    expect(result.steps.some((s) => s.kind === "launch")).toBe(false);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+  });
+
   it("does not boot when a leading run: chain reaches no launch", async () => {
     // A plain fragment composition: nothing to boot, so device resolution
     // proceeds normally (and reports no booted device here).
@@ -1863,6 +1900,51 @@ describe("flow-execute prerequisite vs leading launch chain", () => {
     await expect(refusal).rejects.toThrow(/"e2e-a"/);
     expect(bootElectronApp).not.toHaveBeenCalled();
     expect((registry.invokeTool as any).mock.calls).toEqual([]);
+  });
+
+  it("takes the handshake when the repeat-wrapped run:'s fragment carries a snapshot", async () => {
+    // The scan mirrors execRunStep's fragment-snapshot fence: under a repeat
+    // scope that hop is refused at load, so the launch behind it never runs —
+    // refusing here would demand the author drop a launch that cannot execute.
+    // The ordinary handshake stands, and the acknowledged run errors the run:
+    // step with the fence's own message, no launch line and no boot.
+    const fragment = await writeFlow(
+      'executionPrerequisite: "logged in"\n' +
+        "steps:\n  - repeat: 1\n    steps:\n      - run: frag.yaml\n"
+    );
+    await writeSiblingFlow(
+      fragment,
+      "frag",
+      "steps:\n  - launch: { chromium: ./app }\n  - snapshot: home\n"
+    );
+    const udid = "1A2B3C4D-5E6F-4A8B-9C0D-1E2F3A4B5C6D";
+    const registry = makeRegistry(async (id: string) =>
+      id === "list-devices" ? { devices: [{ platform: "ios", udid, state: "Booted" }] } : {}
+    );
+
+    const noticed = await runFlowRaw(registry, {
+      name: "snap-frag-prereq",
+      project_root: PROJECT_ROOT,
+      flow_file: fragment,
+    });
+    expect(noticed).toMatchObject({
+      notice: expect.stringContaining("prerequisite"),
+      executionPrerequisite: "logged in",
+    });
+
+    const result = await runFlow(registry, {
+      name: "snap-frag-prereq",
+      project_root: PROJECT_ROOT,
+      flow_file: fragment,
+      prerequisiteAcknowledged: true,
+    });
+
+    expect(result.ok).toBe(false);
+    const failed = result.steps.find((s) => s.status === "error");
+    expect(failed).toMatchObject({ kind: "run" });
+    expect(failed?.reason).toContain('fragment "frag.yaml" contains snapshot "home"');
+    expect(result.steps.some((s) => s.kind === "launch")).toBe(false);
+    expect(bootElectronApp).not.toHaveBeenCalled();
   });
 
   it("continues past an all-echo times block to the launch-bearing run: behind it", async () => {
