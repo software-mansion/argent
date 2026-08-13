@@ -1189,7 +1189,10 @@ async function isTvDevice(device: DeviceInfo): Promise<boolean> {
  * nothing; a per-round progress check allows a follow-up nudge only when the
  * previous one moved the target's own entry edge (the fingerprint alone cannot
  * stop the loop when the gesture's own side effects keep the tree churning);
- * and MAX_EDGE_NUDGES caps the retries. Once the
+ * and MAX_EDGE_NUDGES caps the retries. None of the three binds when the first
+ * acceptance lands in the last few iterations: that round's nudge goes out with
+ * no round left to read it back, so MAX_SCROLL_ITERATIONS ends the phase
+ * instead, as a pass that warns the landing was never read. Once the
  * axis check has accepted the target the step can no longer fail, and only
  * nudge-sized gestures are dispatched — a round that loses the target ends
  * the loop as a pass. Cancelling the run is the one non-pass exit left: the
@@ -1407,7 +1410,11 @@ async function scrollToVisible(
       await scrollIncrement(env, direction, anchorRegion);
     }
   }
-  // Iterations ran out mid-nudge.
+  // Reached when the LAST iteration dispatches a nudge: the budget ends before
+  // any round reads where it landed. That needs the first acceptance in one of
+  // the last three iterations - the nudge cap is only consulted on the round
+  // AFTER the nudge that hits it, so from there the capping round would itself
+  // fall outside the budget.
   if (accepted) {
     return {
       found: true,

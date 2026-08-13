@@ -1226,15 +1226,19 @@ describe("scroll-to directive", () => {
   );
 
   it(
-    "passes with a warning when the iterations run out on the nudge round",
+    "passes with a warning when the iterations run out on the first acceptance's nudge",
     { timeout: 30_000 },
     async () => {
-      // The last of the four post-acceptance bail-outs: a long search finds the
-      // target on the 25th and final iteration, the nudge goes out, and the
-      // loop ends before any round can read where it landed. Acceptance is
-      // never revoked, so this passes - but the nudge's result is as unknown as
-      // it is in the outage and vanished-container cases, and the pass says so.
-      // Each search round emits a distinct tree so end-of-scroll never fires.
+      // Reachability pin for the post-loop `if (accepted)` exit, the last of
+      // the four post-acceptance bail-outs: a long search finds the target on
+      // the 25th and final iteration, that round's nudge goes out, and the
+      // budget ends before any round can read where it landed. This scenario
+      // spends a single nudge; the cap could not bind anyway, since it is only
+      // consulted on a round after the nudge and no round is left.
+      // Acceptance is never revoked, so this passes, but the nudge's result is
+      // as unknown as it is in the outage and vanished-container cases, and the
+      // pass says so. Each search round emits a distinct tree so end-of-scroll
+      // never fires.
       let gestures = 0;
       currentTree = () =>
         gestures >= 24
