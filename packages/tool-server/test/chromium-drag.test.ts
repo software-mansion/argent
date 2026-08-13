@@ -149,7 +149,7 @@ describe("gesture-drag", () => {
     }
   });
 
-  it("momentum: false eases the moves out (release at ~0 pointer velocity); without it they stay linear", async () => {
+  it("momentum: false eases the moves out (release at ~0 pointer velocity); with momentum they stay linear, by default and by name", async () => {
     // Web drag libraries compute their fling from the release velocity of this
     // very mouse stream, so the eased curve must genuinely decay into the
     // release. durationMs 64 samples 4 frames, under the ease-out floor, so the
@@ -187,19 +187,26 @@ describe("gesture-drag", () => {
       expect(xs[i] - xs[i - 1]).toBeLessThan(xs[i - 1] - xs[i - 2]);
     }
 
-    const control = fakeChromiumApi();
-    await gestureDragTool.execute(
-      { chromium: control } as never,
-      { ...params, durationMs: 64 } as never
-    );
-    const controlMoves = control.dispatchMouseEvent.mock.calls
-      .map((c) => c[0] as Record<string, unknown>)
-      .slice(1, -1);
-    expect(controlMoves).toHaveLength(3);
-    // Without the ease-out the same endpoints interpolate on the straight linear grid.
-    expect(controlMoves[0].x as number).toBeCloseTo(startPx + deltaPx * 0.25, 5);
-    expect(controlMoves[1].x as number).toBeCloseTo(startPx + deltaPx * 0.5, 5);
-    expect(controlMoves[2].x as number).toBeCloseTo(startPx + deltaPx * 0.75, 5);
+    // The control for the ease-out above, run both ways round so the flag's
+    // polarity is pinned from both sides rather than only where it is set - a
+    // predicate reading any stated `momentum` as momentum-free stays green on
+    // the default leg alone.
+    for (const momentum of [undefined, true]) {
+      const control = fakeChromiumApi();
+      await gestureDragTool.execute(
+        { chromium: control } as never,
+        { ...params, durationMs: 64, momentum } as never
+      );
+      const controlMoves = control.dispatchMouseEvent.mock.calls
+        .map((c) => c[0] as Record<string, unknown>)
+        .slice(1, -1);
+      // Frame-rate sampling only - the 8-frame ease-out floor stays off it.
+      expect(controlMoves).toHaveLength(3);
+      // Without the ease-out the same endpoints interpolate on the straight linear grid.
+      expect(controlMoves[0].x as number).toBeCloseTo(startPx + deltaPx * 0.25, 5);
+      expect(controlMoves[1].x as number).toBeCloseTo(startPx + deltaPx * 0.5, 5);
+      expect(controlMoves[2].x as number).toBeCloseTo(startPx + deltaPx * 0.75, 5);
+    }
   });
 
   it("floors the ease-out sample count so the final frame before the release is a sliver of the travel", async () => {
@@ -219,10 +226,16 @@ describe("gesture-drag", () => {
       expect(finalFrameFraction(eased.stamps)).toBeLessThan(0.005);
       // Same duration with momentum: sampling untouched, and its final frame
       // still carries a sixth to a half of the travel — the contrast is the
-      // whole point of the flag.
-      const plain = await runOnVirtualClock({ ...params, durationMs });
-      expect(plain.stamps.slice(1, -1)).toHaveLength(Math.max(2, Math.round(durationMs / 16)) - 1);
-      expect(finalFrameFraction(plain.stamps)).toBeGreaterThan(0.15);
+      // whole point of the flag. Named `true` has to land on the same grid as
+      // the default, or the floor and the curve reach a drag that asked for
+      // momentum out loud.
+      for (const momentum of [undefined, true]) {
+        const plain = await runOnVirtualClock({ ...params, durationMs, momentum });
+        expect(plain.stamps.slice(1, -1)).toHaveLength(
+          Math.max(2, Math.round(durationMs / 16)) - 1
+        );
+        expect(finalFrameFraction(plain.stamps)).toBeGreaterThan(0.15);
+      }
     }
   });
 
