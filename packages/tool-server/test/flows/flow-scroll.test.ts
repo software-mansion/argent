@@ -132,6 +132,21 @@ function asRun(r: FlowRunResult | { notice: string }): FlowRunResult {
   return r;
 }
 
+// The cancellation signal rides the tool context, so the abort cases run the
+// flow through here instead of the plain two-argument execute() every other
+// test uses.
+async function runCancellable(
+  name: string,
+  registry: Registry,
+  signal: AbortSignal
+): Promise<FlowRunResult> {
+  return asRun(
+    await createRunFlowTool(registry).execute({}, { name, project_root: tmpDir, device: DEVICE }, {
+      signal,
+    } as never)
+  );
+}
+
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-scroll-"));
   vi.mocked(isTvOsSimulator).mockReset().mockResolvedValue(false);
@@ -1181,6 +1196,115 @@ describe("scroll-to directive", () => {
     expect(result.steps[0].warning).toContain("screen-edge chrome");
   });
 
+  it("reports a skip when the nudge's gesture rejects because the run was cancelled", async () => {
+    // The same rejecting dispatch as the control directly above, plus a
+    // cancellation: the swipe rejects because the run was cancelled, not
+    // because the device is broken. Only the signal separates the two, so the
+    // catch must read it before swallowing the throw - "backend died" keeps the
+    // accepted frame's pass, "run cancelled" reports the uniform skip.
+    const controller = new AbortController();
+    currentTree = () =>
+      screen([
+        fullScreenScroller(),
+        n({ label: "Order #1234", frame: { x: 0.1, y: 0.87, width: 0.8, height: 0.1 } }),
+      ]);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      controller.abort();
+      throw new Error("This operation was aborted");
+    });
+
+    await writeFlow("cancelled-nudge-gesture", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+    });
+
+    const result = await runCancellable("cancelled-nudge-gesture", registry, controller.signal);
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["scroll-to:skip"]);
+    expect(result.steps[0].reason).toBe("run aborted");
+    expect(result.ok).toBe(false);
+    // The swallow-and-pass would have reported a pass carrying the rejection.
+    expect(result.steps[0].warning).toBeUndefined();
+    expect(swipes).toHaveLength(1);
+  });
+
+  it("reports a skip when the run is cancelled between nudge rounds", async () => {
+    // The nudge goes out and the run is cancelled while it settles, so the
+    // round that would have read the landing sees the abort at the top of the
+    // loop. Without the cancellation this shape passes (see the flush-landing
+    // nudge above): acceptance never turns an aborted run into a pass.
+    const controller = new AbortController();
+    const flush = screen([
+      fullScreenScroller(),
+      n({ label: "Order #1234", frame: { x: 0.1, y: 0.87, width: 0.8, height: 0.1 } }),
+    ]);
+    const padded = screen([
+      fullScreenScroller(),
+      n({ label: "Order #1234", frame: { x: 0.1, y: 0.75, width: 0.8, height: 0.1 } }),
+    ]);
+    let nudged = false;
+    currentTree = () => (nudged ? padded : flush);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      nudged = true;
+      controller.abort();
+    });
+
+    await writeFlow("cancelled-between-nudges", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+    });
+
+    const result = await runCancellable("cancelled-between-nudges", registry, controller.signal);
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["scroll-to:skip"]);
+    expect(result.steps[0].reason).toBe("run aborted");
+    expect(result.ok).toBe(false);
+    expect(swipes).toHaveLength(1);
+  });
+
+  it("reports a skip when the run is cancelled during the nudge round's settle read", async () => {
+    // Same shape as the case above, one step later: the abort lands inside the
+    // first tree read of the round that would have measured the landing, so
+    // settleTree bails and hands back no tree at all. That exit is
+    // post-acceptance too and must report the skip, not the accepted pass.
+    const controller = new AbortController();
+    const flush = screen([
+      fullScreenScroller(),
+      n({ label: "Order #1234", frame: { x: 0.1, y: 0.87, width: 0.8, height: 0.1 } }),
+    ]);
+    const padded = screen([
+      fullScreenScroller(),
+      n({ label: "Order #1234", frame: { x: 0.1, y: 0.75, width: 0.8, height: 0.1 } }),
+    ]);
+    let nudged = false;
+    currentTree = () => {
+      if (!nudged) return flush;
+      controller.abort();
+      return padded;
+    };
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      nudged = true;
+    });
+
+    await writeFlow("cancelled-nudge-settle", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+    });
+
+    const result = await runCancellable("cancelled-nudge-settle", registry, controller.signal);
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["scroll-to:skip"]);
+    expect(result.steps[0].reason).toBe("run aborted");
+    expect(result.ok).toBe(false);
+    expect(swipes).toHaveLength(1);
+  });
+
   it(
     "passes on the accepted frame when the tree source dies after the nudge",
     { timeout: 10_000 },
@@ -1304,6 +1428,38 @@ describe("scroll-to directive", () => {
     expect(result.ok).toBe(false);
     expect(result.steps[0].status).toBe("error");
     expect(result.steps[0].reason).toContain("simulator-server");
+    expect(swipes).toHaveLength(1);
+  });
+
+  it("still fails a search scroll when the tree source dies", { timeout: 10_000 }, async () => {
+    // The settle guard's negative control, mirroring the gesture one above:
+    // the search increment goes out and every tree fetch then fails. Nobody has
+    // seen the target pre-acceptance, so there is no accepted frame to fall
+    // back on - settleTree's outage must propagate and error the step.
+    let scrolled = false;
+    currentTree = () => {
+      if (scrolled) throw new Error("native devtools disconnected");
+      return screen([n({ label: "Top", frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 } })]);
+    };
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      scrolled = true;
+    });
+
+    await writeFlow("outage-during-search", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "outage-during-search", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0].status).toBe("error");
+    expect(result.steps[0].reason).toContain("native devtools disconnected");
     expect(swipes).toHaveLength(1);
   });
 

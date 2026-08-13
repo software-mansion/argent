@@ -1231,6 +1231,10 @@ async function scrollToVisible(
   // see the gate below.
   let tvVeto: boolean | undefined;
   for (let i = 0; i < MAX_SCROLL_ITERATIONS; i++) {
+    // Redundant with settleTree's own first-statement abort check, which sends
+    // an already-cancelled round to the `!tree` exit below with the same
+    // verdict. Kept as the loop's own contract: nothing between rounds may run
+    // on a cancelled signal, whichever call happens to read it next.
     if (env.signal?.aborted) return { aborted: true };
 
     let tree: DescribeNode | undefined;
