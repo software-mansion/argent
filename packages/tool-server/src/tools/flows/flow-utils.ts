@@ -2783,7 +2783,7 @@ function completeRunExtension(value: string): string {
  * pattern, like `long-press` duration. Requiring an explicit `max` was
  * considered and rejected as noise on the common case.
  */
-export const DEFAULT_REPEAT_MAX = 10;
+const DEFAULT_REPEAT_MAX = 10;
 
 /**
  * Sanity bound on `times` and `max` alike. Not a semantic limit — a repeat
