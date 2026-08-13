@@ -4,23 +4,30 @@
  *
  * gesture-swipe and gesture-drag declare-and-refuse `settle` (renamed to
  * `momentum` with the opposite sense) via a `z.never()` field, and the refusal
- * is enforced by `registry.invokeTool`'s schema validation. The schema-level
- * tests in test/tools pin the declaration by calling `safeParse` directly, but
- * every flow test runs against the mock registry in ./harness.ts, whose
- * `invokeTool` validates nothing - so a raw `tool:` step carrying `settle`
- * would sail through that suite green even if the validation in
- * `Registry.invokeTool` were removed or the `settle` declaration dropped.
+ * is enforced twice: flow-execute's pre-run pass refuses a `tool:` step
+ * carrying it before the run starts, and `registry.invokeTool`'s schema
+ * validation refuses it on every other dispatch path. The schema-level tests in
+ * test/tools pin the declaration by calling `safeParse` directly, but every
+ * flow test runs against the mock registry in ./harness.ts, whose `invokeTool`
+ * validates nothing and whose tools declare no such field - so a raw `tool:`
+ * step carrying `settle` would sail through that suite green even if either
+ * line were removed.
  *
  * This file drives a REAL `Registry` with the REAL tool definitions, so what it
  * pins is the refusal actually reaching a flow-run caller:
  *
- *   - a recorded step carrying `settle: true` errors, and the step reason
- *     teaches the new spelling (`momentum`) and the flipped sense
- *     (`momentum: false`);
- *   - the same step with `momentum: false` instead passes validation - it then
- *     fails at service resolution (this bare registry has no blueprints, which
- *     is deterministic and never touches a device backend), proving the control
- *     got past the schema.
+ *   - a flow with a recorded step carrying `settle: true` is refused at load,
+ *     with no step reported at all, and the refusal teaches the new spelling
+ *     (`momentum`) and the flipped sense (`momentum: false`);
+ *   - the refusal beats step ORDER: an earlier `echo` never reports pass, which
+ *     is the whole point of gating before the run rather than letting the step
+ *     fail when it is reached, after earlier steps have driven the device;
+ *   - the same step with `momentum: false` instead passes both the gate and
+ *     validation - it then fails at service resolution (this bare registry has
+ *     no blueprints, which is deterministic and never touches a device backend),
+ *     proving the control got past them;
+ *   - `registry.invokeTool` still refuses the key on its own, so the gate is the
+ *     earlier of two independent lines rather than the only one.
  *
  * Each case gets its own temp project root, passed explicitly to `flow-execute`,
  * so nothing is shared between them.
@@ -29,10 +36,10 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Registry } from "@argent/registry";
+import { FAILURE_CODES, Registry, getFailureSignal } from "@argent/registry";
 
 import { createRunFlowTool } from "../../src/tools/flows/flow-run";
-import { serializeFlow } from "../../src/tools/flows/flow-utils";
+import { serializeFlow, type FlowStep } from "../../src/tools/flows/flow-utils";
 import { gestureSwipeTool } from "../../src/tools/gesture-swipe";
 import { gestureDragTool } from "../../src/tools/gesture-drag";
 
@@ -51,32 +58,68 @@ function buildRegistry(): Registry {
   return registry;
 }
 
+/** Writes a flow file verbatim from parsed steps. */
+async function writeSteps(name: string, steps: FlowStep[]): Promise<void> {
+  const dir = path.join(tmpDir, ".argent", "flows");
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(
+    path.join(dir, `${name}.yaml`),
+    serializeFlow({ executionPrerequisite: "", steps })
+  );
+}
+
 /**
  * Writes a flow whose single step is a raw `tool:` step, shaped like a recorded
  * one: gesture coordinates but no device key - the runner strips any recorded
  * device id and injects the run device's udid via `bindDeviceArgs`.
  */
 async function writeFlow(name: string, tool: string, args: Record<string, unknown>): Promise<void> {
-  const dir = path.join(tmpDir, ".argent", "flows");
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(
-    path.join(dir, `${name}.yaml`),
-    serializeFlow({
-      executionPrerequisite: "",
-      steps: [{ kind: "tool", name: tool, args }],
-    })
-  );
+  await writeSteps(name, [{ kind: "tool", name: tool, args }]);
+}
+
+/** A recorded gesture step, minus the device key the runner rebinds. */
+function swipeStep(args: Record<string, unknown>): FlowStep {
+  return {
+    kind: "tool",
+    name: "gesture-swipe",
+    args: { fromX: 0.5, fromY: 0.75, toX: 0.5, toY: 0.35, ...args },
+  };
 }
 
 type StepReport = { kind: string; status: string; tool?: string; reason?: string };
 
-async function runSingleStepFlow(name: string, device: string): Promise<StepReport> {
+async function runFlowSteps(name: string, device: string): Promise<StepReport[]> {
   const runFlow = createRunFlowTool(buildRegistry());
   const result = await runFlow.execute({}, { name, project_root: tmpDir, device });
   expect(result).toHaveProperty("steps");
-  const steps = (result as { steps: StepReport[] }).steps;
+  return (result as { steps: StepReport[] }).steps;
+}
+
+async function runSingleStepFlow(name: string, device: string): Promise<StepReport> {
+  const steps = await runFlowSteps(name, device);
   expect(steps).toHaveLength(1);
   return steps[0]!;
+}
+
+/**
+ * Runs a flow that must be refused BEFORE it starts, and returns the refusal.
+ *
+ * A run that resolves at all fails the test whatever its report says: "step 0
+ * pass, step 1 error" is exactly the resolved shape this gate exists to
+ * prevent, so the reported steps are printed rather than asserted over.
+ */
+async function refusalOf(name: string, device: string): Promise<unknown> {
+  const runFlow = createRunFlowTool(buildRegistry());
+  return await runFlow.execute({}, { name, project_root: tmpDir, device }).then(
+    (result) => {
+      throw new Error(`flow ran instead of being refused: ${JSON.stringify(result)}`);
+    },
+    (err: unknown) => err
+  );
+}
+
+function messageOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 beforeEach(async () => {
@@ -88,7 +131,7 @@ afterEach(async () => {
 });
 
 describe("flow-execute refuses the retired `settle` key through the real registry", () => {
-  it("gesture-swipe: a recorded step carrying settle errors with the rename guidance", async () => {
+  it("gesture-swipe: a recorded step carrying settle is refused at load, with the rename guidance", async () => {
     await writeFlow("swipe-settle", "gesture-swipe", {
       fromX: 0.5,
       fromY: 0.8,
@@ -97,16 +140,18 @@ describe("flow-execute refuses the retired `settle` key through the real registr
       settle: true,
     });
 
-    const step = await runSingleStepFlow("swipe-settle", IOS_DEVICE);
+    const err = await refusalOf("swipe-settle", IOS_DEVICE);
 
-    expect(step).toMatchObject({ kind: "tool", status: "error", tool: "gesture-swipe" });
-    // The report is what the flow author reads, so it must teach both the new
-    // spelling and the flipped sense.
-    expect(step.reason).toContain("gesture-swipe's `settle` was renamed to `momentum`");
-    expect(step.reason).toContain("momentum: false");
+    // The refusal is what the flow author reads, so it must locate the step and
+    // teach both the new spelling and the flipped sense.
+    expect(messageOf(err)).toContain('Flow "swipe-settle" step 1');
+    expect(messageOf(err)).toContain("gesture-swipe's retired `settle` key");
+    expect(messageOf(err)).toContain("renamed to `momentum`");
+    expect(messageOf(err)).toContain("momentum: false");
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_FILE_INVALID);
   });
 
-  it("gesture-drag: a recorded step carrying settle errors with the rename guidance", async () => {
+  it("gesture-drag: a recorded step carrying settle is refused at load, with the rename guidance", async () => {
     await writeFlow("drag-settle", "gesture-drag", {
       fromX: 0.3,
       fromY: 0.5,
@@ -115,17 +160,81 @@ describe("flow-execute refuses the retired `settle` key through the real registr
       settle: true,
     });
 
-    const step = await runSingleStepFlow("drag-settle", CHROMIUM_DEVICE);
+    const err = await refusalOf("drag-settle", CHROMIUM_DEVICE);
 
-    expect(step).toMatchObject({ kind: "tool", status: "error", tool: "gesture-drag" });
-    expect(step.reason).toContain("gesture-drag's `settle` was renamed to `momentum`");
-    expect(step.reason).toContain("momentum: false");
+    expect(messageOf(err)).toContain("gesture-drag's retired `settle` key");
+    expect(messageOf(err)).toContain("renamed to `momentum`");
+    expect(messageOf(err)).toContain("momentum: false");
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_FILE_INVALID);
   });
 
-  // Controls: the renamed spelling gets PAST validation. The step still errors
-  // - this registry has no blueprints, so `execute` is never reached - but at
-  // service resolution, which proves the schema accepted the args: a validation
-  // refusal would carry "Invalid params" and never mention a service.
+  // The comment's scenario, and the reason the gate is pre-run rather than
+  // per-step: refused at the step, this flow reports step 1 pass and step 2
+  // error - after the echo has run and, in a real recording, after every
+  // preceding step has driven the device.
+  it("refuses a settle step that FOLLOWS an echo, so the echo never reports pass", async () => {
+    await writeSteps("echo-then-settle", [
+      { kind: "echo", message: "runs first" },
+      swipeStep({ settle: true }),
+    ]);
+
+    const err = await refusalOf("echo-then-settle", IOS_DEVICE);
+
+    expect(messageOf(err)).toContain("step 2");
+    expect(messageOf(err)).toContain("gesture-swipe's retired `settle` key");
+    expect(messageOf(err)).toContain("momentum: false");
+  });
+
+  // `when:` bodies are walked because their steps are already parsed and in
+  // hand, and a guarded step drives the device exactly as late as any other.
+  it("refuses a settle step inside a when: block, naming where it sits", async () => {
+    await writeSteps("when-settle", [
+      { kind: "echo", message: "runs first" },
+      {
+        kind: "when",
+        condition: { kind: "platform", platform: "ios" },
+        steps: [swipeStep({ settle: true })],
+      },
+    ]);
+
+    const err = await refusalOf("when-settle", IOS_DEVICE);
+
+    expect(messageOf(err)).toContain("step 1 of the when: block at step 2");
+    expect(messageOf(err)).toContain("gesture-swipe's retired `settle` key");
+  });
+
+  // A `run:` target is NOT read by the pre-run pass (it is resolved at run
+  // time), so the fragment is gated the moment it loads: the composition point
+  // errors and not one of the fragment's own steps runs.
+  it("refuses a fragment carrying settle at the composition point", async () => {
+    await writeSteps("settle-fragment", [swipeStep({ settle: true })]);
+    await writeSteps("composed", [{ kind: "run", flow: "settle-fragment.yaml" }]);
+
+    const steps = await runFlowSteps("composed", IOS_DEVICE);
+
+    expect(steps).toHaveLength(1);
+    expect(steps[0]).toMatchObject({ kind: "run", status: "error" });
+    expect(steps[0]!.reason).toContain('fragment "settle-fragment.yaml" step 1');
+    expect(steps[0]!.reason).toContain("gesture-swipe's retired `settle` key");
+    expect(steps[0]!.reason).toContain("momentum: false");
+  });
+
+  // The gate never guesses at a tool it cannot look up: an unknown tool's step
+  // fails on its own, with a message about the tool rather than about a key.
+  it("leaves an unknown tool's step to its own failure", async () => {
+    await writeFlow("unknown-tool-settle", "not-a-real-tool", { settle: true });
+
+    const step = await runSingleStepFlow("unknown-tool-settle", IOS_DEVICE);
+
+    expect(step).toMatchObject({ kind: "tool", status: "error" });
+    expect(step.reason).not.toContain("retired");
+  });
+
+  // Controls: the renamed spelling gets PAST the gate and validation. The step
+  // still errors - this registry has no blueprints, so `execute` is never
+  // reached - but at service resolution, which proves both were cleared: a
+  // refusal would carry "retired" or "Invalid params" and never mention a
+  // service.
   it("control: gesture-swipe with momentum: false passes validation and fails only at service resolution", async () => {
     await writeFlow("swipe-momentum", "gesture-swipe", {
       fromX: 0.5,
@@ -158,5 +267,21 @@ describe("flow-execute refuses the retired `settle` key through the real registr
     expect(step.reason).toContain("Service dependency failed");
     expect(step.reason).not.toContain("Invalid params");
     expect(step.reason).not.toContain("settle");
+  });
+
+  // The second line, pinned directly: every dispatch path that is not a flow
+  // step (HTTP, run-sequence, a sub-invoke) still meets the declaration's own
+  // refusal, so the flow gate is an earlier catch and not the only one.
+  it("registry.invokeTool still refuses settle on its own", async () => {
+    await expect(
+      buildRegistry().invokeTool("gesture-swipe", {
+        udid: IOS_DEVICE,
+        fromX: 0.5,
+        fromY: 0.8,
+        toX: 0.5,
+        toY: 0.2,
+        settle: true,
+      })
+    ).rejects.toThrow(/gesture-swipe's `settle` was renamed to `momentum`/);
   });
 });
