@@ -477,12 +477,12 @@ function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
  * reports which greens went out unsettled. Any directive read that comes back
  * retires it, as does a relaunch.
  *
- * What it costs: an outage that lasted a full window, in a run that then never
- * reads the tree again and never relaunches, leaves later gestures unsettled
- * even once it clears. That is a flow of nothing but coordinate gestures giving
- * up a best-effort settle it never had before this directive existed, against
- * every one of those gestures otherwise paying the window for a settle that is
- * not coming.
+ * What it costs: an outage that failed every read attempt, in a run that then
+ * never reads the tree again and never relaunches, leaves later gestures
+ * unsettled even once it clears. That is a flow of nothing but coordinate
+ * gestures giving up a best-effort settle it never had before this directive
+ * existed, against every one of those gestures otherwise paying a whole settle,
+ * window and floor reads alike, for a tree that is not coming.
  */
 export async function settleTree(
   env: ActionEnv,
