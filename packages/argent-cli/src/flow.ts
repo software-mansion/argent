@@ -378,7 +378,11 @@ export function renderArtifactLines(report: FlowReport): string[] {
   let n = 0;
   for (const s of report.steps) {
     // Numbering here must match renderReport's, so the two lines that skip a
-    // number there — narration and block structure — skip it here too.
+    // number there — narration and block structure — skip it here too. Skipping
+    // a structural marker hides nothing the way it would in batch mode: this
+    // tail only ever follows the live step lines, which print the marker itself
+    // (unnumbered) whatever its status, and renderReport hangs no artifacts
+    // under a marker either — a "step N" label has no number to name one by.
     if (s.kind === "echo" || isStructural(s)) continue;
     n++;
     if (!s.artifacts || typeof s.artifacts !== "object") continue;
@@ -405,18 +409,31 @@ export function renderFailedSteps(report: FlowReport): string[] {
   let n = 0;
   for (const s of report.steps) {
     // Same skips as renderReport, or the number printed here disagrees with
-    // the single-mode rerun it sends the operator to. Skipping a structural
-    // marker outright drops no failure: the runner pushes markers with pass
-    // or skip status only — a repeat block's fail/error terminal lines are
-    // deliberately not structural (see execRepeatStep in the tool-server).
-    if (s.kind === "echo" || isStructural(s)) continue;
-    n++;
+    // the single-mode rerun it sends the operator to.
+    if (s.kind === "echo") continue;
+    // Block structure takes no number and does not advance the sequence, as in
+    // renderReport — but it is not dropped. `structural` is untrusted wire data
+    // (see isStructural) and these lines are the whole of what batch mode
+    // prints, so a server that stamped a fail/error line structural would
+    // otherwise produce a FAIL summary with no failure line under it: the
+    // counts renderSummary reports come from the report's own fields, which the
+    // CLI cannot re-derive. The runner marks only passing or skipped markers,
+    // so a well-formed report renders exactly as before.
+    const structural = isStructural(s);
+    if (!structural) n++;
     if (s.status !== "fail" && s.status !== "error" && !s.warning) continue;
-    lines.push(renderStepLine(s, n, report.flow));
-    if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
+    lines.push(renderStepLine(s, structural ? { unnumbered: n } : n, report.flow));
+    // Under-lines pad to the number column the step line above them printed:
+    // `n` for a numbered step, and for a marker the blank renderStepLine sizes
+    // to the next number to be issued (`n + 1`), so the text still sits under
+    // the label past step 99. renderReport hangs nothing under a marker because
+    // its steps print their own; here a dropped under-line is a warning or an
+    // artifact path with nowhere else to appear.
+    const under = structural ? n + 1 : n;
+    if (s.warning) lines.push(renderUnderStepLine(s, under, `⚠ ${s.warning}`));
     if (s.artifacts && typeof s.artifacts === "object") {
       for (const [k, v] of Object.entries(s.artifacts)) {
-        if (typeof v === "string") lines.push(renderUnderStepLine(s, n, `${k}: ${v}`));
+        if (typeof v === "string") lines.push(renderUnderStepLine(s, under, `${k}: ${v}`));
       }
     }
   }

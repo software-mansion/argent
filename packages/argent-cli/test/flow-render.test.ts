@@ -579,6 +579,62 @@ describe("flow report rendering", () => {
     expect(renderReport(report).split("\n")).toContain(failed[0]!);
   });
 
+  it("renderFailedSteps prints a failure line a server stamped structural", () => {
+    // Wire data again: `structural` is the server's word, and batch mode prints
+    // these lines and nothing else. A server that marked a failing line
+    // structural while still counting it failed used to print a FAIL summary
+    // with no failure line under it — renderSummary counts from the report's
+    // own fields, which is why the counts here disagree with the flags.
+    const report = mkReport(
+      [
+        { index: 0, kind: "tap", status: "pass", target: '"A"' },
+        {
+          index: 1,
+          kind: "repeat",
+          status: "fail",
+          reason: "iteration 2/2 never settled",
+          structural: true,
+          artifacts: { diff: "/tmp/d.png" },
+        },
+        { index: 2, kind: "tap", status: "fail", target: '"B"', reason: "not found" },
+      ],
+      { ok: false, failed: 2 }
+    );
+    const failed = renderFailedSteps(report);
+    // The marker prints unnumbered and consumes no number, so the ordinary tap
+    // after it is still step 2 — the sequence a single-mode rerun prints.
+    expect(failed).toEqual([
+      "  ✗    repeat — iteration 2/2 never settled",
+      "       diff: /tmp/d.png",
+      '  ✗  2 tap "B" — not found',
+    ]);
+    expect(renderSummary(report)).toBe("FAIL — 1 passed, 2 failed, 0 errored, 0 skipped");
+    // The marker's line is byte-identical to renderReport's, as the numbered
+    // ones are: batch mode borrows that renderer's convention, not a second one.
+    expect(renderReport(report).split("\n")).toContain(failed[0]!);
+  });
+
+  it("pads a structural failure's under-lines to the blank its own line printed", () => {
+    // A marker's blank spans the NEXT number to be issued, so past step 99 its
+    // under-lines pad to three digits too, or they hang left of the label.
+    const steps: StepReport[] = [];
+    for (let i = 0; i < 99; i++) {
+      steps.push({ index: i, kind: "tap", status: "pass", target: '"Pad"' });
+    }
+    steps.push({
+      index: 99,
+      kind: "repeat",
+      status: "error",
+      reason: "runner died",
+      structural: true,
+      warning: "block left half-run",
+    });
+    const failed = renderFailedSteps(mkReport(steps, { ok: false, errored: 1 }));
+    expect(failed[0]).toBe("  ✗     repeat — runner died");
+    expect(failed[1]).toBe("        ⚠ block left half-run");
+    expect(failed[1]!.indexOf("⚠")).toBe(failed[0]!.indexOf("repeat"));
+  });
+
   it("renderFailedSteps includes errored steps and their warnings", () => {
     expect(
       renderFailedSteps(
