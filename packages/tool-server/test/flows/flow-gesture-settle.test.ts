@@ -13,11 +13,14 @@ let events: Event[];
 let currentTree: () => DescribeNode;
 /** A source that never answers, for the tests that need a read still in flight. */
 let hangReads: boolean;
+/** How long a read takes to answer, for the tests that need one slower than a settle window. */
+let readDelayMs: number;
 
 vi.mock("../../src/tools/flows/flow-tree", () => ({
   fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => {
     events.push({ kind: "read" });
     if (hangReads) return new Promise<never>(() => {});
+    if (readDelayMs > 0) await new Promise((r) => setTimeout(r, readDelayMs));
     return { tree: currentTree(), source: "native-devtools" };
   }),
 }));
@@ -91,6 +94,7 @@ beforeEach(async () => {
   events = [];
   currentTree = screen;
   hangReads = false;
+  readDelayMs = 0;
 });
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
@@ -424,6 +428,36 @@ describe("a tree-source outage never fails a selector-less gesture", () => {
     return screen([{ role: "AXButton", label: "Continue", frame: BUTTON, children: [] }]);
   };
 
+  it("keeps skipping after the source recovers, when nothing reads in between", async () => {
+    // The memo's documented cost, pinned as the trade it is rather than left to
+    // be rediscovered as a bug. Nothing re-tests the verdict, so a source that
+    // comes back the moment its window closes buys the gestures behind it
+    // nothing - and a flow of only coordinate gestures reaches neither escape
+    // (a directive read below, a relaunch further down).
+    currentTree = deadUntilFirstGesture;
+    await writeFlow("tap-recovers-tap", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "tap", x: 0.1, y: 0.1 },
+        { kind: "tap", x: 0.2, y: 0.2 },
+      ],
+    });
+
+    const result = await run("tap-recovers-tap");
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:pass", "tap:pass"]);
+    // Tap 1 paid the whole window: a dozen-odd failed reads at the poll
+    // interval, never the 2 identical ones a settle converges on.
+    expect(readsBeforeFirstGesture()).toBeGreaterThan(2);
+    // And tap 2 spends the verdict without a read, though the source recovered
+    // the moment tap 1 went out and would have answered one.
+    expect(readsBetween(gestureAt(0), events.length)).toBe(0);
+    expect(() => currentTree()).not.toThrow();
+    // The compensation is the report: the skip is wrong here, and says so.
+    expect(result.steps[1].warning).toContain("without settling the screen");
+    expect(result.steps[1].warning).toContain("native devtools is unavailable");
+  }, 20_000);
+
   it("stops skipping as soon as any read comes back, settle or not", async () => {
     // The `await` is the point: it never settles, it just reads. A memo only a
     // settle could clear would survive it and leave the tap after it unsettled.
@@ -591,6 +625,42 @@ describe("a proven outage is spent only on the device that proved it", () => {
     expect(tree).toBeDefined();
     expect(events.filter((e) => e.kind === "read").length).toBeGreaterThanOrEqual(2);
   });
+});
+
+// The settle's deadline is tested only after a read RETURNS, so the window
+// bounds how many reads it issues and never how long it waits on one. That is
+// deliberate: budgeting the read to what is left of the window would put a 3s
+// cap on `ViewHierarchy.getFullHierarchy`, which #778 raised to a 15s RPC tier
+// precisely so an iOS cold-start stall is ridden out instead of failed. The
+// abort in the block below is the one thing that does cut such a read short.
+describe("the settle window bounds its retries, not the read in flight", () => {
+  // One whole window (3000ms) plus the least margin that still tells "waited it
+  // out" from "cut it off at the deadline". The window cannot be made cheaper,
+  // so the margin is the only part of this test's cost there is to keep down.
+  const SLOW_READ_MS = 3_500;
+
+  it("waits out a read slower than the whole window", async () => {
+    readDelayMs = SLOW_READ_MS;
+    await writeFlow("tap-slow-read", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tap", x: 0.4, y: 0.6 }],
+    });
+
+    const startedAt = Date.now();
+    const result = await run("tap-slow-read");
+    const elapsed = Date.now() - startedAt;
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:pass"]);
+    // Exactly one read: it answered past the deadline, so the window ended on
+    // it and issued no second. A read cut off at the deadline would leave that
+    // count identical - the wait is what separates the two.
+    expect(readsBeforeFirstGesture()).toBe(1);
+    expect(elapsed).toBeGreaterThanOrEqual(SLOW_READ_MS);
+    // The gesture goes out on a tree that converged on nothing, but a read did
+    // come back, so this is no outage and the step is not warned about one.
+    expect(gestures()[0]).toMatchObject({ tool: "gesture-tap", args: { x: 0.4, y: 0.6 } });
+    expect(result.steps[0].warning).toBeUndefined();
+  }, 15_000);
 });
 
 // The settle is the only abort checkpoint `tap`/`long-press` have: nothing
