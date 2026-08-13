@@ -310,7 +310,7 @@ describe("a tree-source outage never fails a selector-less gesture", () => {
 
 // A relaunch is the repair the tree source names when it refuses an app that
 // loaded no instrumentation, so a `launch` spends the verdict proven before it
-// - nothing else would, with no read falling between it and the next gesture.
+// - no read falls between it and the next gesture to clear it instead.
 describe("a launch clears a proven outage", () => {
   it("makes the gesture after it pay for a settle of its own", async () => {
     currentTree = outage;
@@ -334,6 +334,49 @@ describe("a launch clears a proven outage", () => {
     // from scratch. A memo that outlived the launch would leave it zero reads.
     expect(readsBetween(gestureAt(1), gestureAt(2))).toBeGreaterThan(2);
   }, 20_000);
+});
+
+// The same device operation written as a raw `tool:` step. It is the shape a
+// recorded flow actually carries - `launch-app` is never rewritten into a
+// `launch:` directive, and the docs tell authors to start an app that cannot
+// load the instrumentation with a bare `tool: restart-app` - so it must spend
+// the verdict too, or the gesture behind the most animation-heavy moment a flow
+// has would be the one dispatched with no settle at all.
+describe("a raw `tool:` relaunch clears a proven outage", () => {
+  /** Dead until the named relaunch tool runs, healthy after: the repair works. */
+  const deadUntilTool = (tool: string) => (): DescribeNode => {
+    if (!events.some((e) => e.kind === "invoke" && e.tool === tool)) {
+      throw new Error("native devtools is unavailable");
+    }
+    return screen();
+  };
+
+  it.each(["restart-app", "launch-app"])(
+    "makes the gesture after `tool: %s` pay for a settle of its own",
+    async (tool) => {
+      currentTree = deadUntilTool(tool);
+      await writeFlow(`tap-${tool}-tap`, {
+        executionPrerequisite: "",
+        steps: [
+          { kind: "tap", x: 0.1, y: 0.1 },
+          { kind: "tool", name: tool, args: { bundleId: "com.acme.app" } },
+          { kind: "tap", x: 0.2, y: 0.2 },
+        ],
+      });
+
+      const result = await run(`tap-${tool}-tap`);
+
+      expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+        "tap:pass",
+        "tool:pass",
+        "tap:pass",
+      ]);
+      // Exactly the two identical reads a settle converges on. A verdict only
+      // `launch:` spent would leave the second tap with zero.
+      expect(readsBetween(gestureAt(1), gestureAt(2))).toBe(2);
+    },
+    20_000
+  );
 });
 
 // The memo is keyed to the device it was proven against: a run can move onto

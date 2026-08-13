@@ -86,7 +86,8 @@ export interface ActionEnv {
    * prove a source dead (a {@link settleTree} whose whole window failed) and
    * cleared by {@link readFlowTree}, which every directive's reads go through,
    * since a read that came back is evidence of health whichever directive asked
-   * for it. `launch` clears it too: a relaunch is the repair the commonest of
+   * for it. A relaunch clears it too, whether spelled `launch` or as one of
+   * flow-run's `FOREGROUND_CHANGING_TOOLS`: it is the repair the commonest of
    * these errors asks for, and no read need follow it before a gesture does.
    * Absent for a caller that builds an `ActionEnv` by hand, which simply leaves
    * every settle on its own budget.

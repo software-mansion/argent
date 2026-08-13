@@ -295,9 +295,10 @@ const NATIVE_READY_POLL_MS = 250;
 
 /**
  * `tool:` steps that can change or relaunch the foreground app — running one
- * invalidates {@link ActionEnv.launchedNativeApp}. `button` is included for
- * its `home` case; distinguishing button kinds here would couple this list to
- * that tool's arg schema for little gain.
+ * invalidates {@link ActionEnv.launchedNativeApp} and spends
+ * {@link ActionEnv.treeOutage}. `button` is included for its `home` case;
+ * distinguishing button kinds here would couple this list to that tool's arg
+ * schema for little gain.
  */
 const FOREGROUND_CHANGING_TOOLS = new Set([
   "launch-app",
@@ -2286,12 +2287,15 @@ async function execLeafStep(
       }
       try {
         // These sub-tools can change (or relaunch) the foreground app, so the
-        // `launch:`-derived hint no longer names what is on screen. Cleared
+        // `launch:`-derived hint no longer names what is on screen, and a
+        // relaunch is the repair a proven tree outage asks for by name - the
+        // same clear `runLaunch` makes for the directive spelling. Cleared
         // BEFORE invoking: a tool that throws mid-way may still have switched
-        // apps, and a stale hint is worse than no hint (tree reads fall back
-        // to plain auto-resolution, today's behavior).
+        // apps, and a stale hint is worse than no hint (tree reads fall back to
+        // plain auto-resolution, today's behavior).
         if (FOREGROUND_CHANGING_TOOLS.has(step.name)) {
           state.launchedNativeApp = undefined;
+          if (state.treeOutage) state.treeOutage.proven = undefined;
         }
         const result = await invokeSubTool(registry, ctx, step.name, args);
         if (isUnmetUiWaitResult(step.name, result)) {
