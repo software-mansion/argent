@@ -94,15 +94,25 @@ export class SourceMapsRegistry {
   }
 
   private async doRegister(sourceMapURL: string): Promise<void> {
-    // An inline `data:` map carries its payload in the URL. There is no fetch
-    // to wait for and no allowlist to apply, so this returns at once. Decoding
-    // and parsing it kept nothing: the result was discarded, the `catch` below
-    // swallowed any throw, and a malformed payload reached the same return as
-    // a well-formed one. The only cost was time inside `waitForPending()`,
-    // which `debugger-connect` and every `debugger-status` block on — ~25 ms
-    // for a 20 MiB map, and with no size cap, unlike the fetch below.
-    if (sourceMapURL.startsWith("data:")) return;
     try {
+      // An inline `data:` map carries its payload in the URL. There is no fetch
+      // to wait for and no allowlist to apply, so this returns at once. Decoding
+      // and parsing it kept nothing: the result was discarded, this `catch`
+      // swallowed any throw, and a malformed payload reached the same return as
+      // a well-formed one. The only cost was time inside `waitForPending()`,
+      // which `debugger-connect` and every `debugger-status` block on — ~25 ms
+      // for a 20 MiB map, and with no size cap, unlike the fetch below.
+      //
+      // This test belongs INSIDE the `try`, and it is the first thing to touch
+      // `sourceMapURL`. The value is a bare cast over socket JSON — `params
+      // .sourceMapURL as string | undefined` in `cdp-client.ts`, forwarded
+      // unchecked — and `registerFromScriptParsed` only rejects falsy, so a CDP
+      // peer that sends a number reaches `.startsWith` and throws. In here that
+      // is skipped like any other malformed map. Outside, the throw escapes as
+      // a rejected promise nothing awaits before the next tick, which
+      // `index.ts` turns into `crashShutdown` — the whole tool-server and every
+      // device session it owns, for one bad field.
+      if (sourceMapURL.startsWith("data:")) return;
       if (!isAllowedSourceMapURL(sourceMapURL)) return;
       // The redirect target is never re-validated, so without
       // `redirect: "error"` an allowlisted loopback URL could 302 us onto
