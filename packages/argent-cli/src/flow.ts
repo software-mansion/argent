@@ -330,8 +330,23 @@ export function renderStepLine(
   // of the next number to be issued (`unnumbered + 1`). At the 99→100
   // boundary that width is 3 — the marker lines up with the 3-digit body it
   // opens, not the 2-digit step it happens to trail, and it cannot do both.
-  // The floor of 2 mirrors the padStart(2), so reports that never pass 99
-  // render byte-identically to before.
+  // The floor of 2 mirrors the padStart(2), so a marker trailing fewer than 99
+  // numbered steps renders byte-identically to before.
+  //
+  // The lean is forward even when nothing numbered follows, and there the
+  // width is spent on a number that never prints: a report whose numbering
+  // stops one short of a power of ten and ends in a block over narration alone
+  // puts its markers one column right of every line in it — at 99 numbered
+  // steps, and again at 999, which nested blocks reach (see
+  // MAX_REPEAT_ITERATIONS). Sizing that case correctly needs to know whether a
+  // numbered line follows, and the live streamer — which shares this function
+  // so its step lines match the buffered report's byte for byte — prints each
+  // line as it arrives, with the rest of the run still unread. Only the
+  // buffered renderer could look ahead, and then the two would disagree on the
+  // same report, which is the failure this shared sizing exists to prevent.
+  // The forward lean is what the tests pin (flow-render's 3-digit alignment
+  // case), so the residual is the deliberate side of that trade, not an
+  // oversight in it.
   const num =
     typeof n === "number"
       ? String(n).padStart(2)
