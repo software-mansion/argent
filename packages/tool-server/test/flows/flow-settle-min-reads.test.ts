@@ -100,7 +100,7 @@ describe("settleTree takes at least two read attempts", () => {
         await sleep(SLOW_READ_MS);
         throw new Error("ui tree RPC timed out");
       }
-      return tree();
+      return tree("Continue", MOVED_BUTTON_FRAME);
     };
     await writeTap("tap-slow-blip");
 
@@ -109,8 +109,12 @@ describe("settleTree takes at least two read attempts", () => {
     // One slow blip is not an outage: the retry read the screen, so the tap
     // resolved and went out instead of erroring the step.
     expect(result.ok).toBe(true);
-    expect(reads).toBeGreaterThanOrEqual(2);
-    expect(result.calls.map((c) => c.tool)).toEqual(["gesture-tap"]);
+    // The slow failure buys one retry, not an open-ended wait for a good read.
+    expect(reads).toBe(2);
+    // Centre of the MOVED frame, a point only the retry's tree can produce.
+    expect(result.calls).toEqual([
+      { tool: "gesture-tap", args: { udid: DEVICE, x: 0.5, y: 0.75 } },
+    ]);
   }, 20_000);
 
   it("settles against the retry when the only read so far succeeded slowly", async () => {
