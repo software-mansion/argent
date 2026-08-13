@@ -2149,9 +2149,21 @@ function describeWhenCondition(cond: WhenCondition): string {
  * guarded dismissal into a green no-op, and would keep a drain iterating,
  * driving side-effecting steps against a screen the runner cannot read, until
  * it fails at the cap for a condition that may long since hold.
+ *
+ * "Unmet" carries the probe's `blipNote` — the trailing read that failed while
+ * the verdict stayed determinate — because both callers phrase their own line
+ * and never print the probe's `reason`, which is where the probe put it.
+ * Classifying it away would drop the one error the probe took care not to drop.
+ * The drain is the caller that spends it: its cap FAIL is a verdict about
+ * reads that kept coming back unmet, so an erroring tail is the difference
+ * between a condition that never held and one nobody could see. `when:`
+ * evaluates the guard once and skips, an outcome the note cannot change, and
+ * its line is unchanged from before either directive shared this probe.
  */
 type GuardOutcome =
-  | { outcome: "met" | "unmet" | "aborted" }
+  | { outcome: "met" }
+  | { outcome: "aborted" }
+  | { outcome: "unmet"; blipNote?: string }
   | { outcome: "indeterminate"; reason?: string };
 
 /** Probe a UI guard at the short assert grace and classify the result. */
@@ -2161,7 +2173,8 @@ async function probeGuard(state: ExecState, cond: UiWhenCondition): Promise<Guar
   if (!probe.ok && probe.indeterminate) {
     return { outcome: "indeterminate", reason: probe.reason };
   }
-  return { outcome: probe.ok ? "met" : "unmet" };
+  if (probe.ok) return { outcome: "met" };
+  return { outcome: "unmet", ...(probe.blipNote ? { blipNote: probe.blipNote } : {}) };
 }
 
 /**
@@ -2619,12 +2632,22 @@ async function execRepeatStep(
     if (done >= max) {
       // The cap is a failure, not a quiet exit: a drain that never converged
       // asserts nothing if it passes.
+      //
+      // The blip note is the reaching probe's and no other's: the verdict is
+      // that probe's reading of the screen, and every earlier one describes a
+      // screen a later probe has since re-read. It is named rather than
+      // dropped because that probe held a determinate answer over a failed
+      // trailing read and appended the error to a `reason` this line never
+      // prints — without it, the cap blames the app for a condition the runner
+      // could barely see by the end.
       pushReport(state, {
         index: state.reports.length,
         kind: "repeat",
         status: "fail",
         flow: scopeFlow(scope),
-        reason: `still not ${label} after ${max} iteration${max === 1 ? "" : "s"} (max)`,
+        reason:
+          `still not ${label} after ${max} iteration${max === 1 ? "" : "s"} (max)` +
+          (probe.blipNote ? ` (${probe.blipNote})` : ""),
         ...depthOf(scope),
       });
       state.stopped = true;

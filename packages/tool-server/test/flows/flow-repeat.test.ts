@@ -1019,6 +1019,61 @@ describe("repeat: until", () => {
     expect(counts(result)).toEqual({ ok: false, passed: 2, failed: 1, skipped: 0, errored: 0 });
   }, 20000);
 
+  it("names the failed final read on the cap verdict when the last probe blipped", async () => {
+    // The trailing-blip tolerance, met at the cap. The tree source disconnects
+    // inside the LAST probe only, ~one poll before that probe's 1s deadline:
+    // trusted reads carry the whole window bar its tail, so the probe answers
+    // "still unmet" determinately instead of erroring the block — and the read
+    // that failed under that answer belongs on the line the answer produces.
+    // Dropped, the report tells the author the app never reached the state and
+    // says nothing about the runner having gone blind while concluding it,
+    // which is the one fact that would send them to the tree source rather
+    // than to the app.
+    //
+    // `visible`, not this suite's usual `hidden`: gone-ness is unconfirmable
+    // over ANY failed final read, so a `hidden` drain has no determinate-unmet
+    // blip to carry — it errors on the evidence gap instead (flow-when covers
+    // that bar). The guard element never appears, so the drain runs to its cap.
+    let darkFrom: number | undefined;
+    currentTree = () => {
+      // The taps resolve their target at `tapCount` 0 and 1, so only the third
+      // probe — the one that finds `done >= max` — ever sees the dark branch.
+      if (tapCount < 2) return screen([notification()]);
+      darkFrom ??= Date.now();
+      if (Date.now() - darkFrom >= 950) throw new Error("native devtools disconnected");
+      return screen([notification()]);
+    };
+    await writeFlow("dark-at-the-cap", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "repeat",
+          spec: {
+            mode: "until",
+            until: { kind: "ui", condition: "visible", selector: { text: "All caught up" } },
+            max: 2,
+          },
+          steps: [TAP],
+        },
+      ],
+    });
+
+    const result = await run("dark-at-the-cap");
+
+    // A fail, not an error: the verdict stayed determinate.
+    expect(result.ok).toBe(false);
+    expect(result.failed).toBe(1);
+    expect(result.errored).toBe(0);
+    expect(tapCount).toBe(2);
+    // Pinned on `reason` directly — the string the renderers print, cap tag and
+    // failed read both.
+    expect(result.steps.at(-1)?.status).toBe("fail");
+    expect(result.steps.at(-1)?.reason).toBe(
+      'still not visible text="All caught up" after 2 iterations (max) ' +
+        "(the final poll could not read the UI tree: native devtools disconnected)"
+    );
+  }, 20000);
+
   it("passes a drain that converges on exactly its max-th iteration", async () => {
     // Three items, `max: 3` — the bound set to the number of items the author
     // expects, the cap's common shape. The third tap empties the list, so the
