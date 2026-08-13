@@ -2098,4 +2098,37 @@ describe("scroll-to directive", () => {
     expect(swipes).toHaveLength(0);
     expect(isTvOsSimulator).toHaveBeenCalledWith(DEVICE);
   });
+
+  it("does not probe the runtime kind when the geometry asks for no nudge", async () => {
+    // The tv veto only matters when a gesture is about to go out, and the probe
+    // shells out to `xcrun simctl` (seconds on a cold list, no cache for a UDID
+    // the list doesn't resolve). Most accepted iOS targets need no nudge at
+    // all - here the row at 0.80..0.903 is already within EDGE_EPS of the
+    // padding, the same landing that "leaves a landing a hair short of the
+    // padding alone" pins - so the pure geometry must decide first and this must
+    // stay the zero-I/O return it was before the nudge existed.
+    currentTree = () =>
+      screen([
+        fullScreenScroller(),
+        n({ label: "Order #1234", frame: { x: 0.1, y: 0.8, width: 0.8, height: 0.103 } }),
+      ]);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes);
+
+    await writeFlow("no-nudge-no-probe", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "no-nudge-no-probe", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(0);
+    expect(isTvOsSimulator).not.toHaveBeenCalled();
+  });
 });
