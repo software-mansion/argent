@@ -231,9 +231,13 @@ const SETTLE_TIMEOUT_MS = 3000;
 // blip with no retry at all. The second read is not bounded by the window
 // either, so a wedged source costs two full reads and tens of seconds, and a
 // source that answers slowly pays a second read where it used to end on one.
-// `scroll-to` multiplies that: it settles once per round, bounded by
-// `MAX_SCROLL_ITERATIONS` rather than a wall clock, so the added read lands on
-// every round and a slow source turns one step's tens of seconds into minutes.
+// Slower than the window is not the exceptional case: `HUNG_TREE_READ_MS`
+// reasons from 5400ms Android reads, so ending a window on a single read is
+// the ordinary outcome there and the second read an ordinary cost, not a
+// degraded one. `scroll-to` multiplies that: it settles once per round,
+// bounded by `MAX_SCROLL_ITERATIONS` rather than a wall clock, so the added
+// read lands on every round and a slow source turns one step's tens of seconds
+// into minutes.
 // `await`/`assert` have always had this floor in `waitForCondition`'s final
 // poll; this is the same guarantee for the directives that resolve through a
 // settle.
