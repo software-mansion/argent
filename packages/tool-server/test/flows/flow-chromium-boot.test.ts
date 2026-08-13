@@ -1170,6 +1170,46 @@ describe("flow-execute chromium boot", () => {
     expect(bootElectronApp).not.toHaveBeenCalled();
   });
 
+  it("does not boot when that snapshot-bearing fragment sits a second run: hop down", async () => {
+    // The fence rides the recursion, not just the block's own first hop: the
+    // executor carries the repeat scope through every composition below the
+    // block, so a clean fragment that merely composes the snapshot-bearing one
+    // is refused at the SECOND load. A scan that dropped the scope one hop down
+    // would walk past a.yaml, report b.yaml's launch, and boot an app this run
+    // never reaches — the one-hop case above would stay green throughout.
+    const top = await writeFlow("steps:\n  - repeat: 1\n    steps:\n      - run: a.yaml\n");
+    await writeSiblingFlow(top, "a", "steps:\n  - run: b.yaml\n");
+    await writeSiblingFlow(
+      top,
+      "b",
+      "steps:\n  - launch: { chromium: ./app }\n  - snapshot: home\n"
+    );
+    const registry = makeRegistry(async (id: string) =>
+      id === "list-devices" ? { devices: [] } : {}
+    );
+
+    await expect(
+      runFlow(registry, { name: "snap-frag-chain", project_root: PROJECT_ROOT, flow_file: top })
+    ).rejects.toThrow(/No booted device found/);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+
+    // The executor's verdict on the same chain, pinned so it actually runs:
+    // a.yaml loads clean, and ITS run: errors with the fence's message.
+    const result = await runFlow(registry, {
+      name: "snap-frag-chain",
+      project_root: PROJECT_ROOT,
+      flow_file: top,
+      device: "chromium-cdp-9999",
+    });
+
+    expect(result.ok).toBe(false);
+    const failed = result.steps.find((s) => s.status === "error");
+    expect(failed).toMatchObject({ kind: "run" });
+    expect(failed?.reason).toContain('fragment "b.yaml" contains snapshot "home"');
+    expect(result.steps.some((s) => s.kind === "launch")).toBe(false);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+  });
+
   it("does not boot when a leading run: chain reaches no launch", async () => {
     // A plain fragment composition: nothing to boot, so device resolution
     // proceeds normally (and reports no booted device here).
@@ -1943,6 +1983,53 @@ describe("flow-execute prerequisite vs leading launch chain", () => {
     const failed = result.steps.find((s) => s.status === "error");
     expect(failed).toMatchObject({ kind: "run" });
     expect(failed?.reason).toContain('fragment "frag.yaml" contains snapshot "home"');
+    expect(result.steps.some((s) => s.kind === "launch")).toBe(false);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+  });
+
+  it("takes it too when that fragment sits a second run: hop below the block", async () => {
+    // The two-hop spelling of the test above: the repeat scope the fence reads
+    // rides every hop under the block, so the executor refuses a.yaml's own
+    // run: and b.yaml's launch never runs. Dropping the scope one hop down, the
+    // scan would reach that launch and refuse the composition for declaring a
+    // prerequisite — sending the author to delete the one step that is not the
+    // problem, while the one-hop case above stayed green.
+    const fragment = await writeFlow(
+      'executionPrerequisite: "logged in"\n' +
+        "steps:\n  - repeat: 1\n    steps:\n      - run: a.yaml\n"
+    );
+    await writeSiblingFlow(fragment, "a", "steps:\n  - run: b.yaml\n");
+    await writeSiblingFlow(
+      fragment,
+      "b",
+      "steps:\n  - launch: { chromium: ./app }\n  - snapshot: home\n"
+    );
+    const udid = "1A2B3C4D-5E6F-4A8B-9C0D-1E2F3A4B5C6D";
+    const registry = makeRegistry(async (id: string) =>
+      id === "list-devices" ? { devices: [{ platform: "ios", udid, state: "Booted" }] } : {}
+    );
+
+    const noticed = await runFlowRaw(registry, {
+      name: "snap-frag-chain-prereq",
+      project_root: PROJECT_ROOT,
+      flow_file: fragment,
+    });
+    expect(noticed).toMatchObject({
+      notice: expect.stringContaining("prerequisite"),
+      executionPrerequisite: "logged in",
+    });
+
+    const result = await runFlow(registry, {
+      name: "snap-frag-chain-prereq",
+      project_root: PROJECT_ROOT,
+      flow_file: fragment,
+      prerequisiteAcknowledged: true,
+    });
+
+    expect(result.ok).toBe(false);
+    const failed = result.steps.find((s) => s.status === "error");
+    expect(failed).toMatchObject({ kind: "run" });
+    expect(failed?.reason).toContain('fragment "b.yaml" contains snapshot "home"');
     expect(result.steps.some((s) => s.kind === "launch")).toBe(false);
     expect(bootElectronApp).not.toHaveBeenCalled();
   });
