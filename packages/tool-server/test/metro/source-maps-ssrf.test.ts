@@ -1,5 +1,9 @@
-import { describe, it, expect } from "vitest";
-import { isAllowedSourceMapURL, readCappedJson } from "../../src/utils/debugger/source-maps";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import {
+  isAllowedSourceMapURL,
+  readCappedJson,
+  SourceMapsRegistry,
+} from "../../src/utils/debugger/source-maps";
 
 describe("isAllowedSourceMapURL", () => {
   it("accepts a Metro localhost URL", () => {
@@ -93,5 +97,50 @@ describe("readCappedJson (body cap)", () => {
       json: async () => ({ should: "not reach" }),
     };
     await expect(readCappedJson(res, 1024)).rejects.toThrow(/exceeded/);
+  });
+});
+
+// The tests above prove `isAllowedSourceMapURL` classifies correctly, but not
+// that the fetch path asks it. Delete the guard from `doRegister` and every one
+// of them still passes, so nothing pinned the call itself. These two do: the
+// first fails if the guard goes, the second fails if it ever rejects the URLs
+// Metro really emits.
+describe("doRegister consults the allowlist", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  function stubFetch() {
+    return vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ version: 3, sources: [], mappings: "" }), {
+        headers: { "content-type": "application/json" },
+      })
+    );
+  }
+
+  it("never fetches a sourceMapURL the allowlist rejects", async () => {
+    const fetchSpy = stubFetch();
+    const reg = new SourceMapsRegistry();
+    for (const url of [
+      "http://127.0.0.2:8081/evil.map", // loopback range, but not an allowed host
+      "http://169.254.169.254/latest.map", // cloud metadata, named in this file's header
+      "http://attacker.example/leak.map",
+      "http://localhost:8081/shutdown", // loopback, but not a *.map path
+    ]) {
+      reg.registerFromScriptParsed("http://localhost:8081/index.bundle", "1", url);
+    }
+    await reg.waitForPending();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("still fetches the loopback *.map URL Metro emits", async () => {
+    const fetchSpy = stubFetch();
+    const reg = new SourceMapsRegistry();
+    reg.registerFromScriptParsed(
+      "http://localhost:8081/index.bundle",
+      "1",
+      "http://localhost:8081/index.bundle.map"
+    );
+    await reg.waitForPending();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0][0]).toBe("http://localhost:8081/index.bundle.map");
   });
 });
