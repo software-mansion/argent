@@ -2206,8 +2206,8 @@ async function probeGuard(state: ExecState, cond: UiWhenCondition): Promise<Guar
  * numbers the step after the block 5 where this path numbers it 3, while the
  * same block over one `echo:` numbers it 2 both ways — three unnumbered passes
  * of an unnumbered line shift nothing. A drain's verdict is the one extra that
- * always takes a number: already met over that same `echo:` body, it still
- * numbers the following step 3 where this path numbers it 2.
+ * always takes a number: with its guard already met over that same `echo:`
+ * body, it still numbers the following step 3 where this path numbers it 2.
  *
  * Call this while the block is still open — after the line that opens it and
  * before any line that closes it — so the stand-in children bracket the way the
@@ -2618,7 +2618,7 @@ async function execRepeatStep(
       // Same bracketing as the two branches above: the skip lines stand in for
       // the pass that never ran, so they belong inside the block, ahead of the
       // converged verdict that closes it.
-      if (done === 0) reportBlockSkipped(state, step.steps, inner, "already met");
+      if (done === 0) reportBlockSkipped(state, step.steps, inner, "until guard already met");
       pushReport(state, {
         index: state.reports.length,
         kind: "repeat",

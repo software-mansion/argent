@@ -978,7 +978,10 @@ describe("repeat: until", () => {
     // it. Swapped with the errored branch's string, a PASSING zero-iteration
     // drain would tell the operator its body was skipped because the "until
     // guard errored".
-    expect(result.steps.slice(1, 3).map((s) => s.reason)).toEqual(["already met", "already met"]);
+    expect(result.steps.slice(1, 3).map((s) => s.reason)).toEqual([
+      "until guard already met",
+      "until guard already met",
+    ]);
     // The converged verdict is the only pass here — the opening marker is not.
     expect(result.passed).toBe(1);
   });
@@ -1192,9 +1195,9 @@ describe("repeat: until", () => {
     // No iteration ran, so the body reports one skip line — inside the block,
     // between the opening marker and the guard's error, which closes it. The
     // stand-in carries this branch's own reason, pinned directly for the same
-    // cause as the converged branch's "already met": {@link shape} renders a
-    // skipped tap's target, never its reason — and swapped, an errored drain
-    // would explain its un-run body with "already met".
+    // cause as the converged branch's "until guard already met": {@link shape}
+    // renders a skipped tap's target, never its reason — and swapped, an
+    // errored drain would explain its un-run body with an already-met guard.
     expect(result.steps[1]?.status).toBe("skip");
     expect(result.steps[1]?.depth).toBe(1);
     expect(result.steps[1]?.reason).toBe("until guard errored");
