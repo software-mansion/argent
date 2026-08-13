@@ -1248,7 +1248,7 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
       // is restart-app, which terminates and relaunches whatever device it is
       // handed, so those stay refused.
       if (flow.executionPrerequisite && !pinnedToChromium(params.device)) {
-        const leading = await leadingLaunch(flow, [rootEntry]);
+        const leading = await leadingLaunch(flow, [rootEntry], Boolean(ctx?.inRepeatFlowScope));
         if (leading) {
           // Offer the pin only where it is a real way out (see
           // chromiumPinnable): the guard also fires for unpinned runs of every
@@ -1409,9 +1409,9 @@ async function resolveRunDevice(
   viaUpload: boolean
 ): Promise<{ device: DeviceInfo | null; booted: BootedChromium | null }> {
   if (!params.device) {
-    // The executor's own runStack seed, so a boot can never precede a chain it
-    // then refuses.
-    const leading = await leadingLaunch(flow, [rootEntry]);
+    // The executor's own runStack seed and repeat scope, so a boot can never
+    // precede a chain it then refuses.
+    const leading = await leadingLaunch(flow, [rootEntry], Boolean(ctx?.inRepeatFlowScope));
     const spec = leading && chromiumBootSpec(leading.app, params.platform);
     if (spec) {
       let booted: BootedChromium;
@@ -1525,12 +1525,21 @@ const NO_EXECUTABLE_STEP = "no-executable-step";
  * step IS the launch, so a rejection can point at the right file. Null when the
  * run doesn't begin with a launch, or when the chain can't be read (a broken
  * `run:` target is reported properly by {@link execRunStep} when it executes).
+ *
+ * `inRepeat` is the whole RUN's repeat scope: a `tool: flow-execute` dispatched
+ * from inside a repeat body runs its entire flow under one, which is the seed
+ * {@link execSteps} takes for that same run. Every caller has to answer it
+ * rather than inherit a default — a scan blind to it walks a `run:` hop the
+ * executor refuses at fragment load and reports a launch that can never execute,
+ * which is a hoist for an app the run never reaches and a refusal telling the
+ * author to drop a launch that was never the problem.
  */
 async function leadingLaunch(
   flow: FlowFile,
-  stack: RunStackEntry[]
+  stack: RunStackEntry[],
+  inRepeat: boolean
 ): Promise<{ app: Launch; flow: string } | null> {
-  const found = await scanLeadingLaunch(flow.steps, stack);
+  const found = await scanLeadingLaunch(flow.steps, stack, inRepeat);
   return found === NO_EXECUTABLE_STEP ? null : found;
 }
 
@@ -1566,16 +1575,17 @@ async function leadingLaunch(
  * {@link execRunStep} does — anchored at the containing file's canonical
  * directory, by concatenation so a `..` reaches the kernel uncollapsed — and
  * applies the same cycle, depth, and on-disk-casing guards — plus, once a
- * `times` body has been entered, the fragment-snapshot fence a `run:` load
- * under a repeat scope refuses on. That is not duplication for its own sake: a
- * chain the executor refuses never reaches its launch, so any hop it would
- * error on stays `null` (give up) here, never transparent. Anything unreadable
- * is `null` too — {@link execRunStep} reports that properly when it executes.
+ * `times` body has been entered or the run arrived already repeat-scoped, the
+ * fragment-snapshot fence a `run:` load under a repeat scope refuses on. That is
+ * not duplication for its own sake: a chain the executor refuses never reaches
+ * its launch, so any hop it would error on stays `null` (give up) here, never
+ * transparent. Anything unreadable is `null` too — {@link execRunStep} reports
+ * that properly when it executes.
  */
 async function scanLeadingLaunch(
   steps: FlowStep[],
   stack: RunStackEntry[],
-  inRepeat = false
+  inRepeat: boolean
 ): Promise<{ app: Launch; flow: string } | typeof NO_EXECUTABLE_STEP | null> {
   const top = stack[stack.length - 1]!;
   for (const step of steps) {

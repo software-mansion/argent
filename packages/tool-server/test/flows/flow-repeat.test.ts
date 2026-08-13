@@ -1813,6 +1813,78 @@ describe("repeat: snapshot smuggled in through a nested tool: flow-execute", () 
     expect(result.steps[2]?.reason).toContain('flow "relay" failed');
     expect(result.steps[2]?.reason).toContain('flow "deep-snapper" contains snapshot "home"');
   }, 15000);
+
+  /**
+   * The chain the two prerequisite tests below compose: a fragment whose
+   * snapshot the seeded repeat scope refuses at load — behind a launch — and a
+   * prerequisite-bearing flow whose only step hops to it.
+   */
+  async function writeGatedChain(): Promise<void> {
+    await writeFlow("frag", {
+      executionPrerequisite: "",
+      steps: [{ kind: "launch", app: "com.acme.app" }, SNAPSHOT],
+    });
+    await writeFlow("gated", {
+      executionPrerequisite: "logged in",
+      steps: [{ kind: "run", flow: "frag.yaml" }],
+    });
+  }
+
+  /** The outer flow: one `tool: flow-execute` of "gated" inside a times block. */
+  async function writeGatedSmuggler(name: string, args: Record<string, unknown>): Promise<void> {
+    await writeFlow(name, {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "repeat",
+          spec: { mode: "times", times: 2 },
+          steps: [{ kind: "tool", name: "flow-execute", args: { project_root: tmpDir, ...args } }],
+        },
+      ],
+    });
+  }
+
+  it("takes the prerequisite handshake when the nested flow's leading run: reaches a snapshot-bearing fragment", async () => {
+    // The nested run's leading-launch scan reads the same seeded repeat scope
+    // execSteps does, so it stops at frag's load exactly where the executor
+    // would: the launch behind that hop can never run, and refusing the
+    // composition for declaring executionPrerequisite would send the author to
+    // drop a launch that was never what fails the run. Scan-blind to the scope,
+    // this walked straight through to the launch and refused.
+    await writeGatedChain();
+    await writeGatedSmuggler("gated-smuggler", { name: "gated" });
+
+    const result = await runNested("gated-smuggler");
+
+    expect(result.ok).toBe(false);
+    expect(vi.mocked(runSnapshot)).not.toHaveBeenCalled();
+    expect(result.steps[2]).toMatchObject({ kind: "tool", status: "error", tool: "flow-execute" });
+    expect(result.steps[2]?.reason).toContain(
+      'flow "gated" did not run — its execution prerequisite was not acknowledged: logged in'
+    );
+    expect(result.steps[2]?.reason).not.toContain("must not declare executionPrerequisite");
+  }, 15000);
+
+  it("then errors that fragment's load once the prerequisite is acknowledged", async () => {
+    // What the handshake above hands the caller through to: the acknowledged
+    // run reaches the fence itself, which is the proof the guard was right to
+    // stand aside — the run fails on the snapshot composition, not on the
+    // launch it was told to drop.
+    await writeGatedChain();
+    await writeGatedSmuggler("gated-ack-smuggler", {
+      name: "gated",
+      prerequisiteAcknowledged: true,
+    });
+
+    const result = await runNested("gated-ack-smuggler");
+
+    expect(result.ok).toBe(false);
+    expect(vi.mocked(runSnapshot)).not.toHaveBeenCalled();
+    expect(result.steps[2]).toMatchObject({ kind: "tool", status: "fail", tool: "flow-execute" });
+    expect(result.steps[2]?.reason).toContain('flow "gated" failed');
+    expect(result.steps[2]?.reason).toContain('fragment "frag.yaml" contains snapshot "home"');
+    expect(result.steps[2]?.reason).not.toContain("must not declare executionPrerequisite");
+  }, 15000);
 });
 
 /**
