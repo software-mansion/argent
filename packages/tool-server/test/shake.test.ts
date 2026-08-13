@@ -5,7 +5,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // times) without a booted simulator.
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
-  execFile: vi.fn((_file: string, _args: string[], _opts: unknown, cb: (e: null) => void) => cb(null)),
+  execFile: vi.fn((_file: string, _args: string[], _opts: unknown, cb: (e: null) => void) =>
+    cb(null)
+  ),
 }));
 
 // Device-set resolution reads config off disk; pin it so argv is deterministic.
@@ -188,6 +190,104 @@ describe("shake tool — Android", () => {
     ).rejects.toThrow(/needs an Android emulator/i);
     expect(runAdb).not.toHaveBeenCalled();
   });
+
+  it("restores a rotated device's own resting pose, exponent notation and all", async () => {
+    // What a landscape emulator actually reports: the near-zero axis comes back
+    // in scientific notation. Misread it and the restore writes a portrait
+    // vector, which auto-rotates the device out of landscape mid-test.
+    vi.mocked(runAdb).mockImplementation(async (args: string[]) =>
+      args.includes("get")
+        ? { stdout: "acceleration = 9.81:-1.90735e-06:0\r\nOK\r\n", stderr: "" }
+        : { stdout: "OK\r\n", stderr: "" }
+    );
+
+    await expect(shakeTool.execute(services, { udid: androidEmulator })).resolves.toEqual({
+      shaken: true,
+      count: 1,
+    });
+
+    const sets = vi
+      .mocked(runAdb)
+      .mock.calls.map(([args]) => args as string[])
+      .filter((a) => a[4] === "set");
+    // Landscape gravity is back on X, not swapped onto Y.
+    expect(sets.at(-1)![6]).toBe("9.8100:-0.0000:0.0000");
+  });
+
+  it("fails loudly when the console rejects a sensor write", async () => {
+    // `adb emu` exits 0 even when the console refuses the command — the refusal
+    // is only a `KO:` line in the reply. Unchecked, a shake that never reached
+    // the device reports `{ shaken: true }`.
+    vi.mocked(runAdb).mockImplementation(async (args: string[]) =>
+      args.includes("get")
+        ? { stdout: "acceleration = 0:9.81:0\r\nOK\r\n", stderr: "" }
+        : { stdout: "KO: unknown sensor name: acceleration\r\n", stderr: "" }
+    );
+
+    await expect(shakeTool.execute(services, { udid: androidEmulator })).rejects.toThrow(
+      /emulator console rejected/i
+    );
+  });
+
+  it("reads the trailing verdict, not a stray KO earlier in the reply", async () => {
+    // An auth banner can emit its own `KO:` ahead of a command that succeeds.
+    vi.mocked(runAdb).mockImplementation(async (args: string[]) =>
+      args.includes("get")
+        ? {
+            stdout: "KO: unknown command, try 'help'\r\nacceleration = 0:9.81:0\r\nOK\r\n",
+            stderr: "",
+          }
+        : { stdout: "KO: unknown command, try 'help'\r\nOK\r\n", stderr: "" }
+    );
+
+    await expect(shakeTool.execute(services, { udid: androidEmulator })).resolves.toEqual({
+      shaken: true,
+      count: 1,
+    });
+  });
+
+  it("falls back rather than adopting a resting vector left stuck by another process", async () => {
+    // ~31.6 m/s² is a swung sample, not a pose. Adopting it would restore it,
+    // and every later shake would re-capture and re-restore it forever.
+    vi.mocked(runAdb).mockImplementation(async (args: string[]) =>
+      args.includes("get")
+        ? { stdout: "acceleration = -30:9.81:0\r\nOK\r\n", stderr: "" }
+        : { stdout: "OK\r\n", stderr: "" }
+    );
+
+    await shakeTool.execute(services, { udid: androidEmulator });
+
+    const sets = vi
+      .mocked(runAdb)
+      .mock.calls.map(([args]) => args as string[])
+      .filter((a) => a[4] === "set");
+    expect(sets.at(-1)![6]).toBe("0.0000:9.8100:0.0000");
+  });
+
+  it("serializes overlapping shakes so neither restores the other's swing", async () => {
+    // Agents share an emulator. Unserialized, the second shake reads a mid-burst
+    // sample as its resting vector and — finishing last — leaves the device
+    // permanently tilted, with both calls reporting success.
+    const REST = "0:9.81:0";
+    let deviceVector = REST;
+    vi.mocked(runAdb).mockImplementation(async (args: string[]) => {
+      if (args.includes("get")) {
+        return { stdout: `acceleration = ${deviceVector}\r\nOK\r\n`, stderr: "" };
+      }
+      deviceVector = args[6]!;
+      return { stdout: "OK\r\n", stderr: "" };
+    });
+
+    // The short shake starts first; the long one begins mid-burst and finishes
+    // last, so unserialized it is the long one's restore that survives — and it
+    // captured a swung sample as "rest".
+    const short = shakeTool.execute(services, { udid: androidEmulator, count: 1 });
+    await new Promise((r) => setTimeout(r, 120));
+    const long = shakeTool.execute(services, { udid: androidEmulator, count: 3 });
+    await Promise.all([short, long]);
+
+    expect(deviceVector).toBe("0.0000:9.8100:0.0000");
+  });
 });
 
 describe("shake tool — TV targets are out of scope", () => {
@@ -240,6 +340,14 @@ describe("parseAcceleration", () => {
       x: -1.5,
       y: 9.8,
       z: -0.25,
+    });
+  });
+
+  it("parses the scientific notation a rotated emulator reports", () => {
+    expect(parseAcceleration("acceleration = 9.81:-1.90735e-06:0\r\nOK\r\n")).toEqual({
+      x: 9.81,
+      y: -1.90735e-6,
+      z: 0,
     });
   });
 
