@@ -1133,6 +1133,132 @@ describe("flow-execute chromium boot", () => {
     expect(bootElectronApp).not.toHaveBeenCalled();
   });
 
+  it("boots for a chromium launch inside a leading times block", async () => {
+    // A literal count is paste-equivalence, so the first iteration's launch runs
+    // unconditionally at step 1 exactly as the unwrapped spelling does, and the
+    // hoist has to boot for it. Without the descent the block is a wrapper that
+    // makes a launch-first run invisible: no boot, and the run attaches to
+    // whatever chromium instance happens to be up, green launch step and all.
+    const flowFile = await writeFlow(
+      "steps:\n  - repeat: 2\n    steps:\n      - launch: { chromium: { path: ./app, args: [--e2e] } }\n"
+    );
+    const registry = makeRegistry();
+
+    const result = await runFlow(registry, {
+      name: "times-launch",
+      project_root: PROJECT_ROOT,
+      flow_file: flowFile,
+    });
+
+    // Booted for the block's launch, args and all — the same call the unwrapped
+    // spelling makes, from the app path resolved against the flow's directory.
+    expect(bootElectronApp).toHaveBeenCalled();
+    expect(bootElectronApp.mock.calls[0][0]).toEqual({
+      appPath: path.join(path.dirname(flowFile), "app"),
+      extraArgs: ["--e2e"],
+    });
+    expect(result.ok).toBe(true);
+    expect(result.device).toBe("chromium-cdp-12345");
+    // Iteration 1's launch settles the hoisted instance rather than booting its
+    // own — reason presence is the owned-vs-attached signal — and iteration 2
+    // relaunches the same app, retiring it exactly as two pasted launches would.
+    const launches = result.steps.filter((s) => s.kind === "launch");
+    expect(launches.map((s) => s.reason)).toEqual([
+      "booted chromium instance chromium-cdp-12345",
+      "booted chromium instance chromium-cdp-12346 — retired chromium-cdp-12345 (same app relaunched)",
+    ]);
+    expect(bootElectronApp).toHaveBeenCalledTimes(2);
+    expect(killChromiumByPortAndWait.mock.calls).toEqual([
+      [12345, 4242],
+      [12346, 4243],
+    ]);
+  });
+
+  it("boots for a launch a leading times block reaches through a run: hop", async () => {
+    // The composed spelling of the fixture above, and the shape that pins what
+    // the descent carries into the body: the same stack, since the block adds no
+    // file hop, so `run: e2e-chromium` resolves against the containing file
+    // precisely as the executor expands it; and a repeat scope that fences only
+    // snapshot-bearing fragments (the two snapshot-fence tests further down),
+    // never a clean one. Get either wrong and the hop is a dead end — no boot,
+    // and the run attaches to whatever instance happens to be up.
+    const top = await writeFlow(
+      "steps:\n  - repeat: 1\n    steps:\n      - echo: warming up\n      - run: e2e-chromium\n"
+    );
+    await writeSiblingFlow(top, "e2e-chromium", "steps:\n  - launch: { chromium: ./app }\n");
+    const registry = makeRegistry();
+
+    const result = await runFlow(registry, {
+      name: "times-run-hop",
+      project_root: PROJECT_ROOT,
+      flow_file: top,
+    });
+
+    expect(bootElectronApp).toHaveBeenCalledTimes(1);
+    expect(bootElectronApp.mock.calls[0][0]).toEqual({
+      appPath: path.join(path.dirname(top), "app"),
+      extraArgs: undefined,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.device).toBe("chromium-cdp-12345");
+    const launch = result.steps.find((s) => s.kind === "launch")!;
+    expect(launch.reason).toBe("booted chromium instance chromium-cdp-12345");
+    expect(killChromiumByPortAndWait).toHaveBeenCalledWith(12345, 4242);
+  });
+
+  it("boots the times block's first launch, not a later one in the body or behind the block", async () => {
+    // Step 1 of the pasted-out flow is the body's FIRST executable step, so that
+    // is the launch the hoist owns. A descent that returned any other launch it
+    // met — the body's second, or the one after the block — would still boot,
+    // still report one call, and still tear down cleanly: only the app path
+    // tells the two apart. Booting app-b first would also fail iteration 1's
+    // launch, which settles the hoisted instance and finds the wrong app.
+    const flowFile = await writeFlow(
+      "steps:\n" +
+        "  - repeat: 1\n" +
+        "    steps:\n" +
+        "      - launch: { chromium: ./app-a }\n" +
+        "      - launch: { chromium: ./app-b }\n" +
+        "  - launch: { chromium: ./app-c }\n"
+    );
+    const registry = makeRegistry();
+
+    const result = await runFlow(registry, {
+      name: "times-first-launch",
+      project_root: PROJECT_ROOT,
+      flow_file: flowFile,
+    });
+
+    // app-a is the hoist; b and c boot themselves as the run reaches them.
+    expect(bootElectronApp.mock.calls.map((c) => c[0].appPath)).toEqual([
+      path.join(path.dirname(flowFile), "app-a"),
+      path.join(path.dirname(flowFile), "app-b"),
+      path.join(path.dirname(flowFile), "app-c"),
+    ]);
+    expect(result.ok).toBe(true);
+    expect(result.device).toBe("chromium-cdp-12345");
+  });
+
+  it("does not boot for a chromium launch inside an until drain", async () => {
+    // The negative twin of the three fixtures above, on the same branch:
+    // transparency is times-only. A drain's guard is checked BEFORE each
+    // iteration, so an already-satisfied guard runs the body — launch included —
+    // zero times, and a launch that may never happen is no basis for booting an
+    // app. Device resolution proceeds normally instead, and reports what it
+    // finds (nothing here).
+    const flowFile = await writeFlow(
+      "steps:\n  - repeat: { until: { hidden: Busy } }\n    steps:\n      - launch: { chromium: ./app }\n"
+    );
+    const registry = makeRegistry(async (id: string) =>
+      id === "list-devices" ? { devices: [] } : {}
+    );
+
+    await expect(
+      runFlow(registry, { name: "drain-launch", project_root: PROJECT_ROOT, flow_file: flowFile })
+    ).rejects.toThrow(/No booted device found/);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+  });
+
   it("does not boot when the launch hides in a snapshot-bearing fragment inside a times block", async () => {
     // The fourth refusal kind: under a repeat scope execRunStep refuses a
     // snapshot-bearing fragment at load, so the launch behind it never runs —
