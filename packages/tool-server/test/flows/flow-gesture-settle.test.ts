@@ -204,10 +204,12 @@ describe("a tree-source outage never fails a selector-less gesture", () => {
     expect(gestures()[0]?.tool).toBe("gesture-pinch");
   }, 15_000);
 
-  it("charges the outage window once per run, not once per gesture", async () => {
+  it("charges one outage window for a run of gestures, not one per gesture", async () => {
     // The shape this matters for: a source that serves no tree at all
     // (`ios-remote`, an app the instrumentation cannot load) against a flow
     // made of coordinate gestures, which is the only kind such a run can have.
+    // Consecutive ones, at that: a foreground-changing `tool:` step between two
+    // gestures re-arms the window for the second, which the arms below pin.
     currentTree = outage;
     await writeFlow("taps-blind", {
       executionPrerequisite: "",
@@ -507,9 +509,12 @@ describe("a launch clears a proven outage", () => {
 // `launch:` directive, and the docs tell authors to start an app that cannot
 // load the instrumentation with a bare `tool: restart-app` - so it must spend
 // the verdict too, or the gesture behind the most animation-heavy moment a flow
-// has would be the one dispatched with no settle at all.
+// has would be the one dispatched with no settle at all. The set is
+// deliberately coarse - `button` and most `open-url` targets repair nothing -
+// because over-clearing only costs a later gesture a window it would have
+// skipped, while missing a repair leaves it dispatching blind.
 describe("a raw `tool:` relaunch clears a proven outage", () => {
-  /** Dead until the named relaunch tool runs, healthy after: the repair works. */
+  /** Dead until the named tool runs, healthy after: the gesture behind it can read again. */
   const deadUntilTool = (tool: string) => (): DescribeNode => {
     if (!events.some((e) => e.kind === "invoke" && e.tool === tool)) {
       throw new Error("native devtools is unavailable");
@@ -517,15 +522,23 @@ describe("a raw `tool:` relaunch clears a proven outage", () => {
     return screen();
   };
 
-  it.each(["restart-app", "launch-app"])(
-    "makes the gesture after `tool: %s` pay for a settle of its own",
-    async (tool) => {
+  // Every entry of `FOREGROUND_CHANGING_TOOLS`, with the args its own schema
+  // asks for: the clear is unkeyed, so each spelling has to be pinned.
+  it.each([
+    { tool: "launch-app", args: { bundleId: "com.acme.app" } },
+    { tool: "restart-app", args: { bundleId: "com.acme.app" } },
+    { tool: "reinstall-app", args: { bundleId: "com.acme.app", appPath: "./build/Acme.app" } },
+    { tool: "open-url", args: { url: "https://example.com" } },
+    { tool: "button", args: { button: "home" } },
+  ])(
+    "makes the gesture after `tool: $tool` pay for a settle of its own",
+    async ({ tool, args }) => {
       currentTree = deadUntilTool(tool);
       await writeFlow(`tap-${tool}-tap`, {
         executionPrerequisite: "",
         steps: [
           { kind: "tap", x: 0.1, y: 0.1 },
-          { kind: "tool", name: tool, args: { bundleId: "com.acme.app" } },
+          { kind: "tool", name: tool, args },
           { kind: "tap", x: 0.2, y: 0.2 },
         ],
       });
