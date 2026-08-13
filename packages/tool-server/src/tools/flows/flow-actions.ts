@@ -454,7 +454,11 @@ function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
  * "Every attempt" is at least {@link SETTLE_MIN_READS} of them: the deadline
  * bounds the polling, never the number of reads taken, so a read slow enough to
  * outlast the window on its own is retried rather than treated as the whole
- * evidence.
+ * evidence. The price lands on the best-effort return: if that retry then
+ * fails, `prevTree` is the first read's tree handed back a read-duration later
+ * (bounded by the tree source's own RPC ceiling), older than what the bare
+ * deadline would have returned. Paid because a single successful read has been
+ * compared against nothing and is no settle at all.
  *
  * `skipProvenOutage` rethrows {@link ActionEnv.treeOutage} instead of buying
  * that whole settle again, window and floor reads alike. Not a shorter budget:
