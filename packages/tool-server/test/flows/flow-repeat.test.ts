@@ -502,6 +502,23 @@ describe("repeat: parse/serialize", () => {
     ).toThrow(/snapshot "home" cannot run inside a repeat block/i);
   });
 
+  it("echoes the bound untruncated when a long steps-first body holds the snapshot", () => {
+    // Same unordered-keys hazard as the bound errors above: an echo of the
+    // whole step hits the 200-char render cap inside the body, so the
+    // `{ repeat: … }` wrap is what identifies the block the message refuses.
+    // The message already names the snapshot, so the `$`-anchored match is what
+    // proves the echo survived rather than being elided into `…(+N chars)`.
+    const longBody = [
+      '      - tap: { text: "Load more results from the server and then some more" }',
+      '      - await: { visible: "Results loaded successfully after a long wait" }',
+      '      - tap: { text: "Dismiss the notification banner at the top of screen" }',
+      "      - snapshot: home",
+    ].join("\n");
+    expect(() => parseFlow(`steps:\n  - steps:\n${longBody}\n    repeat: 2\n`)).toThrow(
+      /snapshot "home" cannot run inside a repeat block.*: \{"repeat":2\}$/s
+    );
+  });
+
   it("shares one depth cap with when — an alternating chain cannot evade it", () => {
     // A per-directive counter would let this nest forever. Build 12 repeat/when
     // pairs: 24 levels, over the shared cap of 20, under either alone.

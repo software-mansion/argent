@@ -2935,12 +2935,16 @@ function parseRepeatStep(raw: Record<string, unknown>, depth: number): FlowStep 
       "a repeat step takes exactly { repeat: <count | { until, max? }>, steps: [...] }"
     );
   }
-  // Bound errors echo `{ repeat: … }`, not the whole step: keys are unordered,
-  // so a steps-first long body would push the part the message names past the
-  // MAX_ENTRY_RENDER_CHARS truncation.
-  const spec = parseRepeatSpec(raw.repeat, { repeat: raw.repeat });
+  // The bound errors and the snapshot refusal both echo `{ repeat: … }`, not
+  // the whole step: keys are unordered, so a steps-first long body would push
+  // what each echo is there to carry — the bound for a bound error, the
+  // identity of the block for a refusal that already names the snapshot — past
+  // the MAX_ENTRY_RENDER_CHARS truncation. The wrap is sized by the bound
+  // alone, so no body can cost either message its echo.
+  const boundEntry = { repeat: raw.repeat };
+  const spec = parseRepeatSpec(raw.repeat, boundEntry);
   const steps = parseBlockSteps(raw, depth, "repeat needs a non-empty steps list to run");
-  assertNoSnapshotInRepeat(steps, raw);
+  assertNoSnapshotInRepeat(steps, boundEntry);
   return { kind: "repeat", spec, steps };
 }
 
