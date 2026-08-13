@@ -76,10 +76,21 @@ export interface ActionEnv {
   launchedNativeApp?: string;
   /**
    * Run-scoped memo of a tree source that answered nothing: set by a
-   * {@link settleTree} whose whole window failed, cleared by the next read
-   * anywhere in the run that comes back. One holder per run (built in
-   * flow-run's ExecState and shared by every `deviceEnv`), so the evidence one
-   * step gathered is the evidence the next one acts on.
+   * {@link settleTree} whose whole window failed, cleared by the next
+   * DIRECTIVE read that comes back. One holder per run (built in flow-run's
+   * ExecState and shared by every `deviceEnv`), so the evidence one step
+   * gathered is the evidence the next one acts on.
+   *
+   * A `tool:` step's read is not one of those: it goes through `invokeSubTool`
+   * and never reaches {@link readFlowTree}, so a run can carry a green
+   * `native-full-hierarchy` - the same RPC flow-ios-tree issues - or a green
+   * `describe` (the same source outright on Android, Chromium and Vega; the AX
+   * tree only on iOS) and still skip later gesture settles. Nor is the clear
+   * ordered against the step that is running: `idle` hands its read to
+   * `settleWithin` and stops waiting at the round budget, so that read can land
+   * during a later step and retire a verdict minted after it was issued. Safe
+   * direction - that only ever costs a later gesture a window it would have
+   * skipped - but it is a clear by arrival, not by sequence.
    *
    * Only {@link settleForGesture} and {@link fetchScreenAspect} READ it, each
    * to skip work it has been shown cannot pay off: a settle window, and a read
@@ -92,9 +103,8 @@ export interface ActionEnv {
    * health whichever directive asked for it. A relaunch clears it too, whether
    * spelled `launch` or as one of flow-run's `FOREGROUND_CHANGING_TOOLS`: it is
    * the repair the commonest of these errors asks for, and no read need follow
-   * it before a gesture does.
-   * Absent for a caller that builds an `ActionEnv` by hand, which simply leaves
-   * every settle on its own budget.
+   * it before a gesture does. Absent for a caller that builds an `ActionEnv` by
+   * hand, which simply leaves every settle on its own budget.
    *
    * The write carries the device it was proven against: a verdict about a
    * device the run has left says nothing about the one it moved onto (a
@@ -423,8 +433,8 @@ function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
  * ~20s on the single sample it then mints the verdict from. Being wrong costs a
  * settle, not a step: {@link settleForGesture} swallows the throw - and says
  * so, warning every gesture it spares, so a run whose prediction was wrong
- * reports which greens went out unsettled. Any read that comes back retires it,
- * as does a relaunch.
+ * reports which greens went out unsettled. Any directive read that comes back
+ * retires it, as does a relaunch.
  *
  * What it costs: an outage that lasted a full window, in a run that then never
  * reads the tree again and never relaunches, leaves later gestures unsettled
