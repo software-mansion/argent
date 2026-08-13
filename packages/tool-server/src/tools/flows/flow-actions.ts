@@ -76,7 +76,7 @@ export interface ActionEnv {
   launchedNativeApp?: string;
   /**
    * Run-scoped memo of a tree source that answered nothing: set by a
-   * {@link settleTree} whose whole window failed, cleared by the next
+   * {@link settleTree} that failed every read attempt, cleared by the next
    * DIRECTIVE read that comes back. One holder per run (built in flow-run's
    * ExecState and shared by every `deviceEnv`), so the evidence one step
    * gathered is the evidence the next one acts on.
@@ -89,17 +89,17 @@ export interface ActionEnv {
    * ordered against the step that is running: `idle` hands its read to
    * `settleWithin` and stops waiting at the round budget, so that read can land
    * during a later step and retire a verdict minted after it was issued. Safe
-   * direction - that only ever costs a later gesture a window it would have
+   * direction - that only ever costs a later gesture a settle it would have
    * skipped - but it is a clear by arrival, not by sequence.
    *
-   * Only {@link settleForGesture} READS it, and only to skip a window it has
+   * Only {@link settleForGesture} READS it, and only to skip a settle it has
    * already been shown is unaffordable - never a read whose answer is
    * dispatched rather than waited on, which is why {@link fetchScreenAspect}
    * does not consult it. The skip is not silent: the gesture warns its step
    * report that it dispatched unsettled, so the memo never makes an outage
    * cheaper to miss than it was to prove. It is written by the one place that
-   * can prove a source dead (a {@link settleTree} whose whole window failed),
-   * whichever directive asked for that window. `waitForFrame` and
+   * can prove a source dead (a {@link settleTree} that failed every read
+   * attempt), whichever directive asked for that settle. `waitForFrame` and
    * `scrollToVisible` error the step on it, so a verdict of theirs is never
    * spent; `runSnapshot` is the one producer whose step then passes reporting
    * nothing, since it captures pixels regardless and has no warning to carry.
@@ -120,7 +120,7 @@ export interface ActionEnv {
    * move is behind `runLaunch`, which clears the verdict first - but it keeps
    * the property from resting on where that clear sits in another file. The
    * clear is deliberately NOT keyed: it only ever costs a later gesture a
-   * window it would otherwise have skipped, and that is the side to err on.
+   * settle it would otherwise have skipped, and that is the side to err on.
    */
   treeOutage?: { proven?: { deviceId: string; error: Error } };
 }
@@ -457,14 +457,14 @@ function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
  * evidence.
  *
  * `skipProvenOutage` rethrows {@link ActionEnv.treeOutage} instead of buying
- * that window again. Not a shorter budget: a threshold low enough to spare a
- * source serving no tree at all would also abandon the mid-navigation blip the
- * retry above exists for. But the memo is a prediction: one window mints it and
- * nothing re-tests it. Being wrong costs a settle, not a step:
- * {@link settleForGesture} swallows the throw - and says so, warning every
- * gesture it spares, so a run whose prediction was wrong reports which greens
- * went out unsettled. Any directive read that comes back retires it, as does a
- * relaunch.
+ * that whole settle again, window and floor reads alike. Not a shorter budget:
+ * a threshold low enough to spare a source serving no tree at all would also
+ * abandon the mid-navigation blip the retry above exists for. But the memo is a
+ * prediction: one settle mints it and nothing re-tests it. Being wrong costs a
+ * settle, not a step: {@link settleForGesture} swallows the throw - and says
+ * so, warning every gesture it spares, so a run whose prediction was wrong
+ * reports which greens went out unsettled. Any directive read that comes back
+ * retires it, as does a relaunch.
  *
  * What it costs: an outage that lasted a full window, in a run that then never
  * reads the tree again and never relaunches, leaves later gestures unsettled
