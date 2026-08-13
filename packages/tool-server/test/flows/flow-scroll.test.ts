@@ -39,6 +39,7 @@ vi.mock("../../src/utils/adb", async (importOriginal) => ({
 
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow } from "../../src/tools/flows/flow-utils";
+import { adaptFullAndroidHierarchyToDescribeResult } from "../../src/tools/flows/flow-android-tree";
 import { isTvOsSimulator } from "../../src/utils/ios-devices";
 import { isAndroidTv } from "../../src/utils/adb";
 
@@ -595,6 +596,71 @@ describe("scroll-to directive", () => {
     // One increment attempted, then the scoped no-progress check accepted it.
     expect(swipes).toHaveLength(1);
   });
+
+  it("finds a flush last item in an id-less Android scroller despite a header spinner", async () => {
+    // The Android counterpart of the clock test above, and the plain-search
+    // consequence of the scrollable keep-gate (flow-android-tree): an RN
+    // ScrollView / Compose LazyColumn with no testID dumps as a scrollable
+    // android.view.ViewGroup, whose class-fallback role fails the /scroll/i
+    // test, so only the `scrollable` flag keeps it as a leaf. Without that
+    // leaf the tree surfaces no scroll container under the anchor, the
+    // fingerprint scope falls back to the whole screen, and the header spinner
+    // above the list masks the end of the scroll - a plain search round, no
+    // nudge involved. Built through the real adapter so this stays tied to
+    // that gate.
+    let reads = 0;
+    // The last row sits flush against the screen bottom on every read, so the
+    // axis check can never clear its entry edge and only end-of-scroll
+    // detection can accept it. The spinner sits ABOVE the scroller's bounds,
+    // so it is out of the scoped fingerprint but in a whole-screen one.
+    const dump = (spinner: string): string =>
+      `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.widget.TextView" text="${spinner}" package="com.acme.app" bounds="[380,20][700,100]" />
+    <node index="1" class="android.view.ViewGroup" scrollable="true" package="com.acme.app" bounds="[0,200][1080,1920]">
+      <node index="0" class="android.widget.TextView" text="Row 9" package="com.acme.app" bounds="[100,1400][980,1520]" />
+      <node index="1" class="android.widget.TextView" text="Bottom row" package="com.acme.app" bounds="[100,1728][980,1920]" />
+    </node>
+  </node>
+</hierarchy>`;
+    currentTree = () => {
+      reads++;
+      // Ticks every other read: each settle sees a stable pair, but no two
+      // settled trees share the spinner's label (a ~1Hz spinner, effectively).
+      return adaptFullAndroidHierarchyToDescribeResult(
+        dump(`Syncing ${Math.floor(reads / 2)}s`),
+        1080,
+        1920
+      );
+    };
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes);
+
+    await writeFlow("android-spinner-last-item", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Bottom row" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute(
+        {},
+        { name: "android-spinner-last-item", project_root: tmpDir, device: ANDROID_DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    // One increment attempted, then the scoped no-progress check accepted it.
+    // With the scope back at the whole screen this burns all
+    // MAX_SCROLL_ITERATIONS and fails "not found" on a visible element.
+    expect(swipes).toHaveLength(1);
+    // The pass takes under a second; the budget covers that regression path
+    // (25 rounds x the settle poll) so it fails on these assertions rather
+    // than on a test timeout, which would read as a flake.
+  }, 15000);
 
   it("keeps scrolling when only an outer scroller progresses past a static inner scrollable at the anchor", async () => {
     // A horizontal carousel sits exactly under the swipe anchor but doesn't
