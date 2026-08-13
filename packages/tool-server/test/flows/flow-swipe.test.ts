@@ -286,6 +286,40 @@ describe("swipe: parse/serialize", () => {
     expect(parseFlow(yaml).steps).toEqual([{ kind: "swipe", direction: "left" }]);
   });
 
+  it.each<[string, FlowStep, FlowStep]>([
+    [
+      "by travel",
+      { kind: "swipe", by: { x: 0.2 }, momentum: true },
+      { kind: "swipe", by: { x: 0.2 } },
+    ],
+    [
+      "an anchor",
+      { kind: "swipe", from: { x: 0.5, y: 0.8 }, direction: "up", momentum: true },
+      { kind: "swipe", from: { x: 0.5, y: 0.8 }, direction: "up" },
+    ],
+    [
+      "a duration",
+      { kind: "swipe", direction: "left", duration: 800, momentum: true },
+      { kind: "swipe", direction: "left", duration: 800 },
+    ],
+  ])(
+    "verbose body: a programmatic momentum: true with %s emits no momentum key",
+    (_description, step, normalized) => {
+      // The sugar gate's twin on the branch the sugar test above cannot reach:
+      // each of these carries a second field, so the bare-direction return never
+      // fires and the options body builder alone decides the default's fate.
+      // Emitting `momentum: true` there writes a key parseSwipe normalizes
+      // straight back to absent, so serialize stops being parse's inverse while
+      // the file still reads back fine. Deliberately NOT in the round-trip
+      // fixture above: that one asserts the parsed steps equal the INPUT steps,
+      // and these inputs are not fixed points, since the default is dropped on
+      // the way back. The asymmetry is the assertion here.
+      const yaml = serializeFlow({ executionPrerequisite: "", steps: [step] });
+      expect(yaml).not.toContain("momentum");
+      expect(parseFlow(yaml).steps).toEqual([normalized]);
+    }
+  );
+
   it("rejects a bare string that is not a direction", () => {
     expect(() => parseFlow("steps:\n  - swipe: Login\n")).toThrow(
       /swipe takes a direction \(up, down, left, right\)/i
