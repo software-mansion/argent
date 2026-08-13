@@ -347,15 +347,19 @@ function axisFullyInside(
 // container the tree shows the target living in (see targetScrollerFrame and
 // scrollerRegion) — never the whole screen, and never a static pane, either
 // of which shows a deficit no gesture can close while dispatching that
-// gesture into whatever sits under its centre.
+// gesture into whatever sits under its centre. Owning the target is necessary
+// but not sufficient: the OS hands the drag to the scroller it hit-tests at
+// the touch-down point, so the clip's centre must not be covered by a smaller
+// scroller that does not contain the target (see nudgeReachesTarget).
 // Best-effort by design:
 // it engages only when that container's entry edge effectively is a screen
 // edge (an inset container is read as sitting above its own chrome - see
 // EDGE_AVOID_SCREEN_EPS), and gives up —
-// accepting the flush landing — when no scrolling clip resolves, the previous
-// nudge failed to move the target, the target has no headroom, the
-// attempts run out, or a post-acceptance device interaction (the nudge
-// gesture or the next round's settle read) throws. A nudge can therefore
+// accepting the flush landing — when no scrolling clip resolves, a nested
+// scroller would take the gesture, the previous nudge failed to move the
+// target, the target has no headroom, the attempts run out, or a
+// post-acceptance device interaction (the nudge gesture or the next round's
+// settle read) throws. A nudge can therefore
 // delay a step but never fail one that was already visible - the delay does
 // expose it to run cancellation, which reports the step as an aborted skip.
 //
@@ -813,9 +817,41 @@ function anchorScrollFrames(tree: DescribeNode, anchor: { x: number; y: number }
   return frames;
 }
 
+/** Same rect, to the float. Node identity is deliberately not the test - see scrollerRegion. */
+function sameFrame(a: DescribeFrame, b: DescribeFrame): boolean {
+  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+}
+
+/**
+ * Does `container` contain `frame`, with the per-side slack the edge-avoid
+ * nudge's container gate uses (see targetScrollerFrame for what the entry-side
+ * slack buys)? Both halves of that gate - the clip search in
+ * targetScrollerFrame and the anchor reach check in nudgeReachesTarget - share
+ * it, so "the target lives inside this scroller" cannot mean two different
+ * things.
+ */
+function containerContainsTarget(
+  container: DescribeFrame,
+  frame: DescribeFrame,
+  direction: ScrollDirection
+): boolean {
+  // Sides named by the direction that reveals from them (see targetScrollerFrame).
+  const slack = (side: ScrollDirection): number =>
+    side === direction ? EDGE_AVOID_SCREEN_EPS : EDGE_EPS;
+  return (
+    container.x <= frame.x + slack("left") &&
+    container.y <= frame.y + slack("up") &&
+    container.x + container.width >= frame.x + frame.width - slack("right") &&
+    container.y + container.height >= frame.y + frame.height - slack("down")
+  );
+}
+
 /**
  * Frame of the scroll container the accepted target lives in, or undefined
- * when the tree surfaces none — the edge-avoid nudge's container gate. The
+ * when the tree surfaces none — the clip half of the edge-avoid nudge's
+ * container gate (nudgeReachesTarget is the other half: containment says the
+ * clip owns the target, never that a gesture at the clip's centre reaches the
+ * clip rather than something nested over it). The
  * flow tree is flat-leaves-under-one-root (see flow-tree-flatten): a
  * RecyclerView / UIScrollView and the rows it scrolls arrive as SIBLINGS, so
  * parent/child ancestry cannot say whose content the target is — geometric
@@ -862,23 +898,12 @@ function targetScrollerFrame(
   frame: DescribeFrame,
   direction: ScrollDirection
 ): DescribeFrame | undefined {
-  // Sides named by the direction that reveals from them (see the docstring).
-  const slack = (side: ScrollDirection): number =>
-    side === direction ? EDGE_AVOID_SCREEN_EPS : EDGE_EPS;
   let best: DescribeFrame | undefined;
   forEachVisibleScrollContainer(tree, (node) => {
     const f = node.frame;
     if (
-      f.x <= frame.x + slack("left") &&
-      f.y <= frame.y + slack("up") &&
-      f.x + f.width >= frame.x + frame.width - slack("right") &&
-      f.y + f.height >= frame.y + frame.height - slack("down") &&
-      !(
-        f.x === frame.x &&
-        f.y === frame.y &&
-        f.width === frame.width &&
-        f.height === frame.height
-      ) &&
+      containerContainsTarget(f, frame, direction) &&
+      !sameFrame(f, frame) &&
       (best === undefined || frameArea(f) < frameArea(best))
     ) {
       best = f;
@@ -908,21 +933,76 @@ function targetScrollerFrame(
  * the gesture lands on the co-located scroller and moves the same rect. The
  * shape this gate exists to refuse - a card or text pane strictly inside a
  * scrollable page - shares its frame with no scroller and still declines.
+ *
+ * What identity does NOT certify is that a gesture at the centre reaches the
+ * co-located scroller rather than a smaller one nested over that centre - the
+ * reach half of the gate, in nudgeReachesTarget.
  */
 function scrollerRegion(tree: DescribeNode, region: DescribeFrame): DescribeFrame | undefined {
   let found = false;
   forEachVisibleScrollContainer(tree, (node) => {
-    const f = node.frame;
-    if (
-      f.x === region.x &&
-      f.y === region.y &&
-      f.width === region.width &&
-      f.height === region.height
-    ) {
-      found = true;
-    }
+    if (sameFrame(node.frame, region)) found = true;
   });
   return found ? region : undefined;
+}
+
+/**
+ * Would a nudge anchored at `clip`'s centre reach a scroller that owns the
+ * target? The clip resolution answers a different question - targetScrollerFrame
+ * certifies only that the clip CONTAINS the target, scrollerRegion only that a
+ * scroller occupies the named rect - and neither looks at what sits at the
+ * anchor. The OS does: it hit-tests the touch-down point and hands the drag to
+ * the INNERMOST scroller there, so a smaller same-axis scroller covering the
+ * clip's centre (an inner list, an embedded web view, a map pane) swallows it -
+ * the target never moves, and that pane is left scrolled for whatever
+ * `assert`/`snapshot` follows. The nudge therefore goes out only when the
+ * innermost visible scroll container under the anchor IS the clip, or contains
+ * the target. Skipping is the safe direction: the flush landing is exactly the
+ * pre-nudge behavior, and this shape hits targets that needed no gesture at all
+ * before this phase existed.
+ *
+ * Landing on the clip is its own arm rather than a case of containment,
+ * because the `within` clip is certified scrollable but not certified to
+ * contain the target (the axis check constrains the scroll axis only, so a row
+ * may overhang its pane across it) - a drag that lands on the clip is by
+ * definition the one the deficit was measured for. The clip is also always a
+ * candidate here (both halves resolve it from a visible scroll container, and a
+ * rect contains its own centre), so the no-candidate arm is defensive only.
+ *
+ * A scroller whose frame IS the target's (an addressable scroller scrolled TO,
+ * the one shape targetScrollerFrame excludes as a clip) trivially contains it
+ * and passes: the drag then scrolls the target's own content instead of moving
+ * it - a nudge that achieves nothing rather than one that mutates an unrelated
+ * pane - and the progress check bounds it to one gesture.
+ *
+ * Two residuals. A pane the adapters never emit as a scroll container (an
+ * Android WebView scrolling internally without the framework `scrollable`
+ * flag) is invisible here, so the progress check stays the only backstop for
+ * it. And a nested scroller that moves only the OTHER axis (a horizontal
+ * carousel under a vertical nudge) hands the drag to its ancestor, which may
+ * be the clip - no adapter reports an axis, so it is skipped anyway, costing a
+ * nudge that would have worked. Both land on the flush landing, the pre-nudge
+ * behavior.
+ */
+function nudgeReachesTarget(
+  tree: DescribeNode,
+  clip: DescribeFrame,
+  frame: DescribeFrame,
+  direction: ScrollDirection
+): boolean {
+  const anchor = getDescribeTapPoint(clip);
+  let innermost: DescribeFrame | undefined;
+  forEachVisibleScrollContainer(tree, (node) => {
+    const f = node.frame;
+    if (
+      frameContains(f, anchor.x, anchor.y) &&
+      (innermost === undefined || frameArea(f) < frameArea(innermost))
+    ) {
+      innermost = f;
+    }
+  });
+  if (innermost === undefined) return true;
+  return sameFrame(innermost, clip) || containerContainsTarget(innermost, frame, direction);
 }
 
 function collectFocused(node: DescribeNode, acc: DescribeNode[]): DescribeNode[] {
@@ -1084,7 +1164,9 @@ async function isTvDevice(device: DeviceInfo): Promise<boolean> {
  * the innermost scroll container the tree shows the target living in. With no
  * such clip (pinned chrome, a fully static screen, a `within` naming a card or
  * a text pane) the landing is accepted as it stands with no gesture (see
- * scrollerRegion and targetScrollerFrame). The phase is bounded three ways: the
+ * scrollerRegion and targetScrollerFrame) - and likewise when a scroller nested
+ * over that clip's centre would take the drag instead, since the OS routes it
+ * by hit-test (see nudgeReachesTarget). The phase is bounded three ways: the
  * end-of-scroll fingerprint — scoped, like the gesture, to the scrollers under
  * the round's actual anchor — accepts the flush landing when a nudge moves
  * nothing; a per-round progress check allows a follow-up nudge only when the
@@ -1187,6 +1269,12 @@ async function scrollToVisible(
         (direction === "down" || direction === "right") && env.device.platform !== "chromium";
       if (clip !== undefined && nudgeable) {
         nudge = edgeNudgeDistance(frame, direction, clip);
+        // Reach gate: owning the target does not make the clip what the OS
+        // hit-tests at the anchor - a nested pane over the clip's centre takes
+        // the drag, leaving itself scrolled and the target where it was (see
+        // nudgeReachesTarget). Gated on the geometry above, which returns 0 for
+        // most accepted targets, to keep the extra walk off the common path.
+        if (nudge > 0 && !nudgeReachesTarget(tree, clip, frame, direction)) nudge = 0;
         // TV veto: neither TV can take the swipe - the simulator-server
         // rejects touch for tvOS, and a leanback UI is D-pad driven with no
         // touch at all, so the gesture moves nothing. Both classify as a touch
@@ -1257,9 +1345,11 @@ async function scrollToVisible(
     }
     prevFp = fp;
 
-    // A nudge anchors in the container that owns the target (latching the
-    // gesture to the scroller that can actually move it); a search increment
-    // keeps the plain region anchor.
+    // A nudge anchors in its clip - the target's own scroller, or the `within`
+    // region when one is named - and the reach gate above has checked, over the
+    // emitted tree, that the scroller the OS hit-tests there is that clip or
+    // another container holding the target, so the gesture latches to one that
+    // can actually move it. A search increment keeps the plain region anchor.
     if (nudge > 0) {
       nudges++;
       try {

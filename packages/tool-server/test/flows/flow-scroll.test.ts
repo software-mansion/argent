@@ -1677,6 +1677,259 @@ describe("scroll-to directive", () => {
     expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.105, 5);
   });
 
+  it("skips the nudge when a nested scroller covers the anchor without owning the target", async () => {
+    // Reviewer repro: a page scroller owns the row, but an embedded pane (an
+    // inner list, a web view, a map) covers the page's centre - where the
+    // nudge would touch down. The OS hit-tests that point and hands the drag
+    // to the INNERMOST scroller there, so the pane swallows it: the row (flush
+    // at 0.87..0.97, every geometric condition for a 0.105 nudge met) does not
+    // move and the pane is left scrolled for the next step to read. The pane
+    // does not contain the row, so the nudge must not go out at all - the
+    // pre-nudge behavior for a target that was already fully visible.
+    const scrollers = () => [
+      fullScreenScroller(),
+      n({
+        role: "AXScrollArea",
+        identifier: "inner-pane",
+        frame: { x: 0, y: 0.3, width: 1, height: 0.4 },
+      }),
+    ];
+    let innerRow = 1;
+    currentTree = () =>
+      screen([
+        ...scrollers(),
+        n({ label: `INNER 0${innerRow}`, frame: { x: 0.1, y: 0.4, width: 0.8, height: 0.1 } }),
+        n({ label: "Order #1234", frame: { x: 0.1, y: 0.87, width: 0.8, height: 0.1 } }),
+      ]);
+
+    const swipes: SwipeCall[] = [];
+    // A swipe reaching the pane scrolls the PANE - the side effect that
+    // outlives the step, and the proof the gesture missed the target.
+    const registry = mockRegistry(swipes, () => {
+      innerRow++;
+    });
+
+    await writeFlow("nested-pane-anchor", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "nested-pane-anchor", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(0);
+    expect(innerRow).toBe(1); // the pane was never scrolled
+  });
+
+  it("still nudges the same shape once the nested scroller is gone", async () => {
+    // Control for the reach gate: the tree above minus the inner pane, so the
+    // page scroller is the innermost container at the anchor as well as the
+    // row's owner. Nothing else changes, and the nudge fires as before (0.07
+    // deficit x 1.5 = 0.105 at the screen centre) - the gate declines a
+    // specific shape, it does not disable the phase. The row cannot move here
+    // (a static tree), so the progress check ends the loop after that one
+    // gesture.
+    let innerRow = 1;
+    currentTree = () =>
+      screen([
+        fullScreenScroller(),
+        n({ label: `INNER 0${innerRow}`, frame: { x: 0.1, y: 0.4, width: 0.8, height: 0.1 } }),
+        n({ label: "Order #1234", frame: { x: 0.1, y: 0.87, width: 0.8, height: 0.1 } }),
+      ]);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      innerRow++;
+    });
+
+    await writeFlow("no-nested-pane", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "no-nested-pane", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].settle).toBe(true);
+    expect(swipes[0].fromY).toBeCloseTo(0.5, 5);
+    expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.105, 5);
+  });
+
+  it("still nudges when the scroller under the anchor also contains the target", async () => {
+    // The reach gate asks whether the scroller hit-tested at the anchor owns
+    // the target, not whether it is the clip. Only the `within` path can show
+    // that difference: with no `within`, a smaller scroller containing the
+    // target would have BEEN the clip (smallest-area wins). Here `within`
+    // names the outer pane (0.2..1.0, clip and anchor at its centre 0.6) while
+    // an inner list (0.4..1.0) covers that centre AND contains the row flush
+    // at 0.87..0.97 - the drag reaches a scroller that moves the row, so the
+    // 0.07-deficit nudge (travel 0.105, headroom 0.67) goes out.
+    const panes = () => [
+      n({
+        role: "AXScrollArea",
+        identifier: "pane",
+        frame: { x: 0, y: 0.2, width: 1, height: 0.8 },
+      }),
+      n({
+        role: "AXScrollArea",
+        identifier: "inner-list",
+        frame: { x: 0, y: 0.4, width: 1, height: 0.6 },
+      }),
+    ];
+    const flush = screen([
+      ...panes(),
+      n({ label: "Row 9", frame: { x: 0.1, y: 0.87, width: 0.8, height: 0.1 } }),
+    ]);
+    const padded = screen([
+      ...panes(),
+      n({ label: "Row 9", frame: { x: 0.1, y: 0.75, width: 0.8, height: 0.1 } }),
+    ]);
+    let nudged = false;
+    currentTree = () => (nudged ? padded : flush);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      nudged = true;
+    });
+
+    await writeFlow("nested-owns-target", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "scroll-to",
+          target: { text: "Row 9" },
+          direction: "down",
+          within: { identifier: "pane" },
+        },
+      ],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "nested-owns-target", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].settle).toBe(true);
+    expect(swipes[0].fromY).toBeCloseTo(0.6, 5);
+    expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.105, 5);
+  });
+
+  it("skips the within nudge when a nested pane covers the named region's centre", async () => {
+    // The same hole on the `within` path: naming the pane certifies that a
+    // scroller occupies that rect, never that the rect's centre is free of a
+    // smaller one. A map pane at 0.45..0.70 sits over the anchor (0.5, 0.6)
+    // and does not contain the row flush at 0.87..0.97, so the drag would
+    // scroll the map and leave the row where it is. No gesture, step passes.
+    currentTree = () =>
+      screen([
+        n({
+          role: "AXScrollArea",
+          identifier: "pane",
+          frame: { x: 0, y: 0.2, width: 1, height: 0.8 },
+        }),
+        n({
+          role: "AXScrollArea",
+          identifier: "map-pane",
+          frame: { x: 0, y: 0.45, width: 1, height: 0.25 },
+        }),
+        n({ label: "Row 9", frame: { x: 0.1, y: 0.87, width: 0.8, height: 0.1 } }),
+      ]);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes);
+
+    await writeFlow("within-nested-pane", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "scroll-to",
+          target: { text: "Row 9" },
+          direction: "down",
+          within: { identifier: "pane" },
+        },
+      ],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "within-nested-pane", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(0);
+  });
+
+  it("still nudges within a narrow pane whose row overhangs it sideways", async () => {
+    // The reach gate's clip arm: nothing is nested over the anchor, so the
+    // drag lands on the clip itself - the container whose deficit was
+    // measured - and must go out even though the clip does not contain the
+    // row. Leaf frames are clamped to the SCREEN, not to the scroller, so a
+    // row in a side panel (x 0..0.6) can report the full width; the axis check
+    // constrains the scroll axis only. Reading the gate as plain containment
+    // would silently drop the nudge here. Pane bottom 1.0, row flush at
+    // 0.87..0.97: deficit 0.07, travel 0.105, anchored at the pane centre
+    // (0.3, 0.6).
+    const pane = () =>
+      n({
+        role: "AXScrollArea",
+        identifier: "side-panel",
+        frame: { x: 0, y: 0.2, width: 0.6, height: 0.8 },
+      });
+    const flush = screen([
+      pane(),
+      n({ label: "Row 9", frame: { x: 0, y: 0.87, width: 1, height: 0.1 } }),
+    ]);
+    const padded = screen([
+      pane(),
+      n({ label: "Row 9", frame: { x: 0, y: 0.75, width: 1, height: 0.1 } }),
+    ]);
+    let nudged = false;
+    currentTree = () => (nudged ? padded : flush);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      nudged = true;
+    });
+
+    await writeFlow("narrow-pane", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "scroll-to",
+          target: { text: "Row 9" },
+          direction: "down",
+          within: { identifier: "side-panel" },
+        },
+      ],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "narrow-pane", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].settle).toBe(true);
+    expect(swipes[0].fromX).toBeCloseTo(0.3, 5);
+    expect(swipes[0].fromY).toBeCloseTo(0.6, 5);
+    expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.105, 5);
+  });
+
   it("resolves the list, not its row cell, as the nudge clip on the iOS table shape", async () => {
     // The tree the fixed full-hierarchy adapter emits for a UIKit table
     // reached through a text selector: a full-bleed AXScrollArea list, the
