@@ -30,27 +30,37 @@ export function isAllowedSourceMapURL(raw: string): boolean {
   return ALLOWED_SOURCE_MAP_HOSTS.has(hostname);
 }
 
-// Source-map bodies are buffered into memory before JSON.parse. A malicious
-// loopback responder (the residual SSRF target) could otherwise stream an
-// unbounded body and OOM the tool-server. 64 MiB is well above any real RN
-// bundle's source map (~tens of MiB at most).
+// How many bytes of a source map this will sit through. A malicious loopback
+// responder (the residual SSRF target) could otherwise stream an unbounded
+// body and hold `waitForPending()` — and with it `debugger-connect` — open for
+// as long as it keeps writing. 64 MiB is well above any real RN bundle's
+// source map (~tens of MiB at most).
 const MAX_SOURCE_MAP_BYTES = 64 * 1024 * 1024;
 
-export async function readCappedJson(
-  res: { headers: { get(name: string): string | null }; body: unknown; json(): Promise<unknown> },
+/**
+ * Read a source-map response to completion under a byte cap, and throw the
+ * bytes away.
+ *
+ * They are read rather than dropped unread because `waitForPending()` is only
+ * a meaningful moment if the body has finished arriving. They are not parsed,
+ * and not even accumulated, because nothing consumes a map any more (see
+ * `SourceMapsRegistry` below) — counting the chunks is all the cap needs.
+ * Measured against a loopback responder, three runs each: 9.2 ms to buffer and
+ * parse a 9.4 MB map against 4.8 ms to drain it, and 64 ms against 22 ms at
+ * 59 MB. That is spent inside the wait every `debugger-status` blocks on.
+ */
+export async function drainCappedBody(
+  res: { headers: { get(name: string): string | null }; body: unknown },
   maxBytes = MAX_SOURCE_MAP_BYTES
-): Promise<unknown> {
+): Promise<void> {
   const declared = Number(res.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > maxBytes) {
     throw new Error(`source map body too large (content-length ${declared} > ${maxBytes})`);
   }
   const body = res.body as ReadableStream<Uint8Array> | null | undefined;
-  if (!body || typeof body.getReader !== "function") {
-    // No stream available (e.g. a test stub) — fall back to the plain parse.
-    return res.json();
-  }
+  // No stream (a bodiless response, or a test stub) — nothing to wait for.
+  if (!body || typeof body.getReader !== "function") return;
   const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
   let total = 0;
   for (;;) {
     const { done, value } = await reader.read();
@@ -61,23 +71,24 @@ export async function readCappedJson(
         await reader.cancel();
         throw new Error(`source map body exceeded ${maxBytes} bytes`);
       }
-      chunks.push(value);
     }
   }
-  return JSON.parse(Buffer.concat(chunks).toString("utf-8"));
 }
 
 /**
  * Fetches the source map a `Debugger.scriptParsed` event points at, so that
- * `waitForPending()` gives callers a defined moment when Metro has served every
- * map the session asked for — which is all `debugger-status` reports as
- * `sourceMapReady`.
+ * `waitForPending()` gives callers a defined moment: every fetch this session
+ * started has settled. That is what `debugger-status` reports as
+ * `sourceMapReady`, and it is weaker than it sounds — a map Metro answered 404
+ * for has settled, and a `data:` or allowlist-rejected URL settles without a
+ * fetch at all, so `sourceMapReady` is true in all three cases. The tool's own
+ * description says as much ("always true").
  *
- * Nothing keeps the parsed map. The registry used to index them for
+ * Nothing keeps the map, parsed or raw. The registry used to index them for
  * `toGeneratedPosition` / `findMatchingSource`, and both went with the sweep
  * that removed their last callers, so holding a `SourceMapConsumer` per script
  * only retained memory nothing could reach. The fetch itself stays, under the
- * loopback allowlist and the 64 MiB cap above.
+ * loopback allowlist and the 64 MiB cap above; its body is drained, not read.
  */
 export class SourceMapsRegistry {
   private pendingRegistrations: Promise<void>[] = [];
@@ -129,7 +140,7 @@ export class SourceMapsRegistry {
       // so this is behaviour-preserving for the legitimate path.
       const res = await fetch(sourceMapURL, { redirect: "error" });
       if (!res.ok) return;
-      await readCappedJson(res);
+      await drainCappedBody(res);
     } catch {
       // Failed to fetch or parse source map — silently skip
     }
