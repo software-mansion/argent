@@ -14,6 +14,12 @@ vi.mock("../src/utils/ios-device-sets", async (importOriginal) => ({
   simctlArgsForUdid: vi.fn(async (_udid: string, args: readonly string[]) => ["simctl", ...args]),
 }));
 
+// The remote branch shells out to the `sim-remote` CLI.
+vi.mock("../src/utils/sim-remote", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/sim-remote")>()),
+  simctlSpawn: vi.fn(async () => ({ pid: undefined, exitCode: 0, stdout: "", stderr: "" })),
+}));
+
 // The Android branch drives the emulator console over adb.
 vi.mock("../src/utils/adb", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/adb")>()),
@@ -32,7 +38,9 @@ import { execFile } from "node:child_process";
 import { shakeTool } from "../src/tools/shake";
 import { SHAKE_NOTIFICATION } from "../src/tools/shake/platforms/ios";
 import { androidImpl, parseAcceleration } from "../src/tools/shake/platforms/android";
+import { iosRemoteImpl } from "../src/tools/shake/platforms/ios";
 import { runAdb } from "../src/utils/adb";
+import { simctlSpawn } from "../src/utils/sim-remote";
 
 const iosUdid = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
 const androidEmulator = "emulator-5554";
@@ -64,6 +72,43 @@ describe("shake tool — iOS", () => {
       count: 3,
     });
     expect(execFile).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("shake tool — remote iOS (sim-remote)", () => {
+  const remoteUdid = "remote:9D2F4AEC-7C68-4C73-9BD9-06D1007FBF1F";
+
+  it("runs the on-device notifyutil argv, uploading nothing", async () => {
+    vi.mocked(simctlSpawn).mockClear();
+    await expect(shakeTool.execute(services, { udid: remoteUdid })).resolves.toEqual({
+      shaken: true,
+      count: 1,
+    });
+
+    expect(simctlSpawn).toHaveBeenCalledTimes(1);
+    const [udid, opts] = vi.mocked(simctlSpawn).mock.calls[0]!;
+    expect(udid).toBe(remoteUdid);
+    expect(opts.args).toEqual(["notifyutil", "-p", SHAKE_NOTIFICATION]);
+    // `--bin` would upload a host binary; the point is to run the simulator's own.
+    expect(opts.binPath).toBeUndefined();
+    // The local xcrun path must not fire for a remote device.
+    expect(execFile).not.toHaveBeenCalled();
+  });
+
+  it("fails loudly when the remote notifyutil exits non-zero", async () => {
+    // `sim-remote spawn --json` exits 0 and reports the child's status in the
+    // payload, so an unchecked exit code would report a shake that never
+    // happened as a success.
+    vi.mocked(simctlSpawn).mockResolvedValueOnce({
+      pid: undefined,
+      exitCode: 1,
+      stdout: "",
+      stderr: "notifyutil: command not found",
+    });
+
+    await expect(
+      iosRemoteImpl.handler({} as never, { udid: remoteUdid }, {} as never)
+    ).rejects.toThrow(/notifyutil exited 1: notifyutil: command not found/);
   });
 });
 

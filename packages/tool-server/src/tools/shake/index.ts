@@ -2,7 +2,7 @@ import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { shakeZodSchema } from "./schema";
 import type { ShakeParams, ShakeResult, ShakeServices } from "./types";
-import { iosImpl } from "./platforms/ios";
+import { iosImpl, iosRemoteImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
 
 const capability: ToolCapability = {
@@ -10,12 +10,9 @@ const capability: ToolCapability = {
   // is no host-side hook to fake it, so `device` stays false and a paired phone
   // gets a clean 400 instead of a silent no-op.
   apple: { simulator: true },
-  // No `appleRemote`: the local path shells out to `xcrun simctl spawn`, and the
-  // sim-remote equivalent is unverified against a real remote host. An
-  // unexercised branch here would fail as a no-op that still reports success,
-  // which is precisely the failure mode this tool exists to avoid — so remote
-  // simulators are rejected until the path can be tested end-to-end.
-  //
+  // A remote simulator is still a simulator: `sim-remote spawn` runs the same
+  // in-simulator `notifyutil` argv the local path does.
+  appleRemote: { simulator: true },
   // Android emulators only, for the same reason as iOS: a physical phone's
   // accelerometer can't be driven from the host. `unknown` is allowed through
   // because a serial that didn't resolve may still be an emulator; the handler
@@ -37,6 +34,7 @@ Use to trigger anything bound to the shake gesture: iOS's "Undo Typing" / "Redo 
 iOS delivers one discrete shake per gesture (the same motion event a physical device raises). Android has no OS-level shake event — the accelerometer is driven through a burst of hard direction changes so app-side detectors fire, and the resting orientation is restored afterwards.
 Set \`count\` above 1 when a detector needs sustained motion before it triggers.
 Returns { shaken: true, count }.
+Works on local and remote (sim-remote) iOS simulators.
 Only simulators and emulators are supported — a physical iPhone or Android phone has a real accelerometer that cannot be driven from the host, and is rejected. Fails if the device is not booted.`,
   searchHint: "shake motion accelerometer undo typing dev menu gesture",
   zodSchema: shakeZodSchema,
@@ -48,6 +46,7 @@ Only simulators and emulators are supported — a physical iPhone or Android pho
     toolId: "shake",
     capability,
     ios: iosImpl,
+    iosRemote: iosRemoteImpl,
     android: androidImpl,
   }),
 };
