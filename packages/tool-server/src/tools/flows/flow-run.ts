@@ -190,7 +190,11 @@ export interface StepReport {
    * looks like; it rendered no content to settle; too few reads came back with
    * content for it to judge anything; or its captures never produced a
    * comparable pair, leaving stillness proved on the UI tree alone without the
-   * presentation-layer motion the pixel half exists to catch.
+   * presentation-layer motion the pixel half exists to catch. Raised too by a
+   * selector-less gesture (coordinate `tap`/`long-press`, centre-anchored
+   * `pinch`/`rotate`) that a tree-source outage left unsettled: it is dispatched
+   * regardless, and the warning is the only thing separating it from one that
+   * waited.
    */
   warning?: string;
   /** Underlying tool id for `tool` steps. */

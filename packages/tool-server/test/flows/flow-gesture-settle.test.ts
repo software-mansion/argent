@@ -286,6 +286,107 @@ describe("a tree-source outage never fails a selector-less gesture", () => {
     expect(readsBetween(gestureAt(0), gestureAt(1))).toBe(2);
   }, 20_000);
 
+  // Dispatching anyway is the right call; doing it silently is not. Nothing else
+  // in a run's report separates a gesture that waited from one that went out
+  // against whatever motion was in flight, so the swallowed outage says so here.
+  describe("but the run is told the gesture went out unsettled", () => {
+    /** The one thing every unsettled-gesture warning must carry: the source's own words. */
+    const OUTAGE_REASON = "native devtools is unavailable";
+
+    it("warns every gesture the outage touched, on the memo as well as on the proof", async () => {
+      // One run, both producers: tap 1 proves the outage inside its own window,
+      // and the three behind it spend the memo without reading. Being told only
+      // once would understate a run that was blind throughout.
+      currentTree = outage;
+      await writeFlow("taps-blind-warned", {
+        executionPrerequisite: "",
+        steps: [
+          { kind: "tap", x: 0.1, y: 0.1 },
+          { kind: "tap", x: 0.2, y: 0.2 },
+          { kind: "long-press", x: 0.3, y: 0.3 },
+          { kind: "rotate", by: 90 },
+        ],
+      });
+
+      const result = await run("taps-blind-warned");
+
+      // The status stays green - the gesture is the escape hatch, not a failure.
+      expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+        "tap:pass",
+        "tap:pass",
+        "long-press:pass",
+        "rotate:pass",
+      ]);
+      for (const step of result.steps) {
+        expect(step.warning).toContain("without settling the screen");
+        expect(step.warning).toContain(OUTAGE_REASON);
+      }
+      // And only the first step paid a window for what all four report.
+      expect(readsBetween(gestureAt(0), events.length)).toBe(0);
+    }, 20_000);
+
+    it("warns a centre-anchored pinch too", async () => {
+      currentTree = outage;
+      await writeFlow("pinch-blind-warned", {
+        executionPrerequisite: "",
+        steps: [{ kind: "pinch", scale: 2 }],
+      });
+
+      const result = await run("pinch-blind-warned");
+
+      expect(result.steps[0].status).toBe("pass");
+      expect(result.steps[0].warning).toContain(OUTAGE_REASON);
+    }, 15_000);
+
+    it("says nothing when the source is healthy", async () => {
+      // What keeps the warning worth reading. A settle that ran carries none,
+      // whichever gesture asked for it.
+      await writeFlow("gestures-settled", {
+        executionPrerequisite: "",
+        steps: [
+          { kind: "tap", x: 0.1, y: 0.1 },
+          { kind: "long-press", x: 0.2, y: 0.2 },
+          { kind: "pinch", scale: 2 },
+          { kind: "rotate", by: 90 },
+        ],
+      });
+
+      const result = await run("gestures-settled");
+
+      expect(result.ok).toBe(true);
+      expect(result.steps.map((s) => s.warning)).toEqual([
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+      ]);
+    });
+
+    it("says nothing about a screen that read fine and never stopped moving", async () => {
+      // The window expired without converging: that settle DID run and waited
+      // out its whole budget, so the gesture is as settled as one can be. Only
+      // the outage path warns.
+      let reads = 0;
+      currentTree = () => {
+        reads += 1;
+        return {
+          role: "AXWindow",
+          frame: { x: 0, y: reads / 100, width: 1, height: 1 },
+          children: [],
+        };
+      };
+      await writeFlow("tap-restless-warned", {
+        executionPrerequisite: "",
+        steps: [{ kind: "tap", x: 0.4, y: 0.6 }],
+      });
+
+      const result = await run("tap-restless-warned");
+
+      expect(result.steps[0].status).toBe("pass");
+      expect(result.steps[0].warning).toBeUndefined();
+    }, 15_000);
+  });
+
   it("rides out a transient read failure rather than treating it as the outage", async () => {
     // Fails once, then serves a still screen: the settle must still converge on
     // the two identical reads that follow instead of quitting on the blip.

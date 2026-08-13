@@ -83,14 +83,16 @@ export interface ActionEnv {
    *
    * Only {@link settleForGesture} and {@link fetchScreenAspect} READ it, each
    * to skip work it has been shown cannot pay off: a settle window, and a read
-   * whose failure the caller degrades past anyway. It is written by the one
-   * place that can
-   * prove a source dead (a {@link settleTree} whose whole window failed) and
-   * cleared by {@link readFlowTree}, which every directive's reads go through,
-   * since a read that came back is evidence of health whichever directive asked
-   * for it. A relaunch clears it too, whether spelled `launch` or as one of
-   * flow-run's `FOREGROUND_CHANGING_TOOLS`: it is the repair the commonest of
-   * these errors asks for, and no read need follow it before a gesture does.
+   * whose failure the caller degrades past anyway. The skip is not silent: the
+   * gesture warns its step report that it dispatched unsettled, so the memo
+   * never makes an outage cheaper to miss than it was to prove. It is written
+   * by the one place that can prove a source dead (a {@link settleTree} whose
+   * whole window failed) and cleared by {@link readFlowTree}, which every
+   * directive's reads go through, since a read that came back is evidence of
+   * health whichever directive asked for it. A relaunch clears it too, whether
+   * spelled `launch` or as one of flow-run's `FOREGROUND_CHANGING_TOOLS`: it is
+   * the repair the commonest of these errors asks for, and no read need follow
+   * it before a gesture does.
    * Absent for a caller that builds an `ActionEnv` by hand, which simply leaves
    * every settle on its own budget.
    *
@@ -416,7 +418,9 @@ function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
  * retry above exists for. But the memo is a prediction: one window mints it,
  * nothing re-tests it, and on iOS a window can be one stalled read (3s < the 5s
  * RPC timeout). Being wrong costs a settle, not a step: {@link settleForGesture}
- * swallows the throw. Any read that comes back retires it, as does a relaunch.
+ * swallows the throw - and says so, warning every gesture it spares, so a run
+ * whose prediction was wrong reports which greens went out unsettled. Any read
+ * that comes back retires it, as does a relaunch.
  *
  * What it costs: an outage that lasted a full window, in a run that then never
  * reads the tree again and never relaunches, leaves later gestures unsettled
@@ -803,6 +807,12 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
 }
 
 /**
+ * What a selector-less gesture's settle leaves behind: the abort signal its
+ * caller turns into a skip, and the warning it owes the step report.
+ */
+type GestureSettle = { aborted?: true; warning?: string };
+
+/**
  * Settle the screen for a gesture that resolves no selector — raw coordinates,
  * or a centre-anchored `pinch`/`rotate`. A selector target gets its settle from
  * `waitForFrame`; without one there was nothing to resolve, so the gesture went
@@ -822,14 +832,42 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
  * drive by coordinates for exactly that reason, so every step of such a flow
  * arrives here. Charging each of them a window for the same verdict is what the
  * memo takes off them.
+ *
+ * Swallowing the outage is not the same as hiding it: the returned `warning`
+ * rides the step report, so a gesture dispatched into whatever motion was in
+ * flight is distinguishable from one that waited. Every gesture the memo spares
+ * carries it, not just the one that proved the outage - a run told once about a
+ * source that was dead for all of it would understate what its greens bought.
+ * Only the outage path warns; a window that expired without converging did
+ * settle, for as long as a settle can be given.
  */
-async function settleForGesture(env: ActionEnv): Promise<"aborted" | undefined> {
+async function settleForGesture(env: ActionEnv): Promise<GestureSettle> {
+  let warning: string | undefined;
   try {
     await settleTree(env, { skipProvenOutage: true });
-  } catch {
+  } catch (err) {
     // tree-source outage — this gesture needs no frame from it, so dispatch anyway
+    warning = unsettledGestureWarning(err);
   }
-  return env.signal?.aborted ? "aborted" : undefined;
+  if (env.signal?.aborted) return { aborted: true };
+  return warning !== undefined ? { warning } : {};
+}
+
+/** Spread a settle's warning onto an outcome, leaving no `warning: undefined` key behind. */
+function warned(settle: { warning?: string }): { warning?: string } {
+  return settle.warning !== undefined ? { warning: settle.warning } : {};
+}
+
+/** What a gesture reports when an outage left it unsettled, in the source's own words. */
+function unsettledGestureWarning(err: unknown): string {
+  const reason = err instanceof Error ? err.message : String(err);
+  return (
+    `dispatched without settling the screen first: the UI tree could not be read (${reason}), so ` +
+    `there was no way to tell whether anything was moving. The gesture went out against whatever ` +
+    `was in flight, and one aimed at a moving element can miss it entirely - this step passing ` +
+    `says it was sent, not that it landed. Restore the tree source, or put an explicit \`wait:\` ` +
+    `in front of gestures that follow a transition.`
+  );
 }
 
 /**
@@ -838,22 +876,26 @@ async function settleForGesture(env: ActionEnv): Promise<"aborted" | undefined> 
  * coordinates need no resolution, but still settle before they are used.
  * Coordinate targets are the fallback for elements with no stable selector
  * (e.g. an unlabeled view).
+ *
+ * The point is nested rather than returned bare so a `warning` from the settle
+ * cannot ride the resolved coordinates into the gesture's tool args.
  */
 async function resolveTargetPoint(
   env: ActionEnv,
   target: { selector?: FlowSelector; x?: number; y?: number }
-): Promise<{ x: number; y: number } | { fail: DirectiveOutcome }> {
+): Promise<{ point: { x: number; y: number }; warning?: string } | { fail: DirectiveOutcome }> {
   if (target.selector) {
     const frame = await waitForFrame(env, target.selector);
     if (frame === "aborted") return { fail: ABORTED_OUTCOME };
     if (!frame) {
       return { fail: { ok: false, reason: offscreenHint(target.selector) } };
     }
-    return getDescribeTapPoint(frame);
+    return { point: getDescribeTapPoint(frame) };
   }
   if (typeof target.x === "number" && typeof target.y === "number") {
-    if ((await settleForGesture(env)) === "aborted") return { fail: ABORTED_OUTCOME };
-    return { x: target.x, y: target.y };
+    const settle = await settleForGesture(env);
+    if (settle.aborted) return { fail: ABORTED_OUTCOME };
+    return { point: { x: target.x, y: target.y }, ...warned(settle) };
   }
   return { fail: { ok: false, reason: "gesture needs a selector or x/y coordinates" } };
 }
@@ -867,13 +909,13 @@ async function runTap(
   env: ActionEnv,
   target: { selector?: FlowSelector; x?: number; y?: number; times?: number }
 ): Promise<DirectiveOutcome> {
-  const point = await resolveTargetPoint(env, target);
-  if ("fail" in point) return point.fail;
+  const resolved = await resolveTargetPoint(env, target);
+  if ("fail" in resolved) return resolved.fail;
   await invokeOnDevice(env, "gesture-tap", {
-    ...point,
+    ...resolved.point,
     ...(target.times !== undefined ? { clickCount: target.times } : {}),
   });
-  return { ok: true };
+  return { ok: true, ...warned(resolved) };
 }
 
 /**
@@ -898,8 +940,9 @@ async function runLongPress(
   env: ActionEnv,
   step: { selector?: FlowSelector; x?: number; y?: number; duration?: number }
 ): Promise<DirectiveOutcome> {
-  const point = await resolveTargetPoint(env, step);
-  if ("fail" in point) return point.fail;
+  const resolved = await resolveTargetPoint(env, step);
+  if ("fail" in resolved) return resolved.fail;
+  const point = resolved.point;
   const duration = step.duration ?? DEFAULT_LONG_PRESS_MS;
   if (env.device.platform === "chromium") {
     await invokeOnDevice(env, "gesture-drag", {
@@ -917,7 +960,7 @@ async function runLongPress(
       ],
     });
   }
-  return { ok: true };
+  return { ok: true, ...warned(resolved) };
 }
 
 /**
@@ -935,14 +978,16 @@ async function runPinch(
 ): Promise<DirectiveOutcome> {
   let center = { x: 0.5, y: 0.5 };
   let frame: DescribeFrame | undefined;
+  let settle: GestureSettle = {};
   if (step.selector) {
     const resolved = await waitForFrame(env, step.selector);
     if (resolved === "aborted") return ABORTED_OUTCOME;
     if (!resolved) return { ok: false, reason: offscreenHint(step.selector) };
     frame = resolved;
     center = getDescribeTapPoint(resolved);
-  } else if ((await settleForGesture(env)) === "aborted") {
-    return ABORTED_OUTCOME;
+  } else {
+    settle = await settleForGesture(env);
+    if (settle.aborted) return ABORTED_OUTCOME;
   }
 
   const { n, per } = decomposePinch(step.scale);
@@ -982,7 +1027,7 @@ async function runPinch(
     await invokeOnDevice(env, "gesture-pinch", args);
     if (i < n - 1 && !(await sleepOrAbort(PINCH_SETTLE_MS, env.signal))) return ABORTED_OUTCOME;
   }
-  return { ok: true };
+  return { ok: true, ...warned(settle) };
 }
 
 /**
@@ -1026,14 +1071,16 @@ async function runRotate(
 ): Promise<DirectiveOutcome> {
   let center = { x: 0.5, y: 0.5 };
   let frame: DescribeFrame | undefined;
+  let settle: GestureSettle = {};
   if (step.selector) {
     const resolved = await waitForFrame(env, step.selector);
     if (resolved === "aborted") return ABORTED_OUTCOME;
     if (!resolved) return { ok: false, reason: offscreenHint(step.selector) };
     frame = resolved;
     center = getDescribeTapPoint(resolved);
-  } else if ((await settleForGesture(env)) === "aborted") {
-    return ABORTED_OUTCOME;
+  } else {
+    settle = await settleForGesture(env);
+    if (settle.aborted) return ABORTED_OUTCOME;
   }
 
   // Unknown aspect (source without dimensions, or a failed read) degrades to
@@ -1089,7 +1136,7 @@ async function runRotate(
     if (env.signal?.aborted) return ABORTED_OUTCOME;
     throw err;
   }
-  return { ok: true };
+  return { ok: true, ...warned(settle) };
 }
 
 /**
