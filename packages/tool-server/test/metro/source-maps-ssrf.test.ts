@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
+  drainCappedBody,
   isAllowedSourceMapURL,
-  readCappedJson,
   SourceMapsRegistry,
 } from "../../src/utils/debugger/source-maps";
 
@@ -62,41 +62,59 @@ describe("isAllowedSourceMapURL", () => {
   });
 });
 
-// PR #194 follow-up F: source-map bodies are capped before JSON.parse.
-describe("readCappedJson (body cap)", () => {
+// PR #194 follow-up F: source-map bodies are read under a cap.
+describe("drainCappedBody (body cap)", () => {
   it("rejects when content-length exceeds the cap", async () => {
     const res = {
       headers: { get: (n: string) => (n === "content-length" ? "999999999" : null) },
       body: null,
-      json: async () => ({ should: "not reach" }),
     };
-    await expect(readCappedJson(res, 1024)).rejects.toThrow(/too large/);
+    await expect(drainCappedBody(res, 1024)).rejects.toThrow(/too large/);
   });
 
-  it("falls back to .json() when no stream body is available", async () => {
-    const res = {
-      headers: { get: () => null },
-      body: null,
-      json: async () => ({ ok: 1 }),
-    };
-    expect(await readCappedJson(res, 1024)).toEqual({ ok: 1 });
+  it("returns without reading when no stream body is available", async () => {
+    const res = { headers: { get: () => null }, body: null };
+    await expect(drainCappedBody(res, 1024)).resolves.toBeUndefined();
   });
 
   it("aborts a streamed body that exceeds the cap", async () => {
     const big = new Uint8Array(2048);
     let sent = false;
+    const cancel = vi.fn(async () => {});
     const res = {
       headers: { get: () => null },
       body: {
         getReader: () => ({
           read: async () =>
             sent ? { done: true, value: undefined } : ((sent = true), { done: false, value: big }),
+          cancel,
+        }),
+      },
+    };
+    await expect(drainCappedBody(res, 1024)).rejects.toThrow(/exceeded/);
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  // The whole point of the rewrite: the bytes are counted, never accumulated
+  // and never parsed. A body that is not JSON at all must still drain clean,
+  // which is what tells a reader the parse is gone rather than just moved.
+  it("drains a body that is not JSON, under the cap", async () => {
+    const chunks = [new Uint8Array(400), new Uint8Array(400)];
+    let i = 0;
+    const res = {
+      headers: { get: () => null },
+      body: {
+        getReader: () => ({
+          read: async () =>
+            i < chunks.length
+              ? { done: false, value: chunks[i++] }
+              : { done: true, value: undefined },
           cancel: async () => {},
         }),
       },
-      json: async () => ({ should: "not reach" }),
     };
-    await expect(readCappedJson(res, 1024)).rejects.toThrow(/exceeded/);
+    await expect(drainCappedBody(res, 1024)).resolves.toBeUndefined();
+    expect(i).toBe(chunks.length);
   });
 });
 
