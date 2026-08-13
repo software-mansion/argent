@@ -238,9 +238,10 @@ const SETTLE_TIMEOUT_MS = 3000;
 // bounded by `MAX_SCROLL_ITERATIONS` rather than a wall clock, so the added
 // read lands on every round and a slow source turns one step's tens of seconds
 // into minutes.
-// `await`/`assert` have always had this floor in `waitForCondition`'s final
-// poll; this is the same guarantee for the directives that resolve through a
-// settle.
+// `await`/`assert` never had this hole: `waitForCondition` takes a poll at its
+// deadline unconditionally, however many reads preceded it. The floor here is
+// narrower, firing only when the window closed on fewer than two reads, but it
+// covers the same case: a first read that outlasts the window on its own.
 const SETTLE_MIN_READS = 2;
 
 // `scroll-to`: a bounded number of momentum-free increments. Each travels half
