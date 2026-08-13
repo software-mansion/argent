@@ -416,11 +416,15 @@ function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
  * that window again. Not a shorter budget: a threshold low enough to spare a
  * source serving no tree at all would also abandon the mid-navigation blip the
  * retry above exists for. But the memo is a prediction: one window mints it,
- * nothing re-tests it, and on iOS a window can be one stalled read (3s < the 5s
- * RPC timeout). Being wrong costs a settle, not a step: {@link settleForGesture}
- * swallows the throw - and says so, warning every gesture it spares, so a run
- * whose prediction was wrong reports which greens went out unsettled. Any read
- * that comes back retires it, as does a relaunch.
+ * nothing re-tests it, and on iOS a window can be one stalled read. The
+ * deadline below is only tested after a read RETURNS, and the read a window
+ * issues is `ViewHierarchy.getFullHierarchy` on the 15s RPC tier #778 gave it,
+ * behind a serial 5s `Application.getState` probe, so a 3000ms window can spend
+ * ~20s on the single sample it then mints the verdict from. Being wrong costs a
+ * settle, not a step: {@link settleForGesture} swallows the throw - and says
+ * so, warning every gesture it spares, so a run whose prediction was wrong
+ * reports which greens went out unsettled. Any read that comes back retires it,
+ * as does a relaunch.
  *
  * What it costs: an outage that lasted a full window, in a run that then never
  * reads the tree again and never relaunches, leaves later gestures unsettled
