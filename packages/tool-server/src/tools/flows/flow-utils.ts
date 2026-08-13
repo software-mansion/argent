@@ -770,8 +770,8 @@ export type FlowFile = {
  * `flowRequiresDevice` and `flowScopesDevice` (flow-device.ts), read children
  * not to skip them but to resolve the flow's device decisions from a block's
  * body — the guard against a later block directive whose header reads nothing
- * off the device, and dead in a run while `when`, whose header already
- * classifies device-requiring, is the only block kind.
+ * off the device, and dead in a run while every block kind's header already
+ * classifies device-requiring.
  *
  * Six sites asked `kind === "when"` directly before this existed: five for the
  * children, one for the dispatch (now {@link isBlockStep}/`execBlockStep`);

@@ -261,9 +261,9 @@ export function stepRequiresDevice(registry: Registry, step: FlowStep): boolean 
 /**
  * Whether any step in a flow acts on a device - each block header's own
  * classification OR, via {@link blockSteps}, the steps it actually CONTAINS.
- * Today the header half answers every case: `when`, the only block kind,
- * classifies device-requiring in {@link stepRequiresDevice}, so the child walk
- * is a no-op until a block kind classifies `false`.
+ * Today the header half answers every case: every block kind classifies
+ * device-requiring in {@link stepRequiresDevice}, so the child walk is a no-op
+ * until a block kind classifies `false`.
  *
  * Header classification alone is not enough: a block directive whose header
  * reads nothing off the device would naturally be classified `false` in
@@ -291,8 +291,8 @@ export function flowRequiresDevice(registry: Registry, steps: FlowStep[]): boole
  * failing a flow whose whole purpose is to clear the machine.
  *
  * Walks a block's body via {@link blockSteps}. The walk answers nothing in a
- * run today: `when`, the only block kind, classifies device-requiring, so a
- * flow holding a block is answered by {@link flowRequiresDevice} and never
+ * run today: every block kind classifies device-requiring, so a flow holding a
+ * block of any kind is answered by {@link flowRequiresDevice} and never
  * reaches this question at all. The pair needs both walks - under
  * a block kind that reads nothing off the device, a `devices` scope in its body
  * would be invisible here, the run would resolve no device, and the teardown

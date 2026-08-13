@@ -245,8 +245,8 @@ describe("parseFlow", () => {
     ["a primitive", "steps:\n  - when: { visible: Cart }\n    steps: [42]\n"],
     ["a null", "steps:\n  - when: { visible: Cart }\n    steps: [~]\n"],
   ])("names the step shape when %s sits in a block's steps list", (_shape, content) => {
-    // `when:` is only the vehicle — it is today's sole block directive, and the
-    // guard it reaches is parseBlockSteps', shared by every block directive.
+    // `when:` is only the vehicle: the guard it reaches is parseBlockSteps',
+    // shared by every block directive.
     expect(entryRejectionMessage(content)).toContain(
       "Unrecognized flow entry (step must be an object)"
     );

@@ -360,8 +360,10 @@ describe("stepRequiresDevice", () => {
 });
 
 describe("flowRequiresDevice", () => {
-  // These pin the function's ANSWERS. With `when` the only block kind, its
-  // header decides every case - no FlowStep value can exercise the child walk.
+  // These pin the function's ANSWERS. With every block kind classifying
+  // device-requiring (pinned per kind in the stepRequiresDevice suite above), a
+  // block header decides every case - no FlowStep value can exercise the child
+  // walk, so `when` stands in for all of them here.
   const whenOver = (steps: FlowStep[]): FlowStep => ({
     kind: "when",
     condition: { kind: "platform", platform: "ios" },
@@ -423,8 +425,8 @@ describe("flowScopesDevice", () => {
   // These pin the function's ANSWERS. The child walk shows in them - unlike
   // `flowRequiresDevice`, a `when` header scopes nothing itself - but only
   // under a direct call: a run reaches this question only once
-  // `flowRequiresDevice` said no, and `when`, the only block kind, answers that
-  // one yes for any flow holding a block.
+  // `flowRequiresDevice` said no, and every block kind answers that one yes for
+  // any flow holding a block.
   const whenOver = (steps: FlowStep[]): FlowStep => ({
     kind: "when",
     condition: { kind: "platform", platform: "ios" },
