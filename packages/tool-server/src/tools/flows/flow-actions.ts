@@ -229,9 +229,12 @@ const SETTLE_TIMEOUT_MS = 3000;
 // blip with no retry at all. The second read is not bounded by the window
 // either, and a read is several RPCs deep, each on its own timeout, so a wedged
 // source costs two full reads and tens of seconds, and a source that answers
-// slowly pays a second read where it used to end on one. `await`/`assert` have
-// always had this floor in `waitForCondition`'s final poll; this is the same
-// guarantee for the directives that resolve through a settle.
+// slowly pays a second read where it used to end on one. `scroll-to` multiplies
+// that: it settles once per round, bounded by `MAX_SCROLL_ITERATIONS` rather
+// than a wall clock, so the added read lands on every round and a slow source
+// turns one step's tens of seconds into minutes. `await`/`assert` have always
+// had this floor in `waitForCondition`'s final poll; this is the same guarantee
+// for the directives that resolve through a settle.
 const SETTLE_MIN_READS = 2;
 
 // `scroll-to`: a bounded number of momentum-free increments. Each travels half
