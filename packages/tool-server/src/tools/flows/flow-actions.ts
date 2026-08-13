@@ -859,6 +859,19 @@ type GestureSettle = { aborted?: true; warning?: string };
  * source that was dead for all of it would understate what its greens bought.
  * Only the outage path warns; a window that expired without converging did
  * settle, for as long as a settle can be given.
+ *
+ * The other cost is a screen that never holds still - a spinner, a video, a
+ * ticking clock. Nothing converges, so every selector-less gesture pays the
+ * whole window (measured at ~3.05s per gesture), and the memo buys no relief:
+ * a window that read the tree proves no outage, deliberately. The fingerprint
+ * cannot be narrowed the way `scrollToVisible` narrows its own either. That
+ * one knows which motion it is waiting on - its own scroll, inside the scroll
+ * containers under its anchor - so it can name the nodes worth watching. A
+ * gesture is waiting on motion of unknown origin (a transition, a fling, a
+ * keyboard) that can move what sits under the point without touching it, so
+ * there is no narrower scope that is still correct. It is the same window every
+ * selector directive already pays on such a screen; what changed is that
+ * coordinate targets now pay it too.
  */
 async function settleForGesture(env: ActionEnv): Promise<GestureSettle> {
   let warning: string | undefined;
