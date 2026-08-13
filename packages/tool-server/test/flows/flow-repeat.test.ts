@@ -1566,10 +1566,10 @@ describe("repeat: composition", () => {
  * The parse fence rejects a literal `snapshot:` in a repeat body; these pin
  * the runtime fence for the composed spelling of the same flow, which parse
  * cannot see — a fragment resolves only at load, inside execRunStep. The
- * refusal must land on the `run:` step, before any fragment step runs: N
- * comparisons against one baseline is the shape the parser refuses, and under
- * --update-baselines it silently leaves the last iteration's pixels as the
- * baseline for the first iteration's screen.
+ * refusal must land on the `run:` step, before any fragment step runs: one
+ * baseline for a body written to be re-run is the shape the parser refuses, and
+ * under --update-baselines it silently leaves the last iteration's pixels as
+ * the baseline for the first iteration's screen.
  */
 describe("repeat: snapshot smuggled in through a run: fragment", () => {
   const SNAPSHOT: FlowStep = { kind: "snapshot", name: "home" };
@@ -1604,9 +1604,11 @@ describe("repeat: snapshot smuggled in through a run: fragment", () => {
     ]);
     expect(result.steps[2]?.reason).toBe(
       'fragment "frag.yaml" contains snapshot "home", and this run: executes inside a repeat ' +
-        "block — a snapshot name maps to one baseline, but the step would compare against it " +
-        "once per iteration, and each iteration's screen legitimately differs; move the " +
-        "snapshot after the block, or out of the fragment"
+        "block — a snapshot name maps to one baseline, but a repeat body is written to be " +
+        "re-run, and a later iteration's legitimately different screen would still compare " +
+        "against that one baseline; the refusal is on the construct, not the count, a block " +
+        "bounded at 1 being one edit from N; move the snapshot after the block, or out of the " +
+        "fragment"
     );
     expect(counts(result)).toEqual({ ok: false, passed: 0, failed: 0, skipped: 0, errored: 1 });
   });
@@ -1782,9 +1784,11 @@ describe("repeat: snapshot smuggled in through a nested tool: flow-execute", () 
     });
     expect(result.steps[2]?.reason).toBe(
       'flow "snapper" contains snapshot "home", and this flow-execute runs inside a repeat ' +
-        "block — a snapshot name maps to one baseline, but the step would compare against it " +
-        "once per iteration, and each iteration's screen legitimately differs; move the " +
-        "snapshot after the block, or out of the composed flow"
+        "block — a snapshot name maps to one baseline, but a repeat body is written to be " +
+        "re-run, and a later iteration's legitimately different screen would still compare " +
+        "against that one baseline; the refusal is on the construct, not the count, a block " +
+        "bounded at 1 being one edit from N; move the snapshot after the block, or out of the " +
+        "composed flow"
     );
     expect(result.steps[3]).toMatchObject({ kind: "echo", status: "skip" });
     expect(counts(result)).toEqual({ ok: false, passed: 0, failed: 0, skipped: 0, errored: 1 });

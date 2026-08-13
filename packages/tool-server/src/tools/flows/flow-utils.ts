@@ -2894,11 +2894,16 @@ function parseRepeatSpec(raw: unknown, entry: unknown): RepeatSpec {
 
 /**
  * Reject `snapshot:` anywhere inside a repeat body. A snapshot name maps to one
- * baseline, a step running N times produces N comparisons against it, and
- * iteration 2's screen legitimately differs — that difference is usually why
- * the block loops at all. There is deliberately no per-iteration index to
- * disambiguate names (see the rejected loop-variable), so the only honest
- * answer is to refuse at parse.
+ * baseline, but a repeat body is written to be re-run, so a later iteration
+ * compares its own legitimately different screen — that difference is usually
+ * why the block loops at all — against that same baseline. There is
+ * deliberately no per-iteration index to disambiguate names (see the rejected
+ * loop-variable), so the only honest answer is to refuse at parse.
+ *
+ * The refusal is on the construct, not the bound: `repeat: 1` and `max: 1` are
+ * refused like any other block, since a block bounded at 1 is one edit from N
+ * and a rule that turned on the count would flip while an author narrows a
+ * failing block down.
  *
  * Walks nested blocks via {@link blockSteps}. A `snapshot:` reached through a
  * `run:` fragment is invisible here (different file, resolved at run time) —
@@ -2910,7 +2915,7 @@ function assertNoSnapshotInRepeat(steps: FlowStep[], entry: unknown): void {
     if (step.kind === "snapshot") {
       badEntry(
         entry,
-        `snapshot "${step.name}" cannot run inside a repeat block — a snapshot name maps to one baseline, but the step would compare against it once per iteration, and each iteration's screen legitimately differs; move the snapshot after the block`
+        `snapshot "${step.name}" cannot run inside a repeat block — a snapshot name maps to one baseline, but a repeat body is written to be re-run, and a later iteration's legitimately different screen would still compare against that one baseline; the refusal is on the construct, not the count, a block bounded at 1 being one edit from N; move the snapshot after the block`
       );
     }
     const nested = blockSteps(step);

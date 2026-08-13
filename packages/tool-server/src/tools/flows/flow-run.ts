@@ -1161,10 +1161,10 @@ still unmet FAILS the step. Repeat is NOT retry: a failure inside any iteration 
 and hard-stops the flow, since re-running a
 side-effecting iteration would double-fire it. A \`tool:\` step's full result stays in the report once
 per iteration with nothing truncating it, so a repeat over a result-heavy tool (a screenshot)
-multiplies that payload by the count. \`snapshot\` inside a repeat block is a parse error (one
-baseline, N comparisons); one reached through a \`run:\` fragment fails that \`run:\` step when the
-fragment loads, and a nested \`tool: flow-execute\` whose flow contains one is refused before it
-starts. Distinct from \`tap: { times }\`, which is ONE multi-tap gesture.
+multiplies that payload by the count. \`snapshot\` inside a repeat block is a parse error at every
+bound (one baseline, a body written to be re-run); one reached through a \`run:\` fragment fails
+that \`run:\` step when the fragment loads, and a nested \`tool: flow-execute\` whose flow contains
+one is refused before it starts. Distinct from \`tap: { times }\`, which is ONE multi-tap gesture.
 A flow that begins with a \`launch\` step is a self-contained e2e flow; one that doesn't runs against the
 device's current state. Device id is injected by the runner (flows store none) — pass \`device\` or
 \`platform\` to pick one, else the single booted device is used. On Chromium a \`launch\` step's value is an
@@ -1211,16 +1211,18 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
       // parse fences the literal spelling and execRunStep fences `run:`, but a
       // nested invocation resolves its flow only here, so the dispatching run
       // marks the invocation (inRepeatFlowScope) and this is where the same
-      // one-baseline/N-comparisons shape is refused — before any device work.
+      // one-baseline-in-a-re-run-body shape is refused — before any device work.
       // The root-scope seed below keeps deeper run:/tool hops refusing too.
       if (ctx?.inRepeatFlowScope) {
         const snapshot = findFragmentSnapshot(flow.steps);
         if (snapshot) {
           throw new FailureError(
             `flow "${flowName}" contains snapshot "${snapshot.name}", and this flow-execute runs ` +
-              `inside a repeat block — a snapshot name maps to one baseline, but the step would ` +
-              `compare against it once per iteration, and each iteration's screen legitimately ` +
-              `differs; move the snapshot after the block, or out of the composed flow`,
+              `inside a repeat block — a snapshot name maps to one baseline, but a repeat body is ` +
+              `written to be re-run, and a later iteration's legitimately different screen would ` +
+              `still compare against that one baseline; the refusal is on the construct, not the ` +
+              `count, a block bounded at 1 being one edit from N; move the snapshot after the ` +
+              `block, or out of the composed flow`,
             {
               error_code: FAILURE_CODES.FLOW_FILE_INVALID,
               failure_stage: "flow_repeat_snapshot_composition",
@@ -2788,23 +2790,24 @@ async function execRunStep(
   // The parse fence (assertNoSnapshotInRepeat) refuses a literal `snapshot:`
   // in a repeat body, but it walks one FILE: a fragment resolves only here, at
   // run time, so a snapshot smuggled in through `run:` would get exactly the
-  // shape the parser refuses — one baseline, N comparisons against screens
-  // that legitimately differ per iteration, and under --update-baselines N
-  // green "baseline updated" lines leaving the LAST iteration's pixels as the
-  // baseline for the first iteration's screen. Loading the fragment is the
-  // earliest the runner can see its steps, so the refusal lives here — before
-  // the composition marker, failing the `run:` step itself like the load
-  // failures above, not a parse error: the fragment file is legal on its own,
-  // only this composition point is wrong. No descent into the fragment's own
-  // `run:` steps is needed: `inRepeat` rides childScope's spread into the
-  // scope that nested fragment loads under, so ITS load runs this same check —
-  // and a `tool: flow-execute` below rides the same flag into its invocation
-  // options instead, where the nested run's own entry fence takes over.
+  // shape the parser refuses — one baseline for a body written to be re-run,
+  // whose later iterations legitimately differ, and under --update-baselines a
+  // green "baseline updated" line per iteration leaving the LAST iteration's
+  // pixels as the baseline for the first iteration's screen. Loading the
+  // fragment is the earliest the runner can see its steps, so it is where the
+  // refusal lives — before the composition marker, failing the `run:` step
+  // itself like the load failures above, not a parse error: the fragment file
+  // is legal on its own, only this composition point is wrong. No descent into
+  // the fragment's own `run:` steps is needed: `inRepeat` rides childScope's
+  // spread into the scope that nested fragment loads under, so ITS load runs
+  // this same check — and a `tool: flow-execute` below rides the same flag
+  // into its invocation options instead, where the nested run's own entry
+  // fence takes over.
   if (scope.inRepeat) {
     const snapshot = findFragmentSnapshot(fragment.steps);
     if (snapshot) {
       return fail(
-        `fragment "${target}" contains snapshot "${snapshot.name}", and this run: executes inside a repeat block — a snapshot name maps to one baseline, but the step would compare against it once per iteration, and each iteration's screen legitimately differs; move the snapshot after the block, or out of the fragment`
+        `fragment "${target}" contains snapshot "${snapshot.name}", and this run: executes inside a repeat block — a snapshot name maps to one baseline, but a repeat body is written to be re-run, and a later iteration's legitimately different screen would still compare against that one baseline; the refusal is on the construct, not the count, a block bounded at 1 being one edit from N; move the snapshot after the block, or out of the fragment`
       );
     }
   }

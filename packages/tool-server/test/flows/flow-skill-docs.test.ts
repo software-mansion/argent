@@ -218,4 +218,20 @@ describe("create-flow repeat snippets", () => {
       /cannot run inside a repeat block/i
     );
   });
+
+  it("the snapshot refusal really does hold at bound 1, in both bounds", () => {
+    // The section tells an author the refusal is on the construct, not the
+    // count, and names the two spellings that bound a block at a single
+    // iteration. A parser that let either through would make that a lie at
+    // exactly the moment an author narrows a failing block down.
+    expect(repeatDocs()).toContain("`repeat: 1` and `max: 1` are refused like any other block");
+    expect(() => parseFlow("steps:\n  - repeat: 1\n    steps: [{ snapshot: home }]\n")).toThrow(
+      /cannot run inside a repeat block/i
+    );
+    expect(() =>
+      parseFlow(
+        "steps:\n  - repeat: { until: { hidden: X }, max: 1 }\n    steps: [{ snapshot: home }]\n"
+      )
+    ).toThrow(/cannot run inside a repeat block/i);
+  });
 });
