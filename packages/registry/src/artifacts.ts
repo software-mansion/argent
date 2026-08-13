@@ -146,9 +146,16 @@ export class ArtifactStore {
 
   /**
    * @public
-   * Every caller is in tool-server (`screenshot-diff`, `screen-recording-stop`),
-   * and the dead-code gate runs against an unbuilt tree, where a cross-workspace
-   * edge cannot form. See `knip.jsonc`.
+   * Every caller is in tool-server — `tools/flows/flow-visual`,
+   * `tools/screenshot`, `tools/screenshot-diff`, `tools/screen-recording-stop`,
+   * both `tools/profiler/native-profiler` stop/analyze handlers and
+   * `tools/profiler/react/react-profiler-analyze` — and the dead-code gate runs
+   * against an unbuilt tree, where a cross-workspace edge cannot form. See
+   * `knip.jsonc`.
+   *
+   * To re-audit whether this tag is still earned, rename the member and read
+   * the `Property 'register' does not exist` errors `tsc --build` reports. Do
+   * not grep `.register(`: `registerTool` / `registerBlueprint` swamp the hits.
    */
   async register(opts: RegisterArtifactOptions): Promise<ArtifactHandle> {
     const { hostPath, kind } = opts;
