@@ -984,11 +984,13 @@ async function runLongPress(
 
 /**
  * Pinch-zoom by `scale` centered on a selector's frame (settled tree +
- * auto-wait, like tap) or on the screen center when no selector is given. The
- * scale decomposes into equal-ratio sub-gestures chained with a recognizer
- * reset delay; per sub-gesture, a horizontal and a vertical candidate are
- * built from the axis-matching frame dimension and the better one dispatched
- * (see flow-pinch-geometry). Open-loop by design: there is no "current zoom"
+ * auto-wait, like tap) or on the screen center when no selector is given. Both
+ * branches settle first; the centre one through {@link settleForGesture}, which
+ * is best-effort and adds an abort checkpoint. The scale decomposes into
+ * equal-ratio sub-gestures chained with a recognizer reset delay; per
+ * sub-gesture, a horizontal and a vertical candidate are built from the
+ * axis-matching frame dimension and the better one dispatched (see
+ * flow-pinch-geometry). Open-loop by design: there is no "current zoom"
  * to read back, so flows assert on the result, not the multiplier.
  */
 async function runPinch(
@@ -1076,11 +1078,13 @@ async function fetchScreenAspect(env: ActionEnv): Promise<number | undefined> {
 
 /**
  * Rotate by `by` degrees (+ clockwise) about a selector's frame centre
- * (settled tree + auto-wait, like tap) or the screen centre. One continuous
- * gesture — fingers orbit the fixed centroid at a constant physical radius,
- * so any angle dispatches without decomposition or settle delays, and the
- * angular delta is exact with zero pan/pinch coupling. The initial finger
- * axis is the safer of horizontal and vertical (see flow-rotate-geometry);
+ * (settled tree + auto-wait, like tap) or the screen centre. Both branches
+ * settle first; the centre one through {@link settleForGesture}, which is
+ * best-effort and adds an abort checkpoint. One continuous gesture — fingers
+ * orbit the fixed centroid at a constant physical radius, so any angle
+ * dispatches without decomposition or settle delays, and the angular delta is
+ * exact with zero pan/pinch coupling. The initial finger axis is the safer of
+ * horizontal and vertical (see flow-rotate-geometry);
  * duration derives from the angle at the fixed ~90°/300ms pace — `by` is
  * bounded at parse. NOT the `rotate` tool — that changes device orientation.
  */

@@ -30,7 +30,11 @@ import type { DescribeTreeData } from "../describe/contract";
  * against a tree that simply omits the node). The helpers throw instead:
  * transient failures are absorbed by the callers' retry loops (`settleTree`,
  * the await/assert poll), and a persistent outage fails the step with the
- * helper's reason.
+ * helper's reason - except where the caller needs no frame out of the tree and
+ * so must not fail on it. Those swallow the throw: a gesture that resolves no
+ * selector passes carrying a warning (`settleForGesture`), the rotate aspect
+ * read degrades to a legacy orbit (`fetchScreenAspect`), and `snapshot`
+ * captures pixels anyway (`runSnapshot`).
  */
 export async function fetchFlowTree(
   registry: Registry,
