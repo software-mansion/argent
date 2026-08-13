@@ -74,7 +74,7 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 | Hardware key      | `button`            | Home, back, power, volume, appSwitch, actionButton               |
 | Type text         | `keyboard`          | Every platform. Supports Enter, Escape, arrows (not on TV)       |
 | Rotate device     | `rotate`            | Orientation changes                                              |
-| Shake device      | `shake`             | Undo-typing prompt, RN dev menu, shake handlers (sim/emu only)   |
+| Shake device      | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu   |
 | Wait for UI       | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text    |
 | Wait for idle     | `await-screen-idle` | Block until a non-empty screen tree stops changing               |
 
