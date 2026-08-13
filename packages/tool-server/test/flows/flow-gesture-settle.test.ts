@@ -225,6 +225,35 @@ describe("a tree-source outage never fails a selector-less gesture", () => {
     expect(readsBeforeFirstGesture()).toBeGreaterThan(2);
   }, 20_000);
 
+  it("proves no outage from a window that read the tree but never settled", async () => {
+    // A screen in perpetual motion (a spinner, a video) that also blips once:
+    // the window expires having both read the tree and seen an error. It holds
+    // still from the first tap onwards, so the second tap's reads are exact.
+    let reads = 0;
+    currentTree = () => {
+      if (events.some((e) => e.kind === "invoke")) return screen();
+      reads += 1;
+      if (reads === 2) throw new Error("transient describe failure");
+      const frame = { x: 0, y: reads / 100, width: 1, height: 1 };
+      return { role: "AXWindow", frame, children: [] };
+    };
+    await writeFlow("tap-restless-tap", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "tap", x: 0.1, y: 0.1 },
+        { kind: "tap", x: 0.2, y: 0.2 },
+      ],
+    });
+
+    const result = await run("tap-restless-tap");
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:pass", "tap:pass"]);
+    // A window that read the tree proves no outage, however restless the screen
+    // it described: the second tap settles on its own two identical reads. A
+    // verdict minted off the first window would leave it rethrowing with zero.
+    expect(readsBetween(gestureAt(0), gestureAt(1))).toBe(2);
+  }, 20_000);
+
   it("rides out a transient read failure rather than treating it as the outage", async () => {
     // Fails once, then serves a still screen: the settle must still converge on
     // the two identical reads that follow instead of quitting on the blip.
