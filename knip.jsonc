@@ -4,8 +4,23 @@
   // `npm run knip`; .github/workflows/knip.yml enforces it.
   //
   // Every issue type knip reports is an error by default, so this file sets no
-  // `rules`. There is no parked backlog either: `--max-issues 0` means the whole
-  // report must be empty, and a single new unused export fails the job.
+  // `rules`. There is no parked backlog either: `--max-issues 0` means both
+  // passes must come back empty, and one new unused export fails the job.
+  //
+  // Empty is not the same as exhaustive. Two shapes get past both passes, and
+  // it is the invocation below that hides them, not knip. A dead member of a
+  // referenced `enum` needs `enumMembers` and `nsTypes` in the SAME run
+  // (`knip/dist/graph/analyze.js:72`); pass 1 has the first without the second,
+  // pass 2 the reverse. A dead specifier on a same-workspace `export … from`
+  // line is unreportable in pass 2, because naming `classMembers` turns
+  // `isSkipLibs` off and that enables the `hasExternalReferences` guard, for
+  // which the declaration in the re-exported module is itself a reference; pass
+  // 1 excludes `exports` and `types` outright. Both measured on a dist-free
+  // tree: a dead `ServiceState` member, and a dead `Cookie` type plus a dead
+  // `createTabsManager` value re-export, each leave `npm run knip` at exit 0,
+  // while a plain dead `export const` in the same tree fails it. So treat a
+  // green run as "the shape almost everyone writes is clean", not as proof the
+  // symbol you just orphaned still has a reader.
   //
   // `npm run knip` still runs knip twice because the two flags partition the
   // issue types rather than layering. `--include` is restrictive, so the pass
