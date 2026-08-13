@@ -168,13 +168,13 @@ describe("settleTree takes at least two read attempts", () => {
     expect(reads).toBeGreaterThan(2);
   }, 20_000);
 
-  it("does not spend a second read when the first one settles the screen", async () => {
+  it("adds no third read when the first two reads matched inside the window", async () => {
     await writeTap("tap-healthy");
 
     const result = await run("tap-healthy");
 
     expect(result.ok).toBe(true);
-    // Two reads are what a settle costs a healthy run — the floor adds none.
+    // Two reads are what a settle has always cost a healthy run.
     expect(reads).toBe(2);
   });
 });
