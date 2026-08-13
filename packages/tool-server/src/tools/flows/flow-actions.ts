@@ -222,19 +222,21 @@ const SETTLE_TIMEOUT_MS = 3000;
 
 // Read attempts every settle makes before it may conclude anything, enforced
 // even once the window has closed. A read can fail by TIMING OUT, and every
-// tree source's RPC timeout outlasts the 3s window (the shortest is iOS's 5s),
-// so the window fits only one such read: without a floor, "every read in the
-// window failed", which the throw below reports as a tree-source outage, would
+// tree source's RPC timeout outlasts the 3s window: 5s is the shortest tier any
+// of them allows, and a whole read chains several of those (an iOS read spends
+// up to 5s resolving the target app before a 15s `getFullHierarchy`), so the
+// window fits only one such read. Without a floor, "every read in the window
+// failed", which the throw below reports as a tree-source outage, would
 // collapse into "the first read was slow", erroring a step on one transient
 // blip with no retry at all. The second read is not bounded by the window
-// either, and a read is several RPCs deep, each on its own timeout, so a wedged
-// source costs two full reads and tens of seconds, and a source that answers
-// slowly pays a second read where it used to end on one. `scroll-to` multiplies
-// that: it settles once per round, bounded by `MAX_SCROLL_ITERATIONS` rather
-// than a wall clock, so the added read lands on every round and a slow source
-// turns one step's tens of seconds into minutes. `await`/`assert` have always
-// had this floor in `waitForCondition`'s final poll; this is the same guarantee
-// for the directives that resolve through a settle.
+// either, so a wedged source costs two full reads and tens of seconds, and a
+// source that answers slowly pays a second read where it used to end on one.
+// `scroll-to` multiplies that: it settles once per round, bounded by
+// `MAX_SCROLL_ITERATIONS` rather than a wall clock, so the added read lands on
+// every round and a slow source turns one step's tens of seconds into minutes.
+// `await`/`assert` have always had this floor in `waitForCondition`'s final
+// poll; this is the same guarantee for the directives that resolve through a
+// settle.
 const SETTLE_MIN_READS = 2;
 
 // `scroll-to`: a bounded number of momentum-free increments. Each travels half
