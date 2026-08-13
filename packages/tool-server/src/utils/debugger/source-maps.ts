@@ -93,7 +93,7 @@ export class SourceMapsRegistry {
     sourceMapURL: string | undefined
   ): void {
     if (!sourceMapURL) return;
-    const p = this.doRegister(scriptUrl, scriptId, sourceMapURL);
+    const p = this.doRegister(sourceMapURL);
     this.pendingRegistrations.push(p);
   }
 
@@ -102,18 +102,16 @@ export class SourceMapsRegistry {
     this.pendingRegistrations = [];
   }
 
-  private async doRegister(
-    scriptUrl: string,
-    scriptId: string,
-    sourceMapURL: string
-  ): Promise<void> {
+  private async doRegister(sourceMapURL: string): Promise<void> {
+    // An inline `data:` map carries its payload in the URL. There is no fetch
+    // to wait for and no allowlist to apply, so this returns at once. Decoding
+    // and parsing it kept nothing: the result was discarded, the `catch` below
+    // swallowed any throw, and a malformed payload reached the same return as
+    // a well-formed one. The only cost was time inside `waitForPending()`,
+    // which `debugger-connect` and every `debugger-status` block on — ~25 ms
+    // for a 20 MiB map, and with no size cap, unlike the fetch below.
+    if (sourceMapURL.startsWith("data:")) return;
     try {
-      if (sourceMapURL.startsWith("data:")) {
-        const base64Part = sourceMapURL.split(",")[1];
-        if (!base64Part) return;
-        JSON.parse(Buffer.from(base64Part, "base64").toString("utf-8"));
-        return;
-      }
       if (!isAllowedSourceMapURL(sourceMapURL)) return;
       // `redirect: "error"` so a loopback URL that passes the allowlist
       // can't 302 us onto an internal/metadata host (the redirect target
