@@ -395,20 +395,20 @@ function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
  * convert the outage into a misleading "element not found" downstream. The
  * throw lands in the step's structured report via `execLeafStep`'s catch.
  *
- * `skipProvenOutage` rethrows {@link ActionEnv.treeOutage} instead of spending
- * a window to re-derive it. The discriminator is repetition across the run, not
- * a shorter budget: a threshold low enough to spare a source that serves no
- * tree at all would also abandon the mid-navigation blip the retry above exists
- * for, whereas a source that failed a whole window and has answered nothing
- * since will fail this one identically. So the first settle of a run still pays
- * in full, and only the ones after it are spared.
+ * `skipProvenOutage` rethrows {@link ActionEnv.treeOutage} instead of buying
+ * that window again. Not a shorter budget: a threshold low enough to spare a
+ * source serving no tree at all would also abandon the mid-navigation blip the
+ * retry above exists for. But the memo is a prediction: one window mints it,
+ * nothing re-tests it, and on iOS a window can be one stalled read (3s < the 5s
+ * RPC timeout). Being wrong costs a settle, not a step: {@link settleForGesture}
+ * swallows the throw. Any read that comes back retires it, as does a relaunch.
  *
  * What it costs: an outage that lasted a full window, in a run that then never
  * reads the tree again and never relaunches, leaves later gestures unsettled
  * even once it clears. That is a flow of nothing but coordinate gestures giving
  * up a best-effort settle it never had before this directive existed, against
  * every one of those gestures otherwise paying the window for a settle that is
- * not coming. Any step that reads — a selector, an `await`, an `idle` — ends it.
+ * not coming.
  */
 export async function settleTree(
   env: ActionEnv,
