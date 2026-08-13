@@ -443,12 +443,17 @@ export async function settleTree(
     // first pass: the memo is written by the throw below, which leaves the loop.
     const proven = provenTreeOutage(env);
     if (opts.skipProvenOutage && proven) throw proven;
+    // The signal bounds the wait; nothing else does. A budget of what is left of
+    // the window would fail the slow cold start #778 raised
+    // `ViewHierarchy.getFullHierarchy` to a 15s RPC tier to ride out, so the
+    // read keeps its own tier and only a cancelled run stops us waiting on it.
+    const read = await settleWithin(readFlowTree(env), undefined, env.signal);
     let tree: DescribeNode | undefined;
-    try {
-      ({ tree } = await readFlowTree(env));
-    } catch (err) {
+    if (read.type === "value") {
+      tree = read.value.tree;
+    } else if (read.type === "error") {
       // transient describe failure mid-navigation — retry until the deadline
-      lastError = err instanceof Error ? err : new Error(String(err));
+      lastError = read.cause;
     }
     // The abort can land while the read above is in flight (e.g. the HTTP
     // client disconnecting mid-flow trips the run's AbortController). Without

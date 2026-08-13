@@ -11,10 +11,13 @@ import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/co
 type Event = { kind: "read" } | { kind: "invoke"; tool: string; args: Record<string, unknown> };
 let events: Event[];
 let currentTree: () => DescribeNode;
+/** A source that never answers, for the tests that need a read still in flight. */
+let hangReads: boolean;
 
 vi.mock("../../src/tools/flows/flow-tree", () => ({
   fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => {
     events.push({ kind: "read" });
+    if (hangReads) return new Promise<never>(() => {});
     return { tree: currentTree(), source: "native-devtools" };
   }),
 }));
@@ -87,6 +90,7 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-gesture-settle-"));
   events = [];
   currentTree = screen;
+  hangReads = false;
 });
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
@@ -620,4 +624,31 @@ describe("a run cancelled inside the settle dispatches no coordinate gesture", (
     expect(result.steps[0].reason).toBe("run aborted");
     expect(gestures()).toEqual([]);
   });
+
+  it("skips a coordinate tap while the settle's read is still in flight", async () => {
+    // The read carries no budget of its own - deliberately, so a slow iOS cold
+    // start is ridden out rather than failed - so the signal is the only thing
+    // that ends this wait. A settle that waited for the source first would hold
+    // the cancelled run for as long as the source takes to answer: on iOS the
+    // 5s state probe plus the 15s hierarchy read, and here forever.
+    hangReads = true;
+    const controller = new AbortController();
+    await writeFlow("tap-hung-read", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tap", x: 0.4, y: 0.6 }],
+    });
+
+    const running = run("tap-hung-read", controller.signal);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    const abortedAt = Date.now();
+    controller.abort();
+    const result = await running;
+
+    expect(Date.now() - abortedAt).toBeLessThan(2_000);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:skip"]);
+    expect(result.steps[0].reason).toBe("run aborted");
+    expect(gestures()).toEqual([]);
+    // And the abandoned read was never retried behind the abort.
+    expect(events).toHaveLength(1);
+  }, 10_000);
 });
