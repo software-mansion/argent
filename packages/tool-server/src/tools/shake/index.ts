@@ -18,6 +18,14 @@ const capability: ToolCapability = {
   // because a serial that didn't resolve may still be an emulator; the handler
   // re-checks and rejects a non-emulator serial explicitly.
   android: { emulator: true, unknown: true },
+  // No `vega`: a Fire TV is rejected here, by the absent block.
+  //
+  // TV targets that are NOT separate platforms cannot be excluded here. An
+  // Apple TV simulator is `ios`/`simulator` and an Android TV emulator is
+  // `android`/`emulator` — identical to a phone by id shape and device kind, so
+  // the matrix admits them and each platform handler probes the runtime and
+  // rejects a TV. `supports` can't do it: it is synchronous, while the runtime
+  // kind is an async `simctl list` / `adb` probe.
 };
 
 export const shakeTool: ToolDefinition<ShakeParams, ShakeResult> = {
@@ -35,7 +43,7 @@ iOS delivers one discrete shake per gesture (the same motion event a physical de
 Set \`count\` above 1 when a detector needs sustained motion before it triggers.
 Returns { shaken: true, count }.
 Works on local and remote (sim-remote) iOS simulators.
-Only simulators and emulators are supported — a physical iPhone or Android phone has a real accelerometer that cannot be driven from the host, and is rejected. Fails if the device is not booted.`,
+Only phone/tablet simulators and emulators are supported. A physical iPhone or Android phone has a real accelerometer that cannot be driven from the host, and every TV target (Apple TV, Android TV, Fire TV) has no shake gesture at all — both are rejected rather than silently doing nothing. A TV is focus-driven: use \`tv-remote\` there. Fails if the device is not booted.`,
   searchHint: "shake motion accelerometer undo typing dev menu gesture",
   zodSchema: shakeZodSchema,
   capability,

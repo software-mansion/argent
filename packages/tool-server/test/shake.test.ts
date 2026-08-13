@@ -18,12 +18,21 @@ vi.mock("../src/utils/ios-device-sets", async (importOriginal) => ({
 vi.mock("../src/utils/sim-remote", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/sim-remote")>()),
   simctlSpawn: vi.fn(async () => ({ pid: undefined, exitCode: 0, stdout: "", stderr: "" })),
+  isRemoteTvOsSimulator: vi.fn(async () => false),
+}));
+
+// TV detection is an async runtime probe (`simctl list` / `adb`); default both
+// to "not a TV" and flip them per-test.
+vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/ios-devices")>()),
+  isTvOsSimulator: vi.fn(async () => false),
 }));
 
 // The Android branch drives the emulator console over adb.
 vi.mock("../src/utils/adb", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/adb")>()),
   runAdb: vi.fn(async () => ({ stdout: "acceleration = 0:9.77631:0.812349\nOK\n", stderr: "" })),
+  isAndroidTv: vi.fn(async () => false),
 }));
 
 // `dispatchByPlatform` preflights each branch's `requires`; CI has neither
@@ -39,8 +48,10 @@ import { shakeTool } from "../src/tools/shake";
 import { SHAKE_NOTIFICATION } from "../src/tools/shake/platforms/ios";
 import { androidImpl, parseAcceleration } from "../src/tools/shake/platforms/android";
 import { iosRemoteImpl } from "../src/tools/shake/platforms/ios";
-import { runAdb } from "../src/utils/adb";
-import { simctlSpawn } from "../src/utils/sim-remote";
+import { isAndroidTv, runAdb } from "../src/utils/adb";
+import { isRemoteTvOsSimulator, simctlSpawn } from "../src/utils/sim-remote";
+import { isTvOsSimulator } from "../src/utils/ios-devices";
+import { UnsupportedOperationError } from "../src/utils/capability";
 
 const iosUdid = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
 const androidEmulator = "emulator-5554";
@@ -49,6 +60,7 @@ const services = {} as never;
 beforeEach(() => {
   vi.mocked(execFile).mockClear();
   vi.mocked(runAdb).mockClear();
+  vi.mocked(simctlSpawn).mockClear();
 });
 
 describe("shake tool — iOS", () => {
@@ -79,7 +91,6 @@ describe("shake tool — remote iOS (sim-remote)", () => {
   const remoteUdid = "remote:9D2F4AEC-7C68-4C73-9BD9-06D1007FBF1F";
 
   it("runs the on-device notifyutil argv, uploading nothing", async () => {
-    vi.mocked(simctlSpawn).mockClear();
     await expect(shakeTool.execute(services, { udid: remoteUdid })).resolves.toEqual({
       shaken: true,
       count: 1,
@@ -176,6 +187,42 @@ describe("shake tool — Android", () => {
       androidImpl.handler({} as never, { udid: "R5CT80ZABCD" }, {} as never)
     ).rejects.toThrow(/needs an Android emulator/i);
     expect(runAdb).not.toHaveBeenCalled();
+  });
+});
+
+describe("shake tool — TV targets are out of scope", () => {
+  // A TV has no accelerometer and no shake gesture. Apple TV and Android TV are
+  // NOT separate platforms — by id shape and device kind they are an ordinary
+  // iOS simulator / Android emulator — so the capability matrix admits them and
+  // each handler must probe the runtime. Left ungated, the underlying command
+  // succeeds and the tool reports a shake that never happened.
+  it("rejects an Apple TV simulator", async () => {
+    vi.mocked(isTvOsSimulator).mockResolvedValueOnce(true);
+    await expect(shakeTool.execute(services, { udid: iosUdid })).rejects.toBeInstanceOf(
+      UnsupportedOperationError
+    );
+    expect(execFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects a remote Apple TV simulator", async () => {
+    vi.mocked(isRemoteTvOsSimulator).mockResolvedValueOnce(true);
+    await expect(
+      shakeTool.execute(services, { udid: "remote:9D2F4AEC-7C68-4C73-9BD9-06D1007FBF1F" })
+    ).rejects.toBeInstanceOf(UnsupportedOperationError);
+    expect(simctlSpawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects an Android TV emulator before touching its sensors", async () => {
+    vi.mocked(isAndroidTv).mockResolvedValueOnce(true);
+    await expect(shakeTool.execute(services, { udid: androidEmulator })).rejects.toBeInstanceOf(
+      UnsupportedOperationError
+    );
+    expect(runAdb).not.toHaveBeenCalled();
+  });
+
+  it("rejects a Vega (Fire TV) device at the capability matrix", async () => {
+    // Vega IS its own platform, so the absent block is enough — no probe needed.
+    await expect(shakeTool.execute(services, { udid: "vega-device-1" })).rejects.toThrow();
   });
 });
 

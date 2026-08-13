@@ -1,9 +1,16 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  subprocessFailureMetadata,
+  type DeviceInfo,
+} from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
-import { simctlSpawn } from "../../../utils/sim-remote";
+import { isRemoteTvOsSimulator, simctlSpawn } from "../../../utils/sim-remote";
+import { isTvOsSimulator } from "../../../utils/ios-devices";
+import { UnsupportedOperationError } from "../../../utils/capability";
 import type { ShakeParams, ShakeResult, ShakeServices } from "../types";
 
 const execFileAsync = promisify(execFile);
@@ -33,6 +40,22 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** The in-simulator argv both backends run. */
 const NOTIFYUTIL_ARGV = ["notifyutil", "-p", SHAKE_NOTIFICATION];
 
+/**
+ * An Apple TV has no accelerometer and no shake gesture, but its simulator is a
+ * plain 8-4-4-4-12 UUID that `resolveDevice` classifies as `ios` / `simulator` —
+ * indistinguishable from an iPhone by shape, so the capability matrix cannot
+ * exclude it and the runtime has to be probed. Without this, `notifyutil`
+ * happily posts a notification nothing listens for and the tool reports a
+ * successful shake that never happened.
+ */
+function rejectTv(toolId: string, device: DeviceInfo): never {
+  throw new UnsupportedOperationError(
+    toolId,
+    device,
+    "tvOS has no shake gesture — a TV is focus-driven, use tv-remote"
+  );
+}
+
 function shakeFailure(udid: string, detail: string, cause?: Error): FailureError {
   // `simctl spawn` against a shut-down device fails with a state error that
   // doesn't say what to do about it.
@@ -57,9 +80,10 @@ function shakeFailure(udid: string, detail: string, cause?: Error): FailureError
 
 export const iosImpl: PlatformImpl<ShakeServices, ShakeParams, ShakeResult> = {
   requires: ["xcrun"],
-  async handler(_services, params): Promise<ShakeResult> {
+  async handler(_services, params, device): Promise<ShakeResult> {
     const { udid } = params;
     const count = params.count ?? 1;
+    if (await isTvOsSimulator(udid)) rejectTv("shake", device);
     // `notifyutil` ships inside every simulator runtime, so there is nothing to
     // upload or install — this is the whole implementation.
     const args = await simctlArgsForUdid(udid, ["spawn", udid, ...NOTIFYUTIL_ARGV]);
@@ -91,9 +115,10 @@ export const iosImpl: PlatformImpl<ShakeServices, ShakeParams, ShakeResult> = {
  */
 export const iosRemoteImpl: PlatformImpl<ShakeServices, ShakeParams, ShakeResult> = {
   requires: ["sim-remote"],
-  async handler(_services, params): Promise<ShakeResult> {
+  async handler(_services, params, device): Promise<ShakeResult> {
     const { udid } = params;
     const count = params.count ?? 1;
+    if (await isRemoteTvOsSimulator(udid)) rejectTv("shake", device);
 
     for (let i = 0; i < count; i++) {
       if (i > 0) await sleep(SHAKE_INTERVAL_MS);

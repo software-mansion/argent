@@ -1,6 +1,7 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import { consolePortFromAdbSerial, runAdb } from "../../../utils/adb";
+import { consolePortFromAdbSerial, isAndroidTv, runAdb } from "../../../utils/adb";
+import { UnsupportedOperationError } from "../../../utils/capability";
 import type { ShakeParams, ShakeResult, ShakeServices } from "../types";
 
 /**
@@ -53,9 +54,22 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export const androidImpl: PlatformImpl<ShakeServices, ShakeParams, ShakeResult> = {
   requires: ["adb"],
-  async handler(_services, params): Promise<ShakeResult> {
+  async handler(_services, params, device): Promise<ShakeResult> {
     const serial = params.udid;
     const count = params.count ?? 1;
+
+    // An Android TV emulator is a `platform: "android"`, `kind: "emulator"`
+    // serial like any other, so the capability matrix can't exclude it. A TV
+    // has no accelerometer and is focus-driven; its emulator console would
+    // accept the sensor writes and change nothing observable, reporting a
+    // shake that never happened.
+    if (await isAndroidTv(serial)) {
+      throw new UnsupportedOperationError(
+        "shake",
+        device,
+        "Android TV has no shake gesture — a TV is focus-driven, use tv-remote"
+      );
+    }
 
     // Physical phones expose no emulator console — their accelerometer is real
     // hardware. Reject up front: `adb emu` against a device serial fails with an
