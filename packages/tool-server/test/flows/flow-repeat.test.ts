@@ -2171,13 +2171,95 @@ describe("repeat: cancellation inside the block", () => {
     }
   }, 20000);
 
-  it("closes every enclosing block with its own line when the abort lands in a nested repeat", async () => {
-    // One cancellation, two blocks cut short: the inner repeat closes itself,
-    // the leftover outer-body step skips, then the outer block closes too.
-    // Each line carries its own block's bound, so the two `run aborted`
-    // entries are told apart by target, not just by the depth indent — and
-    // `skipped` carries one per level: a level without its line would read as
-    // an all-pass block whose marker promised iterations that never ran.
+  it("adds no line when the cancellation lands on the last step of the last iteration", async () => {
+    // The line stands in for iterations the block promised and will never
+    // start, so it takes more than a live abort: the block has to still owe
+    // one. Three runs of the same shape, all cancelled from the second tap,
+    // separate a block with an iteration left from two without one — including
+    // the case whose body the abort cut in half, where the abandoned step
+    // reports its own skip and the block still owes nothing.
+    currentTree = () => screen([notification()]);
+    const ECHO: FlowStep = { kind: "echo", message: "after" };
+    await writeFlow("abort-on-last-step", {
+      executionPrerequisite: "",
+      steps: [{ kind: "repeat", spec: { mode: "times", times: 2 }, steps: [TAP] }],
+    });
+    await writeFlow("abort-mid-last-body", {
+      executionPrerequisite: "",
+      steps: [{ kind: "repeat", spec: { mode: "times", times: 2 }, steps: [TAP, ECHO] }],
+    });
+    await writeFlow("abort-with-iterations-left", {
+      executionPrerequisite: "",
+      steps: [{ kind: "repeat", spec: { mode: "times", times: 3 }, steps: [TAP] }],
+    });
+
+    const complete = await run("abort-on-last-step", abortDuringTap(2).signal);
+    tapCount = 0;
+    const midBody = await run("abort-mid-last-body", abortDuringTap(2).signal);
+    tapCount = 0;
+    const left = await run("abort-with-iterations-left", abortDuringTap(2).signal);
+
+    // Every promised iteration ran, and every step in them ran: the block owes
+    // nothing, so it closes silently and the run-level `aborted` is the whole
+    // account of the cancellation.
+    expect(shape(complete.steps)).toEqual([
+      "repeat pass 2 times @0",
+      "repeat pass iteration 1/2 @1",
+      'tap pass "Clear notification" @1',
+      "repeat pass iteration 2/2 @1",
+      'tap pass "Clear notification" @1',
+    ]);
+    expect(complete.steps.some((s) => s.reason === "run aborted")).toBe(false);
+    expect(complete.aborted).toBe(true);
+    // The block leaves `skipped` where it found it: the line is deliberately
+    // not structural, so one pushed here would take a step number and a skip
+    // for a block that delivered everything its marker promised.
+    expect(counts(complete)).toEqual({ ok: false, passed: 2, failed: 0, skipped: 0, errored: 0 });
+
+    // The same final iteration, one step short of its end: the echo never
+    // runs, and it says so itself. The block's answer does not change — it
+    // still promised two iterations and delivered two — so it closes silently
+    // here as well, and the abandoned echo is accounted for exactly once.
+    expect(shape(midBody.steps)).toEqual([
+      "repeat pass 2 times @0",
+      "repeat pass iteration 1/2 @1",
+      'tap pass "Clear notification" @1',
+      "echo pass after @1",
+      "repeat pass iteration 2/2 @1",
+      'tap pass "Clear notification" @1',
+      "echo skip after @1",
+    ]);
+    expect(midBody.steps.at(-1)?.reason).toBe("run aborted");
+    expect(midBody.steps.filter((s) => s.kind === "repeat" && s.status === "skip")).toEqual([]);
+    expect(midBody.aborted).toBe(true);
+    expect(counts(midBody)).toEqual({ ok: false, passed: 2, failed: 0, skipped: 0, errored: 0 });
+
+    // The one thing that does earn the line: the abort lands on the last step
+    // of iteration 2, exactly as in the first run, but a third iteration the
+    // marker promised will now never start and nothing else would say so.
+    expect(shape(left.steps)).toEqual([
+      "repeat pass 3 times @0",
+      "repeat pass iteration 1/3 @1",
+      'tap pass "Clear notification" @1',
+      "repeat pass iteration 2/3 @1",
+      'tap pass "Clear notification" @1',
+      "repeat skip 3 times @0",
+    ]);
+    expect(left.steps.at(-1)?.reason).toBe("run aborted");
+    expect(left.aborted).toBe(true);
+    expect(counts(left)).toEqual({ ok: false, passed: 2, failed: 0, skipped: 1, errored: 0 });
+  }, 25000);
+
+  it("closes every enclosing block with its own line when the abort cuts a nested repeat short", async () => {
+    // One cancellation, and both blocks still owe iterations when it lands —
+    // the inner its third, the outer its second: the inner repeat closes
+    // itself, the leftover body step skips on its own account, then the outer
+    // block closes too. Each line carries its own block's bound, so the two
+    // `run aborted` entries are told apart by target, not just by the depth
+    // indent — and `skipped` carries one per level, each level's unstarted
+    // iterations being its own loss to report: a level without its line would
+    // read as an all-pass block whose marker promised iterations that never
+    // ran.
     currentTree = () => screen([notification()]);
     const controller = abortDuringTap(2);
     await writeFlow("cancelled-in-nested", {
@@ -2218,6 +2300,166 @@ describe("repeat: cancellation inside the block", () => {
     // line per enclosing level.
     expect(counts(result)).toEqual({ ok: false, passed: 2, failed: 0, skipped: 3, errored: 0 });
   }, 15000);
+
+  it("closes only the enclosing blocks that still owed an iteration", async () => {
+    // Which levels close is decided by the iterations each level has left, and
+    // by nothing else — least of all by whether the abort happened to land on
+    // the body's last step. Four runs of the same nested pair: cancelled from
+    // the last tap of the last iteration of both blocks, no level owes an
+    // iteration and no level says anything; cancelled on the inner block's
+    // last tap under the outer's FIRST iteration, only the outer owes one and
+    // only the outer says so; cancelled early, both levels owe one and both
+    // say so. The mixed run is what pins each level answering for itself: the
+    // condition reads that block's own bound, so an inner block that finished
+    // cannot silence an outer one that did not.
+    //
+    // The middle run is the point of the rule. It is the first flow with a
+    // trailing `echo:` inside the inner body, so the abort leaves an authored
+    // step undone — and the answer must not move: the echo reports its own
+    // `run aborted` skip, which is the whole of what the cancellation cost,
+    // and a closing line at either level would be a second account of it,
+    // charged as a skip to a block that ran every iteration it promised.
+    currentTree = () => screen([notification()]);
+    const ECHO: FlowStep = { kind: "echo", message: "after" };
+    const nested = (steps: FlowStep[]): FlowStep => ({
+      kind: "repeat",
+      spec: { mode: "times", times: 2 },
+      steps: [{ kind: "repeat", spec: { mode: "times", times: 3 }, steps }],
+    });
+    await writeFlow("nested-tail-exact", {
+      executionPrerequisite: "",
+      steps: [nested([TAP])],
+    });
+    await writeFlow("nested-tail-trailing", {
+      executionPrerequisite: "",
+      steps: [nested([TAP, ECHO])],
+    });
+
+    // The same flow throughout, cancelled at three different taps: the sixth
+    // is the run's last (the inner block's last iteration inside the outer's
+    // last), the third is the inner block's last inside the outer's first, and
+    // the second leaves an iteration owed at both levels.
+    const exact = await run("nested-tail-exact", abortDuringTap(6).signal);
+    tapCount = 0;
+    const trailing = await run("nested-tail-trailing", abortDuringTap(6).signal);
+    tapCount = 0;
+    const innerDone = await run("nested-tail-exact", abortDuringTap(3).signal);
+    tapCount = 0;
+    const owed = await run("nested-tail-exact", abortDuringTap(2).signal);
+
+    /** The closing lines a run emitted, innermost first — one per block that owed. */
+    const closings = (r: FlowRunResult): string[] =>
+      shape(r.steps.filter((s) => s.kind === "repeat" && s.status === "skip"));
+
+    // The trailing echo changes what the report says about the echo, and
+    // nothing about the blocks: neither run closes a level.
+    expect(closings(exact)).toEqual([]);
+    expect(closings(trailing)).toEqual([]);
+    // Each level answers for itself: the inner block delivered all three of its
+    // iterations, the outer still owes its second.
+    expect(closings(innerDone)).toEqual(["repeat skip 2 times @0"]);
+    expect(closings(owed)).toEqual(["repeat skip 3 times @1", "repeat skip 2 times @0"]);
+
+    // Both blocks delivered every iteration they promised and every step in
+    // them, so neither says anything: the run-level `aborted` is the whole
+    // account of a cancellation that left nothing unstarted.
+    expect(shape(exact.steps)).toEqual([
+      "repeat pass 2 times @0",
+      "repeat pass iteration 1/2 @1",
+      "repeat pass 3 times @1",
+      "repeat pass iteration 1/3 @2",
+      'tap pass "Clear notification" @2',
+      "repeat pass iteration 2/3 @2",
+      'tap pass "Clear notification" @2',
+      "repeat pass iteration 3/3 @2",
+      'tap pass "Clear notification" @2',
+      "repeat pass iteration 2/2 @1",
+      "repeat pass 3 times @1",
+      "repeat pass iteration 1/3 @2",
+      'tap pass "Clear notification" @2',
+      "repeat pass iteration 2/3 @2",
+      'tap pass "Clear notification" @2',
+      "repeat pass iteration 3/3 @2",
+      'tap pass "Clear notification" @2',
+    ]);
+    expect(exact.steps.some((s) => s.reason === "run aborted")).toBe(false);
+    expect(exact.aborted).toBe(true);
+    // The lines are deliberately not structural, so one pushed here would take
+    // a step number and a skip — at every level — for blocks that owe nothing.
+    expect(counts(exact)).toEqual({ ok: false, passed: 6, failed: 0, skipped: 0, errored: 0 });
+
+    // One authored step abandoned, at depth 2, and it is the one line the
+    // cancellation adds: the echo speaks for itself, and the blocks that
+    // finished around it stay silent.
+    expect(shape(trailing.steps)).toEqual([
+      "repeat pass 2 times @0",
+      "repeat pass iteration 1/2 @1",
+      "repeat pass 3 times @1",
+      "repeat pass iteration 1/3 @2",
+      'tap pass "Clear notification" @2',
+      "echo pass after @2",
+      "repeat pass iteration 2/3 @2",
+      'tap pass "Clear notification" @2',
+      "echo pass after @2",
+      "repeat pass iteration 3/3 @2",
+      'tap pass "Clear notification" @2',
+      "echo pass after @2",
+      "repeat pass iteration 2/2 @1",
+      "repeat pass 3 times @1",
+      "repeat pass iteration 1/3 @2",
+      'tap pass "Clear notification" @2',
+      "echo pass after @2",
+      "repeat pass iteration 2/3 @2",
+      'tap pass "Clear notification" @2',
+      "echo pass after @2",
+      "repeat pass iteration 3/3 @2",
+      'tap pass "Clear notification" @2',
+      "echo skip after @2",
+    ]);
+    expect(trailing.steps.at(-1)?.reason).toBe("run aborted");
+    expect(trailing.aborted).toBe(true);
+    // The same six taps and the same totals as the run without the echo: the
+    // abandoned narration is no test step, and no block was charged a skip.
+    expect(counts(trailing)).toEqual({ ok: false, passed: 6, failed: 0, skipped: 0, errored: 0 });
+
+    // The mixed run in full: the inner block closes nothing after its third
+    // tap, and the outer's line is the only account of the iteration it owes.
+    expect(shape(innerDone.steps)).toEqual([
+      "repeat pass 2 times @0",
+      "repeat pass iteration 1/2 @1",
+      "repeat pass 3 times @1",
+      "repeat pass iteration 1/3 @2",
+      'tap pass "Clear notification" @2',
+      "repeat pass iteration 2/3 @2",
+      'tap pass "Clear notification" @2',
+      "repeat pass iteration 3/3 @2",
+      'tap pass "Clear notification" @2',
+      "repeat skip 2 times @0",
+    ]);
+    expect(innerDone.steps.at(-1)?.reason).toBe("run aborted");
+    expect(counts(innerDone)).toEqual({ ok: false, passed: 3, failed: 0, skipped: 1, errored: 0 });
+
+    // Cancelled with iterations still to come at both levels — the inner block
+    // owes its third, the outer its second — and each says so for itself, at
+    // its own depth and under its own bound.
+    expect(shape(owed.steps)).toEqual([
+      "repeat pass 2 times @0",
+      "repeat pass iteration 1/2 @1",
+      "repeat pass 3 times @1",
+      "repeat pass iteration 1/3 @2",
+      'tap pass "Clear notification" @2',
+      "repeat pass iteration 2/3 @2",
+      'tap pass "Clear notification" @2',
+      "repeat skip 3 times @1",
+      "repeat skip 2 times @0",
+    ]);
+    for (const line of [owed.steps.at(-2), owed.steps.at(-1)]) {
+      expect(line?.reason).toBe("run aborted");
+      expect(line?.structural).toBeUndefined();
+    }
+    expect(owed.aborted).toBe(true);
+    expect(counts(owed)).toEqual({ ok: false, passed: 2, failed: 0, skipped: 2, errored: 0 });
+  }, 40000);
 
   it("reports a cancellation caught at the drain's guard probe unchanged", async () => {
     const controller = new AbortController();

@@ -2467,12 +2467,24 @@ async function execRepeatStep(
   /**
    * The block's cancellation line — one shape for every way this block can
    * notice the run was called off (either bound, at a drain's guard probe or
-   * after an iteration body). Without it a block cut short mid-iteration reads
-   * as an all-pass block headed by a marker promising iterations that never
+   * after an iteration body). Without it a block that still owed iterations
+   * reads as an all-pass block headed by a marker promising ones that never
    * ran, with nothing inside saying why it ended. A skip, never a fail: the
    * caller gave up, the steps did nothing wrong — the run-level `aborted`
    * already keeps the verdict honest. Not `structural`: like the drain's other
    * terminal lines this is the block's outcome, not scaffolding.
+   *
+   * The rule both bounds apply: this line stands in for the one thing the
+   * cancellation costs the block that has no line of its own. Everything else a
+   * cancellation abandons already reports itself — {@link execSteps} skips the
+   * body steps behind the abort as `run aborted`, a leaf cut short mid-action
+   * reports its own `run aborted` skip, and an inner block that owed something
+   * closes with a line of its own. For a `times` block the one uncovered loss
+   * is the iterations the marker promised and the run will now never start, so
+   * its call site asks exactly `n < times`. For a drain it is the verdict on
+   * the guard — converged, capped or errored — the block's authored outcome,
+   * which a cancellation always leaves unreached; hence both of the drain's
+   * call sites push unconditionally.
    *
    * The one terminal line that repeats the marker's `target`: its reason names
    * the cancellation and nothing else, so without one it renders as a bare
@@ -2481,12 +2493,16 @@ async function execRepeatStep(
    * depth indent. The drain's converged / cap / errored lines take no target
    * for the mirror-image reason: their reasons already spell out the condition.
    *
-   * A cancellation inside nested repeats ends with one of these lines per
-   * enclosing block, innermost first: every level was cut short, and a level
-   * without its line would read as an all-pass block whose marker promised
-   * iterations that never ran — the shape this line exists to prevent. The
-   * lines are told apart by target and depth, and each is its own block's
-   * outcome, so a single cancellation deliberately counts one skip per level.
+   * A cancellation inside nested repeats therefore ends with one of these lines
+   * per enclosing block that still owed something — iterations for a `times`
+   * block, the verdict for a drain — innermost first: such a level without its
+   * line would read as an all-pass block whose marker promised iterations that
+   * never ran, the shape this line exists to prevent. The lines are told apart
+   * by target and depth, and each is its own block's outcome, so each counts a
+   * skip of its own. A block that owed nothing closes silently: everything the
+   * cancellation cost it already carries a line, and since this one is
+   * deliberately not `structural`, pushing it there would take a step number
+   * and a `skipped` for a block that ran everything it promised.
    */
   const pushAborted = (): void => {
     pushReport(state, {
@@ -2507,18 +2523,23 @@ async function execRepeatStep(
       pushIteration(n, times);
       await execSteps(state, step.steps, inner);
       // Both exits end the block here — later iterations do not run and are not
-      // reported: they would duplicate lines, not complete the shape. Only
-      // cancellation adds a line. A failure or error inside the pass is already
-      // explained by the step that reported it (and set `stopped`), so saying
-      // more would be noise; an abort has nothing at this level saying the
-      // block stopped early, so it says so the same way the drain's probe does.
+      // reported: they would duplicate lines, not complete the shape. Only a
+      // cancellation adds a line, and only one that leaves iterations unstarted.
+      // A failure or error inside the pass is already explained by the step
+      // that reported it (and set `stopped`), so saying more would be noise; a
+      // cancellation with iterations still to come has nothing else saying they
+      // will never run, so it says so the same way the drain's probe does. That
+      // is the whole of what this bound reports — `n < times`, nothing more —
+      // because everything else a cancellation abandons already carries a line
+      // of its own (see `pushAborted`).
       // The order is load-bearing, not cheap-check-first: a cancellation caught
       // with steps still left in the body has ALSO set `stopped` — `execSteps`
-      // skipped those steps as `run aborted` on its own abort branch — so the
-      // abort has to be tested first, or every cancellation except the ones
-      // landing on the body's very last step exits silently again.
+      // skipped those steps as `run aborted` on its own abort branch — so
+      // without testing the abort first the `stopped` branch below returns
+      // before `n < times` is ever evaluated, and every cancellation except the
+      // ones landing on the body's very last step exits silently again.
       if (state.signal?.aborted) {
-        pushAborted();
+        if (n < times) pushAborted();
         return;
       }
       if (state.stopped) return;
@@ -2549,6 +2570,11 @@ async function execRepeatStep(
       // block rather than opening it, so the same block would bracket two
       // different ways depending on whether there was work — exactly the
       // run-to-run comparison the stand-in skip lines exist to preserve.
+      // Unconditional where the `times` loop asks `n < times`, and by the same
+      // rule, not as an exception to it: each bound reports the one loss that
+      // nothing else covers. A drain's is the verdict on its guard, and the
+      // probe that would have reached one is exactly what the cancellation cut
+      // off, so there is always a verdict left owing here.
       if (done === 0) reportBlockSkipped(state, step.steps, inner, "run aborted");
       pushAborted();
       return;
@@ -2603,7 +2629,9 @@ async function execRepeatStep(
     // the same order for the same reason: a mid-body cancellation reaches here
     // with `stopped` already set by `execSteps`, so checking `stopped` first
     // would drop the line. Caught here it is the identical line the guard probe
-    // above would have pushed on the next turn of the loop.
+    // above would have pushed on the next turn of the loop — and unconditional
+    // for the same reason it is there: an iteration just ran, so the verdict is
+    // still unreached, and this cancellation is what stops it being reached.
     if (state.signal?.aborted) {
       pushAborted();
       return;
