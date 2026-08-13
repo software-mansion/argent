@@ -260,6 +260,52 @@ describe("flow-add-step tap selector capture", () => {
     expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.2, y: 0.52 }]);
   });
 
+  it("keeps coordinates for a tap on dead space over a scrollable layout container", async () => {
+    // The Android flow tree emits an id-less, label-less layout container only
+    // because it is framework-marked scrollable (flow-android-tree's keep-gate,
+    // for the scroll-to nudge). nodeAtPoint then finds it under a tap that hits
+    // no row, and its class-fallback role must NOT become the selector: the
+    // containment guard accepts `{ role: "FrameLayout" }` (the scroller does
+    // cover the point) and replay would tap the list centre instead.
+    setTree([
+      n({
+        role: "FrameLayout",
+        scrollable: true,
+        frame: { x: 0, y: 0.1, width: 1, height: 0.8 },
+      }),
+      n({ label: "Row 1", frame: { x: 0.02, y: 0.12, width: 0.96, height: 0.04 } }),
+    ]);
+
+    const result = await recordTap({ x: 0.5, y: 0.6 });
+
+    expect(result.message).toContain("no stable text/id");
+    expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.5, y: 0.6 }]);
+  });
+
+  it("still records a scroller's id, and a genuine scroll role, over the same dead space", async () => {
+    // The refusal is scoped to layout scaffolding: an identified scroller keeps
+    // its id, and a real ScrollView/RecyclerView keeps its role. Neither is a
+    // container the adapter walks through.
+    setTree([
+      n({
+        role: "FrameLayout",
+        identifier: "feed",
+        frame: { x: 0, y: 0.1, width: 1, height: 0.8 },
+      }),
+    ]);
+    await recordTap({ x: 0.5, y: 0.6 });
+
+    setTree([
+      n({ role: "ScrollView", scrollable: true, frame: { x: 0, y: 0.1, width: 1, height: 0.8 } }),
+    ]);
+    await recordTap({ x: 0.5, y: 0.6 });
+
+    expect(await recordedSteps()).toEqual([
+      { kind: "tap", selector: { identifier: "feed" } },
+      { kind: "tap", selector: { role: "ScrollView" } },
+    ]);
+  });
+
   it("records the selector with a caveat when captured from the fallback tree source", async () => {
     setTree(
       [n({ label: "Settings", frame: { x: 0.3, y: 0.5, width: 0.4, height: 0.06 } })],

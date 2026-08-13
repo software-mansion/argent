@@ -5,6 +5,7 @@ import { describeIos } from "../tools/describe/platforms/ios";
 import { describeAndroid } from "../tools/describe/platforms/android";
 import { describeChromium } from "../tools/describe/platforms/chromium";
 import { describeVega } from "../tools/describe/platforms/vega";
+import { LAYOUT_CONTAINER_ROLES } from "../tools/describe/platforms/android/uiautomator-parser";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../blueprints/chromium-cdp";
 
 /**
@@ -823,6 +824,13 @@ const GENERIC_ROLES = new Set([
   "viewgroup",
   "android.view.view",
   "android.view.viewgroup",
+  // Android layout scaffolding, taken from the parser's own list so the two
+  // cannot drift (`viewgroup`/`view` above are the overlap that already did).
+  // The flow tree emits such a node only for an id, a label, focus, or the
+  // scrollable flag, so a tap on dead space over an id-less scrollable
+  // FrameLayout must keep its coordinates rather than become
+  // `{ role: "FrameLayout" }`, which replays at the scroller's centre.
+  ...Array.from(LAYOUT_CONTAINER_ROLES, (role) => role.toLowerCase()),
 ]);
 
 export function deriveSelector(node: DescribeNode): Selector | null {
