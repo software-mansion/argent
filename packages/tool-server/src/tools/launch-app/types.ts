@@ -15,8 +15,10 @@ export type LaunchAppResult =
   | NativeDevtoolsInitFailedResult;
 
 // iOS gets the native-devtools service so launch-app can warm DYLD env before
-// the app starts. Android's `services()` returns `{}` so its handler typechecks
+// the app starts. Vega's `services()` returns `{}`, so its handler typechecks
 // against an empty shape — `dispatchByPlatform` keeps the two generics separate.
+// Android takes the same empty shape, spelled inline in `platforms/android.ts`
+// because no second file names it.
 export interface LaunchAppIosServices {
   nativeDevtools: NativeDevtoolsApi;
 }
