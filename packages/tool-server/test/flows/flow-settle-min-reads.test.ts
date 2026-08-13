@@ -3,12 +3,17 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Registry } from "@argent/registry";
-import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
+import type {
+  DescribeFrame,
+  DescribeNode,
+  DescribeTreeData,
+} from "../../src/tools/describe/contract";
 
-// Reads are driven per attempt, so a test can make the FIRST one fail slowly —
+// Reads are driven per attempt, so a test can make the FIRST one answer slowly —
 // the shape that matters here. A tree RPC allows itself ~5s, more than the 3s
-// settle window, so one such failure used to be the only read a settle ever
-// took, and the "every read failed" throw fired on a single transient blip.
+// settle window, so one such read used to be the only read a settle ever took:
+// the "every read failed" throw fired on a single transient blip, and a read
+// that came back was returned having been compared against nothing.
 let reads = 0;
 let onRead: (attempt: number) => Promise<DescribeTreeData>;
 vi.mock("../../src/tools/flows/flow-tree", () => ({
@@ -23,21 +28,22 @@ import { serializeFlow } from "../../src/tools/flows/flow-utils";
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
 // Comfortably past the 3000ms settle window, the way a tree RPC's own timeout is.
-const SLOW_FAILURE_MS = 3200;
+const SLOW_READ_MS = 3200;
+const BUTTON_FRAME: DescribeFrame = { x: 0.2, y: 0.4, width: 0.6, height: 0.1 };
+// The same button a scroll further down, i.e. a screen still in motion.
+const MOVED_BUTTON_FRAME: DescribeFrame = { ...BUTTON_FRAME, y: 0.7 };
 let tmpDir: string;
 
-function screenWith(label: string): DescribeNode {
+function screenWith(label: string, frame: DescribeFrame = BUTTON_FRAME): DescribeNode {
   return {
     role: "AXWindow",
     frame: { x: 0, y: 0, width: 1, height: 1 },
-    children: [
-      { role: "AXButton", label, frame: { x: 0.2, y: 0.4, width: 0.6, height: 0.1 }, children: [] },
-    ],
+    children: [{ role: "AXButton", label, frame, children: [] }],
   };
 }
 
-function tree(label = "Continue"): DescribeTreeData {
-  return { tree: screenWith(label), source: "native-devtools" };
+function tree(label = "Continue", frame?: DescribeFrame): DescribeTreeData {
+  return { tree: screenWith(label, frame), source: "native-devtools" };
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -91,7 +97,7 @@ describe("settleTree takes at least two read attempts", () => {
   it("retries past the window when the only read so far failed slowly", async () => {
     onRead = async (attempt) => {
       if (attempt === 1) {
-        await sleep(SLOW_FAILURE_MS);
+        await sleep(SLOW_READ_MS);
         throw new Error("ui tree RPC timed out");
       }
       return tree();
@@ -107,9 +113,34 @@ describe("settleTree takes at least two read attempts", () => {
     expect(result.calls.map((c) => c.tool)).toEqual(["gesture-tap"]);
   }, 20_000);
 
+  it("settles against the retry when the only read so far succeeded slowly", async () => {
+    // The button moves between the two reads, so the dispatched point tells us
+    // which read the gesture actually acted on.
+    onRead = async (attempt) => {
+      if (attempt === 1) {
+        await sleep(SLOW_READ_MS);
+        return tree();
+      }
+      return tree("Continue", MOVED_BUTTON_FRAME);
+    };
+    await writeTap("tap-slow-settle");
+
+    const result = await run("tap-slow-settle");
+
+    expect(result.ok).toBe(true);
+    // A lone read has been compared against nothing and is no settle at all, so
+    // the window being spent does not excuse skipping the retry.
+    expect(reads).toBe(2);
+    // Centre of the MOVED frame (0.45 would be the first read's): the tap lands
+    // where the second read saw the button, not on the stale pre-deadline one.
+    expect(result.calls).toEqual([
+      { tool: "gesture-tap", args: { udid: DEVICE, x: 0.5, y: 0.75 } },
+    ]);
+  }, 20_000);
+
   it("still calls a sustained outage an outage, on the read after the slow one", async () => {
     onRead = async (attempt) => {
-      if (attempt === 1) await sleep(SLOW_FAILURE_MS);
+      if (attempt === 1) await sleep(SLOW_READ_MS);
       throw new Error("native devtools is unavailable");
     };
     await writeTap("tap-outage");
