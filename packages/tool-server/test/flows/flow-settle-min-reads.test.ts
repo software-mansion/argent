@@ -48,10 +48,15 @@ function tree(label = "Continue", frame?: DescribeFrame): DescribeTreeData {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+// Set when a scroll increment goes out, so a fixture can reveal the target the
+// way a real scroll does rather than on a read count it is there to measure.
+let swiped = false;
+
 function mockRegistry(calls: Array<{ tool: string; args: Record<string, unknown> }>): Registry {
   return {
     invokeTool: vi.fn(async (id: string, args: Record<string, unknown>) => {
       if (id === "list-devices") return { devices: [] };
+      if (id === "gesture-swipe") swiped = true;
       calls.push({ tool: id, args });
       return { ok: true };
     }),
@@ -87,6 +92,7 @@ async function writeTap(name: string): Promise<void> {
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-settle-reads-"));
   reads = 0;
+  swiped = false;
   onRead = async () => tree();
 });
 afterEach(async () => {
@@ -205,4 +211,32 @@ describe("settleTree takes at least two read attempts", () => {
     // Two reads are what a settle has always cost a healthy run.
     expect(reads).toBe(2);
   });
+});
+
+describe("the settle floor is paid on every `scroll-to` round", () => {
+  it("spends two reads a round against a source slower than the window", async () => {
+    // Every read outlasts the window, so every round's settle closes it on the
+    // first read and pays the floor's retry. The button drifts between reads so
+    // no settle exits early on two matching fingerprints, which would cost two
+    // reads whatever the floor is set to.
+    onRead = async (attempt) => {
+      await sleep(SLOW_READ_MS);
+      const frame = attempt % 2 === 0 ? MOVED_BUTTON_FRAME : BUTTON_FRAME;
+      return tree(swiped ? "Order #1234" : "Top", frame);
+    };
+    await writeFlow("scroll-slow", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+    });
+
+    const result = await run("scroll-slow");
+
+    expect(result.ok).toBe(true);
+    // One increment, so the pass took exactly two rounds.
+    expect(result.calls.map((c) => c.tool)).toEqual(["gesture-swipe"]);
+    // Two per round where the pre-floor cost was one. The loop is bounded by
+    // MAX_SCROLL_ITERATIONS rather than a clock, so two pinned rounds stand in
+    // for the 25 it can run.
+    expect(reads).toBe(4);
+  }, 30_000);
 });
