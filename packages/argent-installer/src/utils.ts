@@ -53,7 +53,6 @@ export {
 } from "./install-record.js";
 export type { InstallMode } from "./install-record.js";
 export { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
-export type { TargetFlags, DecideTargetsContext } from "./install-targets.js";
 
 // ── Package root resolution ───────────────────────────────────────────────────
 // resolvePackageRoot lives in the leaf package-root.ts module (topology.ts
