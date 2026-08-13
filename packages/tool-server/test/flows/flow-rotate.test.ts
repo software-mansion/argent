@@ -342,10 +342,13 @@ describe("rotate: gating", () => {
 describe("rotate: abort", () => {
   it("aborts inside the pre-gesture settle: aborted outcome, no gesture", async () => {
     const controller = new AbortController();
-    // Cancel the run on the settle's first read: with no selector to resolve,
-    // it is the first tree read a rotate makes.
+    // Cancel on read 2, the settle's second read (identical trees converge
+    // there). Read 1 is ambiguous - without the settle it is the aspect read,
+    // which aborts just as cleanly; only read 2 exists when the settle does.
+    let reads = 0;
     currentTree = () => {
-      controller.abort();
+      reads += 1;
+      if (reads >= 2) controller.abort();
       return screen([]);
     };
     const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
@@ -363,6 +366,7 @@ describe("rotate: abort", () => {
       )
     );
 
+    expect(reads).toBe(2);
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["rotate:skip"]);
     expect(result.steps[0].reason).toBe("run aborted");
     expect(calls).toHaveLength(0);
