@@ -1249,11 +1249,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
   if (rest.includes("--help") || rest.includes("-h")) {
     // Once streaming is requested stdout belongs exclusively to NDJSON. Help
     // is still useful, but it is a diagnostic and therefore belongs on stderr.
-    printHelp(
-      rest.some(
-        (tok) => tok === "--json-stream" || tok.startsWith("--json-stream=")
-      )
-    );
+    printHelp(rest.some((tok) => tok === "--json-stream" || tok.startsWith("--json-stream=")));
     return;
   }
 
