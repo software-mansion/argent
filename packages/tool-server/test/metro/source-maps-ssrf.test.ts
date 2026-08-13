@@ -149,6 +149,39 @@ describe("doRegister consults the allowlist", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  // `sourceMapURL` is a bare cast over socket JSON — cdp-client reads
+  // `params.sourceMapURL as string | undefined` off a Debugger.scriptParsed
+  // frame and js-runtime-debugger forwards it unchecked, so a CDP peer can put
+  // a number there. Everything doRegister does with it must therefore sit
+  // inside the try. Hoisting the `data:` test out of it (866d90ce) let the
+  // TypeError escape as a rejected promise nothing awaits before the next
+  // tick, which index.ts turns into crashShutdown.
+  //
+  // The tick matters: waitForPending() attaches allSettled synchronously, so
+  // calling it straight after register hides the bug. Production has a real
+  // gap — scriptParsed fires during CDP message handling, the wait comes much
+  // later — which the timeout below reproduces.
+  it("skips a non-string sourceMapURL instead of rejecting out of doRegister", async () => {
+    const fetchSpy = stubFetch();
+    const reg = new SourceMapsRegistry();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      reg.registerFromScriptParsed(
+        "http://localhost:8081/index.bundle",
+        "1",
+        12345 as unknown as string
+      );
+      await new Promise((r) => setTimeout(r, 10));
+      await reg.waitForPending();
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+    expect(unhandled).toEqual([]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("still fetches the loopback *.map URL Metro emits", async () => {
     const fetchSpy = stubFetch();
     const reg = new SourceMapsRegistry();
