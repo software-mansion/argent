@@ -225,6 +225,38 @@ describe("a tree-source outage never fails a selector-less gesture", () => {
     expect(readsBeforeFirstGesture()).toBeGreaterThan(2);
   }, 20_000);
 
+  it("charges a centre-anchored rotate nothing at all, settle or aspect read", async () => {
+    // `rotate` reads the screen aspect on top of its settle. That read must
+    // honour the verdict too, or every rotate step hands back the window the
+    // skip just saved - and on iOS the hierarchy read is the dearer half.
+    currentTree = outage;
+    await writeFlow("tap-rotate-rotate", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "tap", x: 0.1, y: 0.1 },
+        { kind: "rotate", by: 90 },
+        { kind: "rotate", by: -45 },
+      ],
+    });
+
+    const result = await run("tap-rotate-rotate");
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "tap:pass",
+      "rotate:pass",
+      "rotate:pass",
+    ]);
+    // Every read belongs to the tap's window: neither rotate settles, and
+    // neither asks for an aspect it has been shown the source cannot serve. One
+    // unguarded aspect read per rotate would make this 2.
+    expect(readsBetween(gestureAt(0), events.length)).toBe(0);
+    expect(gestures().map((g) => g.tool)).toEqual([
+      "gesture-tap",
+      "gesture-rotate",
+      "gesture-rotate",
+    ]);
+  }, 20_000);
+
   it("proves no outage from a window that read the tree but never settled", async () => {
     // A screen in perpetual motion (a spinner, a video) that also blips once:
     // the window expires having both read the tree and seen an error. It holds

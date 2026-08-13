@@ -81,8 +81,10 @@ export interface ActionEnv {
    * flow-run's ExecState and shared by every `deviceEnv`), so the evidence one
    * step gathered is the evidence the next one acts on.
    *
-   * Only {@link settleForGesture} READS it, and only to skip a window it has
-   * already been shown is unaffordable. It is written by the one place that can
+   * Only {@link settleForGesture} and {@link fetchScreenAspect} READ it, each
+   * to skip work it has been shown cannot pay off: a settle window, and a read
+   * whose failure the caller degrades past anyway. It is written by the one
+   * place that can
    * prove a source dead (a {@link settleTree} whose whole window failed) and
    * cleared by {@link readFlowTree}, which every directive's reads go through,
    * since a read that came back is evidence of health whichever directive asked
@@ -368,13 +370,24 @@ function flowSelectorToFrame(tree: DescribeNode, sel: FlowSelector): DescribeFra
 }
 
 /**
+ * The run's outage verdict, if one was proven against the device in hand: a
+ * verdict about a device the run has left says nothing about this one (see
+ * {@link ActionEnv.treeOutage}).
+ */
+function provenTreeOutage(env: ActionEnv): Error | undefined {
+  const proven = env.treeOutage?.proven;
+  return proven && proven.deviceId === env.device.id ? proven.error : undefined;
+}
+
+/**
  * Every tree read a directive makes, so that a read which comes back clears
  * {@link ActionEnv.treeOutage} whichever directive asked for it. Routing them
  * all through here is what keeps the memo's claim honest: `await`/`assert`,
- * the `type` focus wait and the rotate aspect read never settle, so a clear
- * living in {@link settleTree} alone would let a run read the tree
- * successfully, over and over, and still have every later coordinate gesture
- * skip its settle on the strength of one old failure.
+ * the `type` focus wait and `idle`'s read never settle, so a clear living in
+ * {@link settleTree} alone would let a run read the tree successfully, over and
+ * over, and still have every later coordinate gesture skip its settle on the
+ * strength of one old failure. The rotate aspect read routes here too but can
+ * never be the read that clears a verdict: it skips itself while one stands.
  */
 function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
   return fetchFlowTree(env.registry, env.device, env.launchedNativeApp).then((data) => {
@@ -424,8 +437,8 @@ export async function settleTree(
     if (env.signal?.aborted) return undefined;
     // Inside the loop so the abort above still wins, but only ever true on the
     // first pass: the memo is written by the throw below, which leaves the loop.
-    const proven = env.treeOutage?.proven;
-    if (opts.skipProvenOutage && proven && proven.deviceId === env.device.id) throw proven.error;
+    const proven = provenTreeOutage(env);
+    if (opts.skipProvenOutage && proven) throw proven;
     let tree: DescribeNode | undefined;
     try {
       ({ tree } = await readFlowTree(env));
@@ -978,8 +991,15 @@ async function runPinch(
  * dimensions through settleTree/waitForFrame: the settle loop already reads
  * the tree several times per step, so the extra fetch is noise, and the
  * resolution path every other directive shares stays untouched.
+ *
+ * Skipped outright on a proven outage, for the same reason {@link
+ * settleForGesture} skips its window: the caller degrades to aspect 1 whether
+ * the read is skipped or fails, and a failing read is not free. On iOS it is
+ * the dearest thing a centre-anchored rotate does, the hierarchy RPC sitting on
+ * a 15s tier against the 3s window just saved.
  */
 async function fetchScreenAspect(env: ActionEnv): Promise<number | undefined> {
+  if (provenTreeOutage(env)) return undefined;
   try {
     const { screen } = await readFlowTree(env);
     return screen && screen.width > 0 && screen.height > 0
