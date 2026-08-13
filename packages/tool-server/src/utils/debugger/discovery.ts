@@ -96,8 +96,9 @@ export async function discoverMetro(port: number): Promise<MetroInfo> {
 
   // Optional: only source-map / file:line resolution needs it. Without it
   // `readSourceFragment` bails before it reads anything, so the worst case is
-  // "no location" rather than a wrong one. (`SourceMapsRegistry` no longer takes
-  // a project root at all — it only registers maps from `Debugger.scriptParsed`.)
+  // "no location" rather than a wrong one. (`SourceMapsRegistry` takes no
+  // project root: it fetches the map a `Debugger.scriptParsed` names, drains it
+  // and keeps nothing, so it has no source path to resolve against.)
   // Metro shipped with React Native 0.72 — which is what Vega/Kepler forks —
   // never sends this header, and hard-failing there would take down evaluate,
   // console logs and the network inspector, none of which touch source maps.
