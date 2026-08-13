@@ -190,6 +190,20 @@ describe("create-flow repeat snippets", () => {
     }
   });
 
+  it("both surfaces count the same deliberate edges off the paste-equivalence", () => {
+    // The count is enumerated in the reference and quoted in the flow-execute
+    // description, which is the surface an MCP client carries in every session
+    // — so a fifth edge added to one leaves the other quietly undercounting.
+    // This pins the two prose counts to each other and no more: unlike the
+    // idle warning count above, the edges are not a list this can count, so
+    // an edge added to both prose surfaces without either count moving still
+    // passes.
+    const description = createRunFlowTool({} as unknown as Registry).description ?? "";
+    const quoted = description.match(/minus\s+(\w+)\s+deliberate edges/);
+    expect(quoted, "the flow-execute description no longer counts the edges").not.toBeNull();
+    expect(repeatDocs()).toMatch(new RegExp(`${quoted![1]!} deliberate edges`, "i"));
+  });
+
   it("the section's two stated parse errors really are parse errors", () => {
     // Both are claims the doc makes about the parser: if either stopped
     // holding, the section would be teaching a restriction that isn't one.

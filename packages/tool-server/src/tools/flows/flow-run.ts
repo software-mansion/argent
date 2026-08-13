@@ -1148,8 +1148,14 @@ A \`when:\` block (condition + \`steps:\`, no else) runs its steps only if the c
 checked once with the short assert grace — for one-sided divergences like interstitials and coach
 marks; a skipped block reports distinctly and failures inside an entered block are real failures.
 A \`repeat:\` block (bound + \`steps:\`) runs the same steps several times: \`repeat: 3\` is a literal
-count (1-100; exactly equivalent to pasting the steps 3 times), \`repeat: { until: <condition>, max?: 10 }\`
-drains until a condition holds — checked BEFORE each iteration, so an already-satisfied guard runs
+count (1-100) whose completed run reports the same COUNTS as pasting the steps 3 times, minus four
+deliberate edges — no padding for iterations an early exit skipped, one stand-in skip per authored
+step (not per pasted-out step) under a skipped enclosing \`when:\`, a device resolved even when every
+step in the block is device-free (so with nothing booted, wrapping device-free steps fails the run
+before step 1), and the \`snapshot:\` refusal below, which the pasted spelling escapes.
+\`repeat: { until: <condition>, max?: 10 }\` drains until a condition holds — \`until\` takes one
+\`when:\` guard condition MINUS \`platform\` (fixed for a run, so a parse error rather than a loop that
+is infinite or empty) — checked BEFORE each iteration, so an already-satisfied guard runs
 zero iterations and passes, and hitting \`max\` (default 10, same 1-100 bound as a count) with it
 still unmet FAILS the step. Repeat is NOT retry: a failure inside any iteration is a real failure
 and hard-stops the flow, since re-running a
