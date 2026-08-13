@@ -142,6 +142,30 @@ describe("settleTree takes at least two read attempts", () => {
     ]);
   }, 20_000);
 
+  it("settles against the slow first read when the retry then fails", async () => {
+    onRead = async (attempt) => {
+      if (attempt === 1) {
+        await sleep(SLOW_READ_MS);
+        return tree();
+      }
+      throw new Error("ui tree RPC timed out");
+    };
+    await writeTap("tap-slow-then-blip");
+
+    const result = await run("tap-slow-then-blip");
+
+    // A read did come back, so this is no outage: the step passes, and the
+    // branch that would mint the outage memo is the one that throws.
+    expect(result.ok).toBe(true);
+    // The floor buys one retry; its failure is not grounds for a third read.
+    expect(reads).toBe(2);
+    // The first read's frame, handed back a read later than the bare deadline
+    // would have returned it rather than discarded over one blip.
+    expect(result.calls).toEqual([
+      { tool: "gesture-tap", args: { udid: DEVICE, x: 0.5, y: 0.45 } },
+    ]);
+  }, 20_000);
+
   it("still calls a sustained outage an outage, on the read after the slow one", async () => {
     onRead = async (attempt) => {
       if (attempt === 1) await sleep(SLOW_READ_MS);
