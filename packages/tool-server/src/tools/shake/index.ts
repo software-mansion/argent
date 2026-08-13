@@ -43,7 +43,7 @@ iOS delivers one discrete shake per gesture (the same motion event a physical de
 Set \`count\` above 1 when a detector needs sustained motion before it triggers.
 Returns { shaken: true, count }.
 Works on local and remote (sim-remote) iOS simulators.
-Only phone/tablet simulators and emulators are supported. A physical iPhone or Android phone has a real accelerometer that cannot be driven from the host, and every TV target (Apple TV, Android TV, Fire TV) has no shake gesture at all — both are rejected rather than silently doing nothing. A TV is focus-driven: use \`tv-remote\` there. Fails if the device is not booted.`,
+Only phone/tablet simulators and emulators are supported.`,
   searchHint: "shake motion accelerometer undo typing dev menu gesture",
   zodSchema: shakeZodSchema,
   capability,
