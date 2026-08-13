@@ -355,7 +355,8 @@ function axisFullyInside(
 // nudge failed to move the target, the target has no headroom, the
 // attempts run out, or a post-acceptance device interaction (the nudge
 // gesture or the next round's settle read) throws. A nudge can therefore
-// delay a step but never fail one that was already visible.
+// delay a step but never fail one that was already visible - the delay does
+// expose it to run cancellation, which reports the step as an aborted skip.
 //
 // Touch platforms only, and only END-edge (`down`/`right`) landings.
 // Chromium is out entirely: no OS chrome overlays a browser viewport, so
@@ -1074,9 +1075,11 @@ async function scrollIncrement(
  * previous one moved the target's own entry edge (the fingerprint alone cannot
  * stop the loop when the gesture's own side effects keep the tree churning);
  * and MAX_EDGE_NUDGES caps the retries. Once the
- * axis check has accepted the target the step can only pass, and only
+ * axis check has accepted the target the step can no longer fail, and only
  * nudge-sized gestures are dispatched — a round that loses the target ends
- * the loop as a pass.
+ * the loop as a pass. Cancelling the run is the one non-pass exit left: the
+ * nudge rounds re-check the abort signal, so a cancelled run reports the
+ * uniform aborted skip rather than that pass.
  */
 async function scrollToVisible(
   env: ActionEnv,
@@ -1086,10 +1089,11 @@ async function scrollToVisible(
 ): Promise<ScrollResolve> {
   let prevFp: string | undefined;
   let nudges = 0;
-  // Latched once the axis check accepts the target: from then on every exit
-  // path reports success rather than a failure, so a nudge gone sideways
-  // (target transiently unresolved, iterations exhausted) can never fail a
-  // step that had its target visible.
+  // Latched once the axis check accepts the target: from then on no exit path
+  // reports a failure, so a nudge gone sideways (target transiently
+  // unresolved, iterations exhausted) can never fail a step that had its
+  // target visible. Only an abort of the whole run still exits non-pass, as
+  // the uniform aborted skip.
   let accepted = false;
   // The target's entry-edge coordinate at the moment the previous nudge went
   // out - the nudge loop's direct progress signal. The region fingerprint
@@ -1238,7 +1242,9 @@ async function scrollToVisible(
         // A throwing gesture backend must not fail a step whose target was
         // already visible - a nudge may delay a step, never fail it. A search
         // increment keeps propagating: a step that still needs scrolling and
-        // cannot scroll must fail loudly.
+        // cannot scroll must fail loudly. Cancellation still outranks that
+        // pass: an aborted run says nothing about the app, so it reports the
+        // uniform skip.
         if (env.signal?.aborted) return { aborted: true };
         return { found: true };
       }
