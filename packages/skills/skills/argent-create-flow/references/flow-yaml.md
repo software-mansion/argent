@@ -184,16 +184,41 @@ The guard accepts one `exists`, `visible`, `hidden`, or `text` condition, or `{ 
 
 ## Bounded repetition
 
-`repeat:` blocks compress a repeated step sequence, with a sibling `steps: [...]` list like `when:`. Two bounds, exactly one per block:
+`repeat:` runs a sibling `steps: [...]` list, like `when:`. Give each block exactly one bound:
 
-- `- repeat: 3` — a literal count (1–100; equivalently `repeat: { times: 3 }` — the map form parses to the same flow, and the serializer writes back the bare integer). Precisely equivalent to pasting the block 3 times — on a completed run, down to the report's counts: the block's opening line and its per-iteration lines are structure, not steps, so they are not counted (the same treatment `echo` gets) and `repeat: 3` over one tap reports 3 passed. Four deliberate edges stop short of the paste: a block cut short by a failure does not pad its remaining iterations as skips, a block skipped by an enclosing `when:` stands in one skip line per authored step rather than per pasted-out step, the block resolves a device even when its steps are device-free, and `snapshot:` is refused inside the block where the pasted-out spelling parses (the rule below). That equivalence is the point, so the count is always a literal (there is deliberately no loop variable and no parameter).
-- `- repeat: { until: { hidden: "Clear notification" }, max: 15 }` — the drain: keep running the block until the condition holds. `until` takes the same one condition key as a `when:` guard **minus `platform`** (fixed for a run, so the loop would be infinite or empty — parse-rejected), and is checked **before each iteration including the first**, so an already-drained list runs zero iterations and passes — each authored step still reports one `skip` line (`until guard already met`), so no step drops out of the report. `max` defaults to 10 and takes the same 1-100 range as a count; **reaching it with the condition still unmet fails the step** — a drain that never converged asserts nothing if it passes. A drain's closing line is an evaluated outcome, not structure, so unlike the markers it IS counted — one pass when it converged, one fail at the cap, one `error` when the guard cannot be evaluated, or one `skip` when the run is cancelled mid-block (the one closing line a count-bounded `repeat:` block can also emit). Each iteration boundary costs the ~1s assert grace, so a long or nested drain is not free. A `tool:` step's full result also stays in the report once per iteration with nothing truncating it - a screenshot-returning tool inlines one image per pass - so keep result-heavy tools out of repeat bodies.
+| Bound                                                          | Behavior                                                                                                                         |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `repeat: 3`                                                    | Run the body a literal 1-100 times. `repeat: { times: 3 }` parses to the same flow; the serializer writes back the bare integer. |
+| `repeat: { until: { hidden: "Clear notification" }, max: 15 }` | Drain: run the body until the condition holds. `max` defaults to 10 and takes the same 1-100 range.                              |
+
+A count is the body pasted that many times, down to a completed run's counts: the block's opening line and its per-iteration lines are structure, not steps, so they are not counted (the treatment `echo` already gets) and `repeat: 3` over one tap reports 3 passed. That equivalence is the point, so the count is always a literal - there is deliberately no loop variable and no parameter.
+
+Four deliberate edges stop short of the paste:
+
+- A block cut short by a failure does not pad its unrun iterations as skips.
+- A block skipped by an enclosing `when:` stands in one skip line per authored step, not per pasted-out step.
+- The block resolves a device even when every step in it is device-free.
+- `snapshot:` is refused inside the block, where the pasted spelling parses (below).
+
+### Draining to a condition
+
+`until` takes the same one condition key as a `when:` guard **minus `platform`** (fixed for a run, so the loop would be infinite or empty - parse-rejected), and is checked **before each iteration including the first**. An already-drained list therefore runs zero iterations and passes; each authored step still reports one `skip` line (`until guard already met`), so no step drops out of the report. **Reaching `max` with the condition still unmet fails the step** - a drain that never converged asserts nothing if it passes.
+
+A drain's closing line is an evaluated outcome, not structure, so unlike the markers it IS counted: one pass when it converged, one fail at the cap, one `error` when the guard cannot be evaluated, or one `skip` when the run is cancelled mid-block (the one closing line a count-bounded block can also emit).
+
+Each iteration boundary costs the ~1s assert grace, and a `tool:` step's full result stays in the report once per iteration with nothing truncating it - a screenshot-returning tool inlines one image per pass. So keep drains short, nesting shallow, and result-heavy tools out of repeat bodies.
+
+### What a repeat block is not
 
 **`repeat` is not retry.** A failure inside any iteration is a real failure and hard-stops the flow — re-running a side-effecting iteration would double-fire it. "Repeat until it works" is the Maestro habit to unlearn; if a step is flaky, fix the wait (`await:`), don't loop over it.
 
 **`repeat: { times }` is not `tap: { times }`.** `tap: { on: X, times: 2 }` is ONE gesture — two presses inside the OS double-tap window, which is what makes a double-tap register. `repeat: 2` + `steps: [tap: X]` is two independent taps, each resolving the selector against a settled tree.
 
-`snapshot:` inside a repeat block is a **parse error**: a snapshot name maps to one baseline, but a repeat body is written to be re-run, and a later iteration's legitimately different screen would still compare against that one baseline. The refusal is on the construct, not the count: `repeat: 1` and `max: 1` are refused like any other block, a block bounded at 1 being one edit from N. Put the snapshot after the block. (A `snapshot:` reached through a `run:` fragment inside the block is still not caught at parse — it fails that `run:` step when the fragment loads, before any of the fragment's steps run; one reached through a nested `tool: flow-execute` is refused the same way, before the nested flow starts. Both fire only when an iteration actually reaches the composition: a drain that converges before its first iteration never loads it, so the mistake surfaces on the first run that iterates - like any load-time refusal inside a block that did not run.)
+### Snapshots inside a block
+
+A `snapshot:` in a repeat body is a **parse error**: a snapshot name maps to one baseline, but a repeat body is written to be re-run, and a later iteration's legitimately different screen would still compare against that one baseline. The refusal is on the construct, not the count: `repeat: 1` and `max: 1` are refused like any other block, a block bounded at 1 being one edit from N. Put the snapshot after the block.
+
+A `snapshot:` reached through a `run:` fragment or a nested `tool: flow-execute` is not caught at parse - it fails that outer step when the fragment or nested flow loads, before any of its steps run. Both fire only when an iteration actually reaches the composition: a drain that converges before its first iteration never loads it, so the mistake surfaces on the first run that iterates - like any load-time refusal inside a block that did not run.
 
 ## Composition and platform limits
 
