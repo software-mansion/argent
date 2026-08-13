@@ -202,7 +202,9 @@ export interface StepReport {
    * selector-less gesture (coordinate `tap`/`long-press`, centre-anchored
    * `pinch`/`rotate`) that a tree-source outage left unsettled: it is dispatched
    * regardless, and the warning is the only thing separating it from one that
-   * waited.
+   * waited. Also by `scroll-to`, when the edge-avoid nudge was swallowed after
+   * the target was already accepted, so the step passed on a landing nobody
+   * read back.
    */
   warning?: string;
   /** Underlying tool id for `tool` steps. */

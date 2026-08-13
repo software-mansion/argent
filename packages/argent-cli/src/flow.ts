@@ -26,8 +26,9 @@ export interface StepReport {
   reason?: string;
   /**
    * A step that passed in a way that weakens it as proof — raised today by
-   * `await: { idle: true }`, which never fails a run and says here what its
-   * green actually bought (see StepReport.warning in the tool-server's
+   * `await: { idle: true }` and by a `scroll-to` whose edge-avoid nudge was
+   * swallowed, neither of which fails a run, and both of which say here what
+   * their green actually bought (see StepReport.warning in the tool-server's
    * flow-run). Also carries the caveat older tool-servers put on a snapshot
    * that adopted a missing baseline, which now fails the step instead. Live
    * either way: dropping the field would silently delete the only thing the

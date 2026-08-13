@@ -696,6 +696,8 @@ describe("scroll-to directive", () => {
     expect(swipes[0].settle).toBe(true);
     expect(swipes[0].fromY).toBeCloseTo(0.5, 5);
     expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.105, 5);
+    // A nudge that completed swallowed nothing - only the bail-outs warn.
+    expect(result.steps[0].warning).toBeUndefined();
   });
 
   it("floors a tiny nudge at the minimum scroll increment so it cannot read as a tap", async () => {
@@ -1132,6 +1134,10 @@ describe("scroll-to directive", () => {
     // the pane centre - not the pane's 0.25 half-extent search increment.
     expect(swipes[0].fromY).toBeCloseTo(0.75, 5);
     expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.12, 5);
+    // Swallowing the nudge is right; saying nothing about it is not - the pass
+    // names the vanished container and what the landing may still sit under.
+    expect(result.steps[0].warning).toContain('id="pane" was gone from the tree that came back');
+    expect(result.steps[0].warning).toContain("screen-edge chrome");
   });
 
   it("passes on the accepted frame when the nudge's gesture backend throws", async () => {
@@ -1168,6 +1174,11 @@ describe("scroll-to directive", () => {
     expect(result.steps[0].status).toBe("pass");
     // Exactly the one failed dispatch was attempted (recorded before the throw).
     expect(swipes).toHaveLength(1);
+    // A dead gesture backend behind a live describe source would otherwise
+    // report fully green: the pass carries the backend's own error.
+    expect(result.steps[0].warning).toContain("could not be dispatched");
+    expect(result.steps[0].warning).toContain("simulator-server exited");
+    expect(result.steps[0].warning).toContain("screen-edge chrome");
   });
 
   it(
@@ -1206,6 +1217,58 @@ describe("scroll-to directive", () => {
       expect(result.ok).toBe(true);
       expect(result.steps[0].status).toBe("pass");
       expect(swipes).toHaveLength(1);
+      // The nudge went out and its result was never read back - the pass says
+      // so, and carries the outage that stopped the read.
+      expect(result.steps[0].warning).toContain("the UI tree could not be read afterwards");
+      expect(result.steps[0].warning).toContain("native devtools disconnected");
+      expect(result.steps[0].warning).toContain("screen-edge chrome");
+    }
+  );
+
+  it(
+    "passes with a warning when the iterations run out on the nudge round",
+    { timeout: 30_000 },
+    async () => {
+      // The last of the four post-acceptance bail-outs: a long search finds the
+      // target on the 25th and final iteration, the nudge goes out, and the
+      // loop ends before any round can read where it landed. Acceptance is
+      // never revoked, so this passes - but the nudge's result is as unknown as
+      // it is in the outage and vanished-container cases, and the pass says so.
+      // Each search round emits a distinct tree so end-of-scroll never fires.
+      let gestures = 0;
+      currentTree = () =>
+        gestures >= 24
+          ? screen([
+              fullScreenScroller(),
+              n({ label: "Order #1234", frame: { x: 0.1, y: 0.87, width: 0.8, height: 0.1 } }),
+            ])
+          : screen([
+              fullScreenScroller(),
+              n({ label: `Row ${gestures}`, frame: { x: 0.1, y: 0.4, width: 0.8, height: 0.1 } }),
+            ]);
+
+      const swipes: SwipeCall[] = [];
+      const registry = mockRegistry(swipes, () => {
+        gestures++;
+      });
+
+      await writeFlow("iterations-out", {
+        executionPrerequisite: "",
+        steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+      });
+
+      const tool = createRunFlowTool(registry);
+      const result = asRun(
+        await tool.execute({}, { name: "iterations-out", project_root: tmpDir, device: DEVICE })
+      );
+
+      expect(result.ok).toBe(true);
+      expect(result.steps[0].status).toBe("pass");
+      // 24 search increments plus the one nudge that ended the budget.
+      expect(swipes).toHaveLength(25);
+      expect(swipes[24].fromY - swipes[24].toY).toBeCloseTo(0.105, 5);
+      expect(result.steps[0].warning).toContain("ran out of its 25 attempts");
+      expect(result.steps[0].warning).toContain("screen-edge chrome");
     }
   );
 

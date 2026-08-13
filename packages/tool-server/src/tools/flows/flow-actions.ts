@@ -1052,7 +1052,24 @@ interface ScrollResolve {
   reason?: string;
   /** The run was cancelled mid-scroll. */
   aborted?: boolean;
+  /**
+   * What a post-acceptance bail-out swallowed. Those exits pass on purpose (a
+   * nudge may delay a step but never fail one whose target was already
+   * visible); passing SILENTLY is what left the author with no sign a gesture
+   * went missing, so each bail-out names its own.
+   */
+  warning?: string;
 }
+
+/**
+ * The consequence every swallowed nudge shares, said once: each bail-out names
+ * what it swallowed, this names what the pass is worth. The nudge clears the
+ * target of screen-edge chrome, so a pass without it leaves a visible target
+ * that may still sit under a tab bar - which is what the next step's tap hits.
+ */
+const SWALLOWED_NUDGE_NOTE =
+  ` - the step passed on the landing it had, which may still sit under screen-edge chrome (a ` +
+  `tab bar, a home indicator), so check the next step acts on the target and not on the chrome.`;
 
 /**
  * Dispatch one momentum-free scroll increment anchored at the center of
@@ -1222,7 +1239,14 @@ async function scrollToVisible(
       // already visible. A search round keeps propagating: a step that still
       // needs the tree and cannot read it must fail loudly.
       if (!accepted) throw err;
-      return { found: true };
+      return {
+        found: true,
+        warning:
+          `the nudge that clears the target of the screen edge went out, but the UI tree could ` +
+          `not be read afterwards to see where the target landed: ` +
+          `${err instanceof Error ? err.message : String(err)}` +
+          SWALLOWED_NUDGE_NOTE,
+      };
     }
     if (!tree) return { aborted: true }; // settleTree only returns undefined on abort
 
@@ -1233,7 +1257,16 @@ async function scrollToVisible(
     if (!region) {
       // Post-acceptance (a nudge round) a vanished container is best-effort
       // territory, not a failure — the target was already fully visible.
-      if (accepted) return { found: true };
+      if (accepted) {
+        return {
+          found: true,
+          warning:
+            `the nudge that clears the target of the screen edge went out, and the scroll ` +
+            `container ${describeSelector(within!)} was gone from the tree that came back, so ` +
+            `where the target landed was never read` +
+            SWALLOWED_NUDGE_NOTE,
+        };
+      }
       return { reason: `scroll container ${describeSelector(within!)} is not visible` };
     }
 
@@ -1354,7 +1387,7 @@ async function scrollToVisible(
       nudges++;
       try {
         await scrollIncrement(env, direction, anchorRegion, nudge);
-      } catch {
+      } catch (err) {
         // A throwing gesture backend must not fail a step whose target was
         // already visible - a nudge may delay a step, never fail it. A search
         // increment keeps propagating: a step that still needs scrolling and
@@ -1362,13 +1395,29 @@ async function scrollToVisible(
         // pass: an aborted run says nothing about the app, so it reports the
         // uniform skip.
         if (env.signal?.aborted) return { aborted: true };
-        return { found: true };
+        return {
+          found: true,
+          warning:
+            `the nudge that clears the target of the screen edge could not be dispatched: ` +
+            `${err instanceof Error ? err.message : String(err)}` +
+            SWALLOWED_NUDGE_NOTE,
+        };
       }
     } else {
       await scrollIncrement(env, direction, anchorRegion);
     }
   }
-  if (accepted) return { found: true }; // iterations ran out mid-nudge
+  // Iterations ran out mid-nudge.
+  if (accepted) {
+    return {
+      found: true,
+      warning:
+        `the scroll ran out of its ${MAX_SCROLL_ITERATIONS} attempts just after a nudge that ` +
+        `clears the target of the screen edge, so where that nudge left the target was never ` +
+        `read` +
+        SWALLOWED_NUDGE_NOTE,
+    };
+  }
   return {
     reason: `${describeSelector(target)} not found after ${MAX_SCROLL_ITERATIONS} scroll attempts`,
   };
@@ -1434,7 +1483,7 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
     case "scroll-to": {
       const r = await scrollToVisible(env, step.target, step.direction, step.within);
       if (r.aborted) return ABORTED_OUTCOME;
-      return { ok: r.found === true, reason: r.reason };
+      return { ok: r.found === true, reason: r.reason, warning: r.warning };
     }
     case "pinch":
       return runPinch(env, step);
