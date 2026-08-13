@@ -1806,9 +1806,11 @@ type GuardDirective = "when" | "until";
 /**
  * How a directive names itself in its own parse errors. `until` is spelled with
  * its parent because it is not a step of its own: the entry its errors echo back
- * is the whole `repeat:` step, so a bare `until` would leave the author to work
- * out which key of it the message is about. Every message a guard can produce
- * takes its spelling from here, so the two cannot drift apart again.
+ * is the `{ repeat: <bound> }` wrap {@link parseRepeatStep} passes (the bound
+ * alone, so a long `steps:` body cannot push the named part past the entry
+ * render cap), which carries `repeat` but says nothing about which of its keys
+ * is wrong. Every message a guard can produce takes its spelling from here, so
+ * the two cannot drift apart again.
  */
 function directiveLabel(kind: "await" | "assert" | GuardDirective): string {
   return kind === "until" ? "repeat.until" : kind;
