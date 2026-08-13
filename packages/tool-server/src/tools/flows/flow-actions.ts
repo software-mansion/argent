@@ -490,6 +490,14 @@ function edgeNudgeDistance(
   // MIN_SCROLL_INCREMENT of travel, so without a tolerance a target a hair
   // short of the padding pays a whole gesture and settle to gain nothing.
   if (deficit <= EDGE_EPS || headroom / 2 < MIN_SCROLL_INCREMENT) return 0;
+  // The floor also makes the travel bimodal in the landing rather than
+  // proportional to it: the gate flips at 0.095 of clearance, and everything
+  // from there down to 0.0667 (deficit MIN_SCROLL_INCREMENT /
+  // EDGE_NUDGE_OVERSHOOT) travels exactly MIN_SCROLL_INCREMENT - so 0.096 of
+  // clearance shifts the viewport nothing and 0.094 shifts it ~42pt on an
+  // 844pt screen. Kept because a sub-floor swipe registers as a TAP on the
+  // target, but it means an uncropped snapshot baseline recorded after a
+  // landing inside that band can flip between the two shifts.
   return Math.min(Math.max(deficit * EDGE_NUDGE_OVERSHOOT, MIN_SCROLL_INCREMENT), headroom / 2);
 }
 
