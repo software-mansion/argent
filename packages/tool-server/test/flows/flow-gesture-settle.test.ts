@@ -593,7 +593,7 @@ describe("a proven outage is spent only on the device that proved it", () => {
   });
 });
 
-// The settle is the only abort checkpoint a coordinate gesture has: nothing
+// The settle is the only abort checkpoint `tap`/`long-press` have: nothing
 // between it and the dispatch looks at the signal again, unlike `pinch`/`rotate`,
 // which re-check before their own dispatch. flow-abort.test.ts pins this same
 // moment on the selector path.
@@ -634,6 +634,23 @@ describe("a run cancelled inside the settle dispatches no coordinate gesture", (
     const result = await run("press-cancelled", controller.signal);
 
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["long-press:skip"]);
+    expect(result.steps[0].reason).toBe("run aborted");
+    expect(gestures()).toEqual([]);
+  });
+
+  // The outcome is what this pins, not a branch: `runPinch`'s own abort return
+  // after the settle is not separable from the signal check its dispatch opens with.
+  it("skips a centre-anchored pinch", async () => {
+    const controller = new AbortController();
+    abortOnSettlingRead(controller);
+    await writeFlow("pinch-cancelled", {
+      executionPrerequisite: "",
+      steps: [{ kind: "pinch", scale: 0.5 }],
+    });
+
+    const result = await run("pinch-cancelled", controller.signal);
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["pinch:skip"]);
     expect(result.steps[0].reason).toBe("run aborted");
     expect(gestures()).toEqual([]);
   });
