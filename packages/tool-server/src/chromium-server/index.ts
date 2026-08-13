@@ -171,6 +171,5 @@ export async function createChromiumServer(
 export { ensureCdpReachable, discoverPrimaryPage } from "./cdp-session";
 export type { TabInfo, TabsManager } from "./tabs";
 export type { NetworkManager, NetworkRequestRecord } from "./network";
-export type { Cookie } from "./storage";
 
 export { setClipboardText } from "./clipboard";
