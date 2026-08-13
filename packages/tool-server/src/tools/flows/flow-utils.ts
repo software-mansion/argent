@@ -845,24 +845,40 @@ export function isStructuralBlockMarker(step: FlowStep): boolean {
  * `executionPrerequisite`. Everything else is a fragment.
  */
 export function isE2eFlow(flow: FlowFile): boolean {
-  return beginsWithLaunch(flow.steps) === true;
+  const site = beginsWithLaunch(flow.steps);
+  return site === "direct" || site === "blocked";
 }
 
 /**
- * {@link isE2eFlow}'s scan, three-valued so a `times` block can be exactly as
- * wide as its pasted-out body: `true` — the first executable step is a launch;
- * `false` — it is something else, launch or not further down; `null` — these
- * steps contribute no executable step at all, so an enclosing scan carries on
- * after them (collapsing `null` to `false` at this level would let an all-echo
- * block hide a launch that follows it).
+ * Where {@link isE2eFlow}'s launch is written, which is not always where it
+ * runs: `"direct"` — the leading launch is a step of the flow itself;
+ * `"blocked"` — it is reached only by descending into a `times` block, so no
+ * step of the flow itself is the launch this refusal is about (a later
+ * top-level `launch` may well exist, and is not it). {@link validateFlow}
+ * spells its remedy off this: told to "drop the leading launch", an author of
+ * the blocked spelling has no step in front of them that is one.
  */
-function beginsWithLaunch(steps: FlowStep[]): boolean | null {
+type LeadingLaunchSite = "direct" | "blocked";
+
+/**
+ * {@link isE2eFlow}'s scan, four-valued so a `times` block can be exactly as
+ * wide as its pasted-out body while still being distinguishable from the
+ * unwrapped spelling: a {@link LeadingLaunchSite} — the first executable step
+ * is a launch, written here or inside a block that opens these steps; `false` —
+ * it is something else, launch or not further down; `null` — these steps
+ * contribute no executable step at all, so an enclosing scan carries on after
+ * them (collapsing `null` to `false` at this level would let an all-echo block
+ * hide a launch that follows it).
+ */
+function beginsWithLaunch(steps: FlowStep[]): LeadingLaunchSite | false | null {
   for (const step of steps) {
     if (step.kind === "echo") continue;
-    if (step.kind === "launch") return true;
+    if (step.kind === "launch") return "direct";
     if (step.kind === "repeat" && step.spec.mode === "times") {
       const inner = beginsWithLaunch(step.steps);
-      if (inner !== null) return inner;
+      // A launch anywhere down the block nesting is blocked from where the
+      // author is standing: the step they would delete is the block.
+      if (inner !== null) return inner === false ? false : "blocked";
       continue;
     }
     return false;
@@ -3177,8 +3193,19 @@ export function serializeFlow(flow: FlowFile): string {
 /** Validate cross-field invariants that are checkable without other files. */
 export function validateFlow(flow: FlowFile): void {
   if (isE2eFlow(flow) && flow.executionPrerequisite) {
+    // The remedy names a step the file actually has: a blocked launch is
+    // written inside a `repeat:` block, and "drop the leading launch" sends
+    // its author looking for a top-level launch step the leading launch is
+    // not — a later one, if the file has any, being the wrong one. Scanned
+    // again rather than threaded through: this arm only runs when the flow is
+    // already being refused, and one predicate owning "is this e2e" is worth
+    // more than the walk.
+    const remedy =
+      beginsWithLaunch(flow.steps) === "blocked"
+        ? "Drop the leading launch out of the repeat block around it (or drop the block)"
+        : "Drop the leading launch";
     throw new FailureError(
-      "A flow that starts with a launch step must not declare executionPrerequisite — it launches its own app and controls its start state. Drop the leading launch to make it a fragment, or drop executionPrerequisite.",
+      `A flow that starts by launching an app must not declare executionPrerequisite — it launches its own app and controls its start state. ${remedy} to make it a fragment, or drop executionPrerequisite.`,
       {
         error_code: FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE,
         failure_stage: "flow_file_validate",

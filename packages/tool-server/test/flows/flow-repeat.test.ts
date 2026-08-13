@@ -537,6 +537,49 @@ describe("repeat: e2e classification", () => {
     ).toThrow(/must not declare executionPrerequisite/i);
   });
 
+  it("spells the remedy against the step the file actually has", () => {
+    // The refusal is only actionable if it names something to delete. Wrapped,
+    // the flow's own first step is the block, so "drop the leading launch" —
+    // the unwrapped spelling's remedy, and the one this reached before —
+    // sends the author looking for a top-level launch that is not there. The
+    // message also travels to flow-add-step, flow-add-echo and
+    // flow-finish-recording, which show it verbatim.
+    const wrapped = (): void => {
+      parseFlow(
+        "executionPrerequisite: nope\nsteps:\n  - repeat: 1\n    steps: [{ launch: com.acme.app }]\n"
+      );
+    };
+    // Both halves the comment called untrue: the opener claimed a launch STEP
+    // the file has not got, and the remedy named one to delete.
+    expect(wrapped).toThrow(/A flow that starts by launching an app/);
+    expect(wrapped).not.toThrow(/starts with a launch step/i);
+    expect(wrapped).toThrow(/out of the repeat block around it/i);
+    expect(wrapped).not.toThrow(/Drop the leading launch to make it a fragment/i);
+
+    // Which block is not claimed, only that there is one: the launch-bearing
+    // block need not be the flow's first step, and naming the opening block
+    // would send the author into an all-echo one that holds no launch.
+    const behindNarration = (): void => {
+      parseFlow(
+        "executionPrerequisite: nope\n" +
+          "steps:\n" +
+          "  - repeat: 2\n" +
+          "    steps: [{ echo: warming up }]\n" +
+          "  - repeat: 2\n" +
+          "    steps: [{ launch: com.acme.app }]\n"
+      );
+    };
+    expect(behindNarration).toThrow(/out of the repeat block around it/i);
+
+    // The unwrapped spelling keeps the direct remedy: there the leading launch
+    // IS a top-level step, and naming the block would be the mirror error.
+    const direct = (): void => {
+      parseFlow("executionPrerequisite: nope\nsteps:\n  - launch: com.acme.app\n");
+    };
+    expect(direct).toThrow(/Drop the leading launch to make it a fragment/i);
+    expect(direct).not.toThrow(/repeat block/i);
+  });
+
   it("sees through nested times blocks and echo narration at every level", () => {
     // Arbitrary nesting and interleaved echoes are still the pasted flow: the
     // first executable step remains the launch, however many wrappers and
@@ -585,9 +628,9 @@ describe("repeat: e2e classification", () => {
   });
 
   it("stops at the first real step inside the block — a tap-first body is a fragment", () => {
-    // The three-state scan's "false" arm through the descent: the body's tap is
-    // the flow's first executable step, so the launch after the block no longer
-    // leads and the flow is an ordinary fragment.
+    // The scan's "false" arm through the descent: the body's tap is the flow's
+    // first executable step, so the launch after the block no longer leads and
+    // the flow is an ordinary fragment.
     expect(() =>
       parseFlow(
         "executionPrerequisite: nope\n" +
