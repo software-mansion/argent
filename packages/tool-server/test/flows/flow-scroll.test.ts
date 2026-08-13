@@ -28,9 +28,19 @@ vi.mock("../../src/utils/ios-devices", async (importOriginal) => ({
   isTvOsSimulator: vi.fn(async () => false),
 }));
 
+// The Android half of the same gate: a leanback device is tagged `android` by
+// serial shape like a phone, so it asks adb which one this serial is - stubbed
+// so no test shells out. Default not-tv keeps every existing Android geometry
+// on its touch nudge path; the TV case overrides per-test.
+vi.mock("../../src/utils/adb", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/utils/adb")>()),
+  isAndroidTv: vi.fn(async () => false),
+}));
+
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow } from "../../src/tools/flows/flow-utils";
 import { isTvOsSimulator } from "../../src/utils/ios-devices";
+import { isAndroidTv } from "../../src/utils/adb";
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
 const ANDROID_DEVICE = "emulator-5554"; // Android serial shape → touch path, non-iOS
@@ -125,6 +135,7 @@ function asRun(r: FlowRunResult | { notice: string }): FlowRunResult {
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-scroll-"));
   vi.mocked(isTvOsSimulator).mockReset().mockResolvedValue(false);
+  vi.mocked(isAndroidTv).mockReset().mockResolvedValue(false);
 });
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
@@ -2097,6 +2108,85 @@ describe("scroll-to directive", () => {
     expect(result.steps[0].status).toBe("pass");
     expect(swipes).toHaveLength(0);
     expect(isTvOsSimulator).toHaveBeenCalledWith(DEVICE);
+  });
+
+  it("never nudges on an Android TV - a leanback UI is D-pad driven", async () => {
+    // A leanback device shares the `emulator-NNNN` serial shape with a phone
+    // AVD, so it classifies as platform "android" and reaches the same nudge
+    // gate - only the runtime probe tells them apart. The geometry is the one
+    // the Android phone control below dispatches for (flush at 0.87..0.97 in a
+    // full-bleed scroller), but a focus-driven UI has no touch, so the swipe
+    // would move nothing: an already-visible target must stay the zero-gesture
+    // pass it was before the nudge existed, not spend a swipe and a settle.
+    vi.mocked(isAndroidTv).mockResolvedValue(true);
+    currentTree = () =>
+      screen([
+        fullScreenScroller(),
+        n({ label: "Order #1234", frame: { x: 0.1, y: 0.87, width: 0.8, height: 0.1 } }),
+      ]);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes);
+
+    await writeFlow("android-tv-no-nudge", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute(
+        {},
+        { name: "android-tv-no-nudge", project_root: tmpDir, device: ANDROID_DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(0);
+    expect(isAndroidTv).toHaveBeenCalledWith(ANDROID_DEVICE);
+  });
+
+  it("still nudges on an Android phone - the TV veto is not blanket-Android", async () => {
+    // The negative control for the case above: same serial shape, same
+    // geometry, probe answering "mobile". The veto must key on the runtime
+    // probe and not on the `android` platform tag, so a phone keeps its one
+    // deficit-sized nudge (0.07 x 1.5).
+    const flush = screen([
+      fullScreenScroller(),
+      n({ label: "Order #1234", frame: { x: 0.1, y: 0.87, width: 0.8, height: 0.1 } }),
+    ]);
+    const padded = screen([
+      fullScreenScroller(),
+      n({ label: "Order #1234", frame: { x: 0.1, y: 0.75, width: 0.8, height: 0.1 } }),
+    ]);
+    let nudged = false;
+    currentTree = () => (nudged ? padded : flush);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      nudged = true;
+    });
+
+    await writeFlow("android-phone-nudge", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute(
+        {},
+        { name: "android-phone-nudge", project_root: tmpDir, device: ANDROID_DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].settle).toBe(true);
+    expect(swipes[0].fromY).toBeCloseTo(0.5, 5);
+    expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.105, 5);
   });
 
   it("does not probe the runtime kind when the geometry asks for no nudge", async () => {

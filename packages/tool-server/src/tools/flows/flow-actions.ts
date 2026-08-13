@@ -24,6 +24,7 @@ import {
 import { settleWithin, sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { isTvOsSimulator } from "../../utils/ios-devices";
+import { isAndroidTv } from "../../utils/adb";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
 import {
@@ -1039,6 +1040,21 @@ async function scrollIncrement(
 }
 
 /**
+ * Whether the run's device is a TV runtime. Neither TV is distinguishable by
+ * its platform tag - tvOS is tagged `ios` by UDID shape, leanback `android` by
+ * serial shape - so each takes the runtime probe its platform provides, the
+ * same pairing `describe` and `await-ui-element` resolve. `ios-remote` is never
+ * tvOS: the probe reads the LOCAL simulator list, so it would answer without
+ * having looked. Both probes shell out (simctl / adb), so resolve this once and
+ * only where the verdict changes the outcome.
+ */
+async function isTvDevice(device: DeviceInfo): Promise<boolean> {
+  if (device.platform === "ios") return isTvOsSimulator(device.id);
+  if (device.platform === "android") return isAndroidTv(device.id);
+  return false;
+}
+
+/**
  * Scroll until `target` is as visible as it can get within the scroll viewport
  * along the scroll axis — fully inside it, or (for a target as tall/wide as the
  * viewport or larger) spanning it. Each round settles the
@@ -1108,9 +1124,9 @@ async function scrollToVisible(
   // nudge minus ~0.01 slop moves >= 0.04), so MAX_EDGE_NUDGES keeps its
   // purpose for genuine partial progress.
   let prevEntryEdge: number | undefined;
-  // Nudge veto for tvOS simulators, resolved lazily at most once per call and
-  // only when the geometry has already asked for a nudge (the probe shells out
-  // to simctl) - see the gate below.
+  // Nudge veto for TV targets, resolved lazily at most once per call and only
+  // when the geometry has already asked for a nudge (the probes shell out) -
+  // see the gate below.
   let tvVeto: boolean | undefined;
   for (let i = 0; i < MAX_SCROLL_ITERATIONS; i++) {
     if (env.signal?.aborted) return { aborted: true };
@@ -1171,16 +1187,19 @@ async function scrollToVisible(
         (direction === "down" || direction === "right") && env.device.platform !== "chromium";
       if (clip !== undefined && nudgeable) {
         nudge = edgeNudgeDistance(frame, direction, clip);
-        // tvOS veto: a tvOS sim classifies as plain "ios" by UDID shape while
-        // the simulator-server rejects touch for it - before the nudge
-        // existed, an already-visible target was the only scroll-to shape
-        // that could succeed on Apple TV, and it must stay a zero-gesture
-        // pass. An unknown runtime resolves as not-tv (nudges proceed). Gated
-        // on the geometry above, which returns 0 for most accepted targets:
-        // the probe shells out to simctl, so it must not be paid on a return
-        // path that would otherwise do no I/O at all.
+        // TV veto: neither TV can take the swipe - the simulator-server
+        // rejects touch for tvOS, and a leanback UI is D-pad driven with no
+        // touch at all, so the gesture moves nothing. Both classify as a touch
+        // platform by device id (see isTvDevice), so the runtime probe is what
+        // stops them: before the nudge existed, an already-visible target was
+        // the only scroll-to shape that could pass on a TV, and it must stay a
+        // zero-gesture pass instead of spending the wasted swipe and settle the
+        // progress check bounds it to. An unknown runtime resolves as not-tv
+        // (nudges proceed). Gated on the geometry above, which returns 0 for
+        // most accepted targets: the probes shell out, so they must not be
+        // paid on a return path that would otherwise do no I/O at all.
         if (nudge > 0) {
-          tvVeto ??= env.device.platform === "ios" && (await isTvOsSimulator(env.device.id));
+          tvVeto ??= await isTvDevice(env.device);
           if (tvVeto) nudge = 0;
         }
       }
