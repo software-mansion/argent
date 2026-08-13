@@ -92,11 +92,13 @@ export interface ActionEnv {
    * Absent for a caller that builds an `ActionEnv` by hand, which simply leaves
    * every settle on its own budget.
    *
-   * The write carries the device it was proven against, because a run can move
-   * onto another one mid-flight (a chromium `launch` boots its own) and a
-   * verdict about the device the run has left says nothing about the one it is
-   * on. The clear is deliberately NOT keyed: it only ever costs a later gesture
-   * a window it would otherwise have skipped, and that is the side to err on.
+   * The write carries the device it was proven against: a verdict about a
+   * device the run has left says nothing about the one it moved onto (a
+   * chromium `launch` boots its own). Belt-and-braces today - the one mid-run
+   * move is behind `runLaunch`, which clears the verdict first - but it keeps
+   * the property from resting on where that clear sits in another file. The
+   * clear is deliberately NOT keyed: it only ever costs a later gesture a
+   * window it would otherwise have skipped, and that is the side to err on.
    */
   treeOutage?: { proven?: { deviceId: string; error: Error } };
 }

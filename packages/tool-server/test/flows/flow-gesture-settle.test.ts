@@ -408,9 +408,11 @@ describe("a raw `tool:` relaunch clears a proven outage", () => {
   );
 });
 
-// The memo is keyed to the device it was proven against: a run can move onto
-// another one mid-flight (a chromium `launch` boots its own), and a dead source
-// on the device the run has left says nothing about the one it is on.
+// The memo is keyed to the device it was proven against: a dead source on the
+// device a run has left says nothing about the one it moved onto (a chromium
+// `launch` boots its own). `runLaunch` clears the verdict before the only
+// mid-run move, so a real run only ever compares equal - these hand-built envs
+// are the only place the mismatch is exercised.
 describe("a proven outage is spent only on the device that proved it", () => {
   const proven = (deviceId: string): ActionEnv["treeOutage"] => ({
     proven: { deviceId, error: new Error("native devtools is unavailable") },
