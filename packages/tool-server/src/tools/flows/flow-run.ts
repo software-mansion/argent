@@ -863,6 +863,27 @@ function displayFlowName(params: { name?: string; flow_path?: string }): string 
   return params.name || stem || params.flow_path || "(unspecified)";
 }
 
+/**
+ * Whether this run can produce a `snapshot` comparison, and therefore needs the
+ * status bar normalized before step 1.
+ *
+ * Pinning it is a device-level override that costs a round of shell calls per
+ * run (on Android, a `settings put` plus five demo-mode broadcasts, and the
+ * same again to restore) — worth paying for a run whose baselines would
+ * otherwise diff on the clock, wasted on one that never captures.
+ *
+ * Conservative by construction: a `run:` step's target is a separate file
+ * resolved during execution, so anything a composed flow might do counts as
+ * "might snapshot" and keeps the pin. Only a self-contained flow with no
+ * snapshot step at all skips it.
+ */
+function mayCapture(flow: FlowFile): boolean {
+  for (const step of walkSteps(flow.steps)) {
+    if (step.kind === "snapshot" || step.kind === "run") return true;
+  }
+  return false;
+}
+
 /** Yield every parsed step, recursing into `when:` blocks (the parser's only nesting). */
 function* walkSteps(steps: FlowStep[]): Generator<FlowStep> {
   for (const step of steps) {
@@ -1078,9 +1099,11 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
       // never drives a snapshot diff and every screenshot is consistent. Pinned
       // before step 1 — it's a device-level override independent of the app, so
       // an e2e flow's leading launch step (relaunch + settle) doubles as
-      // propagation headroom before anything is captured. No-op (returns false)
+      // propagation headroom before anything is captured. Skipped entirely for a
+      // run that cannot capture (see {@link mayCapture}), whose screenshots are
+      // failure evidence rather than something diffed. No-op (returns false)
       // on chromium/vega; restored on teardown.
-      const statusBarPinned = device !== null && (await pinStatusBar(device));
+      const statusBarPinned = device !== null && mayCapture(flow) && (await pinStatusBar(device));
 
       // The chromium equivalent of that normalization: front the page so a
       // backgrounded window doesn't throttle rendering — wheel-event acks
