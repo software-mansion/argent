@@ -16,6 +16,16 @@ let hangReads: boolean;
 /** How long a read takes to answer, for the tests that need one slower than a settle window. */
 let readDelayMs: number;
 
+// `idle` masks the status bar before comparing captures, which asks the iOS
+// runtime whether this UDID is a tvOS simulator. DEVICE is fabricated, so a
+// real probe would shell out to `xcrun simctl list` on every poll and never
+// memoize the answer - pin it to the mobile one every case here is written
+// against. Nothing else in this file reaches an iOS runtime path.
+vi.mock("../../src/utils/ios-devices", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/utils/ios-devices")>()),
+  isTvOsSimulator: vi.fn(async () => false),
+}));
+
 vi.mock("../../src/tools/flows/flow-tree", () => ({
   fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => {
     events.push({ kind: "read" });
@@ -481,6 +491,49 @@ describe("a tree-source outage never fails a selector-less gesture", () => {
     // One read for the await, then two for the second tap's own settle. A memo
     // that outlived the await would leave the tap with none of its own.
     expect(readsBetween(gestureAt(0), gestureAt(1))).toBe(3);
+  }, 20_000);
+
+  it("stops skipping as soon as an `idle` step reads, though it settles nothing either", async () => {
+    // The other directive whose read no settle produces, and the one the
+    // `await` above cannot stand in for: `idle` polls the tree for stillness
+    // beside the pixels and gives up at its own deadline, so unless the read
+    // itself retires the verdict, nothing the step does retires it.
+    currentTree = deadUntilFirstGesture;
+    // A read slower than what its window has left afterwards keeps the idle to
+    // one answered poll, so the count below is the tap's own settle plus a
+    // known read rather than however many polls happened to fit.
+    readDelayMs = 400;
+    await writeFlow("tap-idle-tap", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "tap", x: 0.1, y: 0.1 },
+        // The parser's floor for the default hold. Nothing here can settle
+        // early anyway - see the capture note below - so the window is spent
+        // whole and this is the cheapest one that spends it.
+        { kind: "idle", timeout: 600 },
+        { kind: "tap", x: 0.2, y: 0.2 },
+      ],
+    });
+
+    const result = await run("tap-idle-tap");
+
+    // The idle passes warned rather than green, and could not have settled: one
+    // answered read measures no interval, and this file stubs no capture
+    // backend, so the pixel half of the check never gets a pair either. Which
+    // is the point - what is under test is the read, not the verdict.
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "tap:pass",
+      "idle:pass",
+      "tap:pass",
+    ]);
+    // The idle's own poll, then the two identical reads the second tap's settle
+    // converges on. A memo that outlived the idle would leave the tap with none
+    // of its own.
+    expect(readsBetween(gestureAt(0), gestureAt(1))).toBeGreaterThanOrEqual(3);
+    // And it would say so: every gesture that spends the memo is warned it went
+    // out unsettled, so this tap having nothing to report is the same claim
+    // read off the run's own output.
+    expect(result.steps[2].warning).toBeUndefined();
   }, 20_000);
 
   it("never lets a selector step inherit the skip", async () => {

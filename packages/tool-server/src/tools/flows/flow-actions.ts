@@ -394,12 +394,17 @@ function provenTreeOutage(env: ActionEnv): Error | undefined {
 /**
  * Every tree read a directive makes, so that a read which comes back clears
  * {@link ActionEnv.treeOutage} whichever directive asked for it. Routing them
- * all through here is what keeps the memo's claim honest: `await`/`assert`,
- * the `type` focus wait and `idle`'s read never settle, so a clear living in
- * {@link settleTree} alone would let a run read the tree successfully, over and
- * over, and still have every later coordinate gesture skip its settle on the
- * strength of one old failure. The rotate aspect read routes here too but can
- * never be the read that clears a verdict: it skips itself while one stands.
+ * all through here is what keeps the memo's claim honest: `await`/`assert` and
+ * `idle`'s read never settle, so a clear living in {@link settleTree} alone
+ * would let a run read the tree successfully, over and over, and still have
+ * every later coordinate gesture skip its settle on the strength of one old
+ * failure.
+ *
+ * The other two route here for uniformity but can never be the read that
+ * clears a verdict: {@link fetchScreenAspect} skips itself while one stands,
+ * and the `type` focus wait runs only once {@link waitForFrame} has resolved a
+ * frame, which takes a settle that read the tree - and that read already
+ * cleared it.
  */
 function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
   return fetchFlowTree(env.registry, env.device, env.launchedNativeApp).then((data) => {
