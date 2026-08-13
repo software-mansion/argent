@@ -106,7 +106,10 @@ export async function createChromiumServer(
     sendRotate: (direction: Rotation) => sendRotate(cdp, viewport, direction),
     sendWheel: (point: Point, dx: number, dy: number) => sendWheel(cdp, viewport, point, dx, dy),
     setClipboardSync: async (enabled: boolean) => {
-      // No native bridge yet; the intent is only recorded.
+      // No native bridge yet, and nothing records the flag either — `set` is
+      // empty, by the reasoning in `ClipboardSyncState`'s own docstring. What
+      // this buys is that the call resolves, so the WS `clipboardSync` route
+      // needs no not-yet-implemented branch.
       clipboardSync.set(enabled);
     },
     setClipboardText: (text: string) => setClipboardText(cdp, text),
