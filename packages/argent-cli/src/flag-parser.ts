@@ -57,6 +57,37 @@ function isRetiredField(prop: JsonSchema): boolean {
 }
 
 /**
+ * A retired field's guidance (the replacement spelling and its sense), with the
+ * leading "Retired: " label dropped — every caller already says "retired", and
+ * the text would otherwise read "Retired: Retired: ...".
+ *
+ * Shared by the usage notice and the parse error so the two cannot disagree.
+ */
+function retirementGuidance(prop: JsonSchema): string {
+  return (prop.description ?? "").replace(/^Retired:\s*/, "");
+}
+
+/**
+ * The retired field a flag spelling addresses, if any: the field itself, its
+ * `--no-` negation, its `--<name>-json` form, or the two combined. A retired key
+ * cannot be legitimately passed in any form, so every spelling resolves to the
+ * same refusal rather than each finding its own (wrong) branch below.
+ */
+function retiredFieldFor(flag: string, properties: Record<string, JsonSchema>): string | undefined {
+  const bare = flag.endsWith("-json") ? flag.slice(0, -"-json".length) : flag;
+  // The first candidate that is a declared property wins, and it is refused
+  // only if that property is retired. Trying the whole token first keeps a
+  // field literally named `no-x` readable as itself rather than as `x`'s
+  // negation; a live `x-json` still routes to `x` through the hatch below,
+  // exactly as it did before.
+  for (const name of [flag, bare, bare.startsWith("no-") ? bare.slice(3) : bare]) {
+    const prop = properties[name];
+    if (prop !== undefined) return isRetiredField(prop) ? name : undefined;
+  }
+  return undefined;
+}
+
+/**
  * The flag a field is named by, with no value placeholder — for use in prose.
  *
  * Single source of truth for the `-json` suffix, so a message about a field and its help line
@@ -174,6 +205,21 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
       inlineValue = tok.slice(eq + 1);
     } else {
       flag = tok.slice(2);
+    }
+
+    // A retired property carries no `type`, so it matches none of the branches
+    // below and would land in the unknown-scalar tail: bare `--name` would take
+    // the next flag as its value and then blame that flag for being missing,
+    // `--no-name` would demand a value and, given one, put a literal `no-name`
+    // key in the payload for the non-strict server schema to strip. Refusing
+    // before the lookahead makes the rename guidance reachable from every
+    // spelling that used to work, not just `--name <value>`.
+    const retiredField = retiredFieldFor(flag, properties);
+    if (retiredField !== undefined) {
+      const guidance = retirementGuidance(properties[retiredField]!);
+      throw new FlagParseException(
+        `--${retiredField} is retired${guidance ? `: ${guidance}` : ""}`
+      );
     }
 
     // Skipped when the tool declares its own `args` field, so that field's value
@@ -315,11 +361,10 @@ export function formatSchemaUsage(schema: JsonSchema | undefined): string {
 
   // Retired keys get a notice, not a flag row: a row would offer them in the
   // same shape as the live optional flags. Like the legend below, the line must
-  // not start with `--` after the indent. A leading "Retired: " in the
-  // description is dropped; the label already says it.
+  // not start with `--` after the indent.
   for (const [name, prop] of entries) {
     if (!isRetiredField(prop)) continue;
-    const desc = (prop.description ?? "").replace(/^Retired:\s*/, "");
+    const desc = retirementGuidance(prop);
     lines.push(`  Retired: ${name}${desc ? ` - ${desc}` : ""}`);
   }
 
