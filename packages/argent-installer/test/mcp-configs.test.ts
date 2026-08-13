@@ -2282,9 +2282,68 @@ describe("installer preserves foreign MCP config", () => {
     const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
     homedirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-home-"));
     const permPath = path.join(homedirOverride, ".cursor", "permissions.json");
-    cursor.addAllowlist!(tmpDir, "global"); // fresh create: { mcpAllowlist: ["argent:*"] }
+    fs.mkdirSync(path.dirname(permPath), { recursive: true });
+    // As argent <= 0.20.x created it before addAllowlist stopped creating files.
+    fs.writeFileSync(permPath, JSON.stringify({ mcpAllowlist: ["argent:*"] }));
     cursor.removeAllowlist!(tmpDir, "global");
     expect(fs.existsSync(permPath)).toBe(false);
+    fs.rmSync(homedirOverride, { recursive: true, force: true });
+  });
+
+  // Cursor turns "Run Everything" off whenever permissions.json carries a
+  // non-empty allowlist, and lets that file supersede the in-IDE MCP allowlist.
+  // Creating the file to hold one rule costs the user a run mode they picked
+  // and buys nothing (under Run Everything the allowlist is never consulted).
+  it("Cursor addAllowlist does not create permissions.json, and says so", () => {
+    const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    homedirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-home-"));
+    const permPath = path.join(homedirOverride, ".cursor", "permissions.json");
+    const note = cursor.addAllowlist!(tmpDir, "global");
+    expect(fs.existsSync(permPath)).toBe(false);
+    expect(note).toContain("Run Everything");
+    fs.rmSync(homedirOverride, { recursive: true, force: true });
+  });
+
+  it("Cursor addAllowlist leaves a file that has no mcpAllowlist alone", () => {
+    const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    homedirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-home-"));
+    const permPath = path.join(homedirOverride, ".cursor", "permissions.json");
+    fs.mkdirSync(path.dirname(permPath), { recursive: true });
+    // A terminalAllowlist already constrains the run mode, but adding an
+    // mcpAllowlist would newly take the in-IDE MCP allowlist over.
+    fs.writeFileSync(permPath, `{\n  "terminalAllowlist": ["git"]\n}\n`);
+    const note = cursor.addAllowlist!(tmpDir, "global");
+    const after = readJsoncFile(permPath);
+    expect(after).not.toHaveProperty("mcpAllowlist");
+    expect(after.terminalAllowlist).toEqual(["git"]);
+    expect(note).toContain("in-app allowlist");
+    fs.rmSync(homedirOverride, { recursive: true, force: true });
+  });
+
+  // An argent-only file may be one the user keeps deliberately - we cannot
+  // tell, so it stays. Removing it is a manual step (or `argent uninstall`).
+  it("Cursor addAllowlist leaves an existing argent-only permissions.json in place", () => {
+    const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    homedirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-home-"));
+    const permPath = path.join(homedirOverride, ".cursor", "permissions.json");
+    fs.mkdirSync(path.dirname(permPath), { recursive: true });
+    fs.writeFileSync(permPath, JSON.stringify({ mcpAllowlist: ["argent:*"] }));
+    expect(cursor.addAllowlist!(tmpDir, "global")).toBeUndefined();
+    expect(readJsoncFile(permPath).mcpAllowlist).toEqual(["argent:*"]);
+    fs.rmSync(homedirOverride, { recursive: true, force: true });
+  });
+
+  it("Cursor addAllowlist keeps a user-owned permissions.json intact", () => {
+    const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    homedirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-home-"));
+    const permPath = path.join(homedirOverride, ".cursor", "permissions.json");
+    fs.mkdirSync(path.dirname(permPath), { recursive: true });
+    // argent's rule is present but so is the user's own — not argent's file.
+    fs.writeFileSync(permPath, `{\n  // mine\n  "mcpAllowlist": ["argent:*", "other:*"]\n}\n`);
+    expect(cursor.addAllowlist!(tmpDir, "global")).toBeUndefined();
+    const after = readJsoncFile(permPath);
+    expect(after.mcpAllowlist).toEqual(["argent:*", "other:*"]); // untouched
+    expect(fs.readFileSync(permPath, "utf8")).toContain("mine");
     fs.rmSync(homedirOverride, { recursive: true, force: true });
   });
 

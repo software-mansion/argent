@@ -56,8 +56,12 @@ export async function configureAllowlist(args: {
       continue;
     }
     try {
-      adapter.addAllowlist!(effectiveRoot, scope);
-      lines.push(`${pc.green("+")} ${adapter.name}`);
+      const note = adapter.addAllowlist!(effectiveRoot, scope);
+      lines.push(
+        note
+          ? `${pc.yellow("-")} ${adapter.name} ${pc.dim(`(${note})`)}`
+          : `${pc.green("+")} ${adapter.name}`
+      );
     } catch (err) {
       lines.push(`${pc.red("x")} ${adapter.name}: ${pc.dim(String(err))}`);
     }

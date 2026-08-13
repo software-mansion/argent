@@ -93,7 +93,9 @@ export interface McpConfigAdapter {
   // pair that the client resolves ahead of (or gates) the entry written at
   // `writtenScope`. Only clients with hidden scopes implement this.
   findShadowingConfigs?(root: string, writtenScope: "local" | "global"): ShadowingConfigFinding[];
-  addAllowlist?(root: string, scope: "local" | "global"): void;
+  // Returns a short note when the rule was deliberately NOT added (or an
+  // earlier one was undone) so init can say so instead of claiming a write.
+  addAllowlist?(root: string, scope: "local" | "global"): string | void;
   removeAllowlist?(root: string, scope: "local" | "global"): void;
 }
 
@@ -723,10 +725,42 @@ const cursorAdapter: McpConfigAdapter = {
   // only { mcpAllowlist }, dropping every foreign rule and comment. Newly matters
   // because `hasArgentEntry` now reads mcp.json with readJsonc, so `update`
   // detects a commented config as configured and calls this.
-  addAllowlist(): void {
+  //
+  // APPEND-ONLY, NEVER CREATE. Cursor derives its Run Mode from this file:
+  // `shouldPermissionsFileConstrainUnrestrictedMode()` disables "Run Everything"
+  // whenever a non-empty mcpAllowlist/terminalAllowlist is present and no
+  // approvalMode overrides it, which the UI reports as
+  // `Run Mode (Enforced by ~/.cursor/permissions.json)`. The same non-emptiness
+  // makes the file SUPERSEDE the in-IDE MCP allowlist and freeze its editor
+  // (`getEffectiveMcpAllowlist` ignores composerState.mcpAllowedTools,
+  // `canAddToAllowlistFromIde("mcp")` goes false), so the user's own
+  // "Always allow" entries stop being consulted.
+  //
+  // Creating the file therefore costs a run mode the user chose — and buys
+  // nothing, because under "Run Everything" every tool auto-runs already and
+  // the allowlist is never read. So argent only appends where the user already
+  // keeps a file-based MCP allowlist: there both effects are their own doing
+  // and `argent:*` changes no state. Existing files are never deleted either:
+  // even an argent-only one may be an allowlist the user keeps deliberately.
+  //
+  // Setting `approvalMode: "unrestricted"` to lift the constraint is NOT an
+  // option — Cursor treats a permissions-file approvalMode as authoritative
+  // (`getModeFullAutoRun` returns true for it), so it would force Run
+  // Everything ON for users who chose "Ask every time".
+  addAllowlist(): string | void {
     const permPath = path.join(homedir(), ".cursor", "permissions.json");
+    if (!fs.existsSync(permPath)) {
+      return `skipped - creating ~/.cursor/permissions.json would turn off Cursor's "Run Everything" mode`;
+    }
+    // An existing file is left as the user has it, argent-only shape included:
+    // we cannot tell a file an earlier argent created from one the user keeps
+    // deliberately, and deleting the latter would take away an allowlist they
+    // want. Removing it stays a manual step (or `argent uninstall`).
     const config = readJsonc(permPath);
-    const list = Array.isArray(config.mcpAllowlist) ? (config.mcpAllowlist as string[]) : [];
+    const list = Array.isArray(config.mcpAllowlist) ? (config.mcpAllowlist as string[]) : null;
+    if (list === null || list.length === 0) {
+      return `skipped - an mcpAllowlist here would override Cursor's in-app allowlist`;
+    }
     if (list.includes(CURSOR_ALLOWLIST_PATTERN)) return;
     editJsoncFile(permPath, ["mcpAllowlist"], [...list, CURSOR_ALLOWLIST_PATTERN]);
   },
