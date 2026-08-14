@@ -1028,9 +1028,21 @@ function displayFlowName(params: { name?: string; flow_path?: string }): string 
  * recursion would carry an uploaded flow's nested `run:`/`snapshot` past
  * {@link assertUploadSelfContained} and let an unrunnable flow report green.
  *
- * Each step arrives with the authored position that names it - the only handle a
- * pre-run refusal has, since a step refused before the run starts gets no
- * report line to point at.
+ * Each step arrives with its AUTHORED position - its place in the file as
+ * written, every entry counted, `echo` included. That is the only handle a
+ * pre-run refusal has: a flow refused before the run starts produces no report
+ * line to point at, so the file is the one thing its reader can count against.
+ *
+ * Deliberately not any renderer's numbering, and no renderer's would serve. The
+ * four in packages/argent-cli/src/flow.ts (`renderReport`, `renderFailedSteps`,
+ * `renderArtifactLines`, the live `onStepReport` handler) skip echo;
+ * argent-mcp's `flowRunToMcpContent` numbers from the flat `StepReport.index`,
+ * which counts it - the two already disagree with each other. Reports also
+ * number FLAT across a block's body (index is `state.reports.length`, and the
+ * block's marker takes a slot of its own), where this numbers per level. So
+ * adopting either rule would break agreement with the other and still miss a
+ * report's number inside a block. {@link retiredArgReason} says which counting
+ * its number uses instead.
  *
  * A `run:` target is deliberately not followed: the fragment is resolved at run
  * time, and reading it here would duplicate that lookup and could disagree with
@@ -1168,9 +1180,17 @@ function findRetiredToolArg(registry: Registry, steps: FlowStep[]): RetiredArgUs
   return undefined;
 }
 
-/** The refusal text for {@link findRetiredToolArg}'s hit, shared by both callers. */
+/**
+ * The refusal text for {@link findRetiredToolArg}'s hit, shared by both callers.
+ *
+ * The position carries the counting rule with it, since "step 2" alone is
+ * ambiguous: the CLI renderers would call that same step step 1 (see
+ * {@link walkSteps}). Qualified once at the end of `use.where`, which already
+ * spells every nesting level, so a nested hit reads "step 1 of the when: block
+ * at step 2 as written (...)" and not once per level.
+ */
 function retiredArgReason(use: RetiredArgUse): string {
-  return `${use.where} passes ${use.tool}'s retired \`${use.key}\` key${use.guidance ? `: ${use.guidance}` : ""}`;
+  return `${use.where} as written (echo included) passes ${use.tool}'s retired \`${use.key}\` key${use.guidance ? `: ${use.guidance}` : ""}`;
 }
 
 /**
