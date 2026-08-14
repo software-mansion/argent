@@ -32,4 +32,6 @@ jobs:
         run: npx tsc --build
 
       - name: Lint
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
         run: npm run lint

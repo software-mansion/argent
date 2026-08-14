@@ -68,6 +68,9 @@
         // imports this itself at runtime, so nothing first-party imports it.
         "@fails-components/webtransport-transport-http3-quiche",
         "@modelcontextprotocol/sdk",
+        // The tool-server bundle leaves jiti external because its loader
+        // lazily requires a sibling transformer bundle at runtime.
+        "jiti",
         "tree-sitter",
         "tree-sitter-typescript",
         // devDependencies
