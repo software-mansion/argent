@@ -144,6 +144,51 @@ export interface ToolContext extends InvokeToolOptions {
   artifacts: ArtifactStore;
 }
 
+/**
+ * The narrow surface orchestrators need when they inspect and dispatch tools.
+ * Registry implements this structurally; invocation-scoped composites can do
+ * the same without inheriting Registry's service lifecycle or mutating its
+ * global tool map.
+ */
+export interface ToolLookup {
+  getTool(id: string): ToolDefinition | undefined;
+}
+
+export interface ToolInvoker extends ToolLookup {
+  invokeTool<TResult = unknown>(
+    id: string,
+    params?: unknown,
+    options?: InvokeToolOptions
+  ): Promise<TResult>;
+}
+
+/** Minimal context exposed to trusted host tools loaded for one invocation. */
+export interface ExternalToolExecutionContextV1 {
+  signal?: AbortSignal;
+  toolInvocationId?: string;
+}
+
+/**
+ * Version 1 of Argent's structural external-tool contract. Consumers can
+ * reproduce this shape locally; importing @argent/registry is not required at
+ * runtime (or at compile time).
+ */
+export interface ExternalToolDefinitionV1 {
+  id: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  capability?: {
+    apple?: { simulator?: boolean; device?: boolean };
+  };
+  requires?: ToolDependency[];
+  execute(params: unknown, context: ExternalToolExecutionContextV1): Promise<unknown>;
+}
+
+export interface ExternalToolRegistryModuleV1 {
+  version: 1;
+  tools: ExternalToolDefinitionV1[];
+}
+
 // ── Device + Capability Types ──
 
 export type Platform = "ios" | "android" | "ios-remote" | "chromium" | "vega";

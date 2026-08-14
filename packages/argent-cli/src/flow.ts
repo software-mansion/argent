@@ -150,6 +150,7 @@ Options (run):
   -r, --recursive        With a directory path, also run flows in subdirectories
   --json                 Print the raw JSON report
   --json-stream          Print progress and the final report as NDJSON (single flow only)
+  --tool-registry <path> Load trusted local TypeScript tools for this flow invocation
   --help, -h             Show this help
   --                     End of options — only needed for a flow whose name
                          starts with "-" (\`argent flow run -- -nightly\`)
@@ -157,6 +158,7 @@ Options (run):
 Examples:
   argent flow run checkout --platform ios
   argent flow run .argent/flows/checkout.yaml --output flow-artifacts --json
+  argent flow run .argent/flows/checkout.yaml --tool-registry .argent/tools.ts
   argent flow run ~/shared-flows/checkout.yaml --device <UDID> --update-baselines
   argent flow run .argent/flows --recursive
 `);
@@ -173,6 +175,7 @@ export function parseRunArgs(argv: string[]): {
   device?: string;
   platform?: string;
   output?: string;
+  toolRegistry?: string;
   updateBaselines: boolean;
   recursive: boolean;
   json: boolean;
@@ -262,6 +265,9 @@ export function parseRunArgs(argv: string[]): {
     } else if (flag === "--device") out.device = takeValue("--device");
     else if (flag === "--platform") out.platform = takeValue("--platform");
     else if (flag === "--output") out.output = takeValue("--output");
+    else if (flag === "--tool-registry") {
+      out.toolRegistry = takeValue("--tool-registry");
+    }
     // Any other flag-shaped token is an error — a typo like --platfrom must
     // not silently fall back to device auto-detection. --help/-h never reach
     // this parser: flow() intercepts them before calling parseRunArgs.
@@ -1032,7 +1038,7 @@ async function collectFlowFiles(dir: string, recursive: boolean): Promise<string
  * flow. Prints the recovery hint and returns false when remote routing is
  * configured.
  */
-async function requireLocalToolServer(): Promise<boolean> {
+async function requireLocalToolServer(toolRegistryPath?: string): Promise<boolean> {
   const routing = await getResolvedToolsUrl();
   if (routing.source === "none") return true;
   // With ARGENT_TOOLS_URL set over an existing link file, unsetting only the
@@ -1046,9 +1052,47 @@ async function requireLocalToolServer(): Promise<boolean> {
         : "Unset ARGENT_TOOLS_URL and try again."
       : "Run `argent unlink` and try again.";
   console.error(
-    `argent flow run requires the auto-started local tool server; ${routing.source} routing is configured.\n${recovery}`
+    `argent flow run requires the auto-started local tool server; ${routing.source} routing is configured.\n` +
+      (toolRegistryPath
+        ? "A local external tool registry cannot be executed through ARGENT_TOOLS_URL or a linked tool server.\n"
+        : "") +
+      recovery
   );
   return false;
+}
+
+/**
+ * Resolve the explicitly trusted registry on the caller's filesystem before
+ * starting a flow. Returning the real path gives the local tool server the
+ * same file identity even when the CLI argument was relative or symlinked.
+ */
+export async function resolveToolRegistryPath(
+  suppliedPath: string,
+  projectRoot: string
+): Promise<string> {
+  const absolutePath = path.resolve(projectRoot, suppliedPath);
+  let canonicalPath: string;
+  try {
+    canonicalPath = await fsp.realpath(absolutePath);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    throw new Error(
+      `${code === "ENOENT" ? "External tool registry not found" : "Could not resolve external tool registry"}: ${absolutePath}`,
+      { cause: err }
+    );
+  }
+
+  try {
+    const stat = await fsp.stat(canonicalPath);
+    if (!stat.isFile()) {
+      throw new Error(`External tool registry path is not a file: ${canonicalPath}`);
+    }
+    await fsp.access(canonicalPath, fsConstants.R_OK);
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith("External tool registry path")) throw err;
+    throw new Error(`Could not read external tool registry: ${canonicalPath}`, { cause: err });
+  }
+  return canonicalPath;
 }
 
 /** One flow-execute payload builder so single and batch runs cannot drift. */
@@ -1066,6 +1110,7 @@ function buildRunPayload(
   if (args.device) payload.device = args.device;
   if (args.platform) payload.platform = args.platform;
   if (args.updateBaselines) payload.updateBaselines = true;
+  if (args.toolRegistry) payload.tool_registry_path = args.toolRegistry;
   return payload;
 }
 
@@ -1339,6 +1384,10 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
       console.error("--json-stream supports a single flow; directory runs are not supported.");
       return exitAfterFlush(2);
     }
+    if (args.toolRegistry) {
+      console.error("--tool-registry supports a single flow; directory runs are not supported.");
+      return exitAfterFlush(2);
+    }
     return runFlowDirectory(resolvedPath, args, projectRoot, options);
   }
   if (args.recursive) {
@@ -1497,7 +1546,17 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     return exitAfterFlush(2);
   }
 
-  if (!(await requireLocalToolServer())) return exitAfterFlush(2);
+  if (args.toolRegistry) {
+    try {
+      args.toolRegistry = await resolveToolRegistryPath(args.toolRegistry, projectRoot);
+    } catch (err) {
+      if (args.jsonStream) writeJsonStreamError(err);
+      console.error(err instanceof Error ? err.message : String(err));
+      return exitAfterFlush(2);
+    }
+  }
+
+  if (!(await requireLocalToolServer(args.toolRegistry))) return exitAfterFlush(2);
 
   const { callTool, baseUrl } = createToolsClient({ paths: options.paths });
 

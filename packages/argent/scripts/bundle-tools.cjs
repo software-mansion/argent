@@ -573,6 +573,10 @@ buildBundle({
     "@fails-components/webtransport",
     "@fails-components/webtransport-transport-http3-quiche",
     "dtrace-provider",
+    // Runtime TypeScript loader for explicit external tool registries. Keep it
+    // external because jiti lazily requires its sibling transformer bundle;
+    // @swmansion/argent declares it as a shipped runtime dependency.
+    "jiti",
   ],
 });
 
