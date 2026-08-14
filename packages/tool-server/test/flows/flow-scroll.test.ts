@@ -500,6 +500,104 @@ describe("scroll-to directive", () => {
     expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.05, 5);
   });
 
+  it("keeps the floored increment when the sliver container hugs the top edge", async () => {
+    // Same sliver, moved up against y 0: anchoring at its center (0.03) leaves
+    // only 0.03 of screen above the finger, so clamping the swipe's end alone
+    // would dispatch a 0.03 travel - back inside the tap-slop band the floor
+    // exists to stay out of. The touch-down slides to the container's far edge
+    // instead, which still hit-tests the container.
+    const strip = (children: DescribeNode[]) =>
+      n({
+        identifier: "strip",
+        frame: { x: 0, y: 0.01, width: 1, height: 0.04 },
+        children,
+      });
+    const before = screen([
+      strip([n({ label: "Row 1", frame: { x: 0.1, y: 0.01, width: 0.8, height: 0.04 } })]),
+    ]);
+    const after = screen([
+      strip([n({ label: "Row 9", frame: { x: 0.1, y: 0.01, width: 0.8, height: 0.03 } })]),
+    ]);
+    let scrolled = false;
+    currentTree = () => (scrolled ? after : before);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      scrolled = true;
+    });
+
+    await writeFlow("edge-sliver", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "scroll-to",
+          target: { text: "Row 9" },
+          direction: "down",
+          within: { identifier: "strip" },
+        },
+      ],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "edge-sliver", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.05, 5);
+    // The anchor picks the scroll container, so it may not leave the strip.
+    expect(swipes[0].fromY).toBeGreaterThanOrEqual(0.01);
+    expect(swipes[0].fromY).toBeLessThanOrEqual(0.05);
+  });
+
+  it("keeps the floored increment when the sliver container hugs the left edge", async () => {
+    // The horizontal mirror: a 0.04-wide rail at x 0.01 scrolled `right` drags
+    // the finger toward x 0, so the same clamp would cut the travel to 0.03.
+    const rail = (children: DescribeNode[]) =>
+      n({
+        identifier: "rail",
+        frame: { x: 0.01, y: 0.3, width: 0.04, height: 0.2 },
+        children,
+      });
+    const before = screen([
+      rail([n({ label: "Card 1", frame: { x: 0.01, y: 0.3, width: 0.04, height: 0.2 } })]),
+    ]);
+    const after = screen([
+      rail([n({ label: "Card 9", frame: { x: 0.01, y: 0.3, width: 0.03, height: 0.2 } })]),
+    ]);
+    let scrolled = false;
+    currentTree = () => (scrolled ? after : before);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      scrolled = true;
+    });
+
+    await writeFlow("edge-rail", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "scroll-to",
+          target: { text: "Card 9" },
+          direction: "right",
+          within: { identifier: "rail" },
+        },
+      ],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "edge-rail", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].fromX - swipes[0].toX).toBeCloseTo(0.05, 5);
+    expect(swipes[0].fromX).toBeGreaterThanOrEqual(0.01);
+    expect(swipes[0].fromX).toBeLessThanOrEqual(0.05);
+  });
+
   it("detects the end of the scroll despite an animating node outside the container", async () => {
     // A live ticker outside the `within` container mutates its label between
     // settles. The end-of-scroll check fingerprints only the container's

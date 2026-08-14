@@ -1080,18 +1080,27 @@ const SWALLOWED_NUDGE_NOTE =
   `tab bar, a home indicator), so check the next step acts on the target and not on the chrome.`;
 
 /**
- * Dispatch one momentum-free scroll increment anchored at the center of
- * `region`. The anchor (the touch-down / wheel point) is what selects the scroll
+ * Dispatch one momentum-free scroll increment anchored inside `region` (at its
+ * center, unless the travel needs otherwise - see below). The anchor (the
+ * touch-down / wheel point) is what selects the scroll
  * container — the OS routes the gesture to the innermost scroller hit-tested
  * there — so anchoring inside a `within` region is how nested scrollers are
- * disambiguated. The travel is half the region along the axis (only the end
- * point is clamped, so the down stays at the anchor and keeps latching to the
- * right container) — sized to the clip window rather than the screen, so
- * consecutive views of a small container's content still overlap and a target
- * can't be scrolled fully past between settle checkpoints. An explicit
- * `travel` overrides that default — edge-avoid nudges pass the exact distance
- * they need. Touch platforms use a `settle` swipe (no fling); Chromium uses
- * wheel events (already momentum-free).
+ * disambiguated. The travel is half the region along the axis — sized to the
+ * clip window rather than the screen, so consecutive views of a small
+ * container's content still overlap and a target can't be scrolled fully past
+ * between settle checkpoints. An explicit `travel` overrides that default —
+ * edge-avoid nudges pass the exact distance they need. Touch platforms use a
+ * `settle` swipe (no fling); Chromium uses wheel events (already
+ * momentum-free).
+ *
+ * The touch-down slides along the axis, off the region's center, by however
+ * much the travel needs to fit on screen - never past the region's own edges,
+ * so the anchor still hit-tests the intended container. Clamping only the
+ * swipe's END instead silently shortens the gesture whenever the region hugs a
+ * screen edge along the axis (a `within` at `y 0.01..0.05` scrolling `down`
+ * would travel 0.03 of its 0.05), which is exactly the sub-floor band where a
+ * swipe registers as a TAP (see MIN_SCROLL_INCREMENT). A region too small to
+ * fit the travel even at its far edge gets the longest swipe it allows.
  */
 async function scrollIncrement(
   env: ActionEnv,
@@ -1101,7 +1110,8 @@ async function scrollIncrement(
 ): Promise<void> {
   const cx = clamp01(region.x + region.width / 2);
   const cy = clamp01(region.y + region.height / 2);
-  const extent = direction === "up" || direction === "down" ? region.height : region.width;
+  const vertical = direction === "up" || direction === "down";
+  const extent = vertical ? region.height : region.width;
   const dist = travel ?? Math.min(SCROLL_INCREMENT, Math.max(MIN_SCROLL_INCREMENT, extent / 2));
 
   if (env.device.platform === "chromium") {
@@ -1119,26 +1129,22 @@ async function scrollIncrement(
   }
 
   // To reveal content below the fold the finger travels UP (toY < fromY), etc.
-  let to: { x: number; y: number };
-  switch (direction) {
-    case "down":
-      to = { x: cx, y: clamp01(cy - dist) };
-      break;
-    case "up":
-      to = { x: cx, y: clamp01(cy + dist) };
-      break;
-    case "right":
-      to = { x: clamp01(cx - dist), y: cy };
-      break;
-    case "left":
-      to = { x: clamp01(cx + dist), y: cy };
-      break;
-  }
+  const fromEnd = direction === "down" || direction === "right";
+  const lo = clamp01(vertical ? region.y : region.x);
+  const hi = clamp01(vertical ? region.y + region.height : region.x + region.width);
+  const center = vertical ? cy : cx;
+  // Push the touch-down away from the edge the finger travels toward, but only
+  // as far as the region reaches: a region that cannot fit `dist` anchors at
+  // its far edge and takes the short swipe rather than a faked one.
+  const anchor = fromEnd
+    ? Math.min(Math.max(center, dist), hi)
+    : Math.max(Math.min(center, 1 - dist), lo);
+  const end = clamp01(fromEnd ? anchor - dist : anchor + dist);
   await invokeOnDevice(env, "gesture-swipe", {
-    fromX: cx,
-    fromY: cy,
-    toX: to.x,
-    toY: to.y,
+    fromX: vertical ? cx : anchor,
+    fromY: vertical ? anchor : cy,
+    toX: vertical ? cx : end,
+    toY: vertical ? end : cy,
     settle: true,
     durationMs: 600,
   });
