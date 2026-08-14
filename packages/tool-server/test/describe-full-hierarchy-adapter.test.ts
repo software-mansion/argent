@@ -659,6 +659,13 @@ describe("describe full-hierarchy adapter", () => {
       ["_TtGC7SwiftUI19UIHostingScrollViewVS_7AnyView_", "AXScrollArea"],
       ["_TtGC7SwiftUI22ListCollectionViewCellVS_7AnyView_", "AXCell"],
       ["_TtC7SwiftUI33UpdateCoalescingCollectionView", "AXScrollArea"],
+      // A name that opens like a generic mangling but carries no length
+      // component where one belongs (a mangling scheme the parse does not
+      // know). The whole name is then the best available suffix, so the row
+      // still reads as a row - dropping the unparsed name instead would leave
+      // the suffix tests nothing to match and demote every such view to a
+      // group, taking anonymous rows out of the tree with it.
+      ["_TtGCMyAppPhotoCell", "AXCell"],
     ];
     const raw = {
       windows: [

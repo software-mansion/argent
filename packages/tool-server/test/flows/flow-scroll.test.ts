@@ -40,6 +40,7 @@ vi.mock("../../src/utils/adb", async (importOriginal) => ({
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow } from "../../src/tools/flows/flow-utils";
 import { adaptFullAndroidHierarchyToDescribeResult } from "../../src/tools/flows/flow-android-tree";
+import { adaptFullHierarchyToDescribeResult } from "../../src/tools/flows/flow-ios-tree";
 import { isTvOsSimulator } from "../../src/utils/ios-devices";
 import { isAndroidTv } from "../../src/utils/adb";
 
@@ -759,6 +760,87 @@ describe("scroll-to directive", () => {
     // (25 rounds x the settle poll) so it fails on these assertions rather
     // than on a test timeout, which would read as a flake.
   }, 15000);
+
+  it("declares an early end of scroll when the only scroller at the anchor is at rest", async () => {
+    // The cost of the same keep-gate, pinned in its regressing direction. A
+    // news article in a WebView: the page scrolls INSIDE the web view, which
+    // dumps as a plain android.webkit.WebView carrying no scrollable flag
+    // ("WebView" also fails the role's /scroll/i test), so nothing the tree
+    // reports as a scroll container moves. Over it sits a STICKY related-links
+    // strip - Chrome maps a scrollable web element to an id-less, label-less
+    // android.view.View with scrollable="true" - which the keep-gate now emits,
+    // and it is the only scroller under the gesture anchor (0.5, 0.5).
+    // The fingerprint scope therefore narrows from the whole screen onto that
+    // strip's rect, and a sticky strip neither moves nor changes for a vertical
+    // swipe: round 2 reads the same fingerprint, calls it the end of the
+    // scroll, and the step FAILS naming a target one more increment would have
+    // revealed. Before the gate emitted the strip, the anchor matched no
+    // scroller, the scope fell back to the whole screen, and the article's own
+    // motion carried the loop to the target.
+    // Both premises are load-bearing, and both narrow the blast radius. A
+    // strip that scrolls WITH the article leaves the anchor after one round,
+    // the scope falls back to the whole screen, and the step passes; a WebView
+    // host that does report scrollable="true" puts a moving scroller under the
+    // anchor and the step passes too. What loses is a screen scrolling through
+    // no container the tree reports scrollable, with a pinned one over its
+    // centre. Known and accepted: the same leaf is what makes an id-less
+    // scroller nudgeable ("nudges against an Android scroller kept only for
+    // its scrollable flag") and keeps a header spinner from masking the end of
+    // a scroll (the case above).
+    let scrolled = 0;
+    const paragraphs = () =>
+      [
+        ["Para 5", "Para 6"],
+        ["Para 7", "Para 8"],
+        ["Para 9", "Chapter 7"],
+      ][Math.min(scrolled, 2)]
+        .map(
+          (text, i) =>
+            `      <node index="${i + 1}" class="android.widget.TextView" text="${text}" package="com.acme.news" bounds="[100,${1200 + i * 200}][980,${1360 + i * 200}]" />`
+        )
+        .join("\n");
+    currentTree = () =>
+      adaptFullAndroidHierarchyToDescribeResult(
+        `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.news" bounds="[0,0][1080,2000]">
+    <node index="0" class="android.webkit.WebView" package="com.acme.news" bounds="[0,0][1080,2000]">
+      <node index="0" class="android.view.View" scrollable="true" package="com.acme.news" bounds="[0,880][1080,1120]">
+        <node index="0" class="android.widget.TextView" text="Related" package="com.acme.news" bounds="[40,900][500,980]" />
+      </node>
+${paragraphs()}
+    </node>
+  </node>
+</hierarchy>`,
+        1080,
+        2000
+      );
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      scrolled++;
+    });
+
+    await writeFlow("webview-article", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Chapter 7" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute(
+        {},
+        { name: "webview-article", project_root: tmpDir, device: ANDROID_DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toContain("reached the end of the scroll");
+    // One increment, then the strip's unchanged rect stopped the loop - a
+    // second one brings the target in, as it does with the strip leaf pruned.
+    expect(swipes).toHaveLength(1);
+  });
 
   it("keeps scrolling when only an outer scroller progresses past a static inner scrollable at the anchor", async () => {
     // A horizontal carousel sits exactly under the swipe anchor but doesn't
@@ -2031,6 +2113,62 @@ describe("scroll-to directive", () => {
     expect(swipes).toHaveLength(0);
   });
 
+  it("reads a row overhanging a sub-list by more than the entry slack as the page's", async () => {
+    // The magnitude of that entry-edge slack, which only a shape between the
+    // two amounts can pin. A page scroller with a nested sub-list ending at
+    // 0.87 ("recently viewed", a horizontal shelf), and the row flush at
+    // 0.87..0.97 BELOW it: the row overhangs the shelf's bottom by 0.1 - far
+    // past the float hair the other sides allow, and twice the 0.05 a
+    // screen-clamped frame can produce - so it is the page's row, not the
+    // shelf's content. The slack is a bound, not a guess: a nudgeable clip's
+    // entry edge sits within 0.05 of the screen edge and an accepted target's
+    // entry edge within 1 - EDGE_EPS of it, so nothing nudgeable can overhang
+    // further. Loosen it to 0.2 and the shelf becomes the smallest containing
+    // scroller, moving the clip off the page onto it: the page's 0.105 nudge
+    // at 0.5 is lost (the shelf's end edge, 0.87, is no screen edge), and
+    // where the screen-edge gate reads the same widened value it turns into a
+    // drag inside a shelf that scrolls the other way.
+    const containers = () => [
+      fullScreenScroller(),
+      n({
+        role: "AXScrollArea",
+        identifier: "shelf",
+        frame: { x: 0, y: 0.6, width: 1, height: 0.27 },
+      }),
+    ];
+    const flush = screen([
+      ...containers(),
+      n({ label: "Order #1234", frame: { x: 0.1, y: 0.87, width: 0.8, height: 0.1 } }),
+    ]);
+    const padded = screen([
+      ...containers(),
+      n({ label: "Order #1234", frame: { x: 0.1, y: 0.75, width: 0.8, height: 0.1 } }),
+    ]);
+    let nudged = false;
+    currentTree = () => (nudged ? padded : flush);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      nudged = true;
+    });
+
+    await writeFlow("shelf-overhang", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "shelf-overhang", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].fromY).toBeCloseTo(0.5, 5);
+    expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.105, 5);
+  });
+
   it("anchors the nudge at the target's scroller centre, not the screen centre", async () => {
     // A full-bleed-ish scroller offset under a header: y 0.04..1.0, so its
     // centre is 0.52 — not the screen's 0.5. The row (its flat sibling)
@@ -2380,36 +2518,72 @@ describe("scroll-to directive", () => {
   });
 
   it("resolves the list, not its row cell, as the nudge clip on the iOS table shape", async () => {
-    // The tree the fixed full-hierarchy adapter emits for a UIKit table
-    // reached through a text selector: a full-bleed AXScrollArea list, the
-    // row's cell as a plain (non-scroll) AXGroup leaf, and the label the text
-    // resolves to inside it - all flat siblings. The adapter used to flag
-    // every cell AXScrollArea too (class names contain TableView), and the
+    // A UIKit table as `getFullHierarchy` reports it, run through the REAL
+    // full-hierarchy adapter: the clip resolution is only as good as the roles
+    // that adapter derives, so a hand-built tree would pin this against a
+    // shape no device produces. roleFromClassName keys on the class name's
+    // SUFFIX; the substring test it replaced flagged every `UITableViewCell`
+    // AXScrollArea (the name contains "TableView"), and the
     // smallest-containing-scroller resolution then picked the CELL as the
     // clip: its end edge (0.942) fails the screen-edge gate, so no nudge was
     // dispatched and the label stayed 0.06 off the screen bottom - the
-    // landing this phase exists to avoid. With the cell a plain group the
-    // clip is the LIST (end edge 1.0, gate passes): label at 0.89..0.94 gives
-    // clearance 0.06, deficit 0.04, travel 0.04 x 1.5 = 0.06 (above the 0.05
-    // floor; headroom 0.89, so its 0.445 half-cap does not bite), anchored at
-    // the list's centre.
-    const cellAt = (y: number, children: DescribeNode[]) => [
-      fullScreenScroller(),
-      n({
-        role: "AXGroup",
-        identifier: "row-14-cell",
-        frame: { x: 0, y, width: 1, height: 0.063 },
-      }),
-      ...children,
-    ];
-    const flush = screen(
-      cellAt(0.879, [n({ label: "Row 14", frame: { x: 0.1, y: 0.89, width: 0.8, height: 0.05 } })])
-    );
-    const padded = screen(
-      cellAt(0.739, [n({ label: "Row 14", frame: { x: 0.1, y: 0.75, width: 0.8, height: 0.05 } })])
-    );
+    // landing this phase exists to avoid. With the cell an AXCell (out of the
+    // scroller set) the clip is the LIST (end edge 1.0, gate passes): label at
+    // 0.89..0.94 gives clearance 0.06, deficit 0.04, travel 0.04 x 1.5 = 0.06
+    // (above the 0.05 floor; headroom 0.89, so its 0.445 half-cap does not
+    // bite), anchored at the list's centre.
+    const SCREEN = { x: 0, y: 0, width: 400, height: 1000 };
+    // A 1000pt-tall screen, so every vertical bound below reads as its own
+    // normalized fraction (890pt -> 0.89).
+    const table = (cellY: number) => ({
+      windows: [
+        {
+          className: "UIWindow",
+          frame: SCREEN,
+          windowFrame: SCREEN,
+          children: [
+            {
+              className: "UITableView",
+              identifier: "list",
+              windowFrame: SCREEN,
+              children: [
+                // Stock UIKit rows: no identifier, no label - in the tree only
+                // by the role their class name derives. Two of them, so the
+                // clip cannot resolve to the only cell on the screen by luck.
+                {
+                  className: "UITableViewCell",
+                  windowFrame: { x: 0, y: cellY - 100, width: 400, height: 63 },
+                  children: [
+                    {
+                      className: "UILabel",
+                      label: "Row 13",
+                      windowFrame: { x: 40, y: cellY - 89, width: 320, height: 50 },
+                      children: [],
+                    },
+                  ],
+                },
+                {
+                  className: "UITableViewCell",
+                  windowFrame: { x: 0, y: cellY, width: 400, height: 63 },
+                  children: [
+                    {
+                      className: "UILabel",
+                      label: "Row 14",
+                      windowFrame: { x: 40, y: cellY + 11, width: 320, height: 50 },
+                      children: [],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    // Flush: cell 0.879..0.942 with its label at 0.89..0.94. Post-nudge the
+    // row sits 0.14 higher (label 0.75..0.80, clearance 0.2) - done.
     let nudged = false;
-    currentTree = () => (nudged ? padded : flush);
+    currentTree = () => adaptFullHierarchyToDescribeResult(table(nudged ? 739 : 879));
 
     const swipes: SwipeCall[] = [];
     const registry = mockRegistry(swipes, () => {
@@ -2435,28 +2609,33 @@ describe("scroll-to directive", () => {
   });
 
   it("nudges against an Android scroller kept only for its scrollable flag", async () => {
-    // The Android adapter shape after the scrollable keep-gate fix
-    // (flow-android-tree): an id-less RN ScrollView dumps as a scrollable
-    // android.view.ViewGroup - no identifier, no label, class-fallback role -
-    // and used to be pruned as layout scaffolding, so the container gate found
-    // no candidate and the nudge silently skipped on Android while the same
-    // app nudged on iOS. Kept as a `scrollable: true` leaf it satisfies the
-    // gate via the flag alone ("ViewGroup" fails the role's /scroll/i test):
-    // the row flush at 0.87..0.97 (clearance 0.03, deficit 0.07) gets one
-    // nudge of 0.07 x 1.5 = 0.105 (above the 0.05 floor; headroom 0.87, so
-    // its 0.435 half-cap does not bite), anchored at the scroller's centre.
-    const androidScroller = () =>
-      n({ role: "ViewGroup", scrollable: true, frame: { x: 0, y: 0, width: 1, height: 1 } });
-    const flush = screen([
-      androidScroller(),
-      n({ label: "Order #1234", frame: { x: 0.1, y: 0.87, width: 0.8, height: 0.1 } }),
-    ]);
-    const padded = screen([
-      androidScroller(),
-      n({ label: "Order #1234", frame: { x: 0.1, y: 0.75, width: 0.8, height: 0.1 } }),
-    ]);
+    // The nudge counterpart of the spinner case above, on a real uiautomator
+    // dump through the real adapter - whether this shape nudges at all is
+    // decided by the keep-gate in flow-android-tree, so the dump is the
+    // fixture. An id-less RN ScrollView dumps as a scrollable
+    // android.view.ViewGroup - no resource-id, no text, a pure layout class -
+    // and used to be pruned as scaffolding, so the container gate found no
+    // candidate and the nudge silently skipped on Android while the same app
+    // nudged on iOS. Kept as a `scrollable: true` leaf it satisfies the gate
+    // via the flag alone ("ViewGroup" fails the role's /scroll/i test): the row
+    // flush at 0.87..0.97 (clearance 0.03, deficit 0.07) gets one nudge of
+    // 0.07 x 1.5 = 0.105 (above the 0.05 floor; headroom 0.87, so its 0.435
+    // half-cap does not bite), anchored at the scroller's centre.
+    // The 2000px-tall screen makes every vertical bound read as its own
+    // normalized fraction (1740px -> 0.87).
+    const dump = (rowTop: number): string =>
+      `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,2000]">
+    <node index="0" class="android.view.ViewGroup" scrollable="true" package="com.acme.app" bounds="[0,0][1080,2000]">
+      <node index="0" class="android.widget.TextView" text="Order #1234" package="com.acme.app" bounds="[108,${rowTop}][972,${rowTop + 200}]" />
+    </node>
+  </node>
+</hierarchy>`;
+    // Flush at 0.87..0.97; post-nudge at 0.75..0.85 (clearance 0.15) - done.
     let nudged = false;
-    currentTree = () => (nudged ? padded : flush);
+    currentTree = () =>
+      adaptFullAndroidHierarchyToDescribeResult(dump(nudged ? 1500 : 1740), 1080, 2000);
 
     const swipes: SwipeCall[] = [];
     const registry = mockRegistry(swipes, () => {
@@ -2889,6 +3068,51 @@ describe("scroll-to directive", () => {
     expect(swipes[0].settle).toBe(true);
     expect(swipes[0].fromY).toBeCloseTo(0.5, 5);
     expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.105, 5);
+  });
+
+  it("still nudges when the tvOS probe rejects - a dead probe cannot fail the step", async () => {
+    // The iOS half of the same hazard: the probe shells out to `xcrun simctl
+    // list`, which rejects on a missing/broken xcrun, an unreadable device set
+    // or its own timeout. Nothing between the gate and the step runner catches,
+    // so an unguarded rejection would report the step `error` and stop the run
+    // for a target that was already fully visible. A probe that cannot answer
+    // must resolve as not-tv: the run then costs a tvOS sim the bounded nudges
+    // below instead of a failed step. The geometry is the snapping list from
+    // "gives up after MAX_EDGE_NUDGES", so the rounds also pin that the
+    // fallback verdict is memoized - one probe call for three nudges, not one
+    // per round.
+    vi.mocked(isTvOsSimulator).mockRejectedValue(
+      new Error('xcrun simctl list failed: xcrun: error: unable to find utility "simctl"')
+    );
+    const at = (y: number) =>
+      screen([
+        fullScreenScroller(),
+        n({ label: "Snappy row", frame: { x: 0.1, y, width: 0.8, height: 0.08 } }),
+      ]);
+    const positions = [0.9, 0.88, 0.86, 0.85];
+    let round = 0;
+    currentTree = () => at(positions[Math.min(round, positions.length - 1)]);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      round++;
+    });
+
+    await writeFlow("tvos-probe-dead", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Snappy row" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "tvos-probe-dead", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["scroll-to:pass"]);
+    expect(swipes).toHaveLength(3);
+    expect(isTvOsSimulator).toHaveBeenCalledTimes(1);
+    expect(isTvOsSimulator).toHaveBeenCalledWith(DEVICE);
   });
 
   it("still nudges when the Android TV probe rejects - a dead probe cannot fail the step", async () => {

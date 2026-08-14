@@ -15,12 +15,14 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
 
 import { fetchFlowTree } from "../../src/tools/flows/flow-tree";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
+import { adaptFullAndroidHierarchyToDescribeResult } from "../../src/tools/flows/flow-android-tree";
 import { adaptFullHierarchyToDescribeResult } from "../../src/tools/flows/flow-ios-tree";
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { summarizeStep } from "../../src/tools/flows/flow-finish-recording";
 import { __resetRecordingsForTesting, parseFlow } from "../../src/tools/flows/flow-utils";
 
 const DEVICE = "00000000-0000-0000-0000-0000000000AB"; // iOS UDID shape
+const ANDROID_DEVICE = "emulator-5554"; // Android serial shape
 const FLOW = "rec";
 const PREREQ = "App on home screen";
 
@@ -58,7 +60,7 @@ function mockRegistry(): Registry {
   } as unknown as Registry;
 }
 
-async function recordTap(point: { x: number; y: number }) {
+async function recordTap(point: { x: number; y: number }, udid: string = DEVICE) {
   const tool = createFlowAddStepTool(mockRegistry());
   return tool.execute(
     {},
@@ -66,7 +68,7 @@ async function recordTap(point: { x: number; y: number }) {
       name: FLOW,
       project_root: tmpDir,
       command: "gesture-tap",
-      args: JSON.stringify({ udid: DEVICE, ...point }),
+      args: JSON.stringify({ udid, ...point }),
     }
   );
 }
@@ -272,31 +274,54 @@ describe("flow-add-step tap selector capture", () => {
   });
 
   it("keeps coordinates for a tap on dead space over a scrollable layout container", async () => {
-    // The Android flow tree emits an id-less, label-less layout container only
-    // because it is framework-marked scrollable (flow-android-tree's keep-gate,
-    // for the scroll-to nudge). nodeAtPoint then finds it under a tap that hits
-    // no row, and its class-fallback role must NOT become the selector: the
-    // containment guard accepts `{ role: "FrameLayout" }` (the scroller does
-    // cover the point) and replay would tap the list centre instead.
-    setTree([
-      n({
-        role: "FrameLayout",
-        scrollable: true,
-        frame: { x: 0, y: 0.1, width: 1, height: 0.8 },
-      }),
-      n({ label: "Row 1", frame: { x: 0.02, y: 0.12, width: 0.96, height: 0.04 } }),
+    // Driven through the real Android adapter, because the node under the tap
+    // exists only by that adapter's keep-gate: an id-less, label-less
+    // FrameLayout reaches the flow tree solely because it is framework-marked
+    // scrollable (for the scroll-to nudge), so drop `scrollable` from the dump
+    // and there is nothing under the tap at all. nodeAtPoint finds it under a
+    // tap that hits no row, and its class-fallback role must NOT become the
+    // selector: the containment guard accepts `{ role: "FrameLayout" }` (the
+    // scroller does cover the point) and replay would tap the list centre
+    // instead. The RecyclerView below is the control that keeps the refusal
+    // scoped to scaffolding - its role is a real one, and derivation must
+    // still reach the role branch for it.
+    currentTreeData = () => ({
+      tree: adaptFullAndroidHierarchyToDescribeResult(
+        `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,2000]">
+    <node index="0" class="android.widget.FrameLayout" scrollable="true" package="com.acme.app" bounds="[0,200][1080,1200]">
+      <node index="0" class="android.widget.TextView" text="Row 1" package="com.acme.app" bounds="[20,240][1060,320]" />
+    </node>
+    <node index="1" class="androidx.recyclerview.widget.RecyclerView" package="com.acme.app" bounds="[0,1200][1080,2000]">
+      <node index="0" class="android.widget.TextView" text="Comment 1" package="com.acme.app" bounds="[20,1240][1060,1320]" />
+    </node>
+  </node>
+</hierarchy>`,
+        1080,
+        2000
+      ),
+      source: "android-devtools",
+    });
+
+    // y 0.4 -> 800px: inside the scrollable FrameLayout, below its only row.
+    const scaffolding = await recordTap({ x: 0.5, y: 0.4 }, ANDROID_DEVICE);
+    expect(scaffolding.message).toContain("no stable text/id");
+
+    // y 0.8 -> 1600px: the same kind of dead space over the RecyclerView.
+    const genuine = await recordTap({ x: 0.5, y: 0.8 }, ANDROID_DEVICE);
+    expect(genuine.message).not.toContain("kept coordinates");
+
+    expect(await recordedSteps()).toEqual([
+      { kind: "tap", x: 0.5, y: 0.4 },
+      { kind: "tap", selector: { role: "ScrollView" } },
     ]);
-
-    const result = await recordTap({ x: 0.5, y: 0.6 });
-
-    expect(result.message).toContain("no stable text/id");
-    expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.5, y: 0.6 }]);
   });
 
-  it("still records a scroller's id, and a genuine scroll role, over the same dead space", async () => {
-    // The refusal is scoped to layout scaffolding: an identified scroller keeps
-    // its id, and a real ScrollView/RecyclerView keeps its role. Neither is a
-    // container the adapter walks through.
+  it("still records a scroller's id over the same dead space", async () => {
+    // The other half of the scoping: an identified scroller keeps its id, so
+    // the refusal above is about scaffolding with nothing to name it, not
+    // about scrollers.
     setTree([
       n({
         role: "FrameLayout",
@@ -304,17 +329,10 @@ describe("flow-add-step tap selector capture", () => {
         frame: { x: 0, y: 0.1, width: 1, height: 0.8 },
       }),
     ]);
+
     await recordTap({ x: 0.5, y: 0.6 });
 
-    setTree([
-      n({ role: "ScrollView", scrollable: true, frame: { x: 0, y: 0.1, width: 1, height: 0.8 } }),
-    ]);
-    await recordTap({ x: 0.5, y: 0.6 });
-
-    expect(await recordedSteps()).toEqual([
-      { kind: "tap", selector: { identifier: "feed" } },
-      { kind: "tap", selector: { role: "ScrollView" } },
-    ]);
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { identifier: "feed" } }]);
   });
 
   it("keeps coordinates for a tap on a UIKit row's dead space", async () => {

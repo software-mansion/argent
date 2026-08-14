@@ -126,18 +126,32 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
   });
 
   it("keeps a scrollable bare View (Compose LazyColumn shape) as a leaf", () => {
-    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+    const composeXml = (
+      scrollable: string
+    ) => `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
 <hierarchy rotation="0">
   <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
-    <node index="0" class="android.view.View" scrollable="true" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.view.View"${scrollable} package="com.acme.app" bounds="[0,0][1080,1920]">
       <node index="0" class="android.widget.TextView" text="Item 1" package="com.acme.app" bounds="[0,100][1080,200]" />
     </node>
   </node>
 </hierarchy>`;
-    const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+    const tree = adaptFullAndroidHierarchyToDescribeResult(
+      composeXml(' scrollable="true"'),
+      SCREEN_W,
+      SCREEN_H
+    );
     const scrollers = findAll(tree, { role: "View" });
     expect(scrollers).toHaveLength(1);
     expect(scrollers[0]!.scrollable).toBe(true);
+
+    // The flag is the ONLY thing keeping it: a bare android.view.View is
+    // Compose's no-widget-mapping scaffold, so the same node without it must
+    // stay pruned. Without this control the case passes either way - drop
+    // android.view.View from the parser's LAYOUT_CONTAINERS and the node
+    // returns through hasSemanticRole instead, with the flag doing nothing.
+    const pruned = adaptFullAndroidHierarchyToDescribeResult(composeXml(""), SCREEN_W, SCREEN_H);
+    expect(findAll(pruned, { role: "View" })).toHaveLength(0);
   });
 
   it("never leaks a password field's text as its value", () => {
