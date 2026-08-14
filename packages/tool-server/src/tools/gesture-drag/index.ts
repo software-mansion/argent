@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
+import type { ServiceRef, ToolCapability, ToolContext, ToolDefinition } from "@argent/registry";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { assertChromiumWindowVisible } from "../../utils/chromium-visibility";
 import { resolveDevice } from "../../utils/device-info";
@@ -72,7 +72,7 @@ Pass settle:true for a momentum-free drag that decelerates into the release, so 
   services: (params): Record<string, ServiceRef> => ({
     chromium: chromiumCdpRef(resolveDevice(params.udid)),
   }),
-  async execute(services, params) {
+  async execute(services, params, ctx?: ToolContext) {
     const timestampMs = Date.now();
     const chromium = services.chromium as ChromiumCdpApi;
     // A drag's ~60fps mouse moves each wait on compositor hit-testing, which a
@@ -110,6 +110,35 @@ Pass settle:true for a momentum-free drag that decelerates into the release, so 
     // number. Where frameMs falls under the round-trip the waits floor at 0 and
     // the span can only overrun; nothing dispatches faster than the CDP hop.
     const t0 = Date.now();
+    // Last dispatched pointer position, so an abort can release from where the
+    // pointer is.
+    let lastX = startPx.x;
+    let lastY = startPx.y;
+    // The whole press→release span holds a button down, so an abort is checked
+    // once per frame, as gesture-rotate checks its own: the deadline pacing above
+    // only moves where each wait sits, it does not change that a cancelled run
+    // must stop driving the page.
+    const abortError = (frame: number): Error => {
+      const err = new Error(
+        `gesture-drag aborted - cancelled mid-drag after ${frame} of ${steps + 1} frames`
+      );
+      err.name = "AbortError";
+      return err;
+    };
+    // The button is down by the time this runs, so release it where the pointer
+    // is: a cancelled drag must leave no stuck press (which would capture every
+    // later click) and must not deliver the travel the caller cancelled.
+    const releaseAndAbort = async (frame: number): Promise<never> => {
+      await chromium.dispatchMouseEvent({
+        type: "mouseReleased",
+        x: lastX,
+        y: lastY,
+        clickCount: 1,
+      });
+      throw abortError(frame);
+    };
+    // Nothing is pressed yet, so this one only declines.
+    if (ctx?.signal?.aborted) throw abortError(0);
     await chromium.dispatchMouseEvent({
       type: "mousePressed",
       x: startPx.x,
@@ -117,19 +146,24 @@ Pass settle:true for a momentum-free drag that decelerates into the release, so 
       clickCount: 1,
     });
     for (let i = 1; i < steps; i++) {
+      if (ctx?.signal?.aborted) await releaseAndAbort(i);
       await sleep(Math.max(0, t0 + i * frameMs - Date.now()));
       const t = i / steps;
       // A plain drag advances linearly; a `settle` drag eases-out so the
       // per-frame step shrinks toward the release, giving pointer-velocity
       // momentum code nothing to fling with.
       const progress = settle ? 1 - Math.pow(1 - t, SETTLE_EASE_EXPONENT) : t;
-      await chromium.dispatchMouseEvent({
-        type: "mouseMoved",
-        x: startPx.x + (endPx.x - startPx.x) * progress,
-        y: startPx.y + (endPx.y - startPx.y) * progress,
-        button: "left",
-      });
+      const x = startPx.x + (endPx.x - startPx.x) * progress;
+      const y = startPx.y + (endPx.y - startPx.y) * progress;
+      await chromium.dispatchMouseEvent({ type: "mouseMoved", x, y, button: "left" });
+      lastX = x;
+      lastY = y;
     }
+    // The loop stops one short of the release, so the final frame is checked
+    // here or an abort landing after the last move would still spend the last
+    // wait and then deliver the endpoint. gesture-swipe's `i <= steps` loop
+    // covers the same frame from the inside.
+    if (ctx?.signal?.aborted) await releaseAndAbort(steps);
     // Spend the last frame's wait here, not on another move at the endpoint: a
     // point there followed by a still frame reads as a hold, and app momentum
     // code derives its fling from this stream's release velocity.

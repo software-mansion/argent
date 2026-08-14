@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ToolCapability, ToolDefinition } from "@argent/registry";
+import type { ToolCapability, ToolContext, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
 import { sendCommand } from "../../utils/simulator-client";
@@ -96,7 +96,7 @@ Pass settle:true for a momentum-free swipe that lands exactly where the finger l
   services: (params) => ({
     simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
   }),
-  async execute(services, params) {
+  async execute(services, params, ctx?: ToolContext) {
     const duration = params.durationMs ?? DEFAULT_DURATION_MS;
     const settle = params.settle ?? false;
     const timestampMs = Date.now();
@@ -115,6 +115,9 @@ Pass settle:true for a momentum-free swipe that lands exactly where the finger l
     // only turn durationMs into a lie; a caller who wants a smaller fling
     // authors a shorter travel or a longer duration.
     const steps = Math.max(1, Math.round(duration / 16));
+    // Last dispatched sample, so an abort can lift from where the finger is.
+    let lastX = 0;
+    let lastY = 0;
     // Neither touch backend delivers the Up's coordinates: on both, the finger
     // lifts wherever the last Move landed. Measured on iOS 26.5 and an Android
     // emulator alike - a Down/Move/Up train whose Up jumped a further 0.2 of the
@@ -132,6 +135,30 @@ Pass settle:true for a momentum-free swipe that lands exactly where the finger l
     // the repeat against 803px without (n=14 each, run-to-run spread ~20px), so
     // any effect is well inside the noise.
     for (let i = 0; i <= steps; i++) {
+      // Every frame below is a 16ms sleep, so without this a cancelled run keeps
+      // driving the device for the rest of the duration - the client is gone and
+      // the finger is still down, its samples interleaving into whatever gesture
+      // is sent to that device next.
+      if (ctx?.signal?.aborted) {
+        // Once Down has been dispatched the synthetic finger is on the glass -
+        // send a terminal Up so a cancelled run doesn't leave it held down.
+        if (i > 0) {
+          sendCommand(api, {
+            cmd: "touch",
+            type: "Up",
+            x: lastX,
+            y: lastY,
+            second_x: null,
+            second_y: null,
+          });
+        }
+        const err = new Error(
+          `gesture-swipe aborted - cancelled mid-gesture after ${i} of ${steps + 1} frames`
+        );
+        err.name = "AbortError";
+        throw err;
+      }
+
       const t = i / steps;
       // `settle` lifts at ~0 velocity, so the OS applies no fling. Ease-out
       // beats a train of identical "hold" samples: those get coalesced away,
@@ -161,6 +188,8 @@ Pass settle:true for a momentum-free swipe that lands exactly where the finger l
         second_x: null,
         second_y: null,
       });
+      lastX = x;
+      lastY = y;
       if (i < steps) await sleep(16);
     }
 
