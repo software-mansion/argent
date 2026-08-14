@@ -1156,8 +1156,20 @@ async function scrollIncrement(
  * serial shape - so each takes the runtime probe its platform provides, the
  * same pairing `describe` and `await-ui-element` resolve. `ios-remote` is never
  * tvOS: the probe reads the LOCAL simulator list, so it would answer without
- * having looked. Both probes shell out (simctl / adb), so resolve this once and
- * only where the verdict changes the outcome.
+ * having looked. Both probes shell out (simctl / adb), so the caller resolves
+ * this at most once per call and only where the verdict changes the outcome -
+ * `tvVeto` is a local, so a run of N nudging `scroll-to` steps pays N times.
+ *
+ * What each side pays on that call differs, and only the iOS one is free after
+ * the first. `getSimulatorRuntimeKind` memoizes a resolved kind for the process,
+ * so every later step returns from the cache. The android memo covers only the
+ * capability probe: `getAndroidRuntimeKind` runs `adb devices` first to check
+ * the serial is ready, plus both `avd_name` getprops for an `emulator-NNNN`
+ * serial, BEFORE it consults the cache - so a nudging step always costs at
+ * least one adb round-trip. Neither probe takes the run's abort signal
+ * (`runAdb` has none: 30 s for the `adb devices` hop, 5 s each for the
+ * getprops), so a cancelled run still waits out a wedged adb server here, at a
+ * point where the step's own work is already done.
  */
 async function isTvDevice(device: DeviceInfo): Promise<boolean> {
   if (device.platform === "ios") return isTvOsSimulator(device.id);
