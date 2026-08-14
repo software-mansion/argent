@@ -1206,12 +1206,13 @@ async function isTvDevice(device: DeviceInfo): Promise<boolean> {
  * and MAX_EDGE_NUDGES caps the retries. None of the three binds when the first
  * acceptance lands in the last few iterations: that round's nudge goes out with
  * no round left to read it back, so MAX_SCROLL_ITERATIONS ends the phase
- * instead, as a pass that warns the landing was never read. Once the
- * axis check has accepted the target the step can no longer fail, and only
- * nudge-sized gestures are dispatched — a round that loses the target ends
- * the loop as a pass. Cancelling the run is the one non-pass exit left: the
- * nudge rounds re-check the abort signal, so a cancelled run reports the
- * uniform aborted skip rather than that pass.
+ * instead, as a pass that warns the landing was never read. Once the axis
+ * check has accepted the target the step can no longer fail, and only
+ * nudge-sized gestures are dispatched — a round whose tree no longer holds the
+ * target fully in view ends the loop as a pass too, warning like the exit
+ * above that the landing it reports went unconfirmed. Cancelling the run is
+ * the one non-pass exit left: the nudge rounds re-check the abort signal, so a
+ * cancelled run reports the uniform aborted skip rather than that pass.
  */
 async function scrollToVisible(
   env: ActionEnv,
@@ -1374,8 +1375,30 @@ async function scrollToVisible(
     // re-render, a snap list paging in response to the nudge) must stop as a
     // pass: the loop never reverses, so there is no recovery gesture, and
     // falling through would dispatch a default half-clip increment -
-    // uncounted plain-search scrolling past the already-found target.
-    if (accepted && nudge === 0) return { found: true };
+    // uncounted plain-search scrolling past the already-found target. It warns
+    // like the other post-acceptance bail-outs, and for a sharper reason: this
+    // is the one whose tree came back, either without the target at all or
+    // showing a landing the acceptance no longer holds for - a known-bad
+    // landing under-reports as badly as an unread one, so the warning branches
+    // on which of the two came back. Reaching here with `accepted` means the
+    // previous round dispatched a nudge - every other post-acceptance path
+    // returns before dispatching - and this is the tree that should have read
+    // that nudge back.
+    if (accepted && nudge === 0) {
+      return {
+        found: true,
+        warning:
+          `the nudge that clears the target of the screen edge went out, and ` +
+          (frame
+            ? `the tree that came back no longer showed ${describeSelector(target)} fully in ` +
+              `view - it was back across an edge of the clip window (the screen, or the within ` +
+              `container when the step names one) - so the landing this pass reports was never ` +
+              `confirmed`
+            : `${describeSelector(target)} was gone from the tree that came back, so where that ` +
+              `nudge left the target was never read`) +
+          SWALLOWED_NUDGE_NOTE,
+      };
+    }
 
     // Fingerprint only the scrolled content: a continuously-animating node
     // outside it (a spinner, a ticking clock) would keep a wider fingerprint

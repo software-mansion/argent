@@ -1230,7 +1230,11 @@ describe("scroll-to directive", () => {
     // DIFFERENT content, so end-of-scroll never fires. Never-reverse leaves no
     // recovery gesture: the loop must stop at the accepted frame, not fall
     // back to full-size plain-search increments carrying the viewport further
-    // past the target.
+    // past the target. It stops as a pass WITH a warning: this is the
+    // vanished-target half of that bail-out's message (the sibling below
+    // covers the half where the frame comes back and just isn't accepted), and
+    // a green scroll-to whose landing was never read is what sends the next
+    // step's tap into the off-screen hint.
     const flush = screen([
       fullScreenScroller(),
       n({ label: "Order #1234", frame: { x: 0.1, y: 0.88, width: 0.8, height: 0.1 } }),
@@ -1262,6 +1266,64 @@ describe("scroll-to directive", () => {
     // Exactly the nudge (0.08 deficit × 1.5) — no follow-up full-size scroll.
     expect(swipes).toHaveLength(1);
     expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.12, 5);
+    // The pass names what it swallowed: the target left the tree the nudge
+    // should have been read back from.
+    expect(result.steps[0].warning).toContain("gone from the tree");
+    expect(result.steps[0].warning).toContain("screen-edge chrome");
+  });
+
+  it("passes with a warning when the nudge round's tree no longer holds the target in view", async () => {
+    // The bail-out above, read for its other half: the one post-nudge exit
+    // whose tree DID come back with the target, at a landing the acceptance no
+    // longer holds for. The target is accepted at 0.87..0.97, one nudge goes
+    // out, and the tree that should have measured it brings the row back flush
+    // against the bottom (0.93..1.0): the list rubber-banded the nudge away and
+    // settled with the row clipped by the fold again. Flush against the entry
+    // edge is the universal clipped signal, so the axis check does not
+    // re-accept it (fEnd 1.0 has to clear 0.995, and the row covers nowhere
+    // near the whole clip) - the landing is read, and read as worse than the
+    // acceptance the step reports. The landing stays inside [0,1] on purpose -
+    // every adapter clamps frames to the screen before normalising, so a tree
+    // with an off-screen frame is not one the pipeline can produce. The pass
+    // stands (acceptance is never revoked) but must say so, or the next step's
+    // tap fails with the off-screen hint against a green scroll-to.
+    const flush = screen([
+      fullScreenScroller(),
+      n({ label: "Order #1234", frame: { x: 0.1, y: 0.87, width: 0.8, height: 0.1 } }),
+    ]);
+    const rubberBanded = screen([
+      fullScreenScroller(),
+      n({ label: "Order #1234", frame: { x: 0.1, y: 0.93, width: 0.8, height: 0.07 } }),
+    ]);
+    let nudged = false;
+    currentTree = () => (nudged ? rubberBanded : flush);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      nudged = true;
+    });
+
+    await writeFlow("rubber-banded-nudge", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Order #1234" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "rubber-banded-nudge", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    // The one nudge (0.07 deficit x 1.5) and no follow-up search increment.
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.105, 5);
+    // The pass names the landing it could not stand behind: read, and read as
+    // not fully in view - not the never-read wording its vanished-target
+    // sibling above carries.
+    expect(result.steps[0].warning).toContain('no longer showed text="Order #1234" fully in view');
+    expect(result.steps[0].warning).toContain("never confirmed");
+    expect(result.steps[0].warning).toContain("screen-edge chrome");
   });
 
   it("stops at the accepted frame when the within container vanishes mid-nudge", async () => {
