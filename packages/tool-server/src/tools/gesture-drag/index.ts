@@ -22,6 +22,16 @@ const SETTLE_EASE_EXPONENT = 3;
 // nothing, and the flow swipe directive floors duration well above that.
 const SETTLE_MIN_STEPS = 8;
 
+// Ceiling on the drag time, the same one gesture-swipe carries and for the same
+// reason: durationMs is wall clock the run spends with the left button held
+// down, paced one frame per ~16ms, so an unbounded value is an unbounded press.
+// A drag is worse off than a swipe here - the button stays down across a hidden
+// window, a navigation, a tab close - and it is one continuous pointer stroke,
+// which is what the 10s envelope bounds (MAX_DERIVED_ROTATE_MS, whose own
+// gesture limit derives from it). 10s against a 300ms default leaves any real
+// slider drag or drag-and-drop an order of magnitude of headroom.
+const MAX_DURATION_MS = 10_000;
+
 const zodSchema = z.object({
   udid: z.string().describe("Target Chromium device id from `list-devices` (chromium-cdp-<port>)."),
   fromX: z.number().describe("Press x: normalized 0.0–1.0 (fraction of window width, not pixels)."),
@@ -32,8 +42,13 @@ const zodSchema = z.object({
   toY: z.number().describe("Release y: normalized 0.0–1.0 (not pixels; same space as tap)."),
   durationMs: z
     .number()
+    .max(MAX_DURATION_MS, {
+      message: `durationMs must be at most ${MAX_DURATION_MS} (10s): the drag holds the left button down for exactly this long, one frame per ~16ms, so a larger value is that much wall clock spent mid-press.`,
+    })
     .optional()
-    .describe("Total drag duration in milliseconds (default 300), interpolated at ~60fps."),
+    .describe(
+      `Total drag duration in milliseconds (default 300, at most ${MAX_DURATION_MS} - the button stays down for exactly this long), interpolated at ~60fps.`
+    ),
   settle: z
     .boolean()
     .optional()

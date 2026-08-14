@@ -56,6 +56,8 @@ describe("swipe: parse/serialize", () => {
         { kind: "swipe" as const, from: { x: 0.9, y: 0.5 }, to: { x: 0.1, y: 0.5 }, duration: 800 },
         // 150 is the exact tap/swipe floor on the time axis — must round-trip clean.
         { kind: "swipe" as const, direction: "up" as const, duration: 150 },
+        // And 10000 is the exact ceiling on that same axis.
+        { kind: "swipe" as const, direction: "up" as const, duration: 10_000 },
       ],
     };
     expect(parseFlow(serializeFlow(flow)).steps).toEqual(flow.steps);
@@ -171,6 +173,26 @@ describe("swipe: parse/serialize", () => {
         })
       ).toThrow(
         /cannot serialize flow swipe\.duration: only \d+ms — below the minimum swipe duration of 150ms.*too few 16ms frames for the content to track the travel/i
+      );
+    }
+  );
+
+  it.each([
+    ["one millisecond over the ceiling", 10_001],
+    ["a duration authored in the wrong unit", 20_000],
+    ["a value that clears the finite check", 1e21],
+  ])(
+    "rejects a programmatic swipe duration of %s as an unbounded held touch",
+    (_description, duration) => {
+      // Finite and positive, but the dispatch would hold the finger down for
+      // exactly this long. Serialize must reject exactly what parse rejects.
+      expect(() =>
+        serializeFlow({
+          executionPrerequisite: "",
+          steps: [{ kind: "swipe", direction: "left", duration }],
+        })
+      ).toThrow(
+        /cannot serialize flow swipe\.duration: \S+ms - above the maximum swipe duration of 10000ms.*hold a finger on the screen/i
       );
     }
   );
@@ -317,6 +339,25 @@ describe("swipe: parse/serialize", () => {
   it("accepts the exact minimum swipe duration", () => {
     const steps = parseFlow("steps:\n  - swipe: { direction: left, duration: 150 }\n").steps;
     expect(steps).toEqual([{ kind: "swipe", direction: "left", duration: 150 }]);
+  });
+
+  it.each([
+    ["one millisecond over the ceiling", "10001"],
+    ["a duration authored in the wrong unit", "20000"],
+    ["a literal that clears parsePositiveMs's finite check", "1e21"],
+  ])("rejects a duration of %s as an unbounded held touch", (_description, value) => {
+    // The floor is about delivery fidelity; this is about cost. The dispatch
+    // sleeps 16ms per frame with the finger down, so `duration` is wall clock
+    // the run and the device both spend, and 1e21 never returns at all - the
+    // loop outlives the CLI and keeps feeding the device.
+    expect(() => parseFlow(`steps:\n  - swipe: { direction: left, duration: ${value} }\n`)).toThrow(
+      /swipe\.duration is \S+ms - above the maximum swipe duration of 10000ms.*holds a finger on the screen/i
+    );
+  });
+
+  it("accepts the exact maximum swipe duration", () => {
+    const steps = parseFlow("steps:\n  - swipe: { direction: left, duration: 10000 }\n").steps;
+    expect(steps).toEqual([{ kind: "swipe", direction: "left", duration: 10000 }]);
   });
 
   it("normalizes settle: false to absent (round-trip stays inverse)", () => {
