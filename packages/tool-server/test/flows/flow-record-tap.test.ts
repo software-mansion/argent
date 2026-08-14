@@ -15,6 +15,7 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
 
 import { fetchFlowTree } from "../../src/tools/flows/flow-tree";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
+import { adaptFullHierarchyToDescribeResult } from "../../src/tools/flows/flow-ios-tree";
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { summarizeStep } from "../../src/tools/flows/flow-finish-recording";
 import { __resetRecordingsForTesting, parseFlow } from "../../src/tools/flows/flow-utils";
@@ -35,6 +36,16 @@ function screen(children: DescribeNode[]): DescribeNode {
 
 function setTree(children: DescribeNode[], source: DescribeTreeData["source"] = "native-devtools") {
   currentTreeData = () => ({ tree: screen(children), source });
+}
+
+// Same stub, fed through the REAL iOS adapter: what the recorder can derive
+// from an iOS screen depends on which views the adapter emits, so a hand-built
+// DescribeNode would pin the recorder against a tree no device produces.
+function setIosTree(raw: unknown) {
+  currentTreeData = () => ({
+    tree: adaptFullHierarchyToDescribeResult(raw),
+    source: "native-devtools",
+  });
 }
 
 function mockRegistry(): Registry {
@@ -303,6 +314,67 @@ describe("flow-add-step tap selector capture", () => {
     expect(await recordedSteps()).toEqual([
       { kind: "tap", selector: { identifier: "feed" } },
       { kind: "tap", selector: { role: "ScrollView" } },
+    ]);
+  });
+
+  it("keeps coordinates for a tap on a UIKit row's dead space", async () => {
+    // The iOS arm of the same refusal, driven through the real full-hierarchy
+    // adapter because the bug lives in what that adapter emits. A stock
+    // UITableViewCell carries no identifier and no label, so the row is only in
+    // the tree at all by its cell role - and that role is scaffolding every row
+    // on the screen shares, so the tap keeps its coordinates. Both halves are
+    // load-bearing: drop the row from the tree and nodeAtPoint returns the list,
+    // whose frame covers the whole screen, so the containment guard waves
+    // `{ id: list }` through and replay taps the middle of the list; keep the
+    // row but derive `{ role: "AXCell" }` and replay taps the first row.
+    const SCREEN = { x: 0, y: 0, width: 400, height: 800 };
+    setIosTree({
+      windows: [
+        {
+          className: "UIWindow",
+          frame: SCREEN,
+          windowFrame: SCREEN,
+          children: [
+            {
+              className: "UITableView",
+              identifier: "list",
+              windowFrame: SCREEN,
+              children: [0, 1, 2, 3].map((row) => {
+                const y = 100 + row * 100;
+                return {
+                  className: "UITableViewCell",
+                  windowFrame: { x: 0, y, width: 400, height: 100 },
+                  children: [
+                    {
+                      // The row's only nameable content, in its left third -
+                      // the tap lands to the right of it.
+                      className: "UILabel",
+                      label: `Row ${row + 1}`,
+                      windowFrame: { x: 16, y: y + 35, width: 110, height: 30 },
+                      children: [],
+                    },
+                  ],
+                };
+              }),
+            },
+          ],
+        },
+      ],
+    });
+
+    // 0.306 * 800 = 244.8pt: dead space in the second row.
+    const deadSpace = await recordTap({ x: 0.75, y: 0.306 });
+    expect(deadSpace.message).toContain("no stable text/id");
+
+    // Same row and same height, over its label: keeping coordinates above is
+    // about what the tap hit, not about the row being unaddressable, so the
+    // nameable half of the same row must still record a selector.
+    const onLabel = await recordTap({ x: 0.2, y: 0.306 });
+    expect(onLabel.message).not.toContain("kept coordinates");
+
+    expect(await recordedSteps()).toEqual([
+      { kind: "tap", x: 0.75, y: 0.306 },
+      { kind: "tap", selector: { text: "Row 2" } },
     ]);
   });
 

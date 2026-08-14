@@ -4,6 +4,7 @@ import {
   assertText,
   evaluateCondition,
   findAll,
+  nodeAtPoint,
   selectorToFrame,
   treeFingerprint,
 } from "../src/utils/ui-tree-match";
@@ -543,7 +544,7 @@ describe("describe full-hierarchy adapter", () => {
   // scroll their content. Reporting them as AXScrollArea made every row a
   // scroll container, and the edge-avoid nudge's smallest-containing-scroller
   // resolution then picked the cell over its list - see targetScrollerFrame.
-  it("does not classify cell classes as scroll areas", () => {
+  it("classifies cell classes as cells, not scroll areas", () => {
     const raw = {
       windows: [
         {
@@ -619,45 +620,44 @@ describe("describe full-hierarchy adapter", () => {
     for (const id of ["list", "grid", "pane"]) {
       expect(findAll(tree, { identifier: id })[0]!.role).toBe("AXScrollArea");
     }
-    // ...while every cell shape falls back to a plain group.
-    for (const id of [
-      "cell",
-      "cell-content",
-      "swiftui-cell",
-      "swiftui-collection-cell",
-      "grid-cell",
-    ]) {
-      expect(findAll(tree, { identifier: id })[0]!.role).toBe("AXGroup");
+    // ...while every row shape is a cell...
+    for (const id of ["cell", "swiftui-cell", "swiftui-collection-cell", "grid-cell"]) {
+      expect(findAll(tree, { identifier: id })[0]!.role).toBe("AXCell");
     }
+    // ...and a row's internals stay a plain group.
+    expect(findAll(tree, { identifier: "cell-content" })[0]!.role).toBe("AXGroup");
   });
 
-  // UIKit class names are suffix-typed, so the tail names the kind of view.
-  // Reading a scroller word anywhere in the name (and excluding "Cell" the same
-  // way) is wrong at both ends: it promotes a row's internals and demotes
-  // genuine scrollers whose name happens to carry "Cell".
-  it("keys the scroll-area role on the class name suffix, not on a substring", () => {
+  // UIKit class names are suffix-typed, so the tail names the kind of view, and
+  // the cell and scroller tests both read it. Reading either word anywhere in
+  // the name is wrong at both ends: it promotes a row's internals to a row and
+  // demotes genuine scrollers whose name happens to carry "Cell".
+  it("keys the cell and scroll-area roles on the class name suffix, not on a substring", () => {
     const cases: [string, string][] = [
       // Plain scrollers.
       ["UIScrollView", "AXScrollArea"],
       ["UITableView", "AXScrollArea"],
       ["UICollectionView", "AXScrollArea"],
-      // Rows, their internals and a list's chrome: none of them scroll.
-      ["UITableViewCell", "AXGroup"],
-      ["UICollectionViewCell", "AXGroup"],
-      ["SwiftUI.ListCollectionViewCell", "AXGroup"],
+      // Rows: they do not scroll, and they are not scaffolding either - a stock
+      // one carries no id and no label, so only their own role keeps them.
+      ["UITableViewCell", "AXCell"],
+      ["UICollectionViewCell", "AXCell"],
+      ["SwiftUI.ListCollectionViewCell", "AXCell"],
+      ["MyPhotoCell", "AXCell"],
+      // A row's internals and a list's chrome: neither a row nor a scroller.
       ["UITableViewCellContentView", "AXGroup"],
       ["_UITableViewCellSeparatorView", "AXGroup"],
       ["UITableViewWrapperView", "AXGroup"],
       ["_UIScrollViewScrollIndicator", "AXGroup"],
-      // Genuine scrollers a "Cell" exclusion demoted: UIKit's swipe-actions
-      // scroller under a row, and an app's own class.
+      // Genuine scrollers a "Cell" test on the whole name would demote: UIKit's
+      // swipe-actions scroller under a row, and an app's own class.
       ["UITableViewCellScrollView", "AXScrollArea"],
       ["PhotoCellCollectionView", "AXScrollArea"],
       // A Swift GENERIC class arrives mangled with its type arguments after the
       // class name (here SwiftUI's ScrollView backing view, and a List cell);
       // a plain Swift class still ends with it.
       ["_TtGC7SwiftUI19UIHostingScrollViewVS_7AnyView_", "AXScrollArea"],
-      ["_TtGC7SwiftUI22ListCollectionViewCellVS_7AnyView_", "AXGroup"],
+      ["_TtGC7SwiftUI22ListCollectionViewCellVS_7AnyView_", "AXCell"],
       ["_TtC7SwiftUI33UpdateCoalescingCollectionView", "AXScrollArea"],
     ];
     const raw = {
@@ -684,12 +684,58 @@ describe("describe full-hierarchy adapter", () => {
     expect(actual).toEqual(cases);
   });
 
-  // An anonymous cell is no longer emitted at all (the leaf gate keeps only
-  // nodes with an id, a label, a specific role or focus), so it no longer
-  // carries the list's motion into treeFingerprint - the end-of-scroll and
-  // settle signal. What still covers a list: anything nameable in the row.
-  it("keeps a list fingerprinted through an anonymous cell's children", () => {
-    const rows = (offset: number, children: (row: number, y: number) => unknown[]): unknown => ({
+  // The role is not cosmetic - it is what carries a row past the leaf gate. A
+  // stock UIKit cell has no identifier and no label, so any role the gate treats
+  // as scaffolding drops the whole row: the list's rows leave the flow tree, and
+  // a tap on a row's dead space resolves to the list that covers the screen.
+  it("emits an anonymous cell of every form as a leaf", () => {
+    const forms = [
+      "UITableViewCell",
+      "UICollectionViewCell",
+      "SwiftUI.ListCollectionViewCell",
+      "_TtGC7SwiftUI22ListCollectionViewCellVS_7AnyView_",
+      "MyPhotoCell",
+    ];
+    const raw = {
+      windows: [
+        {
+          className: "UIWindow",
+          frame: SCREEN,
+          windowFrame: SCREEN,
+          children: [
+            {
+              className: "UITableView",
+              identifier: "list",
+              windowFrame: SCREEN,
+              children: forms.map((className, i) => ({
+                className,
+                // No identifier, no label - exactly what UIKit reports.
+                windowFrame: { x: 0, y: 100 + i * 100, width: 400, height: 100 },
+                children: [],
+              })),
+            },
+          ],
+        },
+      ],
+    };
+    const tree = adaptFullHierarchyToDescribeResult(raw);
+
+    expect(findAll(tree, { role: "AXCell" })).toHaveLength(forms.length);
+    // ...and the row is what a tap on its dead space finds, not the list.
+    const hit = nodeAtPoint(tree, { x: 0.75, y: 0.306 });
+    expect(hit?.role).toBe("AXCell");
+    expect(hit?.frame.y).toBeCloseTo(200 / 800, 5); // the second row, at y=200
+  });
+
+  // An anonymous cell clears the leaf gate on its own role, so it carries the
+  // list's motion into treeFingerprint - the end-of-scroll and settle signal.
+  // A row class that is NOT a cell still needs something nameable in it.
+  it("fingerprints a list through anonymous cells, and a non-cell row through its children", () => {
+    const rows = (
+      rowClass: string,
+      offset: number,
+      children: (row: number, y: number) => unknown[]
+    ): unknown => ({
       windows: [
         {
           className: "UIWindow",
@@ -703,8 +749,8 @@ describe("describe full-hierarchy adapter", () => {
               children: [0, 1].map((row) => {
                 const y = 100 + row * 100 - offset;
                 return {
-                  // No identifier, no label: nameable only through its children.
-                  className: "UITableViewCell",
+                  // No identifier, no label: named only by its class kind.
+                  className: rowClass,
                   windowFrame: { x: 0, y, width: 400, height: 100 },
                   children: children(row, y),
                 };
@@ -735,24 +781,31 @@ describe("describe full-hierarchy adapter", () => {
       },
     ];
 
-    // The cells themselves are gone - the tree holds the list plus each row's
-    // text and image...
-    const tree = adaptFullHierarchyToDescribeResult(rows(0, named));
-    expect(findAll(tree, { role: "AXGroup" })).toHaveLength(0);
-    expect(tree.children).toHaveLength(5);
-    // ...and those children move with their row, so a scroll still shows.
+    // The list, both cells, and each row's text and image...
+    const tree = adaptFullHierarchyToDescribeResult(rows("UITableViewCell", 0, named));
+    expect(findAll(tree, { role: "AXCell" })).toHaveLength(2);
+    expect(tree.children).toHaveLength(7);
+    // ...all move with their row, so a scroll shows.
     expect(treeFingerprint(tree)).not.toBe(
-      treeFingerprint(adaptFullHierarchyToDescribeResult(rows(40, named)))
+      treeFingerprint(adaptFullHierarchyToDescribeResult(rows("UITableViewCell", 40, named)))
     );
 
-    // The documented residual: rows with nothing nameable anywhere leave only
-    // the list itself, whose frame does not move, so the scroll reads as
-    // finished. Every other unnamed row class (React Native, custom UIView)
-    // has always behaved this way.
-    const bare = adaptFullHierarchyToDescribeResult(rows(0, anonymous));
+    // The cells alone are enough: rows with nothing nameable inside them still
+    // move the fingerprint.
+    const bareCells = adaptFullHierarchyToDescribeResult(rows("UITableViewCell", 0, anonymous));
+    expect(bareCells.children).toHaveLength(3);
+    expect(treeFingerprint(bareCells)).not.toBe(
+      treeFingerprint(adaptFullHierarchyToDescribeResult(rows("UITableViewCell", 40, anonymous)))
+    );
+
+    // The documented residual: a non-cell row class with nothing nameable
+    // anywhere leaves only the list itself, whose frame does not move, so the
+    // scroll reads as finished. Unnamed React Native and custom UIView rows
+    // have always behaved this way.
+    const bare = adaptFullHierarchyToDescribeResult(rows("RCTView", 0, anonymous));
     expect(bare.children).toHaveLength(1);
     expect(treeFingerprint(bare)).toBe(
-      treeFingerprint(adaptFullHierarchyToDescribeResult(rows(40, anonymous)))
+      treeFingerprint(adaptFullHierarchyToDescribeResult(rows("RCTView", 40, anonymous)))
     );
   });
 

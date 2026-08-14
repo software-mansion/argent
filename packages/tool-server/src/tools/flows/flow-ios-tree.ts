@@ -135,15 +135,22 @@ function roleFromClassName(cn: string | undefined): string {
   if (/Image/i.test(cn)) return "AXImage";
   if (/(Slider|Stepper|Switch|ProgressView)/i.test(cn)) return "AXAdjustable";
   // UIKit class names are suffix-typed, so the tail names the kind of view and
-  // the scroller test keys on it rather than on a substring anywhere in the
-  // name: `UITableViewCell` / `UITableViewCellContentView` /
-  // `UITableViewWrapperView` carry a scroller word but do not scroll their
-  // content, and the edge-avoid nudge resolves a target's container to the
-  // smallest containing scroller - a scrollable-flagged cell would shadow its
-  // list. Excluding `Cell` anywhere in the name instead would demote genuine
-  // scrollers: `UITableViewCellScrollView` (the swipe-actions scroller UIKit
-  // puts under a row) and an app's own `PhotoCellCollectionView`.
-  if (/(ScrollView|TableView|CollectionView)$/i.test(baseClassName(cn))) return "AXScrollArea";
+  // both tests below key on it rather than on a substring anywhere in the name.
+  // A row (`UITableViewCell`, `UICollectionViewCell`) carries a scroller word
+  // but does not scroll its content, and the edge-avoid nudge resolves a
+  // target's container to the smallest containing scroller - a
+  // scrollable-flagged cell would shadow its list. It is not a plain group
+  // either: a stock cell - like an app's own `MyPhotoCell` - carries no
+  // identifier and no label, so the leaf gate below would drop it and a tap on
+  // a row's dead space would resolve to the whole list. A role of its own keeps
+  // the row in the tree while staying out of the scroller set, which
+  // `isScrollContainer` reads off the role by matching "scroll". Reading `Cell`
+  // anywhere in the name would take genuine scrollers down with the rows:
+  // `UITableViewCellScrollView` (the swipe-actions scroller UIKit puts under a
+  // row) and an app's own `PhotoCellCollectionView`.
+  const base = baseClassName(cn);
+  if (/Cell$/i.test(base)) return "AXCell";
+  if (/(ScrollView|TableView|CollectionView)$/i.test(base)) return "AXScrollArea";
   return "AXGroup";
 }
 
@@ -195,12 +202,13 @@ function projectIosNode(
 
   // Nothing nameable, no leaf: a row whose whole subtree is unnamed plain views
   // is absent from the tree, so it carries none of the list's motion into
-  // `treeFingerprint` (settle detection, end-of-scroll). Anything nameable in
-  // the row covers it - its own testID/label, or a descendant with text or an
-  // image, each emitted and moving with the row. Uniform gate behaviour, not a
-  // cell gap: an unnamed React Native or custom row class has always been
-  // dropped here, and UIKit cells only differed while they were misread as
-  // scrollers (see roleFromClassName).
+  // `treeFingerprint` (settle detection, end-of-scroll), and a tap on its dead
+  // space resolves to the list instead. Anything nameable in the row covers it -
+  // its own testID/label, or a descendant with text or an image, each emitted
+  // and moving with the row. A UIKit cell needs none of that: `AXCell` is a
+  // specific role (see roleFromClassName), so a stock id-less, label-less row
+  // clears this gate on its own terms. The residual is the unnamed React Native
+  // or custom row class, which this gate has always dropped.
   let leaf: DescribeNode | null = null;
   let frame: DescribeFrame | null = null;
   if (!skip && (node.identifier || node.label || role !== "AXGroup" || node.firstResponder)) {

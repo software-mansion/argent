@@ -831,6 +831,11 @@ const GENERIC_ROLES = new Set([
   // FrameLayout must keep its coordinates rather than become
   // `{ role: "FrameLayout" }`, which replays at the scroller's centre.
   ...Array.from(LAYOUT_CONTAINER_ROLES, (role) => role.toLowerCase()),
+  // The iOS counterpart: a cell is a list's scaffolding, not an element, and
+  // every row on the screen shares the role. A tap on a row's dead space must
+  // keep its coordinates rather than become `{ role: "AXCell" }`, which replays
+  // at whichever cell the ranking elects - the first row, not the tapped one.
+  "axcell",
 ]);
 
 export function deriveSelector(node: DescribeNode): Selector | null {
