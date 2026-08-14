@@ -1331,11 +1331,20 @@ async function scrollToVisible(
         // the only scroll-to shape that could pass on a TV, and it must stay a
         // zero-gesture pass instead of spending the wasted swipe and settle the
         // progress check bounds it to. An unknown runtime resolves as not-tv
-        // (nudges proceed). Gated on the geometry above, which returns 0 for
-        // most accepted targets: the probes shell out, so they must not be
-        // paid on a return path that would otherwise do no I/O at all.
+        // (nudges proceed), and so does a probe that cannot answer at all - the
+        // android one shells out to `adb devices`, which rejects on a missing
+        // adb, any non-zero exit (a client/server version mismatch) or its own
+        // timeout. Post-acceptance nothing may
+        // fail the step (see the latch), and a probe outage says nothing about
+        // the app: guessing not-tv costs a TV one bounded, progress-checked
+        // swipe, while propagating would fail a step whose target was already
+        // visible. The fallback verdict memoizes like a real one, so a broken
+        // probe is paid at most once per call. Gated on the geometry above,
+        // which returns 0 for most accepted targets: the probes shell out, so
+        // they must not be paid on a return path that would otherwise do no
+        // I/O at all.
         if (nudge > 0) {
-          tvVeto ??= await isTvDevice(env.device);
+          tvVeto ??= await isTvDevice(env.device).catch(() => false);
           if (tvVeto) nudge = 0;
         }
       }

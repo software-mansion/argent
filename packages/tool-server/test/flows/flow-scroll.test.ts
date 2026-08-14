@@ -2731,6 +2731,52 @@ describe("scroll-to directive", () => {
     expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.105, 5);
   });
 
+  it("still nudges when the Android TV probe rejects - a dead probe cannot fail the step", async () => {
+    // The android probe shells out to `adb devices`, which rejects outright on
+    // a missing adb or a client/server version mismatch - an everyday condition
+    // with two platform-tools installs on the PATH. Nothing between the gate
+    // and the step runner catches, so an unguarded rejection would report the
+    // step `error` and stop the run for a target that was already fully
+    // visible. A probe that cannot answer must resolve as not-tv: the run then
+    // costs a TV the bounded nudges below instead of a failed step. The
+    // geometry is the snapping list from "gives up after MAX_EDGE_NUDGES", so
+    // the rounds also pin that the fallback verdict is memoized - one probe
+    // call for three nudges, not one per round.
+    vi.mocked(isAndroidTv).mockRejectedValue(new Error("adb devices failed: adb: not found"));
+    const at = (y: number) =>
+      screen([
+        fullScreenScroller(),
+        n({ label: "Snappy row", frame: { x: 0.1, y, width: 0.8, height: 0.08 } }),
+      ]);
+    const positions = [0.9, 0.88, 0.86, 0.85];
+    let round = 0;
+    currentTree = () => at(positions[Math.min(round, positions.length - 1)]);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      round++;
+    });
+
+    await writeFlow("android-probe-dead", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", target: { text: "Snappy row" }, direction: "down" }],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute(
+        {},
+        { name: "android-probe-dead", project_root: tmpDir, device: ANDROID_DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["scroll-to:pass"]);
+    expect(swipes).toHaveLength(3);
+    expect(isAndroidTv).toHaveBeenCalledTimes(1);
+    expect(isAndroidTv).toHaveBeenCalledWith(ANDROID_DEVICE);
+  });
+
   it("does not probe the runtime kind when the geometry asks for no nudge", async () => {
     // The tv veto only matters when a gesture is about to go out, and the probe
     // shells out to `xcrun simctl` (seconds on a cold list, no cache for a UDID
