@@ -1279,7 +1279,7 @@ export const SWIPE_MIN_TRAVEL = 0.03;
  * flicks are bad style: a genuinely sub-floor flick belongs in a raw
  * `tool: gesture-swipe` step.
  */
-export const SWIPE_MIN_DURATION_MS = 150;
+const SWIPE_MIN_DURATION_MS = 150;
 
 /**
  * The other end of the same axis. Unlike the floor this is not about delivery
@@ -1302,7 +1302,7 @@ export const SWIPE_MIN_DURATION_MS = 150;
  * tools carry the same ceiling on their own `durationMs` - the flow directive is
  * one of several ways in, and the abort check only rescues a cancelled run.
  */
-export const SWIPE_MAX_DURATION_MS = 10_000;
+const SWIPE_MAX_DURATION_MS = 10_000;
 
 /**
  * The same ceiling on `long-press.duration`, which buys the same thing on the
