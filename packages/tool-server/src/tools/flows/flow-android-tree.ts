@@ -30,8 +30,15 @@ import {
  * clickable) into a passthrough and discards the node carrying the id.
  *
  * This module parses the same dump without that trim: it flattens the
- * hierarchy keeping **every** view with a `resource-id` (RN `testID`) or a
- * label — exactly the shape `flow-ios-tree.ts` produces on iOS. The trim's
+ * hierarchy keeping **every** view a selector could address — a `resource-id`
+ * (RN `testID`), a label, or a concrete semantic role — plus the two the
+ * runner needs whether or not a selector can name them: the focused view
+ * (the type directive's focus wait) and a framework-marked scrollable one
+ * (the scroll-to nudge's container lookup and its end-of-scroll scope). See
+ * `projectAndroidNode` for what each buys. `flow-ios-tree.ts` produces the
+ * same KIND of tree on iOS, not the same gate: the UIView hierarchy carries
+ * no scrollable flag, so there a scroller and a list row reach the tree
+ * through the role their class name derives instead. The trim's
  * scroll-clip prune IS preserved (see `flattenHoisting`): a view a scrolling
  * ancestor has scrolled out of its window is dropped here too, so the flow
  * tree agrees with the agent-facing `describe` on what is visible. Throws when
