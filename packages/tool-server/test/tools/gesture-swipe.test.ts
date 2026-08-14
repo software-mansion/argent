@@ -19,8 +19,8 @@ vi.mock("../../src/utils/simulator-client", () => ({
 import { gestureSwipeTool } from "../../src/tools/gesture-swipe";
 
 const services = { simulatorServer: {} } as never;
-// Platform is classified from the id's shape and the end-point repeat is gated on
-// it, so the fling tests below must run on a genuinely iOS-shaped id.
+// Platform is classified from the id's shape, so an iOS-shaped id is what proves
+// the end-point repeat is not gated on platform.
 const IOS_UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
 const ANDROID_SERIAL = "emulator-5554";
 const base = { udid: IOS_UDID, fromX: 0.5, fromY: 0.7, toX: 0.5, toY: 0.2 };
@@ -47,8 +47,8 @@ describe("gesture-swipe", () => {
     expect(sent[0]).toMatchObject({ type: "Down", x: 0.5, y: 0.7 });
     expect(sent.filter((e) => e.type === "Up")).toHaveLength(1);
     expect(sent.at(-1)).toMatchObject({ type: "Up", x: 0.5, y: 0.2 });
-    // Only the single final interpolation keyframe lands exactly on the end point.
-    expect(trailingStationaryMoves(sent, 0.5, 0.2)).toBeLessThanOrEqual(1);
+    // One stationary sample only, the end-point repeat, not a hold train.
+    expect(trailingStationaryMoves(sent, 0.5, 0.2)).toBe(1);
   });
 
   it("decelerates into the end point (ease-out) before lifting when settling", async () => {
@@ -58,8 +58,9 @@ describe("gesture-swipe", () => {
     expect(sent.filter((e) => e.type === "Up")).toHaveLength(1);
     expect(sent.at(-1)).toMatchObject({ type: "Up", x: 0.5, y: 0.2 });
     // The momentum-free landing comes from a decelerating trajectory, not a
-    // stationary hold (which UIKit coalesces away, so the fling survives).
-    expect(trailingStationaryMoves(sent, 0.5, 0.2)).toBeLessThanOrEqual(1);
+    // stationary hold (which UIKit coalesces away, so the fling survives): the
+    // one stationary sample is the end-point repeat.
+    expect(trailingStationaryMoves(sent, 0.5, 0.2)).toBe(1);
 
     // Ease-out: consecutive-sample travel shrinks toward the lift, so the release
     // velocity decays to ~0. The last step is a small fraction of the first.
@@ -71,7 +72,7 @@ describe("gesture-swipe", () => {
   });
 });
 
-// The Android touch backend lifts at the last Move's position and drops the Up's
+// Both touch backends lift at the last Move's position and drop the Up's
 // coordinates, so the end point has to be sent as a Move as well or the whole
 // gesture is delivered a step short — silently, with the step reporting `pass`.
 describe("gesture-swipe end-point delivery", () => {
@@ -97,20 +98,30 @@ describe("gesture-swipe end-point delivery", () => {
     expect(lift.x - sent[0].x).toBeCloseTo(-0.6, 12);
   });
 
-  it("leaves the iOS train untouched — the Up alone carries the end point", async () => {
+  it("repeats it on iOS too: the Up's coordinates are dropped there as well", async () => {
     await gestureSwipeTool.execute(services, { udid: IOS_UDID, ...across });
 
-    // Byte-for-byte the pre-fix sequence: a duplicate sample before the lift
-    // would hand UIKit an extra near-zero interval and damp the fling.
+    // iOS drops the lift's coordinates exactly as Android does. Measured on a
+    // booted iPhone 17 Pro / iOS 26.5: a Down at 0.5 / Move to 0.45 / Up at 0.25
+    // train landed the lift at the Move's y (331.33px, never the 156px asked
+    // for), a bare Down 0.8 / Up 0.2 pair scrolled neither Settings nor a web
+    // page at all, and an unrepeated default swipe arrived 5% short (50% at
+    // durationMs 32) - the shortfall tracking frame count, as it only can if
+    // the lift carries no position of its own. Repeating does not cost the
+    // fling: the same swipe settles a page 806px down with the repeat vs 803px
+    // without (n=14 each, spread ~20px), so any effect is inside the noise.
     expect(sent.map((e) => `${e.type}@${e.x.toFixed(3)}`)).toEqual([
       "Down@0.600",
       "Move@0.400",
       "Move@0.200",
+      "Move@0.000",
       "Up@0.000",
     ]);
+    expect(sent.filter((e) => e.type === "Up")).toHaveLength(1);
+    expect(sent.at(-2)!.x - sent[0].x).toBeCloseTo(-0.6, 12);
   });
 
-  it("gates on platform, not device kind: a physical Android serial repeats too", async () => {
+  it("repeats for a physical device serial too, not only an emulator", async () => {
     await gestureSwipeTool.execute(services, { udid: "R5CT10ABCDE", ...across });
 
     expect(sent).toHaveLength(5);
