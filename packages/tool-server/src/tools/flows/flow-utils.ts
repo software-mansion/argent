@@ -870,7 +870,8 @@ type TapBody = YamlTarget | { on: YamlTarget; times?: number };
  * start→end segment on-screen rather than truncating the delta, so its
  * touch-down is the centre only while each axis delta stays within 0.5 (see
  * runSwipe). `duration` is the travel time in milliseconds, floored at
- * {@link SWIPE_MIN_DURATION_MS} — shorter is delivered as a tap, not a swipe.
+ * {@link SWIPE_MIN_DURATION_MS} — shorter overshoots the travel it asks for
+ * instead of landing on it.
  */
 type SwipeBody =
   | SwipeDirection
@@ -1206,16 +1207,26 @@ export const SWIPE_MIN_TRAVEL = 0.03;
 
 /**
  * The same tap/swipe boundary on the TIME axis: gesture-swipe interpolates one
- * move per ~16ms frame, so under a few frames the device gets a bare Down/Up
- * pair with too few (at 16ms, zero) intermediate moves for a pan recognizer to
- * see a travel — the gesture lands as a tap on the start point however far it
- * was meant to go.
+ * move per ~16ms frame, so a sub-floor duration leaves the content too few of
+ * them to track the travel it was given. At 16ms that used to arrive as a
+ * bare Down/Up pair, no intermediate move at all, and the gesture landed as a
+ * tap on the start point however far it was meant to go. Now that the end point
+ * is repeated as a Move before the lift, the same duration arrives as the fastest
+ * flick either platform can be handed, and the content overshoots the authored
+ * travel by multiples: measured against a scrollable page, travel 0.6 of the
+ * screen, settled scroll, durationMs 16 moves iOS 26.5 by 14343px and an API 34
+ * emulator by 7727px (its saturated maximum fling), against 1247px / 1001px for
+ * the same swipe at the default 300ms. The overshoot decays with the frame count
+ * rather than switching off at some sample count - on iOS 7678px at 33ms (two
+ * moves), 5231px at 50ms (three), 2088px at this floor - so the boundary is an
+ * envelope, not a cliff. A bare Down/Up pair still scrolls 0: at 16ms on both
+ * platforms, at 33ms on iOS.
  *
- * 150ms is 8 moves over 9 frames. Measured on iOS a pan needs ~50ms of them to
- * read as a pan at all (33ms yields one move and is still a tap), so the floor
- * leaves real margin for slower recognizers and gives `settle`'s ease-out
- * enough samples to bend — with a single sample it inverts, measuring a
- * HIGHER release velocity than the linear ramp. It is applied on every
+ * 150ms is 9 moves across 9 frames: 8 interpolated plus that repeat. It is also
+ * the wall clock `settle`'s ease-out needs to be read as a stop instead of
+ * inverting; gesture-swipe refuses `settle` below this same duration, a shorter
+ * one being fitted as a flick rather than a stop (a fling back to the top of the
+ * list on Android, 1.6x the plain swipe's on iOS). The floor is applied on every
  * platform, though Chromium's `gesture-drag` floors its own step count and so
  * never degenerates to a bare press/release: there the floor is margin rather
  * than a rescue. An envelope on faithful delivery, not a judgment that fast
@@ -1291,7 +1302,7 @@ function swipeDurationToYaml(value: number): number {
   const duration = positiveMsToYaml(value, "swipe.duration");
   if (duration < SWIPE_MIN_DURATION_MS) {
     throw new Error(
-      `Cannot serialize flow swipe.duration: only ${duration}ms — below the minimum swipe duration of ${SWIPE_MIN_DURATION_MS}ms — too few interpolated moves for a pan recognizer to see a travel, so the gesture lands as a tap on the start point`
+      `Cannot serialize flow swipe.duration: only ${duration}ms — below the minimum swipe duration of ${SWIPE_MIN_DURATION_MS}ms — that leaves too few 16ms frames for the content to track the travel it was given, so it overshoots instead of landing on it`
     );
   }
   return duration;
@@ -2808,11 +2819,12 @@ function parseSwipe(body: unknown, entry: unknown): FlowStep {
   if (obj.duration !== undefined) {
     const duration = parsePositiveMs(obj.duration, entry, "swipe.duration", "duration: 800");
     // The time-axis twin of parseSwipeBy's magnitude gate: too short and the
-    // dispatch carries too few interpolated moves to read as a travel at all.
+    // dispatch packs the travel into so few frames that what the content does
+    // stops tracking what was authored.
     if (duration < SWIPE_MIN_DURATION_MS) {
       badEntry(
         entry,
-        `swipe.duration is only ${duration}ms — below the minimum swipe duration of ${SWIPE_MIN_DURATION_MS}ms; that leaves too few interpolated moves for a pan recognizer to see a travel, so the gesture lands as a tap on the start point`
+        `swipe.duration is only ${duration}ms — below the minimum swipe duration of ${SWIPE_MIN_DURATION_MS}ms; that leaves too few 16ms frames for the content to track the travel it was given, so it overshoots instead of landing on it`
       );
     }
     step.duration = duration;

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Registry } from "@argent/registry";
 
 // Capture the touch-event train the tool sends to the simulator-server. The
 // momentum-free (`settle`) behavior lives entirely in this event sequence, so
@@ -69,6 +70,57 @@ describe("gesture-swipe", () => {
     expect(gaps.at(-1)!).toBeLessThan(gaps[0]);
     // Monotonic and in-bounds: every sample sits between the start and end point.
     expect(ys.every((y) => y >= 0.2 - 1e-9 && y <= 0.7 + 1e-9)).toBe(true);
+  });
+});
+
+// An ease-out needs wall clock, not samples: given less than ~150ms both OS
+// velocity trackers fit the deceleration as a flick and `settle` delivers the
+// opposite of what it promises. Measured against a scrollable page, durationMs
+// 24 flings the content back to the top of the list on an API 34 emulator and
+// 11624px forward on iOS 26.5, where the same swipe without `settle` runs
+// 7345px. The combination is refused at the schema, which is where every
+// dispatch path (HTTP, run-sequence, flow-execute) validates.
+describe("gesture-swipe settle duration floor", () => {
+  const params = { udid: IOS_UDID, fromX: 0.5, fromY: 0.8, toX: 0.5, toY: 0.2, settle: true };
+
+  it.each([16, 24, 100, 149])("rejects settle at durationMs %i", (durationMs) => {
+    const result = gestureSwipeTool.zodSchema!.safeParse({ ...params, durationMs });
+
+    expect(result.success).toBe(false);
+    expect(result.error!.issues[0]).toMatchObject({
+      path: ["durationMs"],
+      message: expect.stringContaining("settle needs durationMs of at least 150"),
+    });
+  });
+
+  it("accepts settle at the floor, above it, and on the default duration", () => {
+    for (const durationMs of [150, 600]) {
+      expect(gestureSwipeTool.zodSchema!.safeParse({ ...params, durationMs }).success).toBe(true);
+    }
+    expect(gestureSwipeTool.zodSchema!.safeParse(params).success).toBe(true);
+  });
+
+  it("refuses the combination through a real dispatch, not only at the schema", async () => {
+    // Registry.invokeTool validates zodSchema before it resolves services or
+    // calls execute, so the refine reaches every caller and no touch is sent.
+    const registry = new Registry();
+    registry.registerTool(gestureSwipeTool);
+
+    await expect(
+      registry.invokeTool("gesture-swipe", { ...params, durationMs: 24 })
+    ).rejects.toThrow(/settle needs durationMs of at least 150/);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("leaves a plain swipe free at any duration: its fling is the one asked for", () => {
+    // The short-duration fling is not a `settle` artifact and is not gated. At
+    // durationMs 16 the ramps are the same train (one Move, one frame), and what
+    // comes back tracks the authored velocity up to the platform's own clamp.
+    for (const durationMs of [1, 16, 33]) {
+      expect(
+        gestureSwipeTool.zodSchema!.safeParse({ ...params, settle: false, durationMs }).success
+      ).toBe(true);
+    }
   });
 });
 
@@ -148,7 +200,14 @@ describe("gesture-swipe end-point delivery", () => {
   });
 
   it("keeps a settling Android swipe exact and still lifts once", async () => {
-    await gestureSwipeTool.execute(services, { udid: ANDROID_SERIAL, ...across, settle: true });
+    // 160ms rather than `across`'s 50: `execute` never consults the schema, but
+    // the train asserted here should be one a real dispatch can reach.
+    await gestureSwipeTool.execute(services, {
+      udid: ANDROID_SERIAL,
+      ...across,
+      durationMs: 160,
+      settle: true,
+    });
 
     expect(sent.filter((e) => e.type === "Up")).toHaveLength(1);
     // One stationary sample at the end point — the repeat, not a hold: a train of
