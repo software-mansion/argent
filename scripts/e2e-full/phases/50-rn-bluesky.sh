@@ -81,12 +81,14 @@ run_phase() {
   local D="\"device_id\":\"$LID\",\"port\":$MPORT"
 
   # --- debugger chain -------------------------------------------------------
-  # Both of these answer 200 while reporting that the debugger is NOT connected,
-  # so the exit code alone says only that the server replied. debugger-status
-  # carries `connected`; debugger-log-registry carries the same state through
-  # `status` ("connected" on a healthy call, "not_connected" when the runtime is
-  # unreachable) — the `// "connected"` default below covers the pre-#610 shape
-  # where that field was absent.
+  # Both of these answer 200 even when the debugger is not connected, so the
+  # exit code alone says only that the server replied. debugger-status is the
+  # dead-session gate: its `.connected` fails even over a half-closed socket.
+  # debugger-log-registry does not gate on socket state, so its `status` only
+  # turns "not_connected" when the runtime itself is unreachable ("connected"
+  # on a healthy call); the `// "connected"` default below covers the pre-#610
+  # shape where that field was absent, so on this base the log-registry line is
+  # a no-op that only bites once #610 is in the tree.
   assert_true  "$P" debugger-status status "{$D}" '.connected'
   assert_field "$P" debugger-evaluate eval "{$D,\"expression\":\"1+1\"}" '(.result|tostring)' '2'
   assert_field "$P" debugger-log-registry logs "{$D}" '(.status // "connected")' 'connected'
