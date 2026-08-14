@@ -426,3 +426,34 @@ describe("gesture-swipe duration ceiling", () => {
     expect(sent).toHaveLength(0);
   });
 });
+
+// The ease-out rides on the interpolated Moves: steps = max(1, round(duration/16))
+// and the loop emits a Move only for 0 < i < steps, so 23ms is 1 step (Down
+// straight to the end-point repeat and the Up, nothing eased) and 24ms is 2
+// (Math.round(1.5) === 2) for exactly one eased sample. Unreachable through the
+// schema - momentum: false is refused below 150ms - so this pins execute's own
+// arithmetic, on both platforms, the end-point repeat being gated on neither
+// steps nor platform; the eased sample is told apart by position, since the
+// cubic puts it at 1-(1-0.5)^3 = 87.5% of the travel (x 0.075), never on the
+// end point.
+describe("gesture-swipe interpolated-Move boundary", () => {
+  const across = { fromX: 0.6, fromY: 0.5, toX: 0.0, toY: 0.5, momentum: false };
+
+  // Ordered title-first: the leading %s/%d/%d name the case, the rest is fixture.
+  it.each([
+    ["iOS", 23, 0, IOS_UDID, ["Down@0.600", "Move@0.000", "Up@0.000"]],
+    ["iOS", 24, 1, IOS_UDID, ["Down@0.600", "Move@0.075", "Move@0.000", "Up@0.000"]],
+    ["Android", 23, 0, ANDROID_SERIAL, ["Down@0.600", "Move@0.000", "Up@0.000"]],
+    ["Android", 24, 1, ANDROID_SERIAL, ["Down@0.600", "Move@0.075", "Move@0.000", "Up@0.000"]],
+  ] as const)(
+    "%s at durationMs %d eases %d interpolated Move(s)",
+    async (_device, durationMs, eased, udid, train) => {
+      const events = await swipeTrain({ ...across, udid, durationMs });
+
+      expect(events.map((e) => `${e.type}@${e.x.toFixed(3)}`)).toEqual(train);
+      // A Move away from the end point is an eased sample, the one on it is the
+      // repeat.
+      expect(events.filter((e) => e.type === "Move" && e.x !== across.toX)).toHaveLength(eased);
+    }
+  );
+});
