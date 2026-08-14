@@ -11,9 +11,13 @@ interface TouchCmd {
   y: number;
 }
 const sent: TouchCmd[] = [];
+// Runs after each dispatch is recorded, so the abort tests below can cancel on
+// an exact event index rather than racing the 16ms frame timer.
+let afterSend: ((count: number) => void) | undefined;
 vi.mock("../../src/utils/simulator-client", () => ({
   sendCommand: (_api: unknown, cmd: TouchCmd) => {
     sent.push(cmd);
+    afterSend?.(sent.length);
   },
 }));
 
@@ -39,6 +43,7 @@ function trailingStationaryMoves(events: TouchCmd[], x: number, y: number): numb
 
 beforeEach(() => {
   sent.length = 0;
+  afterSend = undefined;
 });
 
 describe("gesture-swipe", () => {
@@ -213,5 +218,82 @@ describe("gesture-swipe end-point delivery", () => {
     // One stationary sample at the end point — the repeat, not a hold: a train of
     // them coalesces away, leaving the fast pre-hold velocity to fling.
     expect(trailingStationaryMoves(sent, 0.0, 0.5)).toBe(1);
+  });
+});
+
+// Every frame is a real 16ms sleep with the finger down, so a run that is
+// cancelled and never consults the signal keeps driving the device for the rest
+// of its duration: measured against a booted iPhone 17 Pro, an abandoned
+// gesture went on dispatching Moves for minutes after its client was killed,
+// interleaving its samples into every later gesture on that device (three
+// vertical swipes arrived as the abandoned stream alone) until the tool-server
+// was restarted. Same contract as gesture-rotate's, tested the same way (see
+// gesture-rotate-radius.test.ts).
+describe("gesture-swipe abort", () => {
+  // 300 steps → 301 frames if it ever ran to completion.
+  const long = { ...base, durationMs: 4800 };
+
+  it("lifts the finger where it is and rejects when aborted mid-gesture", async () => {
+    const controller = new AbortController();
+    // Abort synchronously from inside the send hook after the 3rd dispatched
+    // event - deterministic, no real-time races.
+    afterSend = (count) => {
+      if (count === 3) controller.abort();
+    };
+
+    await expect(
+      gestureSwipeTool.execute(services, long, { signal: controller.signal } as never)
+    ).rejects.toThrow(/gesture-swipe aborted - cancelled mid-gesture after 3 of 301 frames/);
+
+    // Down + 2 Moves before the abort lands, then only the terminal Up.
+    expect(sent.map((e) => e.type)).toEqual(["Down", "Move", "Move", "Up"]);
+    // The lift is at the last dispatched sample, not the authored end point: a
+    // finger teleporting to the end of a gesture the caller cancelled would
+    // deliver the travel anyway.
+    expect(sent.at(-1)).toMatchObject({ x: sent.at(-2)!.x, y: sent.at(-2)!.y });
+    expect(sent.at(-1)!.y).toBeGreaterThan(base.toY);
+  });
+
+  it("lifts instead of completing when the abort lands on the final frame", async () => {
+    // 3 steps, so the 4th and last frame is the one that would dispatch the
+    // end-point Move and the Up. `i <= steps` is what puts that frame inside the
+    // checked loop; gesture-drag's `i < steps` needs a check after its own loop
+    // to cover it (see chromium-drag.test.ts).
+    const controller = new AbortController();
+    afterSend = (count) => {
+      if (count === 3) controller.abort();
+    };
+
+    await expect(
+      gestureSwipeTool.execute(services, { ...base, durationMs: 48 }, {
+        signal: controller.signal,
+      } as never)
+    ).rejects.toThrow(/gesture-swipe aborted - cancelled mid-gesture after 3 of 4 frames/);
+
+    expect(sent.map((e) => e.type)).toEqual(["Down", "Move", "Move", "Up"]);
+    // Lifted where the finger was; the authored end point never arrives.
+    expect(sent.at(-1)).toMatchObject({ x: sent.at(-2)!.x, y: sent.at(-2)!.y });
+    expect(sent.at(-1)!.y).toBeGreaterThan(base.toY);
+  });
+
+  it("puts no finger down at all when the signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      gestureSwipeTool.execute(services, long, { signal: controller.signal } as never)
+    ).rejects.toThrow(/gesture-swipe aborted - cancelled mid-gesture after 0 of 301 frames/);
+    expect(sent).toEqual([]);
+  });
+
+  it("runs to completion on a signal that never aborts", async () => {
+    const controller = new AbortController();
+
+    const result = await gestureSwipeTool.execute(services, { ...base, durationMs: 48 }, {
+      signal: controller.signal,
+    } as never);
+
+    expect(result.swiped).toBe(true);
+    expect(sent.map((e) => e.type)).toEqual(["Down", "Move", "Move", "Move", "Up"]);
   });
 });

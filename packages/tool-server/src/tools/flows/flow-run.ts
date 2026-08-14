@@ -2558,6 +2558,13 @@ async function execLeafStep(
         }
         return { ...base, status: "pass", tool: step.name, result, outputHint, args };
       } catch (err) {
+        // A gesture tool that consults the signal rejects when the run is
+        // cancelled mid-dispatch. Per ABORTED_OUTCOME that is a skip, the same
+        // as the directives and the delay above — never a step failure carrying
+        // the tool's own "aborted after N of M frames" as its reason.
+        if (signal?.aborted) {
+          return { ...base, status: "skip", tool: step.name, reason: ABORTED_OUTCOME.reason };
+        }
         return { ...base, status: "error", tool: step.name, reason: errMsg(err) };
       }
     }

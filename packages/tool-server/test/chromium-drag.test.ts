@@ -303,3 +303,121 @@ describe("gesture-drag", () => {
     ).toThrow(UnsupportedOperationError);
   });
 });
+
+// A drag holds the left button down for the whole durationMs, one frame per
+// ~16ms, so a run cancelled mid-drag that never consults the signal keeps
+// driving the page - and worse than a swipe does, because a press left down
+// captures every later click. Same contract gesture-rotate has on touch.
+describe("gesture-drag abort", () => {
+  // 300 steps if it ever ran to completion; frameMs stays ~16.
+  const long = {
+    udid: "chromium-cdp-19222",
+    fromX: 0.25,
+    fromY: 0.5,
+    toX: 0.75,
+    toY: 0.5,
+    durationMs: 4800,
+  };
+
+  it("releases the button where the pointer is and rejects when aborted mid-drag", async () => {
+    const api = fakeChromiumApi();
+    const controller = new AbortController();
+    // Abort synchronously from inside the dispatch after the press and 2 moves -
+    // deterministic, no real-time races.
+    let dispatched = 0;
+    api.dispatchMouseEvent.mockImplementation(async () => {
+      if (++dispatched === 3) controller.abort();
+    });
+
+    await expect(
+      gestureDragTool.execute(
+        { chromium: api } as never,
+        long as never,
+        {
+          signal: controller.signal,
+        } as never
+      )
+    ).rejects.toThrow(/gesture-drag aborted - cancelled mid-drag after 3 of 301 frames/);
+
+    const calls = api.dispatchMouseEvent.mock.calls.map((c) => c[0] as Record<string, unknown>);
+    expect(calls.map((c) => c.type)).toEqual([
+      "mousePressed",
+      "mouseMoved",
+      "mouseMoved",
+      "mouseReleased",
+    ]);
+    // The release lands on the last dispatched move, not the authored end point:
+    // jumping to the end would deliver the drag the caller cancelled.
+    expect(calls[3]).toMatchObject({ x: calls[2]!.x, y: calls[2]!.y });
+    expect(calls[3]!.x as number).toBeLessThan(0.75 * 800 - 1);
+  });
+
+  it("releases where the pointer is when the abort lands on the final frame", async () => {
+    // The move loop stops one short of the release, so this frame sits OUTSIDE
+    // it: unchecked, a drag cancelled here spent the last wait, released at the
+    // authored end point and returned { dragged: true } with the signal already
+    // aborted. gesture-swipe covers the same frame from inside its `i <= steps`
+    // loop (see tools/gesture-swipe.test.ts).
+    const api = fakeChromiumApi();
+    const controller = new AbortController();
+    // 3 steps at durationMs 48, so dispatch 3 is the last interpolated move and
+    // the next frame is the release.
+    let dispatched = 0;
+    api.dispatchMouseEvent.mockImplementation(async () => {
+      if (++dispatched === 3) controller.abort();
+    });
+
+    await expect(
+      gestureDragTool.execute(
+        { chromium: api } as never,
+        { ...long, durationMs: 48 } as never,
+        {
+          signal: controller.signal,
+        } as never
+      )
+    ).rejects.toThrow(/gesture-drag aborted - cancelled mid-drag after 3 of 4 frames/);
+
+    const calls = api.dispatchMouseEvent.mock.calls.map((c) => c[0] as Record<string, unknown>);
+    expect(calls.map((c) => c.type)).toEqual([
+      "mousePressed",
+      "mouseMoved",
+      "mouseMoved",
+      "mouseReleased",
+    ]);
+    expect(calls[3]).toMatchObject({ x: calls[2]!.x, y: calls[2]!.y });
+    expect(calls[3]!.x as number).toBeLessThan(0.75 * 800 - 1);
+  });
+
+  it("presses nothing when the signal is already aborted", async () => {
+    const api = fakeChromiumApi();
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      gestureDragTool.execute(
+        { chromium: api } as never,
+        long as never,
+        {
+          signal: controller.signal,
+        } as never
+      )
+    ).rejects.toThrow(/gesture-drag aborted - cancelled mid-drag after 0 of 301 frames/);
+    expect(api.dispatchMouseEvent).not.toHaveBeenCalled();
+  });
+
+  it("runs to completion on a signal that never aborts", async () => {
+    const api = fakeChromiumApi();
+    const controller = new AbortController();
+
+    const result = await gestureDragTool.execute(
+      { chromium: api } as never,
+      { ...long, durationMs: 64 } as never,
+      { signal: controller.signal } as never
+    );
+
+    expect(result.dragged).toBe(true);
+    const calls = api.dispatchMouseEvent.mock.calls.map((c) => c[0] as Record<string, unknown>);
+    expect(calls[0]!.type).toBe("mousePressed");
+    expect(calls[calls.length - 1]).toMatchObject({ type: "mouseReleased", x: 0.75 * 800 });
+  });
+});

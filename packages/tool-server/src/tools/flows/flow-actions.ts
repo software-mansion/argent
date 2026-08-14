@@ -782,14 +782,22 @@ async function scrollIncrement(
       to = { x: clamp01(cx + dist), y: cy };
       break;
   }
-  await invokeOnDevice(env, "gesture-swipe", {
-    fromX: cx,
-    fromY: cy,
-    toX: to.x,
-    toY: to.y,
-    settle: true,
-    durationMs: 600,
-  });
+  try {
+    await invokeOnDevice(env, "gesture-swipe", {
+      fromX: cx,
+      fromY: cy,
+      toX: to.x,
+      toY: to.y,
+      settle: true,
+      durationMs: 600,
+    });
+  } catch (err) {
+    // The tool rejects when cancelled mid-gesture. Swallow that here and let
+    // scrollToVisible's next-iteration abort check produce the uniform aborted
+    // skip, rather than surfacing the tool's message as a scroll-to error.
+    if (env.signal?.aborted) return;
+    throw err;
+  }
 }
 
 /**
@@ -1568,11 +1576,18 @@ async function runSwipe(
     ...(step.duration !== undefined ? { durationMs: step.duration } : {}),
     ...(step.settle ? { settle: true } : {}),
   };
-  await invokeOnDevice(
-    env,
-    env.device.platform === "chromium" ? "gesture-drag" : "gesture-swipe",
-    travel
-  );
+  try {
+    await invokeOnDevice(
+      env,
+      env.device.platform === "chromium" ? "gesture-drag" : "gesture-swipe",
+      travel
+    );
+  } catch (err) {
+    // Both tools reject when cancelled mid-gesture; per ABORTED_OUTCOME that must
+    // read as an aborted skip, never a step failure with the tool's message.
+    if (env.signal?.aborted) return ABORTED_OUTCOME;
+    throw err;
+  }
 
   // The momentum this swipe created is this step's business: only a SELECTOR
   // target makes the next step wait, so a following point target would touch
