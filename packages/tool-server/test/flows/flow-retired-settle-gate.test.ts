@@ -22,6 +22,9 @@
  *   - the refusal beats step ORDER: an earlier `echo` never reports pass, which
  *     is the whole point of gating before the run rather than letting the step
  *     fail when it is reached, after earlier steps have driven the device;
+ *   - the position the refusal names is the AUTHORED one - the step's place in
+ *     the file, echo included - and the message says which counting it uses,
+ *     since the report renderers do not agree on one;
  *   - a recorded `run-sequence` batch is covered too: its nested `steps[].args`
  *     reach the sub-tool's schema exactly as a `tool:` step's args reach its
  *     tool's, and the refusal names the nested position and the nested tool;
@@ -138,6 +141,13 @@ function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** The outermost position a refusal names: the step the counting qualifier follows. */
+function positionIn(message: string): string {
+  const named = /step \d+(?= as written)/.exec(message);
+  if (!named) throw new Error(`refusal names no step position: ${message}`);
+  return named[0];
+}
+
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-retired-settle-"));
 });
@@ -201,6 +211,35 @@ describe("flow-execute refuses the retired `settle` key through the real registr
     expect(messageOf(err)).toContain("momentum: false");
   });
 
+  // The numbering itself, and the contract it commits to: the position is the
+  // step's place in the FILE as written, so an echo ahead of it DOES shift the
+  // number - the same swipe is step 2 behind one and step 1 without. That is
+  // the deliberate choice, not an oversight to be "fixed" toward a renderer: a
+  // flow refused before the run starts has no report line to point at, and no
+  // report numbering would serve anyway (argent-cli's four renderers skip echo,
+  // argent-mcp's flowRunToMcpContent counts it, and both number flat across a
+  // block's body where this numbers per level). The message therefore carries
+  // the counting rule, which is what makes a bare "step 2" readable - and it is
+  // the whole agent-facing contract, since the MCP hop drops error_code and
+  // failure_stage.
+  it("names the step's authored position, echo counted, and says which counting that is", async () => {
+    await writeSteps("gate-echo", [
+      { kind: "echo", message: "runs first" },
+      swipeStep({ settle: true }),
+    ]);
+    await writeSteps("gate-no-echo", [swipeStep({ settle: true })]);
+
+    const withEcho = messageOf(await refusalOf("gate-echo", IOS_DEVICE));
+    const withoutEcho = messageOf(await refusalOf("gate-no-echo", IOS_DEVICE));
+
+    expect(positionIn(withEcho)).toBe("step 2");
+    expect(positionIn(withoutEcho)).toBe("step 1");
+    // Stated once per message, whatever the nesting, and adjacent to the number
+    // it qualifies.
+    expect(withEcho).toContain("step 2 as written (echo included) passes");
+    expect(withEcho.match(/as written/g)).toHaveLength(1);
+  });
+
   // `when:` bodies are walked because their steps are already parsed and in
   // hand, and a guarded step drives the device exactly as late as any other.
   it("refuses a settle step inside a when: block, naming where it sits", async () => {
@@ -215,7 +254,10 @@ describe("flow-execute refuses the retired `settle` key through the real registr
 
     const err = await refusalOf("when-settle", IOS_DEVICE);
 
-    expect(messageOf(err)).toContain("step 1 of the when: block at step 2");
+    // Both levels in one name, qualified once, at the end where it covers both.
+    expect(messageOf(err)).toContain(
+      "step 1 of the when: block at step 2 as written (echo included)"
+    );
     expect(messageOf(err)).toContain("gesture-swipe's retired `settle` key");
   });
 
