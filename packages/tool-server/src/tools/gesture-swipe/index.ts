@@ -70,18 +70,22 @@ Pass settle:true for a momentum-free swipe that lands exactly where the finger l
     const timestampMs = Date.now();
     const api = services.simulatorServer as SimulatorServerApi;
     const steps = Math.max(1, Math.round(duration / 16));
-    // Android's touch backend drops the Up's coordinates — the finger lifts
-    // wherever the last Move landed — so without repeating the end point as a
-    // Move the swipe is delivered short of where it was authored. How short
-    // depends on the ramp below: a plain swipe stops a full step out, at
-    // authored × (steps-1)/steps; a `settle` swipe's ease-out has already
-    // closed all but (1/steps)^n of the travel — orders of magnitude nearer,
-    // but still not the end point, so the repeat is unconditional rather than
-    // gated on `!settle`, and settling is what `scroll-to` always asks for.
-    // iOS honours the Up, and a duplicate sample before it would feed UIKit's
-    // velocity estimator an extra near-zero interval and damp the fling.
-    const repeatEndPointBeforeLift = resolveDevice(params.udid).platform === "android";
-
+    // Neither touch backend delivers the Up's coordinates: on both, the finger
+    // lifts wherever the last Move landed. Measured on iOS 26.5 and an Android
+    // emulator alike - a Down/Move/Up train whose Up jumped a further 0.2 of the
+    // screen lifted at the Move's position, and a bare Down/Up pair 0.6 of a
+    // screen apart scrolled nothing at all. So the end point has to be repeated
+    // as a Move or the swipe is delivered short of where it was authored. How
+    // short depends on the ramp below: a plain swipe stops a full step out, at
+    // authored × (steps-1)/steps (5% at the default duration, 50% at
+    // durationMs 32); a `settle` swipe's ease-out has already closed all but
+    // (1/steps)^n of the travel — orders of magnitude nearer, but still not the
+    // end point, so the repeat is unconditional rather than gated on `!settle`,
+    // and settling is what `scroll-to` always asks for. The duplicate sample
+    // does not damp the iOS fling, which is the reason it used to be withheld
+    // there: the same default swipe settles a scrollable page 806px down with
+    // the repeat against 803px without (n=14 each, run-to-run spread ~20px), so
+    // any effect is well inside the noise.
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
       // `settle` lifts at ~0 velocity, so the OS applies no fling. Ease-out
@@ -94,7 +98,7 @@ Pass settle:true for a momentum-free swipe that lands exactly where the finger l
       const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
       // Emitted in the Up's own frame, with no added sleep, so the total
       // duration and the move cadence are unchanged.
-      if (type === "Up" && repeatEndPointBeforeLift) {
+      if (type === "Up") {
         sendCommand(api, {
           cmd: "touch",
           type: "Move",
