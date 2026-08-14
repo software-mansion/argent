@@ -22,6 +22,9 @@
  *   - the refusal beats step ORDER: an earlier `echo` never reports pass, which
  *     is the whole point of gating before the run rather than letting the step
  *     fail when it is reached, after earlier steps have driven the device;
+ *   - a recorded `run-sequence` batch is covered too: its nested `steps[].args`
+ *     reach the sub-tool's schema exactly as a `tool:` step's args reach its
+ *     tool's, and the refusal names the nested position and the nested tool;
  *   - the same step with `momentum: false` instead passes both the gate and
  *     validation - it then fails at service resolution (this bare registry has
  *     no blueprints, which is deterministic and never touches a device backend),
@@ -42,6 +45,7 @@ import { createRunFlowTool } from "../../src/tools/flows/flow-run";
 import { serializeFlow, type FlowStep } from "../../src/tools/flows/flow-utils";
 import { gestureSwipeTool } from "../../src/tools/gesture-swipe";
 import { gestureDragTool } from "../../src/tools/gesture-drag";
+import { createRunSequenceTool } from "../../src/tools/run-sequence";
 
 // Ids only need the right SHAPE: flow-run resolves an explicit `device` purely
 // by shape, and the settle steps are refused at validation, before any service
@@ -55,6 +59,9 @@ function buildRegistry(): Registry {
   const registry = new Registry();
   registry.registerTool(gestureSwipeTool);
   registry.registerTool(gestureDragTool);
+  // The real batching tool, built as setup-registry builds it: it is the
+  // recorded shape that carries a gesture's args one level down.
+  registry.registerTool(createRunSequenceTool(registry));
   return registry;
 }
 
@@ -77,13 +84,22 @@ async function writeFlow(name: string, tool: string, args: Record<string, unknow
   await writeSteps(name, [{ kind: "tool", name: tool, args }]);
 }
 
-/** A recorded gesture step, minus the device key the runner rebinds. */
+/** A recorded gesture's args, minus the device key the runner rebinds. */
+function swipeArgs(args: Record<string, unknown>): Record<string, unknown> {
+  return { fromX: 0.5, fromY: 0.75, toX: 0.5, toY: 0.35, ...args };
+}
+
+/** A recorded gesture step carrying those args. */
 function swipeStep(args: Record<string, unknown>): FlowStep {
-  return {
-    kind: "tool",
-    name: "gesture-swipe",
-    args: { fromX: 0.5, fromY: 0.75, toX: 0.5, toY: 0.35, ...args },
-  };
+  return { kind: "tool", name: "gesture-swipe", args: swipeArgs(args) };
+}
+
+/**
+ * A recorded run-sequence batch: each gesture's args sit one level down, in a
+ * nested `{ tool, args }` entry, and carry no udid (run-sequence injects it).
+ */
+function sequenceStep(steps: Array<{ tool: string; args: Record<string, unknown> }>): FlowStep {
+  return { kind: "tool", name: "run-sequence", args: { steps } };
 }
 
 type StepReport = { kind: string; status: string; tool?: string; reason?: string };
@@ -203,6 +219,45 @@ describe("flow-execute refuses the retired `settle` key through the real registr
     expect(messageOf(err)).toContain("gesture-swipe's retired `settle` key");
   });
 
+  // The batched recording (`run-sequence` is how the skills document a swipe
+  // batch): the key rides one level down, in a nested step's args, and reaches
+  // gesture-swipe's schema exactly as a `tool:` step's own args do. Refused
+  // before the run, so the echo ahead of it never reports pass either.
+  it("refuses a settle key nested in a run-sequence batch, naming the nested step and tool", async () => {
+    await writeSteps("sequence-settle", [
+      { kind: "echo", message: "runs first" },
+      sequenceStep([{ tool: "gesture-swipe", args: swipeArgs({ settle: true }) }]),
+    ]);
+
+    const err = await refusalOf("sequence-settle", IOS_DEVICE);
+
+    expect(messageOf(err)).toContain("step 1 of the run-sequence step at step 2");
+    expect(messageOf(err)).toContain("gesture-swipe's retired `settle` key");
+    expect(messageOf(err)).toContain("renamed to `momentum`");
+    expect(messageOf(err)).toContain("momentum: false");
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_FILE_INVALID);
+  });
+
+  // The position named is the offending nested step's own, not the batch's
+  // first - here a live gesture precedes it, and would have driven the device
+  // before a run-time refusal could land.
+  it("gesture-drag: refuses a settle key in a later nested step, naming that position", async () => {
+    const drag = (args: Record<string, unknown>) => ({
+      tool: "gesture-drag",
+      args: { fromX: 0.3, fromY: 0.5, toX: 0.7, toY: 0.5, ...args },
+    });
+    await writeSteps("sequence-drag-settle", [
+      sequenceStep([drag({ momentum: false }), drag({ settle: true })]),
+    ]);
+
+    const err = await refusalOf("sequence-drag-settle", CHROMIUM_DEVICE);
+
+    expect(messageOf(err)).toContain("step 2 of the run-sequence step at step 1");
+    expect(messageOf(err)).toContain("gesture-drag's retired `settle` key");
+    expect(messageOf(err)).toContain("momentum: false");
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_FILE_INVALID);
+  });
+
   // A `run:` target is NOT read by the pre-run pass (it is resolved at run
   // time), so the fragment is gated the moment it loads: the composition point
   // errors and not one of the fragment's own steps runs.
@@ -264,6 +319,22 @@ describe("flow-execute refuses the retired `settle` key through the real registr
     const step = await runSingleStepFlow("drag-momentum", CHROMIUM_DEVICE);
 
     expect(step).toMatchObject({ kind: "tool", status: "error", tool: "gesture-drag" });
+    expect(step.reason).toContain("Service dependency failed");
+    expect(step.reason).not.toContain("Invalid params");
+    expect(step.reason).not.toContain("settle");
+  });
+
+  // The nested pass must refuse a retired key and nothing else: a batch of live
+  // args runs, and reaches the same service resolution the direct controls do
+  // (through run-sequence, which reports a stopped sub-step as a failing step).
+  it("control: a run-sequence batch whose nested args are all live keys is not refused", async () => {
+    await writeSteps("sequence-momentum", [
+      sequenceStep([{ tool: "gesture-swipe", args: swipeArgs({ momentum: false }) }]),
+    ]);
+
+    const step = await runSingleStepFlow("sequence-momentum", IOS_DEVICE);
+
+    expect(step).toMatchObject({ kind: "tool", tool: "run-sequence" });
     expect(step.reason).toContain("Service dependency failed");
     expect(step.reason).not.toContain("Invalid params");
     expect(step.reason).not.toContain("settle");

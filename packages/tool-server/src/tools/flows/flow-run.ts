@@ -1001,7 +1001,7 @@ function* walkSteps(steps: FlowStep[], within = ""): Generator<{ step: FlowStep;
   }
 }
 
-/** A retired key a `tool:` step passes, with the guidance its tool declares for it. */
+/** A retired key reaching a tool through a `tool:` step, with the guidance that tool declares. */
 interface RetiredArgUse {
   where: string;
   tool: string;
@@ -1029,32 +1029,94 @@ function retiredKeyGuidance(prop: unknown): string | undefined {
   return (schema.description ?? "").replace(/^Retired:\s*/, "");
 }
 
+/** The schema properties a registered tool declares, or undefined for a tool this registry lacks. */
+function toolArgProps(registry: Registry, tool: string): Record<string, unknown> | undefined {
+  return (
+    registry.getTool(tool)?.inputSchema as { properties?: Record<string, unknown> } | undefined
+  )?.properties;
+}
+
+/** The first retired key in one invocation's args, against the properties its tool declares. */
+function retiredArgIn(
+  props: Record<string, unknown>,
+  tool: string,
+  args: Record<string, unknown>,
+  where: string
+): RetiredArgUse | undefined {
+  for (const key of Object.keys(args)) {
+    const guidance = retiredKeyGuidance(props[key]);
+    if (guidance !== undefined) return { where, tool, key, guidance };
+  }
+  return undefined;
+}
+
 /**
- * The first retired key a raw `tool:` step in these steps passes, if any.
+ * The tool invocations a `tool:` step's args carry inline, each with the
+ * position naming it. Matched by SHAPE - a `{ tool, args }` entry, in an arg's
+ * array (run-sequence's `steps`) or as an arg itself - and never by the carrying
+ * tool's name, the rule {@link retiredKeyGuidance} follows for the key itself.
+ *
+ * One level only: those args are forwarded verbatim to the named tool, which
+ * parses them itself, and no tool that batches others allows a batching tool
+ * among them - so a second level cannot exist, and crawling for one would read
+ * every value of every recorded payload for nothing.
+ */
+function* nestedInvocations(
+  args: Record<string, unknown>
+): Generator<{ tool: string; args: Record<string, unknown>; at: string }> {
+  for (const [key, value] of Object.entries(args)) {
+    const entries = Array.isArray(value) ? value : [value];
+    for (const [i, entry] of entries.entries()) {
+      const call = entry as { tool?: unknown; args?: unknown } | null | undefined;
+      if (typeof call?.tool !== "string") continue;
+      if (typeof call.args !== "object" || call.args === null || Array.isArray(call.args)) continue;
+      yield {
+        tool: call.tool,
+        args: call.args as Record<string, unknown>,
+        at: Array.isArray(value) ? `step ${i + 1}` : `\`${key}\``,
+      };
+    }
+  }
+}
+
+/**
+ * The first retired key a raw `tool:` step in these steps passes - in its own
+ * args, or in an invocation those args carry inline (a recorded run-sequence
+ * batch), whose args meet the sub-tool's schema exactly as the step's own meet
+ * its tool's.
  *
  * The typed directives refuse a retired spelling at parse time (`swipe.settle`),
  * but a recorded `tool:` step carries its args opaquely - the parser knows no
  * tool schemas and is deliberately given no registry - so the same key reached
  * `registry.invokeTool` and failed only there, with every earlier step already
- * run against the device. Recorded flows from released builds are exactly where
- * a retired spelling still lives, so callers use this to move that refusal to
- * load time.
+ * run against the device. A batched one lands later still, once the sequence's
+ * own earlier gestures have run too. Recorded flows from released builds are
+ * exactly where a retired spelling still lives, so callers use this to move that
+ * refusal to load time.
  *
- * An unknown tool is skipped: that step already fails on its own, with a better
- * message than a missing schema could produce here.
+ * An unknown tool is skipped, and with it any invocation its args carry: that
+ * step already fails on its own, with a better message than a missing schema
+ * could produce here.
  */
 function findRetiredToolArg(registry: Registry, steps: FlowStep[]): RetiredArgUse | undefined {
   for (const { step, where } of walkSteps(steps)) {
     if (step.kind !== "tool") continue;
-    const props = (
-      registry.getTool(step.name)?.inputSchema as
-        | { properties?: Record<string, unknown> }
-        | undefined
-    )?.properties;
+    const props = toolArgProps(registry, step.name);
     if (!props) continue;
-    for (const key of Object.keys(step.args)) {
-      const guidance = retiredKeyGuidance(props[key]);
-      if (guidance !== undefined) return { where, tool: step.name, key, guidance };
+    const direct = retiredArgIn(props, step.name, step.args, where);
+    if (direct) return direct;
+    for (const call of nestedInvocations(step.args)) {
+      const nestedProps = toolArgProps(registry, call.tool);
+      if (!nestedProps) continue;
+      // Spelled like walkSteps' block position, so both nestings read alike:
+      // "step 1 of the run-sequence step at step 2".
+      const hit = retiredArgIn(
+        nestedProps,
+        call.tool,
+        call.args,
+        `${call.at} of the ${step.name} step at ${where}`
+      );
+      if (hit) return hit;
     }
   }
   return undefined;
