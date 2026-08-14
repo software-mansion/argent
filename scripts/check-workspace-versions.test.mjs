@@ -385,16 +385,32 @@ test("[script] an unusable packages/* directory does not stop the scan", (t) => 
   assert.match(result.stderr, /0\.17\.0: @argent\/registry/);
 });
 
-// JSON.parse succeeds on a file holding `null`, so the scan's try/catch never
-// sees it and the version read below is what would throw.
-test("[script] a packages/* manifest holding null does not crash the scan", (t) => {
+// JSON.parse succeeds on a file holding `null`, a bare scalar or an array, so
+// none of them reach the scan's try/catch — yet each is a manifest that is
+// *there but unusable*, and skipping one would drop a real package out of the
+// lockstep comparison and pass a workspace that had drifted. Same shape the
+// readTrackedJson guard rejects for server.json and packages/argent.
+test("[script] a packages/* manifest holding null fails on-message, not silently skipped", (t) => {
   const root = fixtureRepo(t, {
     otherVersion: "0.17.0",
     extraPackages: { corrupt: "null" },
   });
   const result = runScript(root);
   assert.equal(result.status, 1, `expected a failure, got:\n${result.stdout}${result.stderr}`);
-  assert.match(result.stderr, /0\.17\.0: @argent\/registry/);
+  assert.match(result.stderr, /is null, not a JSON object/);
+  assert.match(result.stderr, /git checkout -- /);
+  assertNoStackTrace(result.stderr);
+});
+
+test("[script] a packages/* manifest holding an array fails on-message, not silently skipped", (t) => {
+  const root = fixtureRepo(t, {
+    otherVersion: "0.17.0",
+    extraPackages: { corrupt: '["@swmansion/argent", "0.18.0"]' },
+  });
+  const result = runScript(root);
+  assert.equal(result.status, 1, `expected a failure, got:\n${result.stdout}${result.stderr}`);
+  assert.match(result.stderr, /is an array, not a JSON object/);
+  assert.match(result.stderr, /git checkout -- /);
   assertNoStackTrace(result.stderr);
 });
 

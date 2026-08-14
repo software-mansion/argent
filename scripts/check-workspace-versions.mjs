@@ -168,10 +168,23 @@ function main() {
       );
       process.exit(1);
     }
-    // `?.` because JSON.parse succeeds on a file holding `null`, which the catch
-    // above never sees — the same shape readTrackedJson rejects for the two
-    // manifests it reads.
-    if (!manifest?.version) continue;
+    // `?.` would mask a manifest that parses to a non-object: JSON.parse
+    // succeeds on a file holding `null`, a bare scalar or an array, none of
+    // which reach the catch above — and each of those is a manifest that is
+    // *there but unusable*, the same class the readTrackedJson shape check
+    // rejects for server.json and packages/argent. Dropping one would take a
+    // real package out of the lockstep comparison and pass a workspace that
+    // drifted, so reject it on-message like every other unreadable manifest.
+    if (manifest === null || typeof manifest !== "object" || Array.isArray(manifest)) {
+      const shape =
+        manifest === null ? "null" : Array.isArray(manifest) ? "an array" : typeof manifest;
+      console.error(`packages/${entry.name}/package.json is ${shape}, not a JSON object`);
+      console.error(
+        `\nIt is tracked in git — restore it with \`git checkout -- ${relative(repoRoot, manifestPath)}\`.`
+      );
+      process.exit(1);
+    }
+    if (!manifest.version) continue;
     const names = byVersion.get(manifest.version) ?? [];
     names.push(manifest.name ?? entry.name);
     byVersion.set(manifest.version, names);
