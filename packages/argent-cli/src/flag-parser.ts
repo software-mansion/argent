@@ -58,8 +58,14 @@ function isJsonField(prop: JsonSchema | undefined): boolean {
  * A retired key: `z.never()` (declared-and-refused, so the server can name the
  * replacement) serializes to `{"not": {}}` with no `type`. Matched so usage can
  * render it as a retirement notice rather than offer it as a flag.
+ *
+ * That serialized shape is pinned at the producer in
+ * packages/registry/tests/zod-to-json-schema.test.ts.
+ *
+ * Exported for `findMissingRequired`, which must read the same filter this file
+ * renders usage through: see the note there.
  */
-function isRetiredField(prop: JsonSchema): boolean {
+export function isRetiredField(prop: JsonSchema): boolean {
   return prop.not !== undefined && Object.keys(prop.not).length === 0;
 }
 
