@@ -37,6 +37,26 @@ const DEFAULT_DURATION_MS = 300;
 // the raw tool flows point at precisely when durationMs has to mean what it says.
 const SETTLE_MIN_DURATION_MS = 150;
 
+// Ceiling on the travel time. Every frame below is a real 16ms sleep with the
+// finger held down, so durationMs is wall clock the run spends AND wall clock
+// the device spends under a touch it cannot shake off: durationMs 10000 costs
+// 11.0s in process against a no-op transport, reproducible anywhere, and 11.2s
+// end to end on a booted iPhone 17 Pro. And 1e21 - finite, positive, past
+// every check that existed before this one - is 6.25e19 frames,
+// a loop that outlives the client and goes on feeding the simulator until the
+// tool-server is restarted, its samples interleaving into every later gesture
+// sent to that device. The abort check in execute unwinds a CANCELLED run; a
+// caller that simply waits needs this instead.
+//
+// 10s is the envelope the `rotate:` flow directive derives its own `by` limit
+// from (MAX_DERIVED_ROTATE_MS), applied here to the same thing: one continuous
+// finger-down-to-lift stroke. It is 626 frames, against the 300ms default and
+// the 600ms `scroll-to` asks for, so the slowest deliberate stroke - a reorder
+// handle dragged across a list, a pull-to-refresh held open - still fits with an
+// order of magnitude to spare. It is deliberately NOT idle.stableFor's 600_000:
+// that bounds a WAIT, which holds nothing down and cancels on a timer.
+const MAX_DURATION_MS = 10_000;
+
 const zodSchema = z
   .object({
     udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
@@ -46,8 +66,13 @@ const zodSchema = z
     toY: z.number().describe("End y: normalized 0.0–1.0 (not pixels; same as tap)"),
     durationMs: z
       .number()
+      .max(MAX_DURATION_MS, {
+        message: `durationMs must be at most ${MAX_DURATION_MS} (10s): every frame is a real 16ms sleep with the finger held down, so a larger value is that many milliseconds of wall clock spent holding a touch the device cannot shake off.`,
+      })
       .optional()
-      .describe("Total gesture duration in milliseconds (default 300)"),
+      .describe(
+        `Total gesture duration in milliseconds (default 300, at most ${MAX_DURATION_MS} - the gesture holds a finger down for exactly this long)`
+      ),
     settle: z
       .boolean()
       .optional()
@@ -86,13 +111,13 @@ export const gestureSwipeTool: ToolDefinition<Params, Result> = {
       `Swiped from (${Math.round(params.fromX * 100)}%, ${Math.round(params.fromY * 100)}%) to (${Math.round(params.toX * 100)}%, ${Math.round(params.toY * 100)}%)`,
     failedMsg: ({ failureSignal }) => `Failed to swipe: ${failureSignal.error_code}`,
   },
-  // The floor is spelled out rather than interpolated: extract-tools scans this
+  // The bounds are spelled out rather than interpolated: extract-tools scans this
   // description statically, so a `${}` in it drops the tool out of the scan.
   description: `Execute a smooth swipe / drag touch gesture between two points on the device (iOS simulator or Android emulator). All from/to positions are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same as gesture-tap.
 Generates interpolated Move events for a natural feel (~60fps).
 Swipe up (fromY > toY) to scroll content down.
 Use when you need to scroll a list, dismiss a modal, drag an element, or navigate between pages. Not supported on Chromium — use gesture-scroll there instead.
-Pass settle:true for a momentum-free swipe that lands exactly where the finger lifts (little to no fling), when you need a deterministic scroll distance; it needs durationMs >= 150 and is rejected below that, a shorter ease-out leaving the OS too little wall clock to read the deceleration as a stop. A plain swipe takes any duration and is delivered as close to the speed it was authored as a 16ms frame allows: below ~32ms the whole travel lands in one or two frames, which the OS flings as hard as it flings anything. Returns { swiped: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
+Pass settle:true for a momentum-free swipe that lands exactly where the finger lifts (little to no fling), when you need a deterministic scroll distance; it needs durationMs >= 150 and is rejected below that, a shorter ease-out leaving the OS too little wall clock to read the deceleration as a stop. A plain swipe takes any duration up to 10000ms and is delivered as close to the speed it was authored as a 16ms frame allows: below ~32ms the whole travel lands in one or two frames, which the OS flings as hard as it flings anything. Returns { swiped: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
   alwaysLoad: true,
   searchHint: "swipe scroll drag pan gesture device simulator emulator touch move",
   zodSchema,

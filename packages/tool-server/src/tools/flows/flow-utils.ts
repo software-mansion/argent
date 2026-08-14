@@ -907,7 +907,8 @@ type TapBody = YamlTarget | { on: YamlTarget; times?: number };
  * touch-down is the centre only while each axis delta stays within 0.5 (see
  * runSwipe). `duration` is the travel time in milliseconds, floored at
  * {@link SWIPE_MIN_DURATION_MS} — shorter overshoots the travel it asks for
- * instead of landing on it.
+ * instead of landing on it. It is also capped at
+ * {@link SWIPE_MAX_DURATION_MS}: the finger stays down for exactly that long.
  */
 type SwipeBody =
   | SwipeDirection
@@ -1280,6 +1281,42 @@ export const SWIPE_MIN_TRAVEL = 0.03;
  */
 export const SWIPE_MIN_DURATION_MS = 150;
 
+/**
+ * The other end of the same axis. Unlike the floor this is not about delivery
+ * fidelity - a 60s swipe is delivered exactly as authored - but about what
+ * authoring it costs: the dispatch is one real 16ms sleep per frame with the
+ * finger held down, so `duration` is wall clock the run spends, and wall clock
+ * the device spends under a touch nothing can cancel from outside. `duration:
+ * 10000` costs 11.0s of run time in process against a no-op transport,
+ * reproducible anywhere, and 11.2s end to end on a booted iPhone 17 Pro;
+ * `duration: 1e21` cleared the floor, cleared parsePositiveMs's finite check,
+ * and never returned - 6.25e19 frames, still dispatching Moves into the
+ * simulator long after the CLI was killed and interleaving its samples into
+ * every later gesture on that device, until the tool-server was restarted.
+ *
+ * 10s is the envelope MAX_DERIVED_ROTATE_MS (flow-rotate-geometry) already sets
+ * for one continuous gesture, applied to the other. Against a 300ms default and
+ * the 600ms `scroll-to` dispatches, it leaves an order of magnitude for a
+ * deliberately slow stroke and still bounds the damage at 626 frames. Not
+ * `idle.stableFor`'s 600_000: that bounds a WAIT, which holds nothing down. The
+ * tools carry the same ceiling on their own `durationMs` - the flow directive is
+ * one of several ways in, and the abort check only rescues a cancelled run.
+ */
+export const SWIPE_MAX_DURATION_MS = 10_000;
+
+/**
+ * The same ceiling on `long-press.duration`, which buys the same thing on the
+ * same axis: a held finger costs wall clock whether it travels or not. Written
+ * as the swipe bound rather than a second 10_000 because on Chromium it IS that
+ * bound - a long-press dispatches `gesture-drag` with from == to, whose own
+ * `durationMs` stops there and is the platform's only press-hold-release tool -
+ * so the two cannot drift without the flow parsing clean and then dying inside
+ * the registry on one platform. Bounded at parse so the author is told at
+ * authoring time, on every platform, instead of at run time on one; a hold that
+ * genuinely needs longer is a raw `tool: gesture-custom` step on touch.
+ */
+const LONG_PRESS_MAX_DURATION_MS = SWIPE_MAX_DURATION_MS;
+
 /** Serialize a relative swipe delta without producing a body parseSwipeBy
  * would reject. FlowStep is also constructed programmatically, so its
  * deliberately convenient optional-axis type is not enough at runtime. */
@@ -1340,14 +1377,33 @@ function positiveMsToYaml(value: number, label: string): number {
   return value;
 }
 
-/** Serialize a swipe's travel time, gating it on SWIPE_MIN_DURATION_MS as
- * swipeByToYaml gates the delta on SWIPE_MIN_TRAVEL, so serialize accepts
- * exactly what parseSwipe accepts and the round-trip stays exact. */
+/** Serialize a swipe's travel time, gating it on both SWIPE_MIN_DURATION_MS and
+ * SWIPE_MAX_DURATION_MS as swipeByToYaml gates the delta on SWIPE_MIN_TRAVEL, so
+ * serialize accepts exactly what parseSwipe accepts and the round-trip stays
+ * exact. */
 function swipeDurationToYaml(value: number): number {
   const duration = positiveMsToYaml(value, "swipe.duration");
   if (duration < SWIPE_MIN_DURATION_MS) {
     throw new Error(
       `Cannot serialize flow swipe.duration: only ${duration}ms — below the minimum swipe duration of ${SWIPE_MIN_DURATION_MS}ms — that leaves too few 16ms frames for the content to track the travel it was given, so it overshoots instead of landing on it`
+    );
+  }
+  if (duration > SWIPE_MAX_DURATION_MS) {
+    throw new Error(
+      `Cannot serialize flow swipe.duration: ${duration}ms - above the maximum swipe duration of ${SWIPE_MAX_DURATION_MS}ms - the step would hold a finger on the screen for exactly that long, one dispatched frame per 16ms`
+    );
+  }
+  return duration;
+}
+
+/** Serialize a long-press hold time, gating it on LONG_PRESS_MAX_DURATION_MS as
+ * swipeDurationToYaml gates the travel time, so serialize accepts exactly what
+ * parseLongPress accepts and the round-trip stays exact. */
+function longPressDurationToYaml(value: number): number {
+  const duration = positiveMsToYaml(value, "long-press.duration");
+  if (duration > LONG_PRESS_MAX_DURATION_MS) {
+    throw new Error(
+      `Cannot serialize flow long-press.duration: ${duration}ms - above the maximum long-press duration of ${LONG_PRESS_MAX_DURATION_MS}ms - the step would hold a finger down for exactly that long`
     );
   }
   return duration;
@@ -1428,7 +1484,7 @@ function toYamlStep(step: FlowStep): YamlStep {
       return {
         "long-press":
           step.duration !== undefined
-            ? { on: target, duration: positiveMsToYaml(step.duration, "long-press.duration") }
+            ? { on: target, duration: longPressDurationToYaml(step.duration) }
             : target,
       };
     }
@@ -2433,7 +2489,19 @@ function parseLongPress(body: unknown, entry: unknown): FlowStep {
     }
     const step: FlowStep = { kind: "long-press", ...parseTarget(obj.on, "long-press.on") };
     if (obj.duration !== undefined) {
-      step.duration = parsePositiveMs(obj.duration, entry, "long-press.duration", "duration: 1200");
+      const duration = parsePositiveMs(
+        obj.duration,
+        entry,
+        "long-press.duration",
+        "duration: 1200"
+      );
+      if (duration > LONG_PRESS_MAX_DURATION_MS) {
+        badEntry(
+          entry,
+          `long-press.duration is ${duration}ms - above the maximum long-press duration of ${LONG_PRESS_MAX_DURATION_MS}ms; the step holds a finger down for exactly that long, and on Chromium it dispatches a gesture-drag that refuses more`
+        );
+      }
+      step.duration = duration;
     }
     return step;
   }
@@ -2911,6 +2979,15 @@ function parseSwipe(body: unknown, entry: unknown): FlowStep {
       badEntry(
         entry,
         `swipe.duration is only ${duration}ms — below the minimum swipe duration of ${SWIPE_MIN_DURATION_MS}ms; that leaves too few 16ms frames for the content to track the travel it was given, so it overshoots instead of landing on it`
+      );
+    }
+    // The ceiling is a cost gate, not a fidelity one: the dispatch sleeps 16ms
+    // per frame with the finger down, so this number is wall clock the run and
+    // the device both spend, and an unbounded one is an unbounded held touch.
+    if (duration > SWIPE_MAX_DURATION_MS) {
+      badEntry(
+        entry,
+        `swipe.duration is ${duration}ms - above the maximum swipe duration of ${SWIPE_MAX_DURATION_MS}ms; the step holds a finger on the screen for exactly that long, one dispatched frame per 16ms, and nothing outside the run can cut it short`
       );
     }
     step.duration = duration;

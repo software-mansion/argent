@@ -297,3 +297,51 @@ describe("gesture-swipe abort", () => {
     expect(sent.map((e) => e.type)).toEqual(["Down", "Move", "Move", "Move", "Up"]);
   });
 });
+
+// Unlike the floor this is not about delivery fidelity - a 60s swipe is
+// delivered exactly as authored - but about what authoring it costs: durationMs
+// is wall clock the call spends AND wall clock the device spends under a touch.
+// On the schema rather than only on the flow directive because the tool is
+// dispatched directly from HTTP, MCP, run-sequence and the CLI, and because the
+// abort check above only rescues a caller who cancels - one that simply waits
+// gets the whole duration.
+describe("gesture-swipe duration ceiling", () => {
+  const params = { udid: IOS_UDID, fromX: 0.5, fromY: 0.8, toX: 0.5, toY: 0.2 };
+
+  it.each([10_001, 20_000, 1e21])("rejects durationMs %p", (durationMs) => {
+    const result = gestureSwipeTool.zodSchema!.safeParse({ ...params, durationMs });
+
+    expect(result.success).toBe(false);
+    expect(result.error!.issues[0]).toMatchObject({
+      path: ["durationMs"],
+      message: expect.stringContaining("durationMs must be at most 10000"),
+    });
+  });
+
+  it("rejects a non-finite durationMs, which no ordering of the bound catches", () => {
+    // Math.round(Infinity / 16) is Infinity, so the frame loop would never end;
+    // Math.max(1, NaN) is NaN, so `i <= NaN` is false at once and the tool would
+    // report a swipe it never sent. z.number() refuses all three up front -
+    // being inside a bound is not the same test as being a number.
+    for (const durationMs of [Infinity, -Infinity, NaN]) {
+      expect(gestureSwipeTool.zodSchema!.safeParse({ ...params, durationMs }).success).toBe(false);
+    }
+  });
+
+  it("accepts the exact ceiling, the default, and what scroll-to dispatches", () => {
+    for (const durationMs of [10_000, 600, 300, 16]) {
+      expect(gestureSwipeTool.zodSchema!.safeParse({ ...params, durationMs }).success).toBe(true);
+    }
+    expect(gestureSwipeTool.zodSchema!.safeParse(params).success).toBe(true);
+  });
+
+  it("refuses it through a real dispatch, so no touch reaches the device", async () => {
+    const registry = new Registry();
+    registry.registerTool(gestureSwipeTool);
+
+    await expect(
+      registry.invokeTool("gesture-swipe", { ...params, durationMs: 1e21 })
+    ).rejects.toThrow(/durationMs must be at most 10000/);
+    expect(sent).toHaveLength(0);
+  });
+});

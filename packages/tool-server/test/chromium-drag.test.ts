@@ -421,3 +421,42 @@ describe("gesture-drag abort", () => {
     expect(calls[calls.length - 1]).toMatchObject({ type: "mouseReleased", x: 0.75 * 800 });
   });
 });
+
+// The same ceiling gesture-swipe carries, for the same reason: durationMs is
+// wall clock spent mid-press, and the abort check above only rescues a caller
+// who cancels. A caller that passes a huge value and waits gets all of it.
+describe("gesture-drag duration ceiling", () => {
+  const params = {
+    udid: "chromium-cdp-19222",
+    fromX: 0.25,
+    fromY: 0.5,
+    toX: 0.75,
+    toY: 0.5,
+  };
+
+  it.each([10_001, 20_000, 1e21])("rejects durationMs %p", (durationMs) => {
+    const result = gestureDragTool.zodSchema!.safeParse({ ...params, durationMs });
+
+    expect(result.success).toBe(false);
+    expect(result.error!.issues[0]).toMatchObject({
+      path: ["durationMs"],
+      message: expect.stringContaining("durationMs must be at most 10000"),
+    });
+  });
+
+  it("rejects a non-finite durationMs, which no ordering of the bound catches", () => {
+    // Math.round(Infinity / 16) is Infinity, so the frame loop would never end,
+    // and frameMs would be NaN. Being inside a bound is not the same test as
+    // being a number; z.number() refuses all three up front.
+    for (const durationMs of [Infinity, -Infinity, NaN]) {
+      expect(gestureDragTool.zodSchema!.safeParse({ ...params, durationMs }).success).toBe(false);
+    }
+  });
+
+  it("accepts the exact ceiling and the default", () => {
+    for (const durationMs of [10_000, 600, 300, 64]) {
+      expect(gestureDragTool.zodSchema!.safeParse({ ...params, durationMs }).success).toBe(true);
+    }
+    expect(gestureDragTool.zodSchema!.safeParse(params).success).toBe(true);
+  });
+});
