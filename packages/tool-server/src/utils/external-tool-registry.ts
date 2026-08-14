@@ -9,7 +9,6 @@ import {
   FailureError,
   ToolExecutionError,
   type ExternalToolDefinitionV1,
-  type ExternalToolRegistryModuleV1,
   type InvokeToolOptions,
   type Registry,
   type ToolDefinition,
@@ -350,6 +349,3 @@ export async function loadExternalToolRegistry(
   const externalTools = validateModule(moduleValue(namespace), builtIns);
   return new CompositeToolInvoker(builtIns, externalTools);
 }
-
-/** Canonical TypeScript-facing shape; the runtime remains structural. */
-export type { ExternalToolRegistryModuleV1 };

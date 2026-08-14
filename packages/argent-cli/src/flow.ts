@@ -1066,10 +1066,7 @@ async function requireLocalToolServer(toolRegistryPath?: string): Promise<boolea
  * starting a flow. Returning the real path gives the local tool server the
  * same file identity even when the CLI argument was relative or symlinked.
  */
-export async function resolveToolRegistryPath(
-  suppliedPath: string,
-  projectRoot: string
-): Promise<string> {
+async function resolveToolRegistryPath(suppliedPath: string, projectRoot: string): Promise<string> {
   const absolutePath = path.resolve(projectRoot, suppliedPath);
   let canonicalPath: string;
   try {
