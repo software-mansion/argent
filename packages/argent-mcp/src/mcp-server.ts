@@ -314,11 +314,19 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         // The tool-server typed the *resolved* secret; a screenshot of a
         // non-secure-entry field would hand the plaintext back to the model
         // as pixels. Tell the agent why there is no image instead.
+        //
+        // "Submit first" needs the batching caveat, because the skip is decided
+        // PER TOOL CALL from that call's whole arguments. `keyboard` rejects
+        // `{ text, key }`, so submitting after typing a secret is a second call
+        // — and a bare `{ key: "enter" }` carries no placeholder, misses this
+        // branch, and re-arms the capture over a screen that may still show the
+        // plaintext. One `run-sequence` carrying both steps is the form that
+        // keeps the skip, since the scan reads the whole request.
         content = [
           ...content,
           {
             type: "text" as const,
-            text: "Auto-screenshot skipped: the input contains a {{secret:…}} placeholder, and a screenshot of this screen could reveal the typed secret. Submit or navigate away first, then verify the resulting screen as usual.",
+            text: "Auto-screenshot skipped: the input contains a {{secret:…}} placeholder, and a screenshot of this screen could reveal the typed secret. Submit or navigate away first, then verify the resulting screen as usual — but send the submit as a second `keyboard` step batched with the typing step into ONE `run-sequence`, because a bare follow-up call carries no placeholder and re-arms this screenshot over the still-visible secret.",
           },
         ];
       } else if (autoScreenshotOn && udid && shouldAutoScreenshot(params.name)) {
