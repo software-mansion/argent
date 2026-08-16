@@ -22,13 +22,19 @@ const registry = {} as Registry;
 // total — the count moves with every commit, so a stale figure reads as a
 // failed reproduction.
 //
-// That guard is load-bearing beyond its own file: `flow-actions.ts`'s `runType`
-// splits "type, then submit" into two keyboard calls precisely BECAUSE a TV
-// target rejects `key` before typing, so a combined `{ text, key }` would throw
-// with the field still empty. If the guard degraded to ignoring `key` instead of
-// throwing, `keyboard { udid: <Apple TV / Android TV>, key: "enter" }` would
-// answer `{ typed: "", keys: 0 }` — a success that pressed nothing — and that
+// That guard is load-bearing beyond its own file. `flow-actions.ts`'s `runType`
+// splits "type, then submit" into two keyboard calls, and on an Android TV the
+// SECOND of them is the one that fails here — the text lands, the submit 400s.
+// If the guard degraded to ignoring `key` instead of throwing, `keyboard
+// { udid: <Apple TV / Android TV>, key: "enter" }` would answer
+// `{ typed: "", keys: 0 }` — a success that pressed nothing — and that
 // directive's submit would silently no-op on a still-filled field.
+//
+// The tool's own text/key exclusivity guard never reaches this backend, so it
+// cannot stand in for this one: it runs above the platform dispatch and only
+// sees requests carrying BOTH parameters, while what a TV rejects is `key` on
+// its own. That is why the exclusivity message carries the TV caveat statically
+// (keyboard-text-key-exclusive.test.ts) instead of relying on this rejection.
 describe("typeTv — the TV keyboard backend", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -48,9 +54,12 @@ describe("typeTv — the TV keyboard backend", () => {
     expect(resolveTvApi).not.toHaveBeenCalled();
   });
 
-  it("rejects a COMBINED text+key call with nothing typed", async () => {
-    // The exact shape `runType`'s two-call split exists to avoid: the rejection
-    // must come before the text, or the flow comment's reasoning is wrong.
+  it("rejects the key BEFORE typing any text it was also handed", async () => {
+    // The tool rejects `{ text, key }` above the dispatch, so this shape does
+    // not arrive from the tool — `blueprints/android-tv-control.ts` is the other
+    // caller of this backend. What it pins is the ORDER inside `typeTv`: the
+    // rejection comes first, so a request it refuses leaves the field untouched
+    // rather than half-typed.
     await expect(
       typeTv(registry, ANDROID_TV, { udid: ANDROID_TV.id, text: "hello", key: "enter" })
     ).rejects.toThrow(/named keys are not supported on a TV target/);

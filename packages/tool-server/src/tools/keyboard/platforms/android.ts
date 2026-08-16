@@ -1,12 +1,7 @@
 import type { DeviceInfo, Registry } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { isAndroidTv } from "../../../utils/adb";
-import {
-  assertTypeableAndroidText,
-  injectAndroidNamedKey,
-  injectAndroidText,
-  resolveAndroidNamedKeycode,
-} from "../../../utils/android-input";
+import { injectAndroidNamedKey, injectAndroidText } from "../../../utils/android-input";
 import type { KeyboardParams, KeyboardResult } from "../types";
 import { typeTv } from "./tv";
 
@@ -21,12 +16,9 @@ async function typeAndroidPhone(
   params: KeyboardParams
 ): Promise<KeyboardResult> {
   let keysPressed = 0;
-  // Resolve the named key before injecting text so an unknown name fails fast,
-  // instead of rejecting only once the text has landed on the device. The text
-  // check is re-run inside `injectAndroidText`, so hoisting it alongside only
-  // decides which error a request bad in BOTH halves reports (the text one).
-  if (params.text) assertTypeableAndroidText(params.text);
-  if (params.key) resolveAndroidNamedKeycode(params.key);
+  // The tool rejects a request carrying both `text` and `key` (see ../index.ts),
+  // so at most one of these two branches runs — there is no ordering to get right
+  // here, and no combined request whose halves could disagree.
   if (params.text) {
     await injectAndroidText(device.id, params.text);
     // `injectAndroidText` (via `assertTypeableAndroidText`) has already rejected
@@ -35,10 +27,6 @@ async function typeAndroidPhone(
     // simulator-server backends) without a spread.
     keysPressed += params.text.length;
   }
-  // Key after text: a combined call means "type, then submit" (text +
-  // key:"enter"). Pressing the key first submits the still-empty field, and on
-  // key:"backspace" eats a character of the field's previous value instead of
-  // the text just typed.
   if (params.key) {
     await injectAndroidNamedKey(device.id, params.key);
     keysPressed++;

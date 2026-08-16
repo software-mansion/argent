@@ -59,7 +59,7 @@ Apple system apps cannot load the instrumentation, and nothing in the launch pat
 
 - Raw `tool: await-ui-element` accessibility checks.
 - Point taps or long-presses derived from `describe`, each named by an echo.
-- A point focus tap plus raw keyboard with `delayMs: 500`.
+- A point focus tap plus a raw text-only `keyboard` with `delayMs: 500`, and a second raw `keyboard` with `key: "enter"` to submit.
 - Raw swipes with `settle: true` because `scroll-to` needs the missing flow tree. Momentum-free scrolling keeps later coordinate taps valid.
 
 Report that the flow is injection-free and its coordinates are not portable. It cannot satisfy the QA contract. Report the artifact and platform blocker instead.

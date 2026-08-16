@@ -66,24 +66,26 @@ const CDP_ENTER = { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 };
 const CDP_ESCAPE = { key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 };
 
 // Single-parameter fidelity: does each backend emit exactly the action it was
-// given, one action per call?
+// given? Every request here carries `text` or `key`, never both — the tool
+// rejects the combined shape (keyboard-text-key-exclusive.test.ts), so one
+// action per call is the only shape a backend ever sees, and there is no
+// relative order left to pin.
 //
-// keyboard-key-order.test.ts pins the RELATIVE order of `text` and `key` in a
-// combined call, but it is not order-only — four of its eight tests assert exact
-// sequences and counts, and its four unknown-key tests name the offending key.
-// Between them those already catch a bare keyUp for a named key (on both
-// backends where that is expressible) and a 400 that omits the name the caller
-// has to correct (on all four). Do not loosen its `toEqual` / `toHaveLength`
-// assertions on the theory that they only check ordering.
+// What a success shape cannot see is a backend that emits its one action
+// wrongly: a prefix instead of the whole string, two presses per character, a
+// modifier held across the lowercase remainder (the text is "hi", so it has no
+// shift to lose), a named key that is always Enter whatever was asked for, a CDP
+// event stream missing its releases or its `char`, or a `typed` echo that drops
+// the key name. Those are pinned here, against literal expectations — never
+// against the same map the code reads, which any value in that map would
+// satisfy.
 //
-// What ordering cannot see is a backend that emits the two actions in the right
-// order but emits one of them wrongly: a prefix instead of the whole string, two
-// presses per character, a modifier held across the lowercase remainder (its
-// text is "hi", so it has no shift to lose), a named key that is always Enter
-// whatever was asked for, a CDP event stream missing its releases or its
-// `char`, or a `typed` echo that drops the key name. Those are pinned here,
-// against literal expectations — never against the same map the code reads,
-// which any value in that map would satisfy.
+// The unknown-key 400 is pinned here too, WITH the offending name: it is what a
+// caller needs to retry, and a bare `/Unknown key/` prefix leaves stripping it
+// green. Only the two backends that throw from their own module are covered
+// here — android's name is pinned in keyboard-android.test.ts and vega's in
+// vega-injection.test.ts, since this file mocks `injectVegaNamedKey`, which is
+// where vega's throw lives.
 describe("keyboard backends — emit exactly the action they were given", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -185,6 +187,19 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       // the key name, so `typed: params.text ?? ""` is caught here too.
       expect(result).toEqual({ typed: key, keys: 1 });
     });
+
+    it("names the offending key when it is unknown, and presses nothing", async () => {
+      const { events, api } = hidRecorder();
+
+      await expect(
+        typeSimulatorServer(registryWith(api), IOS_SIM, {
+          udid: IOS_SIM.id,
+          key: "bogus",
+          delayMs: 0,
+        })
+      ).rejects.toThrow(/Unknown key "bogus"/);
+      expect(events).toEqual([]);
+    });
   });
 
   describe("chromium", () => {
@@ -270,13 +285,26 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       ]);
       expect(result).toEqual({ typed: key, keys: 1 });
     });
+
+    it("names the offending key when it is unknown, and dispatches nothing", async () => {
+      const { events, api } = cdpRecorder();
+
+      await expect(
+        makeChromiumImpl(registryWith(api)).handler(
+          {},
+          { udid: CHROMIUM.id, key: "bogus", delayMs: 0 },
+          CHROMIUM
+        )
+      ).rejects.toThrow(/Unknown key "bogus"/);
+      expect(events).toEqual([]);
+    });
   });
 
   // No android section: `adb shell input` is a command line rather than an event
   // stream, so keyboard-android.test.ts pins the exact strings there — including
   // the case-preservation property this file's iOS section covers as "shifts only
   // the character that needs it", which on android has no modifier to observe and
-  // shows up only as the literal command line.
+  // shows up only as the literal command line, and the unknown-key 400's name.
 
   describe("vega", () => {
     it("injects the text it was given, and nothing else", async () => {

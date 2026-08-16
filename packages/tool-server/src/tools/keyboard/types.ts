@@ -2,7 +2,11 @@ export interface KeyboardParams {
   udid: string;
   /** Text to type character by character. */
   text?: string;
-  /** Named key to press (enter, escape, arrow-*, f1–f12). Not valid on TV targets. */
+  /**
+   * Named key to press (enter, escape, arrow-*, f1–f12). Not valid on TV
+   * targets, and never set alongside `text` — the tool rejects that request
+   * shape (see ./index.ts), so a backend sees at most one of the two.
+   */
   key?: string;
   /** Delay in ms between key presses (default 50). */
   delayMs?: number;

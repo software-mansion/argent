@@ -131,9 +131,12 @@ describe("injectVegaNamedKey", () => {
     expect(lastScript()).toContain(`button_press ${NAMED_KEYCODES["arrow-down"]}`);
   });
 
-  it("throws on an unknown key instead of silently dropping it", async () => {
+  it("names the offending key when it is unknown, instead of dropping it", async () => {
     // f1–f12 are mapped; f13 is the first out-of-range function key.
-    await expect(injectVegaNamedKey("f13")).rejects.toThrow(/Unknown Vega key/i);
+    // The NAME is part of the contract — it is what a caller needs to retry, and
+    // a bare `/Unknown Vega key/` prefix leaves stripping it green here, which
+    // is the only place this backend's message is asserted at all.
+    await expect(injectVegaNamedKey("f13")).rejects.toThrow(/Unknown Vega key "f13"/);
     expect(adbShell).not.toHaveBeenCalled();
   });
 });
