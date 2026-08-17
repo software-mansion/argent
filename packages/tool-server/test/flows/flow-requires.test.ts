@@ -997,8 +997,10 @@ describe("requires folded along the leading run: chain", () => {
 
   it("refuses the chromium hoist before booting when a leading fragment requires tv", async () => {
     // The tv block lives on a fragment the chain crosses, not the root — the
-    // refusal must still precede the boot: the requirements error, never the
-    // boot-shaped "Electron boot: path does not exist".
+    // refusal must still precede the boot: never the boot-shaped "Electron
+    // boot: path does not exist". No tv device can serve a chromium-only
+    // launch, so the composed coverage check settles it before any listing,
+    // on the code a directory run fails rather than skips.
     await writeFlow("boot-chromium", {
       steps: [{ kind: "launch", app: { chromium: "/nonexistent/app" } }],
     });
@@ -1007,13 +1009,14 @@ describe("requires folded along the leading run: chain", () => {
       steps: [{ kind: "run", flow: "boot-chromium.yaml" }],
     });
     await writeFlow("composed", { steps: [{ kind: "run", flow: "tv-frag.yaml" }] });
-    const { registry } = mockRegistry([]);
+    const { registry, invokeTool } = mockRegistry([]);
 
     const err = await run(registry, "composed").catch((e: unknown) => e);
 
-    expect((err as Error).message).toMatch(/chromium is always mobile/);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIRES_UNSATISFIABLE);
+    expect((err as Error).message).toMatch(/no platform that is ever "tv" \(ios, android, vega\)/);
     expect((err as Error).message).not.toMatch(/Electron boot/);
-    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNMET);
+    expect(invokeTool).not.toHaveBeenCalled();
   });
 
   it("rejects an unsatisfiable fold, naming both files", async () => {
@@ -1062,6 +1065,146 @@ describe("requires folded along the leading run: chain", () => {
     const { registry } = mockRegistry([iosEntry(IOS), androidEntry(ANDROID)]);
 
     await expect(run(registry, "root")).rejects.toThrow(/2 booted devices matched/);
+  });
+
+  it("refuses a chromium launch the leading fragment's platform list excludes", async () => {
+    // The block on the fragment, the launch on the root: each file passes its
+    // own validation and no target can run the pair. The code matters as much
+    // as the refusal — FLOW_REQUIREMENTS_UNMET would filter this out of a
+    // directory run and leave the suite green.
+    await writeFlow("ios-frag", {
+      requires: { platform: ["ios"] },
+      steps: [{ kind: "echo", message: "ios-only fragment" }],
+    });
+    await writeFlow("hoist-fold", {
+      steps: [
+        { kind: "run", flow: "ios-frag.yaml" },
+        { kind: "launch", app: { chromium: "/nonexistent/app" } },
+      ],
+    });
+    const { registry, invokeTool } = mockRegistry([chromiumEntry(CHROMIUM)]);
+
+    const err = await run(registry, "hoist-fold").catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIRES_UNSATISFIABLE);
+    expect(getFailureSignal(err)?.error_code).not.toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNMET);
+    // Validation, so a directory run fails this flow alone and keeps going.
+    expect(getFailureSignal(err)?.error_kind).toBe("validation");
+    expect((err as Error).message).toMatch(
+      /a launch step in "hoist-fold" declares no app id for ios/
+    );
+    // Before any listing, so nothing is booted for a run that cannot happen.
+    expect(invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("refuses a native launch the leading fragment's platform list excludes", async () => {
+    // The mirror on the native path: the root owns the ios-only launch and the
+    // fragment owns the android block. Folded, the run is red at the launch
+    // step on the only platform it may target.
+    await writeFlow("android-frag", {
+      requires: { platform: ["android"] },
+      steps: [{ kind: "echo", message: "android-only fragment" }],
+    });
+    await writeFlow("native-fold", {
+      steps: [
+        { kind: "run", flow: "android-frag.yaml" },
+        { kind: "launch", app: { ios: "com.apple.Preferences" } },
+      ],
+    });
+    const { registry } = mockRegistry([androidEntry(ANDROID)]);
+
+    const err = await run(registry, "native-fold").catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIRES_UNSATISFIABLE);
+    expect(getFailureSignal(err)?.error_code).not.toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNMET);
+    expect((err as Error).message).toMatch(
+      /a launch step in "native-fold" declares no app id for android/
+    );
+  });
+
+  it("refuses a launch factored out of the file whose block excludes it", async () => {
+    // The same content refused at parse when the launch sits beside the block:
+    // moving it into a fragment must not buy the file past the check.
+    await writeFlow("frag-launch", {
+      steps: [{ kind: "launch", app: { ios: "com.apple.Preferences" } }],
+    });
+    await writeFlow("inline-block", {
+      requires: { platform: ["ios", "android"] },
+      steps: [{ kind: "run", flow: "frag-launch.yaml" }],
+    });
+    const { registry, invokeTool } = mockRegistry([androidEntry(ANDROID)]);
+
+    const err = await run(registry, "inline-block").catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIRES_UNSATISFIABLE);
+    expect((err as Error).message).toMatch(
+      /a launch step in "frag-launch" declares no app id for android/
+    );
+    // Refused at setup, not at the launch step the run would otherwise reach.
+    expect((err as Error).message).not.toMatch(/no app id declared for platform/);
+    expect(invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("runs a composition every platform in the fold can serve", async () => {
+    await writeFlow("both-frag", {
+      steps: [{ kind: "launch", app: { ios: "com.acme.ios", android: "com.acme.android" } }],
+    });
+    await writeFlow("served", {
+      requires: { platform: ["ios", "android"] },
+      steps: [{ kind: "run", flow: "both-frag.yaml" }],
+    });
+    const { registry } = mockRegistry([androidEntry(ANDROID)]);
+
+    expect((await run(registry, "served")).device).toBe(ANDROID);
+  });
+
+  it("is not proven unsatisfiable by a launch behind a run-time guard in a fragment", async () => {
+    // A guard the platform list does not decide may stay shut on every run, so
+    // the launch under it proves nothing — across files exactly as within one.
+    await writeFlow("guarded-frag", {
+      steps: [
+        {
+          kind: "when",
+          condition: { kind: "ui", condition: "visible", selector: { identifier: "modal" } },
+          steps: [{ kind: "launch", app: { ios: "com.apple.Preferences" } }],
+        },
+      ],
+    });
+    await writeFlow("conditional", {
+      requires: { platform: ["ios", "android"] },
+      steps: [{ kind: "run", flow: "guarded-frag.yaml" }],
+    });
+    const { registry } = mockRegistry([androidEntry(ANDROID)]);
+
+    expect((await run(registry, "conditional")).device).toBe(ANDROID);
+  });
+
+  it("leaves a leading chain it cannot read to the run: step that reports it", async () => {
+    // The scan gives up at the missing hop, so the picture is missing both the
+    // launches past it and the blocks that could narrow them away. Judging a
+    // partial picture would refuse compositions on evidence it never read, so
+    // the best-effort guarantee stands and execRunStep reports the bad target.
+    await writeFlow("mixed-frag", {
+      steps: [
+        { kind: "echo", message: "before the broken hop" },
+        { kind: "run", flow: "missing.yaml" },
+        { kind: "launch", app: { ios: "com.apple.Preferences" } },
+      ],
+    });
+    await writeFlow("partial", {
+      requires: { platform: ["ios", "android"] },
+      steps: [{ kind: "run", flow: "mixed-frag.yaml" }],
+    });
+    const { registry } = mockRegistry([androidEntry(ANDROID)]);
+
+    const result = await run(registry, "partial", { device: ANDROID });
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[2]).toMatchObject({
+      kind: "run",
+      status: "error",
+      reason: expect.stringMatching(/could not load fragment "missing\.yaml"/),
+    });
   });
 });
 
@@ -1150,7 +1293,9 @@ describe("the chromium hoist", () => {
     });
     const { registry } = mockRegistry([]);
 
-    await expect(run(registry, "tv-only")).rejects.toThrow(/chromium is always mobile/);
+    await expect(run(registry, "tv-only")).rejects.toThrow(
+      /no platform that is ever "tv" \(ios, android, vega\)/
+    );
   });
 
   it("is never reached when the platform param is already excluded", async () => {

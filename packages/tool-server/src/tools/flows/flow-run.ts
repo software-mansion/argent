@@ -20,6 +20,7 @@ import type {
 } from "@argent/registry";
 import {
   appIdForPlatform,
+  assertComposedLaunchCoverage,
   assertSafeFlowName,
   assertValidProjectRoot,
   blockSteps,
@@ -35,7 +36,6 @@ import {
   type BlockStep,
   type FlowFile,
   type FlowRequires,
-  type RequiresContribution,
   type FlowSelector,
   type FlowStep,
   type Launch,
@@ -1563,13 +1563,40 @@ interface LeadingRun {
   requires: FlowRequires | undefined;
 }
 
+/** What the leading walk accumulates on its way to the first executable step. */
+interface LeadingScan {
+  /**
+   * Every fragment the walk entered, root excluded. Each is certain to be
+   * reached, so both its `requires` block and its launches belong to the run —
+   * the same certainty `validateRequires` already assumes within one file.
+   */
+  entered: { flow: string; steps: FlowStep[]; requires?: FlowRequires }[];
+  /**
+   * Cleared once a hop is unreadable or refused: the picture is then missing
+   * both launches and the blocks that could have narrowed them away, so it is
+   * not safe to judge.
+   */
+  complete: boolean;
+}
+
 async function leadingRun(flow: FlowFile, rootEntry: RunStackEntry): Promise<LeadingRun> {
-  const fragments: RequiresContribution[] = [];
-  const found = await scanLeadingLaunch(flow, [rootEntry], fragments);
-  return {
-    launch: found === NO_EXECUTABLE_STEP ? null : found,
-    requires: foldLeadingRequires(rootEntry.display, flow.requires, fragments),
-  };
+  const scan: LeadingScan = { entered: [], complete: true };
+  const found = await scanLeadingLaunch(flow, [rootEntry], scan);
+  const requires = foldLeadingRequires(
+    rootEntry.display,
+    flow.requires,
+    scan.entered.flatMap((f) => (f.requires ? [{ flow: f.flow, requires: f.requires }] : []))
+  );
+  // Composition is what parse-time validation cannot see, so the check only
+  // earns its keep once a fragment joined — and only over a chain read end to
+  // end: a broken one stays best-effort here and is reported by execRunStep.
+  if (scan.complete && scan.entered.length > 0) {
+    assertComposedLaunchCoverage(
+      [{ flow: rootEntry.display, steps: flow.steps }, ...scan.entered],
+      requires
+    );
+  }
+  return { launch: found === NO_EXECUTABLE_STEP ? null : found, requires };
 }
 
 /**
@@ -1594,37 +1621,48 @@ async function leadingRun(flow: FlowFile, rootEntry: RunStackEntry): Promise<Lea
  * transparent. Anything unreadable is `null` too — {@link execRunStep} reports
  * that properly when it executes.
  *
- * `fragments` collects the requires block of every fragment the walk enters
- * (parsed and descended into). A fragment entered before a hop the scan gives
- * up on still executes ahead of that hop's error, so its block still binds.
+ * `scan` collects every fragment the walk enters (parsed and descended into).
+ * A fragment entered before a hop the scan gives up on still executes ahead of
+ * that hop's error, so its contribution still binds — but the giving up itself
+ * is recorded, since what lies past it is neither read nor judged.
  */
 async function scanLeadingLaunch(
   flow: FlowFile,
   stack: RunStackEntry[],
-  fragments: RequiresContribution[]
+  scan: LeadingScan
 ): Promise<{ app: Launch; flow: string } | typeof NO_EXECUTABLE_STEP | null> {
   const top = stack[stack.length - 1]!;
+  const abandon = (): null => {
+    scan.complete = false;
+    return null;
+  };
   for (const step of flow.steps) {
     if (step.kind === "echo") continue;
     if (step.kind === "launch") return { app: step.app, flow: top.display };
+    // Not an abandonment: the leading chain ends at the first executable step,
+    // so nothing the fold or the picture wants is left unread.
     if (step.kind !== "run") return null;
     const spelled = path.dirname(top.canonical) + path.sep + step.flow;
     let nested: FlowFile;
     let canonical: string;
     try {
       canonical = await canonicalFlowPath(spelled);
-      if (stack.some((entry) => entry.canonical === canonical)) return null;
-      if (stack.length >= MAX_RUN_DEPTH) return null;
+      if (stack.some((entry) => entry.canonical === canonical)) return abandon();
+      if (stack.length >= MAX_RUN_DEPTH) return abandon();
       const supplied = path.posix.basename(step.flow);
       const spelling = await classifyOnDiskSpelling(path.dirname(spelled), supplied);
-      if (spelling.state === "case_folded") return null;
+      if (spelling.state === "case_folded") return abandon();
       nested = parseFlow(await fs.readFile(canonical, "utf8"));
     } catch {
-      return null;
+      return abandon();
     }
     const display = runDisplayFor(step.flow, stack[0]!.display);
-    if (nested.requires) fragments.push({ flow: display, requires: nested.requires });
-    const inner = await scanLeadingLaunch(nested, [...stack, { canonical, display }], fragments);
+    scan.entered.push({
+      flow: display,
+      steps: nested.steps,
+      ...(nested.requires ? { requires: nested.requires } : {}),
+    });
+    const inner = await scanLeadingLaunch(nested, [...stack, { canonical, display }], scan);
     if (inner !== NO_EXECUTABLE_STEP) return inner;
   }
   return NO_EXECUTABLE_STEP;

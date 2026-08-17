@@ -3017,6 +3017,31 @@ function* launchesInScope(
 }
 
 /**
+ * One file's steps inside the picture a `requires` block is judged against,
+ * named so a refusal can point at the file whose launch broke it. `flow` is
+ * absent for a single-file judgement, whose message needs no attribution.
+ */
+export interface CoverageScope {
+  flow?: string;
+  steps: FlowStep[];
+}
+
+/** {@link launchesInScope} across several files, tagging each launch's file. */
+function* scopedLaunches(
+  scopes: readonly CoverageScope[],
+  allowed: readonly WhenPlatform[]
+): Generator<{
+  app: Launch;
+  allowed: readonly WhenPlatform[];
+  conditional: boolean;
+  flow?: string;
+}> {
+  for (const scope of scopes) {
+    for (const found of launchesInScope(scope.steps, allowed)) yield { ...found, flow: scope.flow };
+  }
+}
+
+/**
  * How these steps' launches relate to one platform under
  * `requires: { platform: [platform] }`: "unserved" when a launch reached
  * unconditionally declares no id for it (the block would fail validation),
@@ -3030,9 +3055,16 @@ export function launchCoverage(
   steps: FlowStep[],
   platform: WhenPlatform
 ): "served" | "unserved" | "unknown" {
+  return scopedCoverage([{ steps }], platform);
+}
+
+function scopedCoverage(
+  scopes: readonly CoverageScope[],
+  platform: WhenPlatform
+): "served" | "unserved" | "unknown" {
   let sawLaunch = false;
   let complete = true;
-  for (const { app, conditional } of launchesInScope(steps, [platform])) {
+  for (const { app, conditional } of scopedLaunches(scopes, [platform])) {
     sawLaunch = true;
     if (appIdForPlatform(app, platform) === null) {
       if (!conditional) return "unserved";
@@ -3040,6 +3072,56 @@ export function launchCoverage(
     }
   }
   return sawLaunch && complete ? "served" : "unknown";
+}
+
+/**
+ * Which launch-coverage promise these scopes break under `requires`, or null
+ * when they keep it. Split out of {@link validateRequires} so
+ * {@link assertComposedLaunchCoverage} can apply the identical judgement to a
+ * multi-file picture instead of growing a second implementation that drifts.
+ */
+function launchCoverageFailure(
+  scopes: readonly CoverageScope[],
+  requires: FlowRequires
+): string | null {
+  const { platform, runtimeKind } = requires;
+
+  if (platform) {
+    // A launch declaring no id for the run's platform is a run-time error
+    // (flow-run's runLaunch), so a launch missing an id for a platform the flow
+    // claims to support is that same error, decidable here without a device.
+    // A platform runtimeKind already rules out can never host a run, so it
+    // owes no id. Only unconditional launches prove anything: one behind a
+    // run-time guard may never be reached, and the flow completes end to end on
+    // every run where the guard stays shut.
+    const viable = runtimeKind
+      ? platform.filter((p) => platformCanPresent(p, runtimeKind))
+      : platform;
+    for (const { app, allowed, conditional, flow } of scopedLaunches(scopes, viable)) {
+      if (conditional) continue;
+      const missing = allowed.filter((p) => appIdForPlatform(app, p) === null);
+      if (missing.length > 0) {
+        return (
+          `a launch step${flow ? ` in "${flow}"` : ""} declares no app id for ${missing.join(", ")}, ` +
+          `which requires.platform says the flow supports — add the missing launch ` +
+          `${missing.length > 1 ? "entries" : "entry"}, or narrow requires.platform`
+        );
+      }
+    }
+    return null;
+  }
+
+  if (!runtimeKind) return null;
+  // Asymmetry with the branch above: a declared platform list is a per-platform
+  // promise (every viable listed platform must be served), but an undeclared
+  // one is an open set — one viable platform served by every launch in its
+  // scope suffices.
+  const candidates = LAUNCH_PLATFORMS.filter((p) => platformCanPresent(p, runtimeKind));
+  if (candidates.some((p) => scopedCoverage(scopes, p) !== "unserved")) return null;
+  return (
+    `no platform that is ever "${runtimeKind}" (${candidates.join(", ")}) has an app id in ` +
+    `every launch step — add launch entries for one of them, or drop requires.runtimeKind`
+  );
 }
 
 function unsatisfiable(detail: string): FailureError {
@@ -3069,43 +3151,37 @@ function validateRequires(flow: FlowFile): void {
     );
   }
 
-  if (platform) {
-    // A launch declaring no id for the run's platform is a run-time error
-    // (flow-run's runLaunch), so a launch missing an id for a platform the flow
-    // claims to support is that same error, decidable here without a device.
-    // A platform runtimeKind already rules out can never host a run, so it
-    // owes no id. Only unconditional launches prove anything: one behind a
-    // run-time guard may never be reached, and the flow completes end to end on
-    // every run where the guard stays shut.
-    const viable = runtimeKind
-      ? platform.filter((p) => platformCanPresent(p, runtimeKind))
-      : platform;
-    for (const { app, allowed, conditional } of launchesInScope(flow.steps, viable)) {
-      if (conditional) continue;
-      const missing = allowed.filter((p) => appIdForPlatform(app, p) === null);
-      if (missing.length > 0) {
-        throw unsatisfiable(
-          `a launch step declares no app id for ${missing.join(", ")}, which requires.platform ` +
-            `says the flow supports — add the missing launch ${missing.length > 1 ? "entries" : "entry"}, ` +
-            `or narrow requires.platform`
-        );
-      }
-    }
-    return;
-  }
+  const detail = launchCoverageFailure([{ steps: flow.steps }], requires);
+  if (detail) throw unsatisfiable(detail);
+}
 
-  if (!runtimeKind) return;
-  // Asymmetry with the branch above: a declared platform list is a per-platform
-  // promise (every viable listed platform must be served), but an undeclared
-  // one is an open set — one viable platform served by every launch in its
-  // scope suffices.
-  const candidates = LAUNCH_PLATFORMS.filter((p) => platformCanPresent(p, runtimeKind));
-  if (!candidates.some((p) => launchCoverage(flow.steps, p) !== "unserved")) {
-    throw unsatisfiable(
-      `no platform that is ever "${runtimeKind}" (${candidates.join(", ")}) has an app id in ` +
-        `every launch step — add launch entries for one of them, or drop requires.runtimeKind`
-    );
-  }
+/**
+ * Re-run {@link validateRequires}'s launch-coverage judgement over a run's
+ * composed picture — the root's steps plus those of every fragment its leading
+ * `run:` chain enters — against the folded block. Parse-time validation sees
+ * one file, so factoring either half across the boundary escapes it and the
+ * same content is judged two ways depending only on how it is split. Refusing
+ * here raises FLOW_REQUIRES_UNSATISFIABLE, which a directory run fails on:
+ * falling through instead leaves the composition to be refused per target as
+ * FLOW_REQUIREMENTS_UNMET, the code that run turns into a silent skip.
+ */
+export function assertComposedLaunchCoverage(
+  scopes: readonly CoverageScope[],
+  requires: FlowRequires | undefined
+): void {
+  if (!requires) return;
+  const detail = launchCoverageFailure(scopes, requires);
+  if (!detail) return;
+  throw new FailureError(
+    `This run's requires block, composed along its leading run: chain, can never be ` +
+      `satisfied: ${detail}`,
+    {
+      error_code: FAILURE_CODES.FLOW_REQUIRES_UNSATISFIABLE,
+      failure_stage: "flow_file_validate",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
+  );
 }
 
 /** One leading-chain file's requires block, named so a fold conflict can point at it. */
