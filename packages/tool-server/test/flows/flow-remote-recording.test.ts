@@ -20,11 +20,7 @@ import {
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import { createRunFlowTool, resolveFlowSource } from "../../src/tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../../src/tools/flows/flow-read-prerequisite";
-import {
-  __resetRecordingsForTesting,
-  getRecordingSession,
-  parseFlow,
-} from "../../src/tools/flows/flow-utils";
+import { __resetRecordingsForTesting, parseFlow } from "../../src/tools/flows/flow-utils";
 
 /**
  * Remote-mode flow behavior: the agent's project_root does NOT exist on this
@@ -1013,17 +1009,23 @@ describe("concurrent recordings against a remote client", () => {
     await expect(fs.stat(CLIENT_ROOT)).rejects.toThrow();
   });
 
-  it("carries the replaced session's requires block into the restart directive", async () => {
-    await flowStartRecordingTool.execute(
+  it("tells the client to re-add the requires block, since no client-mode start can carry one", async () => {
+    // Client mode has no source for the block: this host never reads the file,
+    // and a session's in-memory `requires` is itself whatever a start carried,
+    // so it is undefined for every session here. Both the first start and the
+    // restart must say the block is gone rather than claim one was kept.
+    const started = await flowStartRecordingTool.execute(
       {},
       { name: "remote-flow", project_root: CLIENT_ROOT },
       remoteCtx()
     );
-    // In client mode the in-memory copy is the only copy this host has, so it
-    // is the only place a requires block can survive from. Plant one directly:
-    // a live session carrying one is exactly what a previous carry produces.
-    const session = await getRecordingSession(CLIENT_ROOT, "remote-flow");
-    session!.flow.requires = { runtimeKind: "tv" };
+    expect(started.message).toContain(
+      "This host cannot read the client-side flow file, so any requires block it held is gone - re-add it by hand"
+    );
+    await flowInsertEchoTool.execute(
+      {},
+      { name: "remote-flow", project_root: CLIENT_ROOT, message: "first take" }
+    );
 
     const restarted = await flowStartRecordingTool.execute(
       {},
@@ -1032,9 +1034,10 @@ describe("concurrent recordings against a remote client", () => {
     );
 
     const directive = restarted.savedTo as { content: string };
-    expect(parseFlow(directive.content).requires).toEqual({ runtimeKind: "tv" });
+    expect(parseFlow(directive.content).requires).toBeUndefined();
+    expect(restarted.message).not.toContain("Kept the existing requires block");
     expect(restarted.message).toContain(
-      "requires block (runtimeKind: tv) - edit the YAML to change it"
+      "This host cannot read the client-side flow file, so any requires block it held is gone - re-add it by hand"
     );
     await expect(fs.stat(CLIENT_ROOT)).rejects.toThrow();
   });

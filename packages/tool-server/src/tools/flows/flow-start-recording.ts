@@ -82,7 +82,7 @@ export const flowStartRecordingTool: ToolDefinition<
     failedMsg: ({ params, failureSignal }) =>
       `Failed to start recording of flow ${params.name}: ${failureSignal.error_code}`,
   },
-  description: `Start recording a new flow, resetting .argent/flows/<name>.yaml to an empty flow and replacing any existing one (an existing \`requires:\` block survives the reset, except against a remote tool-server with no live recording, where this host cannot read the client-side file, or when the existing file does not parse, where the block is lost and the message says so).
+  description: `Start recording a new flow, resetting .argent/flows/<name>.yaml to an empty flow and replacing any existing one (an existing \`requires:\` block survives the reset only when the flow file is on this host and parses: against a remote tool-server this host never reads that file, and an unparseable one carries nothing - in both cases the block is lost, the message says so, and re-adding it by hand is the only way back).
 Use when you want to capture a reusable sequence of device interactions for later replay.
 Returns { message, flowFile, savedTo } and optionally { restarted, discardedSteps } if a live recording of the same flow was discarded.
 Whether this server writes that file depends on where your project is: co-located, it creates it and fails if the .argent/flows/ directory cannot be created or the file cannot be written; against a remote tool-server it writes nothing and \`savedTo\` is a directive your client applies (a null \`savedTo\` back means it did not).
@@ -145,12 +145,13 @@ write serializes it over your edit.`,
               : replaced.flow.steps.length;
 
         // `requires` is the one FlowFile field no tool can write back, so the
-        // reset carries it forward instead of silently unfencing the flow.
-        // Best-effort: in host mode the source is the file about to be
-        // truncated; in client mode this host has no file, so a live replaced
-        // session's in-memory flow is the only source.
+        // reset carries it forward instead of silently unfencing the flow. Host
+        // only: the source is the file about to be truncated, and client mode
+        // has no second source - a session's in-memory `requires` comes from
+        // this very expression, so by induction it is undefined in every
+        // client-mode session and the message below says the block is gone.
         const onDisk = persist === "host" ? await requiresOnDisk(filePath) : undefined;
-        const carried = persist === "host" ? onDisk?.requires : replaced?.flow.requires;
+        const carried = onDisk?.requires;
         // A file that would not parse carries nothing AND is about to be
         // truncated, so whether it was fenced is now unknowable - reported
         // rather than passed off as an unfenced flow.
@@ -192,7 +193,9 @@ write serializes it over your edit.`,
       ? ` Kept the existing requires block (${describeRequires(carried)}) - edit the YAML to change it.`
       : requiresUnknown
         ? " The previous file did not parse, so any requires block it held was dropped - re-add it by hand if the flow was fenced."
-        : "";
+        : persist === "client"
+          ? " This host cannot read the client-side flow file, so any requires block it held is gone - re-add it by hand if the flow was fenced."
+          : "";
 
     // Only a same-key restart replaces anything — the documented "re-record it
     // to fix it" workflow. Recordings are keyed per flow file, so starting a
