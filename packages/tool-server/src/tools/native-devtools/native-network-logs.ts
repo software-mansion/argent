@@ -29,6 +29,12 @@ type Result =
 
 export const nativeNetworkLogsTool: ToolDefinition<Params, Result> = {
   id: "native-network-logs",
+  interaction: {
+    startedMsg: ({ params }) => `Reading native network activity for ${params.bundleId}`,
+    completedMsg: ({ params }) => `Read native network activity for ${params.bundleId}`,
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to read native network activity for ${params.bundleId}: ${failureSignal.error_code}`,
+  },
   capability: { apple: { simulator: true, device: true }, appleRemote: { simulator: true } },
   description: `Retrieve network requests captured at the native NSURLProtocol level. 
 Unlike the JS-level network inspector (view-network-logs), this captures ALL network traffic from the app including native modules, Swift/Objective-C networking, and background transfers that bypass JS fetch. 

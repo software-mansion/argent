@@ -113,6 +113,12 @@ const zodSchema = z.object({
 
 export const reactProfilerRendersTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "react-profiler-renders",
+  interaction: {
+    startedMsg: () => "Reading React render activity",
+    completedMsg: () => "Read React render activity",
+    failedMsg: ({ failureSignal }) =>
+      `Failed to read React render activity: ${failureSignal.error_code}`,
+  },
   description: `Scan the live React fiber tree to collect component render counts and durations.
 Returns a markdown table of the top re-rendering components. No profiling session required — works on a live connected app.
 Use when you want a quick snapshot of render counts without a full profiling session.

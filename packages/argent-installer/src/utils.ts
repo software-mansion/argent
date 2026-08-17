@@ -364,11 +364,95 @@ export function editJsoncFile(filePath: string, jsonPath: JSONPath, value: unkno
 
 // ── Directory helpers ─────────────────────────────────────────────────────────
 
-export function copyDir(src: string, dest: string): boolean {
-  if (!fs.existsSync(src)) return false;
+// How many links a destination chain may traverse before we give up, matching
+// the kernel's own ELOOP ceiling.
+const MAX_SYMLINK_HOPS = 40;
+
+export function realpathOrSelf(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
+// The path a copy destination names: itself, or — when it is a symlink — what
+// it points at, following a chain to its end. Each hop resolves against the
+// directory the link really lives in, which is not the lexical dirname when a
+// parent is itself a link into another subtree.
+//
+// A link whose target does not exist is completed, but only into a directory
+// that already exists: finishing `.claude/agents -> ../.agents/agents` for
+// someone who has made `.agents` is helpful, conjuring a whole tree at the end
+// of an arbitrary link is not. Anything else resolves back to the path we were
+// given, so the caller fails naming the link the user actually wrote.
+function resolveLinkedDestination(dest: string): string {
+  let current = dest;
+
+  for (let hop = 0; hop < MAX_SYMLINK_HOPS; hop++) {
+    let entry: fs.Stats;
+    try {
+      entry = fs.lstatSync(current);
+    } catch {
+      // Nothing here: either `dest` itself is simply missing, or we walked a
+      // chain to a target that was never created.
+      return current === dest || dirExists(path.dirname(current)) ? current : dest;
+    }
+
+    if (!entry.isSymbolicLink()) return current;
+
+    try {
+      current = path.resolve(realpathOrSelf(path.dirname(current)), fs.readlinkSync(current));
+    } catch {
+      return dest;
+    }
+  }
+
+  return dest;
+}
+
+// Copy a directory tree onto `dest`, writing *through* every symlink it lands
+// on — file or directory, at any depth — rather than replacing it. Returns the
+// directory actually written (which differs from `dest` when that was a link),
+// or null when there is nothing to copy.
+//
+// Writing through matters because agent definitions are increasingly the same
+// content across harnesses: people keep the canonical copy in one neutral
+// directory and point each vendor path at it — the whole directory
+// (`.claude/agents -> ../.agents/agents`) or a single file inside it. The host
+// tools already tolerate that — Claude Code documents symlinks for
+// `.claude/rules/` — so argent's writer should too (issue #701).
+//
+// `fs.cp` cannot do any of this, because what it does with a symlinked
+// destination depends on which runtime you are on. Node 20 refuses one at any
+// level (ERR_FS_CP_DIR_TO_NON_DIR) and quietly replaces a symlinked file,
+// leaving the canonical copy stale; Node 22 writes through both, but aborts
+// the process — an uncatchable C++ std::filesystem exception no try/catch can
+// reach — whenever it has to create a directory and cannot, whether that is a
+// dangling link or one it may not write to. Argent supports both. Walking the
+// tree here is what makes the behaviour the same on every supported runtime,
+// and `fs.copyFileSync` reports each failure as a plain, catchable errno.
+export function copyDir(src: string, dest: string): string | null {
+  if (!fs.existsSync(src)) return null;
+
+  const target = resolveLinkedDestination(dest);
+  copyTree(src, target);
+  return target;
+}
+
+function copyTree(src: string, dest: string): void {
+  // Read the source before creating anything: a destination that resolves back
+  // inside the source would otherwise grow the very tree being walked.
+  const entries = fs.readdirSync(src, { withFileTypes: true });
+
   fs.mkdirSync(dest, { recursive: true });
-  fs.cpSync(src, dest, { recursive: true });
-  return true;
+
+  for (const entry of entries) {
+    const from = path.join(src, entry.name);
+    const to = resolveLinkedDestination(path.join(dest, entry.name));
+    if (entry.isDirectory()) copyTree(from, to);
+    else fs.copyFileSync(from, to);
+  }
 }
 
 export function dirExists(p: string): boolean {

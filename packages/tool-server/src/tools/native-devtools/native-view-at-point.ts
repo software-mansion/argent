@@ -63,6 +63,12 @@ type Result =
 
 export const nativeViewAtPointTool: ToolDefinition<Params, Result> = {
   id: "native-view-at-point",
+  interaction: {
+    startedMsg: ({ params }) => `Inspecting native view at (${params.x}, ${params.y})`,
+    completedMsg: ({ params }) => `Inspected native view at (${params.x}, ${params.y})`,
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to inspect native view at (${params.x}, ${params.y}): ${failureSignal.error_code}`,
+  },
   capability: { apple: { simulator: true, device: true }, appleRemote: { simulator: true } },
   description: `Inspect the deepest visible UIView at a raw native window point.
 

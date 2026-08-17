@@ -16,6 +16,13 @@ import {
   FlagParseException,
   type JsonSchema,
 } from "./flag-parser.js";
+import {
+  findMissingRequired,
+  describeServerValidationFailure,
+  formatValidationError,
+  missingFlagNames,
+  type ValidationReport,
+} from "./run-validation.js";
 
 export interface RunCommandOptions {
   paths: ToolsServerPaths;
@@ -181,7 +188,26 @@ Examples:
     return;
   }
 
-  const { json, outPath, argvForFlags } = splitOptions(rest);
+  // Parsed before the tool is known, so a bad option here can only point at the tool's own help
+  // rather than print it. Guarded all the same: an unhandled throw would surface as a raw stack.
+  let cliOptions: RunOptions;
+  try {
+    cliOptions = splitOptions(rest);
+  } catch (err) {
+    if (err instanceof FlagParseException) {
+      console.error(`Error: ${err.message}\n`);
+      console.error(`Run \`argent run ${toolName} --help\` to see this tool's flags.`);
+      await trackRunFailure(toolName, startedAt, {
+        error_code: FAILURE_CODES.CLI_RUN_FLAG_PARSE_FAILED,
+        failure_stage: "cli_run_split_options",
+        failure_area: "cli",
+        error_kind: "validation",
+      });
+      process.exit(2);
+    }
+    throw err;
+  }
+  const { json, outPath, argvForFlags } = cliOptions;
 
   const meta = await fetchTool(toolName);
   if (!meta) {
@@ -195,9 +221,42 @@ Examples:
     process.exit(1);
   }
 
+  const schema = meta.inputSchema as JsonSchema | undefined;
+
+  // The one place a rejected invocation is reported, so the locally detected and the
+  // server-reported case cannot drift apart in wording, output channel or exit code.
+  const failValidation = async (report: ValidationReport, stage: string): Promise<never> => {
+    const summary = formatValidationError(report, schema);
+    if (json) {
+      // One object on stderr and nothing on stdout, so `--json | jq` on a failed run reads an
+      // empty stream and a non-zero status rather than prose mixed into the result channel.
+      console.error(
+        JSON.stringify(
+          {
+            error: summary,
+            missing: missingFlagNames(report, schema),
+            issues: report.rawIssues ?? [],
+          },
+          null,
+          2
+        )
+      );
+    } else {
+      console.error(`Error: ${summary}\n`);
+      printToolHelp(meta);
+    }
+    await trackRunFailure(toolName, startedAt, {
+      error_code: FAILURE_CODES.CLI_RUN_INPUT_VALIDATION_FAILED,
+      failure_stage: stage,
+      failure_area: "cli",
+      error_kind: "validation",
+    });
+    process.exit(2);
+  };
+
   let parsed;
   try {
-    parsed = parseFlags(argvForFlags, meta.inputSchema as JsonSchema);
+    parsed = parseFlags(argvForFlags, schema);
   } catch (err) {
     if (err instanceof FlagParseException) {
       console.error(`Error: ${err.message}\n`);
@@ -216,6 +275,18 @@ Examples:
   if (parsed.helpRequested) {
     printToolHelp(meta);
     return;
+  }
+
+  // `argent run` takes no positional arguments beyond the tool name, so anything
+  // left here was typed and then ignored. Saying so is the point: a boolean flag
+  // now consumes a following `true`/`false`/`1`/`0`, but not `--flag yes`, and
+  // silently dropping those is the exact failure this warning exists to stop
+  // (#586). Written to stderr so `--json` output stays parseable.
+  if (parsed.positional.length > 0) {
+    console.error(
+      `Note: ignoring unused argument(s): ${parsed.positional.join(", ")}. ` +
+        `Pass values as --flag <value> or --flag=<value>.`
+    );
   }
 
   // Build the final args payload. Precedence: --args JSON, then per-flag values
@@ -255,6 +326,14 @@ Examples:
     payload[k] = v;
   }
 
+  // Checked against the merged payload, so a required field supplied through `--args` or
+  // `--<field>-json` counts. Answering here spares the user a round trip — and, for a tool that
+  // takes file inputs, spares them uploading those files only to be told a flag was missing.
+  const missing = findMissingRequired(payload, schema);
+  if (missing.length > 0) {
+    await failValidation({ missing, invalid: [], rawIssues: null }, "cli_run_required_flags");
+  }
+
   let result: unknown;
   let note: string | undefined;
   let images: MaterializedImage[] = [];
@@ -273,6 +352,12 @@ Examples:
     images = materialized.images;
     note = resp.note;
   } catch (err) {
+    // The tool rejected the input rather than failing to run it — report it like any other bad
+    // invocation. Anything else keeps its existing handling untouched.
+    const report = describeServerValidationFailure(err, payload, schema);
+    if (report) {
+      await failValidation(report, "cli_run_server_validation");
+    }
     console.error(err instanceof Error ? err.message : String(err));
     await trackRunFailure(toolName, startedAt, {
       error_code: FAILURE_CODES.CLI_RUN_TOOL_CALL_FAILED,

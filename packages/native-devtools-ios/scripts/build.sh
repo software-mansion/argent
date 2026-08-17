@@ -212,6 +212,8 @@ else
     ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} \
     -isysroot "${SDK_PATH}" \
     -target arm64-apple-ios17.0-simulator \
+    -arch arm64 \
+    -arch x86_64 \
     -framework Foundation -framework UIKit -framework CoreGraphics \
     -lobjc \
     -o "${AX_DEST}" "${AX_SRC_DIR}/ax_service.m"
@@ -312,6 +314,8 @@ if [[ "$TRANSPORT" == "unix" ]]; then
       ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} \
       -isysroot "${TVOS_SDK_PATH}" \
       -target arm64-apple-tvos17.0-simulator \
+      -arch arm64 \
+      -arch x86_64 \
       -framework Foundation -framework UIKit -framework CoreGraphics \
       -lobjc \
       -o "${TVOS_AX_DEST}" "${TVOS_SRC_DIR}/tvos_ax_service.m"
@@ -324,6 +328,9 @@ if [[ "$TRANSPORT" == "unix" ]]; then
     clang \
       -fobjc-arc \
       ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} \
+      -mmacosx-version-min=14.0 \
+      -arch arm64 \
+      -arch x86_64 \
       -framework Foundation -framework AppKit -framework CoreGraphics \
       -o "${TVOS_HID_DEST}" "${TVOS_SRC_DIR}/tvos_hid_daemon.m"
   fi

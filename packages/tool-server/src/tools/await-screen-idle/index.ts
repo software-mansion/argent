@@ -114,6 +114,13 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
 
   return {
     id: AWAIT_SCREEN_IDLE_TOOL_ID,
+    interaction: {
+      startedMsg: () => "Waiting for screen to settle",
+      completedMsg: ({ result }) =>
+        result.settled ? "Screen settled" : "Screen did not settle before timeout",
+      failedMsg: ({ failureSignal }) =>
+        `Failed while waiting for screen to settle: ${failureSignal.error_code}`,
+    },
     description: `Block until the screen has rendered content and stopped changing, or a timeout elapses.
 
 Polls the same accessibility / DOM tree as \`describe\` every pollIntervalMs (default ${DEFAULT_POLL_INTERVAL_MS}ms) until it

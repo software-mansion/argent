@@ -22,7 +22,10 @@ const zodSchema = z.object({
  * materializer copies (co-located) or downloads (remote `argent link`) the mp4
  * here, so a recording always lands under `<project>/.argent/recordings/` on the
  * client host rather than in disposable temp — even when the tool-server that
- * produced it is remote.
+ * produced it is remote. This value is a fixed wire hint, not the final path:
+ * the client may redirect it via its `recordings.directory` configuration —
+ * which is why it must stay constant here (changing it would fall off the
+ * client's allowlist and demote recordings to scratch).
  */
 const RECORDINGS_DIR = ".argent/recordings";
 
@@ -53,6 +56,12 @@ export const screenRecordingStopTool: ToolDefinition<
   ScreenRecordingStopResult
 > = {
   id: "screen-recording-stop",
+  interaction: {
+    startedMsg: () => "Stopping screen recording",
+    completedMsg: ({ result }) => `Saved screen recording ${result.video.filename}`,
+    failedMsg: ({ failureSignal }) =>
+      `Failed to stop screen recording: ${failureSignal.error_code}`,
+  },
   capability,
   description: `Stop the screen recording started by \`screen-recording-start\` and retrieve the video: frame capture ends and ffmpeg finalizes the mp4.
 Also retrieves the video when the recording already ended on its own (time limit reached, capture process died) — call it even after the cap fired.

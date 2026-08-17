@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import { selectTarget } from "../../src/utils/debugger/target-selection";
 import type { CDPTarget } from "../../src/utils/debugger/discovery";
 
@@ -118,6 +119,28 @@ describe("selectTarget", () => {
     );
     // The error must surface the valid ids so the caller can re-target.
     expect(() => selectTarget([dev1, dev2], 8081, { deviceId: "unmatched" })).toThrow(/aaa.*bbb/);
+  });
+
+  it("the ambiguous-mismatch error carries the DEBUGGER_TARGET_DEVICE_MISMATCH signal", () => {
+    // The message is contract (asserted above and matched on by agents); the
+    // signal gives telemetry a dedicated code — instead of the catch-all
+    // service-initialization bucket — and lets debugger-status map the error
+    // to the "device_mismatch" reason.
+    const dev1 = makeTarget({ id: "dev1", reactNative: { logicalDeviceId: "aaa" } });
+    const dev2 = makeTarget({ id: "dev2", reactNative: { logicalDeviceId: "bbb" } });
+    let thrown: unknown;
+    try {
+      selectTarget([dev1, dev2], 8081, { deviceId: "unmatched" });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect(getFailureSignal(thrown)).toMatchObject({
+      error_code: FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH,
+      failure_stage: "debugger_select_target",
+      failure_area: "tool_server",
+      error_kind: "not_found",
+    });
   });
 
   it("surfaces deviceName alongside logicalDeviceId so the caller can map ids to devices", () => {

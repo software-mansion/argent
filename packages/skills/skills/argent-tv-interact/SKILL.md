@@ -61,7 +61,7 @@ Needs a Debug build + Metro running. argent only _connects_ to Metro — start M
 
 ## Debugging the JS runtime (Vega)
 
-Once that same Debug build + Metro setup is in place, the JS-runtime tools work on a Vega VVD: `debugger-connect`, `debugger-status`, `debugger-evaluate`, `debugger-log-registry` (console logs), `view-network-logs`, and `view-network-request-details`. See the `argent-metro-debugger` skill.
+Once that same Debug build + Metro setup is in place, the JS-runtime tools work on a Vega VVD: `debugger-connect`, `debugger-status`, `debugger-evaluate`, `debugger-log-registry` (console logs), `view-network-logs`, and `view-network-request-details`. Verify with `debugger-status`: it returns a status result rather than an error when not connected — `status: "connected"` means the setup works; `status: "not_connected"` carries a `reason` and `guidance` (e.g. `metro_not_running` → Metro itself is not up). Vega-specific: on `no_app_connected`, check `vega device start-port-forwarding` **before** relaunching the app — a down device→host forward is the usual cause, and the generic guidance can't know about it. See the `argent-metro-debugger` skill.
 
 Vega's React Native forks RN 0.72 and serves the legacy Hermes inspector, so three things differ from iOS / Android:
 

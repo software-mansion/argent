@@ -11,11 +11,12 @@ import type { NativeProfilerAnalyzeResult } from "../../../utils/ios-profiler/ty
 import { analyzeNativeProfilerIos } from "./platforms/ios";
 import { analyzeNativeProfilerAndroid } from "./platforms/android";
 import { requireArtifacts, type ArtifactHandle } from "../../../artifacts";
+import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
 const zodSchema = z.object({
-  device_id: z
-    .string()
-    .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+  device_id: metroDeviceIdParam(
+    "Target device id from `list-devices` (iOS UDID or Android serial)."
+  ),
 });
 
 const capability = {
@@ -38,6 +39,12 @@ export const nativeProfilerAnalyzeTool: ToolDefinition<
   NativeProfilerAnalyzeToolResult
 > = {
   id: "native-profiler-analyze",
+  interaction: {
+    startedMsg: () => "Analyzing native profile",
+    completedMsg: () => "Analyzed native profile",
+    failedMsg: ({ failureSignal }) =>
+      `Failed to analyze native profile: ${failureSignal.error_code}`,
+  },
   capability,
   description: `Analyze exported native trace data and return an LLM-optimized markdown report.
 iOS: parses CPU time profile, UI hangs, and memory leaks from the exported XML files.

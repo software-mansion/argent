@@ -63,6 +63,12 @@ type Result =
 
 export const nativeUserInteractableViewAtPointTool: ToolDefinition<Params, Result> = {
   id: "native-user-interactable-view-at-point",
+  interaction: {
+    startedMsg: ({ params }) => `Finding interactive view at (${params.x}, ${params.y})`,
+    completedMsg: ({ params }) => `Found interactive view at (${params.x}, ${params.y})`,
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to find interactive view at (${params.x}, ${params.y}): ${failureSignal.error_code}`,
+  },
   capability: { apple: { simulator: true, device: true }, appleRemote: { simulator: true } },
   description: `Inspect the deepest UIView at a raw native window point that would actually receive touch input.
 

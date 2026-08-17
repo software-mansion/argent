@@ -64,6 +64,12 @@ export function createScreenRecordingStartTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, StartRecordingResult> {
   return {
     id: "screen-recording-start",
+    interaction: {
+      startedMsg: () => "Starting screen recording",
+      completedMsg: () => "Started screen recording",
+      failedMsg: ({ failureSignal }) =>
+        `Failed to start screen recording: ${failureSignal.error_code}`,
+    },
     capability,
     description: `Start recording the device screen to a video file (h264 mp4, 30fps at the device's native resolution).
 By default stretches where the screen does not change are trimmed out (see trimStatic), so a long session with only brief activity comes back as a short clip instead of minutes of dead air.
@@ -154,7 +160,8 @@ Fails if a recording is already running on the device, the device is not booted,
  *
  * `disable` waits for any in-flight `enable` to settle before sending its own
  * `show:false`. Enabling is the one suspension point after a recording is
- * stamped, so a dispose (shutdown) can call `disable` while `enable`'s
+ * stamped, so a dispose (shutdown, or a stop-all-simulator-servers teardown of
+ * this device) can call `disable` while `enable`'s
  * `show:true` request is still outstanding. Without this barrier the two
  * requests race and the earlier-issued `show:false` can be overtaken by the
  * later `show:true`, leaving simulator-server's overlay stuck on after the
