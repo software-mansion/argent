@@ -1,6 +1,5 @@
 import { z } from "zod";
 import * as fs from "node:fs/promises";
-import { zodObjectToJsonSchema } from "@argent/registry";
 import type { FileInputSpec, ToolContext, ToolDefinition } from "@argent/registry";
 import { parseFlow } from "./flow-utils";
 import { resolveFlowSource } from "./flow-run";
@@ -28,7 +27,7 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        "Absolute path to a co-located flow .yaml on the client and tool server's shared filesystem. This must be supplied through the file-input boundary. Pass the same flow source here as to flow-execute, so the prerequisite you read belongs to the flow that will run; for remote reads, pass name + project_root instead."
+        "Omit when name is set. Absolute path to a co-located flow .yaml on the client and tool server's shared filesystem. This must be supplied through the file-input boundary. Pass the same flow source here as to flow-execute, so the prerequisite you read belongs to the flow that will run; for remote reads, pass name + project_root instead."
       ),
   })
   .superRefine((params, ctx) => {
@@ -40,15 +39,6 @@ const zodSchema = z
       });
     }
   });
-
-const inputSchema: Record<string, unknown> = {
-  ...zodObjectToJsonSchema(zodSchema),
-  // Zod's JSON Schema conversion cannot represent superRefine. `oneOf` makes
-  // the same exactly-one source rule visible to MCP and HTTP clients — the
-  // identical addition flow-execute makes, so the pre-flight read advertises
-  // the same contract as the run it precedes.
-  oneOf: [{ required: ["name"] }, { required: ["flow_path"] }],
-};
 
 // Mirror of flow-execute's specs, field for field: the documented pre-flight is
 // "read the prerequisite, then run", so both tools must resolve the same source
@@ -90,9 +80,9 @@ Returns the prerequisite description so you can verify the required state is met
 Use when you need to check what app/simulator state is required before executing a flow; pass the same flow
 source (name or flow_path) you will pass to flow-execute, so the prerequisite you read is the contract of
 the flow that will actually run.
-Fails if the flow file does not exist.`,
+Fails if the flow file does not exist.
+Address the flow exactly as you will address it in flow-execute: name or flow_path, one and only one; supplying both or neither is rejected.`,
   zodSchema,
-  inputSchema,
   fileInputs,
   services: () => ({}),
   async execute(_services, params, ctx?: ToolContext) {

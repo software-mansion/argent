@@ -169,6 +169,11 @@ export async function runSnapshot(
   // (e.g. native devtools disconnected). The capture reads pixels, not the
   // describe tree — so short of an explicit abort, proceed best-effort; a
   // genuinely dead device still surfaces via the screenshot invoke below.
+  //
+  // The throw is swallowed, not lost: the same window records the outage on the
+  // run (ActionEnv.treeOutage) for a later gesture to spend. A gesture that
+  // swallows one warns; a capture has no `warning` channel, which makes this
+  // the one settle that passes silently.
   if (opts.cropOn === undefined) {
     try {
       await settleTree(env);

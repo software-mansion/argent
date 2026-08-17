@@ -1459,12 +1459,12 @@ describe("flow composition (run:)", () => {
 
   it("rejects an uploaded flow whose run: sits two when: blocks deep", async () => {
     // Pins walkSteps' recursion DEPTH, which the single-level test above
-    // cannot: a one-level peek (`yield* step.steps` in place of
-    // `yield* walkSteps(step.steps)`) still passes that neighbor but never
-    // reaches this run:, so the flow reports ok: true with the run line inside
-    // a block skip — the silent-green CI outcome the preflight exists to
-    // prevent. The parser nests when: to MAX_WHEN_DEPTH (20), so two levels is
-    // ordinary authorable YAML, not an edge case.
+    // cannot: a one-level peek (`yield* inner` in place of
+    // `yield* walkSteps(inner)`) still passes that neighbor but never reaches
+    // this run:, so the flow reports ok: true with the run line inside a block
+    // skip — the silent-green CI outcome the preflight exists to prevent. The
+    // parser nests when: to MAX_BLOCK_DEPTH (20), so two levels is ordinary
+    // authorable YAML, not an edge case.
     const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
     await fs.writeFile(
       uploadedPath,
@@ -2176,7 +2176,7 @@ describe("flow composition (run:)", () => {
 
     // Each run marker sits at its enclosing depth; the fragment it expands runs
     // one deeper. Top-level steps omit the field entirely, so a flow with no
-    // block directives reports byte-identically to the pre-depth shape.
+    // nesting steps reports byte-identically to the pre-depth shape.
     expect(result.steps.map((s) => `${s.kind}:${s.depth ?? 0}`)).toEqual([
       "run:0",
       "tool:1",

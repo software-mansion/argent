@@ -14,6 +14,7 @@ import {
   type FlowStep,
   type RecordingSession,
 } from "./flow-utils";
+import { summarizeStep } from "./flow-finish-recording";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { resolveDevice } from "../../utils/device-info";
 import { stripDeviceKeys } from "./flow-device";
@@ -435,11 +436,15 @@ async function captureRunTarget(
   }
 }
 
-export function createFlowAddStepTool(
-  registry: Registry
-): ToolDefinition<
+export function createFlowAddStepTool(registry: Registry): ToolDefinition<
   z.infer<typeof zodSchema>,
-  { message: string; toolResult: unknown; flowFile: string; savedTo: FlowSavedTo }
+  {
+    message: string;
+    toolResult: unknown;
+    stepCount: number;
+    recorded: string;
+    savedTo: FlowSavedTo;
+  }
 > {
   return {
     id: "flow-add-step",
@@ -451,8 +456,9 @@ export function createFlowAddStepTool(
       failedMsg: ({ params, failureSignal }) =>
         `Failed to add ${params.command} step to flow ${params.name}: ${failureSignal.error_code}`,
     },
-    description: `Execute a tool call and record it as a step in the flow named by \`name\` + \`project_root\` (the recording must already be open — see flow-start-recording). Use when recording a flow and you want to run and capture each action. A coordinate \`gesture-tap\` is recorded as a portable \`tap: { selector }\` step when the tapped element has stable text/identifier (otherwise coordinates are kept with a warning); a \`restart-app\` is recorded as a \`launch\` step (record one FIRST to make the flow a self-contained e2e flow; restart-app has no chromium support, so a chromium flow records as a fragment — add the \`launch: { chromium: <app path> }\` line to the YAML afterward, deleting the executionPrerequisite line if one was recorded: a flow that starts with a launch must not declare it). Returns { message, toolResult, flowFile, savedTo } on success. If it fails an error is returned and nothing is recorded.
-If a step was recorded by mistake, edit the .yaml file directly to remove it.`,
+    description: `Execute a tool call and record it as a step in the flow named by \`name\` + \`project_root\` (the recording must already be open — see flow-start-recording). Use when recording a flow and you want to run and capture each action. A coordinate \`gesture-tap\` is recorded as a portable \`tap: { selector }\` step when the tapped element has stable text/identifier (otherwise coordinates are kept with a warning); a \`restart-app\` is recorded as a \`launch\` step (record one FIRST to make the flow a self-contained e2e flow; restart-app has no chromium support, so a chromium flow records as a fragment — add the \`launch: { chromium: <app path> }\` line to the YAML afterward, deleting the executionPrerequisite line if one was recorded: a flow that starts with a launch must not declare it).
+Returns { message, toolResult, stepCount, recorded, savedTo } on success. If it fails an error is returned and nothing is recorded.
+If a step was recorded by mistake, edit the .yaml to remove it — against a remote client, only after \`flow-finish-recording\`: the in-memory copy is authoritative there, and every write serializes it over your edit.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params, ctx) {
@@ -540,12 +546,16 @@ If a step was recorded by mistake, edit the .yaml file directly to remove it.`,
         };
       }
 
-      const { flowFile, savedTo } = await appendStepToFlow(session, step);
+      const { savedTo, stepCount } = await appendStepToFlow(session, step);
 
       return {
         message: `Step added to "${params.name}" flow${warning ? ` — ${warning}` : ""}`,
         toolResult,
-        flowFile,
+        stepCount,
+        recorded: summarizeStep(step, stepCount),
+        // Host mode: a path. Client mode: the directive that carries the YAML
+        // to the client, which IS the persistence mechanism there — the one
+        // place the full file still has to travel per step.
         savedTo,
       };
     },

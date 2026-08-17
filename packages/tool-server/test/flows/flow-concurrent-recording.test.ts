@@ -1121,8 +1121,15 @@ describe("appending to a recording whose file was hand-edited", () => {
       "utf8"
     );
 
-    await addEcho(root, "alpha", "s3");
+    const third = await addEcho(root, "alpha", "s3");
     expect(await readMarkers(root, "alpha")).toEqual(["echo:s2", "echo:s3"]);
+    // The count is the FILE's length, not this session's tally of appends —
+    // the only place the two can diverge, and the one surface where the number
+    // is not merely informational: it is what `recorded` numbers the author's
+    // per-step view with. A session-local counter would say "3." for what is
+    // line 2 of their file, and every other stepCount assertion in the suite
+    // appends without editing, so appends == file length in all of them.
+    expect(third.stepCount).toBe(2);
 
     // …and the finish reports the file, not the take as it was recorded.
     const finished = await finish(root, "alpha");

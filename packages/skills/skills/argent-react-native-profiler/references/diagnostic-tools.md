@@ -45,6 +45,13 @@ Call `profiler-cpu-query`. Modes:
 - `call_tree` — callers and callees of a specific `function_name`.
 - `component_cpu` — aggregate CPU during all commits of a `component_name`.
 
+> **Component names:** pass the name exactly as the report shows it. The report strips
+> `Forget(...)` / `Memo(...)` / `ForwardRef(...)` wrappers and marks them with a
+> `[React Compiler]` / `[React.memo] `/ `[forwardRef]` tag; both that displayed name and the
+> underlying wrapped name resolve. If a name maps to several distinct fibers the tool lists
+> the exact names to retry with rather than merging them — a combined total would not describe
+> any real component.
+
 ## Commit query
 
 ```json
