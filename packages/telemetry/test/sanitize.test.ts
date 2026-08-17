@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FAILURE_CODES } from "@argent/registry";
 import { sanitize, ALLOWED } from "../src/sanitize.js";
-import { EVENT_NAMES, PLATFORMS } from "../src/events.js";
+import { DEBUGGER_TOOL_OUTCOMES, EVENT_NAMES, PLATFORMS } from "../src/events.js";
 
 describe("sanitize", () => {
   describe("event allowlist", () => {
@@ -575,6 +575,53 @@ describe("sanitize", () => {
     });
   });
 
+  describe("tool:fail invalid_params validator", () => {
+    const base = { tool: "launch-app", duration_ms: 1 };
+
+    it("accepts camelCase schema names — the /i flag is load-bearing", () => {
+      // A third of registered tools declare camelCase zod keys (bundleId,
+      // avdName, maxNodes, ...). arrayOf is all-or-nothing, so dropping the
+      // case-insensitive flag would silently void the whole property for any
+      // call whose failing param is camelCase.
+      const out = sanitize("tool:fail", {
+        ...base,
+        invalid_params: ["bundleId", "electronAppPath", "unrecognized_keys"],
+      });
+      expect(out.invalid_params).toEqual(["bundleId", "electronAppPath", "unrecognized_keys"]);
+    });
+
+    it("accepts exactly 16 names — the emit-side cap must fit through", () => {
+      // http.ts caps the derived list at 16 before emitting; the sanitize cap
+      // must not be tighter, or every capped emission silently loses the
+      // property.
+      const names = Array.from({ length: 16 }, (_, i) => `param_${i}`);
+      const out = sanitize("tool:fail", { ...base, invalid_params: names });
+      expect(out.invalid_params).toEqual(names);
+    });
+
+    it("drops the whole property at 17 names", () => {
+      const names = Array.from({ length: 17 }, (_, i) => `param_${i}`);
+      const out = sanitize("tool:fail", { ...base, invalid_params: names });
+      expect("invalid_params" in out).toBe(false);
+    });
+
+    it("drops the whole property when one element is not an identifier", () => {
+      const out = sanitize("tool:fail", {
+        ...base,
+        invalid_params: ["port", "not a name!"],
+      });
+      expect("invalid_params" in out).toBe(false);
+    });
+
+    it("drops an element longer than 64 characters (whole property voided)", () => {
+      const out = sanitize("tool:fail", {
+        ...base,
+        invalid_params: ["a".repeat(65)],
+      });
+      expect("invalid_params" in out).toBe(false);
+    });
+  });
+
   describe("sensitive-arg drop tests", () => {
     it.each([
       ["keyboard.text", { text: "hunter2" }],
@@ -655,6 +702,105 @@ describe("sanitize", () => {
         agent_names: ["claude", "cursor"], // must be dropped
       });
       expect(out).toEqual({ agent_choice_count: 2 });
+    });
+  });
+
+  describe("tool:fail invalid_params", () => {
+    const base = { tool: "debugger-status", platform: "ios", duration_ms: 5 };
+
+    it("keeps a conforming list of schema-declared names (incl. the unrecognized_keys token)", () => {
+      const out = sanitize("tool:fail", {
+        ...base,
+        invalid_params: ["device_id", "port", "unrecognized_keys"],
+      });
+      expect(out).toEqual({
+        ...base,
+        invalid_params: ["device_id", "port", "unrecognized_keys"],
+      });
+    });
+
+    it("voids the whole array when longer than 16 (the emit side must cap first)", () => {
+      const out = sanitize("tool:fail", {
+        ...base,
+        invalid_params: Array.from({ length: 17 }, (_, i) => `p${i}`),
+      });
+      expect(out).toEqual(base);
+    });
+
+    it("voids the whole array when any element is not an identifier-shaped name", () => {
+      // A leaked value (spaces, path chars) must take the entire property down,
+      // not slip through next to valid names.
+      const out = sanitize("tool:fail", {
+        ...base,
+        invalid_params: ["port", "/Users/alice/secret file"],
+      });
+      expect(out).toEqual(base);
+    });
+
+    it("voids a non-array invalid_params", () => {
+      const out = sanitize("tool:fail", { ...base, invalid_params: "device_id" });
+      expect(out).toEqual(base);
+    });
+  });
+
+  describe("debugger:tool_outcome", () => {
+    const UUID_V = "a2d4a13a-6c0f-4e0e-8e14-1c8b8f0a1234";
+
+    it("accepts every declared outcome — including the gate-branch values", () => {
+      // stale_connection / reconnecting come from the socket-state gate, not
+      // the catch classifier; the enum must admit them at the SANITIZE level or
+      // those emissions silently lose their outcome dimension.
+      for (const outcome of DEBUGGER_TOOL_OUTCOMES) {
+        expect(
+          sanitize("debugger:tool_outcome", {
+            tool: "debugger-status",
+            outcome,
+            platform: "android",
+            tool_invocation_id: UUID_V,
+          })
+        ).toEqual({
+          tool: "debugger-status",
+          outcome,
+          platform: "android",
+          tool_invocation_id: UUID_V,
+        });
+      }
+      expect(DEBUGGER_TOOL_OUTCOMES).toContain("reconnecting");
+      expect(DEBUGGER_TOOL_OUTCOMES).toContain("stale_connection");
+      expect(DEBUGGER_TOOL_OUTCOMES).toContain("connected");
+    });
+
+    it("accepts both emitting tools and drops any other tool id", () => {
+      for (const tool of ["debugger-status", "debugger-log-registry"] as const) {
+        expect(sanitize("debugger:tool_outcome", { tool, outcome: "connected" })).toEqual({
+          tool,
+          outcome: "connected",
+        });
+      }
+      expect(
+        sanitize("debugger:tool_outcome", { tool: "gesture-tap", outcome: "connected" })
+      ).toEqual({ outcome: "connected" });
+    });
+
+    it("drops an unknown outcome value (free-text error strings must never ride this field)", () => {
+      expect(
+        sanitize("debugger:tool_outcome", {
+          tool: "debugger-status",
+          outcome: "ECONNREFUSED 127.0.0.1:8081",
+        })
+      ).toEqual({ tool: "debugger-status" });
+    });
+
+    it("drops a malformed tool_invocation_id and unknown extra properties", () => {
+      expect(
+        sanitize("debugger:tool_outcome", {
+          tool: "debugger-log-registry",
+          outcome: "metro_not_running",
+          tool_invocation_id: "not-a-uuid",
+          detail: "Metro at port 8081 is not running",
+          guidance: "Do not retry",
+        })
+      ).toEqual({ tool: "debugger-log-registry", outcome: "metro_not_running" });
     });
   });
 

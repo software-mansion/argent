@@ -39,6 +39,14 @@ vi.mock("../src/utils/ios-devices", () => ({
   isTvOsSimulator: vi.fn(async () => false),
 }));
 
+// Device-set resolution reads the user's config + probes simctl — mock it to
+// the default set (null) so spawns stay hermetic; the additional-set spawn
+// test flips it per-case.
+const deviceSetForUdidMock = vi.fn(async (_udid: string): Promise<string | null> => null);
+vi.mock("../src/utils/ios-device-sets", () => ({
+  deviceSetForUdid: (udid: string) => deviceSetForUdidMock(udid),
+}));
+
 function makeFakeProc() {
   const proc = new EventEmitter() as EventEmitter & {
     stdout: Readable;
@@ -128,6 +136,27 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
 
     await instance.dispose();
     expect(fakeProc.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes --device-set for an iOS device from an additional CoreSimulator set", async () => {
+    const fakeProc = makeFakeProc();
+    spawnMock.mockReturnValue(fakeProc);
+    const radonSet = "/Users/dev/Library/Caches/com.swmansion.radon-ide/Devices/iOS";
+    deviceSetForUdidMock.mockResolvedValueOnce(radonSet);
+
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+
+    const udid = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
+    const device = iosDevice(udid);
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    signalReady(fakeProc, 55556);
+    const instance = await factoryPromise;
+
+    const [, args] = spawnMock.mock.calls[0]!;
+    // Same flag Radon IDE passes to this binary for its own set's devices.
+    expect(args).toEqual(["ios", "--id", udid, "--device-set", radonSet]);
+
+    await instance.dispose();
   });
 
   it("spawns the `android` subcommand for an Android device", async () => {

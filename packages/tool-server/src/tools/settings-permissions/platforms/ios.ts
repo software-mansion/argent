@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
+import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
 import { simctlPrivacy as remoteSimctlPrivacy } from "../../../utils/sim-remote";
 import type {
   PermissionAction,
@@ -90,16 +91,20 @@ interface IosPrivacyBackend {
 
 const localBackend: IosPrivacyBackend = {
   async run(udid, simctlAction, service, bundleId) {
-    await execFileAsync("xcrun", ["simctl", "privacy", udid, simctlAction, service, bundleId], {
-      timeout: 30_000,
-    });
+    await execFileAsync(
+      "xcrun",
+      await simctlArgsForUdid(udid, ["privacy", udid, simctlAction, service, bundleId]),
+      { timeout: 30_000 }
+    );
   },
   async isInstalled(udid, bundleId) {
     try {
       // Exits 0 and prints the container path for an installed app.
-      await execFileAsync("xcrun", ["simctl", "get_app_container", udid, bundleId], {
-        timeout: 15_000,
-      });
+      await execFileAsync(
+        "xcrun",
+        await simctlArgsForUdid(udid, ["get_app_container", udid, bundleId]),
+        { timeout: 15_000 }
+      );
       return true;
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);

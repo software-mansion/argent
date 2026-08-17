@@ -7,7 +7,10 @@ import {
 } from "@argent/registry";
 import type { CDPClient } from "../utils/debugger/cdp-client";
 import type { JsRuntimeDebuggerApi } from "./js-runtime-debugger";
-import { FIBER_ROOT_TRACKER_SCRIPT } from "../utils/react-profiler/scripts";
+import {
+  FIBER_ROOT_TRACKER_SCRIPT,
+  STOP_FOR_TAKEOVER_SCRIPT,
+} from "../utils/react-profiler/scripts";
 
 export const REACT_PROFILER_SESSION_NAMESPACE = "ReactProfilerSession";
 
@@ -195,7 +198,35 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
     return {
       api: state,
       dispose: async () => {
-        // Profiler.stop is called explicitly in react-profiler-stop before disposal.
+        // A dispose reached from `react-profiler-stop` arrives with the run
+        // already ended — that tool clears `profilingActive`, calls
+        // `Profiler.stop` and runs STOP_AND_READ_SCRIPT (which stops every
+        // renderer) before disposing. A dispose reached from
+        // `stop-all-simulator-servers` does not: this session is in that
+        // teardown's namespace set, so it arrives mid-run, with nothing having
+        // stopped the in-app backend.
+        //
+        // Left alone, the React DevTools backend keeps recording every commit
+        // into a buffer only an app or bundle reload frees, and argent's
+        // patched commit hook keeps re-serializing that whole accumulated
+        // buffer synchronously on React's commit path — inside the user's app,
+        // outliving the argent session that started it. Stop it here while the
+        // CDP session is still up: `Registry._teardown` disposes dependents
+        // before their dependency, so the JsRuntimeDebugger this rides on has
+        // not disconnected yet, and this is the last moment anything can reach
+        // the app.
+        if (state.profilingActive) {
+          state.profilingActive = false;
+          await cdp
+            .send("Runtime.evaluate", {
+              expression: STOP_FOR_TAKEOVER_SCRIPT,
+              returnByValue: true,
+            })
+            .catch(warnOnError("STOP_FOR_TAKEOVER_SCRIPT"));
+          // And the Hermes CPU sampler `react-profiler-start` enabled, which
+          // `Profiler.disable` alone is not documented to end.
+          await cdp.send("Profiler.stop").catch(ignore);
+        }
         await cdp.send("Profiler.disable").catch(ignore);
       },
       events,

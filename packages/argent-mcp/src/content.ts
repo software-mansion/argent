@@ -211,9 +211,13 @@ export type FlowStepResult = {
   status?: "pass" | "fail" | "skip" | "error";
   reason?: string;
   /**
-   * Legacy: older tool-servers passed a snapshot that adopted a missing
-   * baseline and annotated it with this caveat (a missing baseline now fails
-   * the step). Rendered for wire compat with a not-yet-updated server.
+   * A step that passed in a way that weakens it as proof — raised today by
+   * `await: { idle: true }`, which never fails a run and says here what its
+   * green actually bought (see StepReport.warning in the tool-server's
+   * flow-run). Also carries the caveat older tool-servers put on a snapshot
+   * that adopted a missing baseline, which now fails the step instead. Live
+   * either way: dropping the field would silently delete the only thing the
+   * readiness check reports.
    */
   warning?: string;
   tool?: string;
@@ -225,7 +229,7 @@ export type FlowStepResult = {
   /** Human-readable step target (selector / snapshot name), set by the runner. */
   target?: string;
   /**
-   * Nesting depth: absent/0 at top level, +1 inside each block directive
+   * Nesting depth: absent/0 at top level, +1 inside each nesting step
    * (`when:` guarded steps, `run:` fragment steps). The label is indented by
    * it; a pre-depth tool-server sends none and the report renders flat.
    */
@@ -277,9 +281,12 @@ function stepIndent(depth: unknown): string {
 
 function stepLabel(step: FlowStepResult): string {
   if (step.kind === "echo") return step.message ?? "";
-  if (step.kind === "run") return `run ${step.flow ?? ""}`.trim();
   if (step.tool) return step.tool;
+  // A run step's target is the as-written path — `run ios/login.yaml` and
+  // `run android/login.yaml` must render distinctly, not as one stem.
   if (step.target) return `${step.kind} ${step.target}`;
+  // Legacy: a pre-target tool-server sends only the fragment stem in `flow`.
+  if (step.kind === "run") return `run ${step.flow ?? ""}`.trim();
   return step.kind;
 }
 
@@ -334,9 +341,14 @@ export async function flowRunToMcpContent(
   }
 
   if (result.ok !== undefined) {
+    // Narration steps are not counted, so a flow of only narration counts
+    // nothing — say so rather than reporting four zeros on a passing run.
+    const counted =
+      (result.passed ?? 0) + (result.failed ?? 0) + (result.errored ?? 0) + (result.skipped ?? 0);
+    const note = result.ok && counted === 0 ? " (no test steps)" : "";
     blocks.push({
       type: "text",
-      text: `${result.ok ? "PASS" : "FAIL"} — ${result.passed ?? 0} passed, ${result.failed ?? 0} failed, ${result.errored ?? 0} errored, ${result.skipped ?? 0} skipped`,
+      text: `${result.ok ? "PASS" : "FAIL"} — ${result.passed ?? 0} passed, ${result.failed ?? 0} failed, ${result.errored ?? 0} errored, ${result.skipped ?? 0} skipped${note}`,
     });
   } else {
     blocks.push({ type: "text", text: `Flow "${result.flow}" complete.` });
