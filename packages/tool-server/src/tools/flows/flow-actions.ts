@@ -98,15 +98,21 @@ export interface ActionEnv {
    * does not consult it. The skip is not silent: the gesture warns its step
    * report that it dispatched unsettled, so the memo never makes an outage
    * cheaper to miss than it was to prove. It is written by the one place that
-   * can prove a source dead (a {@link settleTree} whose whole window failed)
-   * and cleared by {@link readFlowTree}, which every directive's reads go
-   * through, since a read that came back is evidence of health whichever
-   * directive asked for it. A relaunch clears it too, whether
-   * spelled `launch` or as one of flow-run's `FOREGROUND_CHANGING_TOOLS`: it is
-   * the repair the commonest of these errors asks for, and no read need follow
-   * it before a gesture does. So does a nested orchestrator step, which can do
-   * either out of this holder's sight. Absent for a caller that builds an
-   * `ActionEnv` by hand, which simply leaves every settle on its own budget.
+   * can prove a source dead (a {@link settleTree} whose whole window failed),
+   * whichever directive asked for that window. `waitForFrame` and
+   * `scrollToVisible` error the step on it, so a verdict of theirs is never
+   * spent; `runSnapshot` is the one producer whose step then passes reporting
+   * nothing, since it captures pixels regardless and has no warning to carry.
+   * Deliberate, but it means a snapshot's outage is heard about on the gesture
+   * that spends the verdict, or not at all if no gesture follows. It is cleared
+   * by {@link readFlowTree}, which every directive's reads go through, since a
+   * read that came back is evidence of health whichever directive asked for it.
+   * A relaunch clears it too, whether spelled `launch` or as one of flow-run's
+   * `FOREGROUND_CHANGING_TOOLS`: it is the repair the commonest of these errors
+   * asks for, and no read need follow it before a gesture does. So does a
+   * nested orchestrator step, which can do either out of this holder's sight.
+   * Absent for a caller that builds an `ActionEnv` by hand, which simply leaves
+   * every settle on its own budget.
    *
    * The write carries the device it was proven against: a verdict about a
    * device the run has left says nothing about the one it moved onto (a
