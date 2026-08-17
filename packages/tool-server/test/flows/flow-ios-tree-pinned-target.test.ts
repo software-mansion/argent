@@ -157,11 +157,21 @@ describe("queryFullHierarchyTree - pinned target vs poisoned auto-resolve", () =
     expect(target.probeAnswered).toBe(true);
   });
 
-  it("a pinned read of a backgrounded app refuses to describe an off-screen hierarchy", async () => {
+  it("a pinned read of a still-answering backgrounded app refuses to describe an off-screen hierarchy", async () => {
     // The pin bypasses auto-resolve's frontmost guard, so the pinned path must
     // re-check it: connected-but-backgrounded means something (a tap into
     // another app, home) left the app, and its hierarchy is not what's on
     // screen.
+    //
+    // The narrow half of that: an app that ANSWERS the probe while
+    // backgrounded, i.e. something keeps its main queue serviced past the
+    // switch away - a background mode, a `beginBackgroundTask`, an attached
+    // debugger, or the sub-second grace before iOS suspends it. Measured on
+    // device across the same flow: an app holding a `beginBackgroundTask`
+    // reaches this refusal and ends the run in ~7s, while a plain UIKit app
+    // that iOS suspends never answers at all and takes ~46s to surface a bare
+    // hierarchy timeout instead - the common path, covered by "a pinned read
+    // whose probe answered earlier refuses a later timeout instead of reading".
     const backgrounded: NativeAppState = {
       bundleId: APP,
       applicationState: "background",
@@ -195,6 +205,88 @@ describe("queryFullHierarchyTree - pinned target vs poisoned auto-resolve", () =
     );
     expect(probed).toEqual([APP]);
     expect(queried).toEqual([]);
+    expect(repaired).toEqual([]);
+  });
+
+  it("a pinned read under a system permission dialog still reads the app", async () => {
+    // What a system dialog (location, notifications, photos) over the app under
+    // test answers: `inactive`, with the app's own scene still attached and
+    // foreground-inactive. The app IS what is on screen - the alert is drawn by
+    // another process in its own window - so a flow asserting around it, or
+    // just reading between two taps, must not be refused.
+    const underAlert: NativeAppState = {
+      ...appState(APP),
+      applicationState: "inactive",
+      foregroundActiveSceneCount: 0,
+      foregroundInactiveSceneCount: 1,
+      isFrontmostCandidate: false,
+    };
+    const { api, probed, queried, repaired } = poisonedApi([APP, POISONER], { [APP]: underAlert });
+    const target = pin(APP);
+    const { tree, source } = await queryFullHierarchyTree(registryFor(api), IOS_DEVICE, target);
+    expect(source).toBe("native-devtools");
+    expect(tree.children.length).toBeGreaterThan(0);
+    // The substance: the guard let the read through, and it probed only the
+    // pinned app to decide that - no fan-out over the poisoned sibling.
+    expect(probed).toEqual([APP]);
+    expect(queried).toEqual([APP]);
+    expect(repaired).toEqual([]);
+    expect(target.probeAnswered).toBe(true);
+  });
+
+  it("a pinned read of an inactive app with no attached scene still reads it", async () => {
+    // `inactive` with every count at zero: no scene attached yet (an app still
+    // mid-launch), or an injected framework old enough to omit the scene fields
+    // entirely, which getAppState defaults to 0. `applicationState` alone
+    // decides here, and it is the disjunct nothing else in this file pins.
+    // Verified against `chooseFrontmostConnectedApp` (native-target-app.ts) over
+    // this one-element array: no strong candidate, exactly one weak one, so
+    // auto-resolve targets it too - the pinned path deliberately matches that
+    // rather than being stricter.
+    const inactive: NativeAppState = {
+      ...appState(APP),
+      applicationState: "inactive",
+      foregroundActiveSceneCount: 0,
+      isFrontmostCandidate: false,
+    };
+    const { api, probed, queried, repaired } = poisonedApi([APP, POISONER], { [APP]: inactive });
+    const target = pin(APP);
+    const { tree, source } = await queryFullHierarchyTree(registryFor(api), IOS_DEVICE, target);
+    expect(source).toBe("native-devtools");
+    expect(tree.children.length).toBeGreaterThan(0);
+    expect(probed).toEqual([APP]);
+    expect(queried).toEqual([APP]);
+    expect(repaired).toEqual([]);
+    expect(target.probeAnswered).toBe(true);
+  });
+
+  it("a pinned read of a background app still holding a foreground-inactive scene reads it", async () => {
+    // The other accepted state: `applicationState` has already flipped to
+    // `background` while a scene is still foreground-inactive - the tail of a
+    // transition (a dismissing sheet, an app-switcher swipe the user abandons),
+    // where the app's window is on screen even though the process-level state
+    // says otherwise. `background` alone is therefore not the verdict; a
+    // lingering foreground scene outvotes it. Verified against
+    // `chooseFrontmostConnectedApp` (native-target-app.ts) over this
+    // one-element array: `foregroundInactiveSceneCount > 0` makes it the single
+    // weak candidate, so auto-resolve reads it too. Only `background` or
+    // `unknown` with no foreground scene at all is refused - see "a pinned read
+    // of a still-answering backgrounded app refuses to describe an off-screen
+    // hierarchy".
+    const lingeringScene: NativeAppState = {
+      ...appState(APP),
+      applicationState: "background",
+      foregroundActiveSceneCount: 0,
+      foregroundInactiveSceneCount: 1,
+      isFrontmostCandidate: false,
+    };
+    const { api, probed, queried, repaired } = poisonedApi([APP, POISONER], {
+      [APP]: lingeringScene,
+    });
+    const { tree } = await queryFullHierarchyTree(registryFor(api), IOS_DEVICE, pin(APP));
+    expect(tree.children.length).toBeGreaterThan(0);
+    expect(probed).toEqual([APP]);
+    expect(queried).toEqual([APP]);
     expect(repaired).toEqual([]);
   });
 
