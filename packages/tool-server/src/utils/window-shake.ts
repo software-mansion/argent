@@ -3,10 +3,11 @@
  * carrying that device wobbles with a damped oscillation, so the cause of a
  * dev menu or undo prompt is visible on screen.
  *
- * Decoration only: gated behind the opt-in `microinteractions` flag, macOS-only
- * (AppleScript against System Events), and it never fails a shake. Every
- * failure path warns once and resolves, because moving a window needs
- * Accessibility permission and a denied prompt must not fail a working shake.
+ * Decoration only: gated behind the opt-in `microinteractions` flag, iOS
+ * simulators on macOS only (AppleScript against System Events), and it never
+ * fails a shake. Every failure path warns once and resolves, because moving a
+ * window needs Accessibility permission and a denied prompt must not fail a
+ * working shake.
  *
  * `prepareHostWindowShake(target)` resolves the per-call invariants once and
  * returns a shaker; the caller fires `begin()` per gesture and `settle()` at
@@ -15,17 +16,16 @@
 
 import { execFile } from "node:child_process";
 import { isFeatureEnabled } from "@argent/configuration-core";
-import { consolePortFromAdbSerial, runAdb } from "./adb";
 import { deviceSetForUdid } from "./ios-device-sets";
-import { androidHeadlessFromEnv, iosHeadlessFromEnv } from "./no-window-env";
+import { iosHeadlessFromEnv } from "./no-window-env";
 
 /** Registered in `@argent/configuration-core`. */
 export const MICROINTERACTIONS_FLAG = "microinteractions";
 
 /**
  * Peak horizontal excursion in points, split across this many window moves. 60
- * moves run roughly 300-500ms, which brackets one gesture (iOS spaces them
- * 400ms apart, an Android burst is 8 swings x 50ms).
+ * moves run roughly 300-500ms, which brackets one gesture (consecutive
+ * gestures are spaced 400ms apart).
  */
 const AMPLITUDE = 22;
 const STEPS = 60;
@@ -40,12 +40,15 @@ const OSASCRIPT_TIMEOUT_MS = 5_000;
  */
 const ORIGIN_MARKER = "ARGENT_WINDOW_ORIGIN:";
 
-export type HostWindowTarget =
-  /**
-   * `name` title-matches the Simulator window; the udid never appears in window
-   * titles, so it serves only the device-set headless check.
-   */
-  { kind: "ios"; udid: string; name?: string } | { kind: "android"; serial: string };
+/**
+ * `name` title-matches the Simulator window; the udid never appears in window
+ * titles, so it serves only the device-set headless check.
+ */
+export interface HostWindowTarget {
+  kind: "ios";
+  udid: string;
+  name?: string;
+}
 
 interface HostWindowShaker {
   /** Start one wobble. No-op when disabled, already in flight, or after a failure. Never throws. */
@@ -62,30 +65,6 @@ function warn(detail: string): void {
 /** AppleScript string literal - the only metacharacters in a `"…"` literal are `\` and `"`. */
 function asStringLiteral(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-}
-
-/**
- * The emulator window's title is `Android Emulator - <avd>:<port>`, so either
- * half identifies it. The port comes free from the serial; the AVD name costs
- * one console round trip and is a fallback if a build drops the port from the
- * title, so a failed read is not fatal.
- */
-async function androidWindowNeedles(serial: string): Promise<string[]> {
-  const needles: string[] = [];
-  const port = consolePortFromAdbSerial(serial);
-  if (port !== null) needles.push(`:${port}`);
-  try {
-    const { stdout } = await runAdb(["-s", serial, "emu", "avd", "name"], { timeoutMs: 5_000 });
-    // `adb emu` answers with the value then a bare `OK` verdict line.
-    const name = stdout
-      .split("\n")
-      .map((line) => line.trim())
-      .find((line) => line.length > 0 && line !== "OK" && !line.startsWith("KO"));
-    if (name) needles.push(name);
-  } catch {
-    // Port-only matching is still correct; nothing to report.
-  }
-  return needles;
 }
 
 /**
@@ -127,20 +106,16 @@ function titleMatchLookup(procNamesExpr: string, needles: string[]): string {
 /**
  * AppleScript that leaves the window to animate in `win`, or `missing value`.
  *
- * iOS: the window belongs to Simulator.app, or Device Hub.app under Xcode 27
- * (the same pair `boot-device` opens), so both are tried, title-matched on the
+ * The window belongs to Simulator.app, or Device Hub.app under Xcode 27 (the
+ * same pair `boot-device` opens), so both are tried, title-matched on the
  * device name because each booted device gets its own window.
- *
- * Android: the GUI process is the `qemu-system-*` binary and one host can run
- * several, so match on the title rather than taking `window 1` of the first hit.
  */
-function windowLookup(target: HostWindowTarget, needles: string[]): string {
-  if (target.kind === "ios") {
-    if (needles.length === 0) {
-      // Unknown device name: window 1 of whichever host app is running. With
-      // several booted devices this may wobble a sibling, which is harmless
-      // decoration and beats skipping the animation.
-      return `
+function windowLookup(needles: string[]): string {
+  if (needles.length === 0) {
+    // Unknown device name: window 1 of whichever host app is running. With
+    // several booted devices this may wobble a sibling, which is harmless
+    // decoration and beats skipping the animation.
+    return `
 	set win to missing value
 	repeat with procRef in {"Simulator", "Device Hub"}
 		-- A repeat variable is a reference into the list and "process <ref>"
@@ -153,13 +128,11 @@ function windowLookup(target: HostWindowTarget, needles: string[]): string {
 		end if
 		if win is not missing value then exit repeat
 	end repeat`;
-    }
-    return titleMatchLookup(
-      `name of every process whose name is "Simulator" or name is "Device Hub"`,
-      needles
-    );
   }
-  return titleMatchLookup(`name of every process whose name starts with "qemu-system"`, needles);
+  return titleMatchLookup(
+    `name of every process whose name is "Simulator" or name is "Device Hub"`,
+    needles
+  );
 }
 
 /**
@@ -190,9 +163,9 @@ const OFFSETS_LITERAL = WOBBLE_OFFSETS.map(([dx, dy]) => `{${dx}, ${dy}}`).join(
  * leaving the window a few points off. The origin is also `log`ged up front
  * (see ORIGIN_MARKER) so a SIGTERMed run can be repaired from outside.
  */
-export function animationScript(target: HostWindowTarget, needles: string[]): string {
+export function animationScript(needles: string[]): string {
   return `on run
-	tell application "System Events"${windowLookup(target, needles)}
+	tell application "System Events"${windowLookup(needles)}
 		if win is missing value then error "no matching window"
 		set origin to position of win
 		set ox to item 1 of origin
@@ -213,14 +186,9 @@ end run
 }
 
 /** One-shot repair script: same window lookup, a single move back to the origin. */
-function restoreScript(
-  target: HostWindowTarget,
-  needles: string[],
-  ox: number,
-  oy: number
-): string {
+function restoreScript(needles: string[], ox: number, oy: number): string {
   return `on run
-	tell application "System Events"${windowLookup(target, needles)}
+	tell application "System Events"${windowLookup(needles)}
 		if win is missing value then error "no matching window"
 		set position of win to {${ox}, ${oy}}
 	end tell
@@ -279,24 +247,20 @@ function runOsascript(script: string): Promise<void> {
  * ran and the window may be left offset. Recover the origin from the logged
  * marker and move it back. Best-effort: its own failure is swallowed.
  */
-async function restoreOriginAfterKill(
-  target: HostWindowTarget,
-  needles: string[],
-  rawStderr: string
-): Promise<void> {
+async function restoreOriginAfterKill(needles: string[], rawStderr: string): Promise<void> {
   const match = rawStderr.match(new RegExp(`${ORIGIN_MARKER}\\s*(-?\\d+)\\s*,\\s*(-?\\d+)`));
   if (!match) return;
   try {
-    await runOsascript(restoreScript(target, needles, Number(match[1]), Number(match[2])));
+    await runOsascript(restoreScript(needles, Number(match[1]), Number(match[2])));
   } catch {
     // The wobble already failed and warned; a failed repair adds nothing.
   }
 }
 
 /**
- * Resolve the per-call invariants once: flag, platform, headless env gates,
- * window needles (one adb round trip on Android), and the script. Never throws;
- * when the animation is disabled it returns an inert shaker.
+ * Resolve the per-call invariants once: flag, platform, headless env gate,
+ * window needles, and the script. Never throws; when the animation is disabled
+ * it returns an inert shaker.
  */
 export async function prepareHostWindowShake(target: HostWindowTarget): Promise<HostWindowShaker> {
   const inert: HostWindowShaker = { begin: () => {}, settle: () => Promise.resolve() };
@@ -304,37 +268,24 @@ export async function prepareHostWindowShake(target: HostWindowTarget): Promise<
     if (!isFeatureEnabled(MICROINTERACTIONS_FLAG)) return inert;
     if (process.platform !== "darwin") return inert;
 
-    let needles: string[];
-    if (target.kind === "ios") {
-      // The same env var `boot-device` honours before `open -a Simulator.app`,
-      // so we never script a window that was deliberately never opened.
-      if (iosHeadlessFromEnv()) return inert;
-      // A device from a non-default CoreSimulator set boots headless
-      // unconditionally (the stock Simulator GUI only displays the default
-      // set), so it has no window either. A per-call `headless: true` boot is
-      // not knowable here; the dead-shaker path below caps that at one failed
-      // wobble and one warning.
-      let deviceSet: string | null = null;
-      try {
-        deviceSet = await deviceSetForUdid(target.udid);
-      } catch {
-        // An unreadable device-set config resolves like the default set.
-      }
-      if (deviceSet !== null) return inert;
-      needles = target.name ? [target.name] : [];
-    } else {
-      // The Android analog: `-no-window` boots have no qemu window to move.
-      if (androidHeadlessFromEnv()) return inert;
-      needles = await androidWindowNeedles(target.serial);
-      if (needles.length === 0) {
-        // Without a needle the lookup would match the first qemu window on the
-        // host, which may belong to somebody else's emulator.
-        warn(`no way to identify the emulator window for ${target.serial}`);
-        return inert;
-      }
+    // The same env var `boot-device` honours before `open -a Simulator.app`,
+    // so we never script a window that was deliberately never opened.
+    if (iosHeadlessFromEnv()) return inert;
+    // A device from a non-default CoreSimulator set boots headless
+    // unconditionally (the stock Simulator GUI only displays the default set),
+    // so it has no window either. A per-call `headless: true` boot is not
+    // knowable here; the dead-shaker path below caps that at one failed wobble
+    // and one warning.
+    let deviceSet: string | null = null;
+    try {
+      deviceSet = await deviceSetForUdid(target.udid);
+    } catch {
+      // An unreadable device-set config resolves like the default set.
     }
+    if (deviceSet !== null) return inert;
+    const needles = target.name ? [target.name] : [];
 
-    const script = animationScript(target, needles);
+    const script = animationScript(needles);
     let inFlight: Promise<void> | null = null;
     let dead = false;
     let warned = false;
@@ -369,7 +320,7 @@ export async function prepareHostWindowShake(target: HostWindowTarget): Promise<
             dead = true;
             const failure = err as Partial<OsascriptError>;
             if (failure.wasKilled && typeof failure.rawStderr === "string") {
-              await restoreOriginAfterKill(target, needles, failure.rawStderr);
+              await restoreOriginAfterKill(needles, failure.rawStderr);
             }
             warnOnce(err instanceof Error ? err.message : String(err));
             inFlight = null;

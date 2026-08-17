@@ -2,7 +2,6 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { consolePortFromAdbSerial, isAndroidTv, runAdb } from "../../../utils/adb";
 import { UnsupportedOperationError } from "../../../utils/capability";
-import { prepareHostWindowShake } from "../../../utils/window-shake";
 import type { ShakeParams, ShakeResult, ShakeServices } from "../types";
 
 /**
@@ -171,12 +170,6 @@ export const androidImpl: PlatformImpl<ShakeServices, ShakeParams, ShakeResult> 
       );
     }
 
-    // A sensor override is invisible on screen, so wobble this emulator's
-    // window in step with the burst. Cosmetic and flag-gated; it can neither
-    // fail nor delay the shake. Prepared before the lock so its adb round trip
-    // never runs concurrently with the burst.
-    const shaker = await prepareHostWindowShake({ kind: "android", serial });
-
     const setAcceleration = async (v: Vec3) => {
       await emuConsole(serial, ["sensor", "set", "acceleration", fmt(v)]);
     };
@@ -203,7 +196,6 @@ export const androidImpl: PlatformImpl<ShakeServices, ShakeParams, ShakeResult> 
 
       try {
         for (let gesture = 0; gesture < count; gesture++) {
-          shaker.begin();
           for (let swing = 0; swing < SWINGS_PER_SHAKE; swing++) {
             // Alternate the X axis around the resting vector, leaving gravity on
             // the other axes so the pose still reads as "held upright, jerked
@@ -234,10 +226,6 @@ export const androidImpl: PlatformImpl<ShakeServices, ShakeParams, ShakeResult> 
         // a stuck override outlives this tool call and would skew every later one.
         await setAcceleration(rest).catch(() => {});
       }
-
-      // Success path only, so no `osascript` outlives the tool call. A failed
-      // burst throws past this and abandons the wobble.
-      await shaker.settle();
 
       return { shaken: true, count };
     });

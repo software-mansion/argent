@@ -15,11 +15,6 @@ vi.mock("@argent/configuration-core", async (importOriginal) => ({
   isFeatureEnabled: vi.fn(() => true),
 }));
 
-vi.mock("../src/utils/adb", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../src/utils/adb")>()),
-  runAdb: vi.fn(async () => ({ stdout: "Pixel_7_API_34\nOK\n", stderr: "" })),
-}));
-
 // Device-set membership normally costs a simctl probe; pin it to the default
 // set so the iOS gate stays open unless a test says otherwise.
 vi.mock("../src/utils/ios-device-sets", async (importOriginal) => ({
@@ -29,7 +24,6 @@ vi.mock("../src/utils/ios-device-sets", async (importOriginal) => ({
 
 import { execFile } from "node:child_process";
 import { isFeatureEnabled } from "@argent/configuration-core";
-import { runAdb } from "../src/utils/adb";
 import { deviceSetForUdid } from "../src/utils/ios-device-sets";
 import {
   animationScript,
@@ -41,7 +35,6 @@ import {
 type ExecCb = (err: Error | null, stdout: string, stderr: string) => void;
 
 const IOS: HostWindowTarget = { kind: "ios", udid: "UDID-1234", name: "iPhone 16 Pro" };
-const ANDROID: HostWindowTarget = { kind: "android", serial: "emulator-5554" };
 
 /**
  * Stand-in for the `osascript` child: records what was piped to stdin and
@@ -80,7 +73,6 @@ async function shakeOnce(target: HostWindowTarget): Promise<void> {
 
 const originalPlatform = process.platform;
 const originalIosNoWindow = process.env.ARGENT_SIMULATOR_NO_WINDOW;
-const originalAndroidNoWindow = process.env.ARGENT_EMULATOR_NO_WINDOW;
 
 function setPlatform(value: string) {
   Object.defineProperty(process, "platform", { value, configurable: true });
@@ -101,13 +93,11 @@ function warnings(): string[] {
 
 beforeEach(() => {
   vi.mocked(execFile).mockReset();
-  vi.mocked(runAdb).mockClear();
   vi.mocked(isFeatureEnabled).mockReturnValue(true);
   vi.mocked(deviceSetForUdid).mockReset();
   vi.mocked(deviceSetForUdid).mockResolvedValue(null);
   setPlatform("darwin");
   delete process.env.ARGENT_SIMULATOR_NO_WINDOW;
-  delete process.env.ARGENT_EMULATOR_NO_WINDOW;
   // Diagnostics go to stderr (stdout carries JSON-RPC); capture them there.
   stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true) as never;
 });
@@ -115,7 +105,6 @@ beforeEach(() => {
 afterEach(() => {
   setPlatform(originalPlatform);
   restoreEnv("ARGENT_SIMULATOR_NO_WINDOW", originalIosNoWindow);
-  restoreEnv("ARGENT_EMULATOR_NO_WINDOW", originalAndroidNoWindow);
   vi.restoreAllMocks();
 });
 
@@ -125,7 +114,6 @@ describe("prepareHostWindowShake — the gate", () => {
     stubOsascript();
     await shakeOnce(IOS);
     expect(execFile).not.toHaveBeenCalled();
-    expect(runAdb).not.toHaveBeenCalled();
   });
 
   it("reads the flag the CLI writes", async () => {
@@ -148,31 +136,6 @@ describe("prepareHostWindowShake — the gate", () => {
     stubOsascript();
     await shakeOnce(IOS);
     expect(execFile).not.toHaveBeenCalled();
-  });
-
-  it("skips a headless emulator boot on ARGENT_EMULATOR_NO_WINDOW", async () => {
-    // `-no-window` boots select the headless qemu binary; there is no window.
-    process.env.ARGENT_EMULATOR_NO_WINDOW = "true";
-    stubOsascript();
-    await shakeOnce(ANDROID);
-    expect(execFile).not.toHaveBeenCalled();
-    expect(runAdb).not.toHaveBeenCalled();
-  });
-
-  it("still animates an emulator when the iOS headless var is set", async () => {
-    // ARGENT_SIMULATOR_NO_WINDOW is the iOS switch; an emulator window opened
-    // regardless of it, so it must not suppress the Android animation.
-    process.env.ARGENT_SIMULATOR_NO_WINDOW = "1";
-    stubOsascript();
-    await shakeOnce(ANDROID);
-    expect(execFile).toHaveBeenCalledTimes(1);
-  });
-
-  it("still animates a simulator when the Android headless var is set", async () => {
-    process.env.ARGENT_EMULATOR_NO_WINDOW = "1";
-    stubOsascript();
-    await shakeOnce(IOS);
-    expect(execFile).toHaveBeenCalledTimes(1);
   });
 
   it("skips a device from an additional device set — those boots never get a GUI window", async () => {
@@ -285,61 +248,6 @@ describe("prepareHostWindowShake — iOS window lookup", () => {
   });
 });
 
-describe("prepareHostWindowShake — Android window lookup", () => {
-  it("matches the emulator window by console port and AVD name", async () => {
-    const scripts = stubOsascript();
-    await shakeOnce(ANDROID);
-
-    expect(runAdb).toHaveBeenCalledWith(
-      ["-s", "emulator-5554", "emu", "avd", "name"],
-      expect.anything()
-    );
-    // Title is `Android Emulator - <avd>:<port>`; either half identifies it.
-    expect(scripts[0]).toContain('set needles to {":5554", "Pixel_7_API_34"}');
-    // Several emulators can be running, so the right window is chosen by title
-    // rather than by taking window 1 of the first qemu process found.
-    expect(scripts[0]).toContain('every process whose name starts with "qemu-system"');
-    expect(scripts[0]).not.toContain('{"Simulator", "Device Hub"}');
-  });
-
-  it("resolves the needles once per prepare, however many wobbles follow", async () => {
-    stubOsascript();
-    const shaker = await prepareHostWindowShake(ANDROID);
-    shaker.begin();
-    await shaker.settle();
-    shaker.begin();
-    await shaker.settle();
-    expect(runAdb).toHaveBeenCalledTimes(1);
-    expect(execFile).toHaveBeenCalledTimes(2);
-  });
-
-  it("falls back to the port alone when the AVD name can't be read", async () => {
-    vi.mocked(runAdb).mockRejectedValueOnce(new Error("console: connection refused"));
-    const scripts = stubOsascript();
-    await shakeOnce({ kind: "android", serial: "emulator-5556" });
-    expect(scripts[0]).toContain('set needles to {":5556"}');
-  });
-
-  it("ignores the console's OK verdict line when reading the AVD name", async () => {
-    vi.mocked(runAdb).mockResolvedValueOnce({ stdout: "\nMy_AVD\nOK\n", stderr: "" });
-    const scripts = stubOsascript();
-    await shakeOnce(ANDROID);
-    expect(scripts[0]).toContain('"My_AVD"');
-    expect(scripts[0]).not.toContain('"OK"');
-  });
-
-  it("skips rather than shaking an arbitrary window it cannot identify", async () => {
-    // A serial with no console port isn't an emulator; without a needle the
-    // lookup would match the first qemu window on the host, which may belong to
-    // somebody else's emulator.
-    vi.mocked(runAdb).mockRejectedValueOnce(new Error("no console"));
-    stubOsascript();
-    await shakeOnce({ kind: "android", serial: "R5CT30ABCDE" });
-    expect(execFile).not.toHaveBeenCalled();
-    expect(warnings().join("\n")).toContain("R5CT30ABCDE");
-  });
-});
-
 describe("prepareHostWindowShake — timeout recovery", () => {
   it("re-asserts the logged origin after a SIGTERMed run", async () => {
     // The 5s timeout kills the script between moves, so the closing re-asserts
@@ -375,13 +283,13 @@ describe("prepareHostWindowShake — timeout recovery", () => {
 });
 
 describe("animationScript", () => {
-  it("escapes a needle so a quote in an AVD name can't break out of the literal", () => {
-    const script = animationScript(ANDROID, ['a"b\\c']);
+  it("escapes a needle so a quote in a device name can't break out of the literal", () => {
+    const script = animationScript(['a"b\\c']);
     expect(script).toContain('"a\\"b\\\\c"');
   });
 
   it("carries the wobble as precomputed offsets — no in-script trigonometry", () => {
-    const script = animationScript(IOS, ["iPhone 16 Pro"]);
+    const script = animationScript(["iPhone 16 Pro"]);
     expect(script).toContain("on run");
     expect(script).toContain("end run");
     // AMPLITUDE and STEPS are compile-time constants, so the damped sine is
@@ -398,7 +306,7 @@ describe("animationScript", () => {
   });
 
   it("logs the origin marker before the first move so a kill is repairable", () => {
-    const script = animationScript(IOS, ["iPhone 16 Pro"]);
+    const script = animationScript(["iPhone 16 Pro"]);
     const markerAt = script.indexOf("ARGENT_WINDOW_ORIGIN:");
     const firstMoveAt = script.indexOf("repeat with pair in offsets");
     expect(markerAt).toBeGreaterThan(-1);

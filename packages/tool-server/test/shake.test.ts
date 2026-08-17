@@ -37,8 +37,8 @@ vi.mock("../src/utils/adb", async (importOriginal) => ({
   isAndroidTv: vi.fn(async () => false),
 }));
 
-// Stub the host-window wobble so these tests neither read the developer's real
-// flags.json nor script a window; its own behaviour lives in
+// Stub the host-window wobble (iOS only) so these tests neither read the
+// developer's real flags.json nor script a window; its own behaviour lives in
 // window-shake.test.ts. Hoisted so every prepare call hands back the same
 // shaker and begin/settle can be asserted per test.
 const { mockShaker } = vi.hoisted(() => ({
@@ -215,31 +215,8 @@ describe("shake tool — Android", () => {
     expect(sets.at(-1)![6]).toBe("0.0000:9.8100:0.0000");
   });
 
-  it("prepares one wobble for this emulator's window and begins it once per gesture", async () => {
-    // Set explicitly rather than relying on the suite default: the mid-burst
-    // failure test above installs its own `mockImplementation`, which the
-    // shared `mockClear` does not undo.
-    vi.mocked(runAdb).mockImplementation(async (args: string[]) =>
-      args.includes("get")
-        ? { stdout: "acceleration = 0:9.77631:0.812349\nOK\n", stderr: "" }
-        : { stdout: "OK\n", stderr: "" }
-    );
-
-    await shakeTool.execute(services, { udid: androidEmulator, count: 2 });
-    // Prepared before the sensor traffic; the serial is what picks the right
-    // window when several emulators run.
-    expect(prepareHostWindowShake).toHaveBeenCalledTimes(1);
-    expect(prepareHostWindowShake).toHaveBeenCalledWith({
-      kind: "android",
-      serial: androidEmulator,
-    });
-    expect(mockShaker.begin).toHaveBeenCalledTimes(2);
-    expect(mockShaker.settle).toHaveBeenCalledTimes(1);
-  });
-
-  it("restores the accelerometer after a failed burst without waiting on the wobble", async () => {
-    // A genuine burst failure must surface at once, and the resting-vector
-    // restore must not queue behind the animation tail.
+  it("restores the accelerometer after a failed burst", async () => {
+    // Whatever goes wrong mid-burst, the device must be handed back at rest.
     let call = 0;
     vi.mocked(runAdb).mockImplementation(async (args: string[]) => {
       call++;
@@ -252,7 +229,6 @@ describe("shake tool — Android", () => {
 
     await expect(shakeTool.execute(services, { udid: androidEmulator })).rejects.toThrow(/shake/i);
 
-    expect(mockShaker.settle).not.toHaveBeenCalled();
     const sets = vi
       .mocked(runAdb)
       .mock.calls.map(([args]) => args as string[])
