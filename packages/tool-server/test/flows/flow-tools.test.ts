@@ -312,6 +312,7 @@ describe("flow-start-recording edge cases", () => {
     expect(result.message).toContain(
       "requires block (platform: [ios], runtimeKind: tv) - edit the YAML to change it"
     );
+    expect(result.message).not.toContain("did not parse");
   });
 
   it("mentions no requires block when the replaced file had none", async () => {
@@ -333,17 +334,73 @@ describe("flow-start-recording edge cases", () => {
     expect(parseFlow(result.flowFile).requires).toBeUndefined();
   });
 
-  it("carries nothing when the on-disk file does not parse", async () => {
-    await fs.mkdir(flowsDirFor(tmpDir), { recursive: true });
-    await fs.writeFile(path.join(flowsDirFor(tmpDir), "broken.yaml"), "steps: [unclosed\n", "utf8");
+  it("says nothing about requires when there is no file yet", async () => {
+    const result = await flowStartRecordingTool.execute(
+      {},
+      { name: "first-take", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    // A missing file declares no block and drops nothing, so it is an answer,
+    // not a gap — the unknown-block clause must not fire on every fresh start.
+    expect(result.message).not.toContain("requires");
+    expect(parseFlow(result.flowFile).requires).toBeUndefined();
+  });
+
+  // Each of these declares a `requires:` block and fails to parse for a reason
+  // `skipRequires` does NOT bypass — a step body, a key inside the block, a
+  // top-level key, a platform spelling the block rejects, plain broken YAML.
+  // The reset truncates all of them, so the block's fate is unknown and
+  // reporting "no block" would discard a fence in silence.
+  const unparseableFenced: Array<[label: string, yaml: string]> = [
+    [
+      "a step that does not parse",
+      'requires:\n  platform: [ios]\nsteps:\n  - bogusstep: { message: "nope" }\n',
+    ],
+    ["a typo inside the block", "requires:\n  runtimeKind: tv\n  platfrom: [ios]\nsteps: []\n"],
+    ["an unknown top-level key", "requires:\n  platform: [ios]\nnotes: hello\nsteps: []\n"],
+    ["a platform the block rejects", "requires:\n  platform: [ios-remote]\nsteps: []\n"],
+    ["unterminated YAML", "requires:\n  platform: [ios]\nsteps: [unclosed\n"],
+  ];
+
+  it.each(unparseableFenced)(
+    "reports the dropped requires block when the file has %s",
+    async (_label, yaml) => {
+      await fs.mkdir(flowsDirFor(tmpDir), { recursive: true });
+      await fs.writeFile(path.join(flowsDirFor(tmpDir), "broken.yaml"), yaml, "utf8");
+
+      const result = await flowStartRecordingTool.execute(
+        {},
+        { name: "broken", project_root: tmpDir, executionPrerequisite: PREREQ }
+      );
+
+      expect(parseFlow(result.flowFile).requires).toBeUndefined();
+      expect(result.message).toContain(
+        "The previous file did not parse, so any requires block it held was dropped"
+      );
+    }
+  );
+
+  it("reports the dropped requires block alongside the discarded take", async () => {
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "drop", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    await fs.writeFile(
+      path.join(flowsDirFor(tmpDir), "drop.yaml"),
+      "requires:\n  platform: [ios]\nnotes: hello\nsteps: []\n",
+      "utf8"
+    );
 
     const result = await flowStartRecordingTool.execute(
       {},
-      { name: "broken", project_root: tmpDir, executionPrerequisite: PREREQ }
+      { name: "drop", project_root: tmpDir, executionPrerequisite: PREREQ }
     );
 
-    expect(result.message).not.toContain("requires");
-    expect(parseFlow(result.flowFile).requires).toBeUndefined();
+    expect(result.restarted).toBe(true);
+    expect(result.message).toContain("reset to an empty flow.");
+    expect(result.message).toContain(
+      "The previous file did not parse, so any requires block it held was dropped"
+    );
   });
 });
 

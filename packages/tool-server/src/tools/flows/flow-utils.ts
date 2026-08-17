@@ -3667,15 +3667,33 @@ export async function countStepsOnDisk(filePath: string): Promise<number | undef
 }
 
 /**
- * The `requires:` block the flow file on disk declares, or undefined when the
- * file is missing or does not parse. For flow-start-recording's reset:
- * `requires` is the one FlowFile field no tool can write back, so the truncate
- * carries it forward instead of silently unfencing the flow. skipRequires so
- * even a coverage-violating block survives the reset rather than vanishing.
+ * What the flow file on disk declares in `requires:` — `{ requires }` when the
+ * file was read and parsed (the block, or undefined for a file that declares
+ * none), or undefined when it could not be read or parsed at all. For
+ * flow-start-recording's reset: `requires` is the one FlowFile field no tool
+ * can write back, so the truncate carries it forward instead of silently
+ * unfencing the flow. skipRequires so even a coverage-violating block survives
+ * the reset rather than vanishing.
+ *
+ * Undefined rather than "declares none" on a failure, for the same reason
+ * {@link countStepsOnDisk} does not report 0: a typo inside the block, an
+ * unknown top-level key or an unparseable step all land here, and those are
+ * exactly the files a re-record is meant to repair — so reporting the unknown
+ * as "no block" would discard a fence in silence. A missing file is an answer
+ * rather than a gap, so a first-time start stays silent.
  */
-export async function requiresOnDisk(filePath: string): Promise<DeclaredRequires | undefined> {
+export async function requiresOnDisk(
+  filePath: string
+): Promise<{ requires: DeclaredRequires | undefined } | undefined> {
+  let content: string;
   try {
-    return parseFlow(await fs.readFile(filePath, "utf8"), { skipRequires: true }).requires;
+    content = await fs.readFile(filePath, "utf8");
+  } catch (err) {
+    const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
+    return code === "ENOENT" ? { requires: undefined } : undefined;
+  }
+  try {
+    return { requires: parseFlow(content, { skipRequires: true }).requires };
   } catch {
     return undefined;
   }
