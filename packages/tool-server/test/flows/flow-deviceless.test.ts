@@ -213,7 +213,8 @@ describe("a flow that does touch a device still demands one", () => {
     // a block directive answers yes without recursing into its body, so
     // wrapping narration in a repeat block is what makes the run demand a
     // device — and it is demanded up front, before step 1, naming neither the
-    // block nor the fact that the same steps unwrapped need nothing.
+    // block nor the fact that the same steps unwrapped need nothing. This is
+    // the refusal half of that cost; the quiet half is the suite below.
     const body: FlowStep[] = [
       { kind: "echo", message: "tick" },
       { kind: "wait", ms: 1 },
@@ -222,6 +223,13 @@ describe("a flow that does touch a device still demands one", () => {
       { kind: "repeat", spec: { mode: "times", times: 2 }, steps: body },
     ]);
     await expectDemandsDevice("looped-narration");
+
+    // The developer/CI case is refused on a different question entirely — one
+    // the author of a device-free body has no answer to.
+    const { registry: several } = mockRegistry({
+      booted: [DEVICE, "11111111-1111-1111-1111-111111111111"],
+    });
+    await expect(runAuto(several, "looped-narration")).rejects.toThrow(/booted devices matched/);
 
     // The cost, stated: those same two steps unwrapped run with nothing booted
     // and are attributed to no device. Only the wrapper changed.
@@ -262,6 +270,32 @@ describe("a flow that does touch a device still demands one", () => {
       { kind: "run", flow: "child.yaml" },
     ]);
     await expectDemandsDevice("parent");
+  });
+});
+
+describe("a repeat block over a device-free body, with one device booted", () => {
+  const body: FlowStep[] = [
+    { kind: "echo", message: "tick" },
+    { kind: "wait", ms: 1 },
+  ];
+
+  it("attaches to that device and reports it, where the same steps unwrapped report none", async () => {
+    // The quiet half of the block directives' blanket device answer: exactly
+    // one booted device resolves, so there is no refusal to notice — the run
+    // just carries a device it never acts on, and is attributed to it. The
+    // wrapper is the only difference between the two flows here, so it is the
+    // wrapper that makes the report depend on what else is booted on the host.
+    await writeFlow("looped-narration", [
+      { kind: "repeat", spec: { mode: "times", times: 2 }, steps: body },
+    ]);
+    await writeFlow("unwrapped", body);
+    const { registry } = mockRegistry({ booted: [DEVICE] });
+
+    const wrapped = asRun(await runAuto(registry, "looped-narration"));
+    expect(wrapped.ok).toBe(true);
+    expect(wrapped.device).toBe(DEVICE);
+
+    expect(asRun(await runAuto(registry, "unwrapped")).device).toBe("");
   });
 });
 

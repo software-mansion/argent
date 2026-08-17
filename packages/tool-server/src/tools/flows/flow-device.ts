@@ -224,17 +224,22 @@ export function stepRequiresDevice(registry: Registry, step: FlowStep): boolean 
     // A block directive needs a device unconditionally rather than recursing
     // into its body to see whether any child does — `when` because its guard
     // reads the tree, `repeat` by the same blanket answer. A `repeat: { times }`
-    // over only `wait:`/`echo:` steps genuinely needs none, so this is
-    // conservative, and the author pays for it before the run starts: the "yes"
-    // here makes flowRequiresDevice say yes, so resolveRunDevice resolves a
-    // device and throws `No booted device found. Pass a device id or platform
-    // explicitly.` ahead of step 1 — naming neither the repeat nor the fact
-    // that the same steps unwrapped would have run device-free. Second cost,
-    // same mechanism: the blanket "yes" spans the whole flow, so a
-    // `devices`-scoped cleanup tool that resolves opportunistically on its own
-    // (the flowScopesDevice path) throws that same refusal once wrapped in a
-    // block — flowScopesDevice does not recurse into block children, so it
-    // could not see the tool either way. Kept for one answer per step kind.
+    // over only `wait:`/`echo:` steps genuinely needs none, and this "yes" makes
+    // flowRequiresDevice say yes for the whole flow, so resolveRunDevice
+    // resolves one before step 1. What that costs turns on the host: with
+    // nothing booted, or several, the run is refused outright — `No booted
+    // device found …` / `<n> booted devices matched …`, neither refusal naming
+    // the wrapper that introduced the requirement. With exactly one there is no
+    // refusal at all: the run attaches to a device it never acts on, reports
+    // it, and touches it on the way in and out — the status-bar pin and its
+    // teardown restore on ios/android, `frontChromiumPage` on chromium. So the
+    // wrapper makes the flow's outcome and reported device depend on what else
+    // is booted, the property resolveRunDevice's null return exists to keep.
+    // Same "yes", second cost: wrapping a `devices`-scoped cleanup flow in a
+    // block hands the answer to this line, so the run never reaches the
+    // flowScopesDevice question, which would have run the sweep unscoped rather
+    // than refuse it. Kept for one answer per step kind, cost accepted
+    // knowingly and pinned by a test.
     case "when":
     case "repeat":
     case "run":
