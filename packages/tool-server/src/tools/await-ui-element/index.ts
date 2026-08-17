@@ -154,13 +154,16 @@ export function evaluateMatches(params: Params, matches: DescribeNode[]): boolea
 // ways an empty tree is untrustworthy:
 //   - the adapter flagged it as unreliable: iOS AX down or native injection
 //     pending → `describeIos` returns an empty tree plus a hint / should_restart
-//     instead of throwing. Android / Chromium never set these flags.
+//     instead of throwing. Android does the same when every node on screen was
+//     system chrome (display off, or a lock screen). Chromium still sets
+//     neither: it throws on an unreadable page, though a page that legitimately
+//     renders no children reaches here unflagged.
 //   - the selector matched on an EARLIER poll (`everMatched`) yet the whole tree
 //     is now empty. A genuinely-hidden element leaves the rest of the screen
 //     behind; a wholly empty tree after we'd already read content is a transient
 //     blank frame mid-navigation, not the element being hidden. This is the only
-//     guard that fires on Android / Chromium, where an empty tree is otherwise
-//     taken at face value — without it an `everMatched` `hidden` wait would
+//     guard that fires on Chromium, where an empty tree is otherwise taken at
+//     face value — without it an `everMatched` `hidden` wait would
 //     falsely resolve on a one-frame blink and release a gated tap against a
 //     screen that only briefly went blank.
 function isBlindRead(data: DescribeTreeData, everMatched: boolean): boolean {

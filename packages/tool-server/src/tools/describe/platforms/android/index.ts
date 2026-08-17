@@ -16,6 +16,37 @@ export const androidRequires: ToolDependency[] = ["adb"];
 // don't short-circuit describe the way iOS does for tvOS), but the agent
 // shouldn't tap coordinates — it should move the D-pad focus instead. Surface
 // the tv-* tools as a hint rather than blocking the (still-useful) tree.
+/**
+ * A read that saw only system chrome — the screen is off, or a lock screen is
+ * up — and therefore says nothing about the app.
+ *
+ * Decided from counts the helper already returns, so it costs no extra round
+ * trip: `nodeCount` is what the accessibility layer handed over, and
+ * `renderedChildren` is what survived pruning. Everything pruned means the only
+ * window on screen was `com.android.systemui`, which is exactly what both a
+ * powered-off display and a keyguard look like. Measured on a Pixel_9 emulator:
+ * app 62/2, launcher 64/7, screen off 28/0, keyguard 73/0.
+ *
+ * Note `windowCount` is NOT the signal — it stays 1 with the display off,
+ * because the keyguard window is still there.
+ */
+function blindReadHint(
+  nodeCount: number | undefined,
+  renderedChildren: number
+): string | undefined {
+  // Fail open on an unknown count — an older helper that does not report one
+  // must not turn every sparse screen into a blind read.
+  if (renderedChildren > 0 || !Number.isFinite(nodeCount) || (nodeCount ?? 0) <= 0) {
+    return undefined;
+  }
+  return (
+    "This read is BLIND, not empty: every node on screen belonged to the system UI, which is what " +
+    "a powered-off display or a lock screen looks like. An element missing from this tree is NOT " +
+    "evidence that it is hidden or gone, and this is NOT a screen with nothing on it. Wake the " +
+    "device (`button` with button `power`) and dismiss the lock screen, then read again."
+  );
+}
+
 const ANDROID_TV_HINT =
   "This is an Android TV (leanback) device — it is focus-driven and has no touch. " +
   "Prefer the `describe` tool to read the focused / focusable elements, `tv-remote` " +
@@ -51,12 +82,17 @@ export async function describeAndroid(
       const device = resolveDevice(serial);
       const ref = androidDevtoolsRef(device);
       const devtools = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
-      const [{ xml }, size] = await Promise.all([
+      const [hierarchy, size] = await Promise.all([
         devtools.getHierarchy(),
         devtools.getScreenSize(),
       ]);
-      const tree = parseUiAutomatorDump(xml, size.width, size.height);
-      return { tree, source: "android-devtools", hint };
+      const tree = parseUiAutomatorDump(hierarchy.xml, size.width, size.height);
+      const blindHint = blindReadHint(hierarchy.nodeCount, tree.children.length);
+      return {
+        tree,
+        source: "android-devtools",
+        hint: [hint, blindHint].filter(Boolean).join(" ") || undefined,
+      };
     } catch (serviceErr) {
       // Fall through to the legacy uiautomator path. Every error here is
       // recoverable because the legacy path has independent failure modes.
