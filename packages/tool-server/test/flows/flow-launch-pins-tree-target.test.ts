@@ -280,9 +280,9 @@ describe("launch pins the flow tree target", () => {
       "launch:pass",
       "assert:pass",
     ]);
-    // First reads carry the first app, final reads the second - the second
-    // launch must overwrite (not keep-if-set) the demoted target, and re-pin
-    // it rather than inherit its unpinned level.
+    // First reads carry the first app, final reads the second: the second
+    // launch must replace the demoted target and hand it back pinned, rather
+    // than inherit the demoted one's unpinned level.
     const firstOther = labels().indexOf(`pinned:${OTHER}`);
     expect(firstOther).toBeGreaterThan(0);
     expect(
@@ -298,8 +298,12 @@ describe("launch pins the flow tree target", () => {
   });
 
   it("back-to-back launches move the pin to the newest app", async () => {
-    // No tool step between the launches, so nothing clears the pin before the
-    // second one runs - it must overwrite (not keep-if-set) a still-set pin.
+    // No tool step between the launches, so the second one starts from a pin
+    // still set on the first app. It moves because runLaunch replaces the target -
+    // it clears before restart-app and re-pins after - but which half does
+    // that is not observable here: with the clear in place a keep-if-set
+    // assignment still passes. Each assert reads once, so the run is one read
+    // per app, in launch order.
     const OTHER = "com.acme.other";
     await writeFlow("relaunched", {
       executionPrerequisite: "",
