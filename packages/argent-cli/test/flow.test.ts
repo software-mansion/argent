@@ -1261,6 +1261,53 @@ describe("argent flow run", () => {
     ]);
   });
 
+  it("streams a structural marker's warning under its line, its artifacts in the tail", async () => {
+    // Same production closure, driven with a marker a server stamped
+    // structural while hanging a warning and a path on it. The live stream and
+    // the buffered report must say the same thing about it: the warning prints
+    // under the marker (padded to the blank the marker's own line printed), and
+    // the path rides the tail, where paths only exist once the final report
+    // lands. Dropping either would end the run on a summary counting a warning
+    // whose text never reached the screen.
+    const streamed: StepReport[] = [
+      {
+        index: 0,
+        kind: "repeat",
+        status: "pass",
+        target: "2 times",
+        structural: true,
+        warning: "the screen never held still",
+        artifacts: { diff: "/tmp/d.png" },
+      },
+      { index: 1, kind: "tap", status: "pass", target: '"Clear"', depth: 1 },
+    ];
+    toolsClientMock.callTool.mockImplementation(
+      async (
+        _tool: string,
+        _payload: unknown,
+        callOpts?: { onProgress?: (e: unknown) => void }
+      ) => {
+        for (const s of streamed) callOpts?.onProgress?.(s);
+        return { data: report({ passed: 1, steps: streamed }) };
+      }
+    );
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:0");
+
+    expect(logs).toEqual([
+      'Flow "checkout"',
+      "  ⚠    repeat 2 times",
+      "       ⚠ the screen never held still",
+      '  ✓  1   tap "Clear"',
+      "  repeat (unnumbered marker):",
+      "       diff: /tmp/d.png",
+      "\nPASS (started on SIM-1) — 1 passed, 0 failed, 0 errored, 0 skipped, 1 warning",
+    ]);
+    // The warning sits under the marker's label, and the marker still takes no
+    // number — the tap after it is step 1.
+    expect(logs[2]!.indexOf("⚠")).toBe(logs[1]!.indexOf("repeat"));
+  });
+
   it("prints the raw report with --json", async () => {
     await expect(flow(["run", checkoutPath, "--json"], opts)).rejects.toThrow("process.exit:0");
     expect(JSON.parse(logs.join("\n"))).toEqual(report());

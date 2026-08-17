@@ -508,6 +508,128 @@ describe("flow report rendering", () => {
     expect(renderReport(mkReport([hostile]))).toContain('  ✓  1 tap "A"');
   });
 
+  it("renderReport hangs a structural line's warning under it, as the summary counts it", () => {
+    // Wire data again: renderSummary counts a warning from whatever line
+    // carries it, so dropping a marker's under-line printed "1 warning" with
+    // the text nowhere on screen — the failure batch mode was already fixed
+    // for, here in the single mode operators are sent to rerun in.
+    const report = mkReport([
+      { index: 0, kind: "tap", status: "pass", target: '"A"' },
+      {
+        index: 1,
+        kind: "repeat",
+        status: "pass",
+        target: "iteration 2/2",
+        depth: 1,
+        structural: true,
+        warning: "the screen never held still",
+      },
+      { index: 2, kind: "tap", status: "pass", target: '"B"', depth: 1 },
+    ]);
+    expect(renderReport(report)).toBe(
+      [
+        'Flow "checkout" on UDID-1',
+        '  ✓  1 tap "A"',
+        "  ⚠      repeat iteration 2/2",
+        "         ⚠ the screen never held still",
+        '  ✓  2   tap "B"',
+        "",
+        "PASS — 2 passed, 0 failed, 0 errored, 0 skipped, 1 warning",
+      ].join("\n")
+    );
+    // The count and the printed text now agree about the same report.
+    expect(renderSummary(report)).toContain("1 warning");
+  });
+
+  it("pads a structural line's under-lines in the buffered report as batch mode does", () => {
+    // Past step 99 a marker's blank spans three digits, so its under-lines pad
+    // to three too — and batch mode's copy of the same lines must be
+    // byte-identical, since disagreeing about one report is the whole bug.
+    const steps: StepReport[] = [];
+    for (let i = 0; i < 99; i++) {
+      steps.push({ index: i, kind: "tap", status: "pass", target: '"Pad"' });
+    }
+    steps.push({
+      index: 99,
+      kind: "repeat",
+      status: "pass",
+      target: "2 times",
+      structural: true,
+      warning: "block left half-run",
+      artifacts: { diff: "/tmp/d.png" },
+    });
+    const report = mkReport(steps);
+    const lines = renderReport(report).split("\n");
+    expect(lines[100]).toBe("  ⚠     repeat 2 times");
+    expect(lines[101]).toBe("        ⚠ block left half-run");
+    expect(lines[102]).toBe("        diff: /tmp/d.png");
+    // Both under-lines sit under the marker's label, not left of it.
+    expect(lines[101]!.indexOf("⚠")).toBe(lines[100]!.indexOf("repeat"));
+    expect(lines[102]!.indexOf("diff")).toBe(lines[100]!.indexOf("repeat"));
+    // Batch mode prints the same three lines for the same report.
+    for (const line of renderFailedSteps(report)) expect(lines).toContain(line);
+  });
+
+  it("shows a structural line's artifacts in both single mode and the live tail", () => {
+    const report = mkReport([
+      { index: 0, kind: "tap", status: "pass", target: '"A"' },
+      {
+        index: 1,
+        kind: "repeat",
+        status: "pass",
+        target: "2 times",
+        structural: true,
+        artifacts: { diff: "/tmp/d.png" },
+      },
+    ]);
+    // Single mode hangs the path under the marker, padded to the blank the
+    // marker's own line printed.
+    expect(renderReport(report).split("\n")).toContain("       diff: /tmp/d.png");
+    // The live tail can only label by number, and the marker owns none — so it
+    // is named for its blank rather than handed a number belonging to another
+    // line. Dropping the entry would hide a path single mode shows.
+    expect(renderArtifactLines(report)).toEqual([
+      "  repeat (unnumbered marker):",
+      "       diff: /tmp/d.png",
+    ]);
+  });
+
+  it("adds nothing to a well-formed report: markers carry no warning or artifacts", () => {
+    // What every current tool-server sends: `structural` only on pass/skip
+    // markers, which carry neither field. Numbering, under-lines and the
+    // artifact tail must all read exactly as they did before markers could
+    // hang anything under them.
+    const report = mkReport([
+      ...REPEAT_STEPS,
+      {
+        index: 5,
+        kind: "snapshot",
+        status: "fail",
+        reason: "diff 2.10% > 1%",
+        target: '"home"',
+        artifacts: { diff: "/tmp/d.png" },
+      },
+    ]);
+    expect(renderReport(report)).toBe(
+      [
+        'Flow "checkout" on UDID-1',
+        "  ✓    repeat 2 times",
+        "  ✓      repeat iteration 1/2",
+        '  ✓  1   tap "Clear"',
+        "  ✓      repeat iteration 2/2",
+        '  ✓  2   tap "Clear"',
+        '  ✗  3 snapshot "home" — diff 2.10% > 1%',
+        "       diff: /tmp/d.png",
+        "",
+        "FAIL — 2 passed, 1 failed, 0 errored, 0 skipped",
+      ].join("\n")
+    );
+    expect(renderArtifactLines(report)).toEqual([
+      "  snapshot (step 3):",
+      "       diff: /tmp/d.png",
+    ]);
+  });
+
   it("renderArtifactLines numbers past a structural marker the same way", () => {
     const lines = renderArtifactLines(
       mkReport([

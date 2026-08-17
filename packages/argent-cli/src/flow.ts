@@ -364,6 +364,31 @@ export function renderUnderStepLine(s: StepReport, n: number, text: string): str
   return `${" ".repeat(5 + Math.max(2, String(n).length))}${stepIndent(s.depth)}${text}`;
 }
 
+/**
+ * Everything that hangs under a step line: its warning, then its artifact
+ * paths. Shared by the buffered renderer and batch mode so the two can't
+ * disagree about the same report.
+ *
+ * `n` is the number column the line above printed — the step's own number, or
+ * for a structural marker the blank renderStepLine sized to the next number to
+ * be issued (`n + 1`), so the text still sits under the label past step 99. A
+ * marker's under-lines are NOT dropped: `structural` is untrusted wire data
+ * (see isStructural), renderSummary counts a warning whatever line carries it,
+ * and a dropped under-line is a warning or an artifact path with nowhere else
+ * to appear. The runner stamps only passing or skipped markers, which carry
+ * neither field, so a well-formed report renders exactly as before.
+ */
+function underStepLines(s: StepReport, n: number): string[] {
+  const lines: string[] = [];
+  if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
+  if (s.artifacts && typeof s.artifacts === "object") {
+    for (const [k, v] of Object.entries(s.artifacts)) {
+      if (typeof v === "string") lines.push(renderUnderStepLine(s, n, `${k}: ${v}`));
+    }
+  }
+  return lines;
+}
+
 export function renderSummary(report: FlowReport, opts: { withDevice?: boolean } = {}): string {
   const warnings = report.steps.filter((s) => s.warning).length;
   const warningsNote = warnings ? `, ${warnings} warning${warnings === 1 ? "" : "s"}` : "";
@@ -386,24 +411,27 @@ export function renderSummary(report: FlowReport, opts: { withDevice?: boolean }
 /**
  * Artifact paths for the live renderer, which prints step lines before any
  * path exists (paths are materialized only from the final report). Labeled by
- * step number since they no longer sit under their step line.
+ * step number since they no longer sit under their step line; a structural
+ * marker owns no number, so it is labeled as the unnumbered line it is.
  */
 export function renderArtifactLines(report: FlowReport): string[] {
   const lines: string[] = [];
   let n = 0;
   for (const s of report.steps) {
-    // Numbering here must match renderReport's, so the two lines that skip a
-    // number there — narration and block structure — skip it here too. Skipping
-    // a structural marker hides nothing the way it would in batch mode: this
-    // tail only ever follows the live step lines, which print the marker itself
-    // (unnumbered) whatever its status, and renderReport hangs no artifacts
-    // under a marker either — a "step N" label has no number to name one by.
-    if (s.kind === "echo" || isStructural(s)) continue;
-    n++;
+    // Numbering here must match renderReport's, so the line that skips a number
+    // there — narration — skips it here too, and a structural marker takes
+    // none. The marker's paths are still listed: this tail is the only place
+    // live mode ever prints one (the live step lines stream before any path
+    // exists), so dropping it would leave the buffered report showing an
+    // artifact the live run never did. It owns no number, so it says so rather
+    // than borrowing a "step N" that names a different line.
+    if (s.kind === "echo") continue;
+    const structural = isStructural(s);
+    if (!structural) n++;
     if (!s.artifacts || typeof s.artifacts !== "object") continue;
     const entries = Object.entries(s.artifacts).filter(([, v]) => typeof v === "string");
     if (entries.length === 0) continue;
-    lines.push(`  ${s.kind} (step ${n}):`);
+    lines.push(`  ${s.kind} (${structural ? "unnumbered marker" : `step ${n}`}):`);
     for (const [k, v] of entries) lines.push(`       ${k}: ${v}`);
   }
   return lines;
@@ -438,19 +466,7 @@ export function renderFailedSteps(report: FlowReport): string[] {
     if (!structural) n++;
     if (s.status !== "fail" && s.status !== "error" && !s.warning) continue;
     lines.push(renderStepLine(s, structural ? { unnumbered: n } : n, report.flow));
-    // Under-lines pad to the number column the step line above them printed:
-    // `n` for a numbered step, and for a marker the blank renderStepLine sizes
-    // to the next number to be issued (`n + 1`), so the text still sits under
-    // the label past step 99. renderReport hangs nothing under a marker because
-    // its steps print their own; here a dropped under-line is a warning or an
-    // artifact path with nowhere else to appear.
-    const under = structural ? n + 1 : n;
-    if (s.warning) lines.push(renderUnderStepLine(s, under, `⚠ ${s.warning}`));
-    if (s.artifacts && typeof s.artifacts === "object") {
-      for (const [k, v] of Object.entries(s.artifacts)) {
-        if (typeof v === "string") lines.push(renderUnderStepLine(s, under, `${k}: ${v}`));
-      }
-    }
+    lines.push(...underStepLines(s, structural ? n + 1 : n));
   }
   return lines;
 }
@@ -899,20 +915,17 @@ export function renderReport(report: FlowReport): string {
       continue;
     }
     // Block structure prints in the step column but takes no number, so the
-    // sequence still counts what the summary counts. Nothing hangs under such
-    // a line — warnings and artifacts belong to steps that ran.
+    // sequence still counts what the summary counts. Its under-lines hang under
+    // it all the same, padded to the blank its own line printed — see
+    // underStepLines for why a marker's are not dropped.
     if (isStructural(s)) {
       lines.push(renderStepLine(s, { unnumbered: n }, report.flow));
+      lines.push(...underStepLines(s, n + 1));
       continue;
     }
     n++;
     lines.push(renderStepLine(s, n, report.flow));
-    if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
-    if (s.artifacts && typeof s.artifacts === "object") {
-      for (const [k, v] of Object.entries(s.artifacts)) {
-        if (typeof v === "string") lines.push(renderUnderStepLine(s, n, `${k}: ${v}`));
-      }
-    }
+    lines.push(...underStepLines(s, n));
   }
   lines.push(`\n${renderSummary(report)}`);
   return lines.join("\n");
@@ -1582,9 +1595,15 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     }
     // Block structure: printed as it streams, but unnumbered — the live
     // sequence has to end up matching the buffered report's, blank width
-    // included, so the marker carries the same count renderReport's would.
+    // included, so the marker carries the same count renderReport's would. Its
+    // warning prints too, padded to the blank the line above it just printed
+    // (`liveIndex + 1`, the next number to be issued), for the reason
+    // underStepLines gives: dropping it would end the run on a summary counting
+    // a warning whose text never reached the screen. Artifacts are not printed
+    // here for any step — no path exists yet — and reach the tail below.
     if (isStructural(s)) {
       console.log(renderStepLine(s, { unnumbered: liveIndex }, flowName));
+      if (s.warning) console.log(renderUnderStepLine(s, liveIndex + 1, `⚠ ${s.warning}`));
       return;
     }
     liveIndex++;
