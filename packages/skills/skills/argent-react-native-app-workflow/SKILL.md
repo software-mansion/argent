@@ -35,7 +35,7 @@ Do NOT default to `npx react-native start` or `npx react-native run-ios` without
 
    Optional: `npx react-native start --reset-cache` if cache issues are suspected.
 
-1. **Verify Metro is ready**: use the `debugger-status` tool to verify Metro is running and reachable.
+1. **Verify Metro is ready**: use the `debugger-status` tool. It returns a `status` result instead of erroring: `status: "connected"` or `status: "not_connected"` with `reason: "no_app_connected"` both mean Metro is up (the app just hasn't attached yet); `reason: "metro_not_running"` means Metro is not reachable — follow the result's `guidance`.
 
 1. **Projects with flavors or custom configs**: Use project-specific start script if present (e.g. `npm run start:local`), and start Metro **before** running the app.
 
@@ -76,7 +76,7 @@ lsof -i :PORT
 - **No output** → Port free; safe to start Metro.
 - **Output with PID** → Another process is using the port.
 
-Use the `debugger-status` tool to check whether the process on that port is actually a Metro server. If not Metro — ask the user whether you may kill the process.
+Use the `debugger-status` tool to check whether the process on that port is actually a Metro server — it returns a structured result, not an error. `status: "connected"` or `reason: "no_app_connected"` → the process is Metro. `reason: "metro_not_running"` while `lsof` shows a listener → the port is occupied by something that is **not** Metro; the result's `detail` field shows what the process answered (`Metro at port ... is not running (got: ...)`). In that case ask the user whether you may kill the process.
 
 To kill a Metro process, use the `stop-metro` tool (requires user confirmation).
 
@@ -85,7 +85,7 @@ To kill a Metro process, use the `stop-metro` tool (requires user confirmation).
 - **App must point at the same host/port as the running Metro.** Default: same machine, port 8081.
 - **iOS Simulator:** By default uses localhost; no extra config needed for same-machine Metro.
 
-**Verify Metro is reachable:** use the `debugger-status` tool.
+**Verify Metro is reachable:** use the `debugger-status` tool. `reason: "metro_not_running"` means Metro did not answer on that port — start it (§2.1); `"no_app_connected"` means Metro answered but the app has not attached (§2.3). Any other reason: follow the result's `guidance` (it does not by itself prove Metro is up).
 
 ### 2.3 Reload the App (Ensure New Bundle)
 
@@ -137,17 +137,17 @@ Once you discover the correct build/run workflow for a project, **save it to pro
 
 ### 3.5 Device Control
 
-| Action                     | Tool / Command                                                         |
-| -------------------------- | ---------------------------------------------------------------------- |
-| List devices               | `list-devices` tool (iOS + Android)                                    |
-| Boot an iOS simulator      | `boot-device` tool with `udid`                                         |
-| Boot an Android emulator   | `boot-device` tool with `avdName`                                      |
-| Launch an app              | `launch-app` tool (pass device id + bundle id / package name)          |
-| Restart an app             | `restart-app` tool (pass device id + bundle id / package name)         |
-| Open a URL / deep link     | `open-url` tool (pass device id + URL)                                 |
-| Rotate device              | `rotate` tool                                                          |
-| Stop simulator server      | `stop-simulator-server` tool (iOS UDID or Android serial — one device) |
-| Stop all simulator servers | `stop-all-simulator-servers` tool (iOS + Android)                      |
+| Action                     | Tool / Command                                                                                                                                                                                             |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| List devices               | `list-devices` tool (iOS + Android)                                                                                                                                                                        |
+| Boot an iOS simulator      | `boot-device` tool with `udid`                                                                                                                                                                             |
+| Boot an Android emulator   | `boot-device` tool with `avdName`                                                                                                                                                                          |
+| Launch an app              | `launch-app` tool (pass device id + bundle id / package name)                                                                                                                                              |
+| Restart an app             | `restart-app` tool (pass device id + bundle id / package name)                                                                                                                                             |
+| Open a URL / deep link     | `open-url` tool (pass device id + URL)                                                                                                                                                                     |
+| Rotate device              | `rotate` tool                                                                                                                                                                                              |
+| Stop simulator server      | `stop-simulator-server` tool (iOS UDID or Android serial — one device)                                                                                                                                     |
+| Stop all simulator servers | `stop-all-simulator-servers` tool — pass `devices: [...]` to scope the teardown to this session's devices (an unscoped call also tears down other agents' devices; use it only for a machine-wide cleanup) |
 
 For full simulator setup workflow, refer to the `argent-ios-simulator-setup` skill.
 
@@ -159,7 +159,7 @@ For full simulator setup workflow, refer to the `argent-ios-simulator-setup` ski
 
 | Problem type                      | Tool / Where to look                                                                                                                                                                                                                                              |
 | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **JavaScript errors / logs**      | Use `debugger-log-registry` to get a summary and log file path, then `Grep`/`Read` to search.                                                                                                                                                                     |
+| **JavaScript errors / logs**      | Use `debugger-log-registry` to get a summary and log file path, then `Grep`/`Read` to search. If it returns `status: "not_connected"`, no log file is returned — follow its `guidance` to reconnect first.                                                        |
 | **React component hierarchy**     | Use `debugger-component-tree` tool for a text tree, or `debugger-inspect-element` at specific logical pixel coordinates (not normalized 0-1).                                                                                                                     |
 | **Visual state of the app**       | Use `screenshot` tool to capture the current screen, but prefer `describe` or `debugger-component-tree` for actual navigation and target discovery. If a permission prompt or system-owned modal overlay is not exposed reliably, then fall back to `screenshot`. |
 | **Evaluate JS in the app**        | Use `debugger-evaluate` tool to run JavaScript in the app's runtime.                                                                                                                                                                                              |

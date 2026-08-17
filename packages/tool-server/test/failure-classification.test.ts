@@ -2,12 +2,10 @@ import { createServer, type Server } from "node:http";
 import { describe, it, expect, afterEach } from "vitest";
 import { FAILURE_CODES, getFailureSignal, type FailureCode } from "@argent/registry";
 
-import {
-  setActiveProjectRoot,
-  clearActiveProjectRoot,
-  assertSafeFlowName,
-  getFlowPath,
-} from "../src/tools/flows/flow-utils";
+import { assertValidProjectRoot, assertSafeFlowName } from "../src/tools/flows/flow-utils";
+import { createFlowAddStepTool } from "../src/tools/flows/flow-add-step";
+import { flowInsertEchoTool } from "../src/tools/flows/flow-insert-echo";
+import { createRunFlowTool } from "../src/tools/flows/flow-run";
 import type { DeviceInfo, Registry } from "@argent/registry";
 import { makeChromiumImpl } from "../src/tools/keyboard/platforms/chromium";
 import { chromiumCdpBlueprint } from "../src/blueprints/chromium-cdp";
@@ -77,8 +75,6 @@ function startServer(handler: (path: string, res: import("node:http").ServerResp
 }
 
 afterEach(async () => {
-  // setActiveProjectRoot mutates module state; reset so cases don't leak.
-  clearActiveProjectRoot();
   // Tear down any local servers a case spun up.
   await Promise.all(openServers.splice(0).map((s) => new Promise<void>((r) => s.close(() => r()))));
 });
@@ -86,23 +82,15 @@ afterEach(async () => {
 describe("flow-utils classifications", () => {
   it("classifies a relative project_root as FLOW_PROJECT_ROOT_INVALID", () => {
     expectCode(
-      captureSync(() => setActiveProjectRoot("relative/path")),
+      captureSync(() => assertValidProjectRoot("relative/path")),
       FAILURE_CODES.FLOW_PROJECT_ROOT_INVALID
     );
   });
 
   it("classifies a project_root containing '..' as FLOW_PROJECT_ROOT_INVALID", () => {
     expectCode(
-      captureSync(() => setActiveProjectRoot("/a/../b")),
+      captureSync(() => assertValidProjectRoot("/a/../b")),
       FAILURE_CODES.FLOW_PROJECT_ROOT_INVALID
-    );
-  });
-
-  it("classifies path resolution with no active project_root as FLOW_PROJECT_ROOT_REQUIRED", () => {
-    // No active root → getFlowPath → getFlowsDir → requireActiveProjectRoot throws.
-    expectCode(
-      captureSync(() => getFlowPath("valid-name")),
-      FAILURE_CODES.FLOW_PROJECT_ROOT_REQUIRED
     );
   });
 
@@ -110,6 +98,76 @@ describe("flow-utils classifications", () => {
     expectCode(
       captureSync(() => assertSafeFlowName("bad name!")),
       FAILURE_CODES.FLOW_NAME_INVALID
+    );
+  });
+});
+
+describe("flow tool project_root classifications", () => {
+  // Every flow tool takes `project_root` from the caller, so the invalid-root
+  // throw is reachable from a tool's execute — not just from the helper above.
+  // Root validation happens inside getFlowPath, which runs BEFORE the recording
+  // is looked up (`requireRecordingSession` keys the session map by that path),
+  // so a bad root reports FLOW_PROJECT_ROOT_INVALID rather than the
+  // FLOW_NO_ACTIVE_RECORDING it would earn if the lookup came first — even
+  // though no recording was ever started here.
+  const RELATIVE_ROOT = "relative/project";
+  const DOTDOT_ROOT = "/tmp/project/../../etc";
+
+  // Both tools throw on the root before any tool dispatch or file read, so a
+  // bare stub registry is never actually used.
+  const registry = {} as unknown as Registry;
+
+  it("classifies flow-add-step with a relative project_root as FLOW_PROJECT_ROOT_INVALID", async () => {
+    const addStep = createFlowAddStepTool(registry);
+    const err = await captureError(
+      addStep.execute(
+        {},
+        { name: "some-flow", project_root: RELATIVE_ROOT, command: "gesture-tap" }
+      )
+    );
+    expectCode(err, FAILURE_CODES.FLOW_PROJECT_ROOT_INVALID);
+    // The root is judged first: no "No active recording" for an unstarted flow.
+    expect((err as Error).message).not.toMatch(/No active recording/);
+  });
+
+  it("classifies flow-add-step with a '..'-bearing project_root as FLOW_PROJECT_ROOT_INVALID", async () => {
+    const addStep = createFlowAddStepTool(registry);
+    expectCode(
+      await captureError(
+        addStep.execute(
+          {},
+          { name: "some-flow", project_root: DOTDOT_ROOT, command: "gesture-tap" }
+        )
+      ),
+      FAILURE_CODES.FLOW_PROJECT_ROOT_INVALID
+    );
+  });
+
+  it("classifies flow-add-echo with a relative project_root as FLOW_PROJECT_ROOT_INVALID", async () => {
+    expectCode(
+      await captureError(
+        flowInsertEchoTool.execute(
+          {},
+          { name: "some-flow", project_root: RELATIVE_ROOT, message: "label" }
+        )
+      ),
+      FAILURE_CODES.FLOW_PROJECT_ROOT_INVALID
+    );
+  });
+
+  it("classifies flow-execute with a relative project_root as FLOW_PROJECT_ROOT_INVALID", async () => {
+    const runFlow = createRunFlowTool(registry);
+    expectCode(
+      await captureError(runFlow.execute({}, { name: "some-flow", project_root: RELATIVE_ROOT })),
+      FAILURE_CODES.FLOW_PROJECT_ROOT_INVALID
+    );
+  });
+
+  it("classifies flow-execute with a '..'-bearing project_root as FLOW_PROJECT_ROOT_INVALID", async () => {
+    const runFlow = createRunFlowTool(registry);
+    expectCode(
+      await captureError(runFlow.execute({}, { name: "some-flow", project_root: DOTDOT_ROOT })),
+      FAILURE_CODES.FLOW_PROJECT_ROOT_INVALID
     );
   });
 });

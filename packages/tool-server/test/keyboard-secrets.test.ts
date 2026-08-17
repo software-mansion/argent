@@ -1,10 +1,14 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createKeyboardTool } from "../src/tools/keyboard";
 import { pasteTool } from "../src/tools/paste";
 import {
   availableSecretNames,
   redactSecretsFromError,
   resolveSecretPlaceholders,
+  type SecretSourceOptions,
 } from "../src/utils/secrets";
 import { InvalidToolInputError } from "../src/utils/capability";
 
@@ -43,14 +47,52 @@ const ENV: NodeJS.ProcessEnv = {
   UNRELATED: "not-a-secret",
 };
 
+/**
+ * A sandboxed pair of scopes: an empty project directory (marked, so the
+ * project-root walk-up stops there) and an empty home. Secret resolution reads
+ * the real filesystem, so every case anchors both scopes here — otherwise a
+ * stray `.env` in the checkout, or the developer's own
+ * `~/.argent/secrets.env`, would decide the result.
+ */
+let sandbox: { project: string; home: string; options: SecretSourceOptions };
+
+function writeFile(filePath: string, content: string): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, content);
+}
+
+/** Options anchored at the sandbox, with `env` as the only environment source. */
+function opts(env: NodeJS.ProcessEnv = ENV): SecretSourceOptions {
+  return { ...sandbox.options, env };
+}
+
+beforeEach(() => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "argent-secrets-"));
+  const project = path.join(root, "project");
+  const home = path.join(root, "home");
+  fs.mkdirSync(project, { recursive: true });
+  fs.mkdirSync(home, { recursive: true });
+  // A project marker so `findProjectRoot` stops here instead of walking out of
+  // the temp directory and into whatever lies above it.
+  fs.writeFileSync(path.join(project, "package.json"), "{}");
+  sandbox = { project, home, options: { cwd: project, homeDir: home } };
+  // The tool paths (below) resolve with no options at all, so the sandbox has
+  // to reach them through the process itself.
+  vi.stubEnv("HOME", home);
+  vi.stubEnv("USERPROFILE", home);
+  vi.spyOn(process, "cwd").mockReturnValue(project);
+});
+
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   vi.mocked(sendCommand).mockReset();
+  fs.rmSync(path.dirname(sandbox.project), { recursive: true, force: true });
 });
 
 describe("resolveSecretPlaceholders", () => {
   it("substitutes a placeholder with the prefixed env var's value", () => {
-    const { text, secrets } = resolveSecretPlaceholders("{{secret:APP_PASSWORD}}", ENV);
+    const { text, secrets } = resolveSecretPlaceholders("{{secret:APP_PASSWORD}}", opts());
     expect(text).toBe("hunter2");
     expect(secrets).toEqual([{ name: "APP_PASSWORD", value: "hunter2" }]);
   });
@@ -58,7 +100,7 @@ describe("resolveSecretPlaceholders", () => {
   it("substitutes placeholders embedded in longer text, repeats included", () => {
     const { text, secrets } = resolveSecretPlaceholders(
       "user:{{secret:APP_PASSWORD}}:{{secret:TOTP_SEED}}:{{secret:APP_PASSWORD}}",
-      ENV
+      opts()
     );
     expect(text).toBe("user:hunter2:JBSWY3DP:hunter2");
     // Each secret is reported once, however many times it appears.
@@ -66,7 +108,7 @@ describe("resolveSecretPlaceholders", () => {
   });
 
   it("returns text unchanged with no placeholders", () => {
-    const { text, secrets } = resolveSecretPlaceholders("plain text", ENV);
+    const { text, secrets } = resolveSecretPlaceholders("plain text", opts());
     expect(text).toBe("plain text");
     expect(secrets).toEqual([]);
   });
@@ -74,7 +116,7 @@ describe("resolveSecretPlaceholders", () => {
   it("rejects an unknown name, listing available names but never values", () => {
     let caught: Error | undefined;
     try {
-      resolveSecretPlaceholders("{{secret:NOPE}}", ENV);
+      resolveSecretPlaceholders("{{secret:NOPE}}", opts());
     } catch (err) {
       caught = err as Error;
     }
@@ -88,12 +130,14 @@ describe("resolveSecretPlaceholders", () => {
   });
 
   it("says (none) when no secrets are exposed", () => {
-    expect(() => resolveSecretPlaceholders("{{secret:X}}", { PATH: "/bin" })).toThrow(/\(none\)/);
+    expect(() => resolveSecretPlaceholders("{{secret:X}}", opts({ PATH: "/bin" }))).toThrow(
+      /\(none\)/
+    );
   });
 
   it("ignores malformed placeholders (bad name, wrong shape)", () => {
     const raw = "{{secret:has-dash}} {{secret}} {secret:APP_PASSWORD}";
-    expect(resolveSecretPlaceholders(raw, ENV).text).toBe(raw);
+    expect(resolveSecretPlaceholders(raw, opts()).text).toBe(raw);
   });
 
   it("accepts a redundant ARGENT_SECRET_ prefix in the name, any casing", () => {
@@ -102,7 +146,7 @@ describe("resolveSecretPlaceholders", () => {
       "{{secret:Argent_SECRET_APP_PASSWORD}}",
       "{{secret:argent_secret_APP_PASSWORD}}",
     ]) {
-      const { text, secrets } = resolveSecretPlaceholders(spelling, ENV);
+      const { text, secrets } = resolveSecretPlaceholders(spelling, opts());
       expect(text).toBe("hunter2");
       // The recorded name is canonical, so error/redaction output steers
       // toward the correct spelling.
@@ -115,13 +159,13 @@ describe("resolveSecretPlaceholders", () => {
       ARGENT_SECRET_ARGENT_SECRET_X: "literal",
       ARGENT_SECRET_X: "bare",
     };
-    expect(resolveSecretPlaceholders("{{secret:ARGENT_SECRET_X}}", env).text).toBe("literal");
+    expect(resolveSecretPlaceholders("{{secret:ARGENT_SECRET_X}}", opts(env)).text).toBe("literal");
   });
 
   it("quotes the typed name but recommends the canonical var when both spellings miss", () => {
     let caught: Error | undefined;
     try {
-      resolveSecretPlaceholders("{{secret:ARGENT_SECRET_NOPE}}", ENV);
+      resolveSecretPlaceholders("{{secret:ARGENT_SECRET_NOPE}}", opts());
     } catch (err) {
       caught = err as Error;
     }
@@ -131,9 +175,76 @@ describe("resolveSecretPlaceholders", () => {
   });
 });
 
+describe("secrets from dotenv files", () => {
+  // Source semantics (exposure rules, precedence, degradation) are covered in
+  // @argent/configuration-core; these cases pin what this layer adds — that the
+  // chain is actually consulted, and that a miss explains itself.
+  const NO_ENV: NodeJS.ProcessEnv = { PATH: "/bin" };
+  const projectSecrets = () => path.join(sandbox.project, ".argent", "secrets.env");
+  const globalSecrets = () => path.join(sandbox.home, ".argent", "secrets.env");
+
+  /**
+   * Just the enumerated source list from an unknown-name error — the placement
+   * advice below it names the same files as *suggestions*, so assertions about
+   * what was actually consulted have to read this block alone.
+   */
+  const sourcesBlock = (message: string) =>
+    message.split("first match wins:\n")[1]!.split("\nTo make it available")[0]!;
+
+  it("substitutes a placeholder from a secrets file, not just the environment", () => {
+    writeFile(projectSecrets(), "APP_PASSWORD=from-project\n");
+    const { text, secrets } = resolveSecretPlaceholders("{{secret:APP_PASSWORD}}", opts(NO_ENV));
+    expect(text).toBe("from-project");
+    // Recorded like any other secret, so redaction covers a file-sourced value.
+    expect(secrets).toEqual([{ name: "APP_PASSWORD", value: "from-project" }]);
+  });
+
+  it("reads the whole chain against one snapshot per call", () => {
+    writeFile(projectSecrets(), "A=1\n");
+    writeFile(globalSecrets(), "B=2\n");
+    expect(resolveSecretPlaceholders("{{secret:A}}/{{secret:B}}", opts(NO_ENV)).text).toBe("1/2");
+  });
+
+  it("lists the sources it consulted, with paths and never a value", () => {
+    writeFile(projectSecrets(), "OTHER=secret-value\n");
+    writeFile(path.join(sandbox.project, ".env"), "UNPREFIXED=app-config\n");
+    let caught: Error | undefined;
+    try {
+      resolveSecretPlaceholders("{{secret:MISSING}}", opts(NO_ENV));
+    } catch (err) {
+      caught = err as Error;
+    }
+    const block = sourcesBlock(caught!.message);
+    expect(block).toContain(projectSecrets());
+    expect(block).toContain(path.join(sandbox.project, ".env.local"));
+    expect(block).toContain(globalSecrets());
+    expect(block).toContain("not found");
+    // A shared file that exists but exposes nothing says why, so "my .env has
+    // it" does not read as "argent ignored my file".
+    expect(block).toContain("only prefixed keys are exposed");
+    expect(caught!.message).not.toContain("secret-value");
+    expect(caught!.message).not.toContain("app-config");
+  });
+
+  it("reaches the tools, which resolve against the running process's scopes", async () => {
+    writeFile(globalSecrets(), "APP_PASSWORD=hunter2\n");
+    const { api, chars } = recordingCdpApi();
+    const tool = createKeyboardTool(registryWith(api));
+
+    const result = await tool.execute(
+      {},
+      { udid: CHROMIUM_UDID, text: "{{secret:APP_PASSWORD}}", delayMs: 0 }
+    );
+
+    expect(chars.join("")).toBe("hunter2");
+    expect(result.typed).toBe("{{secret:APP_PASSWORD}}");
+    expect(JSON.stringify(result)).not.toContain("hunter2");
+  });
+});
+
 describe("availableSecretNames", () => {
   it("lists only prefixed vars, sorted, without the prefix", () => {
-    expect(availableSecretNames(ENV)).toEqual(["APP_PASSWORD", "TOTP_SEED"]);
+    expect(availableSecretNames(opts())).toEqual(["APP_PASSWORD", "TOTP_SEED"]);
   });
 });
 
