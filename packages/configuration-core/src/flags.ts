@@ -70,7 +70,7 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
   {
     name: "microinteractions",
     description:
-      "Amplify a device gesture with a matching animation of the host window — the Simulator / emulator window physically shakes while `shake` runs. Purely cosmetic, macOS only, and never affects whether the gesture itself succeeds. Off by default.",
+      "Amplify device actions with matching animations of the host window, so what happens on the guest is also visible on the desktop. Purely cosmetic, macOS only, and never affects whether the underlying action succeeds. Off by default.",
   },
   {
     name: "video-watermark",

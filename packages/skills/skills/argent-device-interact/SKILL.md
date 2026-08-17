@@ -78,8 +78,6 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 | Wait for UI       | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text    |
 | Wait for idle     | `await-screen-idle` | Block until a non-empty screen tree stops changing               |
 
-`shake` drives the guest only, so nothing about it is visible on the host. On macOS, `argent enable microinteractions` makes the Simulator / emulator window itself wobble for the length of each gesture, which is useful when demoing or recording. It is cosmetic: the shake reports the same result whether or not the animation runs (it needs Accessibility permission for the process running the tool-server, and is skipped on a headless boot).
-
 ## 5. Finding Tap Targets
 
 IMPORTANT. When moved to a different screen after an action or do not know the coordinates of component, **always** perform proper discovery first.
