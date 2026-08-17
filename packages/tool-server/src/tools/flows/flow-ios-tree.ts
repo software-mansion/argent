@@ -328,9 +328,9 @@ async function unreadableHierarchyReason(
  * connections is the follow-up the pinned gate does not cover.
  *
  * Both paths end in the same read. It throws on an explicit getFullHierarchy
- * error and on a target that returns no windows (a non-injectable app, one
- * backgrounded, or a window not yet attached), and can still fail at the
- * transport — the 15s RPC timeout, or a connection lost after the gate.
+ * error and on a target that returns no windows (backgrounded, or a first window
+ * not attached yet), and can still fail at the transport — the 15s RPC timeout,
+ * or a connection lost after the gate.
  */
 export async function queryFullHierarchyTree(
   registry: Registry,
@@ -519,16 +519,22 @@ export async function queryFullHierarchyTree(
     throw new Error(`getFullHierarchy failed for ${bundleId}: ${rawResult.error}`);
   }
 
-  // No windows is an untrustworthy read (non-injectable app, backgrounded, or a
-  // window not yet attached), not a blank screen — and an empty tree is the one
-  // thing a `hidden`/absent check accepts, so trusting it would false-pass.
+  // No windows is an untrustworthy read (the app is backgrounded, or its first
+  // window has not attached yet), not a blank screen — and an empty tree is the
+  // one thing a `hidden`/absent check accepts, so trusting it would false-pass.
   // Key on raw windows, not flattened children: windows-but-no-leaves is a
   // genuinely sparse, trusted screen.
+  //
+  // A `com.apple.*` bundle id can only reach here UNPINNED (the pinned path
+  // refuses it above): the dylib did load and answer, so the message names the
+  // wrong-target diagnosis rather than a failed injection.
   if (!Array.isArray(rawResult.windows) || rawResult.windows.length === 0) {
     throw new Error(
-      `getFullHierarchy returned no windows for ${bundleId} — the app is not injectable ` +
-        `(e.g. an Apple system app) or has no readable foreground window, so flows cannot resolve ` +
-        `selectors against its view hierarchy`
+      `getFullHierarchy returned no windows for ${bundleId} - it has no window attached to read ` +
+        `(backgrounded, or its first window not attached yet), so flows cannot resolve selectors ` +
+        `against its view hierarchy; foreground or relaunch it, and if that bundle id is a ` +
+        `com.apple.* system process the read resolved to a background system app rather than the ` +
+        `app under test, so give this flow a \`launch\` step to pin reads to the right app`
     );
   }
 
