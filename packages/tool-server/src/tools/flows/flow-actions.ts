@@ -1135,8 +1135,8 @@ async function runPinch(
  * the tree several times per step, so the extra fetch is noise, and the
  * resolution path every other directive shares stays untouched.
  *
- * The one read {@link ActionEnv.treeOutage} must not spare, unlike the settle
- * window {@link settleForGesture} skips: this answer is DISPATCHED, not waited
+ * The one read {@link ActionEnv.treeOutage} must not spare, unlike the whole
+ * settle {@link settleForGesture} skips: this answer is DISPATCHED, not waited
  * on. A stale verdict would degrade a centre rotate on a phone from the
  * edge-safe vertical placement the real aspect picks (Down points at
  * y = 0.278 / 0.722) to the aspect-1 fallback, which puts both fingers 0.48 off
@@ -1147,9 +1147,11 @@ async function runPinch(
  *
  * A true verdict costs one failed read instead, which the caller degrades past
  * exactly as it degrades past a skip - but not for free: this read carries no
- * budget and no signal, so on iOS it is the 15s hierarchy tier, longer than the
- * 3s window the memo saved. That is the price of never dispatching geometry off
- * a prediction, and it is what every rotate paid before the memo existed.
+ * budget and no signal, so on iOS it is the 15s hierarchy tier. Less than the
+ * whole settle the memo saved - window and floor reads alike, two reads on that
+ * same tier when the source fails by timing out - but still the price of never
+ * dispatching geometry off a prediction, and what every rotate paid before the
+ * memo existed.
  */
 async function fetchScreenAspect(env: ActionEnv): Promise<number | undefined> {
   try {
