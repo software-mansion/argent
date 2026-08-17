@@ -16,7 +16,7 @@ Load `argent-create-flow` as the authoring engine. Follow its required reference
 A QA flow is complete only when:
 
 1. The first non-echo step is `launch:`. In-flow setup proves a deterministic data baseline. Repeated runs do not accumulate artifacts or require manual cleanup.
-2. The first walkthrough recorded every action and live structural check. Only the three documented polish insertions are unrecorded.
+2. The first walkthrough recorded every action and live structural check. Only the four documented polish insertions are unrecorded.
 3. Every requirement maps to a hard `await:`, `assert:`, or reviewed `snapshot:`. Echoes and screenshots are not verdicts. A negative check needs the same stable selector established as visible earlier.
 4. Every screen change has destination identity followed by `idle` readiness.
 5. Targets satisfy the stable-selector and coordinate-fallback rules. QA keeps coordinates only for genuinely unlabeled targets. Vacuous on Vega, which has no coordinate targets.
@@ -91,7 +91,7 @@ Complete the create-flow polish and blocking audit. Then:
 | ------------------ | ----------- | ------------------------- | --------- |
 | Tap `settings-tab` | Settings    | `settings-screen` visible | `idle`    |
 
-The two are repaired differently. A missing identity check must be recorded live on the restored screen. A missing `idle` check is added in YAML, because `await: { idle: true }` has no recorder form and is one of `argent-create-flow`'s three permitted polish insertions. Re-record any missing action or other structural check.
+The two are repaired differently. A missing identity check must be recorded live on the restored screen. A missing `idle` check is added in YAML, because `await: { idle: true }` has no recorder form and is one of `argent-create-flow`'s four permitted polish insertions. Re-record any missing action or other structural check.
 
 ## 5. Prove two consecutive passes
 
