@@ -1,5 +1,10 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  getFailureSignal,
+  type ToolDefinition,
+} from "@argent/registry";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 import { DEBUGGER_TOOL_CAPABILITY, debuggerServiceRef } from "./debugger-service-ref";
 
@@ -33,7 +38,32 @@ Returns the evaluation result as a JSON-serializable value, along with deviceNam
   }),
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
-    const result = await api.cdp.evaluate(params.expression);
+    let result: unknown;
+    try {
+      result = await api.cdp.evaluate(params.expression);
+    } catch (err) {
+      // The agent-supplied expression throwing is not a tool malfunction — the
+      // evaluate round-trip worked. Re-code it so telemetry can separate
+      // "agent's JS threw" from genuine CDP faults; the message (with the JS
+      // stack the agent needs) is preserved verbatim. getFailureSignal is
+      // breadth-first, so the outer signal wins over the inner one.
+      if (
+        err instanceof Error &&
+        getFailureSignal(err)?.error_code === FAILURE_CODES.DEBUGGER_CDP_RUNTIME_EXCEPTION
+      ) {
+        throw new FailureError(
+          err.message,
+          {
+            error_code: FAILURE_CODES.DEBUGGER_EVALUATE_EXPRESSION_THREW,
+            failure_stage: "debugger_evaluate_expression",
+            failure_area: "tool_server",
+            error_kind: "unknown",
+          },
+          { cause: err }
+        );
+      }
+      throw err;
+    }
     return {
       result,
       deviceName: api.deviceName,

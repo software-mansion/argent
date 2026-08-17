@@ -12,6 +12,7 @@ import type {
   DevToolsCommitTree,
 } from "../../../utils/react-profiler/types/input";
 import { runPipeline } from "../../../utils/react-profiler/pipeline/index";
+import { astLookupCandidates } from "../../../utils/react-profiler/component-names";
 import { buildAstIndexWithDiagnostics } from "../../../utils/react-profiler/pipeline/06-resolve/ast-index";
 import { renderProfilingReport } from "../../../utils/react-profiler/pipeline/05-render";
 import {
@@ -179,7 +180,13 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
     try {
       const astIndex = await buildAstIndexWithDiagnostics(params.project_root);
       for (const finding of pipelineOutput.componentFindings) {
-        const entry = astIndex.index.get(finding.component);
+        // `finding.component` is the raw DevTools name; the index is keyed on
+        // source identifiers. Without the fallback every compiler/memo/forwardRef
+        // component silently loses its source location and the File column
+        // renders "—" even when the file is right there in the project.
+        const entry = astLookupCandidates(finding.component)
+          .map((k) => astIndex.index.get(k))
+          .find(Boolean);
         if (entry) {
           finding.sourceLocation = {
             file: entry.file,

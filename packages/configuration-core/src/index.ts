@@ -24,6 +24,19 @@ export {
 
 export { readConfigObject, updateConfig, getAtPath, setAtPath, deleteAtPath } from "./config.js";
 
+// Secret sources: the ordered environment + dotenv-file chain that `{{secret:…}}`
+// placeholders (and `argent secrets`) resolve names through.
+export {
+  secretSources,
+  lookupSecret,
+  secretNames,
+  describeSecretSources,
+  secretPlacementAdvice,
+  SECRET_ENV_PREFIX,
+  type SecretSource,
+  type SecretSourceOptions,
+} from "./secrets.js";
+
 // Merge policies for scoped values.
 export {
   applyMergePolicy,
