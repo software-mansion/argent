@@ -141,16 +141,29 @@ Pass settle:true for a momentum-free drag that decelerates into the release, so 
       return err;
     };
     // The button is down by the time this runs, so release it where the pointer
-    // is: a cancelled drag must leave no stuck press (which would capture every
-    // later click) and must not deliver the travel the caller cancelled.
+    // is: the press already delivered would otherwise capture every later click,
+    // and releasing at the end point would deliver the travel the caller
+    // cancelled. That release is best effort - a cancel is exactly when the CDP
+    // session can be going away, and a rejected dispatch leaves no transport to
+    // lift the button through. The AbortError is not: it is thrown either way,
+    // carrying the failed release as its `cause`. Nothing downstream reads
+    // err.name for this tool, so the message is the only part of the error that
+    // says cancel; letting the transport error stand in loses it, and makes this
+    // the one gesture whose cancel does not read as one - both siblings abort
+    // unconditionally, their terminal Up being a non-awaited, non-throwing send.
     const releaseAndAbort = async (frame: number): Promise<never> => {
-      await chromium.dispatchMouseEvent({
-        type: "mouseReleased",
-        x: lastX,
-        y: lastY,
-        clickCount: 1,
-      });
-      throw abortError(frame);
+      const err = abortError(frame);
+      try {
+        await chromium.dispatchMouseEvent({
+          type: "mouseReleased",
+          x: lastX,
+          y: lastY,
+          clickCount: 1,
+        });
+      } catch (releaseErr) {
+        err.cause = releaseErr;
+      }
+      throw err;
     };
     // Nothing is pressed yet, so this one only declines.
     if (ctx?.signal?.aborted) throw abortError(0);
