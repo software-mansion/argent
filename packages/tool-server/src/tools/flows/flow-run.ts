@@ -1139,7 +1139,10 @@ device's current state. A top-level \`requires:\` block (\`platform: [ios, andro
 ANDed) names the targets the flow supports; no block means it runs anywhere. Requirements narrow device
 auto-detection, so an ios-only flow picks the booted simulator rather than failing as ambiguous, and a run
 pointed at a target they exclude fails with FLOW_REQUIREMENTS_UNMET (the CLI turns that into a skip when
-running a whole directory). A \`run:\` fragment whose requirements the run device does not meet ERRORS the
+running a whole directory). Skipping needs the check to have ANSWERED: a requirement that could not be
+verified — the device's runtime kind was unreadable — raises FLOW_REQUIREMENTS_UNVERIFIABLE instead, which
+a directory run fails the flow on rather than skipping, so a broken probe cannot pose as a filter.
+A \`run:\` fragment whose requirements the run device does not meet ERRORS the
 step — a composed fragment silently not running would leave a green report for a scenario that half
 happened. Exception: fragments the run's leading \`run:\` chain enters before its first executable step
 are certain to run, so their blocks fold into the root's (platform lists intersect, runtimeKinds must
