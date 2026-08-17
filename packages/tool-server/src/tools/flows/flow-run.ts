@@ -75,6 +75,8 @@ import { untrackChromiumPort } from "../../utils/chromium-discovery";
 import { parseChromiumCdpPort, resolveDevice } from "../../utils/device-info";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
 import { describeVega } from "../describe/platforms/vega";
+import { fetchFlowTree } from "./flow-tree";
+import type { DescribeNode } from "../describe/contract";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
 
 const zodSchema = z
@@ -273,12 +275,102 @@ export interface FlowPrerequisiteNotice {
 export const MAX_RUN_DEPTH = 20;
 
 /**
- * Grace period to let a freshly (re)launched app settle before the first step
- * runs. A cold start can outlast the first directive's default auto-wait (e.g. a
- * short-grace `assert`, or a `tap` whose budget is eaten by the launch), so we
- * give the app a head start here rather than inflating every step's timeout.
+ * Longest a freshly (re)launched app is given to put content on screen before
+ * the first step runs. A cold start can outlast the first directive's default
+ * auto-wait (e.g. a short-grace `assert`, or a `tap` whose budget is eaten by
+ * the launch), so we give the app a head start here rather than inflating every
+ * step's timeout.
+ *
+ * This is a BUDGET, not a delay: {@link settleAfterLaunch} stops as soon as the
+ * app has drawn something the flow tree can see. `restart-app` already waits for
+ * the activity to be displayed, so on a warm app the content is usually there on
+ * the first read and the run continues in a fraction of this window; only an app
+ * that is still blank keeps waiting, which is what the budget was for.
  */
 const POST_LAUNCH_SETTLE_MS = 1500;
+
+/**
+ * How often {@link settleAfterLaunch} re-reads the tree while the app is still
+ * blank. Deliberately unhurried: a hierarchy read is served by the inspected
+ * app's own UI thread, which during a cold start is the thing we are waiting
+ * for, so polling it hard would slow the very work being waited on. The read
+ * that matters is the first one — an app that has already drawn is past this
+ * loop before the interval is ever used.
+ */
+const LAUNCH_SETTLE_POLL_MS = 250;
+
+/**
+ * Nodes below which a tree is "the app has not drawn its content yet", for a
+ * screen whose views carry no label at all (see {@link hasDrawnContent}). The
+ * synthetic root counts, so this is "the root plus two views".
+ */
+const LAUNCH_SETTLE_MIN_NODES = 3;
+
+/**
+ * Has the app put something on screen for the flow to act on?
+ *
+ * A freshly launched Android activity reports a tree of exactly one view before
+ * it draws: the window's own content frame, carrying `android:id/content` and
+ * nothing else — no label, no value, no children. Measured on a cold start, that
+ * shell is what the tree holds for the whole settle window, so "the tree is
+ * non-empty" would call a blank screen ready.
+ *
+ * What separates it from a drawn screen is not size but addressability: the
+ * shell has an identifier only, while anything the app itself renders brings a
+ * label or a value. So a single labelled view is enough — an app whose first
+ * screen is one line of text settles as fast as a dense one.
+ *
+ * The node-count arm below is the fallback for a screen that draws real content
+ * with no labels on it at all (icons without a content description, a canvas):
+ * two such views still read as drawn, one does not, and that case simply waits
+ * out the budget.
+ */
+function hasDrawnContent(root: DescribeNode): boolean {
+  let nodes = 0;
+  let addressable = false;
+  const visit = (node: DescribeNode): void => {
+    nodes += 1;
+    if (node !== root && (node.label || node.value)) addressable = true;
+    for (const child of node.children ?? []) visit(child);
+  };
+  visit(root);
+  return addressable || nodes >= LAUNCH_SETTLE_MIN_NODES;
+}
+
+/**
+ * Wait for a freshly launched app to put content on screen, bounded by
+ * {@link POST_LAUNCH_SETTLE_MS}.
+ *
+ * Replaces an unconditional sleep of the whole budget. The condition that sleep
+ * was approximating is observable — the flow's own tree source either shows the
+ * app's content or it doesn't — and reading it costs a fraction of the window on
+ * a warm app while still spending the full budget on a genuinely slow start.
+ *
+ * Deliberately forgiving: a tree that never satisfies {@link hasDrawnContent}
+ * (an app whose first screen is a canvas, a video surface, or anything else
+ * without addressable content) simply uses the whole budget and the run carries
+ * on, exactly as the sleep did. A read that throws is treated the same way —
+ * this is a head start, not a gate, and {@link treeSourceGate} has already
+ * established that the source is up.
+ *
+ * Returns false only when the run was aborted mid-wait.
+ */
+async function settleAfterLaunch(env: ActionEnv): Promise<boolean> {
+  const deadline = Date.now() + POST_LAUNCH_SETTLE_MS;
+  for (;;) {
+    if (env.signal?.aborted) return false;
+    try {
+      const { tree } = await fetchFlowTree(env.registry, env.device);
+      if (hasDrawnContent(tree)) return true;
+    } catch {
+      // Transient read failure — keep waiting out the budget rather than
+      // reporting a launch problem the next step is better placed to describe.
+    }
+    const left = deadline - Date.now();
+    if (left <= 0) return true;
+    if (!(await sleepOrAbort(Math.min(LAUNCH_SETTLE_POLL_MS, left), env.signal))) return false;
+  }
+}
 
 /**
  * Flows resolve selectors against the native UIView tree, served over the
@@ -470,7 +562,6 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
     if (signal?.aborted) return ABORTED_OUTCOME;
     return { ok: false, reason: `restart-app failed: ${errMsg(err)}` };
   }
-  if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
   const gate = await treeSourceGate(registry, device, bundleId, signal);
   // The gate returns null (ready) on abort — check the signal before trusting
   // it, or a cancelled gate would read as a launch that verified readiness.
@@ -479,8 +570,10 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   // Remember the launched app for the rest of the RUN (nested `run:` flows
   // share this state, so a nested launch retargets the whole run — see
   // ActionEnv.launchedNativeApp). iOS tree reads use it only when target
-  // auto-resolution times out mid-stall.
+  // auto-resolution times out mid-stall. Recorded before the head start below,
+  // which reads the tree and so is one of those reads.
   state.launchedNativeApp = bundleId;
+  if (!(await settleAfterLaunch(env))) return ABORTED_OUTCOME;
   return { ok: true };
 }
 
