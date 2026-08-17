@@ -95,6 +95,18 @@ const chromiumEntry = (id: string): ListedDevice => ({
   state: "Running",
   id,
 });
+/** A row auto-detection never considers, but a refusal must still enumerate. */
+const shutdownIosEntry = (udid: string): ListedDevice => ({
+  platform: "ios",
+  state: "Shutdown",
+  udid,
+});
+/** The other such row: a remote sim, whose id `list-devices` reports in `udid`. */
+const remoteIosEntry = (udid: string): ListedDevice => ({
+  platform: "ios-remote",
+  state: "Booted",
+  udid,
+});
 
 /** A single step that needs a device and always succeeds. */
 const OK_STEP: FlowStep = { kind: "tool", name: "tap", args: {} };
@@ -680,6 +692,19 @@ describe("requirements narrow device auto-detection", () => {
     );
   });
 
+  it("offers no remedy that re-runs the read which already came back unknown", async () => {
+    // `--device` probes through the same `resolveRuntimeKindCached` /
+    // `listIosSimulators` read the listing made, so offering it as a fresh probe
+    // sends the caller round the same loop for the same answer.
+    await writeFlow("tv-only", { requires: { runtimeKind: "tv" } });
+    const { registry } = mockRegistry([androidEntry(ANDROID)]);
+
+    const err = await run(registry, "tv-only").catch((e: unknown) => e);
+
+    expect((err as Error).message).toMatch(/re-list once it is up, or drop runtimeKind\./);
+    expect((err as Error).message).not.toMatch(/--device/);
+  });
+
   it("stays unverifiable when a readable mismatch sits next to the unread device", async () => {
     // The mobile emulator is a real exclusion, but one unanswered candidate is
     // enough to bar the skip: the flow's target may be the device nobody read.
@@ -718,6 +743,80 @@ describe("requirements narrow device auto-detection", () => {
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNMET);
   });
 
+  it("enumerates the shut-down device that would have matched, state and all", async () => {
+    // The row auto-detection skipped is the whole diagnosis: boot that simulator
+    // and the flow runs. Listing only the booted candidates omits exactly it.
+    await writeFlow("ios-only", { requires: { platform: ["ios"] } });
+    const { registry } = mockRegistry([androidEntry(ANDROID), shutdownIosEntry(IOS)]);
+
+    const err = await run(registry, "ios-only").catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNMET);
+    expect((err as Error).message).toMatch(
+      new RegExp(
+        `Available devices: ${ANDROID} \\(android, device\\), ${IOS} \\(ios, Shutdown\\)\\.`
+      )
+    );
+  });
+
+  it("enumerates the shut-down device on the unverifiable arm too", async () => {
+    // The empty-field call into unreadKindError: the emulator's unread kind is
+    // what bars the skip, but the simulator that would have satisfied the block
+    // is the row the caller acts on, and it is outside the booted candidates.
+    await writeFlow("tv-only", { requires: { runtimeKind: "tv" } });
+    const { registry } = mockRegistry([androidEntry(ANDROID), shutdownIosEntry(IOS)]);
+
+    const err = await run(registry, "tv-only").catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNVERIFIABLE);
+    expect((err as Error).message).toMatch(new RegExp(`${IOS} \\(ios, Shutdown, kind unknown\\)`));
+  });
+
+  it("enumerates it on the barred-survivor arm as well", async () => {
+    // The second call into unreadKindError: one candidate matched, one went
+    // unread, so the lone survivor is refused - and the same shut-down row has
+    // to survive into that message too.
+    await writeFlow("tv-only", { requires: { runtimeKind: "tv" } });
+    const { registry } = mockRegistry([
+      iosEntry(IOS_TV, "tv"),
+      androidEntry(ANDROID),
+      shutdownIosEntry(IOS),
+    ]);
+
+    const err = await run(registry, "tv-only").catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNVERIFIABLE);
+    expect((err as Error).message).toMatch(new RegExp(`${IOS} \\(ios, Shutdown, kind unknown\\)`));
+  });
+
+  it("names a remote simulator by the id --device accepts, not `?`", async () => {
+    // `list-devices` carries an ios-remote row's id in `udid`, already
+    // `remote:`-prefixed; falling through to `serial` renders every available
+    // remote sim as an anonymous `?` in the reason a directory run prints.
+    await writeFlow("tv-only", { requires: { runtimeKind: "tv" } });
+    const { registry } = mockRegistry([androidEntry(ANDROID), remoteIosEntry(IOS_REMOTE)]);
+
+    const err = await run(registry, "tv-only").catch((e: unknown) => e);
+
+    expect((err as Error).message).toMatch(
+      new RegExp(`${IOS_REMOTE} \\(ios-remote, Booted, kind unknown\\)`)
+    );
+    expect((err as Error).message).not.toMatch(/\? \(ios-remote/);
+  });
+
+  it("enumerates a device outside an explicit --platform too", async () => {
+    // `--platform` is the caller's own narrowing, not the requirement's: the tv
+    // simulator it hid is the target that satisfies the block, so naming it is
+    // the fix, not noise.
+    await writeFlow("tv-only", { requires: { runtimeKind: "tv" } });
+    const { registry } = mockRegistry([androidEntry(ANDROID, "mobile"), iosEntry(IOS_TV, "tv")]);
+
+    const err = await run(registry, "tv-only", { platform: "android" }).catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNMET);
+    expect((err as Error).message).toMatch(new RegExp(`${IOS_TV} \\(ios, Booted, tv\\)`));
+  });
+
   it("keeps the kind out of the ambiguity message, where it is noise", async () => {
     await writeFlow("ios-only", { requires: { platform: ["ios"] } });
     const { registry } = mockRegistry([iosEntry(IOS, "mobile"), iosEntry(IOS_TV, "tv")]);
@@ -735,10 +834,61 @@ describe("requirements narrow device auto-detection", () => {
   });
 
   it("stays ambiguous when the requirement leaves more than one candidate", async () => {
+    // Both candidates are ios, so `--platform ios` would re-throw this message
+    // byte for byte and any other value would empty the field: only --device
+    // narrows.
     await writeFlow("ios-only", { requires: { platform: ["ios"] } });
     const { registry } = mockRegistry([iosEntry(IOS), iosEntry(IOS_TV)]);
 
-    await expect(run(registry, "ios-only")).rejects.toThrow(/2 booted devices matched/);
+    const err = await run(registry, "ios-only").catch((e: unknown) => e);
+
+    expect((err as Error).message).toMatch(
+      /2 booted devices matched — pass --device to disambiguate\./
+    );
+    expect((err as Error).message).not.toMatch(/--platform/);
+  });
+
+  it("drops --platform when a two-platform block leaves one platform booted", async () => {
+    // Read off the block, this offers --platform; read off the candidates, it
+    // cannot, because only ios is booted. The candidates are what --platform
+    // would filter.
+    await writeFlow("mobile-pair", { requires: { platform: ["ios", "android"] } });
+    const { registry } = mockRegistry([iosEntry(IOS), iosEntry(IOS_TV)]);
+
+    await expect(run(registry, "mobile-pair")).rejects.toThrow(
+      /2 booted devices matched — pass --device to disambiguate\./
+    );
+  });
+
+  it("drops --platform when a kind-only block leaves one platform booted", async () => {
+    // Same, for a block that names no platform at all to read.
+    await writeFlow("tv-only", { requires: { runtimeKind: "tv" } });
+    const { registry } = mockRegistry([iosEntry(IOS, "tv"), iosEntry(IOS_TV, "tv")]);
+
+    await expect(run(registry, "tv-only")).rejects.toThrow(
+      /2 booted devices matched — pass --device to disambiguate\./
+    );
+  });
+
+  it("still offers --platform when the block names more than one platform", async () => {
+    // The control: here --platform genuinely picks a side of the field.
+    await writeFlow("mobile-pair", { requires: { platform: ["ios", "android"] } });
+    const { registry } = mockRegistry([iosEntry(IOS), androidEntry(ANDROID)]);
+
+    await expect(run(registry, "mobile-pair")).rejects.toThrow(
+      /2 booted devices matched — pass --device or --platform to disambiguate\./
+    );
+  });
+
+  it("still offers --platform when the requirement constrains only the kind", async () => {
+    // A runtimeKind-only block pins no platform, so the two candidates can sit
+    // on different ones — the second control for the same branch.
+    await writeFlow("tv-only", { requires: { runtimeKind: "tv" } });
+    const { registry } = mockRegistry([iosEntry(IOS_TV, "tv"), androidEntry(ANDROID, "tv")]);
+
+    await expect(run(registry, "tv-only")).rejects.toThrow(
+      /2 booted devices matched — pass --device or --platform to disambiguate\./
+    );
   });
 
   it("narrows within an explicit platform rather than fighting it", async () => {

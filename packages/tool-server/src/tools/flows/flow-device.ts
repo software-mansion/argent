@@ -84,7 +84,10 @@ const DEVICE_BIND_LIST_KEYS = ["devices"] as const;
 const DEVICE_ARG_KEYS = DEVICE_BIND_KEYS;
 
 interface RawDevice {
-  platform: FlowPlatform;
+  // `Platform`, not `FlowPlatform`: `list-devices` also emits `ios-remote`
+  // rows, which auto-detect never picks (see `isBooted`) but a refusal still
+  // enumerates.
+  platform: Platform;
   state?: string;
   udid?: string;
   serial?: string;
@@ -98,7 +101,10 @@ interface RawDevice {
 }
 
 function deviceEntryId(d: RawDevice): string | undefined {
-  if (d.platform === "ios") return d.udid;
+  // A remote sim's listed udid already carries the `remote:` prefix that
+  // `--device` classifies on (`list-devices` applies `withRemotePrefix`), so
+  // the enumerated id is pasteable as-is.
+  if (d.platform === "ios" || d.platform === "ios-remote") return d.udid;
   if (d.platform === "chromium") return d.id;
   return d.serial; // android, vega
 }
@@ -324,27 +330,37 @@ function meetsRequires(d: RawDevice, requires: FlowRequires | undefined): boolea
   return true;
 }
 
-/** The device enumeration a requirement refusal ends with. */
-function availableDevices(scoped: RawDevice[], requires: FlowRequires): string {
+/**
+ * The device enumeration a requirement refusal ends with. Shows the WHOLE
+ * listing, as the no-device-found refusal does, rather than the booted and
+ * platform-scoped candidates: when a requirement is unmet because the device
+ * that would have matched is shut down, offline, or outside the run's
+ * `--platform`, that row is the diagnosis, and its state says which.
+ */
+function availableDevices(all: RawDevice[], requires: FlowRequires): string {
   const showKind = requires.runtimeKind !== undefined;
-  return `Available devices: ${scoped.map((d) => describeDevice(d, showKind)).join(", ")}.`;
+  return `Available devices: ${all.map((d) => describeDevice(d, showKind)).join(", ")}.`;
 }
 
 /**
  * The refusal for candidates the listing could not classify — worded once, since
- * both auto-detect arms reach it.
+ * both auto-detect arms reach it. `--device` is deliberately not offered as a
+ * remedy: on every platform that can reach this message its probe funnels into
+ * the same read the listing already made (`listIosSimulators` on ios,
+ * `resolveRuntimeKindCached` on android), so it re-asks the question instead of
+ * answering it.
  */
 function unreadKindError(
   requires: FlowRequires,
   unread: RawDevice[],
-  scoped: RawDevice[]
+  all: RawDevice[]
 ): FailureError {
   const ids = unread.map((d) => deviceEntryId(d) ?? "?").join(", ");
   return requirementsUnverifiableError(
     `${declaredRequires(requires)}. The runtime kind of ` +
       `${ids} could not be read from the listing, so whether the flow applies is unknown. ` +
-      `The device may still be booting: re-list, pass --device to probe it fresh, or drop ` +
-      `runtimeKind. ${availableDevices(scoped, requires)}`
+      `The device may still be booting: re-list once it is up, or drop ` +
+      `runtimeKind. ${availableDevices(all, requires)}`
   );
 }
 
@@ -396,7 +412,7 @@ export async function resolveFlowDevice(
     : [];
 
   if (eligible.length === 1) {
-    if (requires && unread.length > 0) throw unreadKindError(requires, unread, scoped);
+    if (requires && unread.length > 0) throw unreadKindError(requires, unread, devices);
     const id = deviceEntryId(eligible[0]);
     if (id) return resolveDevice(id);
   }
@@ -404,13 +420,13 @@ export async function resolveFlowDevice(
     // Requirements are only to blame when something was booted for them to
     // rule out; an empty machine is the plain no-device case either way.
     if (requires && scoped.length > 0) {
-      if (unread.length > 0) throw unreadKindError(requires, unread, scoped);
+      if (unread.length > 0) throw unreadKindError(requires, unread, devices);
       throw requirementsUnmetError(
         (requires.composed
           ? `No booted device satisfies the requires this flow and its composed fragments ` +
             `together declare: `
           : `No booted device satisfies this flow's requires: `) +
-          `{ ${describeRequires(requires)} }. ${availableDevices(scoped, requires)}`
+          `{ ${describeRequires(requires)} }. ${availableDevices(devices, requires)}`
       );
     }
     const what = opts.platform
@@ -418,8 +434,14 @@ export async function resolveFlowDevice(
       : "No booted device found.";
     throw deviceResolutionError(`${what} Pass a device id or platform explicitly.`, devices);
   }
+  // `--platform` narrows nothing once every candidate already sits on one
+  // platform: filtering by that platform leaves the field untouched, so the
+  // rerun would throw this same message, and any other value empties it.
+  const flags = eligible.every((d) => d.platform === eligible[0].platform)
+    ? "--device"
+    : "--device or --platform";
   throw deviceResolutionError(
-    `${eligible.length} booted devices matched — pass --device or --platform to disambiguate.`,
+    `${eligible.length} booted devices matched — pass ${flags} to disambiguate.`,
     eligible
   );
 }
