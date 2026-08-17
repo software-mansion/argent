@@ -114,6 +114,20 @@ export interface ActionEnv {
    * Absent for a caller that builds an `ActionEnv` by hand, which simply leaves
    * every settle on its own budget.
    *
+   * `runSnapshot` is the third caller {@link fetchFlowTree} names as swallowing
+   * such an outage, and it deliberately does NOT read the memo: a capture taken
+   * unsettled is one taken mid-animation, and it lands as a pixel mismatch on a
+   * step whose report has no `warning` to carry the caveat, so being wrong
+   * there would cost a step rather than a settle. Snapshots pay the full price
+   * for that: on a source that fails by timing out, every snapshot step re-buys
+   * the whole settle, window and floor reads alike, two reads where the window
+   * alone ended on one. That price buys something back. The settle reads
+   * through {@link readFlowTree}, so a snapshot re-tests the verdict rather
+   * than trusting it, and in a flow of nothing but snapshots and coordinate
+   * gestures - where the gesture settle skips itself while one stands - it is,
+   * with a rotate's {@link fetchScreenAspect}, one of the two reads left that
+   * can retire a wrong one.
+   *
    * The write carries the device it was proven against: a verdict about a
    * device the run has left says nothing about the one it moved onto (a
    * chromium `launch` boots its own). Belt-and-braces today - the one mid-run
