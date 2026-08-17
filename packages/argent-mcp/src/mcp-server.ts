@@ -315,18 +315,25 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         // non-secure-entry field would hand the plaintext back to the model
         // as pixels. Tell the agent why there is no image instead.
         //
-        // "Submit first" needs the batching caveat, because the skip is decided
-        // PER TOOL CALL from that call's whole arguments. `keyboard` rejects
-        // `{ text, key }`, so submitting after typing a secret is a second call
-        // — and a bare `{ key: "enter" }` carries no placeholder, misses this
-        // branch, and re-arms the capture over a screen that may still show the
-        // plaintext. One `run-sequence` carrying both steps is the form that
-        // keeps the skip, since the scan reads the whole request.
+        // Every instruction here has to be safe to follow AFTER the typing,
+        // because that is the only moment this note appears: the branch needs a
+        // `{{secret:…}}` in the arguments, and any call carrying one has already
+        // typed the value. So the note forbids re-sending the typing step — a
+        // `run-sequence` rebuilt around it would resolve and type the secret a
+        // second time on top of the copy already in the field, and Enter would
+        // submit the doubled credential. The batching advice is kept, worded for
+        // the NEXT such request rather than as a remedy for this one.
+        //
+        // The skip is decided per tool call from that call's whole arguments, so
+        // a bare follow-up `{ key: "enter" }` carries no placeholder and is
+        // screenshotted as usual. Nothing here can extend the skip over it after
+        // the fact, so the note states that plainly instead of prescribing a
+        // form that would re-type.
         content = [
           ...content,
           {
             type: "text" as const,
-            text: "Auto-screenshot skipped: the input contains a {{secret:…}} placeholder, and a screenshot of this screen could reveal the typed secret. Submit or navigate away first, then verify the resulting screen as usual — but send the submit as a second `keyboard` step batched with the typing step into ONE `run-sequence`, because a bare follow-up call carries no placeholder and re-arms this screenshot over the still-visible secret.",
+            text: "Auto-screenshot skipped: the input contains a {{secret:…}} placeholder, and a screenshot of this screen could reveal the typed secret. The secret is already typed — do not send the typing step again, or the field will hold two copies of it. Submit or navigate away, then verify the resulting screen as usual. Only this call is covered: the next call is screenshotted normally, and captures the secret if the field is still on screen. To cover the submit as well, put the typing and the submit in ONE `run-sequence` the next time you type a secret.",
           },
         ];
       } else if (autoScreenshotOn && udid && shouldAutoScreenshot(params.name)) {
