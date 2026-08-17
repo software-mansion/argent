@@ -57,6 +57,23 @@ import {
   type ScrollDirection,
 } from "./flow-utils";
 
+/**
+ * The app an iOS tree read should describe, and how far the runner will vouch
+ * for it (see `queryFullHierarchyTree` for what each level buys).
+ */
+export interface FlowTreeTarget {
+  /** App id of the run's most recent successful `launch` step. */
+  bundleId: string;
+  /**
+   * Whether the runner still vouches that `bundleId` is what is on screen. A
+   * pinned read targets it directly, skipping the auto-resolve fan-out that
+   * probes every connected app. Unpinned, it is only a hint: auto-resolve
+   * decides the target, and `bundleId` breaks the tie solely when that
+   * resolution times out.
+   */
+  pinned: boolean;
+}
+
 /** Everything a directive needs to act on the run's device. */
 export interface ActionEnv {
   registry: Registry;
@@ -64,13 +81,15 @@ export interface ActionEnv {
   device: DeviceInfo;
   signal?: AbortSignal;
   /**
-   * App id of the run's most recent successful `launch` step; cleared by raw
-   * `tool:` steps (their effect on the foreground app is opaque) and by a
-   * launch attempt until it succeeds. Chromium launches hand off before the
-   * assignment, so chromium runs never set it. Only iOS tree reads consume it,
-   * pinning the app under test instead of auto-resolving (see `fetchFlowTree`).
+   * The app the run's most recent successful `launch` step started, and
+   * whether the runner still vouches for it being on screen. Demoted to an
+   * unpinned hint by a raw `tool:` step (its effect on the foreground is opaque
+   * to the runner), dropped outright by a `tool:` step that can change the
+   * foreground app and by a launch attempt until it succeeds. Chromium launches
+   * hand off before the assignment, so chromium runs never set it. Only iOS
+   * tree reads consume it (see `fetchFlowTree`).
    */
-  launchedAppId?: string;
+  treeTarget?: FlowTreeTarget;
   /**
    * Run-scoped memo of a tree source that answered nothing: set by a
    * {@link settleTree} that failed every read attempt, cleared by the next
@@ -454,7 +473,7 @@ function provenTreeOutage(env: ActionEnv): Error | undefined {
  * cleared it.
  */
 function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
-  return fetchFlowTree(env.registry, env.device, env.launchedAppId).then((data) => {
+  return fetchFlowTree(env.registry, env.device, env.treeTarget).then((data) => {
     if (env.treeOutage) env.treeOutage.proven = undefined;
     return data;
   });

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
 import type { DeviceInfo, Registry } from "@argent/registry";
 import type { NativeAppState, NativeDevtoolsApi } from "../../src/blueprints/native-devtools";
+import type { FlowTreeTarget } from "../../src/tools/flows/flow-actions";
 import { queryFullHierarchyTree } from "../../src/tools/flows/flow-ios-tree";
 
 // Simulator-wide injection means background system processes also connect,
@@ -9,6 +10,13 @@ import { queryFullHierarchyTree } from "../../src/tools/flows/flow-ios-tree";
 // getState over every connection, so one such sibling fails every read while
 // the app under test is healthy. A pinned read probes ONLY the pinned app
 // (to prove it is still frontmost), never a sibling.
+//
+// The second describe covers the other confidence level: an UNPINNED target
+// (what a foreground-neutral `tool:` step leaves behind). Auto-resolution
+// still decides, and the target is consulted solely as a TIMEOUT ARBITER -
+// only when the fan-out times out AND the target's connection is still up.
+// Every answered resolution, including the deliberate "single app but
+// backgrounded" error, wins over it, so no foreground guard is ever bypassed.
 
 const IOS_DEVICE = {
   id: "00000000-0000-0000-0000-0000000000ab",
@@ -17,6 +25,20 @@ const IOS_DEVICE = {
 
 const APP = "com.example.app";
 const POISONER = "com.apple.mobilecal";
+const OTHER = "com.example.other";
+
+const pin = (bundleId: string): FlowTreeTarget => ({ bundleId, pinned: true });
+const hint = (bundleId: string): FlowTreeTarget => ({ bundleId, pinned: false });
+
+/** What the wedged sibling's `Application.getState` really rejects with. */
+function rpcTimeout(): FailureError {
+  return new FailureError("ViewInspector RPC timed out: Application.getState", {
+    error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT,
+    failure_stage: "native_devtools_rpc_request",
+    failure_area: "tool_server",
+    error_kind: "timeout",
+  });
+}
 
 function appState(bundleId: string): NativeAppState {
   return {
@@ -70,7 +92,7 @@ function poisonedApi(
         throw probeFailures[id];
       }
       if (id === POISONER) {
-        throw new Error("ViewInspector RPC timed out: Application.getState");
+        throw rpcTimeout();
       }
       return states[id] ?? appState(id);
     },
@@ -101,7 +123,7 @@ function registryFor(api: NativeDevtoolsApi): Registry {
 describe("queryFullHierarchyTree - pinned target vs poisoned auto-resolve", () => {
   it("a pinned read probes only the pinned app - the poisoned sibling is never touched", async () => {
     const { api, probed, queried, repaired } = poisonedApi();
-    const { tree, source } = await queryFullHierarchyTree(registryFor(api), IOS_DEVICE, APP);
+    const { tree, source } = await queryFullHierarchyTree(registryFor(api), IOS_DEVICE, pin(APP));
     expect(source).toBe("native-devtools");
     expect(tree.children.length).toBeGreaterThan(0);
     // The frontmost check probes the pinned app itself and nothing else - a
@@ -128,7 +150,7 @@ describe("queryFullHierarchyTree - pinned target vs poisoned auto-resolve", () =
     const { api, probed, queried, repaired } = poisonedApi([APP, POISONER], {
       [APP]: backgrounded,
     });
-    const err: unknown = await queryFullHierarchyTree(registryFor(api), IOS_DEVICE, APP).then(
+    const err: unknown = await queryFullHierarchyTree(registryFor(api), IOS_DEVICE, pin(APP)).then(
       () => {
         throw new Error("expected the backgrounded-pin read to throw");
       },
@@ -152,19 +174,8 @@ describe("queryFullHierarchyTree - pinned target vs poisoned auto-resolve", () =
     // unanswerable probe is not an answer of "backgrounded", and the pin names
     // the app this run launched, so the read goes ahead instead of failing the
     // step.
-    const { api, probed, queried } = poisonedApi(
-      [APP, POISONER],
-      {},
-      {
-        [APP]: new FailureError("ViewInspector RPC timed out: Application.getState", {
-          error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT,
-          failure_stage: "native_devtools_rpc_request",
-          failure_area: "tool_server",
-          error_kind: "timeout",
-        }),
-      }
-    );
-    const { tree } = await queryFullHierarchyTree(registryFor(api), IOS_DEVICE, APP);
+    const { api, probed, queried } = poisonedApi([APP, POISONER], {}, { [APP]: rpcTimeout() });
+    const { tree } = await queryFullHierarchyTree(registryFor(api), IOS_DEVICE, pin(APP));
     expect(tree.children.length).toBeGreaterThan(0);
     expect(probed).toEqual([APP]);
     expect(queried).toEqual([APP]);
@@ -185,7 +196,9 @@ describe("queryFullHierarchyTree - pinned target vs poisoned auto-resolve", () =
         }),
       }
     );
-    await expect(queryFullHierarchyTree(registryFor(api), IOS_DEVICE, APP)).rejects.toThrow(/boom/);
+    await expect(queryFullHierarchyTree(registryFor(api), IOS_DEVICE, pin(APP))).rejects.toThrow(
+      /boom/
+    );
     expect(queried).toEqual([]);
   });
 
@@ -193,7 +206,7 @@ describe("queryFullHierarchyTree - pinned target vs poisoned auto-resolve", () =
     // The pin was connected at launch; the app then crashed / was killed and
     // its socket close removed it from the connection set.
     const { api, queried, repaired } = poisonedApi([POISONER]);
-    const err: unknown = await queryFullHierarchyTree(registryFor(api), IOS_DEVICE, APP).then(
+    const err: unknown = await queryFullHierarchyTree(registryFor(api), IOS_DEVICE, pin(APP)).then(
       () => {
         throw new Error("expected the dropped-pin read to throw");
       },
@@ -219,5 +232,83 @@ describe("queryFullHierarchyTree - pinned target vs poisoned auto-resolve", () =
       /RPC timed out/i
     );
     expect(probed).toContain(POISONER);
+  });
+});
+
+describe("queryFullHierarchyTree - an unpinned target arbitrates a timed-out fan-out", () => {
+  it("reads the hinted app when the fan-out times out and the hint is connected", async () => {
+    // The pin is gone (a `tool:` step ran), so the fan-out runs and the wedged
+    // sibling sinks it - but the launched app is still connected and no step
+    // since could have changed the foreground, so it decides the target.
+    const { api, probed, queried } = poisonedApi();
+    const { tree, source } = await queryFullHierarchyTree(registryFor(api), IOS_DEVICE, hint(APP));
+    expect(source).toBe("native-devtools");
+    expect(tree.children.length).toBeGreaterThan(0);
+    expect(probed).toContain(POISONER); // the fan-out really did run
+    expect(queried).toEqual([APP]);
+  });
+
+  it("rethrows the timeout when the hinted app is no longer connected", async () => {
+    // The hint names an app that has since dropped its connection; targeting
+    // it would query a process that cannot answer.
+    const { api, queried } = poisonedApi([POISONER, OTHER]);
+    await expect(queryFullHierarchyTree(registryFor(api), IOS_DEVICE, hint(APP))).rejects.toThrow(
+      /RPC timed out/i
+    );
+    expect(queried).toEqual([]);
+  });
+
+  it("does not use the hint to bypass an answered backgrounded-app guard", async () => {
+    // Resolution ANSWERS here (single connected app, backgrounded -> the
+    // deliberate error). The hint must not override a guard that fired.
+    const backgrounded: NativeAppState = {
+      ...appState(APP),
+      applicationState: "background",
+      foregroundActiveSceneCount: 0,
+      backgroundSceneCount: 1,
+      isFrontmostCandidate: false,
+    };
+    const { api, queried } = poisonedApi([APP], { [APP]: backgrounded });
+    await expect(queryFullHierarchyTree(registryFor(api), IOS_DEVICE, hint(APP))).rejects.toThrow(
+      /not foreground-like/
+    );
+    expect(queried).toEqual([]);
+  });
+
+  it("rethrows a non-timeout resolution failure even with a connected hint", async () => {
+    // Only a stall is arbitrated; anything the fan-out actually reports is a
+    // failure the read must not paper over.
+    const { api, queried } = poisonedApi(
+      [APP, POISONER],
+      {},
+      {
+        [POISONER]: new FailureError("boom", {
+          error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_ERROR,
+          failure_stage: "native_devtools_rpc_response",
+          failure_area: "tool_server",
+          error_kind: "subprocess",
+        }),
+      }
+    );
+    await expect(queryFullHierarchyTree(registryFor(api), IOS_DEVICE, hint(APP))).rejects.toThrow(
+      /boom/
+    );
+    expect(queried).toEqual([]);
+  });
+
+  it("prefers the resolved frontmost app over a stale hint when resolution answers", async () => {
+    // Two healthy apps, no wedged sibling: resolution answers with the
+    // frontmost one, and the hint - which a tool step may well have made stale
+    // - must not shadow it.
+    const backgroundedApp: NativeAppState = {
+      ...appState(APP),
+      applicationState: "background",
+      foregroundActiveSceneCount: 0,
+      backgroundSceneCount: 1,
+      isFrontmostCandidate: false,
+    };
+    const { api, queried } = poisonedApi([APP, OTHER], { [APP]: backgroundedApp });
+    await queryFullHierarchyTree(registryFor(api), IOS_DEVICE, hint(APP));
+    expect(queried).toEqual([OTHER]);
   });
 });

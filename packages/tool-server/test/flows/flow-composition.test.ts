@@ -90,6 +90,19 @@ function mockRegistry(props?: Record<string, unknown>): Registry {
     resolveService: vi.fn(async () => ({
       isConnected: () => true,
       listConnectedBundleIds: () => [],
+      // A system app serves no window to read, which is what the tree source
+      // refuses on: the read never degrades to an empty tree.
+      queryViewHierarchy: async () => ({ windows: [] }),
+      // A pinned read probes the launched app alone before reading it.
+      getAppState: async (bundleId: string) => ({
+        bundleId,
+        applicationState: "active",
+        foregroundActiveSceneCount: 1,
+        foregroundInactiveSceneCount: 0,
+        backgroundSceneCount: 0,
+        unattachedSceneCount: 0,
+        isFrontmostCandidate: true,
+      }),
     })),
   } as unknown as Registry;
 }
@@ -2734,10 +2747,14 @@ describe("flow composition (run:)", () => {
   // author is told to restart a tool-server with no mention that a selector
   // needed a hierarchy.
   it("says why the tree was being read, not just what is wrong with the app", async () => {
+    // Through the UNPINNED read: the `tool:` step demotes the launch's pin to a
+    // hint, which is where a launched id that no longer resolves is measured
+    // rather than reported as a connection this run watched drop.
     await writeFlow("main", {
       executionPrerequisite: "",
       steps: [
         { kind: "launch", app: "com.acme.app" },
+        { kind: "tool", name: "screenshot", args: {} },
         { kind: "assert", selector: { text: "General" }, condition: "visible" },
       ],
     });
@@ -2760,7 +2777,7 @@ describe("flow composition (run:)", () => {
       )
     );
 
-    const reason = result.steps[1].reason ?? "";
+    const reason = result.steps[2].reason ?? "";
     expect(reason).toMatch(/argent server stop && argent server start --detach/);
     expect(reason).toMatch(/Flows resolve selectors against the full view hierarchy/);
   });

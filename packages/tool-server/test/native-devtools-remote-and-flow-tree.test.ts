@@ -34,6 +34,10 @@ import type { DeviceInfo, Registry } from "@argent/registry";
 const UDID = "AAAAAAAA-1111-2222-3333-444444444444";
 const BUNDLE = "com.example.app";
 const DEVICE: DeviceInfo = { id: UDID, platform: "ios", kind: "simulator" };
+// The launched app as the runner hands it over once a raw `tool:` step has
+// spent the pin: auto-resolve decides, and the id is what a disconnection it
+// cannot describe is explained for.
+const UNPINNED = { bundleId: BUNDLE, pinned: false };
 
 describe("remoteIosHost.inspectRunningApp", () => {
   it("reports running-ness from the orchestrator and leaves the process unknown", async () => {
@@ -95,10 +99,10 @@ describe("queryFullHierarchyTree surfaces the measured diagnosis", () => {
     // here sends them round a loop the app cannot exit.
     const registry = registryWith([]);
 
-    await expect(queryFullHierarchyTree(registry, DEVICE, BUNDLE)).rejects.toThrow(
+    await expect(queryFullHierarchyTree(registry, DEVICE, UNPINNED)).rejects.toThrow(
       /argent server stop && argent server start --detach/
     );
-    await expect(queryFullHierarchyTree(registry, DEVICE, BUNDLE)).rejects.not.toThrow(
+    await expect(queryFullHierarchyTree(registry, DEVICE, UNPINNED)).rejects.not.toThrow(
       /relaunch it/
     );
   });
@@ -133,7 +137,7 @@ describe("queryFullHierarchyTree surfaces the measured diagnosis", () => {
       }),
     } as unknown as Partial<NativeDevtoolsApi>);
 
-    await queryFullHierarchyTree(registry, DEVICE, BUNDLE);
+    await queryFullHierarchyTree(registry, DEVICE, UNPINNED);
 
     expect(appConnectionState).not.toHaveBeenCalled();
   });
@@ -149,10 +153,10 @@ describe("queryFullHierarchyTree surfaces the measured diagnosis", () => {
       },
     });
 
-    await expect(queryFullHierarchyTree(registry, DEVICE, BUNDLE)).rejects.toThrow(
+    await expect(queryFullHierarchyTree(registry, DEVICE, UNPINNED)).rejects.toThrow(
       /could not be inspected/
     );
-    await expect(queryFullHierarchyTree(registry, DEVICE, BUNDLE)).rejects.not.toThrow(
+    await expect(queryFullHierarchyTree(registry, DEVICE, UNPINNED)).rejects.not.toThrow(
       /Command failed/
     );
   });
@@ -166,15 +170,15 @@ describe("queryFullHierarchyTree surfaces the measured diagnosis", () => {
   it("says the connection arrived mid-read when the measurement finds it connected", async () => {
     const registry = registryWith([], { appConnectionState: async () => "connected" });
 
-    await expect(queryFullHierarchyTree(registry, DEVICE, BUNDLE)).rejects.toThrow(
+    await expect(queryFullHierarchyTree(registry, DEVICE, UNPINNED)).rejects.toThrow(
       /connection arrived mid-read/
     );
     // It must still name the app and an action; the measured states' remedies
     // do not apply, because nothing is wrong with the app.
-    await expect(queryFullHierarchyTree(registry, DEVICE, BUNDLE)).rejects.toThrow(
+    await expect(queryFullHierarchyTree(registry, DEVICE, UNPINNED)).rejects.toThrow(
       new RegExp(`${BUNDLE}[\\s\\S]*Retry`)
     );
-    await expect(queryFullHierarchyTree(registry, DEVICE, BUNDLE)).rejects.not.toThrow(
+    await expect(queryFullHierarchyTree(registry, DEVICE, UNPINNED)).rejects.not.toThrow(
       /argent server stop|restart-app/
     );
   });
@@ -186,14 +190,14 @@ describe("queryFullHierarchyTree surfaces the measured diagnosis", () => {
     // state's remedy is a retry of something.
     const registry = registryWith([]);
 
-    await expect(queryFullHierarchyTree(registry, DEVICE, "com.apple.Preferences")).rejects.toThrow(
+    await expect(queryFullHierarchyTree(registry, DEVICE, { bundleId: "com.apple.Preferences", pinned: false })).rejects.toThrow(
       /Apple system app/
     );
     await expect(
-      queryFullHierarchyTree(registry, DEVICE, "com.apple.Preferences")
+      queryFullHierarchyTree(registry, DEVICE, { bundleId: "com.apple.Preferences", pinned: false })
     ).rejects.not.toThrow(/argent server stop|restart-app/);
     // The remedy has to name a step form that exists AND reads no tree.
-    await expect(queryFullHierarchyTree(registry, DEVICE, "com.apple.Preferences")).rejects.toThrow(
+    await expect(queryFullHierarchyTree(registry, DEVICE, { bundleId: "com.apple.Preferences", pinned: false })).rejects.toThrow(
       /tap: \{ x: [\d.]+, y: [\d.]+ \}/
     );
   });
