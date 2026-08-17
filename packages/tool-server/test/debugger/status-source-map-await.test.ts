@@ -1,6 +1,15 @@
-import { describe, it, expect } from "vitest";
-import { debuggerStatusTool } from "../../src/tools/debugger/debugger-status";
+import { describe, it, expect, vi } from "vitest";
+import type { Registry } from "@argent/registry";
 import type { JsRuntimeDebuggerApi } from "../../src/blueprints/js-runtime-debugger";
+import { createDebuggerStatusTool } from "../../src/tools/debugger/debugger-status";
+
+// The tool resolves its api through the registry, so the fake is handed over
+// there rather than injected as a service.
+const resolved = vi.hoisted(() => ({ api: undefined as JsRuntimeDebuggerApi | undefined }));
+vi.mock("../../src/tools/debugger/not-connected", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/tools/debugger/not-connected")>()),
+  resolveDebuggerService: () => Promise.resolve(resolved.api),
+}));
 
 /**
  * `debugger-status` promises in its own description that `sourceMapReady` is
@@ -46,13 +55,25 @@ function fakeApi(waitForPending: () => Promise<void>): JsRuntimeDebuggerApi {
 
 const PARAMS = { port: 8081, device_id: "mock-device" };
 
+type StatusResult = Awaited<ReturnType<typeof statusTool.execute>>;
+
+function assertConnected(
+  result: StatusResult
+): asserts result is Extract<StatusResult, { status: "connected" }> {
+  expect(result.status).toBe("connected");
+}
+
+// Only the stale-connection branch reaches the registry, and `isConnected` is
+// true throughout, so no member of it is ever read here.
+const statusTool = createDebuggerStatusTool({} as Registry);
+
 describe("debugger-status waits for pending source maps", () => {
   it("does not resolve until the pending source-map registration settles", async () => {
     const pending = deferred();
-    const api = fakeApi(() => pending.promise);
+    resolved.api = fakeApi(() => pending.promise);
 
     let returned = false;
-    const call = debuggerStatusTool.execute({ debugger: api }, PARAMS).then((r) => {
+    const call = statusTool.execute({}, PARAMS, undefined).then((r) => {
       returned = true;
       return r;
     });
@@ -70,20 +91,22 @@ describe("debugger-status waits for pending source maps", () => {
 
     expect(pending.settled).toBe(true);
     expect(returned).toBe(true);
+    assertConnected(result);
     expect(result.sourceMapReady).toBe(true);
   });
 
   it("reports sourceMapReady only after the wait, so the flag is never ahead of the registry", async () => {
     const order: string[] = [];
-    const api = fakeApi(async () => {
+    resolved.api = fakeApi(async () => {
       await new Promise((r) => setTimeout(r, 20));
       order.push("maps-settled");
     });
 
-    const result = await debuggerStatusTool.execute({ debugger: api }, PARAMS);
+    const result = await statusTool.execute({}, PARAMS, undefined);
     order.push("status-returned");
 
     expect(order).toEqual(["maps-settled", "status-returned"]);
+    assertConnected(result);
     expect(result.sourceMapReady).toBe(true);
   });
 });
