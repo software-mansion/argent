@@ -53,9 +53,9 @@ requires:
 
 **No block means the flow runs anywhere**, so every existing flow is unaffected. Requirements also narrow device auto-detection: an ios-only flow picks the booted simulator instead of failing as ambiguous when an emulator is up beside it.
 
-On a target that does not satisfy them, `argent flow run <dir>` **skips** the flow — that is the point, one command over a mixed suite. Running that flow on its own is an **error**, and so is a `run:` fragment the run device cannot satisfy: a composed fragment silently not running would leave a green report for a scenario that only half happened. Use `when:` when you mean "optionally".
+On a target that does not satisfy them, `argent flow run <dir>` **skips** the flow — that is the point, one command over a mixed suite. Running that flow on its own is an **error**, and so is a `run:` fragment the run device cannot satisfy once execution reaches it: a composed fragment silently not running would leave a green report for a scenario that only half happened. A fragment the leading `run:` chain enters before the first executable step is judged earlier: it is certain to run, so its block folds into the run's effective block and refuses the whole root flow at setup — a skip in a directory run, an error on its own. Use `when:` when you mean "optionally".
 
-Combinations nothing could satisfy are rejected at parse: `runtimeKind: tv` with `platform: [chromium]`, or a `launch` step that always runs declaring no app id for a platform `requires.platform` claims. A `launch` inside a `when: { platform: … }` guard is judged against that guard's platform only; one inside any other `when:` guard may never be reached, so it is not judged at all.
+Combinations nothing could satisfy are rejected at parse: `runtimeKind: tv` with `platform: [chromium]`, or a `launch` step that always runs declaring no app id for a platform `requires.platform` claims. A `launch` inside a `when: { platform: … }` guard is judged against that guard's platform only; one inside any other `when:` guard may never be reached, so it is not judged at all. Setup judges launch coverage a second time across the leading chain, against the folded block, so factoring a launch into a fragment does not escape the rule: a composition no target could run **fails** (`FLOW_REQUIRES_UNSATISFIABLE`) instead of being skipped.
 
 ## Selectors
 
