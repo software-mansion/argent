@@ -68,6 +68,13 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     description: "Write structured tool-server lifecycle events to a JSONL file.",
   },
   {
+    name: "boot-sound",
+    description:
+      "Default boot-device's `sound` argument to true so Android emulators boot with audio " +
+      "output instead of muted. Only the argument's default changes — an explicit " +
+      "`sound: false` on a call still boots muted.",
+  },
+  {
     name: "video-watermark",
     description:
       "Overlay the argent corner watermark on recorded screen videos. On by default; turn it off with `argent disable video-watermark`.",

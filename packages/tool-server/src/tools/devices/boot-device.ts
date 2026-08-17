@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
+import { isFlagEnabled } from "@argent/configuration-core";
 import {
   FAILURE_CODES,
   FailureError,
@@ -89,6 +90,12 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe("Shut down and re-boot the device even if already running."),
+  sound: z
+    .boolean()
+    .optional()
+    .describe(
+      "Android only: boot the emulator with audio output enabled. Defaults to false — argent boots emulators MUTED so several agent-driven devices don't all play sound on the host machine; pass `true` when the task involves playing, hearing, or testing audio. Takes effect at boot: if the emulator is already running muted, add `force: true` to reboot it with sound. A boot snapshot saved in the other audio mode can't be reused, so the first boot after toggling is a slower cold boot. The `boot-sound` argent flag flips this default to true. Ignored on iOS/Vega/Electron, which argent never mutes."
+    ),
   headless: z
     .boolean()
     .optional()
@@ -132,7 +139,8 @@ function bootTarget(params: BootDeviceParams): string {
   return params.udid ?? params.avdName ?? params.vvdImage ?? params.electronAppPath ?? "device";
 }
 
-// Flags every boot-device launch should always pass. Two purposes:
+// Flags every boot-device launch should always pass (`-noaudio` unless the
+// caller opts into sound — see launchHardeningArgs below). Two purposes:
 //
 //   - Performance: `-noaudio` skips guest pulseaudio init (one thread, ~50 MB
 //     RSS); `-no-boot-anim` skips the Pixel boot animation, which is a major
@@ -158,13 +166,22 @@ function bootTarget(params: BootDeviceParams): string {
 // boot, and cold boot — a mismatch would silently invalidate the snapshot
 // the previous cold boot saved.
 const LAUNCH_HARDENING_ARGS = [
-  "-noaudio",
   "-no-boot-anim",
   "-netfast",
   "-crash-report-mode",
   "never",
   "-no-metrics",
 ] as const;
+
+// `-noaudio` is opt-out rather than unconditional: the tool's `sound` argument
+// (defaulted by the `boot-sound` flag) drops it so audio-testing sessions can
+// hear the emulator. `sound` is fixed for the lifetime of one bootAndroid call,
+// so probe / hot boot / cold boot still share one argv and the snapshot-parity
+// invariant above holds; a snapshot saved in the other audio mode simply fails
+// the loadability probe and falls through to a cold boot that re-saves it.
+function launchHardeningArgs(sound: boolean): string[] {
+  return sound ? [...LAUNCH_HARDENING_ARGS] : ["-noaudio", ...LAUNCH_HARDENING_ARGS];
+}
 
 // Each stage has its own sub-budget so a hang in one stage cannot consume the
 // entire overall budget and a bootTimeoutMs bump doesn't quietly mask a regression.
@@ -959,6 +976,7 @@ async function bootAndroid(params: {
   avdName: string;
   bootTimeoutMs: number;
   force?: boolean;
+  sound: boolean;
 }): Promise<{
   platform: "android";
   serial: string;
@@ -978,6 +996,7 @@ async function bootAndroidImpl(params: {
   avdName: string;
   bootTimeoutMs: number;
   force?: boolean;
+  sound: boolean;
 }): Promise<{
   platform: "android";
   serial: string;
@@ -996,6 +1015,7 @@ async function bootAndroidImpl(params: {
   // "emulator has been terminated" suffix.
   const gpuMode = selectGpuMode();
   const extraEmulatorArgs = selectExtraEmulatorArgs();
+  const hardeningArgs = launchHardeningArgs(params.sound);
 
   for (const msg of linuxBootDiagnostics(params.avdName) ?? []) {
     console.warn(`[boot-device:linux] ${msg}`);
@@ -1128,7 +1148,7 @@ async function bootAndroidImpl(params: {
     // come from `selectGpuMode` / `selectExtraEmulatorArgs` (resolved upfront).
     const RENDERER_ARGS = ["-gpu", gpuMode, ...extraEmulatorArgs];
     const probe = await checkSnapshotLoadable(params.avdName, "default_boot", {
-      extraArgs: [...RENDERER_ARGS, ...LAUNCH_HARDENING_ARGS],
+      extraArgs: [...RENDERER_ARGS, ...hardeningArgs],
     });
     if (!probe.loadable) {
       hotBootFailureReason = `-check-snapshot-loadable: ${probe.reason ?? "unknown"}`;
@@ -1145,7 +1165,7 @@ async function bootAndroidImpl(params: {
         "-force-snapshot-load",
         "-no-snapshot-save",
         ...RENDERER_ARGS,
-        ...LAUNCH_HARDENING_ARGS,
+        ...hardeningArgs,
         ...crashReportArgs,
       ];
       const hotAttemptDeadline = Math.min(overallDeadline, Date.now() + HOT_BOOT_BUDGET_MS);
@@ -1192,7 +1212,7 @@ async function bootAndroidImpl(params: {
   // Cold boot fallback (either no usable snapshot, or hot-boot attempt failed).
   // Renderer args mirror the hot-boot path so the snapshot this cold boot
   // saves matches the renderer the next launch's probe will resolve.
-  // LAUNCH_HARDENING_ARGS likewise — `-noaudio` and `-netfast` change device
+  // hardeningArgs likewise — `-noaudio` and `-netfast` change device
   // topology, so a mismatch between cold-save and hot-load would invalidate
   // the saved snapshot.
   const coldArgs = [
@@ -1202,7 +1222,7 @@ async function bootAndroidImpl(params: {
     "-gpu",
     gpuMode,
     ...extraEmulatorArgs,
-    ...LAUNCH_HARDENING_ARGS,
+    ...hardeningArgs,
     ...crashReportArgs,
   ];
   let coldResult: { serial: string };
@@ -1476,6 +1496,10 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; the 
           avdName: params.avdName!,
           bootTimeoutMs: params.bootTimeoutMs ?? 480_000,
           force: params.force,
+          // An explicit argument always wins; the `boot-sound` flag only moves
+          // the default when the caller left `sound` unset. Read live per call
+          // so `argent enable/disable boot-sound` applies without a restart.
+          sound: params.sound ?? isFlagEnabled("boot-sound"),
         });
       }
       if (hasVega) {
