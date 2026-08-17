@@ -75,8 +75,11 @@ const capability: ToolCapability = {
  * tvOS screenshot path. The simulator-server backend does not support tvOS, so
  * capture via `xcrun simctl io <udid> screenshot` instead and (optionally)
  * downscale with `sips` to match the iOS/Android scale behaviour.
+ *
+ * Exported for the flow settle, which captures for motion detection rather than
+ * for an artifact and so cannot go through the tool wrapper above.
  */
-async function tvScreenshot(
+export async function tvScreenshot(
   udid: string,
   scale: number,
   signal: AbortSignal | undefined

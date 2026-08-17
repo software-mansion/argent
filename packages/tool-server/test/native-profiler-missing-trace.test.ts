@@ -59,6 +59,7 @@ describe("native-profiler-analyze: missing trace file", () => {
         captureProcess: null,
         traceFile,
         exportedFiles: { cpu: cpuPath, hangs: hangsPath, leaks: leaksPath },
+        disposed: false,
         profilingActive: false,
         wallClockStartMs: null,
         parsedData: null,

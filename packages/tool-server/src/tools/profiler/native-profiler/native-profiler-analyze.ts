@@ -11,11 +11,12 @@ import type { NativeProfilerAnalyzeResult } from "../../../utils/ios-profiler/ty
 import { analyzeNativeProfilerIos } from "./platforms/ios";
 import { analyzeNativeProfilerAndroid } from "./platforms/android";
 import { requireArtifacts, type ArtifactHandle } from "../../../artifacts";
+import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
 const zodSchema = z.object({
-  device_id: z
-    .string()
-    .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+  device_id: metroDeviceIdParam(
+    "Target device id from `list-devices` (iOS UDID or Android serial)."
+  ),
 });
 
 const capability = {

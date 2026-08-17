@@ -1,25 +1,35 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import * as fs from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import {
+  countStepsOnDisk,
   serializeFlow,
   parseFlow,
   describeSelector,
-  setActiveFlow,
-  getActiveFlow,
-  getActiveFlowOrNull,
-  clearActiveFlow,
-  setActiveProjectRoot,
-  clearActiveProjectRoot,
+  assertValidProjectRoot,
+  startRecordingSession,
+  getRecordingSession,
+  requireRecordingSession,
+  clearRecordingSession,
+  listActiveRecordings,
+  __resetRecordingsForTesting,
+  MAX_RECORDINGS,
   getFlowPath,
   appIdForPlatform,
   chromiumLaunchSpec,
+  writeNewFlowFile,
+  blockSteps,
+  BLOCK_DIRECTIVE_KEYS,
   type FlowFile,
 } from "../../src/tools/flows/flow-utils";
 
 // ── serializeFlow ────────────────────────────────────────────────────
 
 describe("serializeFlow", () => {
-  it("serializes an empty flow with prerequisite", () => {
+  it("serializes an empty flow with prerequisite", async () => {
     const flow: FlowFile = {
       executionPrerequisite: "App on home screen",
       steps: [],
@@ -29,7 +39,7 @@ describe("serializeFlow", () => {
     expect(result).toContain("steps: []");
   });
 
-  it("serializes echo steps", () => {
+  it("serializes echo steps", async () => {
     const flow: FlowFile = {
       executionPrerequisite: "Fresh reload",
       steps: [{ kind: "echo", message: "Hello" }],
@@ -38,7 +48,7 @@ describe("serializeFlow", () => {
     expect(result).toContain("- echo: Hello");
   });
 
-  it("serializes tool steps with args", () => {
+  it("serializes tool steps with args", async () => {
     const flow: FlowFile = {
       executionPrerequisite: "",
       steps: [{ kind: "tool", name: "tap", args: { x: 0.5, y: 0.3 } }],
@@ -49,7 +59,7 @@ describe("serializeFlow", () => {
     expect(result).toContain("    y: 0.3");
   });
 
-  it("serializes tool steps with empty args (omits args key)", () => {
+  it("serializes tool steps with empty args (omits args key)", async () => {
     const flow: FlowFile = {
       executionPrerequisite: "",
       steps: [{ kind: "tool", name: "screenshot", args: {} }],
@@ -59,7 +69,7 @@ describe("serializeFlow", () => {
     expect(result).not.toContain("args:");
   });
 
-  it("rejects gesture targets that cannot round-trip through the parser", () => {
+  it("rejects gesture targets that cannot round-trip through the parser", async () => {
     const serializeStep = (step: FlowFile["steps"][number]) =>
       serializeFlow({ executionPrerequisite: "", steps: [step] });
 
@@ -79,19 +89,19 @@ describe("serializeFlow", () => {
 // ── describeSelector ─────────────────────────────────────────────────
 
 describe("describeSelector", () => {
-  it("spells identifier as id, the flow-YAML spelling", () => {
+  it("spells identifier as id, the flow-YAML spelling", async () => {
     expect(describeSelector({ identifier: "submit" })).toBe('id="submit"');
   });
 
-  it("renders a text selector", () => {
+  it("renders a text selector", async () => {
     expect(describeSelector({ text: "Login" })).toBe('text="Login"');
   });
 
-  it("drops the internal loose flag", () => {
+  it("drops the internal loose flag", async () => {
     expect(describeSelector({ text: "Login", loose: true })).toBe('text="Login"');
   });
 
-  it("joins multiple keys with spaces", () => {
+  it("joins multiple keys with spaces", async () => {
     expect(describeSelector({ text: "Login", role: "button" })).toBe('text="Login" role="button"');
   });
 });
@@ -99,27 +109,27 @@ describe("describeSelector", () => {
 // ── parseFlow ────────────────────────────────────────────────────────
 
 describe("parseFlow", () => {
-  it("parses a flow with executionPrerequisite and echo steps", () => {
+  it("parses a flow with executionPrerequisite and echo steps", async () => {
     const content = "executionPrerequisite: App on home screen\nsteps:\n  - echo: Hello\n";
     const flow = parseFlow(content);
     expect(flow.executionPrerequisite).toBe("App on home screen");
     expect(flow.steps).toEqual([{ kind: "echo", message: "Hello" }]);
   });
 
-  it("parses tool entries with args", () => {
+  it("parses tool entries with args", async () => {
     const content =
       'executionPrerequisite: ""\nsteps:\n  - tool: tap\n    args:\n      x: 0.5\n      y: 0.3\n';
     const flow = parseFlow(content);
     expect(flow.steps).toEqual([{ kind: "tool", name: "tap", args: { x: 0.5, y: 0.3 } }]);
   });
 
-  it("parses tool entries with no args", () => {
+  it("parses tool entries with no args", async () => {
     const content = 'executionPrerequisite: ""\nsteps:\n  - tool: screenshot\n';
     const flow = parseFlow(content);
     expect(flow.steps).toEqual([{ kind: "tool", name: "screenshot", args: {} }]);
   });
 
-  it("parses a multi-step flow", () => {
+  it("parses a multi-step flow", async () => {
     const content = [
       "executionPrerequisite: Settings open",
       "steps:",
@@ -143,57 +153,124 @@ describe("parseFlow", () => {
     ]);
   });
 
-  it("returns empty steps for empty content", () => {
+  it("returns empty steps for empty content", async () => {
     const flow = parseFlow("");
     expect(flow.executionPrerequisite).toBe("");
     expect(flow.steps).toEqual([]);
   });
 
-  it("defaults executionPrerequisite to empty string when missing", () => {
+  it("defaults executionPrerequisite to empty string when missing", async () => {
     const content = "steps:\n  - echo: Hello\n";
     const flow = parseFlow(content);
     expect(flow.executionPrerequisite).toBe("");
     expect(flow.steps).toEqual([{ kind: "echo", message: "Hello" }]);
   });
 
-  it("throws on unrecognized entries", () => {
+  it("throws on unrecognized entries", async () => {
     const content = 'executionPrerequisite: ""\nsteps:\n  - bogus: line\n';
     expect(() => parseFlow(content)).toThrow("Unrecognized flow entry");
   });
 
-  it("throws when content is not an object with steps", () => {
+  it("renders a small unrecognized entry in full", async () => {
+    // The common authoring error: a short mistyped step. The echo cap must
+    // leave it untouched — seeing the whole entry is what makes it fixable.
+    const content = 'executionPrerequisite: ""\nsteps:\n  - bogus: line\n';
+    expect(() => parseFlow(content)).toThrow(': {"bogus":"line"}');
+  });
+
+  it("caps the echoed entry so an oversized value cannot ride the diagnostic", async () => {
+    // A mistyped run: path can point parseFlow at any in-project YAML file,
+    // and this message flows verbatim to stdout and into agent context — so
+    // the render must be bounded, and the tail of the value must not appear.
+    const content = `steps:\n  - db_password: "hunter2-${"x".repeat(5000)}-SECRET-TAIL"\n`;
+    let message = "";
+    try {
+      parseFlow(content);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("Unrecognized flow entry");
+    expect(message).toContain("…(+");
+    expect(message).not.toContain("SECRET-TAIL");
+    expect(message.length).toBeLessThan(400);
+  });
+
+  it("throws when content is not an object with steps", async () => {
     expect(() => parseFlow("- echo: Hello\n")).toThrow("expected an object with a steps array");
   });
 
-  it("throws a validation error (not a TypeError) on a primitive step entry", () => {
-    const content = 'executionPrerequisite: ""\nsteps:\n  - tap\n';
-    expect(() => parseFlow(content)).toThrow("Unrecognized flow entry");
+  it("classifies a YAML syntax error as a validation failure with the parser's detail", async () => {
+    let thrown: unknown;
+    try {
+      parseFlow("steps: ][\n");
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    const signal = getFailureSignal(thrown);
+    expect(signal?.error_kind).toBe("validation");
+    expect(signal?.error_code).toBe(FAILURE_CODES.FLOW_FILE_INVALID);
+    // The yaml library's line/column detail must survive so the user can
+    // locate the syntax error.
+    expect((thrown as Error).message).toContain("Invalid flow file:");
+    expect((thrown as Error).message).toContain("line 1");
   });
 
-  it("throws a validation error on a null step entry", () => {
-    const content = 'executionPrerequisite: ""\nsteps:\n  - ~\n';
-    expect(() => parseFlow(content)).toThrow("Unrecognized flow entry");
+  // `step must be an object` is spelled twice — here for a top-level entry, and
+  // in parseBlockSteps for a block directive's own steps: list. Nothing else
+  // asserts either copy, so the two are free to drift apart or be dropped with
+  // nothing noticing; the pair below pins each site independently.
+  const entryRejectionMessage = (content: string): string => {
+    try {
+      parseFlow(content);
+    } catch (err) {
+      // A raw TypeError would carry no signal — this is what makes it structured.
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED);
+      return err instanceof Error ? err.message : String(err);
+    }
+    throw new Error("expected the entry to be rejected");
+  };
+
+  it.each([
+    ["a bare string", 'executionPrerequisite: ""\nsteps:\n  - tap\n'],
+    ["a primitive", 'executionPrerequisite: ""\nsteps:\n  - 42\n'],
+    ["a null", 'executionPrerequisite: ""\nsteps:\n  - ~\n'],
+  ])("names the step shape when %s sits in the top-level steps list", (_shape, content) => {
+    expect(entryRejectionMessage(content)).toContain(
+      "Unrecognized flow entry (step must be an object)"
+    );
   });
 
-  it("sugars a bare-string selector into a loose { text } for tap", () => {
+  it.each([
+    ["a primitive", "steps:\n  - when: { visible: Cart }\n    steps: [42]\n"],
+    ["a null", "steps:\n  - when: { visible: Cart }\n    steps: [~]\n"],
+  ])("names the step shape when %s sits in a block's steps list", (_shape, content) => {
+    // `when:` is only the vehicle — it is today's sole block directive, and the
+    // guard it reaches is parseBlockSteps', shared by every block directive.
+    expect(entryRejectionMessage(content)).toContain(
+      "Unrecognized flow entry (step must be an object)"
+    );
+  });
+
+  it("sugars a bare-string selector into a loose { text } for tap", async () => {
     const flow = parseFlow("steps:\n  - tap: Settings\n");
     // Bare string ⇒ loose: resolves identifier-first, then falls back to text.
     expect(flow.steps).toEqual([{ kind: "tap", selector: { text: "Settings", loose: true } }]);
   });
 
-  it("sugars a bare-string selector for type.into", () => {
+  it("sugars a bare-string selector for type.into", async () => {
     const flow = parseFlow('steps:\n  - type: { into: email, text: "a@b.com" }\n');
     expect(flow.steps).toEqual([
       { kind: "type", into: { text: "email", loose: true }, text: "a@b.com" },
     ]);
   });
 
-  it("defaults type.submit to on (no submit key in the parsed model)", () => {
+  it("defaults type.submit to on (no submit key in the parsed model)", async () => {
     const flow = parseFlow('steps:\n  - type: { into: email, text: "a@b.com" }\n');
     expect(flow.steps[0]).not.toHaveProperty("submit");
   });
 
-  it("parses and round-trips an explicit type.submit: false opt-out", () => {
+  it("parses and round-trips an explicit type.submit: false opt-out", async () => {
     const flow = parseFlow('steps:\n  - type: { into: email, text: "a@b.com", submit: false }\n');
     expect(flow.steps).toEqual([
       { kind: "type", into: { text: "email", loose: true }, text: "a@b.com", submit: false },
@@ -202,11 +279,11 @@ describe("parseFlow", () => {
     expect(parseFlow(serializeFlow(flow)).steps).toEqual(flow.steps);
   });
 
-  it("rejects a non-boolean type.submit", () => {
+  it("rejects a non-boolean type.submit", async () => {
     expect(() => parseFlow('steps:\n  - type: { into: email, text: "x", submit: 3 }\n')).toThrow();
   });
 
-  it("keeps an explicit { text } map strict (no loose fallback)", () => {
+  it("keeps an explicit { text } map strict (no loose fallback)", async () => {
     const flow = parseFlow("steps:\n  - tap: { text: Settings }\n");
     expect(flow.steps).toEqual([{ kind: "tap", selector: { text: "Settings" } }]);
   });
@@ -232,7 +309,7 @@ describe("parseFlow", () => {
     expect(parseFlow(yaml).steps).toEqual([expected]);
   });
 
-  it("accepts a regex selector combined with id and role", () => {
+  it("accepts a regex selector combined with id and role", async () => {
     expect(
       parseFlow(
         "steps:\n  - tap: { text: { matches: '^Order #\\d+$' }, id: order-row, role: button }\n"
@@ -293,23 +370,23 @@ describe("parseFlow", () => {
     expect(() => parseFlow(yaml)).toThrow(`${where} \`matches\` is not a valid regular expression`);
   });
 
-  it("parses the map form's `id` as the internal identifier field (strict)", () => {
+  it("parses the map form's `id` as the internal identifier field (strict)", async () => {
     const flow = parseFlow("steps:\n  - tap: { id: submit-btn }\n");
     expect(flow.steps).toEqual([{ kind: "tap", selector: { identifier: "submit-btn" } }]);
   });
 
-  it("accepts `identifier` as a parse-only alias for `id`", () => {
+  it("accepts `identifier` as a parse-only alias for `id`", async () => {
     const flow = parseFlow("steps:\n  - tap: { identifier: submit-btn }\n");
     expect(flow.steps).toEqual([{ kind: "tap", selector: { identifier: "submit-btn" } }]);
   });
 
-  it("rejects a selector map carrying both `id` and `identifier`", () => {
+  it("rejects a selector map carrying both `id` and `identifier`", async () => {
     expect(() => parseFlow("steps:\n  - tap: { id: a, identifier: b }\n")).toThrow(
       /`id` or `identifier`.*not both/
     );
   });
 
-  it("re-serializes an identifier-spelled flow with the `id` spelling", () => {
+  it("re-serializes an identifier-spelled flow with the `id` spelling", async () => {
     // Old files parse via the alias; the next write (appendStep re-serializes
     // the whole file) migrates them to the canonical `id` spelling.
     const yaml = serializeFlow(parseFlow("steps:\n  - tap: { identifier: submit-btn }\n"));
@@ -317,7 +394,7 @@ describe("parseFlow", () => {
     expect(yaml).not.toContain("identifier:");
   });
 
-  it("parses condition-as-key await/assert sugar (visible/exists/hidden)", () => {
+  it("parses condition-as-key await/assert sugar (visible/exists/hidden)", async () => {
     const flow = parseFlow(
       [
         "steps:",
@@ -333,7 +410,7 @@ describe("parseFlow", () => {
     ]);
   });
 
-  it("parses the text sugar { in, contains } as a substring match", () => {
+  it("parses the text sugar { in, contains } as a substring match", async () => {
     const flow = parseFlow(
       'steps:\n  - assert: { text: { in: { id: counter }, contains: "Taps: 0" } }\n'
     );
@@ -348,7 +425,7 @@ describe("parseFlow", () => {
     ]);
   });
 
-  it("parses the text sugar { in, equals } as an exact match", () => {
+  it("parses the text sugar { in, equals } as an exact match", async () => {
     const flow = parseFlow(
       'steps:\n  - assert: { text: { in: { id: counter }, equals: "Taps: 0" } }\n'
     );
@@ -363,13 +440,13 @@ describe("parseFlow", () => {
     ]);
   });
 
-  it("rejects text sugar with both contains and equals", () => {
+  it("rejects text sugar with both contains and equals", async () => {
     expect(() =>
       parseFlow("steps:\n  - assert: { text: { in: counter, contains: a, equals: b } }\n")
     ).toThrow(/exactly one of `contains`, `equals`, or `matches`/);
   });
 
-  it("rejects the explicit { condition, selector, expectedText } form (sugar only)", () => {
+  it("rejects the explicit { condition, selector, expectedText } form (sugar only)", async () => {
     expect(() =>
       parseFlow(
         [
@@ -383,25 +460,25 @@ describe("parseFlow", () => {
     ).toThrow(/exactly one condition key/);
   });
 
-  it("rejects an await/assert body with no condition key", () => {
+  it("rejects an await/assert body with no condition key", async () => {
     expect(() => parseFlow("steps:\n  - assert: { selector: foo }\n")).toThrow(
       /exactly one condition key/
     );
   });
 
-  it("rejects text sugar with neither contains nor equals", () => {
+  it("rejects text sugar with neither contains nor equals", async () => {
     expect(() => parseFlow("steps:\n  - assert: { text: { in: counter } }\n")).toThrow(
       /exactly one of `contains`, `equals`, or `matches`/
     );
   });
 
-  it("rejects text sugar with an empty contains", () => {
+  it("rejects text sugar with an empty contains", async () => {
     expect(() =>
       parseFlow('steps:\n  - assert: { text: { in: counter, contains: "" } }\n')
     ).toThrow(/non-empty `contains`/);
   });
 
-  it("serializes await/assert with the condition-as-key sugar (no condition: field)", () => {
+  it("serializes await/assert with the condition-as-key sugar (no condition: field)", async () => {
     const yaml = serializeFlow({
       executionPrerequisite: "",
       steps: [
@@ -452,7 +529,7 @@ describe("parseFlow", () => {
     expect(parseFlow(yaml).steps).toEqual([step]);
   });
 
-  it("roundtrips the sugared step kinds through YAML", () => {
+  it("roundtrips the sugared step kinds through YAML", async () => {
     // The spelling carries the loose bit exactly both ways: a LOOSE text-only
     // selector serializes to a bare string (which parses back loose); a strict
     // `{ text }` keeps the map form (which parses back strict). Identifier
@@ -499,7 +576,7 @@ describe("parseFlow", () => {
     expect(parseFlow(serializeFlow(flow)).steps).toEqual(flow.steps);
   });
 
-  it("keeps a strict { text } selector strict across repeated round-trips (never collapsed to a bare loose string)", () => {
+  it("keeps a strict { text } selector strict across repeated round-trips (never collapsed to a bare loose string)", async () => {
     // The recorder derives strict `{ text }` selectors, and every recorded step
     // re-reads and re-writes the whole file (appendStep) — so a single lossy
     // serialization would silently promote them to loose, sending them through
@@ -516,7 +593,7 @@ describe("parseFlow", () => {
     expect(parseFlow(serializeFlow(reparsed)).steps).toEqual(flow.steps);
   });
 
-  it("sugars a bare-string scroll-to target and keeps the within map", () => {
+  it("sugars a bare-string scroll-to target and keeps the within map", async () => {
     const flow = parseFlow(
       ["steps:", "  - scroll-to: { target: Account, direction: down }"].join("\n")
     );
@@ -525,17 +602,17 @@ describe("parseFlow", () => {
     ]);
   });
 
-  it("parses a bare-number wait as milliseconds", () => {
+  it("parses a bare-number wait as milliseconds", async () => {
     const flow = parseFlow("steps:\n  - wait: 750\n");
     expect(flow.steps).toEqual([{ kind: "wait", ms: 750 }]);
   });
 
-  it("rejects a wait that is not a non-negative number", () => {
+  it("rejects a wait that is not a non-negative number", async () => {
     expect(() => parseFlow("steps:\n  - wait: soon\n")).toThrow("wait needs a non-negative number");
     expect(() => parseFlow("steps:\n  - wait: -5\n")).toThrow("wait needs a non-negative number");
   });
 
-  it("parses an await timeout in milliseconds", () => {
+  it("parses an await timeout in milliseconds", async () => {
     const flow = parseFlow("steps:\n  - await: { visible: Account, timeout: 10000 }\n");
     expect(flow.steps).toEqual([
       {
@@ -547,7 +624,7 @@ describe("parseFlow", () => {
     ]);
   });
 
-  it("rejects an await timeout that is not a positive finite number", () => {
+  it("rejects an await timeout that is not a positive finite number", async () => {
     // `.inf`, `.nan`, and an overflowing literal all parse to a typeof-number
     // value; letting Infinity through would make the runner's poll deadline
     // unreachable (an unbounded await).
@@ -558,7 +635,7 @@ describe("parseFlow", () => {
     }
   });
 
-  it("rejects a timeout on an assert step (an assert is an immediate check)", () => {
+  it("rejects a timeout on an assert step (an assert is an immediate check)", async () => {
     // The internal assert step has no timeout field, so a YAML `timeout` used
     // to be silently dropped; reject it loudly instead — a check that needs
     // time to become true is a wait, spelled `await`.
@@ -570,27 +647,27 @@ describe("parseFlow", () => {
     ).toThrow(/assert has no timeout/);
   });
 
-  it("rejects a scroll-to with an invalid direction", () => {
+  it("rejects a scroll-to with an invalid direction", async () => {
     expect(() =>
       parseFlow("steps:\n  - scroll-to: { target: Account, direction: sideways }\n")
     ).toThrow("scroll-to direction must be one of");
   });
 
-  it("defaults scroll-to direction to down", () => {
+  it("defaults scroll-to direction to down", async () => {
     const flow = parseFlow("steps:\n  - scroll-to: { target: Account }\n");
     expect(flow.steps).toEqual([
       { kind: "scroll-to", target: { text: "Account", loose: true }, direction: "down" },
     ]);
   });
 
-  it("parses a bare-string scroll-to as a down-scroll to that target", () => {
+  it("parses a bare-string scroll-to as a down-scroll to that target", async () => {
     const flow = parseFlow("steps:\n  - scroll-to: Account\n");
     expect(flow.steps).toEqual([
       { kind: "scroll-to", target: { text: "Account", loose: true }, direction: "down" },
     ]);
   });
 
-  it("serializes the default scroll-to back to the bare-string sugar", () => {
+  it("serializes the default scroll-to back to the bare-string sugar", async () => {
     const steps = [
       { kind: "scroll-to", target: { text: "Account", loose: true }, direction: "down" },
     ] as FlowFile["steps"];
@@ -599,12 +676,12 @@ describe("parseFlow", () => {
     expect(parseFlow(yaml).steps).toEqual(steps);
   });
 
-  it("parses a bare-string snapshot as its name", () => {
+  it("parses a bare-string snapshot as its name", async () => {
     const flow = parseFlow("steps:\n  - snapshot: home\n");
     expect(flow.steps).toEqual([{ kind: "snapshot", name: "home" }]);
   });
 
-  it("serializes a name-only snapshot as a bare string, keeps the map with maxMismatch", () => {
+  it("serializes a name-only snapshot as a bare string, keeps the map with maxMismatch", async () => {
     const steps = [
       { kind: "snapshot", name: "home" },
       { kind: "snapshot", name: "cart", maxMismatch: 1.5 },
@@ -615,16 +692,16 @@ describe("parseFlow", () => {
     expect(parseFlow(yaml).steps).toEqual(steps);
   });
 
-  it("rejects a snapshot name that is not path-safe", () => {
+  it("rejects a snapshot name that is not path-safe", async () => {
     expect(() => parseFlow("steps:\n  - snapshot: ../evil\n")).toThrow(/must match/);
   });
 
-  it("accepts a string-number maxMismatch", () => {
+  it("accepts a string-number maxMismatch", async () => {
     const flow = parseFlow('steps:\n  - snapshot: { name: home, maxMismatch: "1.5" }\n');
     expect(flow.steps).toEqual([{ kind: "snapshot", name: "home", maxMismatch: 1.5 }]);
   });
 
-  it("rejects a non-numeric, negative, or out-of-range maxMismatch", () => {
+  it("rejects a non-numeric, negative, or out-of-range maxMismatch", async () => {
     for (const bad of ['"5%"', "-1", "101", ".nan"]) {
       expect(() =>
         parseFlow(`steps:\n  - snapshot: { name: home, maxMismatch: ${bad} }\n`)
@@ -632,7 +709,7 @@ describe("parseFlow", () => {
     }
   });
 
-  it("parses snapshot cropOn as a selector (bare-string loose, map strict)", () => {
+  it("parses snapshot cropOn as a selector (bare-string loose, map strict)", async () => {
     const flow = parseFlow(
       "steps:\n" +
         "  - snapshot: { name: home, cropOn: Header }\n" +
@@ -644,7 +721,7 @@ describe("parseFlow", () => {
     ]);
   });
 
-  it("serializes snapshot cropOn in the map form and round-trips", () => {
+  it("serializes snapshot cropOn in the map form and round-trips", async () => {
     const steps = [
       { kind: "snapshot", name: "home", cropOn: { text: "Header", loose: true } },
       { kind: "snapshot", name: "cart", maxMismatch: 1.5, cropOn: { identifier: "cart-total" } },
@@ -654,13 +731,13 @@ describe("parseFlow", () => {
     expect(parseFlow(yaml).steps).toEqual(steps);
   });
 
-  it("rejects a point-form cropOn — a point has no extent to crop to", () => {
+  it("rejects a point-form cropOn — a point has no extent to crop to", async () => {
     expect(() =>
       parseFlow("steps:\n  - snapshot: { name: home, cropOn: { x: 0.5, y: 0.5 } }\n")
     ).toThrow(/snapshot\.cropOn: selector has unknown keys `x`, `y`/);
   });
 
-  it("rejects a tap body mixing a selector with coordinates", () => {
+  it("rejects a tap body mixing a selector with coordinates", async () => {
     for (const key of ["id", "identifier"]) {
       expect(() => parseFlow(`steps:\n  - tap: { ${key}: box, x: 0.5, y: 0.5 }\n`)).toThrow(
         "tap takes a selector or x/y coordinates, not both"
@@ -668,7 +745,7 @@ describe("parseFlow", () => {
     }
   });
 
-  it("rejects a coordinate tap with a missing or non-numeric x/y", () => {
+  it("rejects a coordinate tap with a missing or non-numeric x/y", async () => {
     expect(() => parseFlow("steps:\n  - tap: { x: 0.5 }\n")).toThrow(
       "tap: a coordinate target needs numeric x and y"
     );
@@ -677,7 +754,7 @@ describe("parseFlow", () => {
     );
   });
 
-  it("round-trips free-text values exactly, including whitespace-only lines", () => {
+  it("round-trips free-text values exactly, including whitespace-only lines", async () => {
     // The parser stores every free-text field verbatim — `type.text`, `echo`,
     // await/assert `contains`/`equals`, and `executionPrerequisite` are never
     // trimmed — so serialization must be byte-exact too. Default yamlStringify
@@ -720,7 +797,7 @@ describe("parseFlow", () => {
     }
   });
 
-  it("never serializes a whitespace-only-line value as a block scalar", () => {
+  it("never serializes a whitespace-only-line value as a block scalar", async () => {
     const steps = [{ kind: "echo", message: "step one \n \ndone" }] as FlowFile["steps"];
     const yaml = serializeFlow({ executionPrerequisite: "", steps });
     // Block (|) and folded (>) scalars are not round-trip-safe for this shape;
@@ -736,37 +813,37 @@ describe("parseFlow", () => {
   // surface later as a misleading runtime failure (wrong scroll direction,
   // lost submit opt-out, lost timeout, lost snapshot tolerance).
   describe("unknown option keys are rejected at parse time", () => {
-    it("rejects a misspelled scroll-to direction key with a suggestion", () => {
+    it("rejects a misspelled scroll-to direction key with a suggestion", async () => {
       expect(() =>
         parseFlow("steps:\n  - scroll-to: { target: Order-1234, directon: up }\n")
       ).toThrow(/scroll-to has unknown key `directon` \(did you mean `direction`\?\)/);
     });
 
-    it("rejects a misspelled type.submit key with a suggestion", () => {
+    it("rejects a misspelled type.submit key with a suggestion", async () => {
       expect(() =>
         parseFlow('steps:\n  - type: { into: email, text: "a@b.com", sumbit: false }\n')
       ).toThrow(/type has unknown key `sumbit` \(did you mean `submit`\?\)/);
     });
 
-    it("rejects a misspelled await.timeout key with a suggestion", () => {
+    it("rejects a misspelled await.timeout key with a suggestion", async () => {
       expect(() => parseFlow("steps:\n  - await: { visible: Account, timeut: 10000 }\n")).toThrow(
         /await has unknown key `timeut` \(did you mean `timeout`\?\)/
       );
     });
 
-    it("rejects a misspelled snapshot.maxMismatch key with a suggestion", () => {
+    it("rejects a misspelled snapshot.maxMismatch key with a suggestion", async () => {
       expect(() => parseFlow("steps:\n  - snapshot: { name: home, maxMissmatch: 1.5 }\n")).toThrow(
         /snapshot has unknown key `maxMissmatch` \(did you mean `maxMismatch`\?\)/
       );
     });
 
-    it("rejects a miscased snapshot.cropOn key with a suggestion", () => {
+    it("rejects a miscased snapshot.cropOn key with a suggestion", async () => {
       expect(() => parseFlow("steps:\n  - snapshot: { name: home, cropon: Header }\n")).toThrow(
         /snapshot has unknown key `cropon` \(did you mean `cropOn`\?\)/
       );
     });
 
-    it("rejects an unknown key on a selector map", () => {
+    it("rejects an unknown key on a selector map", async () => {
       expect(() => parseFlow("steps:\n  - tap: { text: Save, roel: button }\n")).toThrow(
         /tap: selector has unknown key `roel` \(did you mean `role`\?\)/
       );
@@ -780,25 +857,25 @@ describe("parseFlow", () => {
       );
     });
 
-    it("rejects an unknown key without a suggestion when nothing is close", () => {
+    it("rejects an unknown key without a suggestion when nothing is close", async () => {
       expect(() => parseFlow("steps:\n  - scroll-to: { target: Row, sideways: true }\n")).toThrow(
         /scroll-to has unknown key `sideways` — allowed keys: target, direction, within/
       );
     });
 
-    it("rejects an unknown key in an await/assert text body", () => {
+    it("rejects an unknown key in an await/assert text body", async () => {
       expect(() =>
         parseFlow('steps:\n  - assert: { text: { in: counter, contians: "Taps: 0" } }\n')
       ).toThrow(/assert.text has unknown key `contians` \(did you mean `contains`\?\)/);
     });
 
-    it("rejects a stray key on a coordinate tap", () => {
+    it("rejects a stray key on a coordinate tap", async () => {
       expect(() => parseFlow("steps:\n  - tap: { x: 0.5, y: 0.5, why: 0.6 }\n")).toThrow(
         /tap: a coordinate target takes only \{ x, y \}/
       );
     });
 
-    it("rejects an unknown key in a launch map and its chromium value", () => {
+    it("rejects an unknown key in a launch map and its chromium value", async () => {
       expect(() => parseFlow("steps:\n  - launch: { amdroid: com.acme.app }\n")).toThrow(
         /launch has unknown key `amdroid` \(did you mean `android`\?\)/
       );
@@ -807,7 +884,7 @@ describe("parseFlow", () => {
       ).toThrow(/launch.chromium has unknown key `arg` \(did you mean `args`\?\)/);
     });
 
-    it("rejects a step-level sibling key (options belong inside the directive value)", () => {
+    it("rejects a step-level sibling key (options belong inside the directive value)", async () => {
       expect(() =>
         parseFlow("steps:\n  - await: { visible: Account }\n    timeout: 5000\n")
       ).toThrow(
@@ -815,26 +892,26 @@ describe("parseFlow", () => {
       );
     });
 
-    it("rejects a step carrying two directive keys", () => {
+    it("rejects a step carrying two directive keys", async () => {
       expect(() => parseFlow("steps:\n  - echo: hi\n    tap: Save\n")).toThrow(
         /a step takes exactly one directive key, found `echo`, `tap`/
       );
     });
 
-    it("suggests the directive key for a misspelled step kind", () => {
+    it("suggests the directive key for a misspelled step kind", async () => {
       expect(() => parseFlow("steps:\n  - snapshoot: home\n")).toThrow(
         /unrecognized step kind \(did you mean `snapshot`\?\)/
       );
     });
 
-    it("rejects an unknown top-level flow file key", () => {
+    it("rejects an unknown top-level flow file key", async () => {
       expect(() =>
         parseFlow("executionPrerequisit: Settings open\nsteps:\n  - echo: hi\n")
       ).toThrow(/unknown key `executionPrerequisit` \(did you mean `executionPrerequisite`\?\)/);
     });
   });
 
-  it("roundtrips: serialize then parse", () => {
+  it("roundtrips: serialize then parse", async () => {
     const flow: FlowFile = {
       executionPrerequisite: "App freshly loaded on home screen",
       steps: [
@@ -849,29 +926,104 @@ describe("parseFlow", () => {
   });
 });
 
+// ── block directives ─────────────────────────────────────────────────
+
+// A flow per block directive, with the children its block authors. Its key type
+// derives from the registry, so registering a directive without a fixture here
+// is a compile error. The fixture itself is deliberately not derived from the
+// key: one that agreed with the parser by construction would test nothing.
+const BLOCK_DIRECTIVE_FLOWS: Record<
+  (typeof BLOCK_DIRECTIVE_KEYS)[number],
+  { yaml: string; children: FlowFile["steps"] }
+> = {
+  when: {
+    yaml:
+      [
+        "steps:",
+        "  - when: { visible: Cart }",
+        "    steps:",
+        "      - echo: Guarded",
+        "      - tap: Buy",
+      ].join("\n") + "\n",
+    children: [
+      { kind: "echo", message: "Guarded" },
+      { kind: "tap", selector: { text: "Buy", loose: true } },
+    ],
+  },
+};
+
+// Registering a kind in BLOCK_DIRECTIVE_KEYS exempts it from fromYamlStep's
+// generic unknown-sibling rejection, on the promise that its own parser
+// rejects unknown siblings with a pointed message. This table is what holds a
+// NEW entry to that promise: its key type derives from the registry, so
+// registering a directive without a fixture here is a compile error, and the
+// test proves the fixture's bogus sibling is rejected, not silently accepted.
+const BLOCK_DIRECTIVE_SIBLING_REJECTIONS: Record<
+  (typeof BLOCK_DIRECTIVE_KEYS)[number],
+  { yaml: string; message: string }
+> = {
+  when: {
+    yaml:
+      ["steps:", "  - when: { exists: x }", "    steps:", "      - echo: hi", "    bogus: 1"].join(
+        "\n"
+      ) + "\n",
+    message: "a when step takes exactly { when: <condition>, steps: [...] }",
+  },
+};
+
+// The parser's block list and blockSteps' runtime answer are the same claim
+// asked twice; a directive only one of them knows drops its whole block from
+// every skip expansion and from the upload preflight, silently.
+describe("block directives", () => {
+  it.each(BLOCK_DIRECTIVE_KEYS)("%s parses to its own kind and yields its children", (key) => {
+    const { yaml, children } = BLOCK_DIRECTIVE_FLOWS[key];
+    const step = parseFlow(yaml).steps[0]!;
+    expect(step.kind).toBe(key);
+    expect(blockSteps(step)).toEqual(children);
+  });
+
+  it.each(BLOCK_DIRECTIVE_KEYS)("%s rejects an unknown sibling key with its own message", (key) => {
+    const { yaml, message } = BLOCK_DIRECTIVE_SIBLING_REJECTIONS[key];
+    let thrown: unknown;
+    try {
+      parseFlow(yaml);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown, "the unknown sibling was silently accepted").toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain(message);
+    expect(getFailureSignal(thrown)?.error_code).toBe(FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED);
+  });
+
+  it("returns undefined for a leaf step", () => {
+    const step = parseFlow("steps:\n  - tap: Buy\n").steps[0]!;
+    expect(blockSteps(step)).toBeUndefined();
+  });
+});
+
 // ── chromium launch (app path) ───────────────────────────────────────
 
 describe("chromium launch parsing", () => {
-  it("parses a chromium launch with a bare-string app path", () => {
+  it("parses a chromium launch with a bare-string app path", async () => {
     const flow = parseFlow("steps:\n  - launch: { chromium: ./app }\n");
     expect(flow.steps).toEqual([{ kind: "launch", app: { chromium: "./app" } }]);
   });
 
-  it("parses a chromium launch with a { path, args } map", () => {
+  it("parses a chromium launch with a { path, args } map", async () => {
     const flow = parseFlow("steps:\n  - launch: { chromium: { path: ./app, args: [--e2e] } }\n");
     expect(flow.steps).toEqual([
       { kind: "launch", app: { chromium: { path: "./app", args: ["--e2e"] } } },
     ]);
   });
 
-  it("parses a mixed per-platform launch (ios id + chromium path)", () => {
+  it("parses a mixed per-platform launch (ios id + chromium path)", async () => {
     const flow = parseFlow("steps:\n  - launch: { ios: com.acme.app, chromium: ./app }\n");
     expect(flow.steps).toEqual([
       { kind: "launch", app: { ios: "com.acme.app", chromium: "./app" } },
     ]);
   });
 
-  it("round-trips a chromium { path, args } launch through YAML", () => {
+  it("round-trips a chromium { path, args } launch through YAML", async () => {
     const flow: FlowFile = {
       executionPrerequisite: "",
       steps: [
@@ -881,13 +1033,13 @@ describe("chromium launch parsing", () => {
     expect(parseFlow(serializeFlow(flow)).steps).toEqual(flow.steps);
   });
 
-  it("rejects a chromium map with no path", () => {
+  it("rejects a chromium map with no path", async () => {
     expect(() => parseFlow("steps:\n  - launch: { chromium: { args: [--e2e] } }\n")).toThrow(
       /launch needs/
     );
   });
 
-  it("rejects a chromium map with non-string args", () => {
+  it("rejects a chromium map with non-string args", async () => {
     expect(() =>
       parseFlow("steps:\n  - launch: { chromium: { path: ./app, args: [1, 2] } }\n")
     ).toThrow(/launch needs/);
@@ -895,27 +1047,27 @@ describe("chromium launch parsing", () => {
 });
 
 describe("chromiumLaunchSpec", () => {
-  it("reads a bare-string launch as the app path", () => {
+  it("reads a bare-string launch as the app path", async () => {
     expect(chromiumLaunchSpec("./app")).toEqual({ path: "./app" });
   });
 
-  it("reads a chromium string value as the path", () => {
+  it("reads a chromium string value as the path", async () => {
     expect(chromiumLaunchSpec({ chromium: "./app" })).toEqual({ path: "./app" });
   });
 
-  it("reads a chromium { path, args } value", () => {
+  it("reads a chromium { path, args } value", async () => {
     expect(chromiumLaunchSpec({ chromium: { path: "./app", args: ["--e2e"] } })).toEqual({
       path: "./app",
       args: ["--e2e"],
     });
   });
 
-  it("returns null when no chromium target is declared", () => {
+  it("returns null when no chromium target is declared", async () => {
     expect(chromiumLaunchSpec({ ios: "com.acme.app" })).toBeNull();
     expect(chromiumLaunchSpec(undefined)).toBeNull();
   });
 
-  it("appIdForPlatform returns the chromium path (the runner's declared-target guard)", () => {
+  it("appIdForPlatform returns the chromium path (the runner's declared-target guard)", async () => {
     expect(appIdForPlatform({ chromium: { path: "./app", args: ["--e2e"] } }, "chromium")).toBe(
       "./app"
     );
@@ -927,13 +1079,13 @@ describe("chromiumLaunchSpec", () => {
 // ── native shorthand ─────────────────────────────────────────────────
 
 describe("native launch shorthand", () => {
-  it("parses a native-only launch and round-trips it", () => {
+  it("parses a native-only launch and round-trips it", async () => {
     const flow = parseFlow("steps:\n  - launch: { native: com.acme.app }\n");
     expect(flow.steps).toEqual([{ kind: "launch", app: { native: "com.acme.app" } }]);
     expect(parseFlow(serializeFlow(flow)).steps).toEqual(flow.steps);
   });
 
-  it("parses native alongside a per-platform override and a chromium path", () => {
+  it("parses native alongside a per-platform override and a chromium path", async () => {
     const flow = parseFlow(
       "steps:\n  - launch: { native: com.acme.app, android: com.acme.app.debug, chromium: ./app }\n"
     );
@@ -945,11 +1097,11 @@ describe("native launch shorthand", () => {
     ]);
   });
 
-  it("rejects an empty native id", () => {
+  it("rejects an empty native id", async () => {
     expect(() => parseFlow('steps:\n  - launch: { native: "" }\n')).toThrow(/launch needs/);
   });
 
-  it("appIdForPlatform falls back to native for installed platforms, override wins", () => {
+  it("appIdForPlatform falls back to native for installed platforms, override wins", async () => {
     const app = { native: "com.acme.app", android: "com.acme.app.debug" };
     // native fills in for platforms without a specific key…
     expect(appIdForPlatform(app, "ios")).toBe("com.acme.app");
@@ -958,112 +1110,352 @@ describe("native launch shorthand", () => {
     expect(appIdForPlatform(app, "android")).toBe("com.acme.app.debug");
   });
 
-  it("native never applies to chromium (chromium takes a path, not an id)", () => {
+  it("native never applies to chromium (chromium takes a path, not an id)", async () => {
     expect(appIdForPlatform({ native: "com.acme.app" }, "chromium")).toBeNull();
     expect(chromiumLaunchSpec({ native: "com.acme.app" })).toBeNull();
   });
 });
 
-// ── Active flow state ────────────────────────────────────────────────
+// ── Recording sessions ───────────────────────────────────────────────
 
-describe("active flow state", () => {
+// Recordings live in a map keyed by the resolved flow file path, so a session
+// has no identity beyond (project_root, name) — two agents recording at once
+// must never write into each other's take. What is isolated is the artifact,
+// not the fact that a recording exists: the not-found message deliberately
+// names the other live flows in the caller's own project and counts the rest,
+// and the two cases below pin that disclosure as bounded rather than absent.
+describe("recording sessions", () => {
   beforeEach(() => {
-    clearActiveFlow();
+    __resetRecordingsForTesting();
   });
 
-  it("throws when no active flow", () => {
-    expect(() => getActiveFlow()).toThrow("No active flow");
+  const emptyFlow = (): FlowFile => ({ executionPrerequisite: "", steps: [] });
+
+  const start = (projectRoot: string, name: string, flow: FlowFile = emptyFlow()) =>
+    startRecordingSession({
+      name,
+      projectRoot,
+      persist: "host",
+      filePath: getFlowPath(projectRoot, name),
+      flow,
+    });
+
+  it("throws when the key has no recording", async () => {
+    await expect(requireRecordingSession("/tmp/proj-a", "my-flow")).rejects.toThrow(
+      /No active recording for flow "my-flow"/
+    );
   });
 
-  it("returns the active flow after setActiveFlow", () => {
-    setActiveFlow("my-flow");
-    expect(getActiveFlow()).toBe("my-flow");
+  it("classifies the not-found throw as FLOW_NO_ACTIVE_RECORDING", async () => {
+    let caught: unknown;
+    try {
+      await requireRecordingSession("/tmp/proj-a", "my-flow");
+    } catch (err) {
+      caught = err;
+    }
+    expect(getFailureSignal(caught)?.error_code).toBe(FAILURE_CODES.FLOW_NO_ACTIVE_RECORDING);
   });
 
-  it("clears the active flow", () => {
-    setActiveFlow("my-flow");
-    clearActiveFlow();
-    expect(() => getActiveFlow()).toThrow("No active flow");
+  it("names the asked-for key and this project's live recordings in the not-found message", async () => {
+    // With concurrent recordings the usual cause is a typo or the wrong
+    // project_root; the agent can only self-correct if it sees the live keys.
+    await start("/tmp/proj-a", "checkout");
+    await start("/tmp/proj-b", "login");
+    await expect(requireRecordingSession("/tmp/proj-a", "chekout")).rejects.toThrow(
+      /No active recording for flow "chekout" in \/tmp\/proj-a\./
+    );
+    await expect(requireRecordingSession("/tmp/proj-a", "chekout")).rejects.toThrow(
+      /Active recordings: "checkout" \(plus 1 in other projects\)\./
+    );
   });
 
-  it("overwrites previous active flow", () => {
-    setActiveFlow("first");
-    setActiveFlow("second");
-    expect(getActiveFlow()).toBe("second");
+  it("counts other projects' recordings without naming them", async () => {
+    // A tool-server bound beyond loopback serves unrelated callers; another
+    // project's flow names and absolute paths are not this caller's to see.
+    await start("/tmp/proj-b", "login");
+    await start("/tmp/proj-c", "secret-onboarding");
+    const message = await (async () => {
+      try {
+        await requireRecordingSession("/tmp/proj-a", "my-flow");
+      } catch (err) {
+        return (err as Error).message;
+      }
+      throw new Error("expected a throw");
+    })();
+    expect(message).toMatch(
+      /Active recordings: none in this project \(plus 2 in other projects\)\./
+    );
+    expect(message).not.toContain("login");
+    expect(message).not.toContain("secret-onboarding");
+    expect(message).not.toContain("/tmp/proj-b");
+    expect(message).not.toContain("/tmp/proj-c");
   });
 
-  it("getActiveFlowOrNull returns null when no active flow", () => {
-    expect(getActiveFlowOrNull()).toBeNull();
+  it("treats a differently-spelled but identical root as THIS project", async () => {
+    // The partition compares path.join-normalized flows dirs, not raw strings.
+    // A caller that spells its own root with a trailing slash must still be
+    // shown its own live recordings — a strict === would answer "none in this
+    // project (plus 1 in other projects)", degrading the message in exactly the
+    // wrong-project_root case it exists to diagnose. Every other test here
+    // spells both sides identically, so only this one separates the two.
+    await start("/tmp/proj-a", "checkout");
+    const message = await (async () => {
+      try {
+        await requireRecordingSession("/tmp/proj-a/", "chekout");
+      } catch (err) {
+        return (err as Error).message;
+      }
+      throw new Error("expected a throw");
+    })();
+    expect(message).toMatch(/Active recordings: "checkout"\./);
+    expect(message).not.toContain("other projects");
   });
 
-  it("getActiveFlowOrNull returns the active flow name", () => {
-    setActiveFlow("my-flow");
-    expect(getActiveFlowOrNull()).toBe("my-flow");
+  it("does not tell the agent to just call flow-start-recording", async () => {
+    // This message is reached for a key that was never started, but equally for
+    // one that was finished, superseded, or dropped by the concurrency cap —
+    // and in those cases the flow file on disk is fully populated. Naming
+    // flow-start-recording as the fix destroys it, because it truncates
+    // unconditionally and reports no `restarted` when no session was replaced.
+    const message = await (async () => {
+      try {
+        await requireRecordingSession("/tmp/proj-a", "finished-earlier");
+      } catch (err) {
+        return (err as Error).message;
+      }
+      throw new Error("expected a throw");
+    })();
+    expect(message).toContain("truncates");
+    expect(message).toMatch(/record under a fresh name|copy it aside/);
+    expect(message).not.toMatch(/Call flow-start-recording first/);
   });
 
-  it("getActiveFlowOrNull returns null after clearing", () => {
-    setActiveFlow("my-flow");
-    clearActiveFlow();
-    expect(getActiveFlowOrNull()).toBeNull();
+  it('reports "none in this project" when nothing is being recorded', async () => {
+    await expect(requireRecordingSession("/tmp/proj-a", "my-flow")).rejects.toThrow(
+      /Active recordings: none in this project\./
+    );
+  });
+
+  it("returns the session that was started for that key", async () => {
+    await start("/tmp/proj-a", "my-flow");
+    const session = await requireRecordingSession("/tmp/proj-a", "my-flow");
+    expect(session.name).toBe("my-flow");
+    expect(session.projectRoot).toBe("/tmp/proj-a");
+    expect(session.persist).toBe("host");
+    expect(session.filePath).toBe(getFlowPath("/tmp/proj-a", "my-flow"));
+  });
+
+  it("getRecordingSession returns undefined for a key with no recording", async () => {
+    expect(await getRecordingSession("/tmp/proj-a", "my-flow")).toBeUndefined();
+  });
+
+  it("getRecordingSession returns the live session", async () => {
+    await start("/tmp/proj-a", "my-flow");
+    expect((await getRecordingSession("/tmp/proj-a", "my-flow"))?.name).toBe("my-flow");
+  });
+
+  it("clearRecordingSession removes only that key", async () => {
+    await start("/tmp/proj-a", "my-flow");
+    await start("/tmp/proj-a", "other-flow");
+    clearRecordingSession(await requireRecordingSession("/tmp/proj-a", "my-flow"));
+    expect(await getRecordingSession("/tmp/proj-a", "my-flow")).toBeUndefined();
+    await expect(requireRecordingSession("/tmp/proj-a", "my-flow")).rejects.toThrow(
+      /No active recording for flow "my-flow"/
+    );
+    // The unrelated recording is untouched.
+    expect((await requireRecordingSession("/tmp/proj-a", "other-flow")).name).toBe("other-flow");
+  });
+
+  it("clearRecordingSession deletes by the key the session HOLDS, not a fresh resolution", async () => {
+    // The same choice appendStepToFlow documents. Re-resolving the spelling
+    // looks up a key the map may no longer hold once the flow file's identity
+    // has moved under the session — a symlink repointed mid-recording — so the
+    // delete missed silently and the finish reported success while the session
+    // stayed live, unfinishable, and holding the key against its own restart.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clear-moved-key-"));
+    try {
+      const root = path.join(dir, "proj");
+      const flows = path.join(root, ".argent", "flows");
+      await fs.mkdir(flows, { recursive: true });
+      const first = path.join(dir, "first.yaml");
+      const second = path.join(dir, "second.yaml");
+      for (const f of [first, second]) await fs.writeFile(f, "steps: []\n", "utf8");
+      const link = path.join(flows, "shared.yaml");
+      await fs.symlink(first, link);
+
+      await startRecordingSession({
+        name: "shared",
+        projectRoot: root,
+        persist: "host",
+        filePath: link,
+        flow: emptyFlow(),
+      });
+      const session = (await getRecordingSession(root, "shared"))!;
+
+      await fs.rm(link);
+      await fs.symlink(second, link);
+      // The spelling now resolves to a different file entirely.
+      expect(await getRecordingSession(root, "shared")).toBeUndefined();
+
+      clearRecordingSession(session);
+      expect(listActiveRecordings()).toEqual([]);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps same-named recordings under different project roots independent", async () => {
+    await start("/tmp/proj-a", "my-flow", { executionPrerequisite: "A", steps: [] });
+    await start("/tmp/proj-b", "my-flow", { executionPrerequisite: "B", steps: [] });
+    expect(
+      (await requireRecordingSession("/tmp/proj-a", "my-flow")).flow.executionPrerequisite
+    ).toBe("A");
+    expect(
+      (await requireRecordingSession("/tmp/proj-b", "my-flow")).flow.executionPrerequisite
+    ).toBe("B");
+    // Finishing one leaves the other recording.
+    clearRecordingSession(await requireRecordingSession("/tmp/proj-a", "my-flow"));
+    expect(await getRecordingSession("/tmp/proj-a", "my-flow")).toBeUndefined();
+    expect(
+      (await requireRecordingSession("/tmp/proj-b", "my-flow")).flow.executionPrerequisite
+    ).toBe("B");
+  });
+
+  it("returns null when starting a recording on a free key", async () => {
+    expect(await start("/tmp/proj-a", "my-flow")).toBeNull();
+    // A second, unrelated recording is the common concurrent case — not a replace.
+    expect(await start("/tmp/proj-a", "other-flow")).toBeNull();
+    expect(await start("/tmp/proj-b", "my-flow")).toBeNull();
+  });
+
+  it("returns the replaced session when re-recording the same key", async () => {
+    await start("/tmp/proj-a", "my-flow", { executionPrerequisite: "first take", steps: [] });
+    const replaced = await start("/tmp/proj-a", "my-flow", {
+      executionPrerequisite: "second take",
+      steps: [],
+    });
+    expect(replaced?.flow.executionPrerequisite).toBe("first take");
+    // The later take wins — one key, one writer.
+    expect(
+      (await requireRecordingSession("/tmp/proj-a", "my-flow")).flow.executionPrerequisite
+    ).toBe("second take");
+  });
+
+  it("evicts the least recently USED recording, not the oldest one", async () => {
+    // The cap is a leak backstop, but which entry it drops matters: evicting a
+    // recording an agent is actively using would strand its steps. Fill past
+    // the cap, touching the first-registered key just before the overflow — it
+    // must survive and the untouched next-oldest must go. A FIFO eviction fails
+    // this deterministically.
+    //
+    // It does NOT reliably catch an LRU keyed on a millisecond clock: that only
+    // ties when the whole fill and the touch land inside one millisecond, which
+    // holds when this file runs alone but not under full-suite load. The
+    // counter's tie-freedom is argued at `touch()` rather than pinned here.
+    const cap = MAX_RECORDINGS;
+    for (let i = 0; i < cap; i++) await start("/tmp/proj-a", `flow-${i}`);
+    expect(listActiveRecordings()).toHaveLength(cap);
+
+    await requireRecordingSession("/tmp/proj-a", "flow-0"); // now most-recently-used
+    await start("/tmp/proj-a", "overflow");
+
+    const live = new Set(listActiveRecordings().map((r) => r.name));
+    expect(live.size).toBe(cap);
+    expect(live.has("flow-0")).toBe(true); // touched, so kept
+    expect(live.has("flow-1")).toBe(false); // untouched and now the oldest use
+    expect(live.has("overflow")).toBe(true);
+  });
+
+  it("listActiveRecordings reflects what is live", async () => {
+    expect(listActiveRecordings()).toEqual([]);
+    await start("/tmp/proj-a", "my-flow", {
+      executionPrerequisite: "",
+      steps: [{ kind: "echo", message: "hi" }],
+    });
+    await start("/tmp/proj-b", "my-flow");
+    expect(listActiveRecordings()).toEqual([
+      { name: "my-flow", projectRoot: "/tmp/proj-a", steps: 1 },
+      { name: "my-flow", projectRoot: "/tmp/proj-b", steps: 0 },
+    ]);
+    clearRecordingSession(await requireRecordingSession("/tmp/proj-a", "my-flow"));
+    expect(listActiveRecordings()).toEqual([
+      { name: "my-flow", projectRoot: "/tmp/proj-b", steps: 0 },
+    ]);
+    __resetRecordingsForTesting();
+    expect(listActiveRecordings()).toEqual([]);
+  });
+
+  it("keys a session by the normalized flow path, so a trailing slash rejoins it", async () => {
+    await start("/tmp/proj-a", "my-flow");
+    expect((await requireRecordingSession("/tmp/proj-a/", "my-flow")).name).toBe("my-flow");
+    expect(await start("/tmp/proj-a/", "my-flow")).not.toBeNull();
+    expect(listActiveRecordings()).toHaveLength(1);
   });
 });
 
 // ── getFlowPath name validation ──────────────────────────────────────
 
 describe("getFlowPath name validation", () => {
-  beforeEach(() => {
-    clearActiveProjectRoot();
-    setActiveProjectRoot("/tmp/argent-flow-name-test");
-  });
+  // Pure path math over two explicit inputs — the root is a parameter, never
+  // shared state, so two callers naming two projects can never collide.
+  const root = "/tmp/argent-flow-name-test";
 
-  it("accepts plain alphanumeric names", () => {
-    expect(getFlowPath("my-flow_1")).toBe(
-      path.join("/tmp/argent-flow-name-test", ".argent", "flows", "my-flow_1.yaml")
+  it("accepts plain alphanumeric names", async () => {
+    expect(getFlowPath(root, "my-flow_1")).toBe(
+      path.join(root, ".argent", "flows", "my-flow_1.yaml")
     );
   });
 
-  it("rejects path-traversal segments", () => {
-    expect(() => getFlowPath("../../etc/passwd")).toThrow(/Invalid flow name/);
-    expect(() => getFlowPath("../foo")).toThrow(/Invalid flow name/);
+  it("normalizes a trailing slash on the project root", async () => {
+    // The flow path doubles as the recording-session key: a trailing slash must
+    // not mint a second identity for the same file.
+    expect(getFlowPath("/tmp/x/", "f")).toBe(getFlowPath("/tmp/x", "f"));
   });
 
-  it("rejects path separators", () => {
-    expect(() => getFlowPath("foo/bar")).toThrow(/Invalid flow name/);
-    expect(() => getFlowPath("/abs/path")).toThrow(/Invalid flow name/);
+  it("rejects path-traversal segments", async () => {
+    expect(() => getFlowPath(root, "../../etc/passwd")).toThrow(/Invalid flow name/);
+    expect(() => getFlowPath(root, "../foo")).toThrow(/Invalid flow name/);
   });
 
-  it("rejects names with spaces or shell metacharacters", () => {
-    expect(() => getFlowPath("foo bar")).toThrow(/Invalid flow name/);
-    expect(() => getFlowPath("foo;bar")).toThrow(/Invalid flow name/);
-    expect(() => getFlowPath("foo$(id)")).toThrow(/Invalid flow name/);
+  it("rejects path separators", async () => {
+    expect(() => getFlowPath(root, "foo/bar")).toThrow(/Invalid flow name/);
+    expect(() => getFlowPath(root, "/abs/path")).toThrow(/Invalid flow name/);
   });
 
-  it("rejects empty names", () => {
-    expect(() => getFlowPath("")).toThrow(/Invalid flow name/);
+  it("rejects names with spaces or shell metacharacters", async () => {
+    expect(() => getFlowPath(root, "foo bar")).toThrow(/Invalid flow name/);
+    expect(() => getFlowPath(root, "foo;bar")).toThrow(/Invalid flow name/);
+    expect(() => getFlowPath(root, "foo$(id)")).toThrow(/Invalid flow name/);
+  });
+
+  it("rejects empty names", async () => {
+    expect(() => getFlowPath(root, "")).toThrow(/Invalid flow name/);
   });
 });
 
 // PR #194 follow-up C: project_root must be absolute AND free of ".."
 // segments (path.join collapses ".." and would relocate the flows dir).
-describe("setActiveProjectRoot validation", () => {
-  it("rejects a relative project_root", () => {
-    expect(() => setActiveProjectRoot("relative/path")).toThrow(/absolute path/);
+describe("assertValidProjectRoot validation", () => {
+  it("rejects a relative project_root", async () => {
+    expect(() => assertValidProjectRoot("relative/path")).toThrow(/absolute path/);
   });
 
-  it('rejects an absolute project_root containing ".." segments', () => {
-    expect(() => setActiveProjectRoot("/a/../../../etc")).toThrow(/must not contain "\.\."/);
-    expect(() => setActiveProjectRoot("/home/user/../../root")).toThrow(/must not contain "\.\."/);
+  it('rejects an absolute project_root containing ".." segments', async () => {
+    expect(() => assertValidProjectRoot("/a/../../../etc")).toThrow(/must not contain "\.\."/);
+    expect(() => assertValidProjectRoot("/home/user/../../root")).toThrow(
+      /must not contain "\.\."/
+    );
   });
 
-  it("accepts a clean absolute project_root", () => {
-    expect(() => setActiveProjectRoot("/tmp/argent-pr194-c-test")).not.toThrow();
+  it("accepts a clean absolute project_root", async () => {
+    expect(() => assertValidProjectRoot("/tmp/argent-pr194-c-test")).not.toThrow();
   });
 });
 
 // ── within (descendant) selector scoping ─────────────────────────────
 
 describe("within selector scoping", () => {
-  it("parses a within scope on a tap selector", () => {
+  it("parses a within scope on a tap selector", async () => {
     const flow = parseFlow("steps:\n  - tap: { text: Delete, within: { id: profile-card } }\n");
     expect(flow.steps).toEqual([
       {
@@ -1073,7 +1465,7 @@ describe("within selector scoping", () => {
     ]);
   });
 
-  it("a bare-string within stays loose (identifier-first, then text)", () => {
+  it("a bare-string within stays loose (identifier-first, then text)", async () => {
     const flow = parseFlow("steps:\n  - tap: { text: Delete, within: profile-card }\n");
     expect(flow.steps).toEqual([
       {
@@ -1083,7 +1475,7 @@ describe("within selector scoping", () => {
     ]);
   });
 
-  it("within chains outward and round-trips exactly", () => {
+  it("within chains outward and round-trips exactly", async () => {
     const flow: FlowFile = {
       executionPrerequisite: "",
       steps: [
@@ -1111,7 +1503,7 @@ describe("within selector scoping", () => {
     expect(parseFlow(serializeFlow(flow))).toEqual(flow);
   });
 
-  it("serializes a loose within back to its bare-string spelling", () => {
+  it("serializes a loose within back to its bare-string spelling", async () => {
     const yaml = serializeFlow({
       executionPrerequisite: "",
       steps: [
@@ -1124,7 +1516,7 @@ describe("within selector scoping", () => {
     expect(yaml).toContain("within: profile-card");
   });
 
-  it("accepts the regex text matcher inside a within scope", () => {
+  it("accepts the regex text matcher inside a within scope", async () => {
     const flow = parseFlow(
       "steps:\n  - assert: { visible: { text: Delete, within: { text: { matches: '^Card \\d+$' } } } }\n"
     );
@@ -1137,42 +1529,42 @@ describe("within selector scoping", () => {
     ]);
   });
 
-  it("rejects a selector that is ONLY a within scope", () => {
+  it("rejects a selector that is ONLY a within scope", async () => {
     expect(() => parseFlow("steps:\n  - tap: { within: { id: card } }\n")).toThrow(
       /still needs its own text\/id\/role/
     );
   });
 
-  it("rejects unknown keys inside a within scope, naming the nested slot", () => {
+  it("rejects unknown keys inside a within scope, naming the nested slot", async () => {
     expect(() => parseFlow("steps:\n  - tap: { text: Delete, within: { idd: card } }\n")).toThrow(
       /tap\.within: selector has unknown key `idd` \(did you mean `id`\?\)/
     );
   });
 
-  it("rejects id+identifier both set inside a within scope", () => {
+  it("rejects id+identifier both set inside a within scope", async () => {
     expect(() =>
       parseFlow("steps:\n  - tap: { text: A, within: { id: x, identifier: x } }\n")
     ).toThrow(/`id` or `identifier` \(its alias\), not both/);
   });
 
-  it("rejects a cyclic within alias via the depth cap", () => {
+  it("rejects a cyclic within alias via the depth cap", async () => {
     const yaml = "steps:\n  - tap: &s { text: Delete, within: *s }\n";
     expect(() => parseFlow(yaml)).toThrow(/nest deeper than|cyclic YAML alias/);
   });
 
-  it("rejects a within selector mixed with coordinates", () => {
+  it("rejects a within selector mixed with coordinates", async () => {
     expect(() => parseFlow("steps:\n  - tap: { within: { id: card }, x: 0.5, y: 0.5 }\n")).toThrow(
       /takes a selector or x\/y coordinates, not both/
     );
   });
 
-  it("rejects a within key beside the tap options form", () => {
+  it("rejects a within key beside the tap options form", async () => {
     expect(() =>
       parseFlow("steps:\n  - tap: { on: Photo, times: 2, within: { id: card } }\n")
     ).toThrow(/the tap options form takes a nested selector/);
   });
 
-  it("within works in scroll-to's target while scroll-to's own within stays the container anchor", () => {
+  it("within works in scroll-to's target while scroll-to's own within stays the container anchor", async () => {
     const flow = parseFlow(
       [
         "steps:",
@@ -1192,7 +1584,7 @@ describe("within selector scoping", () => {
     ]);
   });
 
-  it("describeSelector renders the scope chain in parentheses", () => {
+  it("describeSelector renders the scope chain in parentheses", async () => {
     expect(
       describeSelector({
         text: "Delete",
@@ -1201,7 +1593,7 @@ describe("within selector scoping", () => {
     ).toBe('text="Delete" within (id="cards" within (text="Settings"))');
   });
 
-  it("when guards reject a {{secret:…}} placeholder hidden in a within scope", () => {
+  it("when guards reject a {{secret:…}} placeholder hidden in a within scope", async () => {
     expect(() =>
       parseFlow(
         [
@@ -1218,7 +1610,7 @@ describe("within selector scoping", () => {
 // ── sibling scopes (`after`/`next`) and the `any` universal selector ──
 
 describe("sibling selector scopes and the universal selector", () => {
-  it("parses `after` (CSS ~) and `next` (CSS +) scopes", () => {
+  it("parses `after` (CSS ~) and `next` (CSS +) scopes", async () => {
     const flow = parseFlow(
       [
         "steps:",
@@ -1236,7 +1628,7 @@ describe("sibling selector scopes and the universal selector", () => {
     ]);
   });
 
-  it("parses `any: true` paired with a scope and round-trips exactly", () => {
+  it("parses `any: true` paired with a scope and round-trips exactly", async () => {
     const yaml =
       [
         "steps:",
@@ -1258,7 +1650,7 @@ describe("sibling selector scopes and the universal selector", () => {
     expect(parseFlow(serializeFlow(flow))).toEqual(flow);
   });
 
-  it("a bare-string sibling scope stays loose, and serializes back to the bare spelling", () => {
+  it("a bare-string sibling scope stays loose, and serializes back to the bare spelling", async () => {
     const flow = parseFlow("steps:\n  - tap: { role: Switch, next: wifi-row }\n");
     expect(flow.steps).toEqual([
       { kind: "tap", selector: { role: "Switch", next: { text: "wifi-row", loose: true } } },
@@ -1267,7 +1659,7 @@ describe("sibling selector scopes and the universal selector", () => {
     expect(parseFlow(serializeFlow(flow))).toEqual(flow);
   });
 
-  it("scopes combine and nest, round-tripping through YAML", () => {
+  it("scopes combine and nest, round-tripping through YAML", async () => {
     const flow = parseFlow(
       [
         "steps:",
@@ -1290,7 +1682,7 @@ describe("sibling selector scopes and the universal selector", () => {
     expect(parseFlow(serializeFlow(flow))).toEqual(flow);
   });
 
-  it("accepts the regex text matcher inside a sibling scope", () => {
+  it("accepts the regex text matcher inside a sibling scope", async () => {
     const flow = parseFlow(
       "steps:\n  - tap: { role: Switch, next: { text: { matches: '^Row \\d+$' } } }\n"
     );
@@ -1299,25 +1691,25 @@ describe("sibling selector scopes and the universal selector", () => {
     ]);
   });
 
-  it("rejects a selector that is ONLY a sibling scope", () => {
+  it("rejects a selector that is ONLY a sibling scope", async () => {
     expect(() => parseFlow("steps:\n  - tap: { after: { text: Danger } }\n")).toThrow(
       /`after` only scopes where to look — the selector still needs its own text\/id\/role/
     );
   });
 
-  it("rejects `any: true` alongside the fields it would make redundant", () => {
+  it("rejects `any: true` alongside the fields it would make redundant", async () => {
     expect(() =>
       parseFlow("steps:\n  - tap: { any: true, role: Button, next: { text: Wi-Fi } }\n")
     ).toThrow(/already matches every element — drop it, or drop the `role`/);
   });
 
-  it("rejects a bare `any: true` with no scope to narrow it", () => {
+  it("rejects a bare `any: true` with no scope to narrow it", async () => {
     expect(() => parseFlow("steps:\n  - tap: { any: true }\n")).toThrow(
       /matches every element on screen — pair it with a scope \(within\/after\/next\)/
     );
   });
 
-  it("rejects a non-`true` any value rather than reading it as a locator", () => {
+  it("rejects a non-`true` any value rather than reading it as a locator", async () => {
     // Falsy AND truthy: a truthiness check would wave `any: 1` / `any: yes`
     // through as the universal selector — a spelling no reader can predict and
     // the serializer cannot reproduce.
@@ -1328,19 +1720,19 @@ describe("sibling selector scopes and the universal selector", () => {
     }
   });
 
-  it("rejects unknown keys inside a sibling scope, naming the nested slot", () => {
+  it("rejects unknown keys inside a sibling scope, naming the nested slot", async () => {
     expect(() => parseFlow("steps:\n  - tap: { role: Switch, next: { roel: Button } }\n")).toThrow(
       /tap\.next: selector has unknown key `roel` \(did you mean `role`\?\)/
     );
   });
 
-  it("rejects a cyclic sibling alias via the scope budget", () => {
+  it("rejects a cyclic sibling alias via the scope budget", async () => {
     expect(() => parseFlow("steps:\n  - tap: &s { text: Delete, after: *s }\n")).toThrow(
       /more than \d+ scopes|cyclic YAML alias/
     );
   });
 
-  it("bounds a selector's whole scope TREE, not just its depth", () => {
+  it("bounds a selector's whole scope TREE, not just its depth", async () => {
     // Three relations per level means a depth cap alone still admits 3^depth
     // scopes — and the runner expands one alternative per combination of
     // bare-string scopes, so a few hundred bytes of YAML would exhaust the heap
@@ -1364,7 +1756,7 @@ describe("sibling selector scopes and the universal selector", () => {
     ).toThrow(/more than 6 scopes/);
   });
 
-  it("serializeFlow refuses an `any` selector the parser would reject on read-back", () => {
+  it("serializeFlow refuses an `any` selector the parser would reject on read-back", async () => {
     // appendStep re-parses the whole file on every recorded step, so a selector
     // that violates the parser's `any` rules must fail where it was built, not
     // on some later append.
@@ -1389,7 +1781,7 @@ describe("sibling selector scopes and the universal selector", () => {
     ]);
   });
 
-  it("rejects a sibling-scoped selector mixed with coordinates or tap options", () => {
+  it("rejects a sibling-scoped selector mixed with coordinates or tap options", async () => {
     expect(() => parseFlow("steps:\n  - tap: { after: { id: card }, x: 0.5, y: 0.5 }\n")).toThrow(
       /takes a selector or x\/y coordinates, not both/
     );
@@ -1398,7 +1790,7 @@ describe("sibling selector scopes and the universal selector", () => {
     ).toThrow(/the tap options form takes a nested selector/);
   });
 
-  it("a loose bare-string selector cannot carry a scope through serialization", () => {
+  it("a loose bare-string selector cannot carry a scope through serialization", async () => {
     expect(() =>
       serializeFlow({
         executionPrerequisite: "",
@@ -1409,7 +1801,7 @@ describe("sibling selector scopes and the universal selector", () => {
     ).toThrow(/incompatible fields: after/);
   });
 
-  it("names the missing scroll-to target instead of leaking a schema message", () => {
+  it("names the missing scroll-to target instead of leaking a schema message", async () => {
     // `within` is a selector key now, so this body reads like a scoped selector
     // — it is actually the options map, missing its target.
     for (const body of ["{ within: { id: list } }", "{ direction: up }", "{}"]) {
@@ -1429,7 +1821,7 @@ describe("sibling selector scopes and the universal selector", () => {
     ).not.toThrow();
   });
 
-  it("describeSelector renders each scope, and `*` for the universal selector", () => {
+  it("describeSelector renders each scope, and `*` for the universal selector", async () => {
     expect(describeSelector({ role: "Switch", next: { text: "Wi-Fi" } })).toBe(
       'role="Switch" next (text="Wi-Fi")'
     );
@@ -1438,7 +1830,7 @@ describe("sibling selector scopes and the universal selector", () => {
     ).toBe('* within (id="row") after (text="Name")');
   });
 
-  it("when guards reject a {{secret:…}} placeholder hidden in ANY scope", () => {
+  it("when guards reject a {{secret:…}} placeholder hidden in ANY scope", async () => {
     // Every relation, so no branch of the walk can be skipped unnoticed.
     for (const scope of ["within", "after", "next"]) {
       expect(() =>
@@ -1463,5 +1855,308 @@ describe("sibling selector scopes and the universal selector", () => {
         ].join("\n") + "\n"
       )
     ).toThrow(/secret/);
+  });
+});
+
+// ── countStepsOnDisk ─────────────────────────────────────────────────
+
+// The count `flow-start-recording` reports for a take it is about to truncate.
+// Its contract is the distinction between "0 steps" and "no answer": an empty
+// take really did hold nothing, while an unreadable one is a loss of unknown
+// size, and reporting the first for the second understates it in exactly the
+// case that produced it.
+describe("countStepsOnDisk", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "count-steps-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  const write = async (content: string) => {
+    const file = path.join(dir, "flow.yaml");
+    await fs.writeFile(file, content, "utf8");
+    return file;
+  };
+
+  it("counts the steps a readable flow file holds", async () => {
+    const file = await write(
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [
+          { kind: "echo", message: "one" },
+          { kind: "echo", message: "two" },
+          { kind: "echo", message: "three" },
+        ],
+      })
+    );
+    expect(await countStepsOnDisk(file)).toBe(3);
+  });
+
+  it("counts an empty take as 0, which is a real answer", async () => {
+    const file = await write(serializeFlow({ executionPrerequisite: "", steps: [] }));
+    expect(await countStepsOnDisk(file)).toBe(0);
+  });
+
+  it("returns undefined for a file that does not exist", async () => {
+    expect(await countStepsOnDisk(path.join(dir, "absent.yaml"))).toBeUndefined();
+  });
+
+  it("returns undefined rather than 0 for YAML the parser rejects", async () => {
+    // A hand-edit can leave this behind, and `parseFlow("")` returning an empty
+    // flow with no error is the reason 0 cannot double as "unknown".
+    const file = await write("steps: [ this: is: not: a: flow\n");
+    expect(await countStepsOnDisk(file)).toBeUndefined();
+  });
+
+  it("returns undefined for a directory in the file's place", async () => {
+    const asDir = path.join(dir, "flow-dir.yaml");
+    await fs.mkdir(asDir);
+    expect(await countStepsOnDisk(asDir)).toBeUndefined();
+  });
+});
+
+describe("writeFlowFile failure hints", () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "flow-write-hint-"));
+  });
+
+  afterEach(async () => {
+    // Restore write permission first, or the recursive rm cannot descend.
+    for (const dir of [path.join(root, "vault"), path.join(root, ".argent", "flows")]) {
+      await fs.chmod(dir, 0o755).catch(() => {});
+    }
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  /** Whether this process can be denied by mode bits at all (root cannot). */
+  async function modeBitsBite(dir: string): Promise<boolean> {
+    await fs.chmod(dir, 0o555);
+    const probe = path.join(dir, ".probe");
+    const denied = await fs
+      .writeFile(probe, "x", "utf8")
+      .then(() => false)
+      .catch(() => true);
+    if (!denied) await fs.rm(probe, { force: true });
+    return denied;
+  }
+
+  it("does not call the flow file a symlink when only an ANCESTOR is one", async () => {
+    // On macOS the temp dir is reached through /var -> /private/var, so the
+    // resolved swap directory differs from the spelled one for a flow file that
+    // is a perfectly ordinary regular file. Comparing the two spellings made
+    // every such failure claim a symlink and then contrast one directory with
+    // itself.
+    const flowsDir = path.join(root, ".argent", "flows");
+    await fs.mkdir(flowsDir, { recursive: true });
+    if (!(await modeBitsBite(flowsDir))) return;
+
+    const err = await writeNewFlowFile(path.join(flowsDir, "x.yaml"), "steps: []\n").catch(
+      (e: unknown) => e
+    );
+
+    const message = (err as Error).message;
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_FILE_WRITE_FAILED);
+    expect(message).toContain("must be writable");
+    expect(message).not.toMatch(/is a symlink/);
+  });
+
+  it("blames the name length, not the directory, on ENAMETOOLONG", async () => {
+    // The arm the hint was split for: an over-long flow name comes out of
+    // `rename` (the scratch name is short), and reporting it as a
+    // directory-permissions problem sent the reader looking for one that is not
+    // there.
+    const flowsDir = path.join(root, ".argent", "flows");
+    await fs.mkdir(flowsDir, { recursive: true });
+
+    const err = await writeNewFlowFile(
+      path.join(flowsDir, `${"n".repeat(400)}.yaml`),
+      "steps: []\n"
+    ).catch((e: unknown) => e);
+
+    const message = (err as Error).message;
+    expect(message).toContain("(ENAMETOOLONG)");
+    expect(message).toContain("use a shorter name");
+    expect(message).not.toContain("must be writable");
+  });
+
+  it("names the missing VAULT directory when the link points into one", async () => {
+    // ENOENT out of the scratch write, in the directory the swap actually uses.
+    // Naming `.argent/flows` here would point at a directory that exists.
+    const flowsDir = path.join(root, ".argent", "flows");
+    await fs.mkdir(flowsDir, { recursive: true });
+    const absentVault = path.join(root, "no-such-vault");
+    await fs.symlink(path.join(absentVault, "shared.yaml"), path.join(flowsDir, "shared.yaml"));
+
+    const err = await writeNewFlowFile(path.join(flowsDir, "shared.yaml"), "steps: []\n").catch(
+      (e: unknown) => e
+    );
+
+    const message = (err as Error).message;
+    expect(message).toContain("(ENOENT)");
+    expect(message).toContain(`${absentVault} does not exist`);
+    expect(message).toContain("shared.yaml is a symlink");
+  });
+
+  it("still points at the vault when the flow file really is a symlink", async () => {
+    // The case the clause exists for: naming `.argent/flows` here would send the
+    // reader to a directory that is already writable while the vault, the only
+    // unwritable thing in the picture, went unmentioned.
+    const flowsDir = path.join(root, ".argent", "flows");
+    const vault = path.join(root, "vault");
+    await fs.mkdir(flowsDir, { recursive: true });
+    await fs.mkdir(vault, { recursive: true });
+    await fs.writeFile(path.join(vault, "shared.yaml"), "steps: []\n", "utf8");
+    await fs.symlink(path.join(vault, "shared.yaml"), path.join(flowsDir, "shared.yaml"));
+    if (!(await modeBitsBite(vault))) return;
+
+    const err = await writeNewFlowFile(path.join(flowsDir, "shared.yaml"), "steps: []\n").catch(
+      (e: unknown) => e
+    );
+
+    const message = (err as Error).message;
+    expect(message).toContain("shared.yaml is a symlink, so the write lands in");
+    expect(message).toContain(await fs.realpath(vault));
+  });
+});
+
+describe("flow file permissions across an atomic append", () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "flow-mode-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  /** Whether mode bits can refuse this process at all (root ignores them). */
+  async function modeBitsBite(file: string): Promise<boolean> {
+    return fs
+      .access(file, fsConstants.W_OK)
+      .then(() => false)
+      .catch(() => true);
+  }
+
+  it("carries the flow file's mode across the swap", async () => {
+    // The scratch file is created under the process umask and rename carries
+    // ITS mode over, so without preserving it every append quietly rewrote the
+    // flow file's permissions to 0644.
+    const file = path.join(root, "flow.yaml");
+    await fs.writeFile(file, "steps: []\n", "utf8");
+    await fs.chmod(file, 0o600);
+
+    await writeNewFlowFile(file, "steps: []\n");
+
+    expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
+  });
+
+  it("refuses to overwrite a read-only flow file", async () => {
+    // The swap needs permission on the DIRECTORY, so it would replace a
+    // `chmod 0444` file regardless — turning a plain write's EACCES into a
+    // silent success that also relaxed the mode.
+    const file = path.join(root, "flow.yaml");
+    await fs.writeFile(file, "steps: []\nkeep: me\n", "utf8");
+    await fs.chmod(file, 0o444);
+    if (!(await modeBitsBite(file))) return;
+
+    const err = await writeNewFlowFile(file, "steps: []\n").catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_FILE_WRITE_FAILED);
+    expect((err as Error).message).toMatch(/not writable \(mode 0444\)/);
+    // And it really did not touch the file.
+    expect(await fs.readFile(file, "utf8")).toContain("keep: me");
+  });
+
+  it("leaves no scratch file behind when it refuses", async () => {
+    const flows = path.join(root, ".argent", "flows");
+    await fs.mkdir(flows, { recursive: true });
+    const file = path.join(flows, "flow.yaml");
+    await fs.writeFile(file, "steps: []\n", "utf8");
+    await fs.chmod(file, 0o444);
+    if (!(await modeBitsBite(file))) return;
+
+    await writeNewFlowFile(file, "steps: []\n").catch(() => {});
+
+    expect(await fs.readdir(flows)).toEqual(["flow.yaml"]);
+  });
+
+  it("still creates a flow file that does not exist yet", async () => {
+    // The control: nothing to preserve and nothing to be refused by.
+    const file = path.join(root, "fresh.yaml");
+    await writeNewFlowFile(file, "steps: []\n");
+    expect(await fs.readFile(file, "utf8")).toBe("steps: []\n");
+  });
+});
+
+describe("mkdirFailureHint arms", () => {
+  // The flows-directory half of writeNewFlowFile's classification. Only its
+  // wrapping was covered; each errno arm names a different cause, and the
+  // ENOTDIR one — a `project_root` that names a FILE — is the mistake the hint
+  // exists for.
+  let root: string;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "flow-mkdir-hint-"));
+  });
+
+  afterEach(async () => {
+    await fs.chmod(root, 0o755).catch(() => {});
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("blames a project_root that names a file, not a directory", async () => {
+    const asFile = path.join(root, "notadir");
+    await fs.writeFile(asFile, "", "utf8");
+    const flows = path.join(asFile, ".argent", "flows");
+
+    const err = await writeNewFlowFile(path.join(flows, "x.yaml"), "steps: []\n").catch(
+      (e: unknown) => e
+    );
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_FILE_WRITE_FAILED);
+    expect(getFailureSignal(err)?.failure_stage).toBe("flow_dir_create");
+    expect((err as Error).message).toContain("(ENOTDIR)");
+    expect((err as Error).message).toContain(
+      "check that project_root names a directory rather than a file"
+    );
+  });
+
+  it("blames the nearest existing parent when it is not writable", async () => {
+    await fs.chmod(root, 0o555);
+    if (
+      await fs.access(root, fsConstants.W_OK).then(
+        () => true,
+        () => false
+      )
+    )
+      return;
+    const flows = path.join(root, ".argent", "flows");
+
+    const err = await writeNewFlowFile(path.join(flows, "x.yaml"), "steps: []\n").catch(
+      (e: unknown) => e
+    );
+
+    expect((err as Error).message).toMatch(/\((EACCES|EPERM)\)/);
+    expect((err as Error).message).toContain("nearest existing parent");
+  });
+
+  it("blames the name length when the path is too long for the filesystem", async () => {
+    // ENAMETOOLONG out of mkdir -p, which must not read as a permissions
+    // problem the user would then go and not find.
+    const tooLong = path.join(root, "d".repeat(512), ".argent", "flows");
+
+    const err = await writeNewFlowFile(path.join(tooLong, "x.yaml"), "steps: []\n").catch(
+      (e: unknown) => e
+    );
+
+    expect((err as Error).message).toContain("(ENAMETOOLONG)");
+    expect((err as Error).message).toContain("longer than this filesystem allows");
   });
 });
