@@ -329,6 +329,8 @@ describe("gesture-drag abort", () => {
       if (++dispatched === 3) controller.abort();
     });
 
+    // Pin the identity too, not just the wording: it is what separates a
+    // cancel from the transport error the release can raise instead.
     await expect(
       gestureDragTool.execute(
         { chromium: api } as never,
@@ -337,7 +339,12 @@ describe("gesture-drag abort", () => {
           signal: controller.signal,
         } as never
       )
-    ).rejects.toThrow(/gesture-drag aborted - cancelled mid-drag after 3 of 301 frames/);
+    ).rejects.toMatchObject({
+      name: "AbortError",
+      message: expect.stringMatching(
+        /gesture-drag aborted - cancelled mid-drag after 3 of 301 frames/
+      ),
+    });
 
     const calls = api.dispatchMouseEvent.mock.calls.map((c) => c[0] as Record<string, unknown>);
     expect(calls.map((c) => c.type)).toEqual([
@@ -350,6 +357,50 @@ describe("gesture-drag abort", () => {
     // jumping to the end would deliver the drag the caller cancelled.
     expect(calls[3]).toMatchObject({ x: calls[2]!.x, y: calls[2]!.y });
     expect(calls[3]!.x as number).toBeLessThan(0.75 * 800 - 1);
+  });
+
+  it("still rejects with the AbortError when the release dispatch fails, carrying it as the cause", async () => {
+    // A cancel is exactly when the CDP session can be going away, so the
+    // best-effort release can reject. Awaiting it before building the abort
+    // error let the transport error replace the AbortError, so the tool's own
+    // rejection no longer said the run was cancelled.
+    const api = fakeChromiumApi();
+    const controller = new AbortController();
+    const releaseFailure = new Error("CDP session closed while releasing");
+    let dispatched = 0;
+    api.dispatchMouseEvent.mockImplementation(async (event: Record<string, unknown>) => {
+      if (++dispatched === 3) controller.abort();
+      if (event.type === "mouseReleased") throw releaseFailure;
+    });
+
+    const rejection = await gestureDragTool
+      .execute(
+        { chromium: api } as never,
+        long as never,
+        {
+          signal: controller.signal,
+        } as never
+      )
+      .catch((err: unknown) => err);
+
+    expect(rejection).toMatchObject({
+      name: "AbortError",
+      message: expect.stringMatching(
+        /gesture-drag aborted - cancelled mid-drag after 3 of 301 frames/
+      ),
+    });
+    // The transport failure is not lost: it stays reachable for the agent-facing
+    // formatter's cause-chain walk.
+    expect((rejection as Error).cause).toBe(releaseFailure);
+    // The release was still attempted, at the last dispatched pointer position.
+    const calls = api.dispatchMouseEvent.mock.calls.map((c) => c[0] as Record<string, unknown>);
+    expect(calls.map((c) => c.type)).toEqual([
+      "mousePressed",
+      "mouseMoved",
+      "mouseMoved",
+      "mouseReleased",
+    ]);
+    expect(calls[3]).toMatchObject({ x: calls[2]!.x, y: calls[2]!.y });
   });
 
   it("releases where the pointer is when the abort lands on the final frame", async () => {
