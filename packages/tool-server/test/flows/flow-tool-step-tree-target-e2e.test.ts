@@ -81,12 +81,19 @@ function nativeApi(hierarchyReads: string[]): NativeDevtoolsApi {
   } as unknown as NativeDevtoolsApi;
 }
 
+type ToolCall = { id: string; args: Record<string, unknown> };
+
 // resolveService is the only faked seam; the tool surface just has to answer
-// the launch's restart-app and the flow's `tool:` step.
-function mockRegistry(api: NativeDevtoolsApi): Registry {
+// the launch's restart-app and the flow's `tool:` step. `toolCalls` records
+// what each dispatch carried, which is how a directive's own geometry (the
+// rotate below) is observable without a second seam.
+function mockRegistry(api: NativeDevtoolsApi, toolCalls: ToolCall[] = []): Registry {
   return {
     resolveService: async () => api,
-    invokeTool: async (id: string) => (id === "list-devices" ? { devices: [] } : { ok: true }),
+    invokeTool: async (id: string, args: Record<string, unknown>) => {
+      toolCalls.push({ id, args });
+      return id === "list-devices" ? { devices: [] } : { ok: true };
+    },
     getTool: () => ({ inputSchema: { properties: { udid: {} } } }),
   } as unknown as Registry;
 }
@@ -100,6 +107,20 @@ async function writeFlow(name: string, yaml: Parameters<typeof serializeFlow>[0]
 function asRun(r: FlowRunResult | { notice: string }): FlowRunResult {
   if (!("steps" in r)) throw new Error(`expected a run result, got notice: ${r.notice}`);
   return r;
+}
+
+/** Run an already-written flow on the poisoned device. */
+async function runFlow(
+  name: string,
+  hierarchyReads: string[],
+  toolCalls: ToolCall[] = []
+): Promise<FlowRunResult> {
+  return asRun(
+    await createRunFlowTool(mockRegistry(nativeApi(hierarchyReads), toolCalls)).execute(
+      {},
+      { name, project_root: tmpDir, device: DEVICE }
+    )
+  );
 }
 
 /** `launch APP -> assert -> tool: <name> -> assert` on the poisoned device. */
@@ -117,12 +138,7 @@ async function runToolStepFlow(
       { kind: "assert", condition: "visible", selector: { identifier: "ready" } },
     ],
   });
-  return asRun(
-    await createRunFlowTool(mockRegistry(nativeApi(hierarchyReads))).execute(
-      {},
-      { name, project_root: tmpDir, device: DEVICE }
-    )
-  );
+  return runFlow(name, hierarchyReads);
 }
 
 beforeEach(async () => {
@@ -179,5 +195,118 @@ describe("a tool step's tree target against a wedged sibling (end-to-end)", () =
     expect(result.steps[3].reason).toMatch(/RPC timed out/i);
     // Only the pinned read before the tool step ever reached the hierarchy.
     expect(hierarchyReads).toEqual([APP]);
+  });
+
+  it("reads the screen aspect for a rotate after a foreground-neutral tool step", async () => {
+    // The SILENT variant, and why this asserts on the reads and the geometry
+    // rather than on the step: `fetchScreenAspect` swallows a failed read and
+    // returns undefined, so dropping the target degrades the orbit to the
+    // legacy normalized ellipse with the step still green and the degradation
+    // itself named nowhere. The rotate's settle converges in two identical
+    // reads, so the third read after them IS the aspect read, proving it came
+    // back and went to the launched app; radiusX/radiusY then proves it was
+    // used, where a swallowed error dispatches the legacy single `radius`.
+    // The step's own report is not silent in that state, but what it carries
+    // is the settle's unsettled-gesture warning, about a read the same outage
+    // took - so the assert below is that a healthy rotate raises none.
+    const hierarchyReads: string[] = [];
+    const toolCalls: ToolCall[] = [];
+    await writeFlow("rotate-after-tool", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: APP },
+        { kind: "assert", condition: "visible", selector: { identifier: "ready" } },
+        { kind: "tool", name: "screenshot", args: {} },
+        { kind: "rotate", by: 90 },
+      ],
+    });
+    const result = await runFlow("rotate-after-tool", hierarchyReads, toolCalls);
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "launch:pass",
+      "assert:pass",
+      "tool:pass",
+      "rotate:pass",
+    ]);
+    // assert, then the rotate's two settle reads, then the aspect read.
+    expect(hierarchyReads).toEqual([APP, APP, APP, APP]);
+    expect(result.steps[3]?.warning).toBeUndefined();
+    const rotations = toolCalls.filter((c) => c.id === "gesture-rotate");
+    expect(rotations).toHaveLength(1);
+    // The 400x800 window's aspect, not the aspect-1 fallback: a physical
+    // circle has two radii, and on this screen they differ.
+    expect(rotations[0].args.radius).toBeUndefined();
+    expect(rotations[0].args.radiusX).toEqual(expect.any(Number));
+    expect(rotations[0].args.radiusY).toEqual(expect.any(Number));
+    expect(rotations[0].args.radiusX).not.toEqual(rotations[0].args.radiusY);
+  });
+
+  it("keeps the arbiter when a run: fragment ends in a tool step", async () => {
+    // `execRunStep` inlines a fragment into the PARENT's ExecState, so a
+    // shared helper ending in a raw `tool:` step un-pins every caller.
+    // Dropping the target instead of demoting it kills the parent's next read,
+    // in a file the fragment never names.
+    const hierarchyReads: string[] = [];
+    await writeFlow("dismiss", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tool", name: "screenshot", args: {} }],
+    });
+    await writeFlow("fragment-tool", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: APP },
+        { kind: "assert", condition: "visible", selector: { identifier: "ready" } },
+        { kind: "run", flow: "dismiss.yaml" },
+        { kind: "assert", condition: "visible", selector: { identifier: "ready" } },
+      ],
+    });
+    const result = await runFlow("fragment-tool", hierarchyReads);
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "launch:pass",
+      "assert:pass",
+      "run:pass",
+      "tool:pass",
+      "assert:pass",
+    ]);
+    expect(result.ok).toBe(true);
+    // One read per assert; the second is the one the parent loses if the
+    // fragment's tool step drops the target.
+    expect(hierarchyReads).toEqual([APP, APP]);
+  });
+
+  it("evaluates a when: guard after a tool step instead of stopping the run", async () => {
+    // An unreadable tree makes the guard indeterminate, and `execWhenStep`
+    // reports that as `error` plus `state.stopped` - so a dropped target turns
+    // one dead read into a run-level stop that skips the block AND every later
+    // step, not just one failed assert.
+    const hierarchyReads: string[] = [];
+    await writeFlow("when-after-tool", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: APP },
+        { kind: "assert", condition: "visible", selector: { identifier: "ready" } },
+        { kind: "tool", name: "screenshot", args: {} },
+        {
+          kind: "when",
+          condition: { kind: "ui", condition: "visible", selector: { identifier: "ready" } },
+          steps: [{ kind: "echo", message: "guard met" }],
+        },
+        { kind: "assert", condition: "visible", selector: { identifier: "ready" } },
+      ],
+    });
+    const result = await runFlow("when-after-tool", hierarchyReads);
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "launch:pass",
+      "assert:pass",
+      "tool:pass",
+      "when:pass",
+      "echo:pass",
+      "assert:pass",
+    ]);
+    expect(result.ok).toBe(true);
+    // assert, the guard's probe read, then the trailing assert.
+    expect(hierarchyReads).toEqual([APP, APP, APP]);
   });
 });
