@@ -315,6 +315,51 @@ describe("flow-start-recording edge cases", () => {
     expect(result.message).not.toContain("did not parse");
   });
 
+  it("carries a coverage-violating block and counts the file when a live take is restarted", async () => {
+    // Host mode WITH a live session: the carried block and the discarded count
+    // are two reads of the same file, and both must skip requires validation.
+    // The block below is one `validateRequires` refuses (the launch declares no
+    // android id), which is exactly the file a re-record exists to repair - so
+    // reading it strictly would report "did not parse" and drop the fence.
+    // The session's in-memory copy is left deliberately behind the file, so a
+    // count taken from the session would report 1 rather than 3.
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "fenced-live", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    await flowInsertEchoTool.execute(
+      {},
+      { name: "fenced-live", project_root: tmpDir, message: "in memory" }
+    );
+    // Hand-written: serializeFlow would refuse to emit this file.
+    const violating = [
+      "requires: { platform: [ios, android] }",
+      "steps:",
+      "  - launch: { ios: com.a }",
+      "  - echo: hand-edited two",
+      "  - echo: hand-edited three",
+      "",
+    ].join("\n");
+    expect(() => parseFlow(violating)).toThrow(/declares no app id for android/);
+    await fs.writeFile(path.join(flowsDirFor(tmpDir), "fenced-live.yaml"), violating, "utf8");
+
+    const result = await flowStartRecordingTool.execute(
+      {},
+      { name: "fenced-live", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const requires = { platform: ["ios" as const, "android" as const] };
+    expect(result.restarted).toBe(true);
+    expect(result.discardedSteps).toBe(3);
+    expect(result.message).toContain("the previous take (3 steps) was discarded");
+    expect(result.message).toContain(
+      "Kept the existing requires block (platform: [ios, android]) - edit the YAML to change it"
+    );
+    expect(result.message).not.toContain("did not parse");
+    expect(parseFlow(result.flowFile).requires).toEqual(requires);
+    expect(parseFlow(await readFlowFile("fenced-live")).requires).toEqual(requires);
+  });
+
   it("mentions no requires block when the replaced file had none", async () => {
     await flowStartRecordingTool.execute(
       {},

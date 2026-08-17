@@ -85,6 +85,7 @@ vi.mock("../src/utils/chromium-discovery", async () => {
 vi.mock("../src/utils/vega-sdk", () => ({ listVvdImages: vi.fn(async () => []) }));
 
 import { listDevicesTool } from "../src/tools/devices/list-devices";
+import { __resetAndroidRuntimeKindCacheForTesting } from "../src/utils/adb";
 import { __resetVegaBinaryCacheForTests } from "../src/utils/vega-cli";
 import { listVvdImages } from "../src/utils/vega-sdk";
 
@@ -152,6 +153,9 @@ function simRemoteJson(): string {
 
 beforeEach(() => {
   execFileMock.mockReset();
+  // The runtime-kind memo outlives a single call, so a cached verdict would let
+  // a later case pass without the probe it means to exercise.
+  __resetAndroidRuntimeKindCacheForTesting();
 });
 
 describe("list-devices", () => {
@@ -219,6 +223,40 @@ describe("list-devices", () => {
 
     // AVDs list comes from `emulator -list-avds`.
     expect(result.avds).toEqual([{ name: "Pixel_3a_API_34" }, { name: "Pixel_7_API_34" }]);
+  });
+
+  it("tags Android rows with runtimeKind, the enrichment this tool opts into", async () => {
+    // listAndroidDevices skips the `pm list features` probe unless asked, so this
+    // tool's opt-in is the only thing putting the field on an Android row. A
+    // flow's `requires: { runtimeKind }` auto-detect filters on it, and dropping
+    // the opt-in loses it silently.
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "adb" && args[0] === "devices") {
+        return {
+          stdout: "List of devices attached\nemulator-5560\tdevice\nemulator-5562\tdevice\n",
+          stderr: "",
+        };
+      }
+      if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
+        const shellCmd = args[3] ?? "";
+        if (shellCmd === "pm list features") {
+          return args[1] === "emulator-5560"
+            ? { stdout: "feature:android.software.leanback\n", stderr: "" }
+            : { stdout: "feature:android.hardware.touchscreen\n", stderr: "" };
+        }
+        return { stdout: "", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+    const android = result.devices.filter((d) => d.platform === "android") as Array<{
+      serial: string;
+      runtimeKind?: "mobile" | "tv";
+    }>;
+    expect(android).toHaveLength(2);
+    expect(android.find((d) => d.serial === "emulator-5560")?.runtimeKind).toBe("tv");
+    expect(android.find((d) => d.serial === "emulator-5562")?.runtimeKind).toBe("mobile");
   });
 
   it("readAvdName prefers the modern avd_name prop over the legacy one (now probed concurrently)", async () => {

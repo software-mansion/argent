@@ -1923,6 +1923,23 @@ describe("countStepsOnDisk", () => {
     expect(await countStepsOnDisk(file)).toBeUndefined();
   });
 
+  it("counts a take whose requires block is coverage-violating", async () => {
+    // The case the count parses with `skipRequires`: the block fences a platform
+    // the launch step has no id for yet, and those steps are still countable, so
+    // judging the block here would report a real loss as unknown.
+    const yaml = [
+      "requires: { platform: [ios, android] }",
+      "steps:",
+      "  - launch: { ios: com.a }",
+      "  - echo: mid-take",
+      "",
+    ].join("\n");
+    const file = await write(yaml);
+    // The fixture only bites while the block is genuinely refused.
+    expect(() => parseFlow(yaml)).toThrow(/declares no app id for android/);
+    expect(await countStepsOnDisk(file)).toBe(2);
+  });
+
   it("returns undefined for a directory in the file's place", async () => {
     const asDir = path.join(dir, "flow-dir.yaml");
     await fs.mkdir(asDir);
