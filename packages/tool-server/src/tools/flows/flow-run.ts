@@ -1644,6 +1644,22 @@ async function leadingRun(flow: FlowFile, rootEntry: RunStackEntry): Promise<Lea
 }
 
 /**
+ * The block a RUN of this flow is judged against, for readers that hold the
+ * parsed file but not the runner: {@link leadingRun}'s fold, anchored the way
+ * the run anchors its `run:` targets. A pre-flight that reported the file's own
+ * block instead would answer "runs anywhere" for a root whose leading fragment
+ * the runner then refuses on.
+ */
+export async function effectiveRequires(
+  flow: FlowFile,
+  filePath: string,
+  flowName: string
+): Promise<FlowRequires | undefined> {
+  const canonical = await canonicalFlowPath(filePath);
+  return (await leadingRun(flow, { canonical, display: flowName })).requires;
+}
+
+/**
  * {@link leadingRun}'s recursion, plus the third outcome it needs internally:
  * {@link NO_EXECUTABLE_STEP} — this flow, and everything its leading `run:`s
  * pulled in, contribute no executable step. That is not a reason to give up on

@@ -3059,6 +3059,114 @@ describe("flow-read-prerequisite", () => {
     expect(result.executionPrerequisite).toBe("");
   });
 
+  it("reports the requires block in its YAML spelling", async () => {
+    // The other half of the start contract: a run on a target this block
+    // excludes is refused, so a pre-flight that reported only the
+    // prerequisite would let the agent satisfy state for a run that never
+    // starts.
+    const dir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "tv-only.yaml"),
+      serializeFlow({
+        executionPrerequisite: "App on home screen",
+        requires: { platform: ["ios", "android"], runtimeKind: "tv" },
+        steps: [{ kind: "echo", message: "Step 1" }],
+      })
+    );
+
+    const result = await flowReadPrerequisiteTool.execute(
+      {},
+      { name: "tv-only", project_root: tmpDir }
+    );
+
+    expect(result.executionPrerequisite).toBe("App on home screen");
+    expect(result.requires).toBe("platform: [ios, android], runtimeKind: tv");
+  });
+
+  it("reports an empty requires when the flow runs anywhere", async () => {
+    // Same convention as executionPrerequisite: "" is "no contract", so one
+    // absent-value rule covers both halves of the result.
+    const dir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "anywhere.yaml"),
+      serializeFlow({ executionPrerequisite: "", steps: [{ kind: "echo", message: "Hello" }] })
+    );
+
+    const result = await flowReadPrerequisiteTool.execute(
+      {},
+      { name: "anywhere", project_root: tmpDir }
+    );
+
+    expect(result.requires).toBe("");
+  });
+
+  it("reports the block folded across the leading run: chain, not the file's own", async () => {
+    // The root declares nothing, so its own block is "runs anywhere" — but the
+    // fragment its first step enters is certain to execute, and the runner
+    // folds that fragment's block into what it judges the run by. Reporting
+    // the file's own block here would answer "runs anywhere" for a run the
+    // runner refuses on every non-ios target.
+    const dir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "ios-fragment.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        requires: { platform: ["ios"] },
+        steps: [{ kind: "echo", message: "from the fragment" }],
+      })
+    );
+    await fs.writeFile(
+      path.join(dir, "composed-root.yaml"),
+      serializeFlow({
+        executionPrerequisite: "App on home screen",
+        steps: [{ kind: "run", flow: "ios-fragment.yaml" }],
+      })
+    );
+
+    const result = await flowReadPrerequisiteTool.execute(
+      {},
+      { name: "composed-root", project_root: tmpDir }
+    );
+
+    expect(result.requires).toBe("platform: [ios]");
+  });
+
+  it("anchors a symlinked root's chain at the real file, as the runner does", async () => {
+    // The fragment sits beside the REAL file, so only a canonicalized anchor
+    // reaches it. Without one this answers "runs anywhere" for a run the
+    // runner still refuses - the exact divergence the field exists to close.
+    const dir = path.join(tmpDir, ".argent", "flows");
+    const vault = path.join(tmpDir, "vault");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.mkdir(vault, { recursive: true });
+    await fs.writeFile(
+      path.join(vault, "frag.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        requires: { platform: ["ios"] },
+        steps: [{ kind: "echo", message: "from the vault" }],
+      })
+    );
+    await fs.writeFile(
+      path.join(vault, "real-root.yaml"),
+      serializeFlow({
+        executionPrerequisite: "App on home screen",
+        steps: [{ kind: "run", flow: "frag.yaml" }],
+      })
+    );
+    await fs.symlink(path.join(vault, "real-root.yaml"), path.join(dir, "sym-root.yaml"));
+
+    const result = await flowReadPrerequisiteTool.execute(
+      {},
+      { name: "sym-root", project_root: tmpDir }
+    );
+
+    expect(result.requires).toBe("platform: [ios]");
+  });
+
   it("throws when the flow file does not exist", async () => {
     await expect(
       flowReadPrerequisiteTool.execute({}, { name: "nonexistent", project_root: tmpDir })

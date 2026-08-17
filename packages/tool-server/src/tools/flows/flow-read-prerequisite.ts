@@ -1,8 +1,8 @@
 import { z } from "zod";
 import * as fs from "node:fs/promises";
 import type { FileInputSpec, ToolContext, ToolDefinition } from "@argent/registry";
-import { parseFlow } from "./flow-utils";
-import { resolveFlowSource } from "./flow-run";
+import { describeRequires, parseFlow } from "./flow-utils";
+import { effectiveRequires, resolveFlowSource } from "./flow-run";
 
 const zodSchema = z
   .object({
@@ -66,7 +66,7 @@ const fileInputs: FileInputSpec[] = [
 
 export const flowReadPrerequisiteTool: ToolDefinition<
   z.infer<typeof zodSchema>,
-  { flow: string; executionPrerequisite: string }
+  { flow: string; executionPrerequisite: string; requires: string }
 > = {
   id: "flow-read-prerequisite",
   interaction: {
@@ -75,12 +75,17 @@ export const flowReadPrerequisiteTool: ToolDefinition<
     failedMsg: ({ failureSignal }) =>
       `Failed to read flow prerequisite: ${failureSignal.error_code}`,
   },
-  description: `Read the execution prerequisite of a flow without running it — a saved flow from the .argent/flows/ directory, or an explicit boundary-managed flow_path.
-Returns the prerequisite description so you can verify the required state is met before calling flow-execute.
-Use when you need to check what app/simulator state is required before executing a flow; pass the same flow
-source (name or flow_path) you will pass to flow-execute, so the prerequisite you read is the contract of
-the flow that will actually run.
-Fails if the flow file does not exist.
+  description: `Read what a flow demands before it runs, without running it — a saved flow from the .argent/flows/ directory, or an explicit boundary-managed flow_path.
+Returns both halves of that contract: \`executionPrerequisite\`, the app/simulator state the flow expects to
+start from, and \`requires\`, the target it must be given — its YAML spelling ("platform: [ios, android],
+runtimeKind: tv"), or "" when the flow runs anywhere. A target that does not satisfy \`requires\` is refused,
+not run, so check both before calling flow-execute.
+\`requires\` is the run's EFFECTIVE block: the blocks of every fragment the leading \`run:\` chain enters fold
+into it, so it can name constraints the flow file itself does not declare.
+Use when you need to check what state and which target a flow needs before executing it; pass the same flow
+source (name or flow_path) you will pass to flow-execute, so what you read is the contract of the flow that
+will actually run.
+Fails if the flow file does not exist, or if the folded requires block can never be satisfied (the same refusal flow-execute gives).
 Address the flow exactly as you will address it in flow-execute: name or flow_path, one and only one; supplying both or neither is rejected.`,
   zodSchema,
   fileInputs,
@@ -98,10 +103,17 @@ Address the flow exactly as you will address it in flow-execute: name or flow_pa
       ctx?.fileInputs?.flow_path
     );
     const flow = parseFlow(await fs.readFile(filePath, "utf8"));
+    // The run's folded block, not this file's: a root declaring nothing is
+    // still refused for what its leading `run:` fragments demand.
+    const requires = await effectiveRequires(flow, filePath, flowName);
 
     return {
       flow: flowName,
       executionPrerequisite: flow.executionPrerequisite,
+      // Rendered, not structured: "" is "no contract" exactly as for
+      // executionPrerequisite, and the string is the YAML spelling every
+      // refusal quotes back.
+      requires: requires ? describeRequires(requires) : "",
     };
   },
 };
