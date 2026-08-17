@@ -470,7 +470,10 @@ function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
  * there still returns a lone tree matched against nothing. After a successful
  * first read it buys a fresher sample, since the retry's tree comes back
  * whether or not the fingerprints match, and with it the settle's only chance
- * to converge.
+ * to converge. The best-effort return also reaches `snapshot: { cropOn }`
+ * through {@link waitForFrame}, where the whole retry widens the gap between
+ * the read the crop rectangle comes from and the capture, so the crop can be
+ * measured against a layout the pixels no longer show.
  *
  * `skipProvenOutage` rethrows {@link ActionEnv.treeOutage} instead of buying
  * that whole settle again, window and floor reads alike. Not a shorter budget:
