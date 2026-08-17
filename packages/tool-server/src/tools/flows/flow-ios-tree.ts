@@ -446,8 +446,16 @@ export async function queryFullHierarchyTree(
         throw err;
       }
       if (target.probeAnswered) {
+        // Why this refusal names a `launch:` step where the answered-state one
+        // below names any raw `tool:` step: auto-resolve's fan-out is a
+        // Promise.all over EVERY connection, so this still-connected, silent
+        // app sinks it too and the unpinned branch's arbiter then re-targets it
+        // for the full 15s getFullHierarchy - demoting the pin cannot rescue
+        // this state. The refusal below can offer it because an app that
+        // answers never sinks the fan-out at all. Hardening it against
+        // per-connection failures is the follow-up named in the PR description.
         throw new FailureError(
-          `${bundleId} (the launched app) stopped answering Application.getState - the probe timed out although an earlier one in this run answered, so the app's main queue is no longer being serviced. For a pinned app that is the suspension iOS applies once a flow leaves it (e.g. a tap that opened another app), and a suspended app's hierarchy is not what is on screen; reading it anyway would park on the same unserviced queue and time out again. If this flow's subject IS the other app, run any raw \`tool:\` step - that clears the pin and returns reads to frontmost auto-resolve; otherwise make the flow return to ${bundleId} before reading the UI, or \`launch\` it again.`,
+          `${bundleId} (the launched app) stopped answering Application.getState - the probe timed out although an earlier one in this run answered, so the app's main queue is no longer being serviced. For a pinned app that is the suspension iOS applies once a flow leaves it (e.g. a tap that opened another app), and a suspended app's hierarchy is not what is on screen; reading it anyway would park on the same unserviced queue and time out again. If this flow's subject IS the other app, give the flow a \`launch:\` step for that app - it re-pins reads to it, and a pinned read probes only the app it names, so the suspended ${bundleId} is never touched; a raw \`tool:\` step does not work here, because demoting the pin sends reads back to auto-resolve, which probes every connection at once and is sunk by this same silent one. Otherwise make the flow return to ${bundleId} before reading the UI, or \`launch\` it again.`,
           {
             // The timeout's own code, NOT
             // NATIVE_TARGET_SINGLE_APP_NOT_FOREGROUND: no app state was
