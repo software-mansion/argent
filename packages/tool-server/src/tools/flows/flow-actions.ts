@@ -900,7 +900,13 @@ async function settleForGesture(env: ActionEnv): Promise<GestureSettle> {
     try {
       await settleTree(env, { skipProvenOutage: true });
     } catch (err) {
-      // tree-source outage — this gesture needs no frame from it, so dispatch anyway
+      // tree-source outage — this gesture needs no frame from it, so dispatch
+      // anyway. Untyped because a settle has nothing else to throw: every read
+      // is validated by `parseDescribeResult` before `treeFingerprint` walks it,
+      // so the walk's own unguarded recursion is unreachable on every adapter.
+      // Should one ever serve past that, the message it attributes to the device
+      // would be wrong on a path that goes green, where a selector step would
+      // error on the same tree.
       warning = unsettledGestureWarning(err);
     }
   }
