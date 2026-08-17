@@ -858,10 +858,10 @@ type GestureSettle = { aborted?: true; warning?: string };
  * outage. Only the outage path warns; a window that expired without converging
  * did settle.
  *
- * It is also the caller `skipProvenOutage` exists for: an app that cannot load
- * the instrumentation fails every read (an Apple system app, which flows drive
- * by coordinates for exactly that reason), so every step of such a flow arrives
- * here and would otherwise be charged a window for the same verdict.
+ * It is also the caller `skipProvenOutage` exists for: flows drive an Apple
+ * system app by coordinates because argent refuses it a flow tree by policy on
+ * every read that names one, so every step of such a flow arrives here and
+ * would otherwise be charged a window for the same verdict.
  *
  * A platform with no tree source at all is the one case that settles nothing and
  * reports nothing. `ios-remote` is coordinate-driven by necessity —
