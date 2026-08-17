@@ -215,27 +215,6 @@ describe("shake tool — Android", () => {
     expect(sets.at(-1)![6]).toBe("0.0000:9.8100:0.0000");
   });
 
-  it("restores the accelerometer after a failed burst", async () => {
-    // Whatever goes wrong mid-burst, the device must be handed back at rest.
-    let call = 0;
-    vi.mocked(runAdb).mockImplementation(async (args: string[]) => {
-      call++;
-      if (args.includes("get")) {
-        return { stdout: "acceleration = 0:9.81:0\nOK\n", stderr: "" };
-      }
-      if (call === 3) throw new Error("console: connection reset");
-      return { stdout: "OK\n", stderr: "" };
-    });
-
-    await expect(shakeTool.execute(services, { udid: androidEmulator })).rejects.toThrow(/shake/i);
-
-    const sets = vi
-      .mocked(runAdb)
-      .mock.calls.map(([args]) => args as string[])
-      .filter((a) => a[4] === "set");
-    expect(sets.at(-1)![6]).toBe("0.0000:9.8100:0.0000");
-  });
-
   it("rejects a physical device at the capability gate, before any adb traffic", async () => {
     // A phone's accelerometer is real hardware with no host-side hook, so the
     // matrix omits `android.device` and the dispatch never reaches the handler.

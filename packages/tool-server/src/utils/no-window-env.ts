@@ -1,6 +1,8 @@
 /**
- * Shared parsing for the two headless-boot env vars, so `boot-device` and the
- * window-shake animation read them identically.
+ * The two headless-boot env vars, parsed in one place. `boot-device` reads
+ * both; the window-shake animation reads the iOS one, and has to agree with
+ * `boot-device` about it or it would script a window that was deliberately
+ * never opened.
  *
  * Truthy: "1", "true", "yes" (case-insensitive, trimmed). Anything else,
  * including "false", "no", "0", or empty, is disabled.
