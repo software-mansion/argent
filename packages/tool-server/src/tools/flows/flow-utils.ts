@@ -2568,7 +2568,7 @@ function parseWhenCondition(
       entry,
       allowPlatform
         ? `${label} takes no timeout — the guard is evaluated with the short assert grace so a skipped block never adds a full await wait`
-        : `${label} takes no timeout — the guard is evaluated with the short assert grace at every iteration boundary, so a long drain never multiplies a full await wait`
+        : `${label} takes no timeout — the guard is evaluated with the short assert grace at every iteration boundary, so a long drain never multiplies a full await wait; end the block's steps with an \`await:\` for the state the next probe should read instead`
     );
   }
   if (present[0] === "platform") {

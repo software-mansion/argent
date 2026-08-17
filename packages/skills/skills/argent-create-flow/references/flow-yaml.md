@@ -206,7 +206,14 @@ Four deliberate edges stop short of the paste:
 
 A drain's closing line is an evaluated outcome, not structure, so unlike the markers it IS counted: one pass when it converged, one fail at the cap, one `error` when the guard cannot be evaluated, or one `skip` when the run is cancelled mid-block (the one closing line a count-bounded block can also emit).
 
-Each iteration boundary costs the ~1s assert grace, and a `tool:` step's full result stays in the report once per iteration with nothing truncating it - a screenshot-returning tool inlines one image per pass. So keep drains short, nesting shallow, and result-heavy tools out of repeat bodies.
+Each iteration boundary costs the ~1s assert grace, and that grace is all the settling a drain does. The guard is a probe of the screen NOW, not a wait: `until` takes no `timeout` by design. **The body carries its own settling.** When its effect is asynchronous or slow, end the body with an `await:` for the state the next probe should read - that wait takes a full `timeout:`, and it is the tunable you get.
+
+Without it the probe reads the screen mid-effect, in either direction:
+
+- A `hidden` guard is satisfied by the first read that finds no match. A list that tears down and rebuilds asynchronously is probed inside its own re-render gap, so the drain exits after one iteration and **passes with the list still not empty**.
+- An effect that lands after the grace leaves the probe on stale state, so the body fires again. The drain converges on the target and then overshoots it: the run is green and the app is left holding more than the flow asserted.
+
+A `tool:` step's full result stays in the report once per iteration with nothing truncating it - a screenshot-returning tool inlines one image per pass. So keep drains short, nesting shallow, and result-heavy tools out of repeat bodies.
 
 ### What a repeat block is not
 

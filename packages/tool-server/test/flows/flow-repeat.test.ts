@@ -350,12 +350,14 @@ describe("repeat: parse/serialize", () => {
     ).toThrow(/repeat\.until takes no platform.*when: \{ platform/is);
   });
 
-  it("rejects a timeout on the until guard", () => {
+  it("rejects a timeout on the until guard, pointing at the body's own await", () => {
+    // The refusal carries the remedy: an author who wants to widen the settling
+    // widens the body, since the guard's own window is not theirs to set.
     expect(() =>
       parseFlow(
         "steps:\n  - repeat: { until: { hidden: X, timeout: 5000 } }\n    steps: [{ tap: A }]\n"
       )
-    ).toThrow(/repeat\.until takes no timeout/i);
+    ).toThrow(/repeat\.until takes no timeout.*end the block's steps with an `await:`/is);
   });
 
   it("rejects a {{secret:…}} placeholder in the until guard", () => {
@@ -1342,6 +1344,339 @@ describe("repeat: until", () => {
     ]);
     expect(counts(result)).toEqual({ ok: false, passed: 1, failed: 0, skipped: 0, errored: 1 });
   }, 20000);
+
+  /**
+   * Reads the list stays torn down for after a tap. Sized above what one guard
+   * probe can spend — it polls its ~1s grace every 300ms, six reads at the very
+   * most — so the gap outlasts any probe of the screen and only a step that
+   * WAITS for the rebuilt list gets past it. At one read wide it would instead
+   * be consumed by any step that reads the tree once, whatever that step's
+   * polarity, and the tests below would agree by accident rather than by the
+   * property they are about.
+   */
+  const GAP_READS = 8;
+
+  /**
+   * A three-row list that rebuilds asynchronously: the next {@link GAP_READS}
+   * reads after each tap find the list gone, every read after those finds the
+   * rows that are left. That is refetch-after-mutate (equally a key-less
+   * re-render, or a list data change) modelled off the READ SEQUENCE rather
+   * than off the wall clock, so the three tests below differ in the flow they
+   * run and in nothing else.
+   *
+   * The page chrome outlives the gap, as it does in a real re-render. Nothing
+   * marks those reads as suspect either — no degraded hint, and the selector
+   * has not matched earlier in the same probe — so the drain trusts them and
+   * concludes `hidden` from them, which is exactly the hazard below.
+   */
+  function useRebuildingList(): void {
+    let gapReads = 0;
+    onTap = () => {
+      gapReads = GAP_READS;
+    };
+    currentTree = () => {
+      const mid = gapReads > 0;
+      if (mid) gapReads--;
+      const left = Math.max(0, 3 - tapCount);
+      return screen([
+        n({ label: `${left} left`, frame: { x: 0.1, y: 0.8, width: 0.5, height: 0.05 } }),
+        ...(mid
+          ? []
+          : [
+              n({ identifier: "notification-list", frame: { x: 0, y: 0, width: 1, height: 0.7 } }),
+              ...Array.from({ length: left }, notification),
+            ]),
+      ]);
+    };
+  }
+
+  /** Rows on screen once the list has finished rebuilding. */
+  function rowsLeft(): number {
+    // Absorbs however much of a re-render gap the run left pending.
+    for (let i = 0; i < GAP_READS; i++) currentTree();
+    return currentTree().children.filter((c) => c.label === "Clear notification").length;
+  }
+
+  it("takes the body's own re-render gap for convergence — recorded, not endorsed", async () => {
+    // A REAL HAZARD, pinned as it stands rather than as a nicety: `hidden` is
+    // satisfied by the first poll that finds no match, and the guard is probed
+    // directly after the body mutated the screen — so a body that tears its
+    // list down and rebuilds it asynchronously is read inside its own gap, and
+    // the drain absorbs that gap as convergence: one iteration, a green pass,
+    // two thirds of the list still on screen.
+    //
+    // Deliberately unguarded — do not "fix" this. No signal in a read separates
+    // a re-render gap from a converged drain, so a confirming hold could only
+    // be a guess: it would cost every clean drain its length and still miss a
+    // gap longer than it. And the probe is `when:`/`assert:`'s own
+    // (`probeWhenCondition`), so reading the screen differently under `until`
+    // would give one condition two meanings in one file. The settling belongs
+    // to the body instead, which is what the next test writes.
+    useRebuildingList();
+    await writeFlow("gap-drain", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "repeat",
+          spec: {
+            mode: "until",
+            until: { kind: "ui", condition: "hidden", selector: { text: "Clear notification" } },
+            max: 15,
+          },
+          steps: [TAP],
+        },
+      ],
+    });
+
+    const result = await run("gap-drain");
+
+    expect(result.ok).toBe(true);
+    expect(tapCount).toBe(1);
+    expect(shape(result.steps)).toEqual([
+      'repeat pass until hidden "Clear notification" (max 15) @0',
+      "repeat pass iteration 1 @1",
+      'tap pass "Clear notification" @1',
+      'repeat pass hidden text="Clear notification" after 1 iteration @0',
+    ]);
+    // The verdict line is true about the instant it was taken and the run is
+    // green, so with no trailing assertion nothing in the report says the list
+    // the drain existed to empty is still two thirds full.
+    expect(counts(result)).toEqual({ ok: true, passed: 2, failed: 0, skipped: 0, errored: 0 });
+    expect(rowsLeft()).toBe(2);
+  }, 20000);
+
+  it("drains that same list correctly when the body waits for the rebuild", async () => {
+    // The remedy, on the identical fixture: the body ends with an `await:` for
+    // the state the next probe must read. What clears the gap is POLARITY, not
+    // budget. A negative condition — the guard, and an `await: { hidden }`
+    // alike — returns on the first read that finds no match, and inside a
+    // teardown that is its very first read, so no window of any size outlasts
+    // the gap (the test below gives one a 10s budget and it still returns
+    // mid-gap). An `await:` for the rebuilt list polls a POSITIVE condition and
+    // cannot return until it sees the rebuild, so it holds the iteration open
+    // across all GAP_READS reads and the probe after it lands on a rebuilt
+    // list. Three taps, an empty list, `after 3 iterations`.
+    //
+    // Sensitivity is the tests either side: drop this one step and the very
+    // same fixture converges after ONE iteration with two rows left; keep the
+    // step but flip its polarity and it does the same. The awaited element is
+    // the list container, not a row, because the last iteration legitimately
+    // leaves no rows — a `visible` await on a row would fail the run exactly
+    // when the drain is finally right.
+    //
+    // ~11s of wall clock: three waits of GAP_READS polls 300ms apart, plus the
+    // three guard probes that come back unmet at ~1s each and the taps' own
+    // settle on top. The gap is read-driven, so load moves the clock and
+    // nothing else — hence the 40s budget it shares with the settled cart
+    // below.
+    useRebuildingList();
+    await writeFlow("settled-drain", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "repeat",
+          spec: {
+            mode: "until",
+            until: { kind: "ui", condition: "hidden", selector: { text: "Clear notification" } },
+            max: 15,
+          },
+          steps: [
+            TAP,
+            { kind: "await", condition: "visible", selector: { identifier: "notification-list" } },
+          ],
+        },
+      ],
+    });
+
+    const result = await run("settled-drain");
+
+    expect(result.ok).toBe(true);
+    expect(tapCount).toBe(3);
+    const iteration = (nth: number): string[] => [
+      `repeat pass iteration ${nth} @1`,
+      'tap pass "Clear notification" @1',
+      "await pass visible id=notification-list @1",
+    ];
+    expect(shape(result.steps)).toEqual([
+      'repeat pass until hidden "Clear notification" (max 15) @0',
+      ...iteration(1),
+      ...iteration(2),
+      ...iteration(3),
+      'repeat pass hidden text="Clear notification" after 3 iterations @0',
+    ]);
+    expect(rowsLeft()).toBe(0);
+  }, 40000);
+
+  it("takes the gap all the same when the body's wait is negative — polarity, not budget", async () => {
+    // The polarity claim above, pinned rather than asserted. Same fixture, same
+    // body shape, one `await: { hidden }` where the test above has the positive
+    // wait, and a 10s budget where the guard gets ~1s: `hidden` is satisfied by
+    // the first read that finds no match, so the wait returns on read 1 of
+    // GAP_READS having held nothing open, and the probe after it reads the same
+    // torn-down list the hazard test read. One iteration, a green pass, two
+    // rows left — the hazard intact, with a wait in the body and a budget ten
+    // times the guard's that it never needs to spend.
+    //
+    // This also pins the fixture's gap WIDTH against a regression to one read:
+    // at one read this body's own wait would consume the whole teardown, the
+    // drain would empty the list, and the remedy test above would pass for a
+    // reason that has nothing to do with the settling it is about.
+    useRebuildingList();
+    await writeFlow("gap-await", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "repeat",
+          spec: {
+            mode: "until",
+            until: { kind: "ui", condition: "hidden", selector: { text: "Clear notification" } },
+            max: 15,
+          },
+          steps: [
+            TAP,
+            {
+              kind: "await",
+              condition: "hidden",
+              selector: { text: "Clear notification" },
+              timeout: 10000,
+            },
+          ],
+        },
+      ],
+    });
+
+    const result = await run("gap-await");
+
+    expect(result.ok).toBe(true);
+    expect(tapCount).toBe(1);
+    expect(shape(result.steps)).toEqual([
+      'repeat pass until hidden "Clear notification" (max 15) @0',
+      "repeat pass iteration 1 @1",
+      'tap pass "Clear notification" @1',
+      'await pass hidden "Clear notification" @1',
+      'repeat pass hidden text="Clear notification" after 1 iteration @0',
+    ]);
+    expect(counts(result)).toEqual({ ok: true, passed: 3, failed: 0, skipped: 0, errored: 0 });
+    expect(rowsLeft()).toBe(2);
+  }, 20000);
+
+  /**
+   * Reads a tap's effect stays invisible for. Sized above what one guard probe
+   * can spend: the probe polls its ~1s grace every 300ms, which is six reads at
+   * the very most, so an effect landing on the eighth read is one the guard
+   * structurally cannot wait for and an `await:` (a full action timeout, ~25
+   * polls) comfortably can. Counted in READS rather than slept in milliseconds
+   * so the starvation is a property of the two budgets and not of how loaded
+   * the machine running this is.
+   */
+  const EFFECT_READS = 8;
+
+  /**
+   * A cart whose taps are acknowledged late: each tap goes in flight, shows a
+   * `Syncing` indicator, and only bumps the counter {@link EFFECT_READS} reads
+   * later. Nothing is ever dropped, so every extra tap the drain fires is an
+   * extra item the app eventually holds. Returns a reader for the counter once
+   * everything outstanding has landed — the state a run leaves behind.
+   */
+  function useSlowCart(): () => string {
+    let reads = 0;
+    const dispatchedAt: number[] = [];
+    onTap = () => dispatchedAt.push(reads);
+    currentTree = () => {
+      reads++;
+      const landed = dispatchedAt.filter((at) => reads - at >= EFFECT_READS).length;
+      return screen([
+        n({ label: "Add to cart", frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.1 } }),
+        n({
+          identifier: "cart",
+          label: `${landed} items`,
+          frame: { x: 0.1, y: 0.3, width: 0.5, height: 0.1 },
+        }),
+        ...(landed < dispatchedAt.length
+          ? [n({ label: "Syncing", frame: { x: 0.1, y: 0.5, width: 0.5, height: 0.1 } })]
+          : []),
+      ]);
+    };
+    return () => {
+      for (let i = 0; i < EFFECT_READS; i++) currentTree();
+      return currentTree().children.find((c) => c.identifier === "cart")?.label ?? "";
+    };
+  }
+
+  const CART_TAP: FlowStep = { kind: "tap", selector: { text: "Add to cart", loose: true } };
+  const CART_AT_THREE = {
+    kind: "ui",
+    condition: "text",
+    selector: { identifier: "cart" },
+    expectedText: "3 items",
+    textMatch: "equals",
+  } as const;
+
+  it("over-fires a body whose effect lands after the grace, overshooting its target", async () => {
+    // The other direction of the same one-probe reading, pinned for the same
+    // reason. The guard reads what the app has ACKNOWLEDGED, not what it has
+    // been asked to do, so an effect slower than the grace leaves every probe
+    // on stale state: the drain fires again with an effect already in flight
+    // and converges on a count it then walks straight past. The verdict is true
+    // about the instant it was taken and the run is green, while the app is
+    // left in a state the flow never asserted and a later correct step takes
+    // the blame.
+    const settledCart = useSlowCart();
+    await writeFlow("slow-cart", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "repeat",
+          spec: { mode: "until", until: CART_AT_THREE, max: 10 },
+          steps: [CART_TAP],
+        },
+      ],
+    });
+
+    const result = await run("slow-cart");
+
+    expect(result.ok).toBe(true);
+    expect(result.steps.at(-1)?.reason).toBe('id="cart" equals "3 items" after 4 iterations');
+    // Four taps for a target of three, and nothing was dropped: the drain
+    // asserted "3 items" on a screen that owed it a fourth.
+    expect(tapCount).toBe(4);
+    expect(settledCart()).toBe("4 items");
+  }, 20000);
+
+  it("converges without overshooting when the body waits for its effect", async () => {
+    // Same fixture, same target, one authored wait: `await: { hidden: Syncing }`
+    // holds the iteration open until the app has acknowledged the tap, so the
+    // next probe reads a settled counter and the drain stops on the tap that
+    // actually reached three. Sensitivity is the test above: drop this step and
+    // the same fixture fires four taps and leaves the cart at four.
+    //
+    // ~10s of wall clock, and the waits are not all of it: three waits, each up
+    // to EFFECT_READS polls 300ms apart, plus an unmet 1s guard probe at every
+    // iteration boundary and the taps' own settle on top. The counts are
+    // read-driven, so load moves the clock and nothing else — hence the 40s
+    // budget this and the settled drain above take where the rest of the file
+    // takes 20s, which is what keeps a slow box from turning the cost into a
+    // flake.
+    const settledCart = useSlowCart();
+    await writeFlow("settled-cart", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "repeat",
+          spec: { mode: "until", until: CART_AT_THREE, max: 10 },
+          steps: [CART_TAP, { kind: "await", condition: "hidden", selector: { text: "Syncing" } }],
+        },
+      ],
+    });
+
+    const result = await run("settled-cart");
+
+    expect(result.ok).toBe(true);
+    expect(result.steps.at(-1)?.reason).toBe('id="cart" equals "3 items" after 3 iterations');
+    expect(tapCount).toBe(3);
+    // The app is left holding exactly what the flow asserted.
+    expect(settledCart()).toBe("3 items");
+  }, 40000);
 });
 
 describe("repeat: composition", () => {

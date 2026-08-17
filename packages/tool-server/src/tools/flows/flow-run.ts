@@ -1158,7 +1158,12 @@ before step 1), and the \`snapshot:\` refusal below, which the pasted spelling e
 \`when:\` guard condition MINUS \`platform\` (fixed for a run, so a parse error rather than a loop that
 is infinite or empty) — checked BEFORE each iteration, so an already-satisfied guard runs
 zero iterations and passes, and hitting \`max\` (default 10, same 1-100 bound as a count) with it
-still unmet FAILS the step. Repeat is NOT retry: a failure inside any iteration is a real failure
+still unmet FAILS the step. That check is a PROBE on the short assert grace, not a wait (\`until\`
+takes no \`timeout\`), so a body with a slow or async effect must END with an \`await:\` for the state
+the next probe should read: without one, a \`hidden\` guard can take the body's own re-render gap for
+convergence and pass with the list still not empty, and a late-landing effect leaves every probe on
+stale state so the body fires again and overshoots.
+Repeat is NOT retry: a failure inside any iteration is a real failure
 and hard-stops the flow, since re-running a
 side-effecting iteration would double-fire it. A \`tool:\` step's full result stays in the report once
 per iteration with nothing truncating it, so a repeat over a result-heavy tool (a screenshot)
@@ -2610,6 +2615,25 @@ async function execRepeatStep(
     // guard runs zero iterations, which is a pass — the drain converged, there
     // was simply nothing to drain. Same restore-determinism character as
     // `when:`: drive the UI to a known state, no-op if already there.
+    //
+    // A PROBE, not a wait: it reads the screen over the same ~1s assert grace
+    // `when:` gets and no longer (`until` rejects `timeout` at parse), so it
+    // absorbs a frame of latency and nothing more — while sitting directly
+    // after the body's own mutation. Two consequences, both settling problems
+    // the BODY owns: a `hidden` guard is satisfied by the first poll that finds
+    // no match, so a body that rebuilds its list asynchronously can be read
+    // inside its own re-render gap and that gap taken for convergence; and a
+    // body whose effect outlasts the grace is probed against stale state and
+    // fires again, overshooting the target it then converges on. The tunable is
+    // authored, not here: an `await:` as the body's last step takes a full
+    // action timeout and holds the iteration open until the state the next
+    // probe must read is on screen (flow-repeat.test.ts pins both directions
+    // and both remedies). Deliberately not solved by this loop — no signal in a
+    // read separates a re-render gap from a converged drain, so a confirming
+    // hold could only be a guess that costs every clean drain its length and
+    // still misses a longer gap, and the probe is `when:`/`assert:`'s own, so
+    // reading the screen differently under `until` would give one condition two
+    // meanings.
     const probe = await probeGuard(state, until);
     if (probe.outcome === "aborted") {
       // Zero iterations: the authored steps never ran, so they report one skip
