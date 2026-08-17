@@ -574,7 +574,9 @@ describe("an explicitly targeted run", () => {
 
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNVERIFIABLE);
     expect(getFailureSignal(err)?.error_kind).toBe("validation");
-    expect((err as Error).message).toMatch(/This flow declares requires/);
+    // Spell the whole block out: a refusal that under-reports what the flow
+    // requires sends the author to the wrong line.
+    expect((err as Error).message).toMatch(/This flow declares requires: \{ runtimeKind: tv \}/);
     expect((err as Error).message).toMatch(
       /sim-remote simctl list devices failed: not authenticated/
     );

@@ -7,6 +7,7 @@ import { getRemoteSimulatorRuntimeKind } from "../../utils/sim-remote";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import {
   blockSteps,
+  describeRequires,
   type FlowRequires,
   type FlowRuntimeKind,
   type FlowStep,
@@ -140,17 +141,6 @@ function deviceResolutionError(message: string, all: RawDevice[]): FailureError 
 }
 
 // ── Requirements ─────────────────────────────────────────────────────
-
-/**
- * Human-readable form of a `requires` block, for the messages a caller has to
- * act on. Mirrors the YAML spelling so the remedy is the line they wrote.
- */
-function describeRequires(requires: FlowRequires): string {
-  const parts: string[] = [];
-  if (requires.platform) parts.push(`platform: [${requires.platform.join(", ")}]`);
-  if (requires.runtimeKind) parts.push(`runtimeKind: ${requires.runtimeKind}`);
-  return parts.join(", ");
-}
 
 /**
  * Who declares the block a refusal cites: a block folded across a leading
