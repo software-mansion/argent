@@ -21,11 +21,16 @@ steps:
   - await: { idle: true }
 ```
 
-An e2e flow has a literal `launch:` as its first non-echo step. It cannot declare `executionPrerequisite`. Put the named start state in a leading echo.
+An e2e flow has a `launch:` as its first non-echo step, written directly or inside a leading count-bounded `repeat:` block. It cannot declare `executionPrerequisite`. Put the named start state in a leading echo.
 
 A leading `run:` does not classify the outer flow as e2e, but the runner still follows the chain to the launch it reaches, and on Chromium that launch boots the app before step 1. A flow whose `run:` chain reaches a launch is refused an `executionPrerequisite` too: parse accepts the file, then the run rejects it. The one exception is a run pinned to a Chromium instance you brought to the required state yourself (`--device chromium-cdp-<port>`), where that leading launch only attaches.
 
-A fragment reaches no leading launch, by its own step or through a `run:` chain, and can declare:
+Three scanners ask where the leading launch is: the Chromium boot hoist, the `executionPrerequisite` guard, and the e2e classification above. A leading `run:` chain is transparent to the first two only, which is why parse accepts the file and the run rejects it. One more wrapper is transparent to all three. One is deliberately opaque:
+
+- **A count-bounded `repeat:` block is seen through.** A count is its body pasted out ([Bounded repetition](#bounded-repetition)), so the first iteration's launch runs at step 1 exactly where the unwrapped spelling puts it. `repeat: 1` around a leading launch is an e2e flow, and the refusal names the block to drop, not a top-level launch step the file has not got.
+- **An `until` drain is not.** Its guard is checked before the first iteration, so the body can run zero times, and a launch that may never happen is no basis for booting an app or refusing a prerequisite. A `when:` guard reads the same way. Any other step ends the scan, so a launch further down does not count.
+
+A fragment reaches no leading launch, by its own step, through a `run:` chain, or inside a leading count-bounded block, and can declare:
 
 ```yaml
 executionPrerequisite: User is signed in and viewing Settings
