@@ -606,7 +606,7 @@ async function captureTapSelector(
     const { tree, source } = await fetchFlowTree(
       registry,
       device,
-      launched ? { bundleId: launched, pinned: false } : undefined
+      launched ? { bundleId: launched, pinned: false, probeAnswered: false } : undefined
     );
     const node = nodeAtPoint(tree, point);
     if (!node) return { warning: "no element found under the tap; kept coordinates (brittle)" };

@@ -37,7 +37,7 @@ const DEVICE: DeviceInfo = { id: UDID, platform: "ios", kind: "simulator" };
 // The launched app as the runner hands it over once a raw `tool:` step has
 // spent the pin: auto-resolve decides, and the id is what a disconnection it
 // cannot describe is explained for.
-const UNPINNED = { bundleId: BUNDLE, pinned: false };
+const UNPINNED = { bundleId: BUNDLE, pinned: false, probeAnswered: false };
 
 describe("remoteIosHost.inspectRunningApp", () => {
   it("reports running-ness from the orchestrator and leaves the process unknown", async () => {
@@ -190,14 +190,14 @@ describe("queryFullHierarchyTree surfaces the measured diagnosis", () => {
     // state's remedy is a retry of something.
     const registry = registryWith([]);
 
-    await expect(queryFullHierarchyTree(registry, DEVICE, { bundleId: "com.apple.Preferences", pinned: false })).rejects.toThrow(
+    await expect(queryFullHierarchyTree(registry, DEVICE, { bundleId: "com.apple.Preferences", pinned: false, probeAnswered: false })).rejects.toThrow(
       /Apple system app/
     );
     await expect(
-      queryFullHierarchyTree(registry, DEVICE, { bundleId: "com.apple.Preferences", pinned: false })
+      queryFullHierarchyTree(registry, DEVICE, { bundleId: "com.apple.Preferences", pinned: false, probeAnswered: false })
     ).rejects.not.toThrow(/argent server stop|restart-app/);
     // The remedy has to name a step form that exists AND reads no tree.
-    await expect(queryFullHierarchyTree(registry, DEVICE, { bundleId: "com.apple.Preferences", pinned: false })).rejects.toThrow(
+    await expect(queryFullHierarchyTree(registry, DEVICE, { bundleId: "com.apple.Preferences", pinned: false, probeAnswered: false })).rejects.toThrow(
       /tap: \{ x: [\d.]+, y: [\d.]+ \}/
     );
   });

@@ -141,6 +141,7 @@ describe("flow-add-step tap capture targets the recorded launch", () => {
     expect(vi.mocked(fetchFlowTree).mock.calls[0]![2]).toEqual({
       bundleId: BUNDLE,
       pinned: false,
+      probeAnswered: false,
     });
   });
 
