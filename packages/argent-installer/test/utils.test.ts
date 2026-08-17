@@ -148,20 +148,208 @@ describe("writeJson", () => {
 // ── copyDir ───────────────────────────────────────────────────────────────────
 
 describe("copyDir", () => {
-  it("returns false when source does not exist", () => {
-    expect(copyDir(path.join(tmpDir, "nope"), path.join(tmpDir, "dest"))).toBe(false);
-  });
-
-  it("copies directory recursively", () => {
+  // Two files and a nested directory, matching the shape of the bundled
+  // rules/agents trees this copies in practice.
+  function stageSource(): string {
     const src = path.join(tmpDir, "src");
-    const dest = path.join(tmpDir, "dest");
     fs.mkdirSync(path.join(src, "sub"), { recursive: true });
     fs.writeFileSync(path.join(src, "a.txt"), "hello");
     fs.writeFileSync(path.join(src, "sub", "b.txt"), "world");
+    return src;
+  }
 
-    expect(copyDir(src, dest)).toBe(true);
+  it("returns null when source does not exist", () => {
+    expect(copyDir(path.join(tmpDir, "nope"), path.join(tmpDir, "dest"))).toBeNull();
+  });
+
+  it("copies directory recursively and reports where it wrote", () => {
+    const src = stageSource();
+    const dest = path.join(tmpDir, "dest");
+
+    expect(copyDir(src, dest)).toBe(dest);
     expect(fs.readFileSync(path.join(dest, "a.txt"), "utf8")).toBe("hello");
     expect(fs.readFileSync(path.join(dest, "sub", "b.txt"), "utf8")).toBe("world");
+  });
+
+  // Symlinked destinations (issue #701): the canonical copy lives in one
+  // harness-neutral directory and each vendor path is a link at it, so the copy
+  // has to write *through* the link instead of trying to replace it.
+  // Skipped on Windows, where creating symlinks needs admin rights.
+  describe.skipIf(process.platform === "win32")("symlinked destinations", () => {
+    it("writes through a symlinked destination, leaving the link intact", () => {
+      const src = stageSource();
+      const real = path.join(tmpDir, "canonical");
+      const link = path.join(tmpDir, "dest");
+      fs.mkdirSync(real);
+      fs.symlinkSync("canonical", link);
+
+      expect(copyDir(src, link)).toBe(fs.realpathSync(real));
+      expect(fs.readFileSync(path.join(real, "a.txt"), "utf8")).toBe("hello");
+      expect(fs.readFileSync(path.join(real, "sub", "b.txt"), "utf8")).toBe("world");
+      expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    });
+
+    it("writes through a symlinked subdirectory of the destination", () => {
+      const src = stageSource();
+      const dest = path.join(tmpDir, "dest");
+      const real = path.join(tmpDir, "canonical-sub");
+      fs.mkdirSync(dest);
+      fs.mkdirSync(real);
+      fs.symlinkSync("../canonical-sub", path.join(dest, "sub"));
+
+      copyDir(src, dest);
+
+      expect(fs.readFileSync(path.join(real, "b.txt"), "utf8")).toBe("world");
+      expect(fs.readFileSync(path.join(dest, "a.txt"), "utf8")).toBe("hello");
+      expect(fs.lstatSync(path.join(dest, "sub")).isSymbolicLink()).toBe(true);
+    });
+
+    // A single symlinked file is the layout a dotfile manager produces when the
+    // directory has to stay real because it holds the user's own agents too.
+    it("writes through a symlinked file in the destination", () => {
+      const src = stageSource();
+      const dest = path.join(tmpDir, "dest");
+      const canonical = path.join(tmpDir, "canonical", "a.txt");
+      fs.mkdirSync(path.join(tmpDir, "canonical"));
+      fs.mkdirSync(dest);
+      fs.writeFileSync(canonical, "stale");
+      fs.symlinkSync(path.join("..", "canonical", "a.txt"), path.join(dest, "a.txt"));
+
+      copyDir(src, dest);
+
+      expect(fs.readFileSync(canonical, "utf8")).toBe("hello");
+      expect(fs.lstatSync(path.join(dest, "a.txt")).isSymbolicLink()).toBe(true);
+    });
+
+    it("creates the target of a dangling destination link", () => {
+      const src = stageSource();
+      const link = path.join(tmpDir, "dest");
+      fs.symlinkSync("canonical", link);
+
+      copyDir(src, link);
+
+      expect(fs.readFileSync(path.join(tmpDir, "canonical", "a.txt"), "utf8")).toBe("hello");
+      expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    });
+
+    // The case that aborted the whole process before: fs.cp does not throw on a
+    // dangling link it must turn into a directory, it terminates the runtime.
+    it("creates the target of a dangling link nested in the destination", () => {
+      const src = stageSource();
+      const dest = path.join(tmpDir, "dest");
+      fs.mkdirSync(dest);
+      fs.symlinkSync(path.join("..", "canonical-sub"), path.join(dest, "sub"));
+
+      copyDir(src, dest);
+
+      expect(fs.readFileSync(path.join(tmpDir, "canonical-sub", "b.txt"), "utf8")).toBe("world");
+    });
+
+    // A relative link target resolves against the directory the link really
+    // lives in — here `dotfiles/claude`, not the `home/.claude` path we were
+    // handed — so `..` has to be walked from the real parent.
+    it("resolves a dangling relative target from behind a symlinked parent", () => {
+      const src = stageSource();
+      fs.mkdirSync(path.join(tmpDir, "dotfiles", "claude"), { recursive: true });
+      fs.mkdirSync(path.join(tmpDir, "dotfiles", "shared"), { recursive: true });
+      fs.mkdirSync(path.join(tmpDir, "home"), { recursive: true });
+      fs.symlinkSync(path.join("..", "dotfiles", "claude"), path.join(tmpDir, "home", ".claude"));
+      fs.symlinkSync(
+        path.join("..", "shared", "rules"),
+        path.join(tmpDir, "dotfiles", "claude", "rules")
+      );
+
+      const written = copyDir(src, path.join(tmpDir, "home", ".claude", "rules"));
+
+      expect(written).toBe(path.join(fs.realpathSync(tmpDir), "dotfiles", "shared", "rules"));
+      expect(fs.existsSync(path.join(tmpDir, "home", ".claude", "rules", "a.txt"))).toBe(true);
+    });
+
+    it("follows a chain of destination links to its end", () => {
+      const src = stageSource();
+      const real = path.join(tmpDir, "canonical");
+      fs.mkdirSync(real);
+      fs.symlinkSync("canonical", path.join(tmpDir, "hop"));
+      fs.symlinkSync("hop", path.join(tmpDir, "dest"));
+
+      expect(copyDir(src, path.join(tmpDir, "dest"))).toBe(fs.realpathSync(real));
+      expect(fs.readFileSync(path.join(real, "a.txt"), "utf8")).toBe("hello");
+    });
+
+    // Completing a link is a courtesy for a canonical directory the user has
+    // already made — not a licence to build a tree wherever a link points.
+    it("refuses a dangling link whose parent does not exist, creating nothing", () => {
+      const src = stageSource();
+      const link = path.join(tmpDir, "dest");
+      fs.symlinkSync(path.join("nowhere", "canonical"), link);
+
+      expect(() => copyDir(src, link)).toThrow();
+      expect(fs.existsSync(path.join(tmpDir, "nowhere"))).toBe(false);
+    });
+
+    // Guards a design that resolved these itself and handed the result to
+    // fs.cp, which terminates the runtime on a dangling link rather than
+    // throwing. Left to fs.cp, a leaf link is a plain catchable error.
+    it("reports a dangling chain on a destination file without crashing", () => {
+      const src = stageSource();
+      const dest = path.join(tmpDir, "dest");
+      fs.mkdirSync(path.join(tmpDir, "neutral"), { recursive: true });
+      fs.mkdirSync(dest);
+      fs.symlinkSync(path.join("..", "neutral", "a.txt"), path.join(dest, "a.txt"));
+      fs.symlinkSync(path.join("..", "gone", "a.txt"), path.join(tmpDir, "neutral", "a.txt"));
+
+      expect(() => copyDir(src, dest)).toThrow();
+    });
+
+    it("refuses a destination link pointing at a file, without touching it", () => {
+      const src = stageSource();
+      const file = path.join(tmpDir, "occupied");
+      const link = path.join(tmpDir, "dest");
+      fs.writeFileSync(file, "mine");
+      fs.symlinkSync("occupied", link);
+
+      expect(() => copyDir(src, link)).toThrow(expect.objectContaining({ code: "EEXIST" }));
+      expect(fs.readFileSync(file, "utf8")).toBe("mine");
+    });
+  });
+
+  it("overwrites an existing destination on a repeat copy", () => {
+    const src = stageSource();
+    const dest = path.join(tmpDir, "dest");
+    copyDir(src, dest);
+    fs.writeFileSync(path.join(src, "a.txt"), "second");
+
+    copyDir(src, dest);
+
+    expect(fs.readFileSync(path.join(dest, "a.txt"), "utf8")).toBe("second");
+    expect(fs.readFileSync(path.join(dest, "sub", "b.txt"), "utf8")).toBe("world");
+  });
+
+  // Nothing sensible asks for this, but the walk must not chase its own output
+  // down an unbounded path, and must not truncate a file by copying it over
+  // itself.
+  it("does not burrow when the destination is inside the source", () => {
+    const src = stageSource();
+
+    copyDir(src, path.join(src, "sub"));
+
+    expect(fs.existsSync(path.join(src, "sub", "sub", "sub"))).toBe(false);
+    expect(fs.readFileSync(path.join(src, "a.txt"), "utf8")).toBe("hello");
+    expect(fs.readFileSync(path.join(src, "sub", "b.txt"), "utf8")).toBe("world");
+  });
+
+  // Creating a directory is what fs.cp cannot survive, so the copy does it.
+  it("reports an unwritable destination instead of dying", () => {
+    const src = stageSource();
+    const dest = path.join(tmpDir, "dest");
+    fs.mkdirSync(dest);
+    fs.chmodSync(dest, 0o555);
+
+    try {
+      expect(() => copyDir(src, dest)).toThrow(expect.objectContaining({ code: "EACCES" }));
+    } finally {
+      fs.chmodSync(dest, 0o755);
+    }
   });
 });
 

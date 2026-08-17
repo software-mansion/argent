@@ -30,11 +30,11 @@
 import { copyFile, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, extname, isAbsolute, join, normalize, sep } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { createHash } from "node:crypto";
 
 import { safeExtractTarGz } from "@argent/archive";
-import { argentHomeDir, findProjectRoot } from "@argent/configuration-core";
+import { argentHomeDir, findProjectRoot, getConfigValueByKey } from "@argent/configuration-core";
 
 /** Must match the tool-server's wire contract (`tool-server/src/artifacts.ts`). */
 export const ARTIFACT_MARKER = "__argentArtifact" as const;
@@ -147,6 +147,49 @@ function durableBaseDir(): string {
  * compared in the same form regardless of separator style.
  */
 const ALLOWED_SAVE_DIRS: ReadonlySet<string> = new Set([normalize(".argent/recordings")]);
+
+/**
+ * The wire hint a finished screen recording arrives with. Its *destination* can
+ * be redirected by the `recordings.directory` configuration (see
+ * {@link configuredRecordingsDir}); the hint itself stays fixed so old and new
+ * clients/servers interoperate.
+ */
+const RECORDINGS_SAVE_DIR = normalize(".argent/recordings");
+
+/**
+ * The user-configured recordings directory — the effective value of the
+ * `recordings.directory` config entry (project scope overriding global, per its
+ * schema merge policy) — or null when unset, blank, or unreadable. The value is
+ * read on *this* host: with a remote `argent link` tool-server the mp4 is
+ * persisted on the client, so it is the client's config that decides where.
+ *
+ * Resolution: `~`/`~/…` expands to the user's home; a relative path is anchored
+ * at {@link durableBaseDir} (the project root, or home when not in a project);
+ * an absolute path is used as-is. Unlike the wire `saveDir` hint this value
+ * comes from the client's own config files, not from a possibly-hostile server,
+ * so it is trusted to name any directory the user can write to.
+ */
+function configuredRecordingsDir(): string | null {
+  let value: unknown;
+  try {
+    value = getConfigValueByKey("recordings.directory");
+  } catch {
+    // Unknown key can't happen (it's on the schema); treat any config-layer
+    // failure as unset so a broken config degrades to the default location.
+    return null;
+  }
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (trimmed === "") return null;
+  const home = dirname(argentHomeDir());
+  const expanded =
+    trimmed === "~"
+      ? home
+      : trimmed.startsWith("~/") || trimmed.startsWith(`~${sep}`)
+        ? join(home, trimmed.slice(2))
+        : trimmed;
+  return resolve(durableBaseDir(), expanded);
+}
 
 /**
  * Hard ceiling on a single durable download, independent of the `size` the
@@ -269,6 +312,24 @@ export function durableSaveTarget(
   // non-escaping relative path, which still resolves *inside* the project root
   // (where `.git`, sources, and argent's own config live).
   if (!ALLOWED_SAVE_DIRS.has(rel)) return null;
+  // Past the allowlist, the wire value has only *selected* a sanctioned
+  // destination kind — where that kind actually lands is decided here, from the
+  // client's own config. For recordings, `recordings.directory` redirects the
+  // whole directory; `base` is the configured dir itself and `rel` is empty, so
+  // the post-mkdir real-path check degenerates to "the configured directory
+  // resolves to itself" — a user-chosen path may legitimately be, or traverse,
+  // a symlink, exactly like the default base may.
+  if (rel === RECORDINGS_SAVE_DIR) {
+    const configured = configuredRecordingsDir();
+    if (configured) {
+      return {
+        dir: configured,
+        path: join(configured, sanitizeSegment(handle.filename)),
+        base: configured,
+        rel: "",
+      };
+    }
+  }
   const base = durableBaseDir();
   const dir = join(base, rel);
   // `base` and `rel` are returned so the caller can re-check, after `mkdir`,

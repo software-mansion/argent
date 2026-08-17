@@ -58,6 +58,12 @@ type Result =
 
 export const nativeFullHierarchyTool: ToolDefinition<Params, Result> = {
   id: "native-full-hierarchy",
+  interaction: {
+    startedMsg: ({ params }) => `Reading native view hierarchy for ${params.bundleId}`,
+    completedMsg: ({ params }) => `Read native view hierarchy for ${params.bundleId}`,
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to read native view hierarchy for ${params.bundleId}: ${failureSignal.error_code}`,
+  },
   capability: { apple: { simulator: true, device: true }, appleRemote: { simulator: true } },
   description: `Get the complete UIKit view tree for the running app.
 WARNING: Output can be extremely large (100KB–500KB+) for complex apps, especially those built with SwiftUI. Prefer native-find-views for targeted queries.

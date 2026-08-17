@@ -41,6 +41,12 @@ export interface ConfigDefinition<T = unknown> {
   readonly manageCommand?: string;
   /** Optional example value shown in help/usage. */
   readonly example?: string;
+  /**
+   * What a valid value looks like, in words ("an array of strings"), for the
+   * message shown when one is rejected. Only needed when `parse` is a bespoke
+   * function — a shared helper describes itself, see {@link describeExpectedValue}.
+   */
+  readonly expected?: string;
 }
 
 // ── parse/normalize helpers ──────────────────────────────────────────────
@@ -74,6 +80,29 @@ export function asStringArray(raw: unknown): string[] | undefined {
   return out;
 }
 
+/**
+ * How each shared validator describes the value it accepts.
+ *
+ * Keyed on the validator itself rather than restated per entry, so the wording
+ * cannot drift from what is actually enforced: swapping a key's `parse` swaps
+ * its description with it.
+ */
+const PARSER_EXPECTATIONS = new Map<ConfigDefinition["parse"], string>([
+  [asBoolean, "a boolean (true or false)"],
+  [asString, "a non-empty string"],
+  [asNumber, "a number"],
+  [asStringArray, "an array of strings"],
+]);
+
+/**
+ * What a valid value for this key looks like, in words — or undefined for a
+ * bespoke validator that has not said, in which case callers describe nothing
+ * rather than guessing.
+ */
+export function describeExpectedValue(def: ConfigDefinition): string | undefined {
+  return def.expected ?? PARSER_EXPECTATIONS.get(def.parse);
+}
+
 // ── The registry ─────────────────────────────────────────────────────────
 // The only place you edit to add a configuration.
 
@@ -104,6 +133,37 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     // user's global remembered choice.
     merge: "prioritize-local",
     example: "claude",
+  },
+  {
+    key: "ios.additionalDeviceSets",
+    description:
+      "Additional CoreSimulator device-set directories whose simulators argent should see " +
+      "alongside the default set. Absolute paths (or ~/…); relative entries resolve against " +
+      "the project root (project scope) or home (global scope).",
+    scopes: ["project", "global"],
+    parse: asStringArray,
+    // Additive: the scopes extend each other rather than shadow — a repo's
+    // committed device sets are appended to the user's global ones (global
+    // baseline first, project extras after, deduplicated). Note that
+    // `getAdditionalIosDeviceSets` re-implements this union (path resolution
+    // must precede dedup) and guards on the preset staying "union".
+    merge: "union",
+    example: '["~/DeviceSets/ci"]',
+  },
+  {
+    key: "recordings.directory",
+    description:
+      "Directory where finished screen recordings (mp4) are saved on the client host. " +
+      "Absolute, `~`-prefixed, or relative to the project root (home dir when not in a project). " +
+      "Unset ⇒ `.argent/recordings` under the project root.",
+    scopes: ["project", "global"],
+    parse: asString,
+    // A repo can pin where its recordings land; falls back to the user's global
+    // preference. Resolution happens on the client (the machine the mp4 is
+    // persisted to), so with a remote `argent link` tool-server it is the
+    // *client's* config that decides.
+    merge: "prioritize-local",
+    example: "~/Movies/argent",
   },
 ] as const;
 

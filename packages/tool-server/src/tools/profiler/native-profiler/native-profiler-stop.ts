@@ -12,11 +12,12 @@ import { stopNativeProfilerAndroid, type AndroidStopResult } from "./platforms/a
 import type { ExportDiagnostics } from "../../../utils/ios-profiler/export";
 import { requireArtifacts, type ArtifactHandle } from "../../../artifacts";
 import type { ArtifactStore } from "@argent/registry";
+import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
 const zodSchema = z.object({
-  device_id: z
-    .string()
-    .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+  device_id: metroDeviceIdParam(
+    "Target device id from `list-devices` (iOS UDID or Android serial)."
+  ),
 });
 
 /**
@@ -78,6 +79,11 @@ function registerTrace(store: ArtifactStore, traceFile: string): Promise<Artifac
 
 export const nativeProfilerStopTool: ToolDefinition<z.infer<typeof zodSchema>, StopResult> = {
   id: "native-profiler-stop",
+  interaction: {
+    startedMsg: () => "Stopping native profiler",
+    completedMsg: ({ result }) => `Saved native profile ${result.traceFile.filename}`,
+    failedMsg: ({ failureSignal }) => `Failed to stop native profiler: ${failureSignal.error_code}`,
+  },
   capability,
   // Packaging plus the export passes routinely exceed the 30s fetch timeout.
   longRunning: true,

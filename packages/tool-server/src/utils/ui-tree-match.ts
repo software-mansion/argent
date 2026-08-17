@@ -88,6 +88,42 @@ export type Selector = z.infer<typeof selectorSchema> & {
    * draws below).
    */
   textMatches?: string;
+  /**
+   * Flow-only container scope (`{ text: "Delete", within: { id: "card" } }` in
+   * flow YAML): the node must additionally sit INSIDE a distinct element
+   * matching this selector — its frame contained in the container's frame
+   * (small tolerance for sub-pixel overhang). Deliberately geometric, not
+   * tree-ancestry: every flow adapter flattens its platform tree into leaves
+   * under one synthetic root (see `flow-tree-flatten`), so ancestry does not
+   * survive to replay — and visual containment is what "the button inside the
+   * card" means to a flow author anyway (the same frame-based reading of
+   * "within" the scroll-to directive's container anchor uses). Scopes chain
+   * outward (`a within b within c` reads "a inside b inside c", each
+   * container's frame inside the next). Resolved by {@link findAll}, which
+   * sees the whole tree; {@link matchNode} is a single-node predicate and
+   * evaluates own fields only. A type-level extension, not a schema field,
+   * for the same reason as `textMatches`.
+   */
+  within?: Selector;
+  /**
+   * Flow-only general-sibling scope (`{ role: Switch, after: { text: "Wi-Fi" } }`
+   * in flow YAML) — the CSS `~` combinator: the node must FOLLOW a distinct
+   * element matching this selector in reading order (see {@link frameAfter}:
+   * strictly below the anchor, or sharing its row band and entirely to its
+   * right). Geometric for the same reason `within` is — flow trees flatten, so
+   * every element is a sibling and only frames survive to replay. Resolved by
+   * {@link findAll}; a type-level extension, not a schema field.
+   */
+  after?: Selector;
+  /**
+   * Flow-only adjacent-sibling scope (`{ role: Switch, next: { text: "Wi-Fi" } }`
+   * in flow YAML) — the CSS `+` combinator: like {@link after}, but only the
+   * NEAREST following match is kept, per anchor (CSS `A + B` is likewise the
+   * union over every A of the one sibling right after it). This is the "the
+   * control belonging to this row's label" locator. Resolved by
+   * {@link findAll}; a type-level extension, not a schema field.
+   */
+  next?: Selector;
 };
 
 export type WaitCondition = "exists" | "visible" | "hidden" | "text";
@@ -174,6 +210,20 @@ export function textMatches(
   return mode === "equals" ? equalsCI(actual, expected) : includesCI(actual, expected);
 }
 
+/**
+ * Does the selector constrain WHICH element it matches, rather than only where
+ * to look? False exactly for the universal selector (flow YAML's `any: true`),
+ * whose relational scopes are its whole content.
+ */
+function hasOwnConstraint(selector: Selector): boolean {
+  return (
+    selector.text !== undefined ||
+    selector.textMatches !== undefined ||
+    selector.identifier !== undefined ||
+    selector.role !== undefined
+  );
+}
+
 function matchNodeWithRegex(
   node: DescribeNode,
   selector: Selector,
@@ -210,29 +260,322 @@ function selectorTextRegex(selector: Selector): RegExp | undefined {
     : uiTreeMatchInternals.createRegExp(selector.textMatches);
 }
 
+/**
+ * Single-node predicate over the selector's OWN fields (text/regex/identifier/
+ * role). The relational scopes (`within`/`after`/`next`) need the tree and are
+ * resolved by {@link findAll}; they are ignored here by design.
+ *
+ * A selector with no own fields matches EVERY node — the universal selector
+ * (CSS `*`, spelled `any: true` in flow YAML). Nothing can reach here that way
+ * by accident: `selectorSchema` requires a field, and the flow parser only
+ * lets a field-less selector through behind an explicit `any: true` paired
+ * with a relation.
+ */
 export function matchNode(node: DescribeNode, selector: Selector): boolean {
   return matchNodeWithRegex(node, selector, selectorTextRegex(selector));
 }
 
-function collectMatches(
-  node: DescribeNode,
-  selector: Selector,
-  textRegex: RegExp | undefined,
-  acc: DescribeNode[]
-): void {
-  if (matchNodeWithRegex(node, selector, textRegex)) acc.push(node);
-  for (const child of node.children) collectMatches(child, selector, textRegex, acc);
+// Frame-comparison tolerance (normalized units): a hair of overhang — a border,
+// a shadow, sub-pixel rounding — must not change what the eye plainly sees.
+// `frameWithin` reads it as containment slack (an element overhanging its
+// container's edge is still in it); `frameAbove` reads it as the row-band merge
+// threshold (two frames whose edges touch within it are still one row, not two).
+// Matches the magnitude of the flow runner's edge tolerance (EDGE_EPS in
+// flow-actions).
+const WITHIN_EPS = 0.005;
+
+/** Is `inner` contained in `outer`, within {@link WITHIN_EPS} per edge? */
+function frameWithin(inner: DescribeFrame, outer: DescribeFrame): boolean {
+  return (
+    inner.x >= outer.x - WITHIN_EPS &&
+    inner.y >= outer.y - WITHIN_EPS &&
+    inner.x + inner.width <= outer.x + outer.width + WITHIN_EPS &&
+    inner.y + inner.height <= outer.y + outer.height + WITHIN_EPS
+  );
 }
 
-// Every node matching the selector in the subtree, EXCLUDING `root` itself — the
+// Resolving a `within` scope asks "does this candidate sit inside SOME distinct
+// container?" for every candidate against every container. The naive form scans
+// the whole container set per candidate — O(candidates × containers) — which a
+// broad container selector (`within: { role: <common role> }`, a form the
+// nested slot explicitly allows) drives quadratic on the flattened flow tree
+// (bounded per platform — 12k nodes on Android/Chromium, depth-capped on iOS),
+// and findAll re-runs on every settle/poll. Above a small container count, index
+// the containers in a coarse uniform grid so a candidate only tests the
+// containers registered in its own top-left cell. The realistic container shapes
+// — scattered role matches, a list of stacked rows, a grid of cards — each land
+// only a handful of containers per cell, dropping the scan to near-linear. Only
+// a `within` selector ever builds this; an unscoped findAll never reaches it.
+// (The one input the grid can't prune is many mutually-overlapping containers
+// crammed into one cell — it degrades gracefully back to the naive scan there,
+// never worse, since the exact check still short-circuits on the first hit.)
+const CONTAINMENT_GRID_N = 16; // cells per axis over the normalized [0,1]² frame
+const CONTAINMENT_GRID_MIN = 32; // fewer containers than this: a direct scan wins
+
+// The grid column/row a normalized coordinate falls in, clamped to [0, N): a
+// frame can sit a hair off-screen (negative, or ≥ 1), and every such point must
+// still map to a real cell.
+function gridCell(coord: number): number {
+  const c = Math.floor(coord * CONTAINMENT_GRID_N);
+  return c < 0 ? 0 : c >= CONTAINMENT_GRID_N ? CONTAINMENT_GRID_N - 1 : c;
+}
+
+/**
+ * Build a predicate `inside(node)` — true when the node's frame sits inside a
+ * DISTINCT container in `containers` (the {@link frameWithin} containment a
+ * `within` scope needs). Below {@link CONTAINMENT_GRID_MIN} it scans directly;
+ * larger sets are indexed in a coarse grid keyed by top-left cell.
+ *
+ * A container is registered in every cell its frame covers, PADDED by
+ * {@link WITHIN_EPS}: a candidate may overhang a container edge by up to the
+ * tolerance, so its top-left corner can land one cell before the container's
+ * unpadded coverage — the pad guarantees the corner still hits a registered
+ * cell. The grid therefore only PRUNES; the exact `frameWithin` check on the
+ * bucket decides, so the padding never admits a false containment.
+ */
+function containmentTester(containers: DescribeNode[]): (node: DescribeNode) => boolean {
+  if (containers.length < CONTAINMENT_GRID_MIN) {
+    return (node) => containers.some((c) => c !== node && frameWithin(node.frame, c.frame));
+  }
+  const cells = new Map<number, DescribeNode[]>();
+  for (const c of containers) {
+    const f = c.frame;
+    const colEnd = gridCell(f.x + f.width + WITHIN_EPS);
+    const rowEnd = gridCell(f.y + f.height + WITHIN_EPS);
+    for (let row = gridCell(f.y - WITHIN_EPS); row <= rowEnd; row++) {
+      for (let col = gridCell(f.x - WITHIN_EPS); col <= colEnd; col++) {
+        const key = row * CONTAINMENT_GRID_N + col;
+        const bucket = cells.get(key);
+        if (bucket) bucket.push(c);
+        else cells.set(key, [c]);
+      }
+    }
+  }
+  return (node) => {
+    const bucket = cells.get(gridCell(node.frame.y) * CONTAINMENT_GRID_N + gridCell(node.frame.x));
+    return (
+      bucket !== undefined && bucket.some((c) => c !== node && frameWithin(node.frame, c.frame))
+    );
+  };
+}
+
+// ── Reading-order sibling relations (`after` / `next`) ─────────────────────
+
+/**
+ * Is `a` entirely above `b` — a's bottom edge at or above b's top, within
+ * {@link WITHIN_EPS}? The vertical half of reading order. Two frames for which
+ * this fails BOTH ways share a row band (their vertical spans overlap) and are
+ * ordered horizontally instead — that band rule is what makes "the switch after
+ * the Wi-Fi label" work, since a row's control and its label rarely share a top
+ * edge and a raw top-y comparison would order them by which is taller.
+ */
+function frameAbove(a: DescribeFrame, b: DescribeFrame): boolean {
+  return a.y + a.height <= b.y + WITHIN_EPS;
+}
+
+/** Where `node` sits relative to an anchor in reading order. */
+type FollowKind = "below" | "band" | "no";
+
+/**
+ * Does `node` FOLLOW `anchor` in reading order, and how — on a row below it, or
+ * sharing its row band and entirely to its right? The geometric reading of a
+ * CSS sibling combinator on a flattened tree.
+ *
+ * ONE classification, read by both {@link frameAfter} and {@link nearestAfter},
+ * so the follower test and the grouping of followers can never disagree:
+ * re-deriving the group from a second {@link frameAbove} call put a mutual-case
+ * row-mate in the "below" group, where it lost to a band-mate further right.
+ *
+ * BOTH axes are decided the same way, and for the same reason. Two frames
+ * thinner than the tolerance and closer together than it are "above" each other
+ * (and, side by side, "left of" each other) — the tolerance cannot tell them
+ * apart. Reading such a pair as ordered in both directions is what would let an
+ * element to the anchor's LEFT follow it, so a mutual verdict never decides:
+ * vertically it falls through to the row rule (a pair of hairlines a fraction
+ * of a percent apart is one row), and horizontally it means "no order at all"
+ * — two visually coincident marks, neither after the other. The relation is
+ * therefore antisymmetric, which the `next` reduction relies on.
+ *
+ * Mostly not a containment test — an element well inside the anchor is neither
+ * above nor entirely right of it. The exception is a child flush with the
+ * anchor's bottom or right edge and no thicker than the tolerance (a hairline
+ * divider, a scroll indicator): it both follows the anchor and sits
+ * {@link frameWithin} it.
+ */
+function followKind(node: DescribeFrame, anchor: DescribeFrame): FollowKind {
+  const below = frameAbove(anchor, node);
+  const above = frameAbove(node, anchor);
+  if (below !== above) return below ? "below" : "no";
+  const right = anchor.x + anchor.width <= node.x + WITHIN_EPS;
+  const left = node.x + node.width <= anchor.x + WITHIN_EPS;
+  return right !== left && right ? "band" : "no";
+}
+
+function frameAfter(node: DescribeFrame, anchor: DescribeFrame): boolean {
+  return followKind(node, anchor) !== "no";
+}
+
+/**
+ * Build a predicate `follows(node)` — true when the node follows a DISTINCT
+ * anchor in reading order (the CSS `~` an `after` scope needs).
+ *
+ * A direct scan, deliberately: unlike {@link containmentTester}'s grid, an
+ * index buys nothing here. The pruning a sorted index could offer is subsumed
+ * by {@link frameAfter}'s own short-circuit — the first anchor ending above the
+ * node settles it — so on every realistic tree shape the sort alone costs more
+ * than the scan it replaces (measured 2-13x slower, from a settings-list shape
+ * up to a 3k-anchor selector over 1.5k candidates).
+ */
+function afterTester(anchors: DescribeNode[]): (node: DescribeNode) => boolean {
+  return (node) => anchors.some((a) => a !== node && frameAfter(node.frame, a.frame));
+}
+
+// Ranking among an anchor's followers, once they are split into the two groups
+// below. Each continues past position into frame AREA so that coincident
+// top-left corners — a container and the label leaf flush inside it, an
+// everyday shape in a flattened tree — resolve to the smaller, more specific
+// element rather than to whichever the tree happened to list first (matching
+// the "smallest frame wins" doctrine `selectorToFrame` and `nodeAtPoint`
+// already rank by), then into the individual extents, which separate the shapes
+// area alone cannot: two zero-area rules of different lengths, and a wide-short
+// frame against a narrow-tall one. Only frames identical on all four fields are
+// left to tree order, and those are indistinguishable to act on anyway.
+function comparePick(a: DescribeFrame, b: DescribeFrame): number {
+  return frameArea(a) - frameArea(b) || a.width - b.width || a.height - b.height;
+}
+
+function compareBandPick(a: DescribeFrame, b: DescribeFrame): number {
+  return a.x - b.x || a.y - b.y || comparePick(a, b);
+}
+
+function compareBelowPick(a: DescribeFrame, b: DescribeFrame): number {
+  return a.y - b.y || a.x - b.x || comparePick(a, b);
+}
+
+/**
+ * The CSS `+` reduction: keep only the nearest candidate following each anchor,
+ * unioned over anchors — as CSS `A + B` is itself the union over every A of the
+ * one sibling right after it — and returned in the candidates' own order.
+ *
+ * "Nearest" splits the followers the way a reader does: one sharing the
+ * anchor's row band beats anything on the rows below, because that is the row's
+ * own control — the locator `next` exists for. Within each group the leftmost
+ * (band) / topmost (below) wins, then the smaller frame.
+ *
+ * A single direct scan per anchor, for the same reason {@link afterTester} is
+ * one: sorting the candidates costs about a dozen naive passes, which the one
+ * or two anchors a `next` scope realistically resolves can never amortize. An
+ * earlier indexed variant was also a second implementation of these semantics,
+ * and the two disagreed on frames near the tolerance.
+ *
+ * Measured, single-anchor (`next: { text: "Wi-Fi" }`, the shape this exists
+ * for): 0.1 ms on a settings-sized screen, 1.2 ms even at the flow tree's
+ * 12k-node cap. The quadratic tail is real — 5 ms at 800 nodes, 555 ms at
+ * 12k — but only when the anchor selector matches essentially EVERY node,
+ * which unions a pick per anchor and is not a locator anyone writes; and it
+ * multiplies by the loose-alternative count when a scope is a bare string —
+ * at most 32, since a bare string is a leaf and so at most five of
+ * MAX_SELECTOR_SCOPES levels can be loose. Unlike {@link afterTester} this
+ * cannot short-circuit: it must see every candidate to know which is nearest.
+ * An index would cut the tail, but the one this replaced was a second
+ * implementation of the rules above and the two disagreed near the tolerance —
+ * a correctness bug in the common case is a bad trade for a misuse-case tail.
+ *
+ * Note that the pick is made over ALL candidates, visible or not: this reduces
+ * the match SET, before any condition looks at it. On the platforms whose flow
+ * adapters keep zero-area nodes (Vega), a ghost node between the anchor and the
+ * real control therefore wins the pick and a `visible` check on it fails —
+ * scope by {@link Selector.after} or {@link Selector.within} there instead.
+ */
+function nearestAfter(candidates: DescribeNode[], anchors: DescribeNode[]): DescribeNode[] {
+  if (candidates.length === 0 || anchors.length === 0) return [];
+  const picked = new Set<DescribeNode>();
+  for (const anchor of anchors) {
+    const af = anchor.frame;
+    let band: DescribeNode | undefined;
+    let below: DescribeNode | undefined;
+    for (const c of candidates) {
+      if (c === anchor) continue;
+      const f = c.frame;
+      const kind = followKind(f, af);
+      if (kind === "band") {
+        if (band === undefined || compareBandPick(f, band.frame) < 0) band = c;
+      } else if (kind === "below") {
+        if (below === undefined || compareBelowPick(f, below.frame) < 0) below = c;
+      }
+    }
+    const best = band ?? below;
+    if (best !== undefined) picked.add(best);
+  }
+  return candidates.filter((c) => picked.has(c));
+}
+
+// Every node matching the selector in the tree, EXCLUDING `root` itself — the
 // synthetic full-screen container describe puts at the head of the tree. See the
 // long-form rationale in await-ui-element: matching the root would let a broad
-// role selector satisfy `visible`/`exists` on any screen.
+// role selector satisfy `visible`/`exists` on any screen. The exclusion covers
+// `within` containers too: the synthetic root wraps every screen, so letting it
+// satisfy a scope would make `within` vacuous for broad container selectors.
+//
+// A relational scope is resolved GEOMETRICALLY — never by tree ancestry: the
+// flow adapters flatten every platform tree into leaves under one synthetic
+// root (see `flow-tree-flatten`), so parent/child structure does not survive to
+// replay, while frames do. Every relation requires a DISTINCT node (an element
+// never scopes itself, so `a within a` needs two nested elements), and each
+// nests: `within: { id: b, within: c }` resolves c's containers first, then
+// keeps only the b's sitting inside one of them.
 export function findAll(root: DescribeNode, selector: Selector): DescribeNode[] {
-  const acc: DescribeNode[] = [];
-  const textRegex = selectorTextRegex(selector);
-  for (const child of root.children) collectMatches(child, selector, textRegex, acc);
-  return acc;
+  const all: DescribeNode[] = [];
+  const collect = (node: DescribeNode): void => {
+    all.push(node);
+    for (const child of node.children) collect(child);
+  };
+  for (const child of root.children) collect(child);
+  return resolveSelector(all, selector);
+}
+
+/**
+ * The relational scopes a selector can carry, in the order
+ * {@link resolveSelector} applies them. Spelled once and consumed by both
+ * layers — the match engine here, and flow YAML's parser, serializer, report
+ * stringifiers and loose-alternative expansion — so they cannot drift on which
+ * keys are relations.
+ */
+export const SELECTOR_RELATIONS = ["within", "after", "next"] as const;
+
+export type SelectorRelation = (typeof SELECTOR_RELATIONS)[number];
+
+/**
+ * How each scope narrows a match set. `within` and `after` are per-node
+ * predicates; `next` reduces the SET (it keeps the nearest follower), which is
+ * why the order above applies it last — a scoped `{ any: true, next: X,
+ * within: Y }` means "the first element inside Y that follows X", not "the
+ * first element after X, if it happens to be inside Y".
+ *
+ * A `Record` keyed by the relation union, so adding a scope to
+ * {@link SELECTOR_RELATIONS} without teaching the engine what it MEANS is a
+ * compile error here rather than a scope the resolver silently ignores — which
+ * would read as a condition passing on a constraint that never held.
+ */
+const RELATION_RESOLVERS: Record<
+  SelectorRelation,
+  (matches: DescribeNode[], scope: DescribeNode[]) => DescribeNode[]
+> = {
+  within: (matches, scope) => matches.filter(containmentTester(scope)),
+  after: (matches, scope) => matches.filter(afterTester(scope)),
+  next: (matches, scope) => nearestAfter(matches, scope),
+};
+
+/** Own-field matches from `all`, narrowed by every scope the selector carries. */
+function resolveSelector(all: DescribeNode[], selector: Selector): DescribeNode[] {
+  const regex = selectorTextRegex(selector);
+  let matches = all.filter((n) => matchNodeWithRegex(n, selector, regex));
+  for (const relation of SELECTOR_RELATIONS) {
+    const scope = selector[relation];
+    if (scope === undefined) continue;
+    matches = RELATION_RESOLVERS[relation](matches, resolveSelector(all, scope));
+  }
+  return matches;
 }
 
 // describe prunes off-screen / zero-size nodes, so a non-zero frame area is a
@@ -414,10 +757,32 @@ function exactFieldCount(
  * hits, then the smallest frame wins (the most specific element, mirroring
  * nodeAtPoint's reverse lookup), with reading order as the final tiebreak.
  * Returns undefined when no visible element matches.
+ *
+ * The universal selector (flow YAML's `any: true`) is the one case that ranking
+ * cannot serve: with no field to be exact about, "smallest" degenerates to
+ * "whatever hairline spacer the scope happens to contain". A field-less
+ * selector names a REGION, not a kind of element, so its matches are read the
+ * way every condition reads a match set — first in reading order — which keeps
+ * the element an action targets the same one an `assert` would quote.
+ *
+ * {@link compareBelowPick} rather than {@link firstInReadingOrder}, though:
+ * both order by (y, x), but a bare reading order leaves an exact positional
+ * tie — a container and the leaf flush at its top-left corner, the everyday
+ * flattened-tree shape the sibling picks already guard against — to be settled
+ * by the order the adapter happened to emit them in. Two frames with different
+ * extents means two different tap centres, so the tie continues into "most
+ * specific" instead.
  */
 export function selectorToFrame(root: DescribeNode, selector: Selector): DescribeFrame | undefined {
   const visible = findAll(root, selector).filter(isVisible);
   if (visible.length === 0) return undefined;
+  if (!hasOwnConstraint(selector)) {
+    let first: DescribeNode | undefined;
+    for (const n of visible) {
+      if (first === undefined || compareBelowPick(n.frame, first.frame) < 0) first = n;
+    }
+    return first?.frame;
+  }
   const fullTextRegex = fullConsumptionRegex(selector);
   let best: DescribeNode | undefined;
   let bestExact = -1;

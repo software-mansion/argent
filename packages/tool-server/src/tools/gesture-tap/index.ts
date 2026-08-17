@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
+import { assertChromiumWindowVisible } from "../../utils/chromium-visibility";
 import { resolveDevice } from "../../utils/device-info";
 import { sendCommand } from "../../utils/simulator-client";
 
@@ -31,6 +32,21 @@ type Params = z.infer<typeof zodSchema>;
 interface Result {
   tapped: boolean;
   timestampMs: number;
+}
+
+function tapDescription(params: Params, tense: "present" | "past"): string {
+  const count = params.clickCount ?? 1;
+  const action =
+    count === 1
+      ? tense === "present"
+        ? "Tapping"
+        : "Tapped"
+      : count === 2
+        ? tense === "present"
+          ? "Double-tapping"
+          : "Double-tapped"
+        : `${tense === "present" ? "Tapping" : "Tapped"} ${count} times`;
+  return `${action} at (${Math.round(params.x * 100)}%, ${Math.round(params.y * 100)}%)`;
 }
 
 const capability: ToolCapability = {
@@ -68,6 +84,12 @@ async function tapChromium(
 
 export const gestureTapTool: ToolDefinition<Params, Result> = {
   id: "gesture-tap",
+  interaction: {
+    startedMsg: ({ params }) => tapDescription(params, "present"),
+    completedMsg: ({ params }) => tapDescription(params, "past"),
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to tap at (${Math.round(params.x * 100)}%, ${Math.round(params.y * 100)}%): ${failureSignal.error_code}`,
+  },
   description: `Press the device screen (iOS simulator, Android emulator, or Chromium app) at normalized coordinates: x and y are fractions of screen width and height in 0.0–1.0 (not pixels).
 Sends a Down event followed by an Up event at the same point. For Chromium, this dispatches a CDP mouse-press/release on the renderer.
 Set clickCount: 2 for a double-tap / double-click — the taps are dispatched as one gesture with proper click counting, which two separate tap calls cannot guarantee.
@@ -91,6 +113,9 @@ Before tapping, determine the correct coordinates by using discovery tools — p
     const clickCount = params.clickCount ?? 1;
     if (device.platform === "chromium") {
       const chromium = services.chromium as ChromiumCdpApi;
+      // Mouse dispatches wait on compositor hit-testing, which a hidden
+      // window services at ~5s per event — refuse up front like gesture-scroll.
+      await assertChromiumWindowVisible(chromium, "tap", "chromium_tap_window_hidden");
       await tapChromium(chromium, params.x, params.y, clickCount);
       return { tapped: true, timestampMs };
     }

@@ -90,6 +90,7 @@ async function buildSessionWithTrace(): Promise<{
     captureProcess: null,
     traceFile: tracePath,
     exportedFiles: { pftrace: tracePath },
+    disposed: false,
     profilingActive: false,
     wallClockStartMs: null,
     parsedData: null,

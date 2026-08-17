@@ -41,6 +41,12 @@ type Result =
 
 export const nativeDescribeScreenTool: ToolDefinition<Params, Result> = {
   id: "native-describe-screen",
+  interaction: {
+    startedMsg: ({ params }) => `Reading native screen for ${params.bundleId}`,
+    completedMsg: ({ params }) => `Read native screen for ${params.bundleId}`,
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to read native screen for ${params.bundleId}: ${failureSignal.error_code}`,
+  },
   capability: { apple: { simulator: true, device: true }, appleRemote: { simulator: true } },
   description: `Read the running app's native accessibility screen description via injected native devtools.
 

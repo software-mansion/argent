@@ -12,8 +12,8 @@
  *     effect never happens (store not mutated);
  *   - flag ON  → the same step runs and the side effect lands.
  *
- * Run `run_in_band`-style serially because it relies on a shared active project
- * root (the flow harness's module state), like the sibling flow tests.
+ * Each case gets its own temp project root, passed explicitly to `flow-execute`,
+ * so nothing is shared between them.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
@@ -23,11 +23,7 @@ import { z } from "zod";
 import { Registry } from "@argent/registry";
 
 import { createRunFlowTool } from "../../src/tools/flows/flow-run";
-import {
-  clearActiveProjectRoot,
-  setActiveProjectRoot,
-  serializeFlow,
-} from "../../src/tools/flows/flow-utils";
+import { serializeFlow } from "../../src/tools/flows/flow-utils";
 
 let tmpDir: string;
 
@@ -65,11 +61,9 @@ async function writeFlow(name: string): Promise<void> {
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-flag-gate-"));
-  setActiveProjectRoot(tmpDir);
 });
 
 afterEach(async () => {
-  clearActiveProjectRoot();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 

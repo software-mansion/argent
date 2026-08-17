@@ -113,6 +113,12 @@ const zodSchema = z.object({
 
 export const reactProfilerFiberTreeTool: ToolDefinition<z.infer<typeof zodSchema>, unknown> = {
   id: "react-profiler-fiber-tree",
+  interaction: {
+    startedMsg: () => "Reading React fiber tree",
+    completedMsg: () => "Read React fiber tree",
+    failedMsg: ({ failureSignal }) =>
+      `Failed to read React fiber tree: ${failureSignal.error_code}`,
+  },
   description: `Inspect the React fiber tree and return a JSON representation of the component hierarchy.
 Use when tracing ancestry of a library component or checking for useMemoCache hook (confirms React Compiler is active on a component).
 Returns a nested JSON tree of fiber nodes with name, tag, actualDuration, selfBaseDuration, and children.

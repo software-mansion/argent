@@ -26,6 +26,7 @@ export {
 
 export {
   createToolsClient,
+  ToolInvocationError,
   type ToolsClient,
   type ToolMeta,
   type ToolInvocationResult,
