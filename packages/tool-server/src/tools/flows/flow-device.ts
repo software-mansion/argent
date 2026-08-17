@@ -324,6 +324,30 @@ function meetsRequires(d: RawDevice, requires: FlowRequires | undefined): boolea
   return true;
 }
 
+/** The device enumeration a requirement refusal ends with. */
+function availableDevices(scoped: RawDevice[], requires: FlowRequires): string {
+  const showKind = requires.runtimeKind !== undefined;
+  return `Available devices: ${scoped.map((d) => describeDevice(d, showKind)).join(", ")}.`;
+}
+
+/**
+ * The refusal for candidates the listing could not classify — worded once, since
+ * both auto-detect arms reach it.
+ */
+function unreadKindError(
+  requires: FlowRequires,
+  unread: RawDevice[],
+  scoped: RawDevice[]
+): FailureError {
+  const ids = unread.map((d) => deviceEntryId(d) ?? "?").join(", ");
+  return requirementsUnverifiableError(
+    `${declaredRequires(requires)}. The runtime kind of ` +
+      `${ids} could not be read from the listing, so whether the flow applies is unknown. ` +
+      `The device may still be booting: re-list, pass --device to probe it fresh, or drop ` +
+      `runtimeKind. ${availableDevices(scoped, requires)}`
+  );
+}
+
 /**
  * Resolve the device a flow runs against. Order: explicit `device` id → the
  * single booted device matching `platform` and the flow's requirements → the
@@ -337,7 +361,9 @@ function meetsRequires(d: RawDevice, requires: FlowRequires | undefined): boolea
  * rather than a device-resolution failure. Unless a candidate was ruled out
  * only because its listed kind could not be READ: the requirement was never
  * checked for it, so the throw is FLOW_REQUIREMENTS_UNVERIFIABLE, which a
- * directory run fails on rather than skips.
+ * directory run fails on rather than skips. That throw also bars a LONE
+ * survivor — a field holding a rival nobody judged was never narrowed to one,
+ * so picking it would trade the ambiguity report for a silent guess.
  */
 export async function resolveFlowDevice(
   registry: Registry,
@@ -355,46 +381,36 @@ export async function resolveFlowDevice(
   };
   const booted = devices.filter(isBooted);
   const scoped = opts.platform ? booted.filter((d) => d.platform === opts.platform) : booted;
-  const eligible = scoped.filter((d) => meetsRequires(d, opts.requires));
+  const requires = opts.requires;
+  const eligible = scoped.filter((d) => meetsRequires(d, requires));
+  // "Could not be read" is not "wrong kind": a device that passed the platform
+  // half but whose listed kind is missing was never judged. Both arms below
+  // consult it — an unjudged rival unsettles a lone survivor exactly as it
+  // unsettles an empty field.
+  const unread = requires?.runtimeKind
+    ? scoped.filter(
+        (d) =>
+          (!requires.platform || platformMeets(d.platform, requires.platform)) &&
+          listedRuntimeKind(d) === undefined
+      )
+    : [];
 
   if (eligible.length === 1) {
+    if (requires && unread.length > 0) throw unreadKindError(requires, unread, scoped);
     const id = deviceEntryId(eligible[0]);
     if (id) return resolveDevice(id);
   }
   if (eligible.length === 0) {
     // Requirements are only to blame when something was booted for them to
     // rule out; an empty machine is the plain no-device case either way.
-    if (opts.requires && scoped.length > 0) {
-      const requires = opts.requires;
-      const showKind = requires.runtimeKind !== undefined;
-      const available = `Available devices: ${scoped
-        .map((d) => describeDevice(d, showKind))
-        .join(", ")}.`;
-      // "Could not be read" is not "wrong kind": a device that passed the
-      // platform half but whose listed kind is missing was never judged, so
-      // the refusal must be the loud unverifiable code, not the skip code.
-      const unread = requires.runtimeKind
-        ? scoped.filter(
-            (d) =>
-              (!requires.platform || platformMeets(d.platform, requires.platform)) &&
-              listedRuntimeKind(d) === undefined
-          )
-        : [];
-      if (unread.length > 0) {
-        const ids = unread.map((d) => deviceEntryId(d) ?? "?").join(", ");
-        throw requirementsUnverifiableError(
-          `${declaredRequires(requires)}. The runtime kind of ` +
-            `${ids} could not be read from the listing, so whether the flow applies is unknown. ` +
-            `The device may still be booting: re-list, pass --device to probe it fresh, or drop ` +
-            `runtimeKind. ${available}`
-        );
-      }
+    if (requires && scoped.length > 0) {
+      if (unread.length > 0) throw unreadKindError(requires, unread, scoped);
       throw requirementsUnmetError(
         (requires.composed
           ? `No booted device satisfies the requires this flow and its composed fragments ` +
             `together declare: `
           : `No booted device satisfies this flow's requires: `) +
-          `{ ${describeRequires(requires)} }. ${available}`
+          `{ ${describeRequires(requires)} }. ${availableDevices(scoped, requires)}`
       );
     }
     const what = opts.platform

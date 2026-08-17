@@ -598,11 +598,39 @@ describe("requirements narrow device auto-detection", () => {
     expect((await run(registry, "tv-only")).device).toBe(IOS_TV);
   });
 
-  it("excludes a device whose runtime kind the listing could not report", async () => {
+  it("refuses a lone survivor while another device's kind went unread", async () => {
+    // Without the block the two booted devices report as ambiguous; the block
+    // must not turn that into a silent pick over a rival it never judged.
     await writeFlow("tv-only", { requires: { runtimeKind: "tv" } });
     const { registry } = mockRegistry([iosEntry(IOS_TV, "tv"), androidEntry(ANDROID)]);
 
-    expect((await run(registry, "tv-only")).device).toBe(IOS_TV);
+    const err = await run(registry, "tv-only").catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNVERIFIABLE);
+    expect((err as Error).message).toMatch(
+      new RegExp(`runtime kind of ${ANDROID} could not be read`)
+    );
+  });
+
+  it("picks the survivor when the rival's mismatching kind WAS read", async () => {
+    // The foil to the case above, and the narrowing feature's whole point: a
+    // judged exclusion leaves nothing unverified.
+    await writeFlow("tv-only", { requires: { runtimeKind: "tv" } });
+    const { registry } = mockRegistry([
+      androidEntry(ANDROID, "mobile"),
+      androidEntry(ANDROID_2, "tv"),
+    ]);
+
+    expect((await run(registry, "tv-only")).device).toBe(ANDROID_2);
+  });
+
+  it("picks the survivor when a platform mismatch excluded the unread device", async () => {
+    // The emulator fails the readable platform half, so its unread kind never
+    // mattered — same reasoning as the skip case below, on the survivor arm.
+    await writeFlow("ios-tv", { requires: { platform: ["ios"], runtimeKind: "tv" } });
+    const { registry } = mockRegistry([iosEntry(IOS_TV, "tv"), androidEntry(ANDROID)]);
+
+    expect((await run(registry, "ios-tv")).device).toBe(IOS_TV);
   });
 
   it("admits a listed vega device by its constant kind, with no listing field", async () => {
