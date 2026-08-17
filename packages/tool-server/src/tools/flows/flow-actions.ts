@@ -101,32 +101,31 @@ export interface ActionEnv {
    * can prove a source dead (a {@link settleTree} that failed every read
    * attempt), whichever directive asked for that settle. `waitForFrame` and
    * `scrollToVisible` error the step on it, so a verdict of theirs is never
-   * spent; `runSnapshot` is the one producer whose step then passes reporting
-   * nothing, since it captures pixels regardless and has no warning to carry.
-   * Deliberate, but it means a snapshot's outage is heard about on the gesture
-   * that spends the verdict, or not at all if no gesture follows. It is cleared
-   * by {@link readFlowTree}, which every directive's reads go through, since a
-   * read that came back is evidence of health whichever directive asked for it.
-   * A relaunch clears it too, whether spelled `launch` or as one of flow-run's
-   * `FOREGROUND_CHANGING_TOOLS`: it is the repair the commonest of these errors
-   * asks for, and no read need follow it before a gesture does. So does a
-   * nested orchestrator step, which can do either out of this holder's sight.
-   * Absent for a caller that builds an `ActionEnv` by hand, which simply leaves
-   * every settle on its own budget.
+   * spent; `runSnapshot` captures pixels regardless and `VisualOutcome` has
+   * no `warning` field, so its step passes in silence: the outage surfaces on
+   * the gesture that spends the verdict, or not at all if none follows.
    *
-   * `runSnapshot` is the third caller {@link fetchFlowTree} names as swallowing
-   * such an outage, and it deliberately does NOT read the memo: a capture taken
-   * unsettled is one taken mid-animation, and it lands as a pixel mismatch on a
-   * step whose report has no `warning` to carry the caveat, so being wrong
-   * there would cost a step rather than a settle. Snapshots pay the full price
-   * for that: on a source that fails by timing out, every snapshot step re-buys
-   * the whole settle, window and floor reads alike, two reads where the window
-   * alone ended on one. That price buys something back. The settle reads
-   * through {@link readFlowTree}, so a snapshot re-tests the verdict rather
-   * than trusting it, and in a flow of nothing but snapshots and coordinate
-   * gestures - where the gesture settle skips itself while one stands - it is,
-   * with a rotate's {@link fetchScreenAspect}, one of the two reads left that
-   * can retire a wrong one.
+   * That same silence keeps `runSnapshot` deliberately off the reading side,
+   * though not on {@link fetchScreenAspect}'s grounds, since a snapshot's
+   * settle IS waited on. A capture taken on a stale verdict lands as a
+   * mid-animation pixel mismatch that reads as a visual regression, with
+   * nothing to say the screen was never settled: being wrong there costs a
+   * step, where the gesture risks only a settle. The price is that on a source
+   * failing by timeout, every snapshot step re-buys the whole settle, window
+   * and floor reads alike, two reads where the window alone ended on one. In
+   * exchange the settle reads through {@link readFlowTree}, so a snapshot
+   * re-tests the verdict instead of trusting it, and with a rotate's
+   * {@link fetchScreenAspect} it is one of the two reads left that can retire a
+   * wrong one in a flow of nothing but snapshots and coordinate gestures.
+   *
+   * It is cleared by {@link readFlowTree}, which every directive's reads go
+   * through, since a read that came back is evidence of health whichever
+   * directive asked for it. A relaunch clears it too, whether spelled `launch`
+   * or as one of flow-run's `FOREGROUND_CHANGING_TOOLS`: it is the repair the
+   * commonest of these errors asks for, and no read need follow it before a
+   * gesture does. So does a nested orchestrator step, which can do either out
+   * of this holder's sight. Absent for a caller that builds an `ActionEnv` by
+   * hand, which simply leaves every settle on its own budget.
    *
    * The write carries the device it was proven against: a verdict about a
    * device the run has left says nothing about the one it moved onto (a
