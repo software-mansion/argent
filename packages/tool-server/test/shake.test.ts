@@ -129,9 +129,7 @@ describe("shake tool — iOS", () => {
       _opts: unknown,
       cb: (e: Error | null) => void
     ) => cb(new Error("Invalid device state: Shutdown"))) as never);
-    await expect(shakeTool.execute(services, { udid: iosUdid })).rejects.toThrow(
-      /Failed to shake/
-    );
+    await expect(shakeTool.execute(services, { udid: iosUdid })).rejects.toThrow(/Failed to shake/);
     expect(mockShaker.settle).not.toHaveBeenCalled();
   });
 });

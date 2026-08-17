@@ -95,8 +95,8 @@ let stderrWrite: ReturnType<typeof vi.spyOn>;
 
 function warnings(): string[] {
   return stderrWrite.mock.calls
-    .map((call) => String(call[0]))
-    .filter((line) => line.startsWith("[shake:window]"));
+    .map((call: unknown[]) => String(call[0]))
+    .filter((line: string) => line.startsWith("[shake:window]"));
 }
 
 beforeEach(() => {
@@ -262,9 +262,7 @@ describe("prepareHostWindowShake — iOS window lookup", () => {
     // The device display name is the needle: with several booted devices each
     // window is titled with its device's name, so window 1 is not safe.
     expect(scripts[0]).toContain('set needles to {"iPhone 16 Pro"}');
-    expect(scripts[0]).toContain(
-      'every process whose name is "Simulator" or name is "Device Hub"'
-    );
+    expect(scripts[0]).toContain('every process whose name is "Simulator" or name is "Device Hub"');
     // A shake with no window to move must error out inside AppleScript rather
     // than silently "succeeding" against a stale reference.
     expect(scripts[0]).toContain("if win is missing value then error");

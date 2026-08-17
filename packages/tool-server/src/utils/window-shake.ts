@@ -63,10 +63,9 @@ export type HostWindowTarget =
    * window ("iPhone 16 Pro" plus runtime info). The udid never appears in
    * window titles, so it is used only for the device-set headless check.
    */
-  | { kind: "ios"; udid: string; name?: string }
-  | { kind: "android"; serial: string };
+  { kind: "ios"; udid: string; name?: string } | { kind: "android"; serial: string };
 
-export interface HostWindowShaker {
+interface HostWindowShaker {
   /**
    * Start one wobble. No-op when disabled, when a wobble is already in
    * flight, or after a previous attempt failed. Never throws.
@@ -244,7 +243,12 @@ end run
 }
 
 /** One-shot repair script: same window lookup, a single move back to the origin. */
-function restoreScript(target: HostWindowTarget, needles: string[], ox: number, oy: number): string {
+function restoreScript(
+  target: HostWindowTarget,
+  needles: string[],
+  ox: number,
+  oy: number
+): string {
   return `on run
 	tell application "System Events"${windowLookup(target, needles)}
 		if win is missing value then error "no matching window"
@@ -284,7 +288,7 @@ function runOsascript(script: string): Promise<void> {
           const failure = new Error(detail) as OsascriptError;
           failure.wasKilled = Boolean(
             (err as { killed?: boolean; signal?: string }).killed ||
-              (err as { signal?: string }).signal
+            (err as { signal?: string }).signal
           );
           failure.rawStderr = raw;
           reject(failure);
@@ -312,9 +316,7 @@ async function restoreOriginAfterKill(
   needles: string[],
   rawStderr: string
 ): Promise<void> {
-  const match = rawStderr.match(
-    new RegExp(`${ORIGIN_MARKER}\\s*(-?\\d+)\\s*,\\s*(-?\\d+)`)
-  );
+  const match = rawStderr.match(new RegExp(`${ORIGIN_MARKER}\\s*(-?\\d+)\\s*,\\s*(-?\\d+)`));
   if (!match) return;
   try {
     await runOsascript(restoreScript(target, needles, Number(match[1]), Number(match[2])));
