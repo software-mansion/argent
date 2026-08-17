@@ -1,7 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
 import type { DeviceInfo, Registry } from "@argent/registry";
-import type { NativeAppState, NativeDevtoolsApi } from "../../src/blueprints/native-devtools";
+import {
+  NON_INJECTABLE_NATIVE_WARNING,
+  type NativeAppState,
+  type NativeDevtoolsApi,
+} from "../../src/blueprints/native-devtools";
 import type { FlowTreeTarget } from "../../src/tools/flows/flow-actions";
 import { queryFullHierarchyTree } from "../../src/tools/flows/flow-ios-tree";
 
@@ -223,6 +227,49 @@ describe("queryFullHierarchyTree - pinned target vs poisoned auto-resolve", () =
     // would run a full reverifyEnv per poll and latch the device's give-up
     // after three failures, so the pinned path must never invoke either.
     expect(repaired).toEqual([]);
+    expect(queried).toEqual([]);
+  });
+
+  it("a pinned read of an Apple system app is refused before any RPC is spent", async () => {
+    // A flow `launch:` can name a system app: restart-app runs the 2-arg
+    // precheck (no bundleId, no throw) and the launch gate only waits for
+    // isConnected, which simulator-wide injection lets a background system
+    // process satisfy - so the pin lands here. The refusal must be terminal
+    // and free, not a 5s getState probe plus a 15s getFullHierarchy timeout
+    // surfacing as "RPC timed out".
+    const { api, probed, queried, repaired } = poisonedApi([POISONER]);
+    const err: unknown = await queryFullHierarchyTree(
+      registryFor(api),
+      IOS_DEVICE,
+      pin(POISONER)
+    ).then(
+      () => {
+        throw new Error("expected the system-app pin to be refused");
+      },
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(Error);
+    const message = (err as Error).message;
+    expect(message).toContain(`${POISONER} is an Apple system app`);
+    expect(message).toContain("never a valid flow target");
+    expect(message).toContain(NON_INJECTABLE_NATIVE_WARNING);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE);
+    expect(getFailureSignal(err)?.failure_stage).toBe("flow_tree_pinned_target");
+    // The substance of the refusal: no RPC was touched at all.
+    expect(probed).toEqual([]);
+    expect(queried).toEqual([]);
+    expect(repaired).toEqual([]);
+  });
+
+  it("refuses a system-app pin in any casing, even while it is connected", async () => {
+    // Bundle ids are case-insensitive on iOS, and connected-and-healthy is
+    // exactly the state the isConnected gate would wave through.
+    const RECASED = "COM.Apple.Preferences";
+    const { api, probed, queried } = poisonedApi([APP, RECASED]);
+    await expect(
+      queryFullHierarchyTree(registryFor(api), IOS_DEVICE, pin(RECASED))
+    ).rejects.toThrow(/is an Apple system app/);
+    expect(probed).toEqual([]);
     expect(queried).toEqual([]);
   });
 

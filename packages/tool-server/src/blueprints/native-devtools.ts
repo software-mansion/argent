@@ -55,10 +55,11 @@ export function isInjectableBundleId(bundleId: string): boolean {
 /**
  * The invariant half of the non-injectable recovery guidance: which tools NOT
  * to fall back to. Shared VERBATIM by the precheck throw, the `describe` iOS
- * fallback hint and the `native-devtools-status` description, so none of them
- * can drift into recommending a dead-end. The flow tree source reports the same
- * terminal state without this text: its reader is authoring a flow, so it names
- * the flow-level remedy (drive by coordinate) instead.
+ * fallback hint, the `native-devtools-status` description and the flow runner's
+ * pinned-read refusal in `flow-ios-tree.ts`, so none of them can drift into
+ * recommending a dead-end. The flow tree source's measured diagnosis reports
+ * the same terminal state without this text: its reader is authoring a flow, so
+ * it names the flow-level remedy (drive by coordinate) instead.
  *
  * Every native-* *feature* tool re-throws this identical error from the same
  * 3-arg precheck, so pointing an agent at another one just loops it back here.
