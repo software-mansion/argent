@@ -85,7 +85,7 @@ import {
 } from "../../blueprints/chromium-cdp";
 import { bootElectronApp, killChromiumByPortAndWait } from "../devices/boot-electron";
 import { untrackChromiumPort } from "../../utils/chromium-discovery";
-import { parseChromiumCdpPort, resolveDevice } from "../../utils/device-info";
+import { classifyDeviceShape, parseChromiumCdpPort, resolveDevice } from "../../utils/device-info";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
 import { describeVega } from "../describe/platforms/vega";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
@@ -1481,14 +1481,18 @@ function resolveOpts(
 function assertParamsMeetRequires(params: Params, requires: FlowRequires | undefined): void {
   if (!requires) return;
   if (params.device) {
-    const shape = resolveDevice(params.device).platform;
-    // Name the shape call: a mistyped --device (a device name, say) falls
-    // through to android and must not read as a requires problem.
+    const { platform: shape, recognised } = classifyDeviceShape(params.device);
+    // Only an unconfirmed shape earns the hint — the android fallback, or a
+    // `remote:` tail that is not a UDID. On a confirmed id it would tell the
+    // caller a falsehood about the string they typed.
+    const hint = recognised
+      ? ""
+      : " (no device listing is consulted, and no id shape confirms this one - " +
+        "a device name classifies the same way)";
     assertPlatformMeetsRequires(
       shape,
       requires,
-      `device "${params.device}", whose id shape classifies it as ${shape} ` +
-        `(no device listing is consulted - a device name is not a device id)`
+      `device "${params.device}", whose id shape classifies it as ${shape}${hint}`
     );
     return;
   }

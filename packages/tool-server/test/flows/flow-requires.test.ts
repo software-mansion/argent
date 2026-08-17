@@ -437,9 +437,27 @@ describe("an explicitly targeted run", () => {
     await writeFlow("ios-only", { requires: { platform: ["ios"] } });
     const { registry } = mockRegistry();
 
-    await expect(run(registry, "ios-only", { device: ANDROID })).rejects.toThrow(
-      /excludes device "emulator-5554", whose id shape classifies it as android/
+    const err = await run(registry, "ios-only", { device: ANDROID }).catch((e: unknown) => e);
+
+    expect((err as Error).message).toMatch(
+      /excludes device "emulator-5554", whose id shape classifies it as android \(no device listing[^)]*\)\. Run it against a matching target/
     );
+  });
+
+  it("does not call a well-formed id a non-id when its platform is excluded", async () => {
+    // The common refusal in a directory run: a real booted udid, excluded on
+    // platform alone. The shape verdict stands on its own there - appending the
+    // typo hint would tell the caller their valid udid is not a device id.
+    await writeFlow("android-only", { requires: { platform: ["android"] } });
+    const { registry } = mockRegistry();
+
+    const err = await run(registry, "android-only", { device: IOS }).catch((e: unknown) => e);
+
+    expect((err as Error).message).toContain(
+      `excludes device "${IOS}", whose id shape classifies it as ios. ` +
+        `Run it against a matching target, or relax the requirement.`
+    );
+    expect((err as Error).message).not.toMatch(/no device listing/);
   });
 
   it("names the literal id and the shape call when --device is not a device id", async () => {
@@ -449,7 +467,54 @@ describe("an explicitly targeted run", () => {
     const { registry } = mockRegistry();
 
     await expect(run(registry, "ios-only", { device: "iPhone 17 Pro" })).rejects.toThrow(
-      /device "iPhone 17 Pro", whose id shape classifies it as android \(no device listing is consulted - a device name is not a device id\)/
+      /device "iPhone 17 Pro", whose id shape classifies it as android \(no device listing is consulted, and no id shape confirms this one - a device name classifies the same way\)/
+    );
+  });
+
+  it.each([
+    ["an ios udid", IOS, "ios", "vega"],
+    ["a remote sim udid", IOS_REMOTE, "ios-remote", "vega"],
+    ["a chromium id", CHROMIUM, "chromium", "vega"],
+    ["a vega serial", VEGA, "vega", "ios"],
+  ] as const)(
+    "keeps the typo hint out of a refusal aimed at %s",
+    async (_label, device, shape, required) => {
+      // One per shape-confirmed family: the hint belongs to an unconfirmed
+      // shape, so none of these may carry it.
+      await writeFlow("shape-gate", { requires: { platform: [required] } });
+      const { registry } = mockRegistry();
+
+      const err = await run(registry, "shape-gate", { device }).catch((e: unknown) => e);
+
+      expect((err as Error).message).toContain(
+        `excludes device "${device}", whose id shape classifies it as ${shape}.`
+      );
+      expect((err as Error).message).not.toMatch(/no device listing/);
+    }
+  );
+
+  it.each([
+    ["an emulator serial", ANDROID, "android"],
+    ["a physical android serial", "HT82A0203045", "android"],
+    ["a whitespace-free device name", "iPhone16Pro", "android"],
+    [
+      "an AVD name, which `emulator -list-avds` writes with underscores",
+      "Pixel_8_Pro_API_34",
+      "android",
+    ],
+    ["a remote prefix over a non-udid tail", "remote:iPhone 17 Pro", "ios-remote"],
+  ] as const)("keeps the typo hint on a refusal aimed at %s", async (_label, device, shape) => {
+    // No shape confirms any of these, so a real serial earns the hint on the
+    // same terms as an outright name - and the wording claims only that much.
+    await writeFlow("vega-only", { requires: { platform: ["vega"] } });
+    const { registry } = mockRegistry();
+
+    const err = await run(registry, "vega-only", { device }).catch((e: unknown) => e);
+
+    expect((err as Error).message).toContain(
+      `device "${device}", whose id shape classifies it as ${shape} ` +
+        `(no device listing is consulted, and no id shape confirms this one - ` +
+        `a device name classifies the same way)`
     );
   });
 

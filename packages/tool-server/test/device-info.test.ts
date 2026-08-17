@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { classifyDevice, isAndroidEmulatorSerial, resolveDevice } from "../src/utils/device-info";
+import {
+  classifyDevice,
+  classifyDeviceShape,
+  isAndroidEmulatorSerial,
+  resolveDevice,
+} from "../src/utils/device-info";
 
 describe("classifyDevice", () => {
   it("classifies iOS simulator UUIDs as ios", () => {
@@ -14,6 +19,54 @@ describe("classifyDevice", () => {
 
   it("classifies amazon-prefixed serials as vega", () => {
     expect(classifyDevice("amazon-4a27df03c9777152")).toBe("vega");
+  });
+});
+
+describe("classifyDeviceShape", () => {
+  it("reports every id shape it matches as recognised", () => {
+    for (const id of [
+      "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
+      "remote:01234567-89ab-cdef-0123-456789abcdef",
+      "chromium-cdp-9222",
+      "amazon-4a27df03c9777152",
+    ]) {
+      expect(classifyDeviceShape(id)).toMatchObject({ recognised: true });
+    }
+  });
+
+  it("reports every android id as unrecognised, real serials included", () => {
+    // The android arm holds an id to no shape, so it confirms nothing about a
+    // real serial either.
+    for (const serial of ["emulator-5554", "HT82A0203045", "192.168.1.5:5555"]) {
+      expect(classifyDeviceShape(serial)).toEqual({ platform: "android", recognised: false });
+    }
+  });
+
+  it("reports a device name as the android fallback, not a shape", () => {
+    // The whole point of the flag: a name classifies as android like any
+    // serial, and only this tells a caller the verdict was a fallback. Names
+    // need no whitespace to be names: an AVD name from `emulator -list-avds`
+    // has none.
+    for (const name of ["iPhone 17 Pro", "iPhone16Pro", "Pixel_8_Pro_API_34"]) {
+      expect(classifyDeviceShape(name)).toEqual({ platform: "android", recognised: false });
+    }
+  });
+
+  it("reports an empty id as unrecognised", () => {
+    expect(classifyDeviceShape("")).toEqual({ platform: "android", recognised: false });
+  });
+
+  it("reports a remote prefix on a non-udid as unrecognised", () => {
+    expect(classifyDeviceShape("remote:iPhone 17 Pro")).toEqual({
+      platform: "ios-remote",
+      recognised: false,
+    });
+  });
+
+  it("agrees with classifyDevice on the platform", () => {
+    for (const id of ["AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", "emulator-5554", "iPhone 17 Pro"]) {
+      expect(classifyDeviceShape(id).platform).toBe(classifyDevice(id));
+    }
   });
 });
 
