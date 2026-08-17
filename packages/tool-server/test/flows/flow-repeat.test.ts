@@ -658,6 +658,88 @@ describe("repeat: e2e classification", () => {
       )
     ).not.toThrow();
   });
+
+  // The run-time twin of the same rule. Parse validates one file, so a chain
+  // that only reaches its launch across a `run:` hop is the runner's to refuse
+  // — and its refusal has to spell the remedy against the same reading, or the
+  // wrapped spelling is told to delete a step the named fragment has not got.
+  it("spells the block remedy when the launch a run: hop reaches is wrapped in a times block", async () => {
+    await writeFlow("blocked-launch", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "repeat",
+          spec: { mode: "times", times: 1 },
+          steps: [{ kind: "launch", app: "com.acme.app" }],
+        },
+      ],
+    });
+    await writeFlow("gated-blocked", {
+      executionPrerequisite: "on the profile screen",
+      steps: [{ kind: "run", flow: "blocked-launch.yaml" }],
+    });
+
+    const refusal = run("gated-blocked");
+
+    await expect(refusal).rejects.toThrow(/must not declare executionPrerequisite/i);
+    // The fragment that carries the launch is still what the message names —
+    // the block reading tells the author what to do once that file is open.
+    await expect(refusal).rejects.toThrow(/leading launch in "blocked-launch"/);
+    await expect(refusal).rejects.toThrow(
+      /in "blocked-launch" out of the repeat block around it \(or drop the block\) to make it a fragment/
+    );
+  });
+
+  it("keeps the direct remedy when the fragment's own first step is the launch", async () => {
+    // The control the wording above is only distinguishable against: same
+    // cross-file chain, unwrapped launch. Naming a repeat block here would be
+    // the mirror error, and the phrasing is what flow-add-step and the CLI
+    // print verbatim, so it is pinned whole.
+    await writeFlow("direct-launch", {
+      executionPrerequisite: "",
+      steps: [{ kind: "launch", app: "com.acme.app" }],
+    });
+    await writeFlow("gated-direct", {
+      executionPrerequisite: "on the profile screen",
+      steps: [{ kind: "run", flow: "direct-launch.yaml" }],
+    });
+
+    const refusal = run("gated-direct");
+
+    await expect(refusal).rejects.toThrow(
+      /Drop the leading launch in "direct-launch" to make it a fragment, or drop executionPrerequisite from "gated-direct"\./
+    );
+    await expect(refusal).rejects.not.toThrow(/repeat block/i);
+  });
+
+  it("reads the block against the file the message names, not the chain into it", async () => {
+    // A `run:` hop is a file hop, not a block: the fragment's launch is its own
+    // top-level step, and whatever wrapped the `run:` that reached it is in a
+    // different file from the one the author is being sent to. Carrying the
+    // wrap across the hop would send them looking for a repeat block that file
+    // has not got — the same misdirection, one hop over.
+    await writeFlow("direct-launch", {
+      executionPrerequisite: "",
+      steps: [{ kind: "launch", app: "com.acme.app" }],
+    });
+    await writeFlow("gated-wrapping-run", {
+      executionPrerequisite: "on the profile screen",
+      steps: [
+        {
+          kind: "repeat",
+          spec: { mode: "times", times: 1 },
+          steps: [{ kind: "run", flow: "direct-launch.yaml" }],
+        },
+      ],
+    });
+
+    const refusal = run("gated-wrapping-run");
+
+    await expect(refusal).rejects.toThrow(
+      /Drop the leading launch in "direct-launch" to make it a fragment/
+    );
+    await expect(refusal).rejects.not.toThrow(/repeat block/i);
+  });
 });
 
 describe("repeat: times", () => {

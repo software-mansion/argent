@@ -857,8 +857,13 @@ export function isE2eFlow(flow: FlowFile): boolean {
  * top-level `launch` may well exist, and is not it). {@link validateFlow}
  * spells its remedy off this: told to "drop the leading launch", an author of
  * the blocked spelling has no step in front of them that is one.
+ *
+ * Exported for the run-time twin of that refusal (flow-run's `leadingLaunch`,
+ * which follows a leading `run:` chain across files): it classifies the flow
+ * that OWNS the launch the same way and spells the same remedy off it, so one
+ * spelling cannot get two readings depending on which check caught it.
  */
-type LeadingLaunchSite = "direct" | "blocked";
+export type LeadingLaunchSite = "direct" | "blocked";
 
 /**
  * {@link isE2eFlow}'s scan, four-valued so a `times` block can be exactly as

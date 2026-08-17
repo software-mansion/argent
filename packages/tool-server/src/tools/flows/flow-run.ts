@@ -37,6 +37,7 @@ import {
   type FlowSelector,
   type FlowStep,
   type Launch,
+  type LeadingLaunchSite,
   type UiWhenCondition,
   type WhenCondition,
   LAUNCH_PLATFORMS,
@@ -1265,8 +1266,16 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
           const pinRemedy = chromiumPinnable(leading.app, params.platform)
             ? ` Or pin the run to a chromium instance you have already brought to that state (--device chromium-cdp-<port>), where the leading launch only attaches.`
             : "";
+          // The distinction validateFlow's remedy draws, in its words: told to
+          // drop "the leading launch" of a flow that reaches one only by
+          // descending into a `times` block, an author has no such step to
+          // delete — the block around it is what they have.
+          const blockRemedy =
+            leading.site === "blocked"
+              ? " out of the repeat block around it (or drop the block)"
+              : "";
           throw new FailureError(
-            `A flow whose leading run: chain reaches a launch step must not declare executionPrerequisite — it launches its own app and controls its start state. Drop the leading launch in "${leading.flow}" to make it a fragment, or drop executionPrerequisite from "${flowName}".${pinRemedy}`,
+            `A flow whose leading run: chain reaches a launch step must not declare executionPrerequisite — it launches its own app and controls its start state. Drop the leading launch in "${leading.flow}"${blockRemedy} to make it a fragment, or drop executionPrerequisite from "${flowName}".${pinRemedy}`,
             {
               error_code: FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE,
               failure_stage: "flow_run_validate",
@@ -1529,10 +1538,18 @@ const NO_EXECUTABLE_STEP = "no-executable-step";
  * The launch the RUN begins with, following a leading `run:` — a fragment whose
  * first step composes an e2e flow starts with that flow's launch, and the runner
  * has to know that before step 1 to boot a chromium app for it (and to refuse a
- * prerequisite that launch would invalidate). `flow` names the flow whose first
- * step IS the launch, so a rejection can point at the right file. Null when the
- * run doesn't begin with a launch, or when the chain can't be read (a broken
- * `run:` target is reported properly by {@link execRunStep} when it executes).
+ * prerequisite that launch would invalidate). `flow` names the flow the launch
+ * lives in, so a rejection can point at the right file. Null when the run
+ * doesn't begin with a launch, or when the chain can't be read (a broken `run:`
+ * target is reported properly by {@link execRunStep} when it executes).
+ *
+ * `site` reads that file the way parse reads a single one (see
+ * {@link LeadingLaunchSite}): `"blocked"` when the launch is the flow's first
+ * executable step only by descent into a `times` block, so the refusal names
+ * the block rather than a top-level launch step the named file has not got. A
+ * `run:` hop is a file hop, not a block, and the site is about the file the
+ * message names — so a fragment whose own first step is the launch stays
+ * `"direct"` however many blocks the chain into it passed through.
  *
  * `inRepeat` is the whole RUN's repeat scope: a `tool: flow-execute` dispatched
  * from inside a repeat body runs its entire flow under one, which is the seed
@@ -1546,8 +1563,8 @@ async function leadingLaunch(
   flow: FlowFile,
   stack: RunStackEntry[],
   inRepeat: boolean
-): Promise<{ app: Launch; flow: string } | null> {
-  const found = await scanLeadingLaunch(flow.steps, stack, inRepeat);
+): Promise<{ app: Launch; flow: string; site: LeadingLaunchSite } | null> {
+  const found = await scanLeadingLaunch(flow.steps, stack, inRepeat, false);
   return found === NO_EXECUTABLE_STEP ? null : found;
 }
 
@@ -1589,22 +1606,34 @@ async function leadingLaunch(
  * its launch, so any hop it would error on stays `null` (give up) here, never
  * transparent. Anything unreadable is `null` too — {@link execRunStep} reports
  * that properly when it executes.
+ *
+ * The two flags look alike and are not interchangeable. `inRepeat` is the RUN's
+ * scope, so it rides every hop below a block and is what the snapshot fence
+ * reads. `blocked` is the reported FILE's — the site the refusal spells its
+ * remedy off — so a `run:` hop clears it: that hop's fragment is a new file,
+ * whose own leading launch is a step its author can see and delete, whatever
+ * wrapped the `run:` that reached it.
  */
 async function scanLeadingLaunch(
   steps: FlowStep[],
   stack: RunStackEntry[],
-  inRepeat: boolean
-): Promise<{ app: Launch; flow: string } | typeof NO_EXECUTABLE_STEP | null> {
+  inRepeat: boolean,
+  blocked: boolean
+): Promise<
+  { app: Launch; flow: string; site: LeadingLaunchSite } | typeof NO_EXECUTABLE_STEP | null
+> {
   const top = stack[stack.length - 1]!;
   for (const step of steps) {
     if (step.kind === "echo") continue;
-    if (step.kind === "launch") return { app: step.app, flow: top.display };
+    if (step.kind === "launch") {
+      return { app: step.app, flow: top.display, site: blocked ? "blocked" : "direct" };
+    }
     if (step.kind === "repeat" && step.spec.mode === "times") {
       // Unconditional, so transparent: the block is its body pasted N times.
       // Same stack — no file hop — and an all-echo body falls through to the
       // steps after the block. An `until` drain skips this branch and keeps
       // the give-up below: its body may legitimately run zero times.
-      const inner = await scanLeadingLaunch(step.steps, stack, true);
+      const inner = await scanLeadingLaunch(step.steps, stack, true, true);
       if (inner !== NO_EXECUTABLE_STEP) return inner;
       continue;
     }
@@ -1629,7 +1658,8 @@ async function scanLeadingLaunch(
     const inner = await scanLeadingLaunch(
       nested.steps,
       [...stack, { canonical, display: runDisplayFor(step.flow, stack[0]!.display) }],
-      inRepeat
+      inRepeat,
+      false
     );
     if (inner !== NO_EXECUTABLE_STEP) return inner;
   }
