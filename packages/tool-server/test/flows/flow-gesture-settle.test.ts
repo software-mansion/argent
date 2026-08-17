@@ -451,6 +451,15 @@ describe("a tree-source outage never fails a selector-less gesture", () => {
         undefined,
         undefined,
       ]);
+      // Silent because each gesture settled, not because none did: a still
+      // screen converges on the 2 identical reads a settle returns on, and
+      // every gesture pays for its own pair.
+      expect(readsBeforeFirstGesture()).toBe(2);
+      expect(readsBetween(gestureAt(0), gestureAt(1))).toBe(2);
+      expect(readsBetween(gestureAt(1), gestureAt(2))).toBe(2);
+      // 3 for the rotate: the same pair plus the aspect read it makes on top of
+      // its settle, which no settle produces.
+      expect(readsBetween(gestureAt(2), gestureAt(3))).toBe(3);
     });
 
     it("says nothing about a screen that read fine and never stopped moving", async () => {
@@ -471,10 +480,20 @@ describe("a tree-source outage never fails a selector-less gesture", () => {
         steps: [{ kind: "tap", x: 0.4, y: 0.6 }],
       });
 
+      const startedAt = Date.now();
       const result = await run("tap-restless-warned");
+      const elapsed = Date.now() - startedAt;
 
       expect(result.steps[0].status).toBe("pass");
       expect(result.steps[0].warning).toBeUndefined();
+      // And the budget was spent whole: no two reads ever match, so the tap
+      // waited the full 3000ms window at the 250ms poll - at most 13 reads (12
+      // intervals plus the first), and never the 2 a converging settle returns
+      // on. Only the ceiling is fixed; slower polls on a loaded machine cost
+      // reads, not window, which is what the elapsed time pins instead.
+      expect(readsBeforeFirstGesture()).toBeGreaterThan(2);
+      expect(readsBeforeFirstGesture()).toBeLessThanOrEqual(13);
+      expect(elapsed).toBeGreaterThanOrEqual(3_000);
     }, 15_000);
   });
 
