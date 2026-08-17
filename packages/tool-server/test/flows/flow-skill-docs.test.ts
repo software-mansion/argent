@@ -22,6 +22,10 @@ const FLOW_YAML = path.resolve(
   __dirname,
   "../../../skills/skills/argent-create-flow/references/flow-yaml.md"
 );
+const FIELD_VALUES = path.resolve(
+  __dirname,
+  "../../../skills/skills/argent-create-flow/references/asserting-field-values.md"
+);
 /**
  * The three surfaces that quote the number of `idle` warnings instead of
  * listing them. They cite the reference rather than restating it, so a warning
@@ -66,6 +70,21 @@ describe("create-flow selector-scope docs", () => {
       ...section.matchAll(/^\s*- ((?:tap|assert|await|type|scroll-to):.+?)(?:\s+#.*)?$/gm),
     ].map((m) => m[1]!);
     expect(snippets).toHaveLength(3);
+    for (const snippet of snippets) {
+      expect(() => parseFlow(`steps:\n  - ${snippet}\n`), snippet).not.toThrow();
+    }
+  });
+
+  it("keeps every inline `type:` example parsable, `clear` ones included", () => {
+    // The guard above slices one section, and every `clear` example sits after
+    // `## Directives` — so the directive's own examples, the ones an author
+    // copies, were unguarded. These are inline code spans in prose rather than
+    // list items, so they are matched as spans.
+    const reference = readFileSync(FLOW_YAML, "utf8");
+    const snippets = [...reference.matchAll(/`(type: \{[^`]*\})`/g)].map((m) => m[1]!);
+    // A floor, not a count: the point is that new examples are covered too.
+    expect(snippets.length).toBeGreaterThanOrEqual(2);
+    expect(snippets.filter((s) => s.includes("clear")).length).toBeGreaterThanOrEqual(2);
     for (const snippet of snippets) {
       expect(() => parseFlow(`steps:\n  - ${snippet}\n`), snippet).not.toThrow();
     }
@@ -153,5 +172,34 @@ describe("create-flow idle docs", () => {
         new RegExp(`at least ${smallest}ms`)
       );
     }
+  });
+});
+
+// The clear-only guidance rests on three parse-time facts, and an author who
+// tries the rejected forms first only learns which is which by running a flow.
+// The reference is unguarded otherwise: it is the one create-flow reference no
+// test reads.
+describe("create-flow asserting-field-values docs", () => {
+  const assertStep = (body: string): string => `steps:\n  - assert: { text: ${body} }\n`;
+
+  it("keeps the clear-only section's parser claims true", () => {
+    const section = between(FIELD_VALUES, "## A clear-only step", "\nAssert the OLD value");
+    expect(section).toContain('`equals: ""` and `contains: ""` are rejected');
+    expect(section).toContain("`matches: '^$'`");
+    // Rejected at parse time, exactly as the section says…
+    expect(() => parseFlow(assertStep('{ in: { id: f }, equals: "" }'))).toThrow();
+    expect(() => parseFlow(assertStep('{ in: { id: f }, contains: "" }'))).toThrow();
+    // …and the regex form parses, which is why the section has to warn that it
+    // parses and still never matches rather than simply calling it invalid.
+    expect(() => parseFlow(assertStep('{ in: { id: f }, matches: "^$" }'))).not.toThrow();
+  });
+
+  it("keeps the alternative it prescribes parsable", () => {
+    // What the section sends the author to instead, both forms.
+    expect(() => parseFlow(`steps:\n  - assert: { hidden: "the old value" }\n`)).not.toThrow();
+    expect(() =>
+      parseFlow(assertStep('{ in: { id: f }, contains: "the old value" }'))
+    ).not.toThrow();
+    expect(readFileSync(FIELD_VALUES, "utf8")).toContain('- assert: { hidden: "the old value" }');
   });
 });

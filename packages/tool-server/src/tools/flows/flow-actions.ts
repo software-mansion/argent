@@ -7,7 +7,7 @@ import {
   type DescribeTreeData,
 } from "../describe/contract";
 import {
-  selectorToFrame,
+  selectorToNode,
   findAll,
   evaluateCondition,
   firstInReadingOrder,
@@ -206,6 +206,66 @@ export function invokeOnDevice(
   );
 }
 
+/**
+ * {@link invokeOnDevice}, reclassifying a rejection that coincides with a
+ * cancelled run as the aborted skip {@link ABORTED_OUTCOME} defines, rather than
+ * a step failure quoting the tool.
+ *
+ * Four call sites over three tools — `gesture-rotate` in `runRotate`, and
+ * `gesture-tap` plus both `keyboard` dispatches in `runType` — reaching it from
+ * opposite directions.
+ *
+ * `gesture-rotate` DOES honour the signal: it polls `ctx?.signal?.aborted` every
+ * frame, lifts the fingers and throws a named `AbortError`. Without this wrapper
+ * `runRotate` would report that deliberate unwind as a failed step.
+ *
+ * `keyboard` honours it too, on all three platforms `clear` supports, but not
+ * to the same depth. Only iOS checks it BETWEEN keypresses:
+ * `keyboard/platforms/ios.ts` forwards `options?.signal` into
+ * `simulator-server-keys`, which calls `signal?.throwIfAborted()` per key.
+ * Android and Chromium check it ONCE, as the call's turn on the per-device
+ * chain comes round (`keyboard/platforms/android.ts`, `.../chromium.ts`), and
+ * neither `runAndroidPhoneType` nor `runChromium` takes a signal at all —
+ * Android's own comment says so outright, `adb shell input` not being
+ * cancellable. Concretely: cancel a run mid-`type` on Android or Chromium and
+ * the whole text is still typed out, a resolved `{{secret:…}}` included. An
+ * abort-driven rejection is still the DESIGNED outcome on every one of them,
+ * which is what this wrapper classifies.
+ *
+ * `gesture-tap` is the one that honours nothing. Not because its handlers
+ * discard the context — it has no platform handlers, and `execute(services,
+ * params)` (`gesture-tap/index.ts`) declares no context parameter, so the
+ * signal never arrives. Its dispatch therefore rejects only for an unrelated
+ * reason that happens to land inside a cancelled window: an `adb shell input`
+ * timeout, a simulator-server socket error. Rarer, but the classification still
+ * has to be the skip, because the alternative is a report blaming the tool for
+ * a run the caller cancelled — and in `runType`'s case a report whose verdict
+ * depended on which of its three dispatches happened to be in flight.
+ *
+ * (Cancelling a run does NOT tear down the transport under an in-flight call.
+ * Flow-run's Chromium teardown is run-level, in the `finally` after `execSteps`
+ * settles.)
+ *
+ * `runLaunch` handles the same case differently on purpose and is NOT a caller:
+ * it returns a `restart-app failed: …` outcome rather than rethrowing, so
+ * routing it through here would change its behaviour.
+ *
+ * Returns false when the run was cancelled; a genuine tool error still throws.
+ */
+async function dispatchOrAbort(
+  env: ActionEnv,
+  tool: string,
+  args: Record<string, unknown>
+): Promise<boolean> {
+  try {
+    await invokeOnDevice(env, tool, args);
+  } catch (err) {
+    if (env.signal?.aborted) return false;
+    throw err;
+  }
+  return true;
+}
+
 const DEFAULT_ACTION_TIMEOUT_MS = 7500;
 const POLL_INTERVAL_MS = 300;
 
@@ -219,9 +279,14 @@ const TYPE_FOCUS_SETTLE_MS = 500;
 const TYPE_FOCUS_TIMEOUT_MS = 3000;
 
 // Tree sources that surface `focused` (see flow-ios-tree / flow-android-tree /
-// the chromium DOM walker). A source outside this set (e.g. Vega's toolkit
-// page source) never reports it, so polling would burn the whole timeout on
-// every type step — skip the focus wait there instead.
+// the chromium DOM walker). A source outside this set is one whose focus
+// reporting the `type` directive has no use for, so polling would burn the
+// whole timeout on every type step — skip the focus wait there instead.
+//
+// Not the same as "cannot report focus". Vega's toolkit page source DOES set it
+// (`describe/platforms/vega/source-parser.ts`, preserved through
+// `flow-vega-tree`); it is outside the set because `runDirective` refuses
+// `type` on Vega before any of this runs, so the flag has no reader.
 const FOCUS_REPORTING_SOURCES: ReadonlySet<DescribeSource> = new Set([
   "native-devtools",
   "android-devtools",
@@ -345,6 +410,32 @@ const DEFAULT_ASSERT_TIMEOUT_MS = 1000;
 // the deadline.
 const CONDITION_DARK_TAIL_TOLERANCE_MS = POLL_INTERVAL_MS * 2;
 
+// The same bound for `waitForFocus`, in two forms, because either alone leaves
+// the outage refusal open.
+//
+// Counted in consecutive failed polls, one poll is the genuine last-poll blip
+// and more than one is darkness — the rule above, restated for a loop whose
+// polls each cost a whole tree read (an android-devtools `getHierarchy`, a CDP
+// DOM walk), so a device that is merely slow is not read as an outage.
+//
+// That counter can only be REACHED by failures that come back fast, which is
+// not how a tree source usually goes down. A read that hangs is bounded by its
+// own transport timeout — 15s on Android's `getHierarchy`, 10s per CDP call,
+// 5s per ViewInspector RPC — every one of them longer than this whole focus
+// window, so a single hang ends the window with the counter at 1 and the
+// verdict fell through to "unobservable", the one non-confirmed outcome
+// `runType` dispatches a destructive clear on. Reproduced on Chrome 151: a page
+// that blocks its own main thread for 12s from the focusing tap's `mousedown`
+// took the step from a refusal to a pass that emptied and rewrote a field the
+// step never named.
+//
+// So darkness is ALSO measured in elapsed milliseconds, from the moment the
+// first unanswered read STARTED — the span the window learned nothing in,
+// whether that was spent on one hang or on several quick throws. Same tolerance
+// as `waitForCondition`'s, for the same reason.
+const FOCUS_DARK_TAIL_POLLS = 2;
+const FOCUS_DARK_TAIL_TOLERANCE_MS = POLL_INTERVAL_MS * 2;
+
 /**
  * Evaluate a `when:` block's UI guard — the same engine as `assert`, on the
  * same assert grace window: a skipped block must not add an await-sized dead
@@ -423,11 +514,14 @@ function flowFindAll(tree: DescribeNode, sel: FlowSelector): DescribeNode[] {
   return fallback;
 }
 
-/** Identifier-first-then-text frame resolution for a (possibly loose) selector. */
-function flowSelectorToFrame(tree: DescribeNode, sel: FlowSelector): DescribeFrame | undefined {
+/**
+ * Identifier-first-then-text NODE resolution for a (possibly loose) selector —
+ * the element a directive acts on.
+ */
+function flowSelectorToNode(tree: DescribeNode, sel: FlowSelector): DescribeNode | undefined {
   for (const s of selectorAlternatives(sel)) {
-    const frame = selectorToFrame(tree, s);
-    if (frame) return frame;
+    const node = selectorToNode(tree, s);
+    if (node) return node;
   }
   return undefined;
 }
@@ -461,6 +555,20 @@ function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
     if (env.treeOutage) env.treeOutage.proven = undefined;
     return data;
   });
+}
+
+/**
+ * {@link flowSelectorToNode}'s frame. One resolver behind both, because a
+ * `type` step uses both halves at once: this frame is what gets TAPPED, and the
+ * node is what the focus check judges identity against. A second, unranked pick
+ * made them disagree on the everyday label-above-input shape — the tap landed
+ * on the input while the identity check resolved to the label above it, so the
+ * check could never match: a `clear` hard-failed pointing at a selector that
+ * was already resolving correctly, and a plain `type` burned the whole focus
+ * timeout on every step.
+ */
+function flowSelectorToFrame(tree: DescribeNode, sel: FlowSelector): DescribeFrame | undefined {
+  return flowSelectorToNode(tree, sel)?.frame;
 }
 
 /**
@@ -581,13 +689,46 @@ export async function waitForFrame(
   env: ActionEnv,
   selector: FlowSelector
 ): Promise<DescribeFrame | "aborted" | undefined> {
+  const resolved = await waitForFrameAndTree(env, selector);
+  return typeof resolved === "object" ? resolved.node.frame : resolved;
+}
+
+/**
+ * {@link waitForFrame}, keeping the node it resolved and the settled tree that
+ * node came out of.
+ *
+ * `runType` needs both: the last tree read before the tap was dispatched is the
+ * only record of what the tap could have hit (see {@link tapCandidates}), and
+ * the node is the element the step went on to tap — which is not always what
+ * the same selector resolves to a moment later (see {@link trackTarget}).
+ *
+ * "The last read", not "the screen at the instant of the tap": {@link
+ * settleTree} returns the last read that SUCCEEDED on its best-effort timeout
+ * path, so when the read after it runs to the platform's cap before failing,
+ * the tree handed back predates the tap by `SETTLE_POLL_MS` plus that read's
+ * duration — up to ~15s on Android, ~10s on Chromium, ~5s on iOS. A node that
+ * had already moved out from under the tap point can therefore still sit in
+ * `underTap` and confirm a clear the screen at dispatch time would not have.
+ * That window opens on the whole best-effort path, not only on a read that
+ * failed outright: `settleTree` also returns its last successful read when
+ * every read SUCCEEDED and no two consecutive ones matched — a spinner, a live
+ * clock, a blinking caret — and there the staleness is one poll rather than a
+ * platform cap. A read failing outright is the wider case, and once NO read
+ * succeeds it is the outage `settleTree` throws on instead. Either way
+ * `settleTree` gives the caller no signal that its return was best-effort, so
+ * nothing downstream can narrow it further today.
+ */
+async function waitForFrameAndTree(
+  env: ActionEnv,
+  selector: FlowSelector
+): Promise<{ node: DescribeNode; tree: DescribeNode } | "aborted" | undefined> {
   const deadline = Date.now() + DEFAULT_ACTION_TIMEOUT_MS;
   for (;;) {
     if (env.signal?.aborted) return "aborted";
     const tree = await settleTree(env);
     if (tree) {
-      const frame = flowSelectorToFrame(tree, selector);
-      if (frame) return frame;
+      const node = flowSelectorToNode(tree, selector);
+      if (node) return { node, tree };
     } else if (env.signal?.aborted) {
       return "aborted"; // settleTree bailed on the abort, not on a blank read
     }
@@ -599,6 +740,87 @@ export async function waitForFrame(
 
 function framesOverlap(a: DescribeFrame, b: DescribeFrame): boolean {
   return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
+/**
+ * Containment slack, in normalized screen fractions. Both frames being compared
+ * come out of ONE tree read by ONE adapter, so there is no cross-adapter
+ * disagreement to absorb — what there is, is a hair of overhang: a border, a
+ * focus ring, sub-pixel rounding of an integer bounds pair. Matches
+ * `ui-tree-match`'s `WITHIN_EPS` (which reads it the same way for `within:`
+ * scopes) and this file's own `EDGE_EPS`.
+ *
+ * Per-EDGE slack, so it does not on its own say whether a node is bigger than
+ * the one it is being compared to — see {@link frameNoLargerThan}.
+ */
+const FRAME_CONTAINMENT_EPSILON = 0.005;
+
+/** Is `inner` inside `outer` (equal frames included)? */
+function frameWithin(inner: DescribeFrame, outer: DescribeFrame): boolean {
+  const e = FRAME_CONTAINMENT_EPSILON;
+  return (
+    inner.x >= outer.x - e &&
+    inner.y >= outer.y - e &&
+    inner.x + inner.width <= outer.x + outer.width + e &&
+    inner.y + inner.height <= outer.y + outer.height + e
+  );
+}
+
+/**
+ * Is `inner` no bigger than `outer` along either axis?
+ *
+ * {@link frameWithin} alone cannot answer this: its slack is per-edge, so a
+ * frame overhanging by the epsilon on EVERY side — the `encloses` shape the
+ * same file refuses as "not evidence" — satisfies it while being a full
+ * epsilon larger in each dimension. Measured: a focused `android.webkit.WebView`
+ * enclosing its target by 4px on every side on a 1080x1920 screen passed
+ * containment and took the clear.
+ *
+ * No epsilon of its own, for the reason {@link frameCoversTap} has none: any
+ * slack here is slack a symmetric pad hides inside. A focus trap laid over the
+ * field, larger by ONE pixel on every edge, is the same geometry as a child
+ * overhanging its wrapper by a border's width — one tolerance cannot admit the
+ * second and refuse the first, and the flow trees carry no ancestry to tell
+ * them apart with (`flattenHoisting` returns leaves under one root on every
+ * platform). Reproduced on Chrome 151 at a 1px pad: a `focusin` trap holding
+ * `DRAFT-do-not-erase` over an `<input>` passed the step, and the draft was
+ * emptied and rewritten while the named input kept its old value.
+ *
+ * So the size test is exact, and the cost is a `clear` refused when the focused
+ * child is genuinely a hair wider than the box the selector named. That
+ * direction is safe: the step fails and says so. Equal frames still pass, which
+ * is the everyday wrapper-around-input shape.
+ */
+function frameNoLargerThan(inner: DescribeFrame, outer: DescribeFrame): boolean {
+  return inner.width <= outer.width && inner.height <= outer.height;
+}
+
+/**
+ * Does `frame` cover the point a tap was dispatched at — the way the OS hit
+ * test covers it?
+ *
+ * Half-open, so the start edge belongs to the frame and the end edge belongs to
+ * the next one along. That is what `Rect.contains`, `CGRectContainsPoint` and
+ * Chrome's `elementFromPoint` all do, and asking the same question the OS
+ * answered is the whole point: this decides which of a row's children the tap
+ * that moved focus actually landed on.
+ *
+ * {@link frameContains} — inclusive on every edge — cannot: when a container's
+ * two children split it evenly the container's centre IS the seam, so BOTH
+ * halves contain it and the test discriminates nothing, while the tap went to
+ * exactly one of them (the right/lower one). Reproduced on Chrome 42 and on
+ * Android API 36: a 50/50 row whose LEFT input held focus took a clear aimed at
+ * the row and reported a pass, where the same page split 30/70 refused. Even
+ * splits are the common case, not a corner: an OTP row of 6 boxes on a 1080px
+ * screen lands on exact 180px boundaries.
+ *
+ * No epsilon. The slack that {@link frameWithin} needs absorbs a border's
+ * overhang between two frames; here a hair of slack on the end edge would put
+ * the seam back. Frames that genuinely straddle the point by less than a device
+ * pixel are left to the refusal, which is the safe direction.
+ */
+function frameCoversTap(frame: DescribeFrame, x: number, y: number): boolean {
+  return x >= frame.x && x < frame.x + frame.width && y >= frame.y && y < frame.y + frame.height;
 }
 
 /**
@@ -650,36 +872,724 @@ function collectFocused(node: DescribeNode, acc: DescribeNode[]): DescribeNode[]
 }
 
 /**
- * Poll until an element reporting `focused` overlaps the typed-into element.
- * Overlap, not identity: the selector often matches a testID container while
- * focus is reported by the input inside it. The target's frame is re-resolved
- * each round — the keyboard sliding up routinely scrolls the field away from
- * where it was tapped (keyboard avoidance), and the focused element must be
- * compared against where the field is NOW; `tappedFrame` covers rounds where
- * the selector momentarily doesn't resolve. Best-effort by design — a source
- * that can't report focus returns immediately, and an unconfirmed poll falls
- * through to typing after the timeout rather than failing the step, since "no
- * focus seen" can also mean the focused view didn't make it into the tree.
+ * Does a focus-flagged node stand for `target` — the one case identity cannot
+ * serve, where the selector names a testID container and the input inside it is
+ * what the tree flags?
+ *
+ * The node has to sit inside the target's box, be no bigger than it, AND be one
+ * of the elements the tap could have hit ({@link tapCandidates}). Containment
+ * alone has no discriminator at all: a container that
+ * holds more than one input is the everyday row (an `amount-row` over currency
+ * and amount, an OTP row that forces focus to the first empty box wherever you
+ * tap, a card number/expiry/cvc row with auto-advance), and a suggestion
+ * popover or autocomplete list drawn over a composer is inside it too. Either
+ * way the step clears whichever node reports focus and reports a pass on the
+ * container — reproduced on Chrome 151 both ways round: the tap landed in
+ * `#amount` while the keys emptied and rewrote `#currency`, and `#composer`
+ * kept its draft while the overlay `#mention` took the replacement.
+ *
+ * "Could have hit" is settled ONCE, against the tree the tap was dispatched
+ * from, and never recomputed from the target's current frame. Recomputing looks
+ * safer — it follows a field that keyboard avoidance scrolls away — but it
+ * silently follows a container that GROWS as well, and a combobox wrapper
+ * rendering its listbox inside itself on focus is exactly that: the recomputed
+ * centre drops out of the input and into the option list, and the clear is
+ * refused with a reason naming an overlay or a sibling row, neither of which
+ * exists. Downshift, HeadlessUI and most React Native autocompletes render the
+ * list inside the wrapper, and the wrapper is where a testID sits. Reproduced
+ * on Chrome 42, and a validation message appearing under the field crosses the
+ * same threshold. Matching by {@link sameElement} instead of by geometry is
+ * what keeps the moved-field case working without it.
+ *
+ * Structure would be the sharper test, but the flow trees do not carry it on
+ * ANY platform: `flow-chromium-tree` runs the same `flattenHoisting` pass as
+ * the Android and iOS full-hierarchy adapters, so a wrapper and the input it
+ * wraps arrive as SIBLINGS and there is no ancestry to consult. Worth stating
+ * plainly, because every reproduction cited above comes from Chrome — where the
+ * agent-facing `describe` DOES print a nested tree, and a reader could
+ * reasonably conclude the sharper test was available there.
+ *
+ * Deliberately NOT a role test on the target. Asking "is the target itself a
+ * text input" both over- and under-matches against the roles the adapters
+ * really emit: Material's `TextInputLayout` wrapper derives `TextField`, ARIA
+ * 1.1 puts `combobox` on the wrapper around the input, a `contenteditable`
+ * composer is role `div`, and React Native's iOS host views come through as
+ * `AXStaticText`. The first two refused a legitimate wrapper clear, the last
+ * two admitted the overlay the test exists to catch.
+ *
+ * An overlay covering the tap point confirms only if it was ALREADY under that
+ * point when the tap was dispatched — `underTap`, read from the settled tree
+ * the frame was resolved against. Geometry alone cannot separate "the tap hit
+ * the overlay" from "the overlay appeared BECAUSE of the tap", and the second
+ * is an everyday shape: an @-mention list, an inline emoji or date picker, a
+ * formatting bar with its own input. Nothing hit those, so focus landing in one
+ * is not the honest consequence of the gesture — reproduced on Chrome 42, where
+ * a popover opened by the composer's own `focus` handler took the clear while
+ * the composer kept its draft, and the step reported a pass on the composer.
+ * The same page with the popover already open still confirms, and so does the
+ * same page with no popover at all.
+ */
+function focusedFromInside(
+  tree: DescribeNode,
+  target: DescribeNode,
+  focused: DescribeNode[],
+  tap: TapCandidates
+): boolean {
+  return focused.some((n) => {
+    if (!frameWithin(n.frame, target.frame) || !frameNoLargerThan(n.frame, target.frame)) {
+      return false;
+    }
+    // {@link sameElement} compares NAMES, and a name stands for an identity only
+    // while it picks out ONE element. Inside a container it routinely picks out
+    // several — which is the very shape this gate exists to refuse, so accepting
+    // "the focused node is A namesake of something under the tap" hands the
+    // clear to whichever namesake happens to hold focus. Reproduced on Chrome
+    // 151: an amount-row whose two anonymous inputs both read "Amount", tap on
+    // the right one, focus forced to the left one, and the LEFT field was
+    // emptied and rewritten with a pass reported on the row. The same page with
+    // the second input named "Currency" refused. An OTP row does it too, and on
+    // Android it needs no coincidence at all — `identifier` is the raw
+    // resource-id, which names the layout slot, so every row inflated from one
+    // layout carries the same one.
+    //
+    // So the name has to resolve, in the tree the tap was dispatched from, to
+    // exactly one candidate — and THAT candidate is what must have been under
+    // the tap. Ambiguity is not evidence, and refusing is the safe direction.
+    const named = tap.inside.filter((before) => sameElement(before, n));
+    if (named.length !== 1) return false;
+    // And unambiguous in the tree the VERDICT is drawn from, not only in the
+    // one the evidence was collected in. The two halves of this gate are joined
+    // by a name across two different tree reads and two different container
+    // boxes, so a focused node can otherwise borrow the evidence gathered for a
+    // different element. Three ways in, all reproduced on Chrome 151 against
+    // this branch:
+    //   - a namesake the TAP CREATES. `tap.inside` is frozen before the tap, so
+    //     an element that appears inside the container on focus is invisible to
+    //     the check above — the wrapper-grows-on-focus shape (Downshift,
+    //     HeadlessUI, a React Native autocomplete), and on Android every row
+    //     inflated from one layout shares its resource-id. A wrapper that
+    //     appended a second `row_input` and focused it passed, and the field the
+    //     step never named was emptied and rewritten;
+    //   - a container that GROWS. Candidates are frozen to the pre-tap box while
+    //     containment is judged against the current one, so a 44px row growing
+    //     to 140px on focus swallowed a field that was never a tap candidate at
+    //     all, and cleared it;
+    //   - a focused field that RENAMES ITSELF out of the namesake set — a
+    //     currency input dropping its separators, a phone or card mask — leaving
+    //     a sibling as the unique pre-tap match. That sibling was under the tap,
+    //     so the row's own mis-target passed.
+    // Each of the three leaves two namesakes inside the container in the current
+    // tree, and each refuses once that is what decides. Removing the growth, the
+    // late namesake or the rename refuses too, which is the pre-existing
+    // behaviour these three were routing around.
+    if (currentInside(tree, target).filter((now) => sameElement(now, n)).length !== 1) {
+      return false;
+    }
+    if (tap.underTap.includes(named[0])) return true;
+    // The tap point is ONE point — the container's centre — and a container is
+    // not laid out to put its input there. When that point lands on inert
+    // chrome (a `<label for>`, a helper line, the padding) nothing under it
+    // could have taken the keys itself, so the app routing focus to the
+    // container's one control is the honest consequence of the gesture rather
+    // than a competing element winning it. Measured on Chrome 151: the same page
+    // refused or cleared purely on whether the label was taller than the input
+    // — 32px passed, 40px failed — while the tap focused the right field either
+    // way, the same step without `clear` succeeded, and the refusal blamed an
+    // overlay and a sibling row that did not exist. A two-line label, a label
+    // with vertical padding, and a label plus helper text all sit past that
+    // line, so it is a layout coin toss rather than a corner.
+    //
+    // A control under the point is the whole difference from the row this gate
+    // refuses: there the tap DID reach something that takes focus, and focus
+    // sitting on a different sibling is exactly the mis-target. The target
+    // itself never counts — the everyday React Native shape is a `Pressable`
+    // wrapping a `TextInput`, so the container is clickable by construction.
+    //
+    // ONE control, and the one that reports focus. "Nothing under the tap is a
+    // control" is not on its own evidence that focus followed the gesture:
+    // `underTap` holds only what COVERS the point, so any gap between two
+    // children — a flex `gap`, `space-between`, a margin, a divider the adapter
+    // does not emit — empties it and passes the test below vacuously, leaving
+    // the clear to whichever sibling happened to hold focus already. Reproduced
+    // on Chrome 151: a row of two inputs with a 30px gap, its centre falling
+    // between them and the LEFT input focused before the step, passed and
+    // rewrote that left input; an OTP row of six boxes with a 12px gap did the
+    // same four boxes away from the tap point. Closing the gap so the boxes
+    // touch sends the clear to the box under the tap, which is correct.
+    //
+    // Requiring the container's one control is also what `references/
+    // flow-yaml.md` already promises, and it keeps the sibling refusals the doc
+    // lists (a currency/amount row, one cell of an OTP row) refusing however the
+    // row is spaced.
+    //
+    // Counting controls at all is only possible on a SCREEN where the source
+    // reports them: the iOS full-hierarchy adapter never sets `clickable`
+    // (`flow-ios-tree`), so there this arm never admits anything and the shape
+    // it exists to fix still falls through to the refusal below.
+    //
+    // "And nothing else under the tap is a control" needs no separate test:
+    // `underTap ⊆ inside`, so a clickable member of it other than `tapped`
+    // would be in `controls` — which has exactly one member, and that member is
+    // not under the tap or the arm above would have returned.
+    const controls = tap.inside.filter((before) => before !== tap.tapped && before.clickable);
+    return controls.length === 1 && controls[0] === named[0];
+  });
+}
+
+/**
+ * Do two nodes read from two DIFFERENT tree reads stand for the same element?
+ *
+ * Object identity cannot answer it — each read builds a fresh tree — and the
+ * frame cannot either, because the whole reason to ask is that the element may
+ * have moved (keyboard avoidance) or the box around it grown. What is left is
+ * the element's name: its role plus its identifier, both of which an id/testID
+ * pins across reads and neither of which focus changes.
+ *
+ * With no identifier on either side there is no stable name, so the label
+ * settles it. That is weaker — a field that reformats its value on focus (a
+ * currency input dropping its separators) changes its label and stops matching
+ * itself — which is why the label is consulted only when the identifier is
+ * absent on both sides, the case where the alternative is matching every
+ * anonymous node of the same role against every other.
+ */
+function sameElement(a: DescribeNode, b: DescribeNode): boolean {
+  if (a.role !== b.role || a.identifier !== b.identifier) return false;
+  return a.identifier !== undefined || a.label === b.label;
+}
+
+/**
+ * Is the focus flag on an element whose ENTIRE content is the target — the
+ * editing host whose own text the selector named?
+ *
+ * Quill, ProseMirror and Lexical all render `<div contenteditable><p>…</p></div>`.
+ * The editable node carries no id, no accessible name and no own text, so the
+ * only text in the tree belongs to the block child, and every selector that can
+ * name the editor's content resolves to something INSIDE the focused node.
+ * That classifies as "encloses" and is refused with advice — *point the
+ * selector at the input itself* — which cannot be followed, because there is
+ * nothing else to point at. Reproduced on Chrome 42, where the identical page
+ * with an id on the editable, or with the `<p>` replaced by a bare text node,
+ * cleared fine.
+ *
+ * Equality is not on its own enough to keep this away from the shapes
+ * "encloses" exists to refuse: a focus trap holding a `<textarea>` over the
+ * field confirms the moment its draft happens to equal the field's value, and
+ * that costs the draft. Reproduced on Chrome 151 — a `focusin` trap over an
+ * `<input>` holding `old.remembered.login`, with the textarea holding the same
+ * string, passed the step, emptied the TEXTAREA and rewrote it with the new
+ * address while the named input kept its old one. The same page with any other
+ * draft in the textarea refused. Worse, the coincidence is structural rather
+ * than lucky: an anonymous target does not shield (`flow-tree-flatten`), so its
+ * text hoists into every enclosing node's `subtreeText`.
+ *
+ * So the focused node must have NO text of its own ({@link nodeText} — its
+ * label and value). That is what "this element's content IS the thing named"
+ * means for an editing host: the editable carries no id, no accessible name and
+ * no own text, and the only text on it is the target's, hoisted. A trapped
+ * `<textarea>` fails it (an unlabelled one's value IS its accessible name). A
+ * focused `android.webkit.WebView` carrying the whole form fails the content
+ * count below rather than this guard — its fields are identified, so their text
+ * never reaches its hoist in the first place.
+ *
+ * The flow adapters flatten to leaves under one root, so tree ancestry is not
+ * available to ask this more directly; hoisted text ({@link assertText}) is
+ * what survives the flatten.
+ *
+ * And the named content must not be a CONTROL. An editing host's content is
+ * static — a paragraph, a text node — while a focused wrapper around one text
+ * FIELD produces the identical tree: the field's value is its accessible name,
+ * an anonymous field does not shield, so the value hoists and the wrapper has
+ * no text of its own either. That is the shape the paragraph above says the
+ * `!nodeText` guard refuses, and it does not: the `android.webkit.WebView`
+ * argument only holds for a WebView carrying a WHOLE form, while one wrapping
+ * exactly one field — hosted payment fields are one input per iframe — passed.
+ * Confirmed on Chrome 151: a `<div tabindex=0>` focus-trapped around an
+ * unidentified `<input value="hello-target">` CONFIRMED, and only the keyboard
+ * tool's own "the focused element DIV#wrap is not a text field" stopped the
+ * clear — a backstop iOS and Android do not have, since both dispatch a clear
+ * at whatever holds focus. Where a source reports no controls at all (the iOS
+ * full-hierarchy adapter never sets `clickable`), this cannot discriminate and
+ * the residual stands.
+ *
+ * Text equality alone does not say the editor holds nothing else, because the
+ * hoist it is read from is not a full account of the editor's content: an
+ * identified descendant SHIELDS its own text out of every ancestor's
+ * `subtreeText` (`flow-tree-flatten`), and a password field shields too. So an
+ * editing host holding the named paragraph PLUS any amount of identified
+ * content hoists only the paragraph and compares equal, while the clear —
+ * select-all over the host — destroys all of it. Reproduced on Chrome 151: a
+ * composer holding `<p>Draft body paragraph</p>` beside `<div id="signature">`
+ * passed, wiped the editor to the replacement text and took the signature with
+ * it; the identical page with the signature ANONYMOUS refused, because then its
+ * text hoisted and the equality failed. `data-testid`, a `<input
+ * type=password>` and three identified card fields all behaved like the id.
+ *
+ * What the shield hides from the hoist it does NOT hide from the tree — the
+ * shielding node is emitted as its own leaf. So the content is counted from
+ * the flat tree instead ({@link holdsUnnamedContent}), which is the same
+ * question asked where the answer survives the flatten.
+ *
+ * Residuals: an editor holding more than the named paragraph shows more text
+ * than the selector named, so it still refuses — with the same unfollowable
+ * advice. Naming the whole body, or giving the editable an id, both work.
+ */
+function focusedOwnsTargetText(
+  tree: DescribeNode,
+  target: DescribeNode,
+  focused: DescribeNode[]
+): boolean {
+  const named = assertText(target);
+  if (!named || target.clickable) return false;
+  return (
+    focused.length > 0 &&
+    focused.every(
+      (n) =>
+        n !== target &&
+        frameWithin(target.frame, n.frame) &&
+        !frameNoLargerThan(n.frame, target.frame) &&
+        !nodeText(n) &&
+        assertText(n) === named &&
+        !holdsUnnamedContent(tree, n, target)
+    )
+  );
+}
+
+/**
+ * Does `host` contain anything the selector did NOT name — content a clear on
+ * `host` would destroy without the step ever mentioning it?
+ *
+ * Read from the flat tree rather than from `host`'s hoisted text, because the
+ * hoist is exactly what a shield removes (see {@link focusedOwnsTargetText}).
+ * "Content" is anything a leaf can stand for: its own text, an id/testID, a
+ * control, or a password field — a masked field carries no text at all, and
+ * losing it is the most expensive of the four.
+ *
+ * Nodes inside the TARGET's own box are what the selector named, so they never
+ * count; every adapter flattens to leaves, so this is a frame test rather than
+ * an ancestry one.
+ */
+function holdsUnnamedContent(
+  tree: DescribeNode,
+  host: DescribeNode,
+  target: DescribeNode
+): boolean {
+  let found = false;
+  const walk = (node: DescribeNode): void => {
+    if (found) return;
+    if (
+      node !== host &&
+      node !== target &&
+      frameWithin(node.frame, host.frame) &&
+      !frameWithin(node.frame, target.frame) &&
+      (Boolean(nodeText(node)) ||
+        node.identifier !== undefined ||
+        node.clickable === true ||
+        node.password === true)
+    ) {
+      found = true;
+      return;
+    }
+    for (const child of node.children) walk(child);
+  };
+  walk(tree);
+  return found;
+}
+
+/**
+ * Find `tapped` again in a tree read after the tap.
+ *
+ * Re-running the selector is not the same question. It asks "what does this
+ * selector match NOW", and the answer changes when the tap adds a better-ranked
+ * match: a field that opens a typeahead list on focus, where a suggestion
+ * repeats the field's own value, hands the match to the suggestion — the chip
+ * is smaller than the input and `selectorToNode` ranks smallest-frame-wins. The
+ * focus check would then test focus against an element the step never touched
+ * and refuse the clear, saying focus never reached the target while focus is
+ * exactly where the flow put it. Reproduced on Chrome 42; changing only the
+ * suggestion's text made the same step pass.
+ *
+ * So follow the element instead ({@link sameElement}), and use the selector
+ * only as the fallback for a round where it cannot be found — a re-render that
+ * changes the label of a node carrying no identifier, say.
+ *
+ * When SEVERAL nodes answer to the name, none of them is "the element": the
+ * name is not an identity, and picking one by proximity to where the tap landed
+ * is a coin toss that a re-layout decides. Keyboard avoidance — the everyday
+ * movement this function exists to follow — is exactly such a re-layout.
+ * Reproduced on Chrome 151: two rows sharing a `data-testid`, the selector
+ * resolving to the first, and a 100px scroll during the focus wait putting the
+ * SECOND row where the first had been. It became the nearest namesake, the
+ * identity arm in `waitForFocus` then trusted it absolutely, and the field the
+ * selector never resolved to was emptied and overwritten with the step
+ * reporting a pass. The same page with distinct testids refused.
+ *
+ * So an ambiguous name yields no target at all — not even the selector's own
+ * pick, which ranks by frame and reading order and would hand back one of the
+ * same namesakes on the strength of a tie-break. With no target node there is
+ * nothing to confirm against, which for a `clear` is a refusal and for a plain
+ * `type` is the best-effort path it was already on.
+ *
+ * The fallback has to stay ON the tap point for the same reason. Unlike the
+ * identity arm it carries no relation to the element the step touched — it is
+ * whatever the selector matches NOW — while `waitForFocus`'s identity arm
+ * trusts what comes back absolutely, ahead of the two arms that check a node
+ * against {@link tapCandidates}. When the tapped element stops being findable
+ * (it unmounted as a consequence of the tap: a tap-to-edit row, a conditional
+ * render, a virtualized list) and a DIFFERENT element answering the same
+ * selector holds focus, that element was confirmed and cleared. Reproduced on
+ * Chrome 151 — `aria-label="Email"` removed on `mousedown`, `aria-label="Email
+ * address"` focused beside it, and the second field's draft was emptied and
+ * rewritten with a pass reported; the same page with the row left mounted
+ * refused. A re-render in place — the case the fallback exists for — still
+ * covers the point the tap was dispatched at, so it is unaffected.
+ */
+function trackTarget(
+  tree: DescribeNode,
+  tapped: DescribeNode,
+  selector: FlowSelector,
+  tap: { x: number; y: number }
+): DescribeNode | undefined {
+  const named: DescribeNode[] = [];
+  const walk = (node: DescribeNode): void => {
+    if (sameElement(tapped, node)) named.push(node);
+    for (const child of node.children) walk(child);
+  };
+  walk(tree);
+  if (named.length > 1) return undefined;
+  if (named[0]) return named[0];
+  const bySelector = flowSelectorToNode(tree, selector);
+  return bySelector && frameCoversTap(bySelector.frame, tap.x, tap.y) ? bySelector : undefined;
+}
+
+/**
+ * What a focusing tap on `tappedFrame` could have reached, read ONCE from the
+ * settled tree that frame was resolved from. {@link focusedFromInside} matches
+ * a focus-flagged node against these, which is how an overlay drawn in RESPONSE
+ * to the tap is told apart from one the tap landed on.
+ */
+interface TapCandidates {
+  /** The node the tap was dispatched at, as it stood in that same tree. */
+  tapped: DescribeNode;
+  /**
+   * Everything that sat inside the tapped node's box before the tap. The scope
+   * the focused node's NAME has to be unambiguous in: two of these answering to
+   * one name is exactly the row `focusedFromInside` refuses.
+   */
+  inside: DescribeNode[];
+  /** Those of {@link inside} the tap point itself landed on. A subset, by identity. */
+  underTap: DescribeNode[];
+  /** Where the tap was dispatched — the centre of {@link tapped}'s frame. */
+  point: { x: number; y: number };
+}
+
+/**
+ * What sits inside `target`'s box in the tree a verdict is being drawn from —
+ * the current-tree counterpart of {@link TapCandidates.inside}, and read by the
+ * same rule so the two sides of {@link focusedFromInside}'s name join are
+ * symmetric.
+ */
+function currentInside(tree: DescribeNode, target: DescribeNode): DescribeNode[] {
+  const inside: DescribeNode[] = [];
+  const walk = (node: DescribeNode): void => {
+    if (frameWithin(node.frame, target.frame) && isVisible(node)) inside.push(node);
+    for (const child of node.children) walk(child);
+  };
+  walk(tree);
+  return inside;
+}
+
+function tapCandidates(preTap: DescribeNode, tapped: DescribeNode): TapCandidates {
+  const tap = getDescribeTapPoint(tapped.frame);
+  const inside: DescribeNode[] = [];
+  const underTap: DescribeNode[] = [];
+  const walk = (node: DescribeNode): void => {
+    if (frameWithin(node.frame, tapped.frame) && isVisible(node)) {
+      inside.push(node);
+      if (frameCoversTap(node.frame, tap.x, tap.y)) underTap.push(node);
+    }
+    for (const child of node.children) walk(child);
+  };
+  walk(preTap);
+  return { tapped, inside, underTap, point: tap };
+}
+
+/**
+ * Outcome of the focus handshake. The distinctions only matter to a destructive
+ * `clear`; plain typing treats everything but a hard abort as best-effort.
+ *
+ * - "confirmed" — the target itself reports focus, or a node belonging to it
+ *   does ({@link focusedFromInside}). The keys will land in the field the step
+ *   named.
+ * - "encloses" — the only focus-flagged node overlapping the target CONTAINS
+ *   it. That is not evidence: it is what a hybrid app's focused WebView and an
+ *   ordinary focus trap look like, and each can coexist with a different
+ *   element genuinely holding the keys.
+ * - "overlaps" — a focus-flagged node overlaps the target without being it and
+ *   without containing it: an overlay over the field (a suggestion popover, an
+ *   autocomplete list), or a partial overlap. Also not evidence — clearing on
+ *   it empties the overlay.
+ * - "unconfirmed" — the tree reported focus, on something that does not
+ *   overlap the target at all.
+ * - "unobservable" — no focus evidence anywhere. Today that always means every
+ *   read succeeded and no node was flagged. The {@link FOCUS_REPORTING_SOURCES}
+ *   guard also returns it, but no flow can reach that: `type` runs only on ios,
+ *   android and chromium (`runDirective` refuses it on Vega), and each of those
+ *   hard-codes one source that is already in the set — `native-devtools`
+ *   (`flow-ios-tree`), `android-devtools` (`flow-android-tree`), `cdp-dom`
+ *   (`describe/platforms/chromium`). It is kept as a forward guard: a new
+ *   platform would otherwise poll the full timeout on every type step.
+ * - "unreadable" — every read in the window threw, so nothing at all was
+ *   observed. Distinct from "unobservable", where reads DID succeed: this is
+ *   the tree-source outage `settleTree` refuses to swallow for the same reason.
+ *
+ * Membership in {@link FOCUS_REPORTING_SOURCES} is not enough to tell these
+ * apart. An iOS device whose injected framework predates the `firstResponder`
+ * field answers `getFullHierarchy` without it (see `flow-ios-tree`), so the
+ * source is native-devtools yet no node is ever flagged — verified on an
+ * iPhone 16 Pro, where treating that as "unconfirmed" refused every clear on
+ * the platform. Hence the outcome keys off what the tree reported, not off the
+ * source alone.
+ */
+type FocusOutcome =
+  | "confirmed"
+  | "encloses"
+  | "overlaps"
+  | "unconfirmed"
+  | "unobservable"
+  | "unreadable";
+
+/**
+ * Poll until the typed-into element, or something belonging to it, reports
+ * `focused`.
+ *
+ * Identity first, then {@link focusedFromInside}: the selector often matches a
+ * testID container while focus is reported by the input inside it, and the two
+ * are then different nodes with different frames. The target NODE is found
+ * again each round by {@link trackTarget} — the keyboard sliding up routinely
+ * scrolls the field away from where it was tapped (keyboard avoidance), and the
+ * focused element must be compared against where the field is NOW — but by
+ * following the element the step tapped, not by re-running the selector, which
+ * a post-tap suggestion list can answer with something else entirely.
+ *
+ * Neither arm accepts a bare overlap. A focus-flagged node large enough to
+ * COVER the target satisfies an overlap test by construction, and every shape
+ * that produces one can hide a different element holding the keys:
+ *
+ *   - a CLOSED shadow root, where `el.shadowRoot` is null so the walker cannot
+ *     descend and cannot read the root's own activeElement: the HOST is
+ *     flagged, the element with the caret never reaches the tree at all. (An
+ *     OPEN root no longer produces this — since the describe walker reads the
+ *     activeElement of an element's own ROOT, the inner element is what carries
+ *     the flag and the host is excluded. Before that, a clear aimed at an
+ *     `<input>` overlaid on a screen-spanning host emptied the SHADOW field and
+ *     reported a pass, 3/3 on a Chromium page.);
+ *   - an ordinary focus trap — a `focusin` handler bouncing focus back to a
+ *     `<textarea>` — which leaves a focused text field whose box contains the
+ *     target. The same run cleared the trapped field and left the named one
+ *     untouched;
+ *   - a hybrid app's focused `android.webkit.WebView` wrapping the form.
+ *
+ * The cost is a `clear` refused when the selector names a LABEL inside the
+ * focused field. That direction is safe: the step fails, says so, and points at
+ * the selector. The overlap reading's cost was destroying a field the step
+ * never named while reporting a pass.
+ *
+ * Reports rather than decides: plain typing types on any outcome (misplaced
+ * text is visible and additive), while `runType` refuses to dispatch a
+ * destructive clear on anything but "confirmed" and "unobservable".
+ *
+ * `requireEvidence` says which of those two callers is asking. Only a `clear`
+ * reads the verdict, so only a `clear` has to keep polling once a read has
+ * settled the question of whether SOMETHING holds the target: a plain `type`
+ * ends its wait the moment any focus-flagged node overlaps, and pays one poll
+ * instead of the whole {@link TYPE_FOCUS_TIMEOUT_MS} for an answer it discards.
+ * A form of n fields typed into without a `clear` would otherwise pay n × 3s
+ * for verdicts nobody reads, whenever the tree flags something that covers the
+ * field rather than the field itself.
+ *
+ * The exit fires on the two verdicts that mean focus HAS landed somewhere over
+ * the target, and deliberately not on a tree that flags focus nowhere: there is
+ * nothing focused yet to type into, and the rest of the wait is the app's focus
+ * round-trip. So the iOS build without `firstResponder` documented above — the
+ * one shape where no read ever flags anything — still pays the whole
+ * {@link TYPE_FOCUS_TIMEOUT_MS} and its reads on every plain `type`, for a
+ * verdict `runType` discards. Known, and the safe side of the trade.
+ *
+ * Current Android is NOT that tree, so the saving is smaller than it looks
+ * there: surveyed across eight screens on API 36 / WebView 151, including a
+ * genuine in-app `android.webkit.WebView`, the WebView is `focused="false"`
+ * every time and the inner `EditText` carries the flag — every screen had
+ * exactly one focused node and no focused ancestor. Older WebView builds were
+ * not testable here, and the exit costs nothing on a tree that confirms, so it
+ * stays.
  */
 async function waitForFocus(
   env: ActionEnv,
   into: FlowSelector,
-  tappedFrame: DescribeFrame
-): Promise<void> {
+  tapped: DescribeNode,
+  preTapTree: DescribeNode,
+  requireEvidence: boolean
+): Promise<FocusOutcome> {
   const deadline = Date.now() + TYPE_FOCUS_TIMEOUT_MS;
-  for (;;) {
-    if (env.signal?.aborted) return;
-    try {
-      const { tree, source } = await readFlowTree(env);
-      if (!FOCUS_REPORTING_SOURCES.has(source)) return;
-      const target = flowSelectorToFrame(tree, into) ?? tappedFrame;
-      if (collectFocused(tree, []).some((n) => framesOverlap(n.frame, target))) return;
-    } catch {
-      // transient describe failure — retry until the deadline
+  const tappedFrame = tapped.frame;
+  const candidates = tapCandidates(preTapTree, tapped);
+  // Did the MOST RECENT successful read see focus on anything? Deliberately the
+  // latest look and not "any look, ever": the question the caller is about to
+  // act on is whether something else holds focus NOW, and a sticky flag answers
+  // it with history instead. It also made the verdict a race — an app that
+  // blurs on the focusing tap reports focus for however many rounds precede the
+  // blur, so the same flow against the same app failed or passed depending on
+  // whether round 1 beat the blur. `undefined` until a read succeeds, so a
+  // window in which every read throws stays distinguishable — see `giveUp`,
+  // which maps it to "unreadable" and NOT to "unobservable".
+  let lastRead: "focus-elsewhere" | "focus-encloses" | "focus-overlaps" | "no-focus" | undefined;
+  // The most recent read that actually SAW focus on something. An empty
+  // `focused[]` is not the observation "nothing is focused": it is equally "this
+  // read could not see the element that is", which both flow adapters produce
+  // for a frame that clips to zero area — the everyday keyboard-avoidance
+  // scroll, and on Android a healthy `uiautomator` dump whose focused view's
+  // bounds have collapsed. Letting it overwrite a determinate sighting turns a
+  // refusal into a destructive clear on the very field the run had already
+  // identified as holding the keys: reproduced on Chrome 151, where collapsing
+  // the focused input's box mid-window (it keeps the caret throughout and is
+  // still `document.activeElement` at the end) took the step from "focus never
+  // reached the target" to a pass that emptied and rewrote it.
+  //
+  // Latest-read-wins still decides between the sightings themselves, which is
+  // what keeps a blur-on-tap from being answered with history.
+  let lastSighting: "focus-elsewhere" | "focus-encloses" | "focus-overlaps" | undefined;
+  // Reads that have thrown since the last successful one. `lastRead` is only
+  // ever written by a read that SUCCEEDED, so without this one successful poll
+  // disarms the outage verdict permanently — including the very first, which is
+  // the one most likely to report "no-focus" because the app's focus round-trip
+  // has not finished. That mapped to "unobservable", which a destructive clear
+  // goes through on, so an outage in the TAIL of the window converted a correct
+  // refusal into a blind clear. Reproduced on Chrome 151 by poisoning the tree
+  // read at t+600ms, where focus landed elsewhere at t+900: the step passed and
+  // emptied a field it never named, while the same page with the reads left
+  // alone refused.
+  let darkTail = 0;
+  // When the current run of unanswered reads STARTED — the instant the window
+  // last knew anything. Undefined whenever the most recent read succeeded.
+  let darkSince: number | undefined;
+  // What a healthy read costs on THIS device, from the most recent one that
+  // answered. 0 until one does. Read by the affordability check in the loop.
+  let lastReadMs = 0;
+  const giveUp = (): FocusOutcome => {
+    // `undefined` means no read ever succeeded — an outage, not an observation.
+    // Reporting it as "unobservable" would let a clear through on the strength
+    // of a window in which nothing was seen at all; `settleTree` sets the same
+    // convention for the same condition, and for the same reason.
+    if (lastRead === undefined) return "unreadable";
+    // The window went dark, so a verdict narrated from the reads before the
+    // darkness would describe a screen nobody saw at the deadline — the rule
+    // `CONDITION_DARK_TAIL_TOLERANCE_MS` states for `waitForCondition`. Either
+    // measure of darkness settles it: consecutive failed polls, or one span of
+    // the window long enough that a verdict from before it is stale (see
+    // FOCUS_DARK_TAIL_POLLS for why a hang can only ever be caught by the
+    // second).
+    if (darkTail >= FOCUS_DARK_TAIL_POLLS) return "unreadable";
+    if (darkSince !== undefined && Date.now() - darkSince >= FOCUS_DARK_TAIL_TOLERANCE_MS) {
+      return "unreadable";
     }
-    if (Date.now() >= deadline) return;
+    const seen = lastRead === "no-focus" ? lastSighting : lastRead;
+    if (seen === "focus-encloses") return "encloses";
+    if (seen === "focus-overlaps") return "overlaps";
+    return seen === "focus-elsewhere" ? "unconfirmed" : "unobservable";
+  };
+  for (;;) {
+    if (env.signal?.aborted) return giveUp();
+    // Before the read, not after it. The sleep below is capped to land exactly
+    // ON the deadline, so a check that ran afterwards let one more whole tree
+    // read start past it — and a read costs an android-devtools `getHierarchy`
+    // or a CDP DOM walk, a real fraction of the 3000ms every refusal message
+    // claims the observation window was.
+    if (Date.now() >= deadline) return giveUp();
+    const readStartedAt = Date.now();
+    // A read the window cannot afford is not started at all. Its budget is
+    // whatever is left of the window, so one started too late is abandoned
+    // mid-flight — and `giveUp` books that abandonment as darkness, which is a
+    // fact about read latency against the deadline phase and not about the
+    // device. The step then failed telling the author "the device's tree source
+    // is down" while every read in the window had answered. Worse, whether the
+    // last read starts far enough before the deadline to cross
+    // FOCUS_DARK_TAIL_TOLERANCE_MS depends on how the read time divides into
+    // TYPE_FOCUS_TIMEOUT_MS, so the verdict was not monotonic in latency:
+    // measured on Chrome 151, a page whose focus the tree cannot report failed
+    // as an outage at ~900ms and ~1200ms per read while passing at 0ms — same
+    // page, same screen, every read successful in all of them. Android's
+    // `getHierarchy` sits squarely in that band (2.85s / 0.29s / 0.46s / 0.30s
+    // across four consecutive idle `describe` calls on this host), so the same
+    // step flips between pass and hard failure with load alone.
+    //
+    // A source that has never answered is exempt: `lastReadMs` is 0, the read
+    // starts, and a hang consumes the whole window and IS reported as an
+    // outage — which is the case the dark tail exists for.
+    if (lastReadMs > 0 && deadline - readStartedAt < lastReadMs) return giveUp();
+    // Bounded by what is left of the window, the way `waitForIdle` bounds its
+    // own read. No AbortSignal reaches any transport, so an unbounded read
+    // overran the window by its transport timeout instead — up to 15s on
+    // Android — and every refusal message still narrated the wait as 3000ms.
+    // The abandoned read's eventual settle is consumed by `settleWithin`.
+    const read = await settleWithin(readFlowTree(env), deadline - readStartedAt, env.signal);
+    if (read.type === "aborted") return giveUp();
+    if (read.type !== "value") {
+      // A read that threw, or one still in flight when the window ended —
+      // either way this poll observed nothing. `lastRead` is left alone so a
+      // window of nothing but failures stays "unreadable", and the darkness is
+      // dated from when the read STARTED, since that is when the window stopped
+      // learning anything.
+      darkTail++;
+      darkSince ??= readStartedAt;
+    } else {
+      const { tree, source } = read.value;
+      darkTail = 0;
+      darkSince = undefined;
+      lastReadMs = Date.now() - readStartedAt;
+      if (!FOCUS_REPORTING_SOURCES.has(source)) return "unobservable";
+      // The target NODE, not just its frame: identity is the only unambiguous
+      // evidence. `tappedFrame` still covers a round where neither the element
+      // nor the selector resolves, but only the refusal classification below
+      // can use it — with no node there is nothing to confirm against.
+      const targetNode = trackTarget(tree, tapped, into, candidates.point);
+      const target = targetNode?.frame ?? tappedFrame;
+      const focused = collectFocused(tree, []);
+      // Classified from the MOST RECENT successful read, never from "any read,
+      // ever": the question the caller is about to act on is what holds focus
+      // NOW, and a sticky flag answers it with history. It also made the
+      // verdict a race — an app that blurs on the focusing tap reports focus
+      // for however many rounds precede the blur.
+      if (focused.some((n) => n === targetNode)) return "confirmed";
+      if (targetNode && focusedFromInside(tree, targetNode, focused, candidates)) {
+        return "confirmed";
+      }
+      if (targetNode && focusedOwnsTargetText(tree, targetNode, focused)) return "confirmed";
+      lastRead =
+        focused.length === 0
+          ? "no-focus"
+          : // Genuinely larger, not merely containing: `frameWithin`'s slack is
+            // per-edge, so two identical frames satisfy it, and a focused node
+            // whose frame EQUALS the target's is not the WebView-or-focus-trap
+            // shape "encloses" describes — telling its author to point the
+            // selector at the input itself is advice they have already taken.
+            // Reachable whenever `trackTarget` cannot identify the element and
+            // `target` falls back to the frame the tap was dispatched at.
+            focused.some((n) => frameWithin(target, n.frame) && !frameNoLargerThan(n.frame, target))
+            ? "focus-encloses"
+            : focused.some((n) => framesOverlap(n.frame, target))
+              ? "focus-overlaps"
+              : "focus-elsewhere";
+      if (lastRead !== "no-focus") lastSighting = lastRead;
+      // Enough for a caller that will not act on the verdict: something focused
+      // covers the target, which is as far as a plain `type` ever needed to get.
+      // The refusal arms below are the same verdicts, just reached now instead
+      // of at the deadline.
+      if (!requireEvidence && (lastRead === "focus-encloses" || lastRead === "focus-overlaps")) {
+        return giveUp();
+      }
+    }
     const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
-    if (!(await sleepOrAbort(sleepMs, env.signal))) return;
+    if (!(await sleepOrAbort(sleepMs, env.signal))) return giveUp();
   }
 }
 
@@ -1256,67 +2166,263 @@ async function runRotate(
   }
 
   if (env.signal?.aborted) return ABORTED_OUTCOME;
-  try {
-    await invokeOnDevice(env, "gesture-rotate", {
-      centerX: center.x,
-      centerY: center.y,
-      ...(aspect === undefined
-        ? { radius: selected.radiusX }
-        : { radiusX: selected.radiusX, radiusY: selected.radiusY }),
-      startAngle: selected.startAngle,
-      // endAngle > startAngle = clockwise in the tool, matching +by.
-      endAngle: selected.startAngle + step.by,
-      durationMs: deriveRotateDurationMs(step.by),
-    });
-  } catch (err) {
-    // The tool rejects when cancelled mid-gesture; per ABORTED_OUTCOME that must
-    // read as an aborted skip, never a step failure with the tool's message.
-    if (env.signal?.aborted) return ABORTED_OUTCOME;
-    throw err;
-  }
+  // The tool rejects when cancelled mid-gesture; per ABORTED_OUTCOME that must
+  // read as an aborted skip, never a step failure with the tool's message.
+  const rotated = await dispatchOrAbort(env, "gesture-rotate", {
+    centerX: center.x,
+    centerY: center.y,
+    ...(aspect === undefined
+      ? { radius: selected.radiusX }
+      : { radiusX: selected.radiusX, radiusY: selected.radiusY }),
+    startAngle: selected.startAngle,
+    // endAngle > startAngle = clockwise in the tool, matching +by.
+    endAngle: selected.startAngle + step.by,
+    durationMs: deriveRotateDurationMs(step.by),
+  });
+  if (!rotated) return ABORTED_OUTCOME;
   return { ok: true, ...warned(settle) };
 }
 
 /**
- * Resolve `into` → tap to focus → wait for focus to land → type text via the
- * keyboard tool. Unless `submit` is explicitly `false`, a trailing Enter is
- * pressed to commit the value and dismiss the keyboard, so it can't obscure
- * later steps (chained form fields that end in an explicit submit `tap` should
- * pass `submit: false`).
+ * Why a `clear` was refused, phrased per outcome so the advice matches the
+ * observation. Every arm keeps the substring "refusing to clear", which is what
+ * a caller (and the suite) greps for.
+ *
+ * Deliberately names no element text: the reason is echoed to the agent and
+ * printed by `argent flow run`, and a focused node's label can BE the field's
+ * value. (Nothing writes the step report to a file — `--output` exports failed
+ * snapshot images only — but stdout and the agent's context are surfaces
+ * enough.)
+ */
+function clearRefusalReason(into: FlowSelector, focus: FocusOutcome): string {
+  const sel = describeSelector(into);
+  const head = `refusing to clear ${sel}`;
+  if (focus === "encloses") {
+    return (
+      `${head}: the only element reporting focus within ${TYPE_FOCUS_TIMEOUT_MS}ms CONTAINS ${sel} ` +
+      `rather than being it — a focused WebView or a focus trap looks exactly like this while a ` +
+      `different element holds the keys, so clearing here can empty that element instead. A field ` +
+      `that merely OVERHANGS the box ${sel} names reads the same way, which default content-box ` +
+      `sizing does for a few pixels. Point the selector at the input itself, or clear it with the ` +
+      `app's own affordance`
+    );
+  }
+  if (focus === "overlaps") {
+    return (
+      `${head}: within ${TYPE_FOCUS_TIMEOUT_MS}ms focus was reported on an element that OVERLAPS ` +
+      `${sel} without being it and without covering where the tap landed — an overlay over the ` +
+      `field (a suggestion popover, an autocomplete list), a SIBLING inside the container ` +
+      `${sel} names (a currency/amount row, an OTP row), or the field itself overhanging that ` +
+      `container's box, which default content-box sizing does for a few pixels. Clearing would ` +
+      `empty that element instead. Dismiss the overlay first, or name the input that actually ` +
+      `holds the caret`
+    );
+  }
+  if (focus === "unreadable") {
+    return (
+      `${head}: the UI tree stopped answering before the ${TYPE_FOCUS_TIMEOUT_MS}ms focus wait ` +
+      `ended, so nothing is known about what holds focus NOW. Retry the step; if it persists the ` +
+      `device's tree source is down`
+    );
+  }
+  return (
+    `focus never reached ${sel} within ${TYPE_FOCUS_TIMEOUT_MS}ms — ` +
+    "refusing to clear, since the keys would empty whatever else holds focus. Check that the " +
+    "selector resolves to the input itself rather than to its label or a wrapper around it — " +
+    "an id/testID selector is the reliable way to say so when the field's only stable name sits " +
+    "on a neighbouring element"
+  );
+}
+
+/**
+ * Resolve `into` → tap to focus → wait for focus to land → clear and/or type
+ * text in one keyboard call → optionally press Enter in a second.
+ *
+ * `submit` presses a trailing Enter to commit the value and dismiss the
+ * keyboard, so it can't obscure later steps (chained form fields that end in an
+ * explicit submit `tap` should pass `submit: false`). It defaults to true when
+ * there is text, and to false for a clear-only step — Enter into a field the
+ * step just emptied is never the intent.
  */
 async function runType(
   env: ActionEnv,
-  step: { into: FlowSelector; text: string; submit?: boolean }
+  step: { into: FlowSelector; text?: string; clear?: boolean; submit?: boolean }
 ): Promise<DirectiveOutcome> {
-  const frame = await waitForFrame(env, step.into);
-  if (frame === "aborted") return ABORTED_OUTCOME;
-  if (!frame) {
+  const resolved = await waitForFrameAndTree(env, step.into);
+  if (resolved === "aborted") return ABORTED_OUTCOME;
+  if (!resolved) {
     return { ok: false, reason: offscreenHint(step.into) };
   }
-  await invokeOnDevice(env, "gesture-tap", getDescribeTapPoint(frame));
+  const { node: tappedNode, tree: preTapTree } = resolved;
+  // Wrapped like the two keyboard dispatches below, so all three of this step's
+  // device calls classify a cancelled run the same way. Leaving the focus tap
+  // bare made one step report `error` or `skip` depending on which dispatch
+  // happened to be in flight when the caller gave up. What makes this step the
+  // one that needed wrapping is that it makes SEVERAL dispatches with no guard of
+  // its own between them; every other directive is already covered from
+  // somewhere:
+  //
+  //   - `runTap` and `runLongPress` leave their dispatch bare, and can: one call
+  //     each, so there is no within-step split to classify inconsistently.
+  //   - `scrollIncrement` is bare too, but a `scroll-to` step calls it up to
+  //     MAX_SCROLL_ITERATIONS times — `scrollToVisible` guards the signal at the
+  //     head of every iteration, so a cancel is caught before the next increment
+  //     rather than after the wrong one.
+  //   - `runPinch` chains several, and guards the signal between them itself.
+  if (!(await dispatchOrAbort(env, "gesture-tap", getDescribeTapPoint(tappedNode.frame)))) {
+    return ABORTED_OUTCOME;
+  }
   // Keys are injected at the HID level and go to whatever holds focus, so the
   // tap→type gap must cover the app's focus round-trip (see the constants).
   if (!(await sleepOrAbort(TYPE_FOCUS_SETTLE_MS, env.signal))) {
     return ABORTED_OUTCOME;
   }
-  await waitForFocus(env, step.into, frame);
-  // waitForFocus returns void on abort as well as on focus/timeout — re-check
-  // before every keyboard dispatch (the keyboard tool has no abort handling of
-  // its own), so a cancelled run can never type into, or submit, whatever the
-  // app has focused after the caller gave up.
+  const focus = await waitForFocus(env, step.into, tappedNode, preTapTree, step.clear === true);
+  // waitForFocus returns on abort as well as on focus/timeout — re-check before
+  // every keyboard dispatch (the keyboard tool has no abort handling of its
+  // own), so a cancelled run can never type into, or submit, whatever the app
+  // has focused after the caller gave up.
   if (env.signal?.aborted) return ABORTED_OUTCOME;
-  await invokeOnDevice(env, "keyboard", { text: step.text });
-  if (step.submit !== false) {
-    if (env.signal?.aborted) return ABORTED_OUTCOME;
-    // Enter goes in its own keyboard call because the tool rejects a combined
-    // `{ text, key }` outright (see ../keyboard/index.ts) — two calls are the
-    // only way to express "type, then submit". On an Android TV target this call
-    // is also the one that fails: `typeTv` rejects `key` unconditionally, so the
-    // text lands and the submit errors. (Android TV is the TV kind that reaches
-    // here at all — an Apple TV stops at the focus tap above, whose `gesture-tap`
-    // resolves simulator-server and rejects a tvOS UDID.)
-    await invokeOnDevice(env, "keyboard", { key: "enter" });
+  // Typing without confirmed focus is best-effort — keys land in whatever holds
+  // focus, and misplaced text is additive and visible. A clear is neither, so it
+  // only runs on evidence, or on the absence of any:
+  //
+  //   - "unconfirmed": the tree reported focus and never on the target, so the
+  //     tap did not move focus. Clearing then wipes the field the run was
+  //     previously in (unrecoverable, reported as a pass on a field it never
+  //     touched) or lands nowhere while the report still claims a clear. Both
+  //     reproduced on a Pixel 3a against a real app.
+  //   - "encloses" / "overlaps": the focus flag covers the target, or sits over
+  //     it without being it. Neither is evidence — see waitForFocus for the
+  //     shapes that produce them and the field each destroyed instead of the
+  //     named one.
+  //   - "unreadable": every read in the window threw, so nothing was observed.
+  //     A tree-source outage is not the same as a tree that reported nothing,
+  //     and only the second is safe to clear on.
+  //
+  // "unobservable" — reads succeeded and flagged nothing anywhere — DOES fall
+  // through to the same best-effort path as typing, which is what keeps `clear`
+  // working on an iOS build whose injected framework omits `firstResponder`.
+  //
+  // Known residual, and the reason `argent-create-flow` says to assert the
+  // result: "unobservable" also covers states where something IS focused and
+  // the tree cannot say so. It no longer covers them once a read in the same
+  // window has SEEN where focus is (see `lastSighting`), so what is left is a
+  // window in which no read ever saw it:
+  //
+  //   - an app that BLURS on an outside tap before the first read;
+  //   - a focused field with no on-screen frame. All THREE flow adapters drop
+  //     the leaf for a frame clipping to zero area, so the flag goes with it —
+  //     an off-screen field is the persistent case (positioned there by design,
+  //     not moved there by a scroll), a keyboard-avoidance scroll the transient
+  //     one. The shared scroll-clip prune (`flow-tree-flatten`) drops one whose
+  //     own frame is a healthy on-screen rect, which "clipping to zero area"
+  //     does not describe: a non-clipping carousel, a nested scroller;
+  //   - a focused field the adapter prunes as INVISIBLE before focus is
+  //     considered. `flow-ios-tree` drops `hidden === true || alpha < 0.01`,
+  //     and `flow-android-tree` drops the `com.android.systemui` package and
+  //     its resource-id prefixes — which is the notification direct-reply field
+  //     and the bouncer. Chromium no longer belongs here: its walker keeps the
+  //     branch holding the caret (see `holdsFocus` in describe/platforms/
+  //     chromium), which is what the opacity:0 OTP-capture shape needs;
+  //   - a TRUNCATED tree, on either source. `blueprints/android-devtools`
+  //     returns `truncated` and `windowCount` and `flow-android-tree`
+  //     destructures only `{ xml }`; on Chromium the node-cap sets a `hint`
+  //     that `flow-chromium-tree` drops. A partial tree with no focus flag is
+  //     indistinguishable from "nothing is focused". (The repo's own
+  //     `keyboard/platforms/android` treats those same two fields as
+  //     disqualifying.) iOS truncates by depth instead — `maxDepth: 40` — with
+  //     no signal at all;
+  //   - focus inside a Chromium sub-document. The describe walker's iframe
+  //     descent is dead: `el instanceof Element` rejects the inner
+  //     `documentElement`, because that constructor belongs to the OUTER realm.
+  //     Pre-existing and not fixed here — reviving the descent also needs every
+  //     inner frame translated into the host document's coordinates, or the
+  //     tree gains nodes whose boxes point at the wrong place.
+  //
+  // Deliberate — the alternative refuses every clear on the iOS builds above
+  // (verified: it did). It is NOT justified by "a clear with nothing focused
+  // loses no data": that premise is false for every shape above, and each of
+  // them is a field the step never named. The justification is only that
+  // refusing here costs the platform its `clear` outright, while clearing the
+  // WRONG field is worse than either — so `argent-create-flow` telling authors
+  // to assert the result is load-bearing, not advisory.
+  if (step.clear && focus !== "confirmed" && focus !== "unobservable") {
+    return { ok: false, reason: clearRefusalReason(step.into, focus) };
   }
+  // Clear and text ride ONE keyboard call. Each backend validates the WHOLE
+  // request before touching the device precisely so a rejected call leaves no
+  // trace — `assertTypeableAndroidText`, and the per-character resolves in the
+  // chromium and simulator-server backends, all run ahead of the clear. Issuing
+  // them separately steps outside that guarantee: the clear commits, the text is
+  // then rejected, and the field is left EMPTY by a call that returned 400. On a
+  // Pixel 3a, `{ into: field, text: "José", clear: true }` destroyed the field's
+  // value as two calls, where the same arguments as one call left it intact.
+  //
+  // No read-back check follows the clear. Re-reading the focused node and
+  // failing if it still holds text cannot be made to work against the flow
+  // trees: on iOS a field's contents never reach them at all (`flow-ios-tree`
+  // projects {role, frame, children, label, identifier, focused}), and where the
+  // check CAN see something it misfires — an emptied Android field with a
+  // contentDescription reports its HINT, and a Chromium field carrying an
+  // aria-label / aria-labelledby / placeholder reports that LABEL, since
+  // `accessibleName` returns it long before it reaches `el.value`. What each
+  // platform does expose is tabulated once in the `argent-create-flow` skill, in
+  // `references/asserting-field-values.md`, beside the assert guidance that
+  // depends on it. The focus refusal above — plus the keyboard tool rejecting
+  // `clear` outright on backends that cannot perform it — is where that risk is
+  // actually handled.
+  if (step.clear || step.text !== undefined) {
+    const sent = await dispatchOrAbort(env, "keyboard", {
+      ...(step.clear ? { clear: true } : {}),
+      ...(step.text !== undefined ? { text: step.text } : {}),
+    });
+    if (!sent) return ABORTED_OUTCOME;
+  }
+  // Outside the submit gate, not inside it. `dispatchOrAbort` reclassifies only
+  // a dispatch that REJECTS while the signal is aborted, and the Android keyboard
+  // backend takes no signal at all — so a cancel landing mid-call leaves the call
+  // to resolve and returns `true`. The backends that DO take one (iOS, Chromium)
+  // only narrow the window rather than close it: each checks between keystrokes,
+  // so an abort arriving after the last check still lets the call finish. Inside
+  // the gate this check ran only for a step that submits, which made a cancelled
+  // clear-only step (where `submit` defaults to false) report a pass while the
+  // identical cancellation on a submitting step reported a skip.
+  if (env.signal?.aborted) return ABORTED_OUTCOME;
+  // Default: submit when there is text to commit, not on a clear-only step.
+  if (step.submit ?? step.text !== undefined) {
+    // Enter is the ONE part that stays a separate call, and it has no choice:
+    // the keyboard tool rejects a combined `{ text, key }` outright (see
+    // ../keyboard/index.ts), so two calls are the only way to express "type,
+    // then submit". That is why the clear/text pair above does NOT split the
+    // same way — `clear` combines with `text` freely, and folding it in is what
+    // keeps it atomic with the text it replaces.
+    //
+    // On an Android TV target this call is where a step with NO `clear` fails:
+    // the text lands and the submit errors, because `typeTv` rejects `key`
+    // unconditionally. A `clear: true` step never reaches any dispatch at all —
+    // a tap cannot move D-pad focus, `android-devtools` is in
+    // FOCUS_REPORTING_SOURCES so the wait really looks, and it reports
+    // "unconfirmed", which the refusal above turns into a failed step. The
+    // `typeTv` clear rejection is therefore unreachable from a flow `type` step;
+    // it is what a direct `keyboard` call hits. (Android TV is the TV kind that
+    // reaches here at all: `runDirective` gates `type` on Vega alone, and an
+    // Apple TV stops at the focus tap above, whose `gesture-tap` resolves
+    // simulator-server and rejects a tvOS UDID.)
+    if (!(await dispatchOrAbort(env, "keyboard", { key: "enter" }))) {
+      return ABORTED_OUTCOME;
+    }
+  }
+  // The same re-check as before the submit gate, for the same reason, because the
+  // Enter is a second dispatch and inherits the whole problem: `dispatchOrAbort`
+  // reclassifies only a dispatch that REJECTS under an aborted signal, and the
+  // Android backend takes no signal at all, so a cancel landing mid-Enter leaves
+  // the call to resolve and hands back `true`. With nothing between that and the
+  // pass below, the same cancellation window flipped a step between `pass` and
+  // `skip` on which of its two keyboard calls happened to be in flight — and the
+  // `pass` arm is the one where the submit really was sent after the caller gave
+  // up, which is exactly what the check above says must not happen.
+  if (env.signal?.aborted) return ABORTED_OUTCOME;
   return { ok: true };
 }
 

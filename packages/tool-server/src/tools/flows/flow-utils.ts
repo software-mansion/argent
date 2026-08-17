@@ -690,7 +690,15 @@ export type FlowStep =
   | { kind: "when"; condition: WhenCondition; steps: FlowStep[] }
   | { kind: "tap"; selector?: FlowSelector; x?: number; y?: number; times?: number }
   | { kind: "long-press"; selector?: FlowSelector; x?: number; y?: number; duration?: number }
-  | { kind: "type"; into: FlowSelector; text: string; submit?: boolean }
+  // A step with NEITHER `text` nor `clear` has nothing to do: it serializes to
+  // YAML the parser then rejects, labels itself `⇐ (clear only)` in a recording
+  // summary, and dispatches no keyboard call at all — a silently passing no-op.
+  // The parser is the only construction site today, and it refuses that body;
+  // pairing the two fields keeps it that way for any future one.
+  | ({ kind: "type"; into: FlowSelector; submit?: boolean } & (
+      | { text: string; clear?: boolean }
+      | { text?: string; clear: true }
+    ))
   | {
       kind: "await";
       condition: WaitCondition;
@@ -924,7 +932,7 @@ type YamlStep =
   | { tool: string; args?: Record<string, unknown>; delayMs?: number }
   | { tap: TapBody }
   | { "long-press": YamlTarget | { on: YamlTarget; duration?: number } }
-  | { type: { into: YamlSelector; text: string; submit?: boolean } }
+  | { type: { into: YamlSelector; text?: string; clear?: boolean; submit?: boolean } }
   | { await: (YamlWaitCondition & { timeout?: number }) | YamlIdleCondition }
   | { assert: YamlWaitCondition }
   | { wait: number }
@@ -1258,12 +1266,18 @@ function toYamlStep(step: FlowStep): YamlStep {
       };
     }
     case "type": {
-      const body: { into: YamlSelector; text: string; submit?: boolean } = {
+      const body: { into: YamlSelector; text?: string; clear?: boolean; submit?: boolean } = {
         into: selectorToYaml(step.into),
-        text: step.text,
       };
-      // `submit` defaults to true; only serialize the explicit opt-out.
-      if (step.submit === false) body.submit = false;
+      if (step.text !== undefined) body.text = step.text;
+      // `clear` defaults to false, so only the opt-in is ever worth writing.
+      // `submit` below is NOT the same shape — its default depends on `text`,
+      // so either value can be the one that differs from it.
+      if (step.clear === true) body.clear = true;
+      // `submit` defaults to true when there is text and false without it, so
+      // only serialize a value that differs from the step's own default.
+      if (step.submit === false && step.text !== undefined) body.submit = false;
+      else if (step.submit === true && step.text === undefined) body.submit = true;
       return { type: body };
     }
     case "await":
@@ -1353,9 +1367,14 @@ const MAX_ENTRY_RENDER_CHARS = 200;
 function badEntry(raw: unknown, detail: string): never {
   // A cyclic YAML alias materializes as a cyclic object — JSON.stringify
   // would throw and mask the validation message, so fall back to a marker.
+  // `?? String(raw)` for the values JSON.stringify RETURNS undefined for:
+  // `type: { clear: true }` reaches here with no `into` at all, and reading
+  // `.length` off that undefined replaced the whole validation failure with
+  // "Cannot read properties of undefined" and a REGISTRY_TOOL_EXECUTION_FAILED
+  // code, for a flow the parser diagnoses precisely.
   let rendered: string;
   try {
-    rendered = JSON.stringify(raw);
+    rendered = JSON.stringify(raw) ?? String(raw);
   } catch {
     rendered = "[cyclic entry]";
   }
@@ -2634,22 +2653,75 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
   }
 
   if ("type" in raw) {
-    const body = (raw as { type: { into?: unknown; text?: unknown; submit?: unknown } }).type;
-    if (!body || typeof body !== "object") badEntry(raw, "type needs { into, text }");
-    // A misspelled `sumbit` would silently drop the submit opt-out.
-    rejectUnknownKeys(raw, body as Record<string, unknown>, ["into", "text", "submit"], "type");
-    if (typeof body.text !== "string" || body.text.length === 0) {
-      badEntry(raw, "type needs a non-empty text");
+    const body = (
+      raw as { type: { into?: unknown; text?: unknown; clear?: unknown; submit?: unknown } }
+    ).type;
+    // Reached by extrapolating the bare-scalar form `tap`, `long-press`,
+    // `scroll-to` and `snapshot` accept, so it has to name BOTH shapes the body
+    // can take: `text` stopped being required the moment `clear` arrived, and
+    // pointing an author at one of two valid shapes is its own dead end.
+    if (!body || typeof body !== "object") {
+      badEntry(raw, "type needs { into, text } or { into, clear: true }");
+    }
+    // A misspelled `sumbit` or `claer` would silently drop the opt-out / the
+    // clear, so the new value lands on top of the old one instead of replacing
+    // it — fail loudly instead.
+    rejectUnknownKeys(
+      raw,
+      body as Record<string, unknown>,
+      ["into", "text", "clear", "submit"],
+      "type"
+    );
+    if (body.clear !== undefined && typeof body.clear !== "boolean") {
+      badEntry(raw, "type.clear must be a boolean");
+    }
+    // `text` is required UNLESS the step is a clear: `type: { into: search,
+    // clear: true }` — empty the box, then assert the OLD value is gone
+    // (`assert: { hidden: "the old value" }`) or that the screen it filtered
+    // came back — is a legitimate step with nothing to type.
+    //
+    // Deliberately not "assert the empty state": the flow language cannot say
+    // that. `equals: ""` / `contains: ""` are rejected at parse time (see the
+    // assert arm below), and the regex form parses but cannot match —
+    // `regexMatchesNonEmpty` treats absent/empty text as a non-haystack, so
+    // `matches: "^$"` is false for exactly the state it describes. Measured on
+    // Chrome 151: the assert fails reporting `its text was ""`.
+    if (body.clear === true) {
+      if (body.text !== undefined && (typeof body.text !== "string" || body.text.length === 0)) {
+        badEntry(raw, "type.text must be a non-empty string when given");
+      }
+    } else if (typeof body.text !== "string" || body.text.length === 0) {
+      badEntry(raw, "type needs a non-empty text (or clear: true)");
     }
     if (body.submit !== undefined && typeof body.submit !== "boolean") {
       badEntry(raw, "type.submit must be a boolean");
     }
-    const step: Extract<FlowStep, { kind: "type" }> = {
-      kind: "type",
-      into: parseSelector(body.into, "type.into"),
-      text: body.text,
-    };
-    if (body.submit === false) step.submit = false;
+    // An absent `into` is caught here rather than inside `parseSelector`,
+    // because the diagnostic echoes the offending ENTRY and an absent selector
+    // renders as `undefined` — which in a multi-step flow does not say WHICH
+    // step is broken. Echo the step instead, the way the `claer` typo path
+    // already does.
+    if (body.into === undefined) {
+      badEntry(raw, "type needs an `into` selector ({ into, text } or { into, clear: true })");
+    }
+    // Built in one expression, not field by field: the union above pairs `text`
+    // with `clear` so a step carrying neither cannot be spelled, and an
+    // incremental build passes through exactly that state.
+    const into = parseSelector(body.into, "type.into");
+    const text = typeof body.text === "string" ? body.text : undefined;
+    const step: Extract<FlowStep, { kind: "type" }> =
+      body.clear === true
+        ? { kind: "type", into, clear: true, ...(text !== undefined ? { text } : {}) }
+        : // The validation above rejected every body that reaches here without
+          // a non-empty text.
+          { kind: "type", into, text: text as string };
+    // `submit` defaults to true when there is text to commit, and to false for a
+    // clear-only step — firing Enter into a field the step just emptied is never
+    // what the author meant, and requiring `submit: false` on every such step
+    // would be a footgun. Store it only when it differs from that default, so
+    // the serializer can drop it again and the YAML round-trips unchanged.
+    const submitDefault = step.text !== undefined;
+    if (body.submit !== undefined && body.submit !== submitDefault) step.submit = body.submit;
     return step;
   }
 

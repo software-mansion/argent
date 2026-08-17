@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { DESCRIBE_DOM_SCRIPT } from "../src/tools/describe/platforms/chromium";
+import { adaptChromiumTreeForFlows } from "../src/tools/flows/flow-chromium-tree";
+import { assertText, evaluateCondition, findAll, selectorToNode } from "../src/utils/ui-tree-match";
+import type { DescribeNode } from "../src/tools/describe/contract";
 
 /**
  * `DESCRIBE_DOM_SCRIPT` is an IIFE injected via Runtime.evaluate that walks the live
@@ -11,7 +14,7 @@ import { DESCRIBE_DOM_SCRIPT } from "../src/tools/describe/platforms/chromium";
  *
  * The mock implements only the DOM surface the script reads: getBoundingClientRect,
  * getComputedStyle (display / visibility / opacity / overflow{,X,Y}), children,
- * childNodes (text), getAttribute/hasAttribute, open shadowRoot, iframe contentDocument,
+ * childNodes (text), getAttribute/hasAttribute, open shadowRoot,
  * and a Range whose rect unions the element's own painted content with the still-laid-out
  * boxes of its descendants (everything but display:none) — so it reproduces the real
  * behaviour where a box-less wrapper's Range is non-zero purely from a visibility:hidden /
@@ -26,6 +29,14 @@ class MockElement extends MockNode {}
 class MockHTMLInputElement extends MockElement {}
 class MockHTMLTextAreaElement extends MockElement {}
 class MockHTMLImageElement extends MockElement {}
+// A real Document / ShadowRoot constructor, so the script's `activeElement`
+// reads go through a PROTOTYPE accessor exactly as they do in a renderer. With
+// a plain stub object protoGetter falls back to a direct property read, and the
+// whole point of the focus hunk — that a DOM-clobbering <form> must not be able
+// to answer "who is focused", and that an open shadow root answers for its own
+// subtree — becomes unreachable from a test.
+class MockDocument {}
+class MockShadowRoot {}
 
 // The script reads childNodes / tagName / children through the native prototype getter
 // (Object.getOwnPropertyDescriptor(proto, prop).get.call(el)) so a DOM-clobbering <form>
@@ -56,6 +67,64 @@ defineNative(MockElement.prototype, "scrollHeight", "__scrollHeight");
 defineNative(MockElement.prototype, "clientHeight", "__clientHeight");
 defineNative(MockElement.prototype, "scrollWidth", "__scrollWidth");
 defineNative(MockElement.prototype, "clientWidth", "__clientWidth");
+// activeElement / body live on Document.prototype and ShadowRoot.prototype —
+// where the script captures each, and where a clobbering own property can be
+// laid over them.
+defineNative(MockDocument.prototype, "activeElement", "__activeElement");
+defineNative(MockDocument.prototype, "body", "__body");
+// Brand-checked, like Blink's: calling ShadowRoot's accessor on anything that is
+// not a ShadowRoot throws `Illegal invocation`. A stub that answered `undefined`
+// instead cannot see a page that removed `Element.prototype.shadowRoot` and made
+// the script's shadow read hand a form CONTROL to this getter.
+Object.defineProperty(MockShadowRoot.prototype, "activeElement", {
+  get(this: object): unknown {
+    if (!(this instanceof MockShadowRoot)) throw new TypeError("Illegal invocation");
+    return (this as Record<string, unknown>).__activeElement;
+  },
+  set(this: Record<string, unknown>, v: unknown) {
+    this.__activeElement = v;
+  },
+  configurable: true,
+});
+
+/**
+ * A Document the script's captured accessors work on. `activeElement`/`body`
+ * are written to the backing fields, so a test can shadow the PUBLIC property
+ * with a control element (a `<form name="activeElement">`) and still have the
+ * prototype getter return the truth.
+ */
+function mockDoc(fields: {
+  activeElement?: unknown;
+  body?: unknown;
+  documentElement?: unknown;
+}): Record<string, unknown> {
+  const doc = Object.create(MockDocument.prototype) as Record<string, unknown>;
+  doc.__activeElement = fields.activeElement ?? null;
+  doc.__body = fields.body ?? null;
+  if (fields.documentElement !== undefined) doc.documentElement = fields.documentElement;
+  return doc;
+}
+
+// ownerDocument: whatever a fixture assigned, else the document `run()` installs.
+// Shadow content has an ownerDocument like any other node — only its ROOT differs.
+Object.defineProperty(MockNode.prototype, "ownerDocument", {
+  get(this: Record<string, unknown>) {
+    return this.__ownerDocument ?? (globalThis as Record<string, unknown>).document;
+  },
+  set(this: Record<string, unknown>, v: unknown) {
+    this.__ownerDocument = v;
+  },
+  configurable: true,
+});
+
+// getRootNode(): the containing open shadow root when there is one, else the
+// element's document. The script prefers it over the document precisely because
+// the two differ inside a shadow tree.
+(MockElement.prototype as unknown as Record<string, unknown>).getRootNode = function (
+  this: Record<string, unknown>
+) {
+  return this.__root ?? (globalThis as Record<string, unknown>).document;
+};
 // getAttribute / hasAttribute / getBoundingClientRect are methods on Element.prototype.
 // The script invokes them via the captured `Element.prototype.X` so a [LegacyOverrideBuiltins]
 // form can't shadow them to a control element (which would crash with "not a function").
@@ -73,6 +142,20 @@ elementProto.getBoundingClientRect = function (this: Record<string, unknown>) {
   const r = this.__rect as Rect;
   return { left: r.x, top: r.y, right: r.x + r.w, bottom: r.y + r.h, width: r.w, height: r.h };
 };
+// `contains` lives on Node.prototype in a renderer, and the walker reads it
+// through the captured accessor to ask whether a subtree it is about to prune
+// holds the caret. Light DOM only, like the real one: a shadow boundary is not
+// crossed.
+(MockNode.prototype as unknown as Record<string, unknown>).contains = function (
+  this: Record<string, unknown>,
+  other: unknown
+): boolean {
+  if (this === other) return true;
+  for (const child of (this.children as MockElement[] | undefined) ?? []) {
+    if ((child as unknown as { contains: (n: unknown) => boolean }).contains(other)) return true;
+  }
+  return false;
+};
 
 type Rect = { x: number; y: number; w: number; h: number };
 type Opts = {
@@ -84,7 +167,7 @@ type Opts = {
   attrs?: Record<string, string>;
   children?: MockElement[];
   shadow?: MockElement[]; // open shadow root children (walker pierces these)
-  iframeDoc?: MockElement; // <iframe> contentDocument.documentElement (same-origin pierce)
+  shadowActive?: MockElement; // that shadow root's own activeElement
   clobber?: boolean; // set .title/.id to non-string objects (DOM-clobbering)
   clobberStructural?: boolean; // shadow .children/.childNodes/.tagName with named controls (LegacyOverrideBuiltins)
   clobberAccessors?: boolean; // shadow getAttribute/hasAttribute/getBoundingClientRect/shadowRoot with a control element
@@ -107,11 +190,23 @@ function el(opts: Opts = {}): MockElement {
     : [];
   // An open shadow root is a DocumentFragment exposing `.children`; the walker reads
   // `getShadowRoot.call(el)` then iterates `shadow.children`. null unless a fixture sets it.
-  node.shadowRoot = opts.shadow ? ({ children: opts.shadow } as unknown) : null;
-  // A same-origin <iframe> exposes contentDocument.documentElement (read directly, not via
-  // a prototype getter). Only meaningful when tag === "iframe".
-  if (opts.iframeDoc) {
-    (node as Record<string, unknown>).contentDocument = { documentElement: opts.iframeDoc };
+  // A real ShadowRoot instance, so the script's `activeElement` accessor and its
+  // `instanceof ShadowRoot` root test both see what a renderer would. Everything
+  // inside it reports the shadow root — not the document — as its root node.
+  if (opts.shadow) {
+    const sr = Object.create(MockShadowRoot.prototype) as Record<string, unknown>;
+    sr.children = opts.shadow;
+    sr.__activeElement = opts.shadowActive ?? null;
+    const markRoot = (n: MockElement): void => {
+      (n as unknown as Record<string, unknown>).__root = sr;
+      for (const c of (n as unknown as { __children?: MockElement[] }).__children ?? []) {
+        markRoot(c);
+      }
+    };
+    for (const c of opts.shadow) markRoot(c);
+    node.shadowRoot = sr as unknown;
+  } else {
+    node.shadowRoot = null;
   }
   (node as Record<string, unknown>).__content = opts.content ?? null;
   if (opts.clobber) {
@@ -174,10 +269,39 @@ function inputEl(opts: Opts & { type?: string; value?: string; placeholder?: str
   return node;
 }
 
-function run(rootChildren: MockElement[]): { tree: unknown; truncated: boolean } {
+// A <textarea> the script's `instanceof HTMLTextAreaElement` branches recognise.
+// `text` is its markup DEFAULT (the child text node), `value` the live contents —
+// the two diverge the moment anything types into the field, which is the whole
+// point of the split.
+function textareaEl(opts: Opts & { value?: string; placeholder?: string }) {
+  const node = el({ ...opts, tag: "textarea" }) as MockElement & Record<string, unknown>;
+  Object.setPrototypeOf(node, MockHTMLTextAreaElement.prototype);
+  node.value = opts.value ?? "";
+  if (opts.placeholder) node.placeholder = opts.placeholder;
+  return node;
+}
+
+function run(
+  rootChildren: MockElement[],
+  /**
+   * The page-level activeElement, and optionally a control element shadowing
+   * the PUBLIC `document.activeElement` property (a `<form name="activeElement">`
+   * — Document's named getter is [LegacyOverrideBuiltIns]). Elements built by
+   * `el()` take the global document as their root node unless a shadow root
+   * claims them, so this is what the light DOM's focus reads answer with.
+   */
+  focus?: { activeElement?: MockElement; clobberedBy?: MockElement },
+  /**
+   * Globals a hostile page can redefine before the script runs. `ShadowRoot`
+   * is not always a constructor: a legacy Shadow-DOM polyfill can assign a
+   * non-object to it, and the script reads `ShadowRoot.prototype` at top level.
+   */
+  globals?: { ShadowRoot?: unknown }
+): { tree: unknown; truncated: boolean } {
   const root = el({ tag: "html", rect: { x: 0, y: 0, w: W, h: H } }) as MockElement &
     Record<string, unknown>;
-  root.children = [el({ tag: "body", rect: { x: 0, y: 0, w: W, h: H }, children: rootChildren })];
+  const bodyEl = el({ tag: "body", rect: { x: 0, y: 0, w: W, h: H }, children: rootChildren });
+  root.children = [bodyEl];
 
   const g = globalThis as Record<string, unknown>;
   const saved = {
@@ -188,13 +312,22 @@ function run(rootChildren: MockElement[]): { tree: unknown; truncated: boolean }
     HTMLInputElement: g.HTMLInputElement,
     HTMLTextAreaElement: g.HTMLTextAreaElement,
     HTMLImageElement: g.HTMLImageElement,
+    Document: g.Document,
+    ShadowRoot: g.ShadowRoot,
   };
   g.window = {
     innerWidth: W,
     innerHeight: H,
     getComputedStyle: (e: Record<string, unknown>) => e.__style,
   };
-  g.document = {
+  const doc = mockDoc({ activeElement: focus?.activeElement ?? null, body: bodyEl });
+  if (focus?.clobberedBy) {
+    Object.defineProperty(doc, "activeElement", {
+      value: focus.clobberedBy,
+      configurable: true,
+    });
+  }
+  g.document = Object.assign(doc, {
     documentElement: root,
     // Resolve aria-labelledby targets by walking the mock tree's backing __children
     // (the real children, unaffected by any structural clobber) for a matching id.
@@ -258,12 +391,14 @@ function run(rootChildren: MockElement[]): { tree: unknown; truncated: boolean }
         },
       };
     },
-  };
+  });
   g.Node = MockNode;
   g.Element = MockElement;
   g.HTMLInputElement = MockHTMLInputElement;
   g.HTMLTextAreaElement = MockHTMLTextAreaElement;
   g.HTMLImageElement = MockHTMLImageElement;
+  g.Document = MockDocument;
+  g.ShadowRoot = globals && "ShadowRoot" in globals ? globals.ShadowRoot : MockShadowRoot;
   try {
     const payload = (0, eval)(DESCRIBE_DOM_SCRIPT) as string;
     return JSON.parse(payload);
@@ -305,6 +440,17 @@ function rolesOf(tree: unknown): string[] {
   return out;
 }
 
+/** Every node in the tree carrying the focus flag. */
+function focusedNodes(tree: unknown): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  (function rec(n: Record<string, unknown> | null) {
+    if (!n) return;
+    if (n.focused === true) out.push(n);
+    for (const c of (n.children as Record<string, unknown>[]) ?? []) rec(c);
+  })(tree as Record<string, unknown>);
+  return out;
+}
+
 function findById(tree: unknown, id: string): Record<string, unknown> | null {
   let found: Record<string, unknown> | null = null;
   (function rec(n: Record<string, unknown> | null) {
@@ -333,6 +479,105 @@ const BOX = { x: 0, y: 100, w: 200, h: 30 };
 
 afterEach(() => {
   // run() restores globals in its finally, nothing else to clean up.
+});
+
+describe("DESCRIBE_DOM_SCRIPT — a <textarea>'s own text is not its value", () => {
+  it("never emits the markup default", () => {
+    // `ownText` reads child text nodes, which for a <textarea> is its authored
+    // DEFAULT and never tracks `el.value`. Once typing (or a keyboard clear)
+    // makes them diverge, emitting the default makes the node read as holding
+    // text the field lost — on Chrome 150 an `equals` assert on what the field
+    // really contains failed with `its text was "final textarea-value"` on a
+    // clear that had worked.
+    const { tree } = run([
+      textareaEl({
+        text: "textarea-default",
+        value: "final",
+        attrs: { "aria-label": "Notes", "id": "ta" },
+        rect: BOX,
+      }),
+    ]);
+    expect(JSON.stringify(tree)).not.toContain("textarea-default");
+    expect(findById(tree, "ta")!.value).toBeUndefined();
+  });
+
+  it("leaves a LABELLED textarea's contents out of the tree, exactly as an <input> does", () => {
+    // A textarea has no own text, so what it HOLDS reaches the tree only
+    // through `accessibleName`'s value fallback — which an aria-label or a
+    // placeholder pre-empts. Emitting the value as node text instead exposed
+    // the contents, but node text is what the page DISPLAYS: on Chrome 151 a
+    // container `text` assert then passed on an unsent draft, `visible:` passed
+    // on the composer itself, and a `tap` landed in a note whose draft matched
+    // the button's label. See `asserting-field-values.md` for what to assert
+    // instead.
+    const { tree } = run([
+      textareaEl({
+        value: "initial content one",
+        attrs: { "aria-label": "Notes", "id": "t1" },
+        rect: BOX,
+      }),
+      textareaEl({
+        value: "initial content two",
+        placeholder: "Type here",
+        attrs: { id: "t2" },
+        rect: { x: 0, y: 200, w: 200, h: 30 },
+      }),
+    ]);
+    expect(findById(tree, "t1")!.label).toBe("Notes");
+    expect(findById(tree, "t1")!.value).toBeUndefined();
+    expect(findById(tree, "t2")!.label).toBe("Type here");
+    expect(findById(tree, "t2")!.value).toBeUndefined();
+  });
+
+  it("does not double-report an UNLABELLED textarea's contents", () => {
+    // With no label of any kind the accessible name IS `el.value`, so the value
+    // key is dropped as a duplicate — the same shape an <input> has.
+    const { tree } = run([
+      textareaEl({ value: "initial content three", attrs: { id: "t3" }, rect: BOX }),
+    ]);
+    expect(findById(tree, "t3")!.label).toBe("initial content three");
+    expect(findById(tree, "t3")!.value).toBeUndefined();
+  });
+
+  it("reports a MULTI-LINE value once, and spelled as the field holds it", () => {
+    // A <textarea> is the one field that can hold a newline or a run of spaces,
+    // and its contents reach the tree as exactly one string — so that string is
+    // the one the field HOLDS, raw, like an <input>'s. Normalizing it here made
+    // the same typed text assertable back in an <input> and not in a
+    // <textarea>, and emitting a normalized copy as node text alongside the raw
+    // name reported the contents twice. The single-line case above sees
+    // neither.
+    const { tree } = run([
+      textareaEl({ value: "line one\nline two", attrs: { id: "t4" }, rect: BOX }),
+    ]);
+    expect(findById(tree, "t4")!.label).toBe("line one\nline two");
+    expect(findById(tree, "t4")!.value).toBeUndefined();
+  });
+
+  it("keeps the spaces an equals-assert was written against", () => {
+    // `.trim()` on the value alone silently made `equals: "  hello  "` — which
+    // matched at the base — stop matching, while the same value in an <input>
+    // still did.
+    const { tree } = run([textareaEl({ value: "  hello  ", attrs: { id: "t6" }, rect: BOX })]);
+    expect(findById(tree, "t6")!.label).toBe("  hello  ");
+  });
+
+  it("caps a long value at 200 characters without duplicating it", () => {
+    // `accessibleName` slices to 200. Emitting the value as node text as well
+    // compared the UNSLICED text to the already-sliced name, so anything past
+    // the cap differed BY THE SLICE ALONE and both keys were set — to the same
+    // 200-character prefix, which `nodeText` then joined into the contents
+    // reported twice. 201 characters is the first length that could see it.
+    const { tree } = run([textareaEl({ value: "C".repeat(201), attrs: { id: "t5" }, rect: BOX })]);
+    expect(findById(tree, "t5")!.label).toBe("C".repeat(200));
+    expect(findById(tree, "t5")!.value).toBeUndefined();
+  });
+
+  it("still emits an ordinary element's own text as its value", () => {
+    // The control: only <textarea> has this split between markup text and value.
+    const { tree } = run([el({ tag: "p", text: "paragraph-text" })]);
+    expect(JSON.stringify(tree)).toContain("paragraph-text");
+  });
 });
 
 describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
@@ -762,24 +1007,6 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(valuesOf(tree)).toContain("SHADOWTEXT");
   });
 
-  it("pierces a same-origin iframe's contentDocument", () => {
-    const innerDoc = el({
-      tag: "html",
-      rect: { x: 0, y: 0, w: W, h: H },
-      children: [
-        el({
-          tag: "body",
-          rect: { x: 0, y: 0, w: W, h: H },
-          children: [el({ text: "IFRAMETEXT", rect: BOX })],
-        }),
-      ],
-    });
-    const { tree } = run([
-      el({ tag: "iframe", rect: { x: 0, y: 0, w: 500, h: 500 }, iframeDoc: innerDoc }),
-    ]);
-    expect(valuesOf(tree)).toContain("IFRAMETEXT");
-  });
-
   // ---- a password input's typed value must never become its label ----
   it("never reads a password input's typed value as its accessible name", () => {
     // A placeholder-less password input (floating/uncontrolled-label pattern)
@@ -817,58 +1044,305 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       rect: { x: 0, y: 0, w: W, h: H },
       children: [focusedInput, otherInput],
     });
-    // The mock defines no Document constructor, so the script's protoGetter
-    // falls back to direct reads: a stub document with activeElement/body is
-    // enough. The body being activeElement (the no-focus default) must NOT
-    // mark it focused.
-    const doc = { activeElement: focusedInput, body };
+    const doc = mockDoc({ activeElement: focusedInput, body });
     for (const n of [focusedInput, otherInput, body]) {
       (n as unknown as Record<string, unknown>).ownerDocument = doc;
+      (n as unknown as Record<string, unknown>).__root = doc;
     }
 
     const { tree } = run([body]);
     expect(findById(tree, "focused-input")!.focused).toBe(true);
     expect(findById(tree, "other-input")!.focused).toBeUndefined();
 
+    // The body being activeElement is the no-focus default and must NOT flag it.
     doc.activeElement = body;
     const { tree: unfocusedTree } = run([body]);
     expect(findById(unfocusedTree, "focused-input")!.focused).toBeUndefined();
     expect(findById(unfocusedTree, "the-body")!.focused).toBeUndefined();
   });
 
-  it("flags a focused input inside a same-origin iframe once — never its host <iframe>", () => {
-    // Focus inside a subdocument makes BOTH activeElements point at it: the
-    // inner document's is the input, the outer document's is the host iframe
-    // element. Only the inner element carries the flag; flagging the host too
-    // would double-report the focus.
-    const innerInput = el({ tag: "input", attrs: { id: "iframe-input" }, rect: BOX });
-    const innerBody = el({
-      tag: "body",
-      rect: { x: 0, y: 0, w: 500, h: 500 },
-      children: [innerInput],
+  it("flags the element inside an open shadow root, never its host", () => {
+    // `document.activeElement` is the HOST for focus inside an open shadow root
+    // — the inner element is only ever reachable through the root's OWN
+    // activeElement. Reading the document alone flagged a host that lays out a
+    // whole screen, so `clear` was refused on every input under one; flagging
+    // both would double-report. Measured in a live renderer: activeElement is
+    // the host, inner.getRootNode().activeElement is the inner input.
+    const shadowInput = el({ tag: "input", attrs: { id: "shadow-input" }, rect: BOX });
+    const host = el({
+      attrs: { id: "the-host" },
+      rect: { x: 0, y: 0, w: 400, h: 400 },
+      shadow: [shadowInput],
+      shadowActive: shadowInput,
     });
-    const innerHtml = el({
-      tag: "html",
-      rect: { x: 0, y: 0, w: 500, h: 500 },
-      children: [innerBody],
-    });
-    const innerDoc = { documentElement: innerHtml, activeElement: innerInput, body: innerBody };
-    for (const n of [innerHtml, innerBody, innerInput]) {
-      (n as unknown as Record<string, unknown>).ownerDocument = innerDoc;
+
+    const { tree } = run([host], { activeElement: host });
+    expect(findById(tree, "shadow-input")!.focused).toBe(true);
+    expect(findById(tree, "the-host")!.focused).toBeUndefined();
+  });
+
+  it("survives a page that removed Element.prototype.shadowRoot", () => {
+    // `protoGetter` falls back to a direct property read when the descriptor is
+    // gone — this file's own documented threat model — so a `<form>` holding
+    // `<input name="shadowRoot">` hands back the CONTROL element. Passing that
+    // to the ShadowRoot accessor throws `Illegal invocation`, which aborted the
+    // whole walk: verified live, describe answered CHROMIUM_DESCRIBE_FAILED for
+    // the entire page and recovered when the descriptor was put back.
+    const descriptor = Object.getOwnPropertyDescriptor(MockElement.prototype, "shadowRoot")!;
+    Reflect.deleteProperty(MockElement.prototype, "shadowRoot");
+    try {
+      const form = el({ tag: "form", attrs: { id: "clobbering-form" }, rect: BOX }) as Record<
+        string,
+        unknown
+      >;
+      form.shadowRoot = el({ tag: "input", rect: BOX });
+      const { tree } = run([form as unknown as MockElement]);
+      // `.not.toBeNull()`, not `.toBeDefined()`: `findById` returns null on a
+      // miss, which `toBeDefined()` accepts — so the assertion held whether or
+      // not the form survived the walk.
+      expect(findById(tree, "clobbering-form")).not.toBeNull();
+    } finally {
+      Object.defineProperty(MockElement.prototype, "shadowRoot", descriptor);
     }
+  });
+
+  it("keeps a focused element the walker would otherwise collapse away", () => {
+    // The focus flag is computed BEFORE both collapse returns, and being the
+    // caret's element keeps a node alive just as a name or an id does. A bare
+    // `<div contenteditable><p>…</p></div>` — what Quill / ProseMirror / Lexical
+    // render on a single-paragraph document — is a box-less single-child wrapper
+    // with no id, role or own text, i.e. exactly the shape promotion drops.
+    const para = el({ tag: "p", text: "draft the user is writing", rect: BOX });
+    const editor = el({
+      style: { display: "contents" },
+      rect: ZERO,
+      children: [para],
+    });
+
+    const { tree } = run([editor], { activeElement: editor });
+    const focused = focusedNodes(tree);
+    expect(focused).toHaveLength(1);
+    expect(focused[0]!.role).toBe("div");
+  });
+
+  it("suppresses the host when the flag is NESTED inside its shadow subtree", () => {
+    // `carriesFocus` recurses because the ordinary web-component shape puts the
+    // focused control below the root's own children — `<my-editor>` → a wrapper
+    // `<div>` → the `<input>`. A non-recursive check sees no flag among the
+    // root's direct children, keeps the host flagged, and the tree then
+    // double-reports host and inner: the flow's focus wait reads the host as an
+    // ENCLOSING focused node and refuses the clear the inner element would have
+    // confirmed. Both shadow fixtures beside this one put the activeElement one
+    // level up, where the difference cannot show.
+    const shadowInput = el({ tag: "input", attrs: { id: "nested-input" }, rect: BOX });
+    // The wrapper carries an id, so the structural collapse cannot promote it
+    // away. Without one it was an anonymous single-child box, the flag ended up
+    // at depth 0 of the shadow results, and a NON-recursive `carriesFocus` read
+    // it just as well — the fixture named the recursion without reaching it.
+    const shadowWrapper = el({
+      attrs: { id: "shadow-wrapper" },
+      rect: { x: 0, y: 0, w: 400, h: 400 },
+      children: [shadowInput],
+    });
+    const host = el({
+      attrs: { id: "the-host" },
+      rect: { x: 0, y: 0, w: 400, h: 400 },
+      shadow: [shadowWrapper],
+      shadowActive: shadowInput,
+    });
+
+    const { tree } = run([host], { activeElement: host });
+    expect(findById(tree, "nested-input")!.focused).toBe(true);
+    expect(findById(tree, "the-host")!.focused).toBeUndefined();
+    expect(focusedNodes(tree)).toHaveLength(1);
+  });
+
+  it("keeps the HOST flagged when its shadow subtree never carried the flag out", () => {
+    // Suppressing the host assumes the inner element will report the focus, and
+    // that is an assumption rather than a guarantee: a collapsible or zero-area
+    // activeElement means BOTH candidates vanish and the tree carries no focus
+    // anywhere — which the flow's focus wait reads as "nothing was focused", the
+    // one non-confirmed outcome it dispatches a destructive clear on. On Chrome
+    // 151 that emptied a shadow composer's draft while the step passed on the
+    // field it named.
+    const hidden = el({ style: { display: "none" }, rect: ZERO });
+    const host = el({
+      attrs: { id: "the-host" },
+      rect: { x: 0, y: 0, w: 400, h: 400 },
+      shadow: [hidden],
+      shadowActive: hidden,
+    });
+
+    const { tree } = run([host], { activeElement: host });
+    expect(findById(tree, "the-host")!.focused).toBe(true);
+  });
+
+  it("keeps an INVISIBLE element that holds the caret, and its box", () => {
+    // The field that is invisible by design is very often the one holding the
+    // secret: the capture input under rendered OTP/PIN boxes, a
+    // barcode-scanner sink, a styled file input. Pruning it before focus was
+    // considered left the tree with no focus flag anywhere, which the flow's
+    // focus wait reads as "nothing is focused" — the one non-confirmed outcome
+    // it dispatches a destructive clear on. Measured on Chrome 151: an
+    // opacity:0 capture input holding an OTP was emptied and rewritten with the
+    // step reporting a pass, while the same page at opacity:1 refused.
+    const capture = el({
+      tag: "input",
+      attrs: { id: "capture" },
+      style: { opacity: "0" },
+      rect: { x: 40, y: 40, w: 400, h: 60 },
+    });
+
+    const { tree } = run([capture], { activeElement: capture });
+    const node = findById(tree, "capture")!;
+    expect(node.focused).toBe(true);
+    // Its real box, not a collapsed one — that box is where the keystrokes are
+    // going, and every overlap test in the focus wait reads it.
+    const frame = node.frame as { width: number; height: number };
+    expect(frame.width).toBeCloseTo(400 / W, 6);
+    expect(frame.height).toBeCloseTo(60 / H, 6);
+  });
+
+  it("keeps an invisible WRAPPER that contains the caret's element", () => {
+    // The prune cuts the whole subtree, so the ancestor is where an
+    // opacity:0 capture field is usually lost — the input itself is opaque and
+    // the wrapper is what hides it.
+    const inner = el({ tag: "input", attrs: { id: "inner" }, rect: { x: 0, y: 0, w: 200, h: 30 } });
+    const wrapper = el({
+      attrs: { id: "veil" },
+      style: { opacity: "0" },
+      rect: { x: 0, y: 0, w: 200, h: 30 },
+      children: [inner],
+    });
+
+    const { tree } = run([wrapper], { activeElement: inner });
+    expect(findById(tree, "inner")!.focused).toBe(true);
+  });
+
+  it("still prunes an invisible subtree when the caret is elsewhere", () => {
+    // The carve-out is for the caret and nothing else. `document.body` is the
+    // default activeElement when nothing is focused and it contains the whole
+    // page, so treating it as a holder would resurrect every hidden subtree.
+    const ghost = el({ attrs: { id: "ghost" }, style: { opacity: "0" }, rect: BOX });
+    const real = el({
+      attrs: { id: "real" },
+      text: "visible",
+      rect: { x: 0, y: 200, w: 200, h: 30 },
+    });
+
+    const { tree } = run([ghost, real]);
+    expect(findById(tree, "ghost")).toBeNull();
+    expect(findById(tree, "real")).not.toBeNull();
+  });
+
+  it("never resurrects a display:none subtree that claims the caret", () => {
+    // An element in a display:none subtree cannot hold focus — the browser
+    // blurs it — so a root naming one as its activeElement is describing a page
+    // that cannot exist. Honouring the claim would undo a prune the walker has
+    // always made.
+    const gone = el({ attrs: { id: "gone" }, style: { display: "none" }, rect: BOX });
+
+    const { tree } = run([gone], { activeElement: gone });
+    expect(findById(tree, "gone")).toBeNull();
+  });
+
+  it("keeps a box-less focused element with no children and no own text", () => {
+    // The zero-frame drop is the third sibling of the two structural collapses,
+    // which both consult `focusedSelf`. Same class of drop, same consequence: a
+    // focused node vanishing is the "nothing is focused" tree a destructive
+    // clear goes through on.
+    const empty = el({
+      attrs: { id: "empty-editor" },
+      style: { display: "contents" },
+      rect: ZERO,
+    });
+
+    const { tree } = run([empty], { activeElement: empty });
+    expect(findById(tree, "empty-editor")!.focused).toBe(true);
+  });
+
+  it("a <form name=activeElement> cannot decide which element reports focus", () => {
+    // Document's named getter is [LegacyOverrideBuiltIns], so a form control
+    // named `activeElement` shadows the property and a raw read hands back that
+    // FORM. getRootNode() returns the Document for every light-DOM element, so
+    // reading `root.activeElement` directly made the form the whole page's
+    // answer: it was flagged, the input holding the caret was not, and every
+    // clear inside such a form hard-stopped the flow blaming a focus trap.
+    const emailInput = el({ tag: "input", attrs: { id: "email" }, rect: BOX });
+    const form = el({
+      tag: "form",
+      attrs: { id: "signin" },
+      rect: { x: 0, y: 90, w: 300, h: 100 },
+      children: [emailInput],
+    });
+
+    const { tree } = run([form], { activeElement: emailInput, clobberedBy: form });
+    expect(findById(tree, "email")!.focused).toBe(true);
+    expect(findById(tree, "signin")!.focused).toBeUndefined();
+  });
+
+  it("leaves focus in a same-origin subdocument unreported, host <iframe> included", () => {
+    // The iframe descent is dead in a real renderer, and the host exclusion is
+    // what makes focus inside a subdocument invisible ENTIRELY rather than
+    // double-reported. `walk` bails on `!(el instanceof Element)`, and the inner
+    // `documentElement`'s constructor belongs to the INNER realm, so the check
+    // is false for every subdocument. Verified live on Chrome 151: an
+    // `<iframe srcdoc>` whose body holds a unique marker leaves no trace of the
+    // marker, or of the inner input's id, in describe's output, and focusing
+    // that inner input leaves the whole tree carrying NO focus flag.
+    //
+    // A single-realm mock cannot express that on its own — every element it
+    // builds is an `Element` — so the inner documentElement is a foreign object
+    // here, which is exactly what the guard rejects. That zero-focus tree is
+    // the state `runType`'s residual comment reads as "unobservable", the one
+    // non-confirmed outcome it dispatches a destructive clear on.
+    const foreignHtml = { __realm: "inner" };
+    const innerDoc = mockDoc({ documentElement: foreignHtml, activeElement: null, body: null });
     const iframe = el({
       tag: "iframe",
       attrs: { id: "the-iframe" },
       rect: { x: 0, y: 0, w: 500, h: 500 },
     });
     (iframe as unknown as Record<string, unknown>).contentDocument = innerDoc;
-    // The outer document reports the host iframe as ITS activeElement.
-    const outerDoc = { activeElement: iframe, body: null };
+    // The outer document reports the host iframe as ITS activeElement, which is
+    // what focus inside the subdocument looks like from outside.
+    const outerDoc = mockDoc({ activeElement: iframe, body: null });
     (iframe as unknown as Record<string, unknown>).ownerDocument = outerDoc;
+    (iframe as unknown as Record<string, unknown>).__root = outerDoc;
 
     const { tree } = run([iframe]);
-    expect(findById(tree, "iframe-input")!.focused).toBe(true);
     expect(findById(tree, "the-iframe")!.focused).toBeUndefined();
+    expect(JSON.stringify(tree)).not.toContain("focused");
+  });
+
+  it("still reports focus when getRootNode answers with neither a root nor the document", () => {
+    // ShadyDOM and webcomponents.js REPLACE Element.prototype.getRootNode, so
+    // the captured accessor is never consulted and what comes back is neither a
+    // ShadowRoot nor the element's own document. Answering "nothing is focused"
+    // there dropped the flag from every node on the page — verified on Chrome
+    // 151 — and a tree with no focus flag is what the type directive's focus
+    // wait reads as "unobservable", the one non-confirmed outcome it dispatches
+    // a destructive clear on.
+    const input = inputEl({ attrs: { id: "email" }, value: "abc", rect: BOX });
+    (input as unknown as Record<string, unknown>).__root = { __shady: true };
+
+    const { tree } = run([input], { activeElement: input });
+    expect(findById(tree, "email")!.focused).toBe(true);
+  });
+
+  it("describes the page even when ShadowRoot is not a constructor", () => {
+    // `typeof ShadowRoot === "undefined"` does not cover a page assigning a
+    // non-constructor (window.ShadowRoot = null is the shape a legacy polyfill
+    // shim uses): `null.prototype` threw at script top, before a single node
+    // was walked, and describe failed for the WHOLE page — reproduced against
+    // Chrome 151, where the tool returned CHROMIUM_DESCRIBE_FAILED and no tree.
+    const input = inputEl({ attrs: { id: "email" }, value: "abc", rect: BOX });
+    let out: { tree: unknown } | undefined;
+    expect(() => {
+      out = run([input], { activeElement: input }, { ShadowRoot: null });
+    }).not.toThrow();
+    // …and the page is described in full, focus flag included.
+    expect(findById(out!.tree, "email")!.focused).toBe(true);
   });
 
   // ---- a missing captured accessor must degrade, not abort the whole describe ----
@@ -887,5 +1361,160 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     } finally {
       Object.defineProperty(MockElement.prototype, "scrollHeight", saved!);
     }
+  });
+});
+
+// The walker's output is only half the question a flow asks. A field's contents
+// reaching the tree at all decides three more things one layer down — whether
+// they hoist onto a container, whether a page-wide `visible`/`hidden` check sees
+// them, and whether they out-rank a real control for a `tap` — and none of those
+// is visible in a single-node assertion on the walker. These run the real walker
+// and then the real flow adapter and matcher over it, so a regression at either
+// layer is caught here.
+describe("a <textarea>'s contents through the flow tree", () => {
+  const flowTree = (children: MockElement[]): DescribeNode =>
+    adaptChromiumTreeForFlows(run(children).tree as DescribeNode);
+
+  const composer = (value: string, attrs: Record<string, string> = {}) =>
+    textareaEl({ value, placeholder: "Message", attrs, rect: { x: 0, y: 200, w: 400, h: 80 } });
+
+  it("keeps a labelled composer's draft out of its container's text", () => {
+    // An unidentified field does not shield, so anything it contributes hoists
+    // into the nearest identified ancestor: a container `text` assert then
+    // passed on an unsent draft with the message list empty, and a saved
+    // regression test written that way can never go red.
+    const tree = flowTree([
+      el({
+        attrs: { id: "chat" },
+        rect: { x: 0, y: 100, w: 400, h: 200 },
+        children: [
+          el({ attrs: { id: "messages" }, rect: { x: 0, y: 100, w: 400, h: 40 } }),
+          composer("hello team"),
+        ],
+      }),
+    ]);
+    const chat = findAll(tree, { identifier: "chat" })[0]!;
+    expect(assertText(chat)).not.toContain("hello team");
+  });
+
+  it("lets an UNIDENTIFIED composer's draft INTO its container's text", () => {
+    // The other half of the sentence, and the one the three tests around it
+    // cannot show, because each gives its field a placeholder or an id: the
+    // shield is the IDENTIFIER, not the fact that a field's contents are a
+    // field's contents. With neither, the draft is the node's accessible name
+    // and hoists like any other text. Reproduced live on Chrome 151 through
+    // flow-execute — `text: { in: <chat>, contains: "unsent draft" }` passed
+    // with the message list empty — which is why
+    // `asserting-field-values.md` tells authors to give the field an id.
+    const tree = flowTree([
+      el({
+        attrs: { id: "chat" },
+        rect: { x: 0, y: 100, w: 400, h: 200 },
+        children: [
+          el({ attrs: { id: "messages" }, rect: { x: 0, y: 100, w: 400, h: 40 } }),
+          textareaEl({ value: "hello team", rect: { x: 0, y: 200, w: 400, h: 80 } }),
+        ],
+      }),
+    ]);
+    const chat = findAll(tree, { identifier: "chat" })[0]!;
+    expect(assertText(chat)).toContain("hello team");
+  });
+
+  it("lets an UNIDENTIFIED draft out-rank a real control for a tap", () => {
+    // Same for the ranking: `shield` governs hoisting only, so an unidentified
+    // field's value reaches `label` and the resolver's exact-field match beats
+    // the button whose label merely contains the word. Reproduced live: the tap
+    // landed in the note, not on the Save button.
+    const tree = flowTree([
+      textareaEl({ value: "Save", rect: { x: 0, y: 100, w: 400, h: 100 } }),
+      el({
+        tag: "button",
+        attrs: { id: "save-btn" },
+        text: "Save changes",
+        rect: { x: 0, y: 220, w: 120, h: 30 },
+      }),
+    ]);
+    // The resolver must MATCH, and match the draft: `?.identifier` alone reads
+    // as undefined when nothing resolved at all, so it passed on a resolver
+    // that found neither element.
+    const picked = selectorToNode(tree, { text: "Save" });
+    expect(picked).toBeTruthy();
+    expect(picked!.identifier).toBeUndefined();
+    expect(picked!.label).toBe("Save");
+  });
+
+  it("keeps a labelled composer's draft out of a page-wide visible check", () => {
+    // `assert: { visible: X }` is the pattern `asserting-field-values.md`
+    // prescribes for platforms that hide a field's contents — "assert the
+    // CONSEQUENCE instead" — so it passing on the composer holding X undoes the
+    // advice. It is also the same query as the clear-only proof's `hidden`.
+    const tree = flowTree([
+      composer("Alpha", { id: "composer" }),
+      el({ attrs: { id: "note-list" }, rect: { x: 0, y: 300, w: 400, h: 40 } }),
+    ]);
+    expect(evaluateCondition("visible", undefined, findAll(tree, { text: "Alpha" }))).toBe(false);
+  });
+
+  it("does not let a draft out-rank a real control for a tap", () => {
+    // `selectorToNode` scores an exact field match above a substring hit, and
+    // that beats smallest-frame-wins — so a note whose draft was the word
+    // "Save" took the tap on Chrome 151, and the button whose LABEL is the only
+    // "Save" on the page did not.
+    const tree = flowTree([
+      textareaEl({
+        value: "Save",
+        placeholder: "Note",
+        attrs: { id: "note" },
+        rect: { x: 0, y: 100, w: 400, h: 100 },
+      }),
+      el({
+        tag: "button",
+        attrs: { id: "save-btn" },
+        text: "Save changes",
+        rect: { x: 0, y: 220, w: 120, h: 30 },
+      }),
+    ]);
+    expect(selectorToNode(tree, { text: "Save" })?.identifier).toBe("save-btn");
+  });
+
+  it("still proves a clear landed on an UNLABELLED composer", () => {
+    // The capability the exposure was added for, and the one that survives: with
+    // no label of any kind the contents ARE the accessible name, so the old
+    // value's absence is assertable — `hidden` is false while it is there and
+    // true once the clear emptied it.
+    const held = flowTree([
+      textareaEl({
+        value: "the old value",
+        attrs: { id: "c" },
+        rect: { x: 0, y: 100, w: 400, h: 80 },
+      }),
+    ]);
+    const cleared = flowTree([
+      textareaEl({ value: "", attrs: { id: "c" }, rect: { x: 0, y: 100, w: 400, h: 80 } }),
+    ]);
+    const seen = (t: DescribeNode) =>
+      evaluateCondition("hidden", undefined, findAll(t, { text: "the old value" }));
+    expect(seen(held)).toBe(false);
+    expect(seen(cleared)).toBe(true);
+  });
+
+  it("spells a multi-line draft the way an <input> spells the same string", () => {
+    // Normalizing only the textarea made the same typed text assertable back in
+    // one element type and not the other.
+    const tree = flowTree([
+      textareaEl({ value: "line one\nline two", attrs: { id: "ta" }, rect: BOX }),
+      inputEl({
+        value: "line one\nline two",
+        attrs: { id: "inp" },
+        rect: { x: 0, y: 300, w: 200, h: 30 },
+      }),
+    ]);
+    const ta = findAll(tree, { identifier: "ta" })[0]!;
+    const inp = findAll(tree, { identifier: "inp" })[0]!;
+    // Pin the string, not just the agreement: `toBe` between two empty labels
+    // passes as `"" === ""` if BOTH regressed, which is the likelier failure —
+    // one change to the shared normalizer moves them together.
+    expect(assertText(ta)).toBe("line one\nline two");
+    expect(assertText(ta)).toBe(assertText(inp));
   });
 });

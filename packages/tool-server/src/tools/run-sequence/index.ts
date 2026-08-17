@@ -117,7 +117,7 @@ Allowed tools and their args (udid is auto-injected, do NOT include it in args):
   button:         { button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton" }                  [ios/android]
   keyboard:       { text?: string, key?: string, clear?: boolean, delayMs?: number }  (clear + text OR key, never both; TV: text only)  [ios/android/chromium/vega/tv]
                   text takes {{secret:...}} placeholders — see the keyboard tool for where they resolve
-                  clear empties the field before the step types into it (typing alone appends); iOS/Android/Chromium only, rejected on Vega and TV.
+                  clear empties the field before the step types into it (typing alone does not replace — the old value survives and the new text goes in at the caret); iOS/Android/Chromium only, rejected on Vega and TV.
                   Only Chromium verifies it emptied — elsewhere cleared means the clear was dispatched, so assert the value if the step depends on it
   rotate:         { orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown" }                     [ios/android]
   shake:          { count?: number }                                                                                    [ios sim/android emu]

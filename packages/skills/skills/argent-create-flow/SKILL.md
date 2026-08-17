@@ -14,6 +14,7 @@ For a saved QA test case, ticket, or acceptance criterion, load `argent-qa-flows
 - Before creating or changing a flow, read [Live authoring](references/live-authoring.md) completely.
 - When polishing, composing, or manually reviewing YAML, read [Flow YAML](references/flow-yaml.md). For Vega, read its platform limits before recording remote or keyboard tools.
 - On capture warnings, raw coordinates, unavailable trees, mistimed transitions, overlays, or replay failures, read [Reliability and recovery](references/reliability-and-recovery.md).
+- Before asserting a field value after `type`, read [Field value assertions](references/asserting-field-values.md). Platform limits determine which assertions are reliable.
 
 ## Non-negotiable rules
 

@@ -141,7 +141,13 @@ describe("adaptChromiumTreeForFlows", () => {
     expect(tree.role).toBe("Screen");
     for (const child of tree.children) {
       expect(child.children).toHaveLength(0);
-      expect(Boolean(child.identifier || child.label || child.value || child.clickable)).toBe(true);
+      // `focused` belongs in this list: the projection emits a leaf for it too,
+      // and since the walker keeps the branch holding the caret even when it is
+      // invisible, a focus-only leaf is genuinely producible. Omitting it left
+      // the invariant waiting to fire on a real page.
+      expect(
+        Boolean(child.identifier || child.label || child.value || child.clickable || child.focused)
+      ).toBe(true);
     }
   });
 });

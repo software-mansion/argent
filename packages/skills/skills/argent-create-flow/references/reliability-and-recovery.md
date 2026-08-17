@@ -145,6 +145,8 @@ Starting again under the same name truncates the YAML. Copy any working prefix b
 
 State the added proof before rerunning.
 
+Before asserting a typed value, read [Field value assertions](asserting-field-values.md). Assert an app consequence when the tree hides the value.
+
 ### Correction limit
 
 After each correction, audit and replay from the declared start. Stop after two unsuccessful correction cycles and report the remaining blocker. If failures move while the flow grows, re-record the affected span instead of adding more patches.

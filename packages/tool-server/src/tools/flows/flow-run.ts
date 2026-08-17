@@ -951,7 +951,15 @@ export function createRunFlowTool(
 Steps run in order: \`launch\` starts an app from scratch (terminate + relaunch) and waits until it is
 ready; \`tool\` calls dispatch through the registry; \`tap\`/\`long-press\`/\`type\` resolve a selector to an
 element and act on it (\`tap: { on, times: 2 }\` double-taps; \`long-press: { on, duration }\` presses and
-holds; \`tap\`/\`long-press\` alternatively take a raw normalized point — bare \`{ x, y }\` or \`on: { x, y }\`;
+holds; \`type: { into, text, clear, submit }\` types into a field and presses Enter after it —
+\`clear: true\` empties it first, since typing otherwise leaves the old value in place, the new text
+landing at the caret the focusing tap set — spliced INTO a value long enough to reach the field's
+middle, appended past the end of a shorter one, so the outcome cannot be read off the step; \`text\`
+may be omitted for a clear-only step, which is the one form that sends no Enter unless
+\`submit: true\`; unlike a plain \`type\`, a \`clear\` is not best-effort — it FAILS the step outright,
+without typing, whenever the focus wait ends with focus reported somewhere other than the element
+you named, or with the tree not answering (see the argent-create-flow skill);
+\`tap\`/\`long-press\` alternatively take a raw normalized point — bare \`{ x, y }\` or \`on: { x, y }\`;
 any selector may scope its matches geometrically, the CSS combinators read off frames: \`within: <selector>\`
 (descendant — inside that container's frame), \`after: <selector>\` (CSS \`~\` — following it in reading
 order), \`next: <selector>\` (CSS \`+\` — the nearest such follower, which unlike CSS reaches past a
@@ -1612,7 +1620,16 @@ function stepTarget(step: FlowStep): string | undefined {
       if (step.x !== undefined && step.y !== undefined) return `(${step.x}, ${step.y})`;
       return undefined;
     case "type":
-      return `into ${selectorLabel(step.into)}`;
+      // Name the clear: "into X" alone reads as a plain append, so a run report
+      // of a replace-a-field step would look identical to the bug it fixes.
+      // Present tense, like every sibling's option echo ("(scale 3)", "(by 90°)"):
+      // this column says what the step ASKED for, not what happened — `base` is
+      // stamped before the directive runs and rides every outcome, so a past
+      // tense would claim a clear on a step that failed, errored, was skipped,
+      // or was refused for never confirming focus on the target.
+      return step.clear
+        ? `into ${selectorLabel(step.into)} (clear first)`
+        : `into ${selectorLabel(step.into)}`;
     case "await":
     case "assert":
       return conditionLabel(step, selectorLabel);

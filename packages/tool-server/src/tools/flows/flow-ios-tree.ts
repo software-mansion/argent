@@ -257,8 +257,10 @@ const FULL_HIERARCHY_FIELDS = [
   "windowFrame",
   "hidden",
   "alpha",
-  // The type directive's focus wait; an older injected framework ignores the
-  // request, which just leaves the wait's poll unconfirmed.
+  // The type directive's focus wait. An older injected framework ignores the
+  // request, so no node is ever flagged and the wait reports "unobservable" —
+  // deliberately NOT the "unconfirmed" that refuses a clear, since a tree which
+  // cannot see focus is no evidence the tap missed. See `FocusOutcome`.
   "firstResponder",
 ];
 

@@ -11,10 +11,10 @@ import { createRunFlowTool } from "../../src/tools/flows/flow-run";
 import { __resetRecordingsForTesting } from "../../src/tools/flows/flow-utils";
 
 // `clear` is exercised at the tool level everywhere else. The flow path is where
-// losing it is silent: a recorded `tool: keyboard` step rewritten as a `type:`
-// directive — which the polish table orders and which accepts only
-// `into`/`text`/`submit` — replays as a plain APPEND into the pre-filled field,
-// and the flow still reports PASS. So the property worth pinning is the round
+// losing it would be silent: the polish table orders a recorded `tool: keyboard`
+// step rewritten as a `type:` directive, and a `type:` that dropped `clear` on
+// the way through would replay as a plain APPEND into the pre-filled field with
+// the flow still reporting PASS. So the property worth pinning is the round
 // trip: `clear` survives recording, and it survives replay.
 
 const DEVICE = "emulator-5554";

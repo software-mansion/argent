@@ -223,8 +223,10 @@ export function summarizeStep(step: FlowStep, n: number): string {
       // carries a `delayMs` (only `tool` steps do), so no delayLabel here.
       //
       // That reasoning is NOT applied file-wide, and the arms below show it:
-      // `type.submit` (whose `false` suppresses the Enter press) and
-      // `await.timeout` also change what replays and still render nothing, as
+      // `type.submit` (two-sided since `clear` arrived — `false` suppresses the
+      // Enter press after text, `true` ADDS one to a clear-only step, whose
+      // default is no Enter) and `await.timeout` also change what replays and
+      // still render nothing, as
       // they did before the recorder shared this renderer. Neither kind is
       // recorder-built, so both reach an author only through the finish
       // `summary` — beside the `flowFile` that spells them out. Rendering them
@@ -239,8 +241,24 @@ export function summarizeStep(step: FlowStep, n: number): string {
         step.kind === "long-press" && step.duration !== undefined ? ` for ${step.duration}ms` : "";
       return `${n}. ${step.kind}: ${target}${times}${held}`;
     }
-    case "type":
-      return `${n}. type: ${selectorLabel(step.into)} ← "${step.text}"`;
+    case "type": {
+      // `⇐` (replaces the value) vs `←` (types into whatever is already there —
+      // NOT necessarily appending; see the `type` notes in the
+      // argent-create-flow skill) so a cleared field is visible at a glance; a
+      // clear-only step has nothing on the right-hand side.
+      //
+      // Present tense, like the run report's `(clear first)`. The recorder never
+      // produces a `type` step — `flow-add-step` emits only
+      // `tap`/`launch`/`run`/`tool`, `flow-add-echo` only `echo`, and the sole
+      // `kind: "type"` construction in `src/` is the YAML parser — so every
+      // `type` in this summary arrived by a hand edit to the file that the
+      // host-mode re-read picked up, and did NOT run live. A past-tense
+      // `(cleared)` would report a destructive action on a field nothing has
+      // touched yet; `stepTarget` declines the same tense for the same reason.
+      const arrow = step.clear ? "⇐" : "←";
+      if (step.text === undefined) return `${n}. type: ${selectorLabel(step.into)} ⇐ (clear only)`;
+      return `${n}. type: ${selectorLabel(step.into)} ${arrow} "${step.text}"`;
+    }
     case "await":
     case "assert": {
       const tail =

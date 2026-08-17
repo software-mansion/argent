@@ -748,15 +748,15 @@ function exactFieldCount(
 }
 
 /**
- * Resolve a selector to the on-screen frame of its best visible match — the
- * element a `tap`/`type` action should target. An accessible container (e.g. a
- * Touchable on iOS) aggregates its descendants' labels, so a substring text
- * selector matches the container as well as the leaf that actually carries the
- * text — and the container's centre can sit over a different nested child
- * entirely. Matches are therefore ranked: exact field matches beat substring
- * hits, then the smallest frame wins (the most specific element, mirroring
- * nodeAtPoint's reverse lookup), with reading order as the final tiebreak.
- * Returns undefined when no visible element matches.
+ * Resolve a selector to its best visible match — the element a `tap`/`type`
+ * action should target. An accessible container (e.g. a Touchable on iOS)
+ * aggregates its descendants' labels, so a substring text selector matches the
+ * container as well as the leaf that actually carries the text — and the
+ * container's centre can sit over a different nested child entirely. Matches
+ * are therefore ranked: exact field matches beat substring hits, then the
+ * smallest frame wins (the most specific element, mirroring nodeAtPoint's
+ * reverse lookup), with reading order as the final tiebreak. Returns undefined
+ * when no visible element matches.
  *
  * The universal selector (flow YAML's `any: true`) is the one case that ranking
  * cannot serve: with no field to be exact about, "smallest" degenerates to
@@ -773,7 +773,7 @@ function exactFieldCount(
  * extents means two different tap centres, so the tie continues into "most
  * specific" instead.
  */
-export function selectorToFrame(root: DescribeNode, selector: Selector): DescribeFrame | undefined {
+export function selectorToNode(root: DescribeNode, selector: Selector): DescribeNode | undefined {
   const visible = findAll(root, selector).filter(isVisible);
   if (visible.length === 0) return undefined;
   if (!hasOwnConstraint(selector)) {
@@ -781,7 +781,7 @@ export function selectorToFrame(root: DescribeNode, selector: Selector): Describ
     for (const n of visible) {
       if (first === undefined || compareBelowPick(n.frame, first.frame) < 0) first = n;
     }
-    return first?.frame;
+    return first;
   }
   const fullTextRegex = fullConsumptionRegex(selector);
   let best: DescribeNode | undefined;
@@ -804,7 +804,18 @@ export function selectorToFrame(root: DescribeNode, selector: Selector): Describ
       best = n;
     }
   }
-  return best?.frame;
+  return best;
+}
+
+/**
+ * {@link selectorToNode}'s frame — the spelling every action that only needs a
+ * point uses. The two must stay one resolver: a caller that compares the
+ * element it TAPPED against the element the tree reports as focused is
+ * comparing two halves of the same step, and a second, unranked pick makes them
+ * disagree on the everyday label-above-input shape.
+ */
+export function selectorToFrame(root: DescribeNode, selector: Selector): DescribeFrame | undefined {
+  return selectorToNode(root, selector)?.frame;
 }
 
 /**

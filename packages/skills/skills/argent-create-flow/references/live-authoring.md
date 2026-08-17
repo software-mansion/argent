@@ -117,7 +117,20 @@ Record the focus tap, then record `keyboard` with `text`. A `keyboard` call carr
 
 **`describe` reports focus on Chromium only.** iOS and Android leave it unset — it is a Vega/D-pad signal there — so those platforms have no live pre-typing focus check, and the value check afterwards is what proves the keys landed. On Chromium, read `focused` before recording `keyboard`.
 
-If characters are lost, restore the field with direct calls. Do not record a duplicate typing step. Polish the valid pair with the conversion table below. During replay, `type` reads the runner tree for focus. This tree reports focus on iOS, Android, and Chromium. An unconfirmed poll falls through to typing. Retain the value check. Store credentials as `{{secret:NAME}}`. Never record a literal credential.
+If characters are lost, restore the field with direct calls. Do not record a duplicate typing step.
+
+Convert all `keyboard` steps for one field together. A submit is always a separate recorded Enter step.
+
+| Recorded input                | Followed by Enter                                             | No following Enter                                    |
+| ----------------------------- | ------------------------------------------------------------- | ----------------------------------------------------- |
+| `text`, with optional `clear` | Preserve `text` and any `clear`. Omit `submit`. Delete Enter. | Preserve `text` and any `clear`. Set `submit: false`. |
+| `clear` only                  | Use `{ into, clear: true, submit: true }`. Delete Enter.      | Use `{ into, clear: true }`.                          |
+
+Keep every recorded `clear`. Otherwise, replay can insert text into the old value. Delete each converted Enter step. Otherwise, `type` submits twice.
+
+Replay checks focus on iOS, Android, and Chromium. A clear fails if focus points elsewhere or the check becomes unreadable. It proceeds when successful reads report no focus. Read the residual risk in [Flow YAML](flow-yaml.md). Plain typing remains best effort. Keep the value check.
+
+Store credentials as `{{secret:NAME}}`. Never record a literal credential.
 
 ### Scrolling and swiping
 
@@ -146,7 +159,7 @@ Call `flow-finish-recording`, then read the saved YAML. Apply only meaning-prese
 
 | Recorded form                             | Finished form                                                      |
 | ----------------------------------------- | ------------------------------------------------------------------ |
-| focus tap + `tool: keyboard`              | `type:`; keep raw when `keyboard` uses `clear: true`               |
+| focus tap + `tool: keyboard`              | `type:` from the [Typing](#typing) table with the same `clear`     |
 | text `keyboard` + `key: enter` `keyboard` | submitted `type:` without Enter in its text                        |
 | `tool: await-ui-element`                  | `await:` or `assert:`                                              |
 | element-seeking movement                  | `scroll-to:`                                                       |
@@ -161,7 +174,7 @@ Only these unrecorded insertions are allowed, at states observed live:
 - `await: { idle: true }` after a navigation identity check.
 - The Chromium launch that packages the live boot.
 
-Keep raw forms only when conversion changes behavior. Examples include point-anchored or panning pinch, velocity-sensitive swipe, or rotation with a tested start angle, radius, pivot, duration, or speed. Keep screenshots for human evidence. Use `snapshot:` for automated visual comparison. Read [Flow YAML](flow-yaml.md) for syntax.
+Keep raw forms only when conversion changes behavior. Examples include point-anchored pinch, velocity-sensitive swipe, or rotation with tested gesture parameters. Always convert a recorded `clear`. Raw `keyboard` clear steps do not focus or verify their target. Keep screenshots for human evidence. Use `snapshot:` for automated visual comparison. Read [Flow YAML](flow-yaml.md) for syntax.
 
 If polish reveals a missing action or structural check, restore its preceding state and record it. Do not add remembered behavior directly to YAML.
 
@@ -235,7 +248,9 @@ Run `flow-execute` on the complete YAML with the absolute project root. For a fr
 
 `flow-execute` takes exactly one flow source: `name`, for a flow saved under `.argent/flows/`, or `flow_path`, an absolute path to any flow `.yaml`. `run:` targets and baselines resolve on the tool server's filesystem, beside the YAML it actually reads. `flow_path` therefore requires the agent and the tool server to share a filesystem and is refused when they do not. `name` still runs remotely, but the server receives only that one YAML in a fresh temp directory, so a `run:` target fails as a missing fragment and a `snapshot` fails for a missing baseline. Replay self-contained flows remotely; a composing or snapshotting flow needs one shared filesystem.
 
-Manual rescue invalidates the pass. An `errored` step was never evaluated: an `idle` wait whose tree source could not be read, a step that threw, an unresolvable `run:` target, or a `launch:` that did not start the app. Read the reason — most name the environment, but a failed `launch:` is a verdict about the app. Unconfirmed focus is not in this class at all: the replay focus poll has no failure return, so a `type:` step whose focus was never confirmed is scored a **pass**, and only the value check after typing catches it.
+Manual rescue invalidates the pass. An `errored` step was not evaluated. Examples include an unreadable tree, a thrown step, a missing `run:` target, or a failed `launch:`. Read the reason. Most reasons identify the environment, but a failed `launch:` identifies an app failure.
+
+A plain `type:` with unconfirmed focus passes as best effort. A clear fails when focus points elsewhere or becomes unreadable. See [Flow YAML](flow-yaml.md) for accepted focus results.
 
 **A passing step that carries a `warning` is a finding, not noise.** `await: { idle: true }` raises [six different warnings](flow-yaml.md#idle-readiness) and they do not share one meaning. Two say the screen was moving; one says the wait ran out mid-hold and is repaired by raising the step's `timeout:`; one says the tree stayed empty; one says the tree did hold still and only the screenshot pairs were missing, so the capture path is what to check; one says the step ended with no evidence either way. No report separates intended motion from a load that never finished. Read which one it is, look at that screen, disclose what you found, and confirm the following step targets a stable element rather than stillness.
 

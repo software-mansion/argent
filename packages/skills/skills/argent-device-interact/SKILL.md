@@ -72,7 +72,7 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 | Rotation          | `gesture-rotate`    | Two-finger rotation with auto-interpolation                                                                                                                               |
 | Custom gesture    | `gesture-custom`    | Arbitrary touch sequences, optional interpolation                                                                                                                         |
 | Hardware key      | `button`            | Home, back, power, volume, appSwitch, actionButton                                                                                                                        |
-| Type text         | `keyboard`          | Every platform. Text or one named key per call, never both. Enter, Escape, arrows — not on TV. `clear: true` empties the field first (typing appends) — not on TV or Vega |
+| Type text         | `keyboard`          | Text works everywhere. Send text or one named key per call, not both. Keys do not work on Apple TV or Android TV. `clear: true` works only on iOS, Android, and Chromium. |
 | Rotate device     | `rotate`            | Orientation changes                                                                                                                                                       |
 | Shake device      | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu                                                                                                            |
 | Wait for UI       | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text                                                                                                             |
@@ -175,15 +175,15 @@ One call does one action. `text` and `key` are mutually exclusive, and a call th
 
 Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12`. Optional: `"delayMs": 100` between keystrokes (default 50ms, max 5000ms). It applies only to iOS and Chromium.
 
-Typing appends to the focused field. Use `"clear": true` to replace its value:
+`keyboard` inserts text at the current caret. It does not replace the existing value. Use `"clear": true` before typing:
 
 ```json
 { "udid": "<UDID>", "clear": true, "text": "new@example.com" }
 ```
 
-`clear` combines with `text` or with `key`, never with both. The tool runs the clear first. Omit `text` to clear without typing. To clear, type, and then press Enter, use one `run-sequence` (§ 8) of two steps: `{ "clear": true, "text": "…" }`, then `{ "key": "enter" }`.
+`clear` combines with `text` or `key`, never both. The tool clears first. Omit both to clear only. To clear, type, and press Enter, use two `run-sequence` steps: `{ "clear": true, "text": "..." }`, then `{ "key": "enter" }`.
 
-Clearing supports iOS, Android, and Chromium. It does not support Vega or TV targets. Focus an editable field first. A `"cleared": true` result does not prove the field is empty. Verify the value or an app marker when the result matters.
+Clearing supports iOS, Android, and Chromium. It does not support Vega or other TV targets. Focus an editable field first. A `"cleared": true` result does not prove the field is empty. Verify the value or an app result when the clear matters.
 
 **Typing secrets.** To enter a credential without its plaintext ever entering your context, transcript, or logs, use a secret placeholder in `text` (works in `keyboard`, `paste`, `run-sequence` keyboard steps, and flow `type` steps):
 

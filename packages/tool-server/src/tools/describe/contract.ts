@@ -40,7 +40,14 @@ export interface DescribeNode {
   // `focused` is the element holding input focus; `selected` is the visually
   // highlighted / active item (e.g. the current nav tab). On Vega the toolkit
   // often reports the highlighted item via `selected` while `focused` stays
-  // false, so both are surfaced. Other platforms leave these unset.
+  // false, so both are surfaced.
+  //
+  // `focused` is not Vega-only. The Chromium walker sets it from the
+  // activeElement of an element's own root, and the Android and iOS
+  // full-hierarchy adapters carry the source's own flag (`focused` in the
+  // uiautomator dump, `firstResponder` where the injected framework has it) —
+  // the flow `type` directive's focus wait reads nothing else. `selected` is
+  // the Vega-only one.
   focused?: boolean;
   selected?: boolean;
 }

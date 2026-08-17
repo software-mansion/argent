@@ -19,9 +19,11 @@ const DESCRIBE_FAILURE = {
  * applies on Chromium).
  *
  * Choices:
- *  - Walk children plus open shadow roots and same-origin iframe documents so
- *    modern Chromium apps (VS Code, Slack, custom-element-heavy SPAs) don't
- *    appear as empty pages.
+ *  - Walk children plus open shadow roots so modern Chromium apps (VS Code,
+ *    Slack, custom-element-heavy SPAs) don't appear as empty pages. An iframe's
+ *    document is NOT walked — see `walk()` for why the descent cannot work from
+ *    inside the page script — so a subdocument's content reaches no describe
+ *    consumer.
  *  - Skip purely structural wrappers (anonymous single-child divs) so the
  *    tree stays small.
  *  - Treat anchors, buttons, inputs, [role=button], [onclick], [tabindex]≥0
@@ -35,7 +37,9 @@ const DESCRIBE_FAILURE = {
  *    box. A collapsed overflow:hidden container genuinely hides its content, so it stays
  *    pruned. visibility:hidden is NOT hard-pruned (it inherits, but a descendant can
  *    override it back to visible): we descend and suppress only the hidden element's own
- *    paint, so a visibility:visible descendant still surfaces.
+ *    paint, so a visibility:visible descendant still surfaces. Nor is the branch holding
+ *    the caret — an invisible element can still be focused, and dropping it reports a
+ *    page as having nothing focused (see `holdsFocus`).
  *  - Cap node count at 5000 — that, not depth, bounds the payload a runaway SPA
  *    would otherwise serialize past CDP's single Runtime.evaluate reply limit
  *    (~50MB). Cap depth at 60 purely to bound recursion: modern React DOMs
@@ -107,6 +111,67 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const getOwnerDocument = protoGetter(Node.prototype, "ownerDocument");
   const getActiveElement = protoGetter(docProto, "activeElement");
   const getDocBody = protoGetter(docProto, "body");
+  // A ShadowRoot has an activeElement of its own (DocumentOrShadowRoot), read
+  // through its own prototype for the same reason as the Document's. A shadow
+  // root is a DocumentFragment and can never be a clobbering <form>, so this is
+  // belt-and-braces — but it keeps the "every inherited read goes through a
+  // captured getter" invariant whole rather than carving out an exception.
+  // \`typeof === "function"\`, not \`!== "undefined"\`: a legacy Shadow-DOM polyfill
+  // shim can assign a NON-constructor (window.ShadowRoot = null is the shape
+  // seen in the wild), and both \`null.prototype\` here and \`n instanceof null\`
+  // below throw — the first before a single node is walked, so describe fails
+  // for the whole page. Verified on Chrome 151: with window.ShadowRoot = null
+  // the tool returned CHROMIUM_DESCRIBE_FAILED and no tree at all.
+  const shadowProto = typeof ShadowRoot === "function" ? ShadowRoot.prototype : {};
+  const getShadowActiveElement = protoGetter(shadowProto, "activeElement");
+  const isShadowRoot = (n) => typeof ShadowRoot === "function" && n instanceof ShadowRoot;
+  const containsNode = Node.prototype.contains;
+
+  // The activeElement of el's own root — the same read isFocusedElement makes,
+  // hoisted so the visibility prune can consult it before walk() gets that far.
+  function activeInRootOf(el) {
+    const doc = getOwnerDocument.call(el);
+    if (!doc) return null;
+    let root = null;
+    try {
+      root = el.getRootNode ? el.getRootNode() : doc;
+    } catch (e) {
+      root = doc;
+    }
+    return isShadowRoot(root) ? getShadowActiveElement.call(root) : getActiveElement.call(doc);
+  }
+
+  /**
+   * Is el, or something inside it, the element holding the caret?
+   *
+   * Asked of an element the visibility prune is about to drop. opacity:0 does
+   * not stop an element being focused, and the field that is invisible BY
+   * DESIGN is very often the one holding the secret: the capture input under
+   * rendered OTP/PIN boxes, a barcode-scanner sink, a styled file input. Pruning
+   * it left the tree with no focus flag anywhere, which the type directive's
+   * focus wait reads as "nothing is focused" — the one non-confirmed outcome it
+   * dispatches a destructive clear on. Measured on Chrome 151: an opacity:0
+   * capture input holding an OTP was emptied and rewritten with the step
+   * reporting a pass, while the identical page at opacity:1 refused.
+   *
+   * The body is excluded — it is the default holder when nothing is focused,
+   * and it contains everything. An <iframe> is excluded for the reason
+   * isFocusedElement excludes it: it is the outer document's activeElement
+   * whenever focus merely sits in its subdocument.
+   */
+  function holdsFocus(el) {
+    const doc = getOwnerDocument.call(el);
+    const active = activeInRootOf(el);
+    if (!active || !doc || getDocBody.call(doc) === active) return false;
+    const activeTag = getTagName.call(active);
+    if (activeTag === "IFRAME" || activeTag === "FRAME") return false;
+    if (active === el) return true;
+    try {
+      return containsNode.call(el, active) === true;
+    } catch (e) {
+      return false;
+    }
+  }
 
   function nodeRole(el) {
     const r = getAttr.call(el, "role");
@@ -136,6 +201,13 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       // Never fall through to a password input's value: with no aria label or
       // placeholder (a floating/uncontrolled-label pattern) the typed secret
       // would become the node's label and reach every describe consumer.
+      // Raw, for a <textarea> as much as an <input>: this is the one string
+      // the field's contents reach the tree as, so it has to be the string the
+      // field HOLDS. Whitespace-normalizing only the textarea made the same
+      // typed text assertable back in one element type and not the other — a
+      // two-line value came back spelled as one line — and an equals-assert on
+      // a value with leading or trailing spaces stopped matching what was typed
+      // into it.
       if (el.value && !isPassword(el)) return el.value.slice(0, 200);
     }
     if (el instanceof HTMLImageElement && el.alt) return el.alt.slice(0, 200);
@@ -305,12 +377,121 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return { x: minX, y: minY, width: maxRight - minX, height: maxBottom - minY };
   }
 
+  // Does a subtree already carry the focus flag out?
+  function carriesFocus(nodes) {
+    for (const n of nodes) {
+      if (n.focused) return true;
+      if (carriesFocus(n.children)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Input focus: el is the activeElement of its OWN root. Emitted on the node
+   * for every describe consumer — where the caret is is useful targeting info,
+   * and the flow type directive's focus wait reads nothing else. The
+   * agent-facing render is narrower than that: \`hasContent\`
+   * (describe/format-tree) does not list \`focused\`, so a node whose only signal
+   * is focus — no id, no name, no text, no children — is dropped from it.
+   * Verified on Chrome 151: an anonymous EMPTY focused \`contenteditable\` is
+   * absent from \`describe\` output, while the same editor holding a \`<p>\`, or
+   * carrying an id, is shown.
+   *
+   * The root, not the document, because an open shadow root has an
+   * activeElement of its own while the outer document reports only the HOST.
+   * Reading the document alone flagged the host and never the element holding
+   * the keys, which for a host that lays out a screen is a focus flag covering
+   * every field on it.
+   *
+   * Only the innermost element is flagged, so a host that delegates into its
+   * shadow root is excluded — but ONLY once that shadow subtree has actually
+   * produced the flag. "The inner element will carry it" is an assumption, not
+   * a guarantee: it can be pruned as zero-area, or collapsed as a pure layer,
+   * and suppressing the host on the strength of it then left the tree with no
+   * focus flag anywhere. A host <iframe>/<frame> is excluded too: it is the
+   * outer document's activeElement whenever focus merely sits inside its
+   * subdocument, and its screen-spanning frame would satisfy any overlap check.
+   * NOT because the inner element carries the flag instead — walk() does not
+   * descend into a subdocument at all (see the note where the descent used to
+   * sit), so focus in one reaches the tree from neither side. Verified on
+   * Chrome 151: an <iframe srcdoc> leaves no trace of its content in describe,
+   * and focusing an input inside a LIGHT-DOM iframe leaves the tree with no
+   * focus flag at all.
+   *
+   * Put that same iframe in an OPEN shadow root and the flag lands on the HOST
+   * instead: \`shadowRoot.activeElement\` is the iframe, which is excluded here,
+   * so the shadow subtree carries no flag out, the host is not suppressed as
+   * delegating, and the host is its own document's activeElement. Also verified
+   * on Chrome 151. That is the suppression rule working as intended — it is
+   * exactly the "the inner element will carry it" assumption it refuses to make
+   * — and it leaves a flag on a box spanning the whole component, which the
+   * type directive's focus wait reads as "encloses" and refuses a clear on.
+   *
+   * The body is excluded — it's the default holder when nothing is focused, and
+   * its screen-spanning frame would satisfy any overlap check.
+   */
+  function isFocusedElement(el, invisibleSelf, shadow, shadowResults) {
+    if (invisibleSelf) return false;
+    const tag = getTagName.call(el);
+    if (tag === "IFRAME" || tag === "FRAME") return false;
+    // \`shadow\` is the one captured for the descent — both reads must go through
+    // getShadowRoot, or a <form> with a control named "shadowRoot" decides
+    // whether this element reports focus. And it is only a ShadowRoot when the
+    // page left the descriptor in place: protoGetter falls back to a direct
+    // property read when it is gone (the file's own threat model), so a <form>
+    // with <input name="shadowRoot"> hands back the CONTROL, and calling the
+    // ShadowRoot accessor on it throws \`Illegal invocation\` — which aborted the
+    // whole describe, for every page. The same guard is applied to \`root\` two
+    // lines down.
+    if (shadow && isShadowRoot(shadow) && getShadowActiveElement.call(shadow) && carriesFocus(shadowResults)) {
+      return false;
+    }
+    const doc = getOwnerDocument.call(el);
+    let root = null;
+    try {
+      root = el.getRootNode ? el.getRootNode() : doc;
+    } catch (e) {
+      root = doc;
+    }
+    // Through the prototype accessor for a Document: its named getter is
+    // [LegacyOverrideBuiltIns], so a <form name="activeElement"> shadows the
+    // property and a raw read hands back that FORM. getRootNode() returns the
+    // Document for every light-DOM element, so reading \`root.activeElement\`
+    // directly made that the whole page's answer — the form was flagged, the
+    // input holding the caret was not, and every clear inside such a form
+    // hard-stopped the flow blaming a focus trap.
+    // A root that is neither a ShadowRoot nor this element's own document falls
+    // back to the document's activeElement rather than to "nothing is focused".
+    // ShadyDOM and webcomponents.js REPLACE Element.prototype.getRootNode, so
+    // the captured getter is not consulted and the object handed back is
+    // neither — and answering null there dropped the focus flag from every node
+    // on the page (verified on Chrome 151), which is the no-focus tree a
+    // destructive clear goes through on. The document read is what this was
+    // before open roots were handled, and it is still right for a light-DOM
+    // element.
+    const active = isShadowRoot(root)
+      ? getShadowActiveElement.call(root)
+      : doc
+        ? getActiveElement.call(doc)
+        : null;
+    return active === el && !!doc && getDocBody.call(doc) !== el;
+  }
+
   function walk(el, depth) {
     if (truncated) return null;
     if (depth > MAX_DEPTH) return null;
     if (!(el instanceof Element)) return null;
     const style = window.getComputedStyle(el);
-    if (hidden(el, style)) return null;
+    // The one exception to the prune: the branch holding the caret stays (see
+    // holdsFocus). Everything else about the node is unchanged — it is emitted
+    // with its real box, which for an opacity:0 field is the box the user's
+    // keystrokes are going into.
+    //
+    // display:none is not part of the exception. An element in a display:none
+    // subtree cannot hold focus — the browser blurs it — so a root that names
+    // one as its activeElement is describing a page that cannot exist, and
+    // honouring it would resurrect a subtree the walker has always dropped.
+    if (hidden(el, style) && (style.display === "none" || !holdsFocus(el))) return null;
     // Charge the node budget only for elements that can actually EMIT. A
     // visibility:hidden element paints nothing itself and is descended into
     // purely to catch a descendant that overrides visibility back to visible
@@ -341,27 +522,27 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     // shadow content and duplicate the subtree. A real ShadowRoot is a DocumentFragment
     // (never a form), so its own .children read is safe.
     const shadow = getShadowRoot.call(el);
+    // Kept separately as well: whether the shadow subtree actually carried the
+    // focus flag out is what decides below whether the HOST may be suppressed.
+    const shadowResults = [];
     if (shadow) {
       for (const child of shadow.children) {
         const c = walk(child, depth + 1);
-        if (c) childResults.push(c);
+        if (c) {
+          childResults.push(c);
+          shadowResults.push(c);
+        }
       }
     }
 
-    // Same-origin iframes: pierce contentDocument if accessible. Cross-origin
-    // contentDocument access throws SecurityError — swallowed silently so the
-    // walker doesn't abort the whole tree.
-    if (getTagName.call(el) === "IFRAME") {
-      try {
-        const doc = el.contentDocument;
-        if (doc && doc.documentElement) {
-          const c = walk(doc.documentElement, depth + 1);
-          if (c) childResults.push(c);
-        }
-      } catch (e) {
-        /* cross-origin iframe — skip */
-      }
-    }
+    // No iframe descent. Walking a same-origin contentDocument cannot work from
+    // here: walk() bails on anything that is not an \`Element\`, and an inner
+    // \`documentElement\`'s constructor belongs to the INNER realm, so the
+    // instanceof is false and the subtree never materializes. Verified on
+    // Chrome 151 — an <iframe srcdoc> leaves no trace of its content in
+    // describe. Reviving it needs a realm-independent node test AND every inner
+    // frame translated into the host document's coordinates, or the tree gains
+    // nodes whose boxes point at the wrong place.
 
     // A visibility:hidden element paints nothing itself, but a descendant can override
     // visibility back to visible, so walk() descended instead of pruning (see hidden()).
@@ -369,7 +550,34 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     // and treat it as box-less so it contributes no box of its own: it survives only
     // through, and is framed by, whatever visible descendants it has.
     const invisibleSelf = style.visibility === "hidden";
-    const text = invisibleSelf ? "" : ownText(el);
+    // A <textarea>'s child text is its markup DEFAULT, not its value, and it
+    // never tracks el.value — so emitting it makes the node read as holding
+    // text the field lost the moment anything types into it. It carries no own
+    // text at all, exactly like an <input>: what the field HOLDS reaches the
+    // tree through accessibleName's value fallback and nowhere else.
+    //
+    // Emitting the live value here instead looks like the friendlier fix, and
+    // it does expose a LABELLED textarea's contents, which the fallback cannot.
+    // But node text is what the page DISPLAYS: it hoists into an ancestor's
+    // subtreeText, a text selector matches it, and the resolver ranks an exact
+    // field match on it above a substring hit. Measured on Chrome 151 — a
+    // container text assert passed on an unsent draft with the message list
+    // empty, an "assert visible Alpha" passed on the composer holding "Alpha",
+    // and a "tap text Save" landed in a note whose draft was the word "Save"
+    // rather than on the Save button. A field's contents are not the page's
+    // text, and there is no third channel to tell them apart in, so a
+    // <textarea> reads its contents back the same way every other form control
+    // does.
+    //
+    // The name channel narrows those harms rather than removing them. Only the
+    // hoist is answered, and only for a field carrying an id/testID, which is
+    // what shields (flow-chromium-tree); a selector match and the resolver's
+    // ranking both read the label directly, so an UNIDENTIFIED field leaks
+    // through all three either way — the two Chrome 151 measurements above
+    // reproduce unchanged on a textarea with no id. argent-create-flow's
+    // references/asserting-field-values.md is where that is stated for flow
+    // authors, with "give the field an id" as the answer.
+    const text = invisibleSelf ? "" : el instanceof HTMLTextAreaElement ? "" : ownText(el);
     const name = invisibleSelf ? null : accessibleName(el);
     const clickable = invisibleSelf ? false : isInteractive(el);
     const role = nodeRole(el);
@@ -383,6 +591,19 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       getAttr.call(el, "data-testid") ||
       getAttr.call(el, "data-test-id");
     const bl = invisibleSelf || boxless(el, style);
+    // Computed HERE, ahead of both collapse returns below, because an element
+    // the walker collapses never reaches the end of walk(). A bare
+    // \`<div contenteditable><p>…</p></div>\` — what Quill / ProseMirror / Lexical
+    // render while the document holds a single paragraph — is a box-less
+    // single-child wrapper with no id, role or own text, i.e. exactly the shape
+    // the promotion drops. Put it in an open shadow root and BOTH candidates
+    // disappeared: the host was suppressed as delegating, the editor was
+    // collapsed away, and the tree carried no focus flag at all — which the
+    // flow's focus wait reads as "nothing was focused", the one non-confirmed
+    // outcome it dispatches a destructive clear on. Being the caret's element
+    // is targeting information in its own right, so it also keeps the node
+    // alive, exactly like a name or an id.
+    const focusedSelf = isFocusedElement(el, invisibleSelf, shadow, shadowResults);
 
     // A box-less element has no rect of its own. Its visible extent is whatever its
     // children span; with no surviving child, fall back to the painted extent of its own
@@ -403,7 +624,17 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         const cf = contentFrame(el);
         if (cf) selfFrame = cf;
       }
-      if (childResults.length === 0 && selfFrame.width <= 0 && selfFrame.height <= 0) {
+      // \`focusedSelf\` for the same reason as the two structural collapses
+      // below: this is a sibling drop of the same class, and a focused node
+      // vanishing from the tree is what the flow's focus wait reads as "nothing
+      // is focused" — the one non-confirmed outcome a destructive clear goes
+      // through on.
+      if (
+        childResults.length === 0 &&
+        selfFrame.width <= 0 &&
+        selfFrame.height <= 0 &&
+        !focusedSelf
+      ) {
         return null;
       }
       if (
@@ -411,6 +642,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         !name &&
         !text &&
         !id &&
+        !focusedSelf &&
         childResults.length === 1 &&
         (role === "div" || invisibleSelf)
       ) {
@@ -440,6 +672,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       !text &&
       !id &&
       !scrollable &&
+      !focusedSelf &&
       role === "div"
     ) {
       return childResults[0];
@@ -457,24 +690,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     if (isChecked(el)) node.checked = true;
     if (isPassword(el)) node.password = true;
     if (scrollable) node.scrollable = true;
-    // Input focus: el is its document's activeElement. Deliberately emitted to
-    // EVERY describe consumer (the agent-facing tool as much as the flow type
-    // directive's focus wait) — where the caret is is useful targeting info.
-    // The body is excluded — it's the default holder when nothing is focused,
-    // and its screen-spanning frame would satisfy any overlap check. A host
-    // <iframe>/<frame> is excluded too: it is the outer document's
-    // activeElement whenever focus merely sits inside its subdocument, and the
-    // inner element (that document's own activeElement, checked per-document)
-    // is the one that carries the flag — flagging both would double-report.
-    if (!invisibleSelf) {
-      const tag = getTagName.call(el);
-      if (tag !== "IFRAME" && tag !== "FRAME") {
-        const doc = getOwnerDocument.call(el);
-        if (doc && getActiveElement.call(doc) === el && getDocBody.call(doc) !== el) {
-          node.focused = true;
-        }
-      }
-    }
+    if (focusedSelf) node.focused = true;
     return node;
   }
 

@@ -110,7 +110,22 @@ An Android app that needs a non-launcher activity has no `launch:` form. Record 
 
 In a `scroll-to` map, put the selector under `target:`. The map supports `up`, `down`, `left`, and `right` directions. The default is `down`; set it explicitly to reach a target above the viewport or along a horizontal carousel. If the target is already visible, the step is a safe no-op. `tap`, `type`, and `long-press` do not auto-scroll. Add `scroll-to` when the target can be off-screen. Use `within` for a nested scroller.
 
-`type` presses Enter in a second `keyboard` call unless `submit: false`. A polished focus tap plus one text-only `keyboard` call usually needs `submit: false`. Store external values as `{{secret:NAME}}`. The runner uses the first source that defines the name: environment `ARGENT_SECRET_NAME`; project `.argent/secrets.env`; project `.env.local`, then `.env`; then `~/.argent/secrets.env`. The two `secrets.env` files accept the bare `NAME`, but the shared dotenv files expose only `ARGENT_SECRET_`-prefixed keys, so a bare `NAME=…` in `.env` or `.env.local` stays unresolved. The runner redacts every resolved value, so do not use a placeholder for content a report must show.
+`type` sends Enter after text unless you set `submit: false`. A clear-only step does not send Enter by default.
+
+Typing inserts text at the caret. It does not replace existing text. Use `clear: true` when a field can contain an old value: `type: { into: email, text: "new@example.com", clear: true }`.
+
+`clear` works on iOS, Android, and Chromium. Do not use the `type` directive on TV targets.
+
+- On Vega, use `tv-remote` to focus and `keyboard` to type. Use repeated `backspace` keys or the app's clear control.
+- On Apple TV and Android TV, use `tv-remote` and `keyboard`. Use the app's clear control because `clear` and keys are unsupported.
+
+Omit `text` to clear only: `type: { into: search, clear: true }`. Add `submit: true` to send Enter afterward.
+
+Before clearing, the runner checks focus. It accepts the target, its only input, or its matching editable host. It refuses ambiguous or unreadable checks.
+
+The runner proceeds when successful checks report no focus. This supports iOS trees without focus data. Hidden or truncated fields can cause the same result. Therefore, verify important values after `clear`. Read [Field value assertions](asserting-field-values.md) before adding that check.
+
+Store external values as `{{secret:NAME}}`. The runner uses the first source that defines the name: environment `ARGENT_SECRET_NAME`; project `.argent/secrets.env`; project `.env.local`, then `.env`; then `~/.argent/secrets.env`. The two `secrets.env` files accept the bare `NAME`, but the shared dotenv files expose only `ARGENT_SECRET_`-prefixed keys, so a bare `NAME=…` in `.env` or `.env.local` stays unresolved. The runner redacts every resolved value, so do not use a placeholder for content a report must show.
 
 A **selector-less gesture** — a coordinate `tap`/`long-press`, or a `pinch`/`rotate` with no `on:` — resolves no frame, so a tree source it cannot read does not fail it. It settles best effort, dispatches anyway, and the step **passes carrying a warning** that quotes the source's own error. That green says the gesture was sent, not that it landed: one aimed at a moving element can miss it entirely. Restore the tree source, usually by relaunching the app so the instrumentation loads. Accept the warning only where the app serves no tree at all, and put an explicit `wait:` before a gesture that follows a transition. The first such gesture proves the outage and later ones spend that verdict without paying the settle window again. A tree read that comes back, or a relaunch, retires that verdict — which only makes the next gesture pay a fresh window, and it warns again if the source is still down.
 
@@ -188,7 +203,7 @@ A `run:` target is a YAML path resolved against the directory of the flow file c
 
 - iOS and Android can run fragments or e2e flows inline. A nested e2e launch restarts its app.
 - Chromium boots one instance per launch **step**, not one per run. The leading launch — the flow's own, or the one its leading `run:` chain reaches — boots before step 1, unless you pinned the run with an explicit `device`, where it only attaches. Every later launch boots a fresh instance, moves the run onto it, and tears down the instance the run already owned for that app path. Nesting a Chromium e2e flow with its own launch is therefore the supported way to give a sub-scenario its own restart. Chromium rejects `pinch` and `rotate`. Use the app's own zoom or rotate controls.
-- Vega uses `tool: tv-remote` and raw `tool: keyboard`. The touch directives (`tap`, `long-press`, `type`, `scroll-to`, `pinch`, `rotate`) are unsupported. Gate focus and navigation results with `await`.
+- Vega uses `tool: tv-remote` and raw `tool: keyboard`. The touch directives (`tap`, `long-press`, `type`, `scroll-to`, `pinch`, `rotate`) are unsupported. The keyboard tool also rejects `clear`. Use the app's clear control or repeated `key: "backspace"` presses. Gate focus and navigation results with `await`.
 
 ## Snapshots and standalone runs
 
