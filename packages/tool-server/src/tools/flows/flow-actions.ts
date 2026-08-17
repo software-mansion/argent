@@ -72,6 +72,27 @@ export interface FlowTreeTarget {
    * resolution times out.
    */
   pinned: boolean;
+  /**
+   * Whether a pinned read's `Application.getState` probe has ever answered for
+   * THIS target. MUTATED IN PLACE by `queryFullHierarchyTree` (its only writer
+   * after construction) rather than reported back: `deviceEnv` shallow-spreads
+   * the run state, so every read of the same pin reaches the same object, and
+   * that is what makes "has any read already answered" available to the next
+   * read.
+   *
+   * It is the only evidence the runner has that the app's main queue was ever
+   * serviced, which tells the two causes of a timed-out probe apart: before any
+   * answer the timeout is read as the cold start that can pin the main thread
+   * right after launch, and ridden out; after one it is an app that stopped
+   * servicing a queue it demonstrably serviced, and refused. One-sided by
+   * construction - a flow that leaves the app before its first read still reads
+   * as a cold start and pays both RPC timeouts - and not separable here, since
+   * the launch gate waits only for the connect, which precedes the startup work
+   * the ride-out exists for. A later `launch` builds a fresh target, since a
+   * re-pinned app cold-starts again. Meaningless while unpinned: those reads
+   * auto-resolve and never probe the target.
+   */
+  probeAnswered: boolean;
 }
 
 /** Everything a directive needs to act on the run's device. */

@@ -24,7 +24,13 @@ vi.mock("../../src/tools/flows/flow-ios-tree", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/tools/flows/flow-ios-tree")>()),
   queryFullHierarchyTree: vi.fn(
     async (_r: unknown, _d: unknown, target?: FlowTreeTarget): Promise<DescribeTreeData> => {
-      treeTargets.push(target);
+      // A COPY: the runner hands every read of one pin the same object, so
+      // recording the reference would let a later mutation rewrite what the
+      // earlier reads saw.
+      treeTargets.push(target ? { ...target } : undefined);
+      // Stands in for an answered `Application.getState` probe, which the real
+      // source records on the target itself (see FlowTreeTarget.probeAnswered).
+      if (target?.pinned) target.probeAnswered = true;
       return treeData();
     }
   ),
@@ -314,6 +320,49 @@ describe("launch pins the flow tree target", () => {
       "assert:pass",
     ]);
     expect(labels()).toEqual([`pinned:${APP}`, `pinned:${OTHER}`]);
+  });
+
+  it("a later launch re-arms the probe ride-out on a fresh, unanswered target", async () => {
+    // `probeAnswered` decides how a pinned read reads an unanswerable getState:
+    // before the pin's first answer it is a cold-start stall to ride out, after
+    // it the app has stopped servicing its main queue and the read is refused.
+    // A relaunched app cold-starts again, so the second launch must hand out a
+    // FRESH target rather than carry the first one's answered flag - otherwise
+    // the new app's own cold start is misdiagnosed as a suspension.
+    const OTHER = "com.acme.other";
+    await writeFlow("rearmed", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: APP },
+        { kind: "assert", condition: "visible", selector: { identifier: "ready" } },
+        { kind: "launch", app: OTHER },
+        { kind: "assert", condition: "visible", selector: { identifier: "ready" } },
+      ],
+    });
+    // The marker appears only on the second poll of the first assert, so that
+    // step reads twice - read 2 proves the answer recorded on read 1 really
+    // does reach the next read of the same pin.
+    treeData = () =>
+      treeTargets.length <= 1
+        ? {
+            tree: screen([n({ identifier: "loading", label: "Loading" })]),
+            source: "native-devtools",
+          }
+        : readyTree();
+
+    const result = await run("rearmed", mockRegistry());
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "launch:pass",
+      "assert:pass",
+      "launch:pass",
+      "assert:pass",
+    ]);
+    expect(treeTargets.map((t) => `${label(t)}:${t?.probeAnswered}`)).toEqual([
+      `pinned:${APP}:false`,
+      `pinned:${APP}:true`,
+      `pinned:${OTHER}:false`,
+    ]);
   });
 
   it("a run with no launch step keeps the auto-resolve fallback (no target)", async () => {

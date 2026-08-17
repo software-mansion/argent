@@ -31,8 +31,23 @@ const APP = "com.example.app";
 const POISONER = "com.apple.mobilecal";
 const OTHER = "com.example.other";
 
-const pin = (bundleId: string): FlowTreeTarget => ({ bundleId, pinned: true });
-const hint = (bundleId: string): FlowTreeTarget => ({ bundleId, pinned: false });
+/**
+ * A pinned target. `probeAnswered` defaults to false - the state a fresh
+ * `launch` leaves behind, where a getState timeout is still ridden out as a
+ * cold-start stall; pass true for a pin whose probe has already answered once
+ * in the run, where the same timeout means the app stopped servicing its main
+ * queue.
+ */
+const pin = (bundleId: string, probeAnswered = false): FlowTreeTarget => ({
+  bundleId,
+  pinned: true,
+  probeAnswered,
+});
+const hint = (bundleId: string): FlowTreeTarget => ({
+  bundleId,
+  pinned: false,
+  probeAnswered: false,
+});
 
 /** What the wedged sibling's `Application.getState` really rejects with. */
 function rpcTimeout(): FailureError {
@@ -127,7 +142,8 @@ function registryFor(api: NativeDevtoolsApi): Registry {
 describe("queryFullHierarchyTree - pinned target vs poisoned auto-resolve", () => {
   it("a pinned read probes only the pinned app - the poisoned sibling is never touched", async () => {
     const { api, probed, queried, repaired } = poisonedApi();
-    const { tree, source } = await queryFullHierarchyTree(registryFor(api), IOS_DEVICE, pin(APP));
+    const target = pin(APP);
+    const { tree, source } = await queryFullHierarchyTree(registryFor(api), IOS_DEVICE, target);
     expect(source).toBe("native-devtools");
     expect(tree.children.length).toBeGreaterThan(0);
     // The frontmost check probes the pinned app itself and nothing else - a
@@ -135,6 +151,10 @@ describe("queryFullHierarchyTree - pinned target vs poisoned auto-resolve", () =
     expect(probed).toEqual([APP]);
     expect(queried).toEqual([APP]);
     expect(repaired).toEqual([]);
+    // An answered probe is recorded ON the target, which every later read of
+    // this pin shares - that is what makes a LATER timeout diagnosable as the
+    // app going quiet rather than as a cold start.
+    expect(target.probeAnswered).toBe(true);
   });
 
   it("a pinned read of a backgrounded app refuses to describe an off-screen hierarchy", async () => {
@@ -162,8 +182,14 @@ describe("queryFullHierarchyTree - pinned target vs poisoned auto-resolve", () =
     );
     expect(err).toBeInstanceOf(Error);
     const message = (err as Error).message;
-    expect(message).toContain(`${APP} (the launched app) is not foreground-like`);
+    expect(message).toContain(`${APP} (the launched app) has no foreground presence at all`);
     expect(message).toContain("applicationState=background");
+    // The message must not advertise a refusal the guard does not deliver: it
+    // is as lenient as auto-resolve over one app (an `inactive` app, or a
+    // lingering foreground-inactive scene, still reads), so it says so and
+    // names the escape hatch for a flow whose subject IS another app.
+    expect(message).toContain("Transitional states are NOT refused here");
+    expect(message).toContain("clears the pin");
     expect(getFailureSignal(err)?.error_code).toBe(
       FAILURE_CODES.NATIVE_TARGET_SINGLE_APP_NOT_FOREGROUND
     );
@@ -172,17 +198,59 @@ describe("queryFullHierarchyTree - pinned target vs poisoned auto-resolve", () =
     expect(repaired).toEqual([]);
   });
 
-  it("a pinned read rides out a frontmost probe the stalled main thread cannot answer", async () => {
+  it("a pinned read rides out a frontmost probe the stalled main thread cannot answer, on the FIRST read", async () => {
     // Application.getState hops onto the app's main thread, which a heavy cold
     // start (first Hermes parse, asset decode) can pin past the RPC timeout. An
     // unanswerable probe is not an answer of "backgrounded", and the pin names
     // the app this run launched, so the read goes ahead instead of failing the
-    // step.
+    // step. This is the only window where that holds: the cold-start stall can
+    // only precede the pin's first ANSWERED probe, which is exactly what
+    // `probeAnswered: false` says about this target.
     const { api, probed, queried } = poisonedApi([APP, POISONER], {}, { [APP]: rpcTimeout() });
-    const { tree } = await queryFullHierarchyTree(registryFor(api), IOS_DEVICE, pin(APP));
+    const target = pin(APP);
+    expect(target.probeAnswered).toBe(false);
+    const { tree } = await queryFullHierarchyTree(registryFor(api), IOS_DEVICE, target);
     expect(tree.children.length).toBeGreaterThan(0);
     expect(probed).toEqual([APP]);
     expect(queried).toEqual([APP]);
+    // A ridden-out probe is not an answer, so it must not arm the refusal for
+    // the next read - the app may still be starting up.
+    expect(target.probeAnswered).toBe(false);
+  });
+
+  it("a pinned read whose probe answered earlier refuses a later timeout instead of reading", async () => {
+    // Same RPC timeout, opposite verdict: this pin already had a probe answer,
+    // so the main queue WAS being serviced and has stopped - for a pinned app,
+    // the suspension iOS applies once a flow leaves it. The hierarchy read
+    // would dispatch onto that same unserviced queue behind the abandoned
+    // probe, so it is not a second chance, only a second timeout.
+    const { api, probed, queried } = poisonedApi([APP, POISONER], {}, { [APP]: rpcTimeout() });
+    const err: unknown = await queryFullHierarchyTree(
+      registryFor(api),
+      IOS_DEVICE,
+      pin(APP, true)
+    ).then(
+      () => {
+        throw new Error("expected the suspended-pin read to throw");
+      },
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(Error);
+    const message = (err as Error).message;
+    expect(message).toContain(`${APP} (the launched app) stopped answering Application.getState`);
+    expect(message).toContain("an earlier one in this run answered");
+    // The escape hatch for a flow whose subject genuinely IS the other app.
+    expect(message).toContain("clears the pin");
+    // The timeout's own classification, kept because no app state was observed
+    // here - the flow-level diagnosis rides in the message, and the stage
+    // separates it from a bare transport timeout.
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT);
+    expect(getFailureSignal(err)?.failure_stage).toBe("flow_tree_pinned_target");
+    expect((err as Error).cause).toBeInstanceOf(Error);
+    expect(probed).toEqual([APP]);
+    // The substance of the refusal: the 15s getFullHierarchy that would have
+    // timed out on the same queue is never spent.
+    expect(queried).toEqual([]);
   });
 
   it("a pinned read propagates a frontmost probe failure that is not a timeout", async () => {

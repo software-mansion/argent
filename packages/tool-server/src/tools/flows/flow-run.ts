@@ -624,8 +624,10 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   if (signal?.aborted) return ABORTED_OUTCOME;
   if (gate) return { ok: false, reason: gate };
   // Pins later tree reads; nested `run:` fragments share this state and
-  // inherit it.
-  state.treeTarget = { bundleId, pinned: true };
+  // inherit it. A FRESH object every time, never a mutation of the previous
+  // target: `probeAnswered` is per-pin state and the app just cold-started, so
+  // a re-pin has to re-arm the ride-out of a probe its cold start stalls.
+  state.treeTarget = { bundleId, pinned: true, probeAnswered: false };
   return { ok: true };
 }
 
@@ -2547,7 +2549,7 @@ async function execLeafStep(
         if (step.name === "launch-app" || step.name === "restart-app") {
           const launched = (args as { bundleId?: unknown }).bundleId;
           if (typeof launched === "string") {
-            state.treeTarget = { bundleId: launched, pinned: false };
+            state.treeTarget = { bundleId: launched, pinned: false, probeAnswered: false };
           }
         }
         return { ...base, status: "pass", tool: step.name, result, outputHint, args };

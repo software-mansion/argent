@@ -398,22 +398,67 @@ export async function queryFullHierarchyTree(
     // getFullHierarchy for a backgrounded-but-not-suspended app too, so an
     // unguarded read would describe a screen that is not on screen. Probe ONLY
     // the pinned app, never siblings: one suspended sibling's getState is the
-    // fan-out failure the pin exists to avoid. The probe itself hops onto the
-    // app's MAIN thread, which a heavy cold start (first Hermes parse, asset
-    // decode) can pin past the RPC timeout - a probe the stall made
-    // unanswerable is not an answer of "backgrounded", so ride it out and read
-    // the pin. Every probe that DOES answer still decides.
+    // fan-out failure the pin exists to avoid.
+    //
+    // A probe that never ANSWERS has two opposite causes, told apart by whether
+    // this pin has ever had one answer (see FlowTreeTarget.probeAnswered):
+    //
+    //  - Not yet: the probe hops onto the app's MAIN thread, which a heavy cold
+    //    start (first Hermes parse, asset decode) can pin past the RPC timeout.
+    //    That stall can only precede the pin's first answered read, and an
+    //    unanswerable probe is not an answer of "backgrounded". Ride it out and
+    //    read the pin - accepting that a flow which left the app before ever
+    //    reading it is indistinguishable here and pays both timeouts.
+    //  - Already has: the app was servicing its main queue and stopped, which
+    //    for a pinned app is the suspension iOS applies once a flow leaves it.
+    //    Refuse here. Falling through is not a second chance: getFullHierarchy
+    //    hops onto the same main queue nothing is servicing, so the read would
+    //    spend its own (longer) timeout only to surface a bare "RPC timed out"
+    //    that reads like a wedged simulator.
+    //
+    // Every probe that DOES answer still decides.
     let pinnedState: NativeAppState | undefined;
     try {
       pinnedState = await nativeApi.getAppState(bundleId);
+      target.probeAnswered = true;
     } catch (err) {
       if (getFailureSignal(err)?.error_code !== FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT) {
         throw err;
       }
+      if (target.probeAnswered) {
+        throw new FailureError(
+          `${bundleId} (the launched app) stopped answering Application.getState - the probe timed out although an earlier one in this run answered, so the app's main queue is no longer being serviced. For a pinned app that is the suspension iOS applies once a flow leaves it (e.g. a tap that opened another app), and a suspended app's hierarchy is not what is on screen; reading it anyway would park on the same unserviced queue and time out again. If this flow's subject IS the other app, run any raw \`tool:\` step - that clears the pin and returns reads to frontmost auto-resolve; otherwise make the flow return to ${bundleId} before reading the UI, or \`launch\` it again.`,
+          {
+            // The timeout's own code, NOT
+            // NATIVE_TARGET_SINGLE_APP_NOT_FOREGROUND: no app state was
+            // observed here - nothing answered - so claiming that verdict as
+            // the machine-readable classification would assert a state this
+            // read never saw. What measurably happened is an RPC timeout; the
+            // flow-level diagnosis rides in the message, and failure_stage
+            // (with the preserved cause) keeps it apart from both a bare
+            // transport timeout and the answered-state refusal below.
+            error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT,
+            failure_stage: "flow_tree_pinned_target",
+            failure_area: "tool_server",
+            error_kind: "timeout",
+          },
+          err instanceof Error ? { cause: err } : undefined
+        );
+      }
     }
+    // Deliberately as lenient as auto-resolve is over a single app:
+    // `chooseFrontmostConnectedApp` accepts `inactive` with no scenes, and a
+    // `background` app still holding a foreground-inactive scene. Those are the
+    // transition window - under a system permission alert, in the app
+    // switcher's first frames, behind the notification shade - where the app is
+    // still what is on screen, so reading it still reads what the author sees.
+    // A strict "active only" check would fail the very flows that assert on
+    // such an alert, and would split the pinned path from auto-resolve over the
+    // same one-element array. The message below says what this therefore
+    // actually refuses.
     if (pinnedState && !chooseFrontmostConnectedApp([pinnedState])) {
       throw new FailureError(
-        `${bundleId} (the launched app) is not foreground-like (applicationState=${pinnedState.applicationState}, foregroundActiveScenes=${pinnedState.foregroundActiveSceneCount}, foregroundInactiveScenes=${pinnedState.foregroundInactiveSceneCount}) - a step in this flow left the app (e.g. a tap that opened another app), so a read of its hierarchy would describe a screen that is not on screen. Launch it again (a flow \`launch\` step) or make the flow return to it before reading the UI.`,
+        `${bundleId} (the launched app) has no foreground presence at all (applicationState=${pinnedState.applicationState}, foregroundActiveScenes=${pinnedState.foregroundActiveSceneCount}, foregroundInactiveScenes=${pinnedState.foregroundInactiveSceneCount}) - a step in this flow left the app (e.g. a tap that opened another app), so a read of its hierarchy would describe a screen that is not on screen. Transitional states are NOT refused here: an \`inactive\` app, or one still holding a foreground scene, is read as usual - under a system alert or mid-transition it is still the app on screen. If this flow's subject IS another app, run any raw \`tool:\` step - that clears the pin and returns reads to frontmost auto-resolve; otherwise make the flow return to ${bundleId} before reading the UI, or \`launch\` it again.`,
         {
           error_code: FAILURE_CODES.NATIVE_TARGET_SINGLE_APP_NOT_FOREGROUND,
           failure_stage: "flow_tree_pinned_target",
