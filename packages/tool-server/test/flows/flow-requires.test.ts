@@ -1041,6 +1041,21 @@ describe("requires folded along the leading run: chain", () => {
     expect((await run(registry, "composed")).device).toBe(ANDROID);
   });
 
+  it("intersects a two-platform root with a leading fragment's narrower list", async () => {
+    // The fold's middle case, between the pass-through and the empty
+    // intersection: [ios, android] ∩ [android] leaves [android], and the
+    // narrowing is what picks the emulator out of a field the root alone would
+    // have called ambiguous.
+    await writeFlow("android-frag", { requires: { platform: ["android"] } });
+    await writeFlow("pair-root", {
+      requires: { platform: ["ios", "android"] },
+      steps: [{ kind: "run", flow: "android-frag.yaml" }],
+    });
+    const { registry } = mockRegistry([iosEntry(IOS), androidEntry(ANDROID)]);
+
+    expect((await run(registry, "pair-root")).device).toBe(ANDROID);
+  });
+
   it("skips — not reds — a composing root pointed at an excluded device", async () => {
     await writeFlow("android-frag", { requires: { platform: ["android"] } });
     await writeFlow("composed", { steps: [{ kind: "run", flow: "android-frag.yaml" }] });
@@ -1107,6 +1122,56 @@ describe("requires folded along the leading run: chain", () => {
     expect(getFailureSignal(err)?.error_kind).toBe("validation");
     expect((err as Error).message).toMatch(/"composed"/);
     expect((err as Error).message).toMatch(/"android-frag"/);
+    // The platform arm, named: the kind arms below must not be able to answer
+    // for it, and this one must not answer for them.
+    expect((err as Error).message).toMatch(
+      /"composed" requires platform: \[ios\] and "android-frag" requires platform: \[android\] — no platform satisfies both/
+    );
+  });
+
+  it("rejects a runtimeKind the chain contradicts, under that arm's own message", async () => {
+    // The platform halves agree (neither file declares one), so a refusal
+    // worded like the intersection's above would be the wrong arm firing.
+    await writeFlow("mobile-frag", {
+      requires: { runtimeKind: "mobile" },
+      steps: [{ kind: "echo", message: "mobile-only fragment" }],
+    });
+    await writeFlow("kind-clash", {
+      requires: { runtimeKind: "tv" },
+      steps: [{ kind: "run", flow: "mobile-frag.yaml" }],
+    });
+    const { registry } = mockRegistry([iosEntry(IOS_TV, "tv"), androidEntry(ANDROID, "mobile")]);
+
+    const err = await run(registry, "kind-clash").catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIRES_UNSATISFIABLE);
+    expect((err as Error).message).toMatch(
+      /"kind-clash" requires runtimeKind: tv and "mobile-frag" requires runtimeKind: mobile/
+    );
+    expect((err as Error).message).not.toMatch(/no platform satisfies both/);
+  });
+
+  it("rejects a platform list and a runtimeKind no file pairs on its own", async () => {
+    // The arm parse-time validation cannot reach: each file is legal alone, so
+    // only the composition names the pair a lone file is refused for above
+    // ("refuses a tv requirement on chromium alone") — chromium is never a TV.
+    await writeFlow("tv-frag", {
+      requires: { runtimeKind: "tv" },
+      steps: [{ kind: "echo", message: "tv-only fragment" }],
+    });
+    await writeFlow("chromium-root", {
+      requires: { platform: ["chromium"] },
+      steps: [{ kind: "run", flow: "tv-frag.yaml" }],
+    });
+    const { registry } = mockRegistry([chromiumEntry(CHROMIUM), iosEntry(IOS_TV, "tv")]);
+
+    const err = await run(registry, "chromium-root").catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIRES_UNSATISFIABLE);
+    expect((err as Error).message).toMatch(
+      /"chromium-root" leaves platform: \[chromium\] and "tv-frag" requires runtimeKind: tv, which no platform in that list ever presents/
+    );
+    expect((err as Error).message).not.toMatch(/no platform satisfies both/);
   });
 
   it("does not fold a fragment composed after the first executable step", async () => {
@@ -1276,6 +1341,28 @@ describe("requires folded along the leading run: chain", () => {
       status: "error",
       reason: expect.stringMatching(/could not load fragment "missing\.yaml"/),
     });
+  });
+
+  it("still folds a fragment entered before the hop the scan gave up on", async () => {
+    // Best effort has a floor: the fragment executes ahead of the hop's own
+    // error either way, so its block still gates the run. Giving up on what
+    // lies past the hop must not give up on what the walk already read.
+    await writeFlow("gate-frag", {
+      requires: { platform: ["android"] },
+      steps: [
+        { kind: "echo", message: "before the broken hop" },
+        { kind: "run", flow: "missing.yaml" },
+      ],
+    });
+    await writeFlow("broken-tail", { steps: [{ kind: "run", flow: "gate-frag.yaml" }] });
+    const { registry } = mockRegistry([iosEntry(IOS)]);
+
+    const err = await run(registry, "broken-tail").catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNMET);
+    expect((err as Error).message).toMatch(
+      /No booted device satisfies the requires this flow and its composed fragments together declare: \{ platform: \[android\] \}/
+    );
   });
 });
 
