@@ -1092,6 +1092,9 @@ export function createRunFlowTool(
         `Failed to run flow ${displayFlowName(params)}: ${failureSignal.error_code}`,
     },
     description: `Run a saved flow from the .argent/flows/ directory, or an explicit boundary-managed flow_path.
+Use when a scenario is already authored as YAML and the whole of it should replay in one call with a
+per-step verdict; reach for the individual gesture tools when nothing is authored yet, and for
+run-sequence when the steps are an ad-hoc list rather than a stored flow.
 Steps run in order: \`launch\` starts an app from scratch (terminate + relaunch) and waits until it is
 ready; \`tool\` calls dispatch through the registry; \`tap\`/\`long-press\`/\`type\` resolve a selector to an
 element and act on it (\`tap: { on, times: 2 }\` double-taps; \`long-press: { on, duration }\` presses and
