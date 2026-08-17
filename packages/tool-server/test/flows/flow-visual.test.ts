@@ -333,7 +333,7 @@ describe("runSnapshot cross-app key collision", () => {
 
 describe("runSnapshot settle", () => {
   it("proceeds to capture when the tree source is down", async () => {
-    // settleTree throws when every read in its window failed (native devtools
+    // settleTree throws when every read attempt failed (native devtools
     // disconnected). The capture reads pixels, not the tree — the snapshot
     // must still capture and compare instead of reporting an error.
     vi.mocked(settleTree).mockRejectedValueOnce(new Error("native devtools is unavailable"));

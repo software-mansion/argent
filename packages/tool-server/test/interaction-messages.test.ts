@@ -1,15 +1,7 @@
 import { describe, expect, it } from "vitest";
-import {
-  FAILURE_CODES,
-  type FailureSignal,
-  type Registry,
-  type ToolDefinition,
-} from "@argent/registry";
+import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
 import { createRegistry } from "../src/utils/setup-registry";
-import { pasteTool } from "../src/tools/paste";
-import { simulatorServerTool } from "../src/tools/simulator/simulator-server";
-import { createProposeVariantTool } from "../src/tools/variants/propose-variant";
-import { awaitUserSelectionTool } from "../src/tools/variants/await-user-selection";
+import { definitionsById, EXPECTED_TOOL_COUNT } from "./helpers/catalog";
 
 const failureSignal: FailureSignal = {
   error_code: FAILURE_CODES.ARGENT_UNCLASSIFIED_FAILURE,
@@ -18,27 +10,10 @@ const failureSignal: FailureSignal = {
   error_kind: "unknown",
 };
 
-function definitionsById(registry: Registry): Map<string, ToolDefinition<any, any>> {
-  const definitions = new Map<string, ToolDefinition<any, any>>();
-  for (const id of registry.getSnapshot().tools) {
-    definitions.set(id, registry.getTool(id)!);
-  }
-
-  // Lens tools are only registered on macOS; add them explicitly so this test
-  // covers the same catalog on every CI platform.
-  definitions.set("propose_variant", createProposeVariantTool(registry));
-  definitions.set("await_user_selection", awaitUserSelectionTool);
-
-  // These definitions intentionally exist outside createRegistry.
-  definitions.set("paste", pasteTool);
-  definitions.set("simulator-server", simulatorServerTool);
-  return definitions;
-}
-
 describe("tool interaction messages", () => {
   it("defines all three formatters for every tool", () => {
     const definitions = definitionsById(createRegistry());
-    expect(definitions.size).toBe(77);
+    expect(definitions.size).toBe(EXPECTED_TOOL_COUNT);
 
     for (const [id, definition] of definitions) {
       expect(definition.interaction?.startedMsg, `${id}.startedMsg`).toBeTypeOf("function");
@@ -172,7 +147,33 @@ describe("tool interaction messages", () => {
     const definitions = definitionsById(createRegistry());
     const name = "checkout";
     const params = { name, project_root: "/tmp/proj", command: "gesture-tap", message: "note" };
-    const result = { message: "", flowFile: "", savedTo: "project" as const };
+    // Each tool's OWN result shape. One shared `{ message, flowFile, savedTo }`
+    // used to stand in for all four, which stopped describing any of them once
+    // the recorder dropped the per-step YAML: `flowFile` survives on start and
+    // finish only, and add-step/add-echo report `stepCount` (plus `recorded`
+    // on add-step) instead. No formatter below reads a field that differs
+    // between them, but a fixture that misdescribes the contract is the one
+    // that gets copied into a test that does.
+    const results: Record<string, Record<string, unknown>> = {
+      "flow-start-recording": { message: "", flowFile: "", savedTo: "project" },
+      "flow-add-step": {
+        message: "",
+        toolResult: {},
+        stepCount: 1,
+        recorded: "1. tap: (0.5, 0.3)",
+        savedTo: "project",
+      },
+      "flow-add-echo": { message: "", stepCount: 1, savedTo: "project" },
+      "flow-finish-recording": {
+        message: "",
+        path: "/tmp/proj/.argent/flows/checkout.yaml",
+        executionPrerequisite: "",
+        steps: 1,
+        summary: ["1. tap: (0.5, 0.3)"],
+        flowFile: "",
+        savedTo: "project",
+      },
+    };
 
     for (const id of [
       "flow-start-recording",
@@ -182,7 +183,9 @@ describe("tool interaction messages", () => {
     ]) {
       const i = definitions.get(id)!.interaction!;
       expect(i.startedMsg!({ params }), `${id}.startedMsg`).toContain(name);
-      expect(i.completedMsg!({ params, result }), `${id}.completedMsg`).toContain(name);
+      expect(i.completedMsg!({ params, result: results[id] }), `${id}.completedMsg`).toContain(
+        name
+      );
       expect(
         i.failedMsg!({ params, error: new Error("raw error"), failureSignal }),
         `${id}.failedMsg`
@@ -215,7 +218,7 @@ describe("tool interaction messages", () => {
       // part — it is caller-authored free text — and stays out.
       definitions.get("flow-add-echo")!.interaction!.completedMsg!({
         params: { name: "checkout", project_root: "/tmp/proj", message: secret },
-        result: { message: secret, flowFile: "/tmp/flow.yaml", savedTo: "project" },
+        result: { message: secret, stepCount: 1, savedTo: "project" },
       }),
     ];
 

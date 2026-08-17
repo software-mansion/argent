@@ -7,7 +7,10 @@ import { ArtifactStore, zodObjectToJsonSchema } from "@argent/registry";
 
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
-import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recording";
+import {
+  flowFinishRecordingTool,
+  summarizeStep,
+} from "../../src/tools/flows/flow-finish-recording";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import {
   createRunFlowTool,
@@ -24,6 +27,15 @@ import {
   serializeFlow,
   type FlowStep,
 } from "../../src/tools/flows/flow-utils";
+
+/**
+ * The flow as PERSISTED. The recorder deliberately no longer returns the whole
+ * growing YAML per step (it was the single largest consumer of a session's
+ * context), so the file on disk is the assertion surface.
+ */
+async function onDisk(name: string, root = tmpDir): Promise<string> {
+  return fs.readFile(path.join(root, ".argent", "flows", `${name}.yaml`), "utf8");
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -241,7 +253,10 @@ describe("flow-start-recording edge cases", () => {
       {},
       { name: "same-flow", project_root: tmpDir, message: "new take" }
     );
-    expect(parseFlow(echo.flowFile).steps).toEqual([{ kind: "echo", message: "new take" }]);
+    expect(echo.stepCount).toBe(1);
+    expect(parseFlow(await onDisk("same-flow")).steps).toEqual([
+      { kind: "echo", message: "new take" },
+    ]);
   });
 
   it("does not report a restart when the flow was not already recording", async () => {
@@ -269,7 +284,22 @@ describe("flow-add-echo", () => {
     );
 
     expect(result.message).toContain("echo-test");
-    const flow = parseFlow(result.flowFile);
+    // The whole growing YAML is deliberately no longer echoed per step; the
+    // file on disk is the assertion surface, and `flowFile` must be gone.
+    expect(result).not.toHaveProperty("flowFile");
+    // …and unlike flow-add-step, no `recorded` either. The asymmetry is
+    // deliberate: an echo step is entirely the `message` the caller just
+    // passed, so a rendered line would only quote their own input back, while
+    // a recorded step can be REWRITTEN on the way in (a coordinate tap into a
+    // selector, a restart-app into a launch) and needs a line saying what
+    // actually landed. Asserted so the pair can't silently drift together.
+    expect(result).not.toHaveProperty("recorded");
+    // With `flowFile` gone, `savedTo` is the only field naming the destination,
+    // so it has to be the real path — returning a bogus one used to pass the
+    // whole suite. Pinned here and on flow-add-step, the two callers of
+    // appendStepToFlow's host branch.
+    expect(result.savedTo).toBe(path.join(flowsDirFor(tmpDir), "echo-test.yaml"));
+    const flow = parseFlow(await onDisk("echo-test"));
     expect(flow.steps).toEqual([{ kind: "echo", message: "Hello world" }]);
   });
 
@@ -278,16 +308,21 @@ describe("flow-add-echo", () => {
       {},
       { name: "multi-echo", project_root: tmpDir, executionPrerequisite: PREREQ }
     );
-    await flowInsertEchoTool.execute(
+    const first = await flowInsertEchoTool.execute(
       {},
       { name: "multi-echo", project_root: tmpDir, message: "First" }
     );
-    const result = await flowInsertEchoTool.execute(
+    const second = await flowInsertEchoTool.execute(
       {},
       { name: "multi-echo", project_root: tmpDir, message: "Second" }
     );
 
-    const flow = parseFlow(result.flowFile);
+    // stepCount reflects the running total, not a constant — it is the only
+    // per-step size signal now that the growing YAML is no longer returned.
+    expect(first.stepCount).toBe(1);
+    expect(second.stepCount).toBe(2);
+
+    const flow = parseFlow(await onDisk("multi-echo"));
     expect(flow.steps).toEqual([
       { kind: "echo", message: "First" },
       { kind: "echo", message: "Second" },
@@ -348,12 +383,170 @@ describe("flow-add-step", () => {
     );
 
     expect(result.toolResult).toEqual({ tapped: true });
-    const flow = parseFlow(result.flowFile);
+    // The growing YAML is no longer returned per step; `flowFile` must be gone
+    // from the add-step result too (the breaking change this PR pins).
+    expect(result).not.toHaveProperty("flowFile");
+    const flow = parseFlow(await onDisk("step-test"));
     expect(flow.steps).toEqual([{ kind: "tool", name: "tap", args: { x: 0.5, y: 0.3 } }]);
     expect(registry.invokeTool).toHaveBeenCalledWith("tap", {
       x: 0.5,
       y: 0.3,
     });
+  });
+
+  it("returns the appended step as the `recorded` line, carrying delayMs", async () => {
+    const registry = createMockRegistry({ tap: { result: { tapped: true } } });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "recorded-line", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    const result = await tool.execute(
+      {},
+      {
+        name: "recorded-line",
+        project_root: tmpDir,
+        command: "tap",
+        args: '{"x":0.5,"y":0.3}',
+        delayMs: 500,
+      }
+    );
+
+    // `recorded` is the author's only per-step view of the file now that the
+    // whole YAML is no longer echoed, and it must spell the step exactly the
+    // way flow-finish-recording's summary does — including the pre-step sleep.
+    expect(result.stepCount).toBe(1);
+    expect(result.recorded).toBe('1. tool: tap {"x":0.5,"y":0.3} (after 500ms)');
+    expect(result.recorded).toBe(
+      summarizeStep(parseFlow(await onDisk("recorded-line")).steps[0], 1)
+    );
+    // In host mode `savedTo` is the path the YAML actually landed at, and with
+    // `flowFile` gone it is the only field naming it. See the add-echo case.
+    expect(result.savedTo).toBe(path.join(flowsDirFor(tmpDir), "recorded-line.yaml"));
+  });
+
+  it("reports stepCount as a running total, numbering each recorded line with it", async () => {
+    // Only flow-add-echo's running total was pinned; add-step's was asserted
+    // only at the value 1, so hardcoding `stepCount: 1` in its return passed
+    // the whole suite. stepCount is the recorder's only per-step size signal
+    // now that the growing YAML is gone, and it doubles as the line number
+    // `recorded` is rendered with — so drift here misnumbers both surfaces.
+    const registry = createMockRegistry({ tap: { result: { tapped: true } } });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "running-total", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const counts: number[] = [];
+    for (const y of [0.1, 0.2, 0.3]) {
+      const result = await tool.execute(
+        {},
+        {
+          name: "running-total",
+          project_root: tmpDir,
+          command: "tap",
+          args: JSON.stringify({ x: 0.5, y }),
+        }
+      );
+      counts.push(result.stepCount);
+      // The number `recorded` opens with IS the reported count, so the author
+      // cannot be shown "3." while being told the flow holds one step.
+      expect(result.recorded.startsWith(`${result.stepCount}. `)).toBe(true);
+    }
+
+    expect(counts).toEqual([1, 2, 3]);
+    // …and the total tracks the file, not just itself.
+    expect(parseFlow(await onDisk("running-total")).steps).toHaveLength(3);
+  });
+
+  it("records a double-tap's clickCount as `times`, surfaced in the recorded line", async () => {
+    // The clickCount→times rewrite (so a recorded double-tap replays as one,
+    // not a single tap) only fires on a `gesture-tap` command, so the raw-tool
+    // tests above never reach it. Selector capture can't resolve a device under
+    // the mock, so the coordinates are kept — all this case needs to drive the
+    // rewrite and confirm the ×N reaches the recorded line.
+    const registry = createMockRegistry({ "gesture-tap": { result: { tapped: true } } });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "double-tap", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    const result = await tool.execute(
+      {},
+      {
+        name: "double-tap",
+        project_root: tmpDir,
+        command: "gesture-tap",
+        args: JSON.stringify({
+          udid: "00000000-0000-0000-0000-0000000000ab",
+          x: 0.5,
+          y: 0.3,
+          clickCount: 2,
+        }),
+      }
+    );
+
+    const step = parseFlow(await onDisk("double-tap")).steps[0];
+    expect(step).toEqual({ kind: "tap", x: 0.5, y: 0.3, times: 2 });
+    expect(result.recorded).toBe("1. tap: (0.5, 0.3) ×2");
+    expect(result.recorded).toBe(summarizeStep(step, 1));
+  });
+
+  it("finish-recording's summary carries the same delay/times spellings as `recorded`", async () => {
+    // The per-step `recorded` lines are unit-covered above; this pins the OTHER
+    // summarizeStep consumer — finish-recording's `summary` array — so the two
+    // surfaces can't drift. It must render the pre-step delay and the tap count
+    // exactly as the recorder echoed them per step.
+    const registry = createMockRegistry({
+      "screenshot": { result: { ok: true } },
+      "gesture-tap": { result: { tapped: true } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "summary-labels", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    const delayed = await tool.execute(
+      {},
+      {
+        name: "summary-labels",
+        project_root: tmpDir,
+        command: "screenshot",
+        args: "{}",
+        delayMs: 250,
+      }
+    );
+    const doubled = await tool.execute(
+      {},
+      {
+        name: "summary-labels",
+        project_root: tmpDir,
+        command: "gesture-tap",
+        args: JSON.stringify({
+          udid: "00000000-0000-0000-0000-0000000000ab",
+          x: 0.5,
+          y: 0.3,
+          clickCount: 2,
+        }),
+      }
+    );
+
+    const finished = await flowFinishRecordingTool.execute(
+      {},
+      { name: "summary-labels", project_root: tmpDir }
+    );
+
+    expect(finished.summary).toEqual([
+      "1. tool: screenshot {} (after 250ms)",
+      "2. tap: (0.5, 0.3) ×2",
+    ]);
+    // The finished summary and each step's `recorded` line are the same spelling.
+    expect(finished.summary).toEqual([delayed.recorded, doubled.recorded]);
   });
 
   it("propagates the request's telemetry attribution to the recorded sub-tool", async () => {
@@ -464,7 +657,13 @@ describe("flow-add-step", () => {
       bundleId: "com.acme.app",
     });
     // …but recorded the launch directive, making this an e2e flow.
-    expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "launch", app: "com.acme.app" }]);
+    const steps = parseFlow(await onDisk("launch-rewrite")).steps;
+    expect(steps).toEqual([{ kind: "launch", app: "com.acme.app" }]);
+    // The rewrite is invisible in the raw result (which echoes restart-app's
+    // own output), so `recorded` is what tells the author a launch was stored
+    // rather than the tool call they made.
+    expect(result.recorded).toBe("1. launch: com.acme.app");
+    expect(result.recorded).toBe(summarizeStep(steps[0], 1));
   });
 
   it("keeps a restart-app with extra args (e.g. activity) as a raw tool step", async () => {
@@ -474,7 +673,7 @@ describe("flow-add-step", () => {
     const tool = createFlowAddStepTool(registry);
 
     await flowStartRecordingTool.execute({}, { name: "launch-activity", project_root: tmpDir });
-    const result = await tool.execute(
+    await tool.execute(
       {},
       {
         name: "launch-activity",
@@ -484,7 +683,7 @@ describe("flow-add-step", () => {
       }
     );
 
-    expect(parseFlow(result.flowFile).steps).toEqual([
+    expect(parseFlow(await onDisk("launch-activity")).steps).toEqual([
       {
         kind: "tool",
         name: "restart-app",
@@ -552,7 +751,12 @@ describe("flow-add-step", () => {
     // Ran the fragment live to set up state…
     expect(result.toolResult).toEqual({ ok: true, steps: [] });
     // …but recorded the portable composition directive, not the raw tool call.
-    expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "run", flow: "login.yaml" }]);
+    const steps = parseFlow(await onDisk("compose-test")).steps;
+    expect(steps).toEqual([{ kind: "run", flow: "login.yaml" }]);
+    // Same reason as the launch rewrite: `recorded` is the only place the
+    // author sees that a `run:` went in instead of a raw flow-execute step.
+    expect(result.recorded).toBe("1. run: login.yaml");
+    expect(result.recorded).toBe(summarizeStep(steps[0], 1));
   });
 
   it("records a run: directive when the target is an e2e flow", async () => {
@@ -564,7 +768,7 @@ describe("flow-add-step", () => {
     await flowStartRecordingTool.execute({}, { name: "compose-e2e", project_root: tmpDir });
     await writeSiblingFlow("other-e2e", "steps:\n  - launch: com.acme.app\n  - echo: hi\n");
 
-    const result = await tool.execute(
+    await tool.execute(
       {},
       {
         name: "compose-e2e",
@@ -575,7 +779,9 @@ describe("flow-add-step", () => {
     );
 
     // e2e flows now compose via run: just like fragments — their launch runs inline.
-    expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "run", flow: "other-e2e.yaml" }]);
+    expect(parseFlow(await onDisk("compose-e2e")).steps).toEqual([
+      { kind: "run", flow: "other-e2e.yaml" },
+    ]);
   });
 
   it("keeps the raw flow-execute step when the target is not a sibling", async () => {
@@ -597,7 +803,7 @@ describe("flow-add-step", () => {
     );
 
     expect(result.message).toMatch(/could not resolve/i);
-    expect(parseFlow(result.flowFile).steps).toEqual([
+    expect(parseFlow(await onDisk("compose-missing")).steps).toEqual([
       { kind: "tool", name: "flow-execute", args: { name: "elsewhere", project_root: tmpDir } },
     ]);
   });
@@ -614,7 +820,7 @@ describe("flow-add-step", () => {
 
     await flowStartRecordingTool.execute({}, { name: "compose-pinned", project_root: tmpDir });
 
-    const result = await tool.execute(
+    await tool.execute(
       {},
       {
         name: "compose-pinned",
@@ -624,7 +830,7 @@ describe("flow-add-step", () => {
       }
     );
 
-    expect(parseFlow(result.flowFile).steps).toEqual([
+    expect(parseFlow(await onDisk("compose-pinned")).steps).toEqual([
       { kind: "tool", name: "flow-execute", args: { name: "elsewhere", project_root: tmpDir } },
     ]);
   });
@@ -670,7 +876,7 @@ describe("flow-add-step", () => {
       await fs.realpath(path.join(tmpDir, ".argent", "flows", "twin.yaml"))
     );
     expect(result.message).toMatch(/would replay a different flow/);
-    expect(parseFlow(result.flowFile).steps).toEqual([
+    expect(parseFlow(await onDisk("compose-twin")).steps).toEqual([
       { kind: "tool", name: "flow-execute", args },
     ]);
   });
@@ -707,7 +913,7 @@ describe("flow-add-step", () => {
     // step is kept and the warning hands back the recordable spelling.
     expect(result.message).toContain('case-insensitively to "frag.yaml"');
     expect(result.message).toContain('re-run it as name "frag" to record it');
-    expect(parseFlow(result.flowFile).steps).toEqual([
+    expect(parseFlow(await onDisk("compose-name-casing")).steps).toEqual([
       { kind: "tool", name: "flow-execute", args },
     ]);
   });
@@ -743,7 +949,7 @@ describe("flow-add-step", () => {
       'rename "frag.YAML" to "frag.yaml" to record it — flow files must be lowercase .yaml'
     );
     expect(result.message).not.toContain("re-run it as name");
-    expect(parseFlow(result.flowFile).steps).toEqual([
+    expect(parseFlow(await onDisk("compose-name-rename")).steps).toEqual([
       { kind: "tool", name: "flow-execute", args },
     ]);
   });
@@ -759,7 +965,7 @@ describe("flow-add-step", () => {
     await flowStartRecordingTool.execute({}, { name: "compose-name-mixed", project_root: tmpDir });
     await writeSiblingFlow("MixedCase", "steps:\n  - echo: hi\n");
 
-    const result = await tool.execute(
+    await tool.execute(
       {},
       {
         name: "compose-name-mixed",
@@ -769,7 +975,9 @@ describe("flow-add-step", () => {
       }
     );
 
-    expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "run", flow: "MixedCase.yaml" }]);
+    expect(parseFlow(await onDisk("compose-name-mixed")).steps).toEqual([
+      { kind: "run", flow: "MixedCase.yaml" },
+    ]);
   });
 
   // A root the recorder cannot anchor is not a root it can check the name
@@ -809,7 +1017,7 @@ describe("flow-add-step", () => {
       );
 
       expect(result.message).toContain(`project_root must be an absolute path ${detail}`);
-      expect(parseFlow(result.flowFile).steps).toEqual([
+      expect(parseFlow(await onDisk("compose-unanchored")).steps).toEqual([
         { kind: "tool", name: "flow-execute", args },
       ]);
     } finally {
@@ -875,7 +1083,9 @@ describe("flow-add-step", () => {
     // Anchored beside the symlink's spelling this would miss the fragment and
     // demote a perfectly replayable composition to a raw tool step.
     expect(result.message).not.toMatch(/could not resolve/i);
-    expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "run", flow: "frag.yaml" }]);
+    expect(parseFlow(await onDisk("rec", base)).steps).toEqual([
+      { kind: "run", flow: "frag.yaml" },
+    ]);
   });
 
   it("keeps the raw step when the sibling exists only beside the symlink's spelling", async () => {
@@ -906,7 +1116,7 @@ describe("flow-add-step", () => {
     );
 
     expect(result.message).toMatch(/could not resolve/i);
-    expect(parseFlow(result.flowFile).steps).toEqual([
+    expect(parseFlow(await onDisk("rec", base)).steps).toEqual([
       { kind: "tool", name: "flow-execute", args: { name: "frag", project_root: base } },
     ]);
   });
@@ -943,7 +1153,7 @@ describe("flow-add-step", () => {
     );
 
     expect(result.message).toMatch(/not the file the live flow-execute ran/i);
-    expect(parseFlow(result.flowFile).steps).toEqual([
+    expect(parseFlow(await onDisk("rec", base)).steps).toEqual([
       { kind: "tool", name: "flow-execute", args: { name: "frag", project_root: base } },
     ]);
   });
@@ -958,7 +1168,7 @@ describe("flow-add-step", () => {
     await writeSiblingFlow("login", "steps:\n  - echo: hi\n");
     const sibling = path.join(tmpDir, ".argent", "flows", "login.yaml");
 
-    const result = await tool.execute(
+    await tool.execute(
       {},
       {
         name: "compose-path",
@@ -968,7 +1178,9 @@ describe("flow-add-step", () => {
       }
     );
 
-    expect(parseFlow(result.flowFile).steps).toEqual([{ kind: "run", flow: "login.yaml" }]);
+    expect(parseFlow(await onDisk("compose-path")).steps).toEqual([
+      { kind: "run", flow: "login.yaml" },
+    ]);
     // The live sub-invoke gets no file-input boundary, so it must run the
     // sibling by name…
     const nested = (registry.invokeTool as any).mock.calls[0][1];
@@ -1376,7 +1588,7 @@ describe("flow-add-step", () => {
     const tool = createFlowAddStepTool(registry);
 
     await flowStartRecordingTool.execute({}, { name: "teardown-test", project_root: tmpDir });
-    const result = await tool.execute(
+    await tool.execute(
       {},
       {
         name: "teardown-test",
@@ -1391,7 +1603,7 @@ describe("flow-add-step", () => {
       devices: ["00000000-HOST-DEVICE-ID"],
     });
     // …and the recorded step still reads as the scoped teardown it was.
-    expect(parseFlow(result.flowFile).steps).toEqual([
+    expect(parseFlow(await onDisk("teardown-test")).steps).toEqual([
       {
         kind: "tool",
         name: "stop-all-simulator-servers",
@@ -2395,14 +2607,20 @@ describe("flow-read-prerequisite", () => {
     // The pre-flight must offer the same source contract as the run it
     // precedes — a schema still requiring `name` would leave flow_path flows
     // unaddressable and silently answer for a saved flow of the same stem.
-    expect(flowReadPrerequisiteTool.inputSchema).toMatchObject({
+    const schema = zodObjectToJsonSchema(flowReadPrerequisiteTool.zodSchema!);
+    expect(schema).toMatchObject({
       type: "object",
       properties: {
         name: { type: "string" },
         flow_path: { type: "string" },
       },
-      oneOf: [{ required: ["name"] }, { required: ["flow_path"] }],
     });
+    // Neither source may be `required`: the exactly-one rule cannot be a
+    // top-level oneOf (tool-input-schema-contract.test.ts), so the zod
+    // superRefine enforces it and the description states it.
+    expect(schema.required as string[]).not.toContain("name");
+    expect(schema.required as string[]).not.toContain("flow_path");
+    expect(flowReadPrerequisiteTool.description).toMatch(/one and only one/i);
   });
 
   it("reads a boundary-verified flow_path's prerequisite, not the saved flow of the same stem", async () => {
@@ -2519,6 +2737,122 @@ describe("the flow-add-step schema the CLI tests hand-copy", () => {
   it("still opens its description with the sentence those fixtures quote verbatim", () => {
     expect(createFlowAddStepTool({} as unknown as Registry).description).toContain(
       "Execute a tool call and record it as a step in the flow named by `name` + `project_root`"
+    );
+  });
+});
+
+// ── summarizeStep rendering ──────────────────────────────────────────
+//
+// summarizeStep is the single spelling shared by the recorder's per-step
+// `recorded` line and flow-finish-recording's `summary`. `times` (tap),
+// `duration` (long-press) and `delayMs` (tool) change what replays, so a
+// summary that drops them misdescribes the file. long-press steps have no
+// live recorder path, so this is the only coverage of that rendering.
+describe("summarizeStep rendering", () => {
+  it("renders a tap's times count", () => {
+    // A recorded selector spells the id key `identifier`; selectorToYaml maps it
+    // to the file's `id` spelling, so the rendered line reads {"id":…}.
+    expect(summarizeStep({ kind: "tap", selector: { identifier: "b" }, times: 2 }, 1)).toBe(
+      '1. tap: {"id":"b"} ×2'
+    );
+    expect(summarizeStep({ kind: "tap", x: 0.5, y: 0.3 }, 1)).toBe("1. tap: (0.5, 0.3)");
+  });
+
+  it("renders the count it was given, across the range the file can carry", () => {
+    // Every other assertion that renders a count uses `times: 2`, so replacing
+    // `×${step.times}` with a constant `×2` left the whole suite green. The rest
+    // of the range is reachable: gesture-tap takes clickCount up to 10,
+    // flow-add-step records it as `times`, and parseTapTimes admits 2..10. Under
+    // that mutation a recorded triple-tap renders `×2` on the `recorded` line —
+    // the author's only per-step view of what was appended.
+    expect(summarizeStep({ kind: "tap", selector: { identifier: "b" }, times: 3 }, 1)).toBe(
+      '1. tap: {"id":"b"} ×3'
+    );
+    expect(summarizeStep({ kind: "tap", x: 0.5, y: 0.3, times: 10 }, 1)).toBe(
+      "1. tap: (0.5, 0.3) ×10"
+    );
+  });
+
+  it("never renders ×1 — the file can't carry times: 1", () => {
+    // parseTapTimes normalizes `times: 1` to absent, so a valid flow file never
+    // spells a single tap with a count. summarizeStep renders the file's
+    // spelling, so a stray in-memory `times: 1` must read as a plain tap, not ×1.
+    expect(summarizeStep({ kind: "tap", x: 0.5, y: 0.3, times: 1 }, 1)).toBe("1. tap: (0.5, 0.3)");
+    expect(summarizeStep({ kind: "tap", selector: { identifier: "b" }, times: 1 }, 1)).toBe(
+      '1. tap: {"id":"b"}'
+    );
+  });
+
+  it("renders a long-press hold duration", () => {
+    expect(
+      summarizeStep({ kind: "long-press", selector: { text: "Row" }, duration: 1200 }, 3)
+    ).toBe('3. long-press: {"text":"Row"} for 1200ms');
+    expect(summarizeStep({ kind: "long-press", x: 0.4, y: 0.5 }, 3)).toBe(
+      "3. long-press: (0.4, 0.5)"
+    );
+  });
+
+  it("renders a launch step's app, per-platform map included", () => {
+    // `launch` and `run` are the two kinds the recorder builds besides tap and
+    // tool, so both reach the author through `recorded` — yet mutating either
+    // arm to a constant used to fail nothing. A per-platform launch map is not
+    // recorder-reachable (the rewrite only maps a plain bundleId), but it is
+    // the arm's other branch and finish-recording renders it.
+    expect(summarizeStep({ kind: "launch", app: "com.acme.app" }, 1)).toBe(
+      "1. launch: com.acme.app"
+    );
+    expect(
+      summarizeStep({ kind: "launch", app: { ios: "com.acme.app", android: "com.acme" } }, 2)
+    ).toBe('2. launch: {"ios":"com.acme.app","android":"com.acme"}');
+  });
+
+  it("renders a run step's target as the file spells it", () => {
+    // The as-written YAML path, not a resolved absolute one — the summary
+    // quotes the file so a reader can find the line they are being told about.
+    expect(summarizeStep({ kind: "run", flow: "login.yaml" }, 1)).toBe("1. run: login.yaml");
+    expect(summarizeStep({ kind: "run", flow: "../shared/login.yaml" }, 5)).toBe(
+      "5. run: ../shared/login.yaml"
+    );
+  });
+
+  it("renders a tool step's pre-step delay", () => {
+    expect(
+      summarizeStep({ kind: "tool", name: "screenshot", args: { scale: 0.2 }, delayMs: 500 }, 4)
+    ).toBe('4. tool: screenshot {"scale":0.2} (after 500ms)');
+    expect(summarizeStep({ kind: "tool", name: "screenshot", args: {} }, 4)).toBe(
+      "4. tool: screenshot {}"
+    );
+  });
+
+  // `fromYamlStep` copies `delayMs` across without checking its type and
+  // `validateFlow` does not check it either, so a hand-edited non-number
+  // survives a parse and reaches the renderer. The line must describe what the
+  // RUNNER does with such a value — it gates on truthiness and hands the raw
+  // value to setTimeout — not what `typeof` says about it, since the two
+  // disagree in both directions.
+  const toolStepWithDelay = (yamlDelay: string) =>
+    parseFlow(
+      `executionPrerequisite: ""\nsteps:\n  - tool: screenshot\n    args: {}\n    delayMs: ${yamlDelay}\n`
+    ).steps[0];
+
+  it("renders no delay for a hand-edited delayMs the runner will not sleep", () => {
+    // `soon` coerces to NaN, which setTimeout floors to an immediate tick.
+    expect(summarizeStep(toolStepWithDelay("soon"), 4)).toBe("4. tool: screenshot {}");
+    // `.nan` IS a number, so a `typeof` check announced `(after NaNms)` — but
+    // it is falsy, so the runner's gate skips the sleep entirely.
+    expect(summarizeStep(toolStepWithDelay(".nan"), 4)).toBe("4. tool: screenshot {}");
+    // Same tick, same silence: neither reaches setTimeout's 1ms floor.
+    expect(summarizeStep(toolStepWithDelay("0"), 4)).toBe("4. tool: screenshot {}");
+    expect(summarizeStep(toolStepWithDelay("-5"), 4)).toBe("4. tool: screenshot {}");
+  });
+
+  it("renders the delay a quoted number really sleeps", () => {
+    // A quoted numeric is an ordinary slip in the hand-edit workflow, and it is
+    // not inert: the runner's gate is truthiness, and setTimeout coerces the
+    // string, so this waits two real seconds on every replay. A `typeof` check
+    // rendered nothing at all for it.
+    expect(summarizeStep(toolStepWithDelay('"2000"'), 4)).toBe(
+      "4. tool: screenshot {} (after 2000ms)"
     );
   });
 });

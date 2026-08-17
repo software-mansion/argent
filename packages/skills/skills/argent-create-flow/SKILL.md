@@ -1,344 +1,49 @@
 ---
 name: argent-create-flow
-description: Record a reusable flow (scripted sequence of MCP tool calls) that can be replayed later with a single command. Use when the user asks to create, record, or build a flow, or to script a sequence of device actions. Also used proactively, without an explicit request, when a multi-step interaction sequence is about to be repeated (re-profiling, re-testing, or a complex path worth saving).
+description: Create, record, edit, replay, or repair reusable Argent flow YAML files. Use when the user asks to record or replay a repeatable device path, set up profiling or an A/B comparison, or invoke the authoring engine behind argent-qa-flows. Also use before repeating three or more interactions. For one-off UI checks, acceptance-driven regression tests, or screen video, use argent-test-ui-flow, argent-qa-flows, or argent-screen-recording respectively.
 ---
 
-## Overview
+# Create an Argent flow
 
-A flow is a sequence of steps saved to a `.yaml` file in the `.argent/flows/` directory. Each recorded step is **executed live** as you add it, so you verify it works before it becomes part of the flow. Replay a finished flow with `flow-execute`, or — for an e2e flow — headlessly with `argent flow run checkout` (a saved flow's name) or `argent flow run path/to/checkout.yaml`.
+An Argent flow is a replayable sequence in `.argent/flows/<name>.yaml`.
 
-Flows store **no device id**: the runner binds a device (the single booted one, or pass `device`/`platform`). A recorded coordinate `gesture-tap` is captured as a portable `tap: { selector }` step whenever the tapped element has stable text/identifier.
+For a saved QA test case, ticket, or acceptance criterion, load `argent-qa-flows` first. It adds deterministic setup, acceptance evidence, and two-pass proof.
 
-The one exception is a device _scope_ rather than a target: `stop-all-simulator-servers`' `devices` list is kept in the YAML, because without it the step means the machine-wide sweep and would tear down devices other agents are mid-session on. Replay rebinds a recorded scope only when you pass `device` explicitly — an auto-detected device would retarget the teardown at a device the flow never named, which is the cross-agent teardown the scope exists to prevent. So the recorded ids are what run when you replay without `device`, and when you hand-run the step (see _Strategy 2 — Manual recovery + continue_); on another host they reap nothing and come back in `unmatched`. Re-record the cleanup flow there, or pass `device`. A step that recorded NO scope is still narrowed onto whatever device the run resolved, since binding can only make the machine-wide sweep smaller. A cleanup flow whose only step is that teardown needs no device and runs whether none or several are booted.
+## Read the relevant reference
 
-**Two flow types**
+- Before creating or changing a flow, read [Live authoring](references/live-authoring.md) completely.
+- When polishing, composing, or manually reviewing YAML, read [Flow YAML](references/flow-yaml.md). For Vega, read its platform limits before recording remote or keyboard tools.
+- On capture warnings, raw coordinates, unavailable trees, mistimed transitions, overlays, or replay failures, read [Reliability and recovery](references/reliability-and-recovery.md).
 
-- **e2e** — begins with a `launch:` step, which starts that app from scratch (terminate + relaunch), so the flow controls its own start state. No `executionPrerequisite`. May `run:` other flows, and may itself be a `run:` target — when nested, its `launch` runs inline, restarting the app for that sub-scenario. **On Chromium a launch is a process, not a relaunch:** the "device" is the booted app (its id is the CDP port). The runner needs a device before step 1, so it boots for the launch the run _begins_ with, following a leading `run:` — a fragment whose first step composes a chromium e2e flow boots that flow's app (pass `--platform chromium` when the launch names several platforms, or the target is ambiguous and auto-detection is used instead). That first launch then just settles the instance it was booted for; every _later_ launch — a nested e2e flow's own, or a mid-flow `launch:` of the same app — boots its own instance and the run moves onto it for the remaining steps, replacing the one the runner already owns for that app. Every instance the runner boots is torn down at run end; one you pinned with `--device` is attached to, never killed — so relaunching _that_ app mid-flow fails if it holds a single-instance lock. A launch that names no id for the run's platform is an error — a `chromium:` entry does not make a flow runnable on iOS, and the run never switches platforms mid-flight. Record one by adding a `restart-app` of the app under test as the **first** step — it is captured as the `launch` step. Not on Chromium, though: `restart-app` has no chromium support and only successful calls are recorded, so a recorded chromium flow is always a fragment — write the `launch: { chromium: <app path> }` line into the YAML yourself afterward, and delete any `executionPrerequisite` the recording declared: with its own launch the flow controls its start state, and a launch-first flow must not carry one.
-- **fragment** — doesn't begin with a launch; runs against the device's current state. May declare an `executionPrerequisite` (a documented entry-state contract). Invoked from other flows via a `run:` step, or directly by you at any time. One exception to "current state": a fragment whose **first** step `run:`s a chromium e2e flow takes on that flow's launch — the runner boots that app before step 1 (see the e2e bullet; pass `--device` to attach to a running instance instead).
+## Non-negotiable rules
 
-Both run via `argent flow run <flow|flow.yaml>` — a fragment simply runs against whatever is on screen (its prerequisite is printed as a reminder), except the chromium leading-`run:` case above, which boots. A bare name is read from `.argent/flows/<name>.yaml`; anything ending in `.yaml` is a path. Only e2e flows are meaningful CI/suite entries, since only they give a deterministic verdict from a clean start.
+1. **Record the first walkthrough.** Start the recorder before the first launch or in-app action. Do not reconstruct a rehearsed path.
+2. **Record checks when their states appear.** Record `await-ui-element` live, then convert it during polish. An echo records intent or diagnostic context, not app behavior or a verdict. A screenshot is human evidence, not an executable verdict. For absence, record the same selector as `visible`, perform the removing action, then record it as `hidden`.
+3. **Use semantic targets.** Prefer a strict id, then stable text or an accessibility label. Use `scroll-to` for off-screen elements. Resolve every raw-point warning immediately through the [coordinate fallback gate](references/reliability-and-recovery.md#coordinate-fallback-gate).
+4. **Prove every screen change.** Record a destination-only identity check. During polish, follow it with `await: { idle: true }`. Stillness does not prove identity, and `idle` can pass with a warning.
+5. **Polish only executed behavior.** Convert recorded steps without changing their meaning. Record any missing action or structural check live. The only unrecorded insertions are a planned `snapshot:`, a navigation `await: { idle: true }`, and the documented Chromium packaging `launch:`.
+6. **Replay the final YAML end to end.** A normal flow needs one uninterrupted full pass. `argent-qa-flows` requires two consecutive passes.
 
-### Step directives
+### Stable selectors
 
-Beyond raw `tool:` steps and `echo:`, flows support declarative directives interpreted by the runner (they are **not** agent-callable tools). **Every directive hard-stops the flow on failure**; later steps are reported `skip`.
+A stable selector is fixed by app code and survives account, data, time, count, order, and every locale and environment the flow supports. Prefer ids such as `settings-screen`. Do not gate on values such as `Today`, `Item 4`, usernames, counters, or timestamps.
 
-| Directive    | YAML                                                                                                                                                                 | Meaning                                                                                                                                                                                                                       |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `launch`     | `- launch: com.acme.app` or `- launch: { ios: …, android: … }`                                                                                                       | start the app from scratch (terminate + relaunch) and wait until ready                                                                                                                                                        |
-| `tap`        | `- tap: Login`, `- tap: { x: 0.5, y: 0.57 }`, `- tap: { on: Login, times: 2 }`, `- tap: { on: { x: 0.5, y: 0.57 }, times: 2 }`                                       | tap by selector (auto-waits) or raw point; `times` (2 = double-tap) needs the target nested under `on:` — a selector or a point (`{ x, y, times }` is rejected)                                                               |
-| `long-press` | `- long-press: Row 3`, `- long-press: { x: 0.5, y: 0.6 }`, `- long-press: { on: <sel>, duration: 1200 }`, `- long-press: { on: { x: 0.5, y: 0.6 }, duration: 1200 }` | press and hold an element or raw point (default 800ms; Chromium: mouse press-hold); `duration` needs the target nested under `on:` — a selector or a point                                                                    |
-| `type`       | `- type: { into: email, text: "a@b.com" }`                                                                                                                           | focus a field, type, then press Enter to submit + dismiss the keyboard                                                                                                                                                        |
-| `scroll-to`  | `- scroll-to: "Order #1234"` (scrolls down) or `- scroll-to: { target: …, direction: right, within: … }`                                                             | momentum-free scroll until the target is visible                                                                                                                                                                              |
-| `pinch`      | `- pinch: { on: "Map", scale: 3 }` or `- pinch: { scale: 0.5 }`                                                                                                      | two-finger zoom in (`scale` > 1) or out (`< 1`); big scales chain gestures; `on` optional — defaults to screen center; open-loop — assert the visible result                                                                  |
-| `rotate`     | `- rotate: { on: "Map", by: 90 }` or `- rotate: { by: -45 }`                                                                                                         | two-finger rotation by degrees (+ CW, − CCW, within ±3000°; options map only); `on` optional — screen center default; not `tool: rotate` (orientation)                                                                        |
-| `await`      | `- await: { visible: Home }` or `- await: { idle: true }`                                                                                                            | wait for a UI condition, or for the screen to stop moving                                                                                                                                                                     |
-| `wait`       | `- wait: 500`                                                                                                                                                        | pause for a fixed number of milliseconds (last resort — prefer `await`)                                                                                                                                                       |
-| `assert`     | `- assert: { visible: Welcome }`                                                                                                                                     | check a condition, hard-fail if it never holds                                                                                                                                                                                |
-| `snapshot`   | `- snapshot: home` or `- snapshot: { name: home, maxMismatch: 0.5, cropOn: { id: order-summary } }`                                                                  | diff a screenshot — or one element's region — against a stored baseline                                                                                                                                                       |
-| `run`        | `- run: login.yaml`                                                                                                                                                  | execute another flow's steps inline (fragment or e2e); a YAML path resolved relative to the flow file that contains the step (e.g. `../shared/login.yaml`); `.yaml` is optional (`run: login` = `login.yaml` beside the flow) |
-| `when`       | `- when: { visible: "What's new" }` + `steps: [...]`                                                                                                                 | run a guarded step block only when the condition holds (no else)                                                                                                                                                              |
+### Flow-only selector scopes
 
-### Selectors
+During polish, use `within`, `after`, and `next` to disambiguate repeated elements. Read [Flow YAML: Relational scopes](references/flow-yaml.md#relational-scopes) for their frame-based semantics and failure cases.
 
-A **selector** is `{ text?, id?, role? }` plus the optional scopes below (all-must-match; `text`/`role` are case-insensitive substrings, `id` matches the element's testID / accessibilityIdentifier / resource-id exactly, case-insensitive, also accepting the unqualified Android resource-id name — `submit` matches `com.example.app:id/submit`) — the same semantics `await-ui-element` uses, though that tool spells the `id` field `identifier` (flow YAML also accepts `identifier` as an alias for `id`, but `id` is the canonical spelling and what the recorder writes). A bare string is a _loose_ selector: it resolves **identifier-first, then falls back to text** (label/value), so `tap: Login` matches a `testID="Login"` or, failing that, visible text "Login" — no need to know which. Loose fallback applies uniformly to every selector slot (`tap`, `type.into`, `await`, `assert`, `scroll-to`). Use the map form to be strict: `{ id: submit-btn }` (identifier only) or `{ text: Login }` (text only, no fallback).
+## Workflow
 
-`text` also takes a **regex matcher map** — `{ text: { matches: '^Order #\d+$' } }`, in any selector slot — for dynamic text no literal can pin. It tests each node's native **own** label/value (not the adapter-hoisted `subtreeText`), though on iOS a container's own label may itself aggregate descendant text, so a wrapper and its leaf can both match. Same regex rules as `text.in`'s `matches` (see _`await` and `assert`_): unanchored, **case-sensitive**, single-quoted, invalid pattern fails at parse. So `assert: { visible: { text: { matches: '^Taps: \d+$' } } }` asserts a counter is on screen with no locator at all, and `tap: { text: { matches: '^Order #\d+$' } }` taps a dynamic row — though a stable `id` stays the more robust action target.
+1. Choose the flow type:
+   - **e2e:** the first non-echo step is `launch:`. The flow controls process start.
+   - **fragment:** there is no leading launch. Declare a precise `executionPrerequisite`.
+2. Follow [Live authoring](references/live-authoring.md): start, record one verified step at a time, finish, polish, audit, and replay.
+3. Report the file, replay command, result, prerequisite or side effects, and every coordinate or raw-gesture exception.
 
-#### Scopes — CSS combinators, read off frames
+## Proactive recording
 
-A map selector may also carry a **scope**: a nested selector naming another element the match must sit in a given spatial relation to. These are the geometric readings of the CSS combinators that survive a flattened tree — the child combinator `>` has no analog, since parent/child structure does not reach replay. They combine, and nest up to six scopes per selector:
+Before repeating three or more interactions, tell the user and start a recording. Record that run and replay it afterward. A completed path cannot be recorded retroactively.
 
-| Scope           | CSS     | Reads as                                                        | Example                                                               |
-| --------------- | ------- | --------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `within: <sel>` | `A B`   | the match's frame sits **inside** the scope element's frame     | `tap: { text: Delete, within: { id: profile-card } }`                 |
-| `after: <sel>`  | `A ~ B` | the match **follows** the scope element in reading order        | `assert: { visible: { role: Button, after: { text: Danger zone } } }` |
-| `next: <sel>`   | `A + B` | as `after`, narrowed to the **nearest** follower of each anchor | `tap: { role: Switch, next: { text: Wi-Fi } }`                        |
+## Repair
 
-And `any: true` is the CSS `*` universal selector. It carries no locator of its own, so the parser enforces two rules: it needs **at least one scope** (a bare `any: true` would match the whole screen), and it may **not** sit beside `text`/`id`/`role` (which it would only make redundant — write `{ role: Switch, next: … }`, not `{ any: true, role: Switch, next: … }`). Only the literal `true` is accepted. `assert: { hidden: { any: true, within: { id: empty-state } } }` asserts an empty container. It works for actions too — `tap: { any: true, next: { text: Airplane Mode } }` taps whatever sits right after that label — but on a real tree "whatever" includes spacers and wrappers, so **name the target** (`role`, `id`) whenever you can and keep `any` for conditions and for `next`, which reduces to a single element per anchor.
-
-All of it is **visual (frame-based), not tree ancestry** — flow trees are flattened, and "inside the card" / "the switch after this label" mean what the screen shows — the same frame-based reading of "within" that `scroll-to`'s container anchor uses. Every scope needs a **distinct element** (nothing scopes itself, so `{ id: card, within: { id: card } }` needs two nested elements), the synthetic screen root never counts, and a scope only narrows _where_ to look — the selector still needs its own `text`/`id`/`role` naming _what_ to find there, or `any: true`. The nested slot takes every selector form: a bare string keeps the loose identifier-first fallback (`within: profile-card`), the map form stays strict, the regex matcher works (`within: { text: { matches: '^Card \d+$' } }`). Scopes are flow-YAML only; the raw `await-ui-element` tool's selector accepts none of them. Prefer a unique `id` on the target itself when one exists — reach for a scope when the target has no unique locator of its own (repeated row actions, per-card buttons, list cells).
-
-**`within`** — `tap: { text: Delete, within: { id: profile-card } }` taps the Delete button in the profile card even when other cards show identical ones; `tap: { text: "Pin feed", within: { text: "For You" } }` picks one card's button out of a whole list. Scope to a container with a **tight frame** (a row, card, dialog, toast): a full-screen wrapper contains everything and scopes nothing. It chains outward: `{ text: Save, within: { id: cards, within: Settings } }` reads "Save inside cards inside Settings", each container's frame inside the next.
-
-**`after` / `next`** — reading order is row-band aware: an element **follows** the anchor when it starts below the anchor's bottom edge, _or_ shares its row band and sits entirely to its right. That is what makes `{ role: Switch, next: { text: Wi-Fi } }` resolve the Wi-Fi row's own switch even though the taller switch's frame starts a couple of pixels _higher_ than the label's. `next` keeps only the nearest follower — a match in the anchor's own row beats anything on the rows below, leftmost first — while `after` keeps them all, so `assert: { hidden: { role: Button, after: { text: Danger zone } } }` holds when nothing button-like appears past that heading. Both union over anchors exactly as CSS does: with three rows on screen, `{ role: Switch, next: { role: AXStaticText } }` yields all three switches, one per label. Note that "follows" is **not transitive** — against a tall anchor, an element can follow something that itself follows the anchor without following the anchor directly — so nesting `after` scopes is not the same as chaining CSS `~`: `{ after: { …, after: … } }` can match elements a single `after` excludes. Nest them only when each link is a container-sized step. An element sitting _inside_ the anchor does not follow **that** anchor — containment is not reading order — so scope by `within` for that.
-
-**Prefer the map form for a scope's anchor.** A bare-string scope (`next: wifi-row`) keeps the loose identifier-first fallback, and the runner takes the first pass that finds a _visible_ match — so if some unrelated element carries `testID="wifi-row"`, the identifier pass wins and the text pass never runs. Reproduced: with a decoy `testID="Wi-Fi"` elsewhere on screen, `tap: { role: Switch, next: Wi-Fi }` taps the decoy's neighbour and reports a pass. This is the ordinary identifier-first doctrine, but a scope makes a decoy likelier to "succeed": a decoy _container_ only wins if it actually holds a match, while a decoy _anchor_ wins if anything at all sits after it — which on a real screen it usually does. Spell an anchor you care about as a map: `next: { text: Wi-Fi }` or `next: { id: wifi-row }`.
-
-One way `next` is deliberately **looser than CSS `+`**: where `A + B` matches nothing unless the very next sibling is a `B`, `next` keeps looking and returns the nearest match further on. That is what makes it survive the wrapper and spacer nodes a flattened tree is full of, but it also means a row that is _missing_ the control you asked for silently resolves to the next row's — `{ role: Switch, next: { text: Wi-Fi } }` on a Wi-Fi row rendered without a switch returns the _Bluetooth_ row's switch rather than failing. When a row may legitimately lack the control, assert it first (`assert: { visible: { role: Switch, within: { id: wifi-row } } }`) or scope by `within` instead.
-
-Scopes compose, and it matters which one carries them. `{ role: Button, next: { text: Name, within: { id: card-b } } }` scopes the **anchor** — one label, so one pick, but that pick may land outside card-b. `{ role: Button, next: { text: Name }, within: { id: card-b } }` scopes the **target** — every label is still an anchor, but only card-b's buttons can be picked. They agree on a well-formed screen and diverge when card-b has no button: the first reaches on to the next card's, the second returns nothing. Scope the target when the container is the thing you trust. Conditions honor scopes like any other selector: `assert: { hidden: { text: Saved, within: { id: toast-area } } }` holds when nothing matching "Saved" is inside the toast area — matches elsewhere on screen don't count, and a missing scope element satisfies `hidden` (and fails `visible`/`exists`).
-
-Selectors resolve against the **full native hierarchy** (iOS: the UIView tree; Android: the complete accessibility hierarchy including not-important views) — strictly more than `describe` or the raw `await-ui-element` tool see (both use the trimmed tree), with complete `testID`/`resource-id` coverage. So an `id` selector works even when `describe` collapses or omits the element — don't fall back to coordinate taps just because a testID isn't visible in `describe` output. And when several elements match — including wrappers whose native text aggregates descendant content — the action directives (`tap`, `type`, `scroll-to`) pick the **most specific** match: an exact text/identifier match beats a substring hit (for a regex matcher, a pattern consuming the element's whole text counts as exact), then the smallest frame wins. (A universal `any: true` selector has no field to be exact about, so its matches rank by reading order instead — the first element in the scope, which is the element a condition reads too. Where two matches share a top-left corner, an action breaks the tie toward the smaller, more specific one and a condition does not, so those two can name different elements.)
-
-**Quote strings YAML would mangle.** An unquoted `#` starts a YAML comment — `tap: Order #1234` silently parses as `tap: Order` — and bare `yes`/`no`/`on`/`off`/numbers coerce to non-strings. When a selector or typed text contains `#`, `:`, quotes, or could read as a boolean/number, wrap it: `tap: "Order #1234"`.
-
-### `await` and `assert`
-
-The **condition is the key**, and its value is the selector:
-
-- `{ visible: Home }`, `{ exists: { id: row } }`, `{ hidden: spinner }`
-- `{ text: { in: <selector>, contains: "Taps:" } }` or `{ text: { in: <selector>, equals: "Taps: 0" } }` — `text` locates an element (`in`) and checks its rendered content against exactly one of `contains` (case-insensitive substring) or `equals` (case-insensitive exact match — use it when boundaries matter: `contains: "Taps: 3"` is also satisfied by "Taps: 30"). Reach for `text` only when the locator is an identifier/role; to assert a string is simply on screen, prefer `{ visible: "Taps: 0" }`.
-- `{ text: { in: total, matches: 'Total: \$\d+\.\d{2}' } }` — the third comparator: a JS regex for dynamic content (counters, prices, dates) that neither literal mode can pin. Unanchored like `contains` (anchor with `^…$` for the `equals` analog) and — unlike the literal modes — **case-sensitive**: the pattern carries its own semantics. An invalid pattern fails at parse time. **Quote the pattern in single quotes**: single-quoted and plain YAML scalars keep backslashes; double quotes would need `\\d`. To assert a dynamic string is simply on screen with no locator, prefer a regex **selector** — `{ visible: { text: { matches: '^Taps: \d+$' } } }` (see Selectors); `text.in` + `matches` is for checking a specific element's aggregated text.
-- A container's text aggregates its descendants' text (space-joined), so `text` can assert what a testID wrapper visibly shows even when the string lives in a child node. That also means `equals` against a wrapper must match _everything_ it shows or exactly the wrapper's own label/value — targeting the leaf holding exactly the value (or using `contains`) stays the clearer spelling.
-
-This condition-as-key form is the only spelling. `await` also accepts an optional `timeout` sibling key in milliseconds — `- await: { visible: Home, timeout: 15000 }` — for a transition that legitimately needs longer than the default budget. **Omit `timeout` by default**: the default budget covers normal transitions, and a habitual generous override just delays failure reporting on every broken step. Add one only after a step demonstrably needs it — it timed out at the default and the wait is legitimately slow (a cold start, a network round-trip, a long animation). `assert` has no timeout override: a check that needs seconds to become true is a wait — spell it `await`.
-
-For a custom poll interval or bundleId, drop to an explicit `- tool: await-ui-element` step — but the raw tool polls the trimmed `describe` tree, so a testID it reports as not found can still resolve fine as an `await:` directive (see Selectors). Prefer the directive.
-
-**`await: { idle: true }` — the one condition with no selector.** It waits until the screen has content and stops moving in **both** the UI tree and the rendered pixels. Options: `stableFor` (how long stillness must hold, default 250) and `timeout` (default 7500, and it has to contain the longer of the hold and the 400ms a settle spans — three reads spanning two 200ms polls — plus the 200ms of budget the closing round has to have left to be allowed to start, or the parser rejects the step. The hold runs **during** those polls, not after them, so the default 250ms hold needs 600ms and an 800ms hold needs 1000ms). Reach for it when a transition's motion is invisible to the tree — an iOS push or modal dismissal commits its hierarchy up front and then animates a layer for a few hundred milliseconds, and a cross-fade or scrim moves no node at all — which is exactly when an element `await:` returns while the screen is still sliding, and the next tap lands on a moving target.
-
-It **never fails a run.** Readiness is not an acceptance criterion, so every outcome short of a clean settle passes carrying a `warning` on the step — read it rather than stepping over it:
-
-- **the screen never held still** — it spent the timeout and went ahead, and was still moving on the last interval. Plenty of healthy screens never stop (a video, a shimmer, a carousel, live-updating text); a screen that never finished loading looks the same from here.
-- **the screen was still for the last Nms** — the wait ran out mid-hold, so the settle was never confirmed. It names the term that was short: a second agreeing interval (one can be two samples either side of an animation's turning point) or the rest of `stableFor`. Raise `timeout` — this one is the wait being too short, not the screen moving.
-- **a small part of it was still changing** — a spinner, a caret, a progress dot, moving during the stretch of stillness the step settled on. Too small to be the screen moving, so the settle completed anyway; if it is a loading spinner, the screen was still loading when this step returned.
-- **the tree stayed empty** — the screen rendered no accessible content. Sometimes the app (a canvas, a video surface), sometimes a screen that never arrived.
-- **settled on the UI tree alone** — the screen could not be screenshotted often enough to compare a pair, so presentation-layer motion (a push, a fade, a dismissing modal) was not waited out.
-- **the screen came back with content on too few reads** — a settle takes three of them spanning two polls, and this step got fewer, so it ended without ever being able to tell whether the screen was moving. A slow tree source, or a window that was blank for most of the wait.
-
-Only a tree source that cannot be read stops the run, as an `error` — one that is still failing when the wait ends, one that answers and then wedges, one that answers with an empty tree it flags as degraded (an unattached Vega toolkit, an AX service asking to be relaunched), or one that never answers at all within the step (that last one may simply be slow: raise the step's `timeout` before suspecting the app). That is a broken window, not a verdict about the app: the run is not ok and every later step is skipped. A single failed read is not that window: the hold restarts from the next good one, and a read that fails at the very end of the wait is named in the warning rather than stopping the run.
-
-It is **not** a screen check either: a dropped tap leaves the source screen perfectly idle. Put it **after** the element `await:` that names the destination, never instead of one. There is no `assert` form (waiting is the whole point), no `when:` form, and the recorder cannot emit one — every `idle` step is hand-written. Do not sprinkle it after every step: each one costs a settle, and it cannot fail, so a flow full of them is slower without being stricter.
-
-### `type` and `scroll-to`
-
-`type` presses Enter after typing to commit the value and dismiss the keyboard, so it can't cover later targets. For a chained form whose fields feed one explicit submit — e.g. email then password then a `tap: "Log in"` — set `submit: false` on the intermediate fields so a premature Enter doesn't fire the form early: `type: { into: password, text: "hunter2", submit: false }`.
-
-Never record a real credential into a flow — the YAML is committed to the repo. Use a secret placeholder instead: `type: { into: password, text: "{{secret:APP_PASSWORD}}" }`. The placeholder is stored verbatim (the YAML stays secret-free) and is resolved at run time by the tool-server, from the `ARGENT_SECRET_APP_PASSWORD` environment variable or an argent secrets file — so one flow runs unchanged everywhere:
-
-- **CI** — the job exports `ARGENT_SECRET_APP_PASSWORD` from its secret store; the environment wins over every file.
-- **A developer's machine** — the value lives in a dotenv file instead, so nothing has to be exported and no session has to be restarted: `APP_PASSWORD=…` in `~/.argent/secrets.env` (per user, any project) or in the project's `.argent/secrets.env` (**gitignore it** — the rest of `.argent/` is committed), or `ARGENT_SECRET_APP_PASSWORD=…` in the project's `.env` / `.env.local`, where only prefixed keys are exposed.
-
-Same placeholder for a value that is merely _external_ rather than sensitive (a test account's email, a staging tenant id) — it keeps the flow environment-independent. Note that argent treats every such value as a secret: it is redacted from errors and never echoed back, so don't use it for something a report should show.
-
-`scroll-to` takes an optional `direction` (`up` | `down` | `left` | `right`, default `down` — so the common case is just `- scroll-to: <selector>`) and optionally a `within: <selector>` that anchors the scroll inside a specific container — required to drive a **nested** scroller (e.g. a horizontal carousel inside a vertical list), since the device can't be asked which container to scroll. This step-level `within` (a sibling of `target`) anchors the _gesture_, and it is the **only** scope key the step body takes — `after:`/`next:`/`any:` beside `target` are rejected. It is distinct from a selector's scopes (see Selectors), which `target` may itself carry — `scroll-to: { target: { text: Delete, within: { id: cards } }, within: { id: settings-list } }` scrolls the settings list until the Delete button _inside the cards container_ is visible. It scrolls in bounded momentum-free increments, re-checks after each, and stops if a scroll reveals nothing new (end of the container). `tap`/`type` do **not** scroll — add a `scroll-to` before any target that may be off-screen. It's a no-op when the target is already visible, so a defensive `scroll-to` costs nothing on replay and keeps the flow working on smaller screens.
-
-### `snapshot` cropping
-
-`cropOn: <selector>` narrows a snapshot's comparison to one element's region — `- snapshot: { name: cart-total, cropOn: { id: order-summary } }`. The selector resolves like a directive target (settled tree, auto-wait, the standard not-found failure; selector-only, no point form), and the **cropped** image is what gets compared, stored as the baseline, and reported as the `current` artifact; the baseline filename still keys on the full capture's resolution — plus a `-crop-<hash>` selector suffix — so device-class drift is still caught. A cropped comparison never masks any region — every pixel of the crop is compared — so prefer elements clear of the top status-bar band (a crop overlapping it leans on best-effort status-bar pinning, and the clock/battery may diff). Crop **fixed-size containers**, addressed by `id`: a text selector resolves to the smallest matching node — typically the label itself, whose frame tracks text metrics — and the crop tracks the element's frame, so an element that grew or shrank by a pixel fails on dimensions ("nothing was compared") rather than on content. Baseline storage and seeding are covered under _Standalone runner_.
-
-### TV targets (Vega)
-
-A Vega (Fire TV) device is remote-driven — there is no touch input, so the touch directives (`tap`, `long-press`, `type`, `scroll-to`, `pinch`, `rotate`) fail on it with guidance. Drive focus with `tool: tv-remote` steps and type with `tool: keyboard` instead; everything else (`launch`, `await`, `assert`, `wait`, `snapshot`, `echo`, `run`, selectors) works unchanged — the tree comes from the on-device automation toolkit, which attaches at app launch (the `launch` step waits for it, so a leading `launch` also guarantees selectors resolve).
-
-```yaml
-steps:
-  - launch: com.example.app.main # the interactive component id from manifest.toml
-  - await: { visible: Home }
-  - tool: tv-remote
-    args: { button: [down, select] } # move focus, then confirm — one step per navigation
-  - await: { visible: Explore Screen }
-  - snapshot: explore
-```
-
-Since a `tv-remote` path is positional (like a coordinate tap), gate each navigation with an `await` on the destination screen and echo where focus should be — that is what makes the flow diagnosable when the focus order changes.
-
-### Standalone runner
-
-`argent flow run <flow|flow.yaml|dir> [--device <id>] [--platform ios|android|chromium|vega] [--update-baselines] [--output <dir>] [-r|--recursive] [--json]` runs a flow with no LLM in the loop and exits non-zero on any failure — suitable for CI (e2e flows; a fragment runs against the current device state, useful while authoring — unless its first step `run:`s a chromium e2e flow, which boots that app). The argument is either a saved flow's name, read from `.argent/flows/<name>.yaml` under the current directory, or a `.yaml` file path (relative to the current directory, or absolute) for a flow kept anywhere else. The two never collide: a name carries no separator and no extension, so an argument ending in `.yaml` is always a path and never falls back to the flows directory. Either way the filename (minus `.yaml`) names the run's report and artifacts, so it must contain only letters, numbers, `_`, or `-`. A directory path runs every flow in it sequentially, printing only failing steps plus a final `passed/failed/skipped` flow summary (`--json` prints one aggregate object); `-r`/`--recursive` walks subdirectories too, skipping dot-directories and `node_modules`. An invalid flow file fails alone and the batch continues; an infra error stops the batch, counting the remaining flows skipped. Only a path reaches a directory — a name always resolves to one `.yaml` file. `argent flow list` prints runnable paths for flows saved under `.argent/flows/` — a nested one is addressable by its path only.
-
-The standalone command uses only the auto-started local tool server. It is unavailable while `ARGENT_TOOLS_URL` or `argent link` routing is active; unset `ARGENT_TOOLS_URL` or run `argent unlink` first. This restriction applies only to the CLI: an agent may continue calling `flow-execute` with `name` and `project_root`, including through a remote tool server — but a remote call uploads the one YAML into a temp directory on the server, and both `run:` targets (whose referenced files stay behind on the client) and `__baselines__/` resolve beside that copy, so only a self-contained flow replays remotely (see _Replaying_).
-
-`snapshot` baselines live beside the **real** (symlink-resolved) **top-level** flow file in `<canonical-root-flow-directory>/__baselines__/<real-root-flow-filename-minus-.yaml>/` — directory _and_ key both come from the resolved file (for a saved flow that is a regular file, simply `.argent/flows/__baselines__/<flow>/`; for one that is a symlink, `.argent/flows/smoke.yaml` → `../vault/a-smoke.yaml` keys `../vault/__baselines__/a-smoke/`, so two projects symlinking their own `smoke.yaml` into one shared vault keep separate baselines — commit baselines beside the real file under the real file's name, and move any set already committed under `.argent/flows/__baselines__/<flow>/` there once) — snapshots inside composed fragments are keyed by and stored with the root flow, wherever the fragment file lives — keyed by platform + resolution; a `snapshot` step **fails** when no baseline exists for the run's device class, so seed baselines with `--update-baselines` and have the user review and commit `__baselines__/` — and pin the device class in CI (`--device`/`--platform`, same simulator model) so runs compare against the committed key. The status bar is pinned (iOS `simctl status_bar`, Android demo mode) for the run so it doesn't drive visual diffs. `--output <dir>` writes each failed snapshot's baseline/current/diff images to `<dir>/<flow>/` — a stable path for CI artifact upload. When two different flow files share a filename and one `--output` dir, the later export lands in `<dir>/<flow>-<pathhash>/` instead (deterministic per flow path, with a warning) so neither flow's evidence overwrites the other's.
-
-## Tools
-
-| Tool                     | Purpose                                                                                                                                                 |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `flow-start-recording`   | Start recording — takes `name` + `project_root` and (fragments only) an optional `executionPrerequisite`; creates the file, truncating any existing one |
-| `flow-add-step`          | Execute a tool call live and record it if it succeeds                                                                                                   |
-| `flow-add-echo`          | Add a label/comment that prints during replay                                                                                                           |
-| `flow-finish-recording`  | Stop recording and get a summary                                                                                                                        |
-| `flow-read-prerequisite` | Read a flow's execution prerequisite without running it (same `name`/`flow_path` sources)                                                               |
-| `flow-execute`           | Replay a flow — a saved one by `name`, or any flow YAML by absolute `flow_path`                                                                         |
-
-Every tool during recording returns the current flow file contents, so you can track what has been recorded. Rules:
-
-- **Every step runs live.** You see the real tool result (including screenshots) — verify the step worked before continuing. **Only successful steps are recorded**: a failed call writes nothing to the flow file; fix the issue and try again.
-- **Every recording tool takes `name` + `project_root`.** `flow-add-step`, `flow-add-echo`, and `flow-finish-recording` each name the recording they address, repeating the `name` and the absolute `project_root` (an error is returned if the path is not absolute) given to `flow-start-recording`. Nothing is carried over between calls.
-- **Recording _state_ is isolated; the device is not.** A recording is keyed by its output file, `<project_root>/.argent/flows/<name>.yaml`, so several can be open at once — different names, different projects — and one recording's steps never land in another's file. Nothing is isolated on the device: every step runs live, so two recordings driving one device interleave real UI actions, and one flow's recorded `restart-app` resets the app under the other. Give each concurrent recording its own device.
-- **Starting always truncates the `.yaml`.** `flow-start-recording` resets `<project_root>/.argent/flows/<name>.yaml` to an empty flow on every call — including a name that is only a saved file with no recording in progress, so starting under the name of a committed flow wipes it. `restarted: true` is reported only when a LIVE recording of that flow was discarded, so its **absence does not mean nothing was overwritten**. `discardedSteps` (in the return value) counts the discarded take, but can be absent even on a restart. Starting a _different_ flow abandons nothing.
-- **Pick a name unique to your task.** The key is `(project_root, name)` with no ownership check: if another agent starts the same name + project while you are recording, your file is truncated and it takes the key. **Usually nothing tells you.** The liveness check runs only while an append is executing, so if you were between calls (the common case) your next `flow-add-step`/`flow-add-echo` simply re-resolves the key and appends into the other agent's recording, reporting success. You are told only in the lucky case where a step happened to be in flight at the moment of the takeover: `Recording of "<name>" in <project_root> is no longer active — it was restarted while this step was running…`. `flow-finish-recording` re-resolves the key the same way, so it finishes and clears whichever recording currently holds it — possibly the other agent's, which leaves _them_ with `Active recordings: none in this project` and no step in flight to have warned them. Either way, restart under a fresh name instead of re-adding the step. A name that only _resolves_ to the same file — a differently-cased one on macOS/Windows, or a flow (or `.argent/flows`) symlinked into a shared vault from two projects — is the same key, because the key is the file the filesystem resolves to, not the spelling you passed. That collision is reported rather than silent: the second start says `restarted` with a `discardedSteps` count, and the first recording's next call fails with `… are the same file on this filesystem …` naming both spellings.
-- **Start before adding.** Calling those tools for a flow with no recording in progress returns `No active recording for flow "<name>" in <project_root>. If you have not started it yet, call flow-start-recording — but note it truncates, so if <path> already holds a take you want (finished, or interrupted by a restart), copy it aside or record under a fresh name instead. Active recordings: ...`. The truncation caveat is there because this same error is what you get when your take was finished or dropped by the concurrent-recording cap — and on those branches the `.yaml` on disk is fully populated, so starting again destroys it. (A takeover by another agent is different: it resolves to _their_ recording and succeeds — see the previous bullet — rather than reaching this error.) The tail names only the flows live under **the `project_root` you passed** — `"checkout"`, or `none in this project` — and merely counts any others as `(plus N in other projects)`, since a shared tool-server serves callers whose project paths are not yours to see. So a mistyped `name` is spelled out for you; a wrong `project_root` shows up as your flow missing from a project you expected it in.
-- **Mistakes can be edited out.** Edit the `.yaml` file directly to remove or reorder steps.
-
-### flow-add-step arguments
-
-The `command` parameter is the MCP tool name; `args` is a **JSON string** (not an object), omitted entirely for tools with no arguments:
-
-```
-name: "checkout-e2e"   project_root: "/Users/dev/MyApp"
-command: "gesture-tap"
-args: "{\"udid\": \"<UDID>\", \"x\": 0.5, \"y\": 0.35}"
-
-name: "checkout-e2e"   project_root: "/Users/dev/MyApp"
-command: "await-ui-element"
-args: "{\"udid\": \"<UDID>\", \"condition\": \"visible\", \"selector\": {\"text\": \"Continue\"}}"
-```
-
-Recording a `flow-execute` step carries **two** `name`s: the top-level `name` is the recording being appended to, `args.name` is the flow being run (captured as a `run:` step).
-
-```
-name: "checkout-e2e"   project_root: "/Users/dev/MyApp"
-command: "flow-execute"
-args: "{\"name\": \"login\", \"project_root\": \"/Users/dev/MyApp\"}"
-```
-
-Caveat to the "only successful steps are recorded" rule: if that sibling is a fragment with an `executionPrerequisite`, `flow-execute` returns its prerequisite **notice** instead of running - still a successful return, so `run: login` is recorded even though nothing executed. Add `"prerequisiteAcknowledged": true` to `args` to actually run it.
-
-Record an `await-ui-element` step to **gate** the next step on a screen transition — it blocks until the element is `visible`/`hidden` (or contains `text`), so the following step runs only once the screen has actually settled; prefer this over a fixed `delayMs`. If its condition is not met before the timeout, replay **stops at that step** (the steps after it assume the transition happened). See the `await-ui-element` section of `argent-device-interact` for the full condition/selector reference. The live call sees only the trimmed `describe` tree — if it can't find an identifier you know exists, gate on visible text to get the step recorded, then retarget the identifier in the `await:` form during polish (the directive resolves the full hierarchy — see Selectors); don't conclude the testID is unusable in the flow.
-
-## Recording
-
-1. **Start, then launch as the first step (e2e) or set the stage yourself (fragment).** Call `flow-start-recording` with a descriptive name and the absolute `project_root`. For an **e2e** flow, record a `restart-app` of the app under test as the **first** step — it runs live (resetting the device for the rest of the recording) and is captured as the flow's `launch` step (`restart-app` has no chromium support, so on Chromium record the flow as a fragment against the running app and add the `launch:` line to the YAML afterward, deleting the `executionPrerequisite` line if you passed one — a launch-first flow must not declare it). For a **fragment**, bring the device to the entry state _before_ recording and pass an `executionPrerequisite` describing it (e.g. "App on the login screen") to `flow-start-recording` instead.
-2. **Build step-by-step**: for each action, call `flow-add-step` with the same `name` + `project_root`, plus the tool name and args. The tool runs immediately — check the result before moving on, and gate each navigation with an `await-ui-element` step.
-3. **Add labels**: use `flow-add-echo` (same `name` + `project_root`) between steps — echo the expected state, not just the action (see _Making flows resilient_).
-4. **Finish**: call `flow-finish-recording` with the same `name` + `project_root`. It returns the file path where the flow was saved and a summary of all steps.
-5. **Polish**: **read the saved `.yaml` file** and convert the raw `tool:` steps that have a cleaner directive form (the recorder leaves these as tools):
-   - `tool: keyboard` typing into a field → `type: { into: "<field>", text: "…" }`, folding in the `tap` that focused the field.
-   - `tool: await-ui-element` gating a transition → `await: { visible: "…" }` / `{ hidden: … }` / `{ text: { in: …, equals: … } }`, carrying a custom `timeoutMs` over as a `timeout` sibling key. Converting also upgrades the wait from the trimmed `describe` tree to the flow's full-hierarchy tree (see Selectors). Keep the raw `tool: await-ui-element` step only when it sets a custom `pollIntervalMs`/`bundleId` the directive can't express.
-   - A scroll-to-reach-an-element — a `tool: gesture-swipe` (or its chromium analog, `gesture-scroll`) used to bring a specific element on screen before interacting with it (a `tap`, `type`, `assert`, …) → `scroll-to: { target: "<that element>", direction: … }`, dropping the swipe. This is far more robust than a fixed-distance swipe: it scrolls momentum-free and stops exactly when the target appears, so it survives layout and content changes. (`tap`/`type` do not scroll, so a raw swipe whose fling lands differently on another device leaves the following tap unresolved — always prefer the `scroll-to` rewrite.) Keep a `gesture-swipe` as a raw `tool:` step when it isn't scrolling toward a specific element — especially a velocity-dependent gesture like swipe-to-dismiss, edge-swipe-back, or swipe-to-reveal a row action, which a momentum-free `scroll-to` would not reproduce.
-   - `tool: gesture-pinch` → `pinch: { on: "<target>", scale: … }`, deriving `scale` as `endDistance / startDistance`. Set `on:` to the element under the pinch center when the pinch was aimed at one (the map or image being zoomed); omit it for a screen-center pinch. Don't carry the recorded distances/angle over — the directive re-derives the geometry (finger placement, system-edge avoidance, chaining of large scales) at run time, so the conversion swaps device-specific coordinates for a portable selector with auto-wait. Keep the raw `tool: gesture-pinch` step when the pinch is anchored at a specific point _inside_ a large element (zooming toward a particular map location, not the map's center) or deliberately pans via `endCenterX`/`endCenterY` — `on:` takes only a selector and re-centers the pinch on the element's frame center, so converting would silently move the zoom anchor.
-   - `tool: gesture-rotate` → `rotate: { on: "<target>", by: … }`, deriving `by` as `endAngle − startAngle` (the tool's `endAngle` > `startAngle` turns clockwise, matching the directive's positive `by`). Set `on:` to the element under the rotation center when the rotation was aimed at one (the map or image being rotated); omit it for a screen-center rotation. Don't carry the recorded `centerX`/`centerY`, radii (`radius` or `radiusX`/`radiusY`), `startAngle`, or `durationMs` over — the directive re-derives the geometry (finger placement, physical-circle radius, system-edge avoidance) and runs at a fixed pace (~90° per 300 ms), so the conversion swaps device-specific coordinates for a portable selector with auto-wait. Keep the raw `tool: gesture-rotate` step when the rotation is anchored at a specific point _inside_ a large element rather than its center (the directive re-centers on the element's frame center, so converting would silently move the pivot), when the gesture's speed itself matters (the directive's pace is fixed), or when the sweep exceeds the directive's ±3000° bound.
-
-Every other recorded tool (a velocity-dependent `gesture-swipe`, a fixed-distance `gesture-scroll` not aimed at an element, `button`, `screenshot`, …) has no directive form — leave it as a `tool:` step. The recorder already handles the rest: coordinate `gesture-tap`s are captured as portable `tap:` selector steps, a `restart-app` is captured as a `launch:` step, a `flow-execute` of a sibling fragment is captured as a `run: <name>.yaml` composition directive, and device ids are stripped. Captured selectors are emitted in the strict map form (`tap: { text: General }`), never as a loose bare string — the recorder verified the exact element the tap hit, and a bare string would re-parse as loose and route through the identifier-first fallback it was never checked against. After editing, re-run with `flow-execute` to confirm the cleaned flow still passes.
-
-### Example session
-
-```
-flow-start-recording  { name: "open-about", project_root: "/Users/dev/MyApp" }
-flow-add-echo  { name: "open-about", project_root: "/Users/dev/MyApp", message: "Start Settings from scratch" }
-flow-add-step  { name: "open-about", project_root: "/Users/dev/MyApp", command: "restart-app", args: "{\"udid\": \"ABC\", \"bundleId\": \"com.apple.Preferences\"}" }   # ⇒ captured as `- launch: com.apple.Preferences` — this is now an e2e flow
-flow-add-echo  { name: "open-about", project_root: "/Users/dev/MyApp", message: "On the Settings root list, tapping the 'General' row" }
-flow-add-step  { name: "open-about", project_root: "/Users/dev/MyApp", command: "gesture-tap", args: "{\"udid\": \"ABC\", \"x\": 0.5, \"y\": 0.35}" }   # ⇒ captured as `- tap: { text: General }` (portable selector, no udid)
-flow-add-step  { name: "open-about", project_root: "/Users/dev/MyApp", command: "await-ui-element", args: "{\"udid\": \"ABC\", \"condition\": \"visible\", \"selector\": {\"text\": \"About\"}}" }   # gate the transition
-flow-add-echo  { name: "open-about", project_root: "/Users/dev/MyApp", message: "On Settings > General, tapping 'About'" }
-flow-add-step  { name: "open-about", project_root: "/Users/dev/MyApp", command: "gesture-tap", args: "{\"udid\": \"ABC\", \"x\": 0.5, \"y\": 0.17}" }
-flow-add-step  { name: "open-about", project_root: "/Users/dev/MyApp", command: "await-ui-element", args: "{\"udid\": \"ABC\", \"condition\": \"visible\", \"selector\": {\"text\": \"Model Name\"}}" }
-flow-finish-recording  { name: "open-about", project_root: "/Users/dev/MyApp" }
-```
-
-Then polish the saved file: the two `await-ui-element` steps become `await:` directives (see the file below).
-
-## Replaying
-
-Call `flow-execute` with exactly one flow source: `name` for a flow saved under `.argent/flows/` (this form also works through a remote tool server), or `flow_path` — an absolute path to any flow `.yaml`. A flow's `run:` targets and `__baselines__/` resolve on the **tool server's** filesystem, beside the YAML it actually reads. `flow_path` requires the agent and the tool server to share a filesystem and is refused when they don't; `name` is what still runs then, but it is not a way to keep siblings and baselines — a remote call reaches the server as an upload of that one YAML into a fresh temp directory, so a `run:` target errors as a missing fragment and a `snapshot` step fails for a missing baseline under a temp path (and `updateBaselines` writes the baseline there, to be deleted with the directory). Remotely, replay self-contained flows; a flow that composes or snapshots needs the agent and the tool server on one filesystem. Pass `project_root` too — it is always required here, and replaying reads no recording state, so an in-progress recording never stands in for it. **Pass `device` explicitly whenever more than one device is booted:** auto-detection resolves only when exactly one booted device matches — optionally narrowed by `platform` — and otherwise throws, listing what is available. (A Chromium e2e flow boots and tears down its own instance, but only when the launch resolves to a real Electron app path — a `launch: { chromium: <path> }` map, or `platform: "chromium"` with `device` unset. **Don't force it with `platform: "chromium"` on a recorded flow:** the recorder writes a bare-string `launch:` holding a bundle _id_, which the boot branch reads as an app path and fails with `Electron boot: path does not exist: …`. Hand-edit the launch to `{ chromium: <app path> }` first.) If the flow has an execution prerequisite, the tool returns a **notice** with the prerequisite text instead of running — verify the prerequisite is met (you can also inspect it beforehand with `flow-read-prerequisite`, which takes the same `name`/`flow_path` pair) and call `flow-execute` again with `prerequisiteAcknowledged: true`. A flow without a prerequisite runs immediately. The run executes all steps in order and returns a structured report: `{ ok, passed, failed, skipped, errored, steps }`.
-
-**What each step reports.** Raw `tool:` steps include the underlying tool's full `result` (screenshots and other outputs render as usual). The directive steps are summarized: `tap`/`type`/`await`/`assert` report only `status` + `reason`, and `snapshot` adds `artifacts` only when there is something to look at — a failed comparison (baseline/current/diff paths), a missing-baseline failure (`current` only), or a baseline write; a clean pass reports just `status` + `reason`. So converting a `tool: gesture-tap` into a `tap:` directive during cleanup drops only that tap's (uninteresting) raw result — output-bearing tools like `screenshot` have no directive form and stay `tool:` steps, so their results keep flowing through.
-
-## Flow file format
-
-The top-level is an object with `steps` (array) and — fragments only — `executionPrerequisite` (an e2e flow, one beginning with `launch:`, has none). Besides the directives above:
-
-- `- echo: <message>` — a label printed during replay
-- `- tool: <name>` with optional `args:` — a raw tool call. A tool step may also carry `delayMs: <ms>` to sleep that long before it runs. (`await-ui-element` is an ordinary tool step; see _flow-add-step arguments_ and _Making flows resilient_ for when to gate a transition with one.)
-- **`when:` blocks** handle one-sided divergences (interstitials, coach marks): `- when: { visible: "What's new" }` with a sibling `steps: [...]` list runs the block only if the condition holds — checked once with the short assert grace (~1s), so a skipped block barely costs a clean run. Guards are one condition key (`exists`/`visible`/`hidden`/`text`, the await/assert shapes) or `platform: ios|android|chromium|vega`. **No else** (parse-rejected): a block exists to dismiss the divergence and reconverge, never to test two paths — two paths are two flows. Failures inside an entered block are real failures; a skipped block reports `skip` lines. Tap-if-present is a one-step block (`when: { visible: "Got it" }` + `steps: [tap: "Got it"]`); there is NO per-step `optional:` key — it is rejected at parse with a pointer to `when:`.
-
-The polished result of the example session above:
-
-```yaml
-steps:
-  - echo: Start Settings from scratch
-  - launch: com.apple.Preferences
-  - echo: On the Settings root list, tapping the 'General' row
-  - tap: { text: General }
-  - await: { visible: About }
-  - echo: On Settings > General, tapping 'About'
-  - tap: { text: About }
-  - await: { visible: Model Name }
-```
-
-Note there is **no device id** anywhere in the file — the recorder strips them and the runner injects the bound device.
-
-## When to proactively record a flow
-
-Proactive recording is part of this skill's scope (see the description). Record a flow without waiting to be asked — telling the user you are doing so — when you recognize any of these patterns:
-
-- **About to re-profile**: You completed a profiling session and are about to apply a fix and re-profile. Record the interaction steps now so the re-profile replays them identically (see `argent-react-native-profiler` and `argent-native-profiler` skills).
-- **Repeating steps**: You have already performed a multi-step interaction sequence once and the task requires doing it again (comparison, retry, re-test).
-- **Complex path discovered**: You worked through a non-trivial sequence of taps/swipes/navigation to reach a desired app state. Capture it before it is lost.
-- **User says "again" / "one more time"**: Any request to redo what you just did is a signal to record first, then replay.
-
-## Flow self-improvement
-
-Flows break. UI layouts change, coordinates drift, screens get added or removed. When `flow-execute` returns a failure, follow this procedure to diagnose and fix the flow instead of silently re-recording or giving up.
-
-### Classify the result
-
-After every `flow-execute`, classify the outcome before proceeding:
-
-| Outcome                | Signal                                                                | Action             |
-| ---------------------- | --------------------------------------------------------------------- | ------------------ |
-| **Success**            | All steps completed, final screenshot shows expected state            | Continue with task |
-| **Hard error**         | A step has `ERROR` in the result — engine stopped there               | Enter **Diagnose** |
-| **Silent misfire**     | All steps completed but final screenshot shows wrong screen           | Enter **Diagnose** |
-| **Partial divergence** | Intermediate screenshot shows wrong state even though later steps ran | Enter **Diagnose** |
-
-For silent misfires and partial divergence, echo annotations (see _Making flows resilient_) are your reference for what each screen _should_ look like.
-
-### Diagnose
-
-1. Note the failure step index and error message (if hard error).
-2. Call `screenshot` to see where the app actually is now.
-3. Call `describe` or `debugger-component-tree` to get the current element tree. Remember `describe` shows less than the flow tree — a testID missing from its output can still resolve as a selector (see Selectors).
-
-   `debugger-component-tree` is an **authoring aid only — never record a `debugger-*` step into a flow.** `device_id` is stripped at record time and re-injected at replay, but `port` is not a device-bind key, so a recorded debugger step carries whatever `port` it was given (or falls through to the 8081 default at replay) and runs against whatever Metro happens to be on that port.
-
-   When calling any `debugger-*` tool directly, mind the shared-Metro rule: `port` is the **only** project discriminator (default `8081`), so with two RN projects running, pass the `port` of the one under test — otherwise the call lands on whichever Metro owns 8081.
-
-4. Compare current state to what the failed step expected. Classify the root cause:
-
-| Root cause       | Symptoms                                                        |
-| ---------------- | --------------------------------------------------------------- |
-| Coordinate drift | Tap succeeded but hit wrong element; elements shifted positions |
-| Missing element  | Target element not present in element tree                      |
-| Wrong screen     | Screenshot shows entirely different page than expected          |
-| Timing           | Element exists in tree but tap missed; loading spinner visible  |
-| State mismatch   | First step fails — executionPrerequisite was not actually met   |
-
-5. State the diagnosis in one sentence before attempting any correction.
-
-### Correct
-
-Choose the lightest strategy that fits:
-
-**Strategy 1 — Edit the YAML** (coordinate drift, parameter changes).
-Read `.argent/flows/<flow-name>.yaml`, update the broken step's `x`/`y`, `bundleId`, `text`, or other args. Re-run `flow-execute` to verify.
-
-**Strategy 2 — Manual recovery + continue** (timing/transient issues, one-off replay).
-Manually execute the failed step with corrected coordinates from the Diagnose step, then manually execute remaining steps. Does not fix the YAML — use only when re-recording is not worth it.
-
-**Strategy 3 — Re-record from failure point** (structural changes, new intermediate screens).
-Navigate the app to the state just before the failure point. Call `flow-start-recording` with the same `name` + `project_root` — the start truncates the saved `.yaml` immediately, so copy the working prefix out of the file first. Re-add that prefix via `flow-add-step` (same `name` + `project_root`), then continue recording new steps from the divergence point. Call `flow-finish-recording` with the same `name` + `project_root`.
-
-**Strategy 4 — Full re-record** (major changes, unclear diagnosis, or 3+ broken steps).
-Reset the app to prerequisite state (`restart-app` + `launch-app`). Record from scratch with the same `name` + `project_root` — the start truncates the old `.yaml`, so keep a copy if you may want to diff against it.
-
-**Decision heuristic:**
-
-- 1 step broken, parameter-only change → Strategy 1
-- 1 step broken, transient issue, not worth persisting → Strategy 2
-- 2–3 steps broken or flow structure partially changed → Strategy 3
-- 3+ steps broken, or unclear root cause → Strategy 4
-- Flow used for profiling comparison (must be identical) → Strategy 4
-
-### Verify and bound retries
-
-After applying a correction, re-run `flow-execute` to verify.
-
-- If it succeeds → done. Report what changed (e.g. "Fixed step 4: updated tap coordinates from 0.5,0.35 to 0.5,0.42").
-- If it fails at a **different** step → return to Diagnose for a second attempt.
-- If this is already the second correction attempt → **stop**. Report the diagnosis to the user and recommend a full re-record or manual investigation.
-
-**Hard cap: 2 correction cycles.** Do not enter an unbounded fix loop.
-
-### Making flows resilient
-
-Apply these when recording new flows to reduce future breakage:
-
-- **Echo expected state, not just actions.** Write `"On Settings > General screen, about to tap About"` not `"Tap About"`. During diagnosis these tell you what the screen _should_ look like.
-- **Gate transitions with `await-ui-element`, not fixed delays.** After a tap that triggers a navigation, record an `await-ui-element` step that waits for the next screen's element to be `visible` (or a spinner to be `hidden`) before the following step — converted to an `await:` directive during polish. This removes the **Timing** failure mode in Diagnose (the element is in the tree but the tap fired before the screen settled) and is more reliable than `delayMs` or an extra `screenshot`. An unmet wait stops replay at that step, so a mistimed step can never run blind.
-- **Add screenshot steps after critical navigation.** Insert `screenshot` steps after screen transitions. These produce images in the flow result you can inspect during diagnosis.
-- **Write specific executionPrerequisites.** `"App on home tab, user logged in, simulator UDID is <X>"` — not `"App running"`. Verify with `screenshot` + `describe` before acknowledging.
-- **Prefer launch-app / open-url over navigation chains.** Deep links are more resilient to layout changes than tap sequences.
-- **Echo accessibility labels for coordinate taps.** When recording a tap, add an echo with the target's label or testID: `"Tapping 'Submit' button (testID: submit-btn) at 0.5, 0.82"`. During repair, use `describe` to find the element by label and update coordinates. Only use `screenshot` for permission or system overlays when `describe` cannot expose the target reliably.
+When replay fails, follow [Reliability and recovery](references/reliability-and-recovery.md). Inspect the first divergence, correct the smallest justified unit, audit, and replay the full flow. Stop after two unsuccessful correction cycles. Never weaken a requested check to obtain a pass.

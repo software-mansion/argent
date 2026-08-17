@@ -21,6 +21,8 @@ import {
   appIdForPlatform,
   chromiumLaunchSpec,
   writeNewFlowFile,
+  blockSteps,
+  BLOCK_DIRECTIVE_KEYS,
   type FlowFile,
 } from "../../src/tools/flows/flow-utils";
 
@@ -214,14 +216,40 @@ describe("parseFlow", () => {
     expect((thrown as Error).message).toContain("line 1");
   });
 
-  it("throws a validation error (not a TypeError) on a primitive step entry", async () => {
-    const content = 'executionPrerequisite: ""\nsteps:\n  - tap\n';
-    expect(() => parseFlow(content)).toThrow("Unrecognized flow entry");
+  // `step must be an object` is spelled twice — here for a top-level entry, and
+  // in parseBlockSteps for a block directive's own steps: list. Nothing else
+  // asserts either copy, so the two are free to drift apart or be dropped with
+  // nothing noticing; the pair below pins each site independently.
+  const entryRejectionMessage = (content: string): string => {
+    try {
+      parseFlow(content);
+    } catch (err) {
+      // A raw TypeError would carry no signal — this is what makes it structured.
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED);
+      return err instanceof Error ? err.message : String(err);
+    }
+    throw new Error("expected the entry to be rejected");
+  };
+
+  it.each([
+    ["a bare string", 'executionPrerequisite: ""\nsteps:\n  - tap\n'],
+    ["a primitive", 'executionPrerequisite: ""\nsteps:\n  - 42\n'],
+    ["a null", 'executionPrerequisite: ""\nsteps:\n  - ~\n'],
+  ])("names the step shape when %s sits in the top-level steps list", (_shape, content) => {
+    expect(entryRejectionMessage(content)).toContain(
+      "Unrecognized flow entry (step must be an object)"
+    );
   });
 
-  it("throws a validation error on a null step entry", async () => {
-    const content = 'executionPrerequisite: ""\nsteps:\n  - ~\n';
-    expect(() => parseFlow(content)).toThrow("Unrecognized flow entry");
+  it.each([
+    ["a primitive", "steps:\n  - when: { visible: Cart }\n    steps: [42]\n"],
+    ["a null", "steps:\n  - when: { visible: Cart }\n    steps: [~]\n"],
+  ])("names the step shape when %s sits in a block's steps list", (_shape, content) => {
+    // `when:` is only the vehicle — it is today's sole block directive, and the
+    // guard it reaches is parseBlockSteps', shared by every block directive.
+    expect(entryRejectionMessage(content)).toContain(
+      "Unrecognized flow entry (step must be an object)"
+    );
   });
 
   it("sugars a bare-string selector into a loose { text } for tap", async () => {
@@ -895,6 +923,81 @@ describe("parseFlow", () => {
     };
     const serialized = serializeFlow(flow);
     expect(parseFlow(serialized)).toEqual(flow);
+  });
+});
+
+// ── block directives ─────────────────────────────────────────────────
+
+// A flow per block directive, with the children its block authors. Its key type
+// derives from the registry, so registering a directive without a fixture here
+// is a compile error. The fixture itself is deliberately not derived from the
+// key: one that agreed with the parser by construction would test nothing.
+const BLOCK_DIRECTIVE_FLOWS: Record<
+  (typeof BLOCK_DIRECTIVE_KEYS)[number],
+  { yaml: string; children: FlowFile["steps"] }
+> = {
+  when: {
+    yaml:
+      [
+        "steps:",
+        "  - when: { visible: Cart }",
+        "    steps:",
+        "      - echo: Guarded",
+        "      - tap: Buy",
+      ].join("\n") + "\n",
+    children: [
+      { kind: "echo", message: "Guarded" },
+      { kind: "tap", selector: { text: "Buy", loose: true } },
+    ],
+  },
+};
+
+// Registering a kind in BLOCK_DIRECTIVE_KEYS exempts it from fromYamlStep's
+// generic unknown-sibling rejection, on the promise that its own parser
+// rejects unknown siblings with a pointed message. This table is what holds a
+// NEW entry to that promise: its key type derives from the registry, so
+// registering a directive without a fixture here is a compile error, and the
+// test proves the fixture's bogus sibling is rejected, not silently accepted.
+const BLOCK_DIRECTIVE_SIBLING_REJECTIONS: Record<
+  (typeof BLOCK_DIRECTIVE_KEYS)[number],
+  { yaml: string; message: string }
+> = {
+  when: {
+    yaml:
+      ["steps:", "  - when: { exists: x }", "    steps:", "      - echo: hi", "    bogus: 1"].join(
+        "\n"
+      ) + "\n",
+    message: "a when step takes exactly { when: <condition>, steps: [...] }",
+  },
+};
+
+// The parser's block list and blockSteps' runtime answer are the same claim
+// asked twice; a directive only one of them knows drops its whole block from
+// every skip expansion and from the upload preflight, silently.
+describe("block directives", () => {
+  it.each(BLOCK_DIRECTIVE_KEYS)("%s parses to its own kind and yields its children", (key) => {
+    const { yaml, children } = BLOCK_DIRECTIVE_FLOWS[key];
+    const step = parseFlow(yaml).steps[0]!;
+    expect(step.kind).toBe(key);
+    expect(blockSteps(step)).toEqual(children);
+  });
+
+  it.each(BLOCK_DIRECTIVE_KEYS)("%s rejects an unknown sibling key with its own message", (key) => {
+    const { yaml, message } = BLOCK_DIRECTIVE_SIBLING_REJECTIONS[key];
+    let thrown: unknown;
+    try {
+      parseFlow(yaml);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown, "the unknown sibling was silently accepted").toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain(message);
+    expect(getFailureSignal(thrown)?.error_code).toBe(FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED);
+  });
+
+  it("returns undefined for a leaf step", () => {
+    const step = parseFlow("steps:\n  - tap: Buy\n").steps[0]!;
+    expect(blockSteps(step)).toBeUndefined();
   });
 });
 

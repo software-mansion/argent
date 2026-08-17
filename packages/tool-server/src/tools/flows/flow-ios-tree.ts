@@ -1,4 +1,4 @@
-import type { DeviceInfo, Registry } from "@argent/registry";
+import { FAILURE_CODES, getFailureSignal, type DeviceInfo, type Registry } from "@argent/registry";
 import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
 import { resolveNativeTargetApp } from "../../utils/native-target-app";
 import { flattenHoisting, type FlatNode } from "./flow-tree-flatten";
@@ -272,7 +272,8 @@ const FULL_HIERARCHY_FIELDS = [
  */
 export async function queryFullHierarchyTree(
   registry: Registry,
-  device: DeviceInfo
+  device: DeviceInfo,
+  launchedNativeApp?: string
 ): Promise<DescribeTreeData> {
   let nativeApi: NativeDevtoolsApi;
   try {
@@ -285,8 +286,32 @@ export async function queryFullHierarchyTree(
     );
   }
   // resolveNativeTargetApp's own errors (no connected app / ambiguous frontmost)
-  // already carry the actionable next step, so they propagate unwrapped.
-  const target = await resolveNativeTargetApp(nativeApi, undefined);
+  // already carry the actionable next step, so they propagate unwrapped — with
+  // one exception. Auto-resolution's `Application.getState` probe hops onto the
+  // app's MAIN thread; an app whose main thread is momentarily pinned (heavy
+  // cold start: first Hermes parse, Lottie decode) times that probe out even
+  // though it is exactly the app the flow launched and is about to read. When
+  // that happens — and ONLY on the timeout failure — fall back to the app this
+  // run's `launch:` started, provided its devtools connection is still up. A
+  // resolution that ANSWERS (including the deliberate "single app but
+  // backgrounded" error) is always preferred: the arbiter never overrides a
+  // guard that fired, it only rides out a probe the stall made unanswerable.
+  let target: { bundleId: string };
+  try {
+    target = await resolveNativeTargetApp(nativeApi, undefined);
+  } catch (err) {
+    const timedOut =
+      getFailureSignal(err)?.error_code === FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT;
+    if (
+      timedOut &&
+      launchedNativeApp !== undefined &&
+      nativeApi.listConnectedBundleIds().includes(launchedNativeApp)
+    ) {
+      target = { bundleId: launchedNativeApp };
+    } else {
+      throw err;
+    }
+  }
 
   if (await nativeApi.requiresAppRestart(target.bundleId)) {
     throw new Error(

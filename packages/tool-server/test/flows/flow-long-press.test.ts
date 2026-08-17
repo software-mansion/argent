@@ -9,7 +9,8 @@ import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/co
 // full-hierarchy source and hard-fail rather than degrade to the AX tree, so
 // these unit tests stub the tree fetch itself.
 let currentTree: () => DescribeNode;
-vi.mock("../../src/tools/flows/flow-tree", () => ({
+vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/tools/flows/flow-tree")>()),
   fetchFlowTree: vi.fn(
     async (): Promise<DescribeTreeData> => ({
       tree: currentTree(),
@@ -221,7 +222,7 @@ describe("long-press: execution", () => {
     ]);
   });
 
-  it("presses a raw point without resolving the tree", async () => {
+  it("presses a raw point", async () => {
     currentTree = () => screen([]);
     await writeFlow("press-point", {
       executionPrerequisite: "",

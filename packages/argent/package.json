@@ -1,6 +1,6 @@
 {
   "name": "@swmansion/argent",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "mcpName": "io.github.software-mansion/argent",
   "description": "MCP server for iOS Simulator and Android Emulator control",
   "license": "Apache-2.0",
@@ -22,8 +22,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json",
-    "observe": "node scripts/observe.cjs",
-    "benchmark": "node scripts/benchmark.cjs"
+    "observe": "node scripts/observe.cjs"
   },
   "private": false,
   "engines": {
@@ -57,11 +56,9 @@
     "@argent/cli": "file:../argent-cli",
     "@argent/installer": "file:../argent-installer",
     "@argent/mcp": "file:../argent-mcp",
-    "@argent/telemetry": "file:../telemetry",
     "@argent/tools-client": "file:../argent-tools-client",
     "@clack/prompts": "^1.6.0",
     "@types/node": "^26.0.1",
-    "@types/semver": "^7.7.1",
     "esbuild": "^0.28.1",
     "picocolors": "^1.1.1",
     "posthog-node": "5.38.6",

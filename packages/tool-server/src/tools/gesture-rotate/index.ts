@@ -1,10 +1,5 @@
 import { z } from "zod";
-import {
-  zodObjectToJsonSchema,
-  type ToolCapability,
-  type ToolContext,
-  type ToolDefinition,
-} from "@argent/registry";
+import { type ToolCapability, type ToolContext, type ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
 import { sendTouchEvent } from "../../utils/gesture-utils";
@@ -62,20 +57,6 @@ const zodSchema = z
     message: "Pass radius, or both radiusX and radiusY.",
   });
 
-// Explicit because the auto-derived JSON Schema loses the .refine() cross-field
-// rules — the anyOf re-encodes both: the per-axis pair together, or radius with
-// neither half of the pair.
-const inputSchema = {
-  ...zodObjectToJsonSchema(zodSchema),
-  anyOf: [
-    { required: ["radiusX", "radiusY"] },
-    {
-      required: ["radius"],
-      not: { anyOf: [{ required: ["radiusX"] }, { required: ["radiusY"] }] },
-    },
-  ],
-};
-
 type Params = z.infer<typeof zodSchema>;
 
 interface Result {
@@ -108,9 +89,9 @@ export const gestureRotateTool: ToolDefinition<Params, Result> = {
 endAngle > startAngle = clockwise rotation. Typical values: radius 0.15, startAngle 0, endAngle 90 for a 90° clockwise turn. A single radius applies to both axes, so on a non-square screen it traces a physical ellipse (finger separation varies through the turn); pass radiusX+radiusY (fractions of width/height with radiusX·width = radiusY·height) for a physically circular orbit instead.
 Auto-generates interpolated frames at ~60fps.
 Unlike gesture-pinch which moves fingers linearly to zoom, this orbits fingers in an arc to change orientation.
-Use when you need to rotate a map, image picker, or any rotateable UI element. Returns { rotated: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
+Use when you need to rotate a map, image picker, or any rotateable UI element. Returns { rotated: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.
+Size the orbit with radius, or with radiusX and radiusY together (the pair overrides radius); one half of the pair alone, or none of the three, is rejected.`,
   zodSchema,
-  inputSchema,
   capability,
   services: (params) => ({
     simulatorServer: simulatorServerRef(resolveDevice(params.udid)),

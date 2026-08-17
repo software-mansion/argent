@@ -23,7 +23,7 @@ import {
 import { settleWithin, sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { bindDeviceArgs } from "./flow-device";
-import { fetchFlowTree } from "./flow-tree";
+import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
 import {
   capturePixelsWithin,
   comparePixels,
@@ -63,6 +63,79 @@ export interface ActionEnv {
   ctx?: ToolContext;
   device: DeviceInfo;
   signal?: AbortSignal;
+  /**
+   * Bundle id of the last successful native `launch:` in this RUN — nested
+   * `run:` flows share it (ExecState is per-run, so a nested launch updates
+   * the whole run's hint, matching "a nested e2e launch restarts its app").
+   * Cleared by `tool:` steps that can change the foreground app (launch-app,
+   * restart-app, open-url, button, reinstall-app). iOS tree reads use it ONLY
+   * as an arbiter when target auto-resolution itself times out — see
+   * `queryFullHierarchyTree` — so foreground-likeness guards keep firing
+   * whenever the app answers at all.
+   */
+  launchedNativeApp?: string;
+  /**
+   * Run-scoped memo of a tree source that answered nothing: set by a
+   * {@link settleTree} that failed every read attempt, cleared by the next
+   * DIRECTIVE read that comes back. One holder per run (built in flow-run's
+   * ExecState and shared by every `deviceEnv`), so the evidence one step
+   * gathered is the evidence the next one acts on.
+   *
+   * A `tool:` step's read is not one of those: it goes through `invokeSubTool`
+   * and never reaches {@link readFlowTree}, so a run can carry a green
+   * `native-full-hierarchy` - the same RPC flow-ios-tree issues - or a green
+   * `describe` (the same source outright on Android, Chromium and Vega; the AX
+   * tree only on iOS) and still skip later gesture settles. Nor is the clear
+   * ordered against the step that is running: `idle` hands its read to
+   * `settleWithin` and stops waiting at the round budget, so that read can land
+   * during a later step and retire a verdict minted after it was issued. Safe
+   * direction - that only ever costs a later gesture a settle it would have
+   * skipped - but it is a clear by arrival, not by sequence.
+   *
+   * Only {@link settleForGesture} READS it, and only to skip a settle it has
+   * already been shown is unaffordable - never a read whose answer is
+   * dispatched rather than waited on, which is why {@link fetchScreenAspect}
+   * does not consult it. The skip is not silent: the gesture warns its step
+   * report that it dispatched unsettled, so the memo never makes an outage
+   * cheaper to miss than it was to prove. It is written by the one place that
+   * can prove a source dead (a {@link settleTree} that failed every read
+   * attempt), whichever directive asked for that settle. `waitForFrame` and
+   * `scrollToVisible` error the step on it, so a verdict of theirs is never
+   * spent; `runSnapshot` captures pixels regardless and `VisualOutcome` has
+   * no `warning` field, so its step passes in silence: the outage surfaces on
+   * the gesture that spends the verdict, or not at all if none follows.
+   *
+   * That same silence keeps `runSnapshot` deliberately off the reading side,
+   * though not on {@link fetchScreenAspect}'s grounds, since a snapshot's
+   * settle IS waited on. A capture taken on a stale verdict lands as a
+   * mid-animation pixel mismatch that reads as a visual regression, with
+   * nothing to say the screen was never settled: being wrong there costs a
+   * step, where the gesture risks only a settle. The price is that on a source
+   * failing by timeout, every snapshot step re-buys the whole settle, window
+   * and floor reads alike, two reads where the window alone ended on one. In
+   * exchange the settle reads through {@link readFlowTree}, so a snapshot
+   * re-tests the verdict instead of trusting it, and with a rotate's
+   * {@link fetchScreenAspect} it is one of the two reads left that can retire a
+   * wrong one in a flow of nothing but snapshots and coordinate gestures.
+   *
+   * It is cleared by {@link readFlowTree}, which every directive's reads go
+   * through, since a read that came back is evidence of health whichever
+   * directive asked for it. A relaunch clears it too, whether spelled `launch`
+   * or as one of flow-run's `FOREGROUND_CHANGING_TOOLS`: it is the repair the
+   * commonest of these errors asks for, and no read need follow it before a
+   * gesture does. So does a nested orchestrator step, which can do either out
+   * of this holder's sight. Absent for a caller that builds an `ActionEnv` by
+   * hand, which simply leaves every settle on its own budget.
+   *
+   * The write carries the device it was proven against: a verdict about a
+   * device the run has left says nothing about the one it moved onto (a
+   * chromium `launch` boots its own). Belt-and-braces today - the one mid-run
+   * move is behind `runLaunch`, which clears the verdict first - but it keeps
+   * the property from resting on where that clear sits in another file. The
+   * clear is deliberately NOT keyed: it only ever costs a later gesture a
+   * settle it would otherwise have skipped, and that is the side to err on.
+   */
+  treeOutage?: { proven?: { deviceId: string; error: Error } };
 }
 
 /** Outcome of a selector directive: ok, or a machine-readable reason it failed. */
@@ -158,7 +231,37 @@ const FOCUS_REPORTING_SOURCES: ReadonlySet<DescribeSource> = new Set([
 // Settle detection: re-read the tree until two consecutive reads match, so a tap
 // never lands mid-fling and a resolved frame can't go stale before we act.
 const SETTLE_POLL_MS = 250;
-const SETTLE_TIMEOUT_MS = 3000;
+/**
+ * How long that re-reading gets. Exported for flow-settle-min-reads.test.ts,
+ * which sizes its slow reads past this window: a hand-copied number there would
+ * survive this one being raised above it, and the read counts it prices would
+ * quietly stop measuring the floor below.
+ */
+export const SETTLE_TIMEOUT_MS = 3000;
+
+// Read attempts every settle makes before it may conclude anything, enforced
+// even once the window has closed. A read can fail by TIMING OUT, and every
+// tree source's RPC timeout outlasts the 3s window: 5s is the shortest tier any
+// of them allows, and a whole read chains several of those (an iOS read spends
+// up to 5s resolving the target app before a 15s `getFullHierarchy`), so the
+// window fits only one such read. Without a floor, "every read in the window
+// failed", which the throw below reports as a tree-source outage, would
+// collapse into "the first read was slow", erroring a step on one transient
+// blip with no retry at all. The second read is not bounded by the window
+// either, so a wedged source costs two full reads and tens of seconds, and a
+// source that answers slowly pays a second read where it used to end on one.
+// Slower than the window is not the exceptional case: `HUNG_TREE_READ_MS`
+// reasons from 5400ms Android reads, so ending a window on a single read is
+// the ordinary outcome there and the second read an ordinary cost, not a
+// degraded one. `scroll-to` multiplies that: it settles once per round,
+// bounded by `MAX_SCROLL_ITERATIONS` rather than a wall clock, so the added
+// read lands on every round and a slow source turns one step's tens of seconds
+// into minutes.
+// `await`/`assert` never had this hole: `waitForCondition` takes a poll at its
+// deadline unconditionally, however many reads preceded it. The floor here is
+// narrower, firing only when the window closed on fewer than two reads, but it
+// covers the same case: a first read that outlasts the window on its own.
+const SETTLE_MIN_READS = 2;
 
 // `scroll-to`: a bounded number of momentum-free increments. Each travels half
 // the clip window along the scroll axis (half the screen when no `within`
@@ -330,6 +433,37 @@ function flowSelectorToFrame(tree: DescribeNode, sel: FlowSelector): DescribeFra
 }
 
 /**
+ * The run's outage verdict, if one was proven against the device in hand: a
+ * verdict about a device the run has left says nothing about this one (see
+ * {@link ActionEnv.treeOutage}).
+ */
+function provenTreeOutage(env: ActionEnv): Error | undefined {
+  const proven = env.treeOutage?.proven;
+  return proven && proven.deviceId === env.device.id ? proven.error : undefined;
+}
+
+/**
+ * Every tree read a directive makes, so that a read which comes back clears
+ * {@link ActionEnv.treeOutage} whichever directive asked for it. Routing them
+ * all through here is what keeps the memo's claim honest: `await`/`assert`,
+ * `idle`'s read and the rotate aspect read never settle, so a clear living in
+ * {@link settleTree} alone would let a run read the tree successfully, over and
+ * over, and still have every later coordinate gesture skip its settle on the
+ * strength of one old failure.
+ *
+ * The `type` focus wait routes here for uniformity but can never be the read
+ * that clears a verdict: it runs only once {@link waitForFrame} has resolved a
+ * frame, which takes a settle that read the tree - and that read already
+ * cleared it.
+ */
+function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
+  return fetchFlowTree(env.registry, env.device, env.launchedNativeApp).then((data) => {
+    if (env.treeOutage) env.treeOutage.proven = undefined;
+    return data;
+  });
+}
+
+/**
  * Re-read the describe tree until two consecutive reads are identical — the UI
  * has settled (a scroll's fling has stopped, an animation finished). Returns the
  * stable tree, the last tree read on timeout (best effort), or undefined if the
@@ -337,26 +471,74 @@ function flowSelectorToFrame(tree: DescribeNode, sel: FlowSelector): DescribeFra
  * from landing mid-deceleration (where a scroll view swallows it) or acting on a
  * frame that has already moved.
  *
- * Throws when EVERY read in the window failed: that is a tree-source outage
+ * Throws when EVERY read attempt failed: that is a tree-source outage
  * (e.g. native devtools disconnected mid-run — `fetchFlowTree` refuses to
  * degrade to a trimmed tree), not a mid-animation blip, and swallowing it would
  * convert the outage into a misleading "element not found" downstream. The
  * throw lands in the step's structured report via `execLeafStep`'s catch.
+ *
+ * "Every attempt" is at least {@link SETTLE_MIN_READS} of them: the deadline
+ * bounds the polling, never the number of reads taken, so a read slow enough to
+ * outlast the window on its own is retried rather than treated as the whole
+ * evidence. The price lands on the best-effort return: if that retry then
+ * fails, `prevTree` is the first read's tree handed back a read-duration later
+ * (bounded by the tree source's own RPC ceiling), older than what the bare
+ * deadline would have returned. Paid for what the retry buys, which differs by
+ * branch. After a failed first read it buys evidence: the outage throw rests on
+ * two failed attempts rather than on one slow read, and a retry that succeeds
+ * there still returns a lone tree matched against nothing. After a successful
+ * first read it buys a fresher sample, since the retry's tree comes back
+ * whether or not the fingerprints match, and with it the settle's only chance
+ * to converge. The best-effort return also reaches `snapshot: { cropOn }`
+ * through {@link waitForFrame}, where the whole retry widens the gap between
+ * the read the crop rectangle comes from and the capture, so the crop can be
+ * measured against a layout the pixels no longer show.
+ *
+ * `skipProvenOutage` rethrows {@link ActionEnv.treeOutage} instead of buying
+ * that whole settle again, window and floor reads alike. Not a shorter budget:
+ * a threshold low enough to spare a source serving no tree at all would also
+ * abandon the mid-navigation blip the retry above exists for. But the memo is a
+ * prediction: one settle mints it and nothing re-tests it. Being wrong costs a
+ * settle, not a step: {@link settleForGesture} swallows the throw - and says
+ * so, warning every gesture it spares, so a run whose prediction was wrong
+ * reports which greens went out unsettled. Any directive read that comes back
+ * retires it, as does a relaunch.
+ *
+ * What it costs: an outage that failed every read attempt, in a run that then
+ * never reads the tree again and never relaunches, leaves later gestures
+ * unsettled even once it clears. That is a flow of nothing but coordinate
+ * gestures giving up a best-effort settle it never had before this directive
+ * existed, against every one of those gestures otherwise paying a whole settle,
+ * window and floor reads alike, for a tree that is not coming.
  */
-export async function settleTree(env: ActionEnv): Promise<DescribeNode | undefined> {
+export async function settleTree(
+  env: ActionEnv,
+  opts: { skipProvenOutage?: boolean } = {}
+): Promise<DescribeNode | undefined> {
   const deadline = Date.now() + SETTLE_TIMEOUT_MS;
   let prevFp: string | undefined;
   let prevTree: DescribeNode | undefined;
   let lastError: Error | undefined;
+  let reads = 0;
   for (;;) {
     if (env.signal?.aborted) return undefined;
+    // Inside the loop so the abort above still wins, but only ever true on the
+    // first pass: the memo is written by the throw below, which leaves the loop.
+    const proven = provenTreeOutage(env);
+    if (opts.skipProvenOutage && proven) throw proven;
+    // The signal bounds the wait; nothing else does. A budget of what is left of
+    // the window would fail the slow cold start #778 raised
+    // `ViewHierarchy.getFullHierarchy` to a 15s RPC tier to ride out, so the
+    // read keeps its own tier and only a cancelled run stops us waiting on it.
+    const read = await settleWithin(readFlowTree(env), undefined, env.signal);
     let tree: DescribeNode | undefined;
-    try {
-      ({ tree } = await fetchFlowTree(env.registry, env.device));
-    } catch (err) {
+    if (read.type === "value") {
+      tree = read.value.tree;
+    } else if (read.type === "error") {
       // transient describe failure mid-navigation — retry until the deadline
-      lastError = err instanceof Error ? err : new Error(String(err));
+      lastError = read.cause;
     }
+    reads += 1;
     // The abort can land while the read above is in flight (e.g. the HTTP
     // client disconnecting mid-flow trips the run's AbortController). Without
     // this re-check the two-identical-reads return below — or the deadline's
@@ -371,7 +553,14 @@ export async function settleTree(env: ActionEnv): Promise<DescribeNode | undefin
       prevTree = tree;
     }
     if (Date.now() >= deadline) {
-      if (prevTree === undefined && lastError !== undefined) throw lastError;
+      // Owed another attempt: retry back-to-back rather than sleeping out a
+      // poll interval the window no longer has (`waitForCondition`'s final
+      // poll does the same). Bounded — `reads` rises on every pass.
+      if (reads < SETTLE_MIN_READS) continue;
+      if (prevTree === undefined && lastError !== undefined) {
+        if (env.treeOutage) env.treeOutage.proven = { deviceId: env.device.id, error: lastError };
+        throw lastError;
+      }
       return prevTree;
     }
     if (!(await sleepOrAbort(SETTLE_POLL_MS, env.signal))) return undefined;
@@ -481,7 +670,7 @@ async function waitForFocus(
   for (;;) {
     if (env.signal?.aborted) return;
     try {
-      const { tree, source } = await fetchFlowTree(env.registry, env.device);
+      const { tree, source } = await readFlowTree(env);
       if (!FOCUS_REPORTING_SOURCES.has(source)) return;
       const target = flowSelectorToFrame(tree, into) ?? tappedFrame;
       if (collectFocused(tree, []).some((n) => framesOverlap(n.frame, target))) return;
@@ -711,25 +900,125 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
 }
 
 /**
+ * What a selector-less gesture's settle leaves behind: the abort signal its
+ * caller turns into a skip, and the warning it owes the step report.
+ */
+type GestureSettle = { aborted?: true; warning?: string };
+
+/**
+ * Settle the screen for a gesture that resolves no selector — raw coordinates,
+ * or a centre-anchored `pinch`/`rotate`. A selector target gets its settle from
+ * `waitForFrame`; without one there was nothing to resolve, so the gesture went
+ * out against whatever motion was in flight and a coordinate tap could land
+ * mid-fling — the very race the settle exists to close.
+ *
+ * Best-effort where the selector path is not: no frame is being read out of the
+ * tree here, so a source outage must not fail this gesture, which would break
+ * the escape hatch coordinates exist to be (an element the tree cannot see).
+ * The same allowance `snapshot` makes before a capture that reads pixels rather
+ * than nodes.
+ *
+ * It is also the caller `skipProvenOutage` exists for, because a tree the run
+ * can never read is not only the disconnect mid-run: an app that cannot load
+ * the instrumentation fails every read off an in-memory list — an Apple system
+ * app, which flows drive by coordinates for exactly that reason, so every step
+ * of such a flow arrives here. Charging each of them a window for the same
+ * verdict is what the memo takes off them.
+ *
+ * A platform with no tree source at all is the one case that settles nothing
+ * and reports nothing. `ios-remote` is coordinate-driven by necessity —
+ * `fetchFlowTree` serves it no tree, so every selector directive already fails
+ * there and a coordinate flow is the only kind such a run can have. There is no
+ * source to be down, so there is no degradation to warn about: buying the
+ * window and warning would put ~400 characters of "restore the tree source" on
+ * every gesture of every green run there, and neither remedy it names exists.
+ *
+ * Swallowing the outage is not the same as hiding it: the returned `warning`
+ * rides the step report, so a gesture dispatched into whatever motion was in
+ * flight is distinguishable from one that waited. Every gesture the memo spares
+ * carries it, not just the one that proved the outage - a run told once about a
+ * source that was dead for all of it would understate what its greens bought.
+ * Only the outage path warns; a window that expired without converging did
+ * settle, for as long as a settle can be given.
+ *
+ * The other cost is a screen that never holds still - a spinner, a video, a
+ * ticking clock. Nothing converges, so every selector-less gesture pays the
+ * whole window (measured at ~3.05s per gesture), and the memo buys no relief:
+ * a window that read the tree proves no outage, deliberately. The fingerprint
+ * cannot be narrowed the way `scrollToVisible` narrows its own either. That
+ * one knows which motion it is waiting on - its own scroll, inside the scroll
+ * containers under its anchor - so it can name the nodes worth watching. A
+ * gesture is waiting on motion of unknown origin (a transition, a fling, a
+ * keyboard) that can move what sits under the point without touching it, so
+ * there is no narrower scope that is still correct. It is the same window every
+ * selector directive already pays on such a screen; what changed is that
+ * coordinate targets now pay it too.
+ */
+async function settleForGesture(env: ActionEnv): Promise<GestureSettle> {
+  let warning: string | undefined;
+  // A platform with no tree source settles nothing and is warned about nothing;
+  // the abort checkpoint below is owed to the gesture either way.
+  if (supportsFlowTree(env.device.platform)) {
+    try {
+      await settleTree(env, { skipProvenOutage: true });
+    } catch (err) {
+      // tree-source outage — this gesture needs no frame from it, so dispatch
+      // anyway. Untyped because a settle has nothing else to throw: every read
+      // is validated by `parseDescribeResult` before `treeFingerprint` walks it,
+      // so the walk's own unguarded recursion is unreachable on every adapter.
+      // Should one ever serve past that, the message it attributes to the device
+      // would be wrong on a path that goes green, where a selector step would
+      // error on the same tree.
+      warning = unsettledGestureWarning(err);
+    }
+  }
+  if (env.signal?.aborted) return { aborted: true };
+  return warning !== undefined ? { warning } : {};
+}
+
+/** Spread a settle's warning onto an outcome, leaving no `warning: undefined` key behind. */
+function warned(settle: { warning?: string }): { warning?: string } {
+  return settle.warning !== undefined ? { warning: settle.warning } : {};
+}
+
+/** What a gesture reports when an outage left it unsettled, in the source's own words. */
+function unsettledGestureWarning(err: unknown): string {
+  const reason = err instanceof Error ? err.message : String(err);
+  return (
+    `dispatched without settling the screen first: the UI tree could not be read (${reason}), so ` +
+    `there was no way to tell whether anything was moving. The gesture went out against whatever ` +
+    `was in flight, and one aimed at a moving element can miss it entirely - this step passing ` +
+    `says it was sent, not that it landed. Restore the tree source, or put an explicit \`wait:\` ` +
+    `in front of gestures that follow a transition.`
+  );
+}
+
+/**
  * Resolve a gesture target (`tap`/`long-press`) to a normalized point: a
  * selector resolves to its frame centre (settled tree + auto-wait); raw
- * coordinates pass through untouched. Coordinate targets are the fallback for
- * elements with no stable selector (e.g. an unlabeled view).
+ * coordinates need no resolution, but still settle before they are used.
+ * Coordinate targets are the fallback for elements with no stable selector
+ * (e.g. an unlabeled view).
+ *
+ * The point is nested rather than returned bare so a `warning` from the settle
+ * cannot ride the resolved coordinates into the gesture's tool args.
  */
 async function resolveTargetPoint(
   env: ActionEnv,
   target: { selector?: FlowSelector; x?: number; y?: number }
-): Promise<{ x: number; y: number } | { fail: DirectiveOutcome }> {
+): Promise<{ point: { x: number; y: number }; warning?: string } | { fail: DirectiveOutcome }> {
   if (target.selector) {
     const frame = await waitForFrame(env, target.selector);
     if (frame === "aborted") return { fail: ABORTED_OUTCOME };
     if (!frame) {
       return { fail: { ok: false, reason: offscreenHint(target.selector) } };
     }
-    return getDescribeTapPoint(frame);
+    return { point: getDescribeTapPoint(frame) };
   }
   if (typeof target.x === "number" && typeof target.y === "number") {
-    return { x: target.x, y: target.y };
+    const settle = await settleForGesture(env);
+    if (settle.aborted) return { fail: ABORTED_OUTCOME };
+    return { point: { x: target.x, y: target.y }, ...warned(settle) };
   }
   return { fail: { ok: false, reason: "gesture needs a selector or x/y coordinates" } };
 }
@@ -743,13 +1032,13 @@ async function runTap(
   env: ActionEnv,
   target: { selector?: FlowSelector; x?: number; y?: number; times?: number }
 ): Promise<DirectiveOutcome> {
-  const point = await resolveTargetPoint(env, target);
-  if ("fail" in point) return point.fail;
+  const resolved = await resolveTargetPoint(env, target);
+  if ("fail" in resolved) return resolved.fail;
   await invokeOnDevice(env, "gesture-tap", {
-    ...point,
+    ...resolved.point,
     ...(target.times !== undefined ? { clickCount: target.times } : {}),
   });
-  return { ok: true };
+  return { ok: true, ...warned(resolved) };
 }
 
 /**
@@ -774,8 +1063,9 @@ async function runLongPress(
   env: ActionEnv,
   step: { selector?: FlowSelector; x?: number; y?: number; duration?: number }
 ): Promise<DirectiveOutcome> {
-  const point = await resolveTargetPoint(env, step);
-  if ("fail" in point) return point.fail;
+  const resolved = await resolveTargetPoint(env, step);
+  if ("fail" in resolved) return resolved.fail;
+  const point = resolved.point;
   const duration = step.duration ?? DEFAULT_LONG_PRESS_MS;
   if (env.device.platform === "chromium") {
     await invokeOnDevice(env, "gesture-drag", {
@@ -793,16 +1083,18 @@ async function runLongPress(
       ],
     });
   }
-  return { ok: true };
+  return { ok: true, ...warned(resolved) };
 }
 
 /**
  * Pinch-zoom by `scale` centered on a selector's frame (settled tree +
- * auto-wait, like tap) or on the screen center when no selector is given. The
- * scale decomposes into equal-ratio sub-gestures chained with a recognizer
- * reset delay; per sub-gesture, a horizontal and a vertical candidate are
- * built from the axis-matching frame dimension and the better one dispatched
- * (see flow-pinch-geometry). Open-loop by design: there is no "current zoom"
+ * auto-wait, like tap) or on the screen center when no selector is given. Both
+ * branches settle first; the centre one through {@link settleForGesture}, which
+ * is best-effort and adds an abort checkpoint. The scale decomposes into
+ * equal-ratio sub-gestures chained with a recognizer reset delay; per
+ * sub-gesture, a horizontal and a vertical candidate are built from the
+ * axis-matching frame dimension and the better one dispatched (see
+ * flow-pinch-geometry). Open-loop by design: there is no "current zoom"
  * to read back, so flows assert on the result, not the multiplier.
  */
 async function runPinch(
@@ -811,12 +1103,16 @@ async function runPinch(
 ): Promise<DirectiveOutcome> {
   let center = { x: 0.5, y: 0.5 };
   let frame: DescribeFrame | undefined;
+  let settle: GestureSettle = {};
   if (step.selector) {
     const resolved = await waitForFrame(env, step.selector);
     if (resolved === "aborted") return ABORTED_OUTCOME;
     if (!resolved) return { ok: false, reason: offscreenHint(step.selector) };
     frame = resolved;
     center = getDescribeTapPoint(resolved);
+  } else {
+    settle = await settleForGesture(env);
+    if (settle.aborted) return ABORTED_OUTCOME;
   }
 
   const { n, per } = decomposePinch(step.scale);
@@ -856,7 +1152,7 @@ async function runPinch(
     await invokeOnDevice(env, "gesture-pinch", args);
     if (i < n - 1 && !(await sleepOrAbort(PINCH_SETTLE_MS, env.signal))) return ABORTED_OUTCOME;
   }
-  return { ok: true };
+  return { ok: true, ...warned(settle) };
 }
 
 /**
@@ -865,10 +1161,28 @@ async function runPinch(
  * dimensions through settleTree/waitForFrame: the settle loop already reads
  * the tree several times per step, so the extra fetch is noise, and the
  * resolution path every other directive shares stays untouched.
+ *
+ * The one read {@link ActionEnv.treeOutage} must not spare, unlike the whole
+ * settle {@link settleForGesture} skips: this answer is DISPATCHED, not waited
+ * on. A stale verdict would degrade a centre rotate on a phone from the
+ * edge-safe vertical placement the real aspect picks (Down points at
+ * y = 0.278 / 0.722) to the aspect-1 fallback, which puts both fingers 0.48 off
+ * centre on whichever axis wins: on iOS the two candidates tie and horizontal
+ * takes it (x = 0.02 / 0.98, inside the 0.08 side guard), while Android's wider
+ * side guards pick vertical (y = 0.02 / 0.98, inside the top/bottom one).
+ * Either way both fingers start in a guard.
+ *
+ * A true verdict costs one failed read instead, which the caller degrades past
+ * exactly as it degrades past a skip - but not for free: this read carries no
+ * budget and no signal, so on iOS it is the 15s hierarchy tier. Less than the
+ * whole settle the memo saved - window and floor reads alike, two reads on that
+ * same tier when the source fails by timing out - but still the price of never
+ * dispatching geometry off a prediction, and what every rotate paid before the
+ * memo existed.
  */
 async function fetchScreenAspect(env: ActionEnv): Promise<number | undefined> {
   try {
-    const { screen } = await fetchFlowTree(env.registry, env.device);
+    const { screen } = await readFlowTree(env);
     return screen && screen.width > 0 && screen.height > 0
       ? screen.width / screen.height
       : undefined;
@@ -879,11 +1193,13 @@ async function fetchScreenAspect(env: ActionEnv): Promise<number | undefined> {
 
 /**
  * Rotate by `by` degrees (+ clockwise) about a selector's frame centre
- * (settled tree + auto-wait, like tap) or the screen centre. One continuous
- * gesture — fingers orbit the fixed centroid at a constant physical radius,
- * so any angle dispatches without decomposition or settle delays, and the
- * angular delta is exact with zero pan/pinch coupling. The initial finger
- * axis is the safer of horizontal and vertical (see flow-rotate-geometry);
+ * (settled tree + auto-wait, like tap) or the screen centre. Both branches
+ * settle first; the centre one through {@link settleForGesture}, which is
+ * best-effort and adds an abort checkpoint. One continuous gesture — fingers
+ * orbit the fixed centroid at a constant physical radius, so any angle
+ * dispatches without decomposition or settle delays, and the angular delta is
+ * exact with zero pan/pinch coupling. The initial finger axis is the safer of
+ * horizontal and vertical (see flow-rotate-geometry);
  * duration derives from the angle at the fixed ~90°/300ms pace — `by` is
  * bounded at parse. NOT the `rotate` tool — that changes device orientation.
  */
@@ -893,12 +1209,16 @@ async function runRotate(
 ): Promise<DirectiveOutcome> {
   let center = { x: 0.5, y: 0.5 };
   let frame: DescribeFrame | undefined;
+  let settle: GestureSettle = {};
   if (step.selector) {
     const resolved = await waitForFrame(env, step.selector);
     if (resolved === "aborted") return ABORTED_OUTCOME;
     if (!resolved) return { ok: false, reason: offscreenHint(step.selector) };
     frame = resolved;
     center = getDescribeTapPoint(resolved);
+  } else {
+    settle = await settleForGesture(env);
+    if (settle.aborted) return ABORTED_OUTCOME;
   }
 
   // Unknown aspect (source without dimensions, or a failed read) degrades to
@@ -954,7 +1274,7 @@ async function runRotate(
     if (env.signal?.aborted) return ABORTED_OUTCOME;
     throw err;
   }
-  return { ok: true };
+  return { ok: true, ...warned(settle) };
 }
 
 /**
@@ -1045,7 +1365,7 @@ async function waitForCondition(
   for (;;) {
     if (env.signal?.aborted) return ABORTED_OUTCOME;
     try {
-      const data = await fetchFlowTree(env.registry, env.device);
+      const data = await readFlowTree(env);
       lastMatches = flowFindAll(data.tree, step.selector);
       fetchError = undefined;
       everMatched ||= lastMatches.length > 0;
@@ -1406,7 +1726,7 @@ async function waitForIdle(
     // backend), so serializing them would double the round without buying
     // anything.
     const [read, frame] = await Promise.all([
-      settleWithin(fetchFlowTree(env.registry, env.device), roundBudget, env.signal).then((r) => {
+      settleWithin(readFlowTree(env), roundBudget, env.signal).then((r) => {
         answeredReadMs = Date.now() - roundStartedAt;
         return r;
       }),
