@@ -439,6 +439,62 @@ describe("gesture-drag abort", () => {
     expect(calls[3]!.x as number).toBeLessThan(0.75 * 800 - 1);
   });
 
+  it("releases where the pointer is when the abort lands inside the final frame's wait", async () => {
+    // The wait before the release is the one window the check above it cannot
+    // see: unchecked on the far side, a drag cancelled there still spent the
+    // wait, released at the authored end point and returned { dragged: true }
+    // on an already-aborted signal. Every move has gone out by then and the
+    // release is the dispatch under test, so the only deterministic hook left is
+    // the `sleep` itself - drive it through a setTimeout spy that fires the
+    // abort inside the last one.
+    const api = fakeChromiumApi();
+    const controller = new AbortController();
+    // 3 steps at durationMs 48: two in-loop waits, then the one before the
+    // release. Calling `fn` straight through keeps the run off the real clock.
+    let sleeps = 0;
+    const timeoutSpy = vi.spyOn(global, "setTimeout").mockImplementation(((fn: () => void) => {
+      if (++sleeps === 3) controller.abort();
+      fn();
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as never);
+
+    let rejection: unknown;
+    try {
+      rejection = await gestureDragTool
+        .execute(
+          { chromium: api } as never,
+          { ...long, durationMs: 48 } as never,
+          {
+            signal: controller.signal,
+          } as never
+        )
+        .catch((err: unknown) => err);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+
+    // A rejection, not { dragged: true }: a raw `tool: gesture-drag` step only
+    // reads as cancelled if the tool throws.
+    expect(rejection).toMatchObject({
+      name: "AbortError",
+      message: expect.stringMatching(
+        /gesture-drag aborted - cancelled mid-drag after 3 of 4 frames/
+      ),
+    });
+
+    const calls = api.dispatchMouseEvent.mock.calls.map((c) => c[0] as Record<string, unknown>);
+    expect(calls.map((c) => c.type)).toEqual([
+      "mousePressed",
+      "mouseMoved",
+      "mouseMoved",
+      "mouseReleased",
+    ]);
+    // The release stays on the last dispatched move; the travel to the end point
+    // is the part the caller cancelled.
+    expect(calls[3]).toMatchObject({ x: calls[2]!.x, y: calls[2]!.y });
+    expect(calls[3]!.x as number).toBeLessThan(0.75 * 800 - 1);
+  });
+
   it("presses nothing when the signal is already aborted", async () => {
     const api = fakeChromiumApi();
     const controller = new AbortController();
