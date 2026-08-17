@@ -7,7 +7,11 @@ import {
   ADB_DEVICES_TIMEOUT_MS,
 } from "../../utils/adb";
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
-import { listIosSimulators, type IosSimulator } from "../../utils/ios-devices";
+import {
+  listIosSimulators,
+  isIosOrTvOsRuntimeId,
+  type IosSimulator,
+} from "../../utils/ios-devices";
 import { simctlListDevices } from "../../utils/sim-remote";
 import { withRemotePrefix } from "../../utils/device-info";
 import { discoverChromiumDevices, type ChromiumDevice } from "../../utils/chromium-discovery";
@@ -86,6 +90,9 @@ async function listRemoteIosSimulators(): Promise<IosRemoteDevice[]> {
     const result = await simctlListDevices();
     const out: IosRemoteDevice[] = [];
     for (const [runtime, devices] of Object.entries(result.devices)) {
+      // Same iOS/tvOS filter the local listing applies: a remote watchOS / xrOS sim
+      // has no interaction surface, so it must not be advertised as an ios-remote target.
+      if (!isIosOrTvOsRuntimeId(runtime)) continue;
       for (const d of devices) {
         if (d.isAvailable === false) continue;
         out.push({

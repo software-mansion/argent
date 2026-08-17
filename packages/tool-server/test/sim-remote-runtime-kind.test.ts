@@ -36,6 +36,9 @@ import {
 const UDID = "4A5B6C7D-1111-2222-3333-444455556666";
 const IOS_RUNTIME = "com.apple.CoreSimulator.SimRuntime.iOS-18-0";
 const TVOS_RUNTIME = "com.apple.CoreSimulator.SimRuntime.tvOS-18-0";
+const WATCHOS_RUNTIME = "com.apple.CoreSimulator.SimRuntime.watchOS-11-4";
+// visionOS's simctl runtime id is spelled `xrOS`.
+const XROS_RUNTIME = "com.apple.CoreSimulator.SimRuntime.xrOS-2-5";
 
 const sim = (udid: string, extra: Record<string, unknown> = {}) => ({
   udid,
@@ -60,6 +63,28 @@ describe("getRemoteSimulatorRuntimeKind", () => {
   it("reads tv off a tvOS runtime", async () => {
     listing = under(TVOS_RUNTIME, sim(UDID));
     expect(await getRemoteSimulatorRuntimeKind(UDID)).toBe("tv");
+  });
+
+  it("does not call a watchOS simulator mobile, the way the local classifier drops that runtime", async () => {
+    // Without the runtime filter, `--device remote:<watch-udid>` would satisfy a
+    // `requires: { runtimeKind: mobile }` the same device fails locally.
+    listing = under(WATCHOS_RUNTIME, sim(UDID));
+    expect(await getRemoteSimulatorRuntimeKind(UDID)).toBeUndefined();
+  });
+
+  it("does not call a visionOS (xrOS) simulator mobile either", async () => {
+    listing = under(XROS_RUNTIME, sim(UDID));
+    expect(await getRemoteSimulatorRuntimeKind(UDID)).toBeUndefined();
+  });
+
+  it("skips an unsupported runtime rather than the scan, so a later iOS entry still answers", async () => {
+    listing = {
+      devices: {
+        [WATCHOS_RUNTIME]: [sim("11111111-0000-0000-0000-000000000000")],
+        [IOS_RUNTIME]: [sim(UDID)],
+      },
+    };
+    expect(await getRemoteSimulatorRuntimeKind(UDID)).toBe("mobile");
   });
 
   it("reads the kind off the runtime holding the udid, not the first one listed", async () => {

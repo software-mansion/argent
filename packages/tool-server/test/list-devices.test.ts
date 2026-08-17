@@ -127,6 +127,29 @@ function simctlJson(): string {
   });
 }
 
+// `sim-remote simctl list devices --json` mirrors Apple's payload, so the remote
+// listing sees the same watchOS / xrOS runtimes the local one does. An
+// unsupported runtime leads, so a filter that aborts the walk instead of
+// skipping the entry loses every row behind it.
+function simRemoteJson(): string {
+  return JSON.stringify({
+    devices: {
+      "com.apple.CoreSimulator.SimRuntime.watchOS-11-4": [
+        { udid: "33333333-3333-3333-3333-333333333333", name: "Apple Watch", state: "Shutdown" },
+      ],
+      "com.apple.CoreSimulator.SimRuntime.iOS-18-2": [
+        { udid: "11111111-1111-1111-1111-111111111111", name: "iPhone 16", state: "Booted" },
+      ],
+      "com.apple.CoreSimulator.SimRuntime.tvOS-17-5": [
+        { udid: "22222222-2222-2222-2222-222222222222", name: "Apple TV", state: "Shutdown" },
+      ],
+      "com.apple.CoreSimulator.SimRuntime.xrOS-2-5": [
+        { udid: "44444444-4444-4444-4444-444444444444", name: "Vision Pro", state: "Shutdown" },
+      ],
+    },
+  });
+}
+
 beforeEach(() => {
   execFileMock.mockReset();
 });
@@ -224,6 +247,23 @@ describe("list-devices", () => {
     }>;
     expect(android).toHaveLength(1);
     expect(android[0]!.avdName).toBe("ModernName");
+  });
+
+  it("lists remote iOS/tvOS simulators only, never a remote watchOS or visionOS sim", async () => {
+    __resetVegaBinaryCacheForTests();
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "sim-remote" && args[0] === "simctl")
+        return { stdout: simRemoteJson(), stderr: "" };
+      return { stdout: "", stderr: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+    const remote = result.devices.filter((d) => d.platform === "ios-remote") as Array<{
+      udid: string;
+      name: string;
+    }>;
+    expect(remote.map((d) => d.name).sort()).toEqual(["Apple TV", "iPhone 16"]);
+    expect(remote.map((d) => d.udid)).toContain("remote:11111111-1111-1111-1111-111111111111");
   });
 
   it("silently omits iOS when xcrun is unavailable — other platforms still returned", async () => {
