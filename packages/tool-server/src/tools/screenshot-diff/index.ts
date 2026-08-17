@@ -94,6 +94,11 @@ const fileInputs: FileInputSpec[] = [
 
 export const screenshotDiffTool: ToolDefinition<Params, ScreenshotDiffResult> = {
   id: "screenshot-diff",
+  interaction: {
+    startedMsg: () => "Comparing screenshots",
+    completedMsg: () => "Compared screenshots",
+    failedMsg: ({ failureSignal }) => `Failed to compare screenshots: ${failureSignal.error_code}`,
+  },
   description: `Compare two PNG screenshots and return a compact visual-diff summary.
 Accepts saved baseline/current PNG paths, or one saved PNG plus one live full-resolution capture from a device. Always provide udid so the simulator-server dependency can be resolved.
 Use when stable before/after screenshots exist and the expected result is pixel-visible: layout, spacing, color, typography, image/icon rendering, clipping, overflow, or text rendering.

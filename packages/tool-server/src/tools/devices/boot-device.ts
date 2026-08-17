@@ -34,6 +34,7 @@ import {
 import { ensureDep } from "../../utils/check-deps";
 import { linuxBootDiagnostics } from "../../utils/linux-preflight";
 import { listIosSimulators } from "../../utils/ios-devices";
+import { deviceSetForUdid, simctlPrefix } from "../../utils/ios-device-sets";
 import { classifyDevice, stripRemotePrefix } from "../../utils/device-info";
 import {
   simctlBoot as simRemoteBoot,
@@ -126,6 +127,10 @@ type BootDeviceResult =
   | VegaBootResult
   | ElectronBootResult
   | NativeDevtoolsInitFailedResult;
+
+function bootTarget(params: BootDeviceParams): string {
+  return params.udid ?? params.avdName ?? params.vvdImage ?? params.electronAppPath ?? "device";
+}
 
 // Flags every boot-device launch should always pass. Two purposes:
 //
@@ -487,10 +492,14 @@ async function bootIos(
     .catch(() => undefined);
   const simState = simMatch?.state;
   const isTvOs = simMatch?.runtimeKind === "tv";
+  // listIosSimulators above already learned which device set owns this UDID,
+  // so this resolves from cache; every simctl below targets that set.
+  const deviceSet = await deviceSetForUdid(udid);
+  const prefix = simctlPrefix(deviceSet);
 
   // force=true on a running sim: shut it down so we can pre-write AX prefs.
   if (force && simState === "Booted") {
-    await execFileAsync("xcrun", ["simctl", "shutdown", udid]);
+    await execFileAsync("xcrun", [...prefix, "shutdown", udid]);
   }
 
   const needsPreBoot = simState === "Shutdown" || (force && simState === "Booted");
@@ -504,13 +513,13 @@ async function bootIos(
     });
   }
 
-  await execFileAsync("xcrun", ["simctl", "boot", udid]).catch((err: unknown) => {
+  await execFileAsync("xcrun", [...prefix, "boot", udid]).catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);
     if (!message.includes("Unable to boot device in current state: Booted")) {
       throw err;
     }
   });
-  await execFileAsync("xcrun", ["simctl", "bootstatus", udid, "-b"]);
+  await execFileAsync("xcrun", [...prefix, "bootstatus", udid, "-b"]);
 
   // tvOS only: a boot transition (Shutdown→Booted, or a force reboot) orphans
   // the host-side HID daemon. Unlike the ax-service — which runs *inside* the
@@ -578,19 +587,27 @@ async function bootIos(
   if (initFailure?.givenUp) {
     return buildInitFailedResult(udid, initFailure);
   }
-  await execFileAsync("defaults", [
-    "write",
-    "com.apple.iphonesimulator",
-    "CurrentDeviceUDID",
-    udid,
-  ]).catch(() => {});
+  // A Simulator.app instance displays ONE device set (the default, unless
+  // launched with -DeviceSetPath). A device from an additional set therefore
+  // can't be surfaced by attaching the stock GUI — it runs headless and is
+  // streamed via simulator-server (exactly how Radon IDE presents its own
+  // set's devices) — so skip the GUI attach and the CurrentDeviceUDID write
+  // that only steers the default-set window.
+  if (!deviceSet) {
+    await execFileAsync("defaults", [
+      "write",
+      "com.apple.iphonesimulator",
+      "CurrentDeviceUDID",
+      udid,
+    ]).catch(() => {});
+  }
   // `simctl boot` above already booted the device CORE (headless). Opening
   // Simulator.app only attaches the GUI window — surfaces that stream the
   // device through simulator-server (e.g. Argent Lens) don't need it, so
   // `headless` skips it to avoid popping a window the user didn't ask for.
   // ARGENT_SIMULATOR_NO_WINDOW forces the same skip host-wide (the iOS analog
   // of ARGENT_EMULATOR_NO_WINDOW) so CI/Lens hosts never have to pass the flag.
-  if (!headless && !iosHeadlessFromEnv()) {
+  if (!headless && !iosHeadlessFromEnv() && !deviceSet) {
     // Xcode 27 drops Simulator.app in favour of Device Hub.app
     // (com.apple.dt.Devices); fall back to it, and keep the GUI attach
     // best-effort so a missing app never fails a boot whose core is already up.
@@ -1414,6 +1431,12 @@ export function createBootDeviceTool(
 ): ToolDefinition<BootDeviceParams, BootDeviceResult> {
   return {
     id: "boot-device",
+    interaction: {
+      startedMsg: ({ params }) => `Starting ${bootTarget(params)}`,
+      completedMsg: ({ params }) => `Started ${bootTarget(params)}`,
+      failedMsg: ({ params, failureSignal }) =>
+        `Failed to start ${bootTarget(params)}: ${failureSignal.error_code}`,
+    },
     description: `Start an iOS simulator, launch an Android emulator, start a Vega (Fire TV) Virtual Device, or spawn an Electron app and wait until it is ready to accept interactions.
 Pick the platform by which argument you pass: 'udid' for an iOS simulator from list-devices, 'avdName' for an Android AVD (a serial is assigned automatically), 'vvdImage' for a Vega VVD (the 'vvdImage' of a vega device from list-devices, e.g. 'tv'), or 'electronAppPath' for an Electron app (a CDP remote-debugging port is picked automatically, or pass 'electronPort' to fix one).
 Use at the start of a session once you have picked a target.

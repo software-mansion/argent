@@ -156,6 +156,12 @@ export function createReactProfilerStopTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, Record<string, unknown>> {
   return {
     id: "react-profiler-stop",
+    interaction: {
+      startedMsg: () => "Stopping React profiler",
+      completedMsg: () => "Stopped React profiler",
+      failedMsg: ({ failureSignal }) =>
+        `Failed to stop React profiler: ${failureSignal.error_code}`,
+    },
     description: `Stop CPU profiling and collect the cpuProfile + React commit tree.
 Reads commit data from the in-app React DevTools backend.
 Stores results in the ReactProfilerSession for later use by react-profiler-analyze or react-profiler-cpu-summary.
@@ -174,8 +180,10 @@ Fails if no active profiling session exists or the CDP connection was lost durin
 
       if (!entry || entry.state !== ServiceState.RUNNING) {
         throw new FailureError(
-          "No active profiling session. The session may have been lost due to a Metro reload. " +
-            "Call react-profiler-start to begin a new session.",
+          "No active profiling session. The session may have been lost to a Metro reload, or " +
+            "torn down by a stop-all-simulator-servers — this session rides on the device's " +
+            "JS-runtime debugger, which that teardown reaps, and one tool-server serves every " +
+            "agent using this argent install. Call react-profiler-start to begin a new session.",
           {
             error_code: FAILURE_CODES.REACT_PROFILER_NO_ACTIVE_SESSION,
             failure_stage: "react_profiler_stop_session_lookup",

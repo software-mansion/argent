@@ -520,6 +520,12 @@ const zodSchema = z.object({
 
 export const debuggerComponentTreeTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "debugger-component-tree",
+  interaction: {
+    startedMsg: () => "Reading React component tree",
+    completedMsg: () => "Read React component tree",
+    failedMsg: ({ failureSignal }) =>
+      `Failed to read React component tree: ${failureSignal.error_code}`,
+  },
   description: `Fetch the current screen of a running React Native app as a compact component text tree.
 Only shows on-screen components with unique positions — off-screen (scrolled) content,
 full-screen transparent wrappers, and implementation-detail components are pruned.

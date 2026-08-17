@@ -111,11 +111,13 @@ export interface InvokeToolOptions {
    *
    * The outer request's AI client is inherited unchanged. The platform is
    * re-derived from each sub-tool's own `childArgs` (its `udid` / `device_id` /
-   * `avdName`), falling back to the outer request's platform when the sub-tool
-   * carries no device arg — an orchestrator like flow-execute has no platform of
-   * its own and a single flow can target several devices, so the child's device
-   * arg is the only correct platform source. Opaque to the registry — it neither
-   * reads nor validates the recorded metadata.
+   * `devices` / `avdName`), falling back to the outer request's platform when the
+   * sub-tool carries no device arg — an orchestrator like flow-execute has no
+   * platform of its own and a single flow can target several devices, so the
+   * child's device arg is the only correct platform source. (A replayed
+   * `stop-all-simulator-servers` step carries `devices`, injected by
+   * `bindDeviceArgs`, so it resolves rather than falling back.) Opaque to the
+   * registry — it neither reads nor validates the recorded metadata.
    */
   recordChildInvocation?: (toolInvocationId: string, childArgs?: unknown) => () => void;
   /**
@@ -235,7 +237,15 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
   description?: string;
   /** Zod schema for tool input; used for runtime validation. When provided, inputSchema is auto-derived at registration time. */
   zodSchema?: z.ZodObject<any>;
-  /** JSON Schema for tool input; used for listing (GET /tools). Auto-derived from zodSchema if not explicitly set. */
+  /**
+   * JSON Schema for tool input; used for listing (GET /tools). Auto-derived from zodSchema if not
+   * explicitly set — and it should never need to be set. A hand-written schema is how top-level
+   * `oneOf`/`allOf`/`anyOf` reached clients once before (#773): the Anthropic Messages API rejects
+   * those outright with a 400 that fails the WHOLE request, every tool in it. Express a cross-field
+   * rule as a zod `.refine()`/`.superRefine()` plus a sentence in `description` instead. Combinators
+   * nested inside `properties` (e.g. a `z.union` field) are fine.
+   * Enforced by tool-server/test/tool-input-schema-contract.test.ts.
+   */
   inputSchema?: Record<string, unknown>;
   /** Optional hint for adapters (e.g. "image" for MCP to return base64 image content). */
   outputHint?: string;

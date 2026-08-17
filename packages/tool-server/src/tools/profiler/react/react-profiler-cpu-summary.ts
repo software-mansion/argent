@@ -117,6 +117,12 @@ function renderMarkdownTable(entries: HotspotEntry[]): string {
 
 export const reactProfilerCpuSummaryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "react-profiler-cpu-summary",
+  interaction: {
+    startedMsg: () => "Summarizing React CPU profile",
+    completedMsg: () => "Summarized React CPU profile",
+    failedMsg: ({ failureSignal }) =>
+      `Failed to summarize React CPU profile: ${failureSignal.error_code}`,
+  },
   description: `Return a raw Hermes CPU flamegraph summary (top hotspot functions by self-time).
 FOR DEDICATED CPU INVESTIGATION ONLY — do NOT call this as part of a normal profiling session.
 Use react-profiler-analyze instead; it covers all React rendering performance analysis.
