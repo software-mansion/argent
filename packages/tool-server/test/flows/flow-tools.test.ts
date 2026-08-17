@@ -1862,6 +1862,31 @@ describe("flow-finish-recording", () => {
     expect(result.requiresPrompt).toContain("`requires: { platform: [ios] }` is the likely answer");
   });
 
+  it("excludes a platform only a UI-guarded launch fails to serve", async () => {
+    // The validator lets android pass here, since the guarded launch may never
+    // be reached; the hint is stricter, because the suggested block would break
+    // on android the first run the modal does show.
+    await flowStartRecordingTool.execute({}, { name: "guarded-helper", project_root: tmpDir });
+    await overwriteFlowFile("guarded-helper", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: { ios: "com.example.app", android: "com.example.app" } },
+        {
+          kind: "when",
+          condition: { kind: "ui", condition: "visible", selector: { identifier: "modal" } },
+          steps: [{ kind: "launch", app: { ios: "com.example.helper" } }],
+        },
+      ],
+    });
+
+    const result = await flowFinishRecordingTool.execute(
+      {},
+      { name: "guarded-helper", project_root: tmpDir }
+    );
+
+    expect(result.requiresPrompt).toContain("`requires: { platform: [ios] }` is the likely answer");
+  });
+
   it("suggests nothing when the launch names every platform", async () => {
     // A bare app id runs anywhere, so it narrows nothing and must not be
     // dressed up as a recommendation.

@@ -279,6 +279,22 @@ describe("requirements no target could satisfy are rejected at parse", () => {
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIRES_UNSATISFIABLE);
   });
 
+  it("allows that same block once a UI guard may keep the launch unreached", () => {
+    // The twin of the case above, one guard apart: a tv run that never opens the
+    // banner completes end to end, so the runtime-kind-only branch reads
+    // conditionality exactly as the platform branch does.
+    expect(() =>
+      parseFlow(
+        [
+          "requires: { runtimeKind: tv }",
+          "steps:",
+          "  - when: { visible: { id: banner } }",
+          "    steps: [{ launch: { chromium: /some/app } }]",
+        ].join("\n")
+      )
+    ).not.toThrow();
+  });
+
   it("allows a runtime-kind-only block when a shared native id serves a viable platform", () => {
     expect(() =>
       parseFlow("requires: { runtimeKind: tv }\nsteps: [{ launch: { native: com.a } }]")
@@ -312,10 +328,9 @@ describe("requirements no target could satisfy are rejected at parse", () => {
     ).not.toThrow();
   });
 
-  it("holds a launch behind a non-platform guard to every required platform", () => {
-    // A visible: guard narrows nothing about the platform, so its launch still
-    // owes ios an id - kills a launchesInScope mutation that skips launches
-    // under non-platform guards instead of passing `allowed` through.
+  it("lets a launch behind a non-platform guard miss a required platform", () => {
+    // A visible: guard may never fire, so the flow still completes end to end on
+    // ios - and validateRequires only rejects impossibilities.
     expect(() =>
       parseFlow(
         [
@@ -325,7 +340,53 @@ describe("requirements no target could satisfy are rejected at parse", () => {
           "    steps: [{ launch: { android: com.a } }]",
         ].join("\n")
       )
+    ).not.toThrow();
+  });
+
+  it("accepts a shared launch beside a platform-specific one behind a UI guard", () => {
+    expect(() =>
+      parseFlow(
+        [
+          "requires: { platform: [ios, android] }",
+          "steps:",
+          "  - launch: { native: com.shared.app }",
+          "  - when: { visible: { id: onboarding-modal } }",
+          "    steps: [{ launch: { ios: com.shared.app.helper } }]",
+        ].join("\n")
+      )
+    ).not.toThrow();
+  });
+
+  it("still refuses a launch a platform guard admits but declares no id for", () => {
+    // The guard admits ios, so the launch runs on every ios run - a platform
+    // guard narrows the scope without making the launch conditional.
+    expect(() =>
+      parseFlow(
+        [
+          "requires: { platform: [ios, android] }",
+          "steps:",
+          "  - when: { platform: ios }",
+          "    steps: [{ launch: { android: com.a } }]",
+        ].join("\n")
+      )
     ).toThrow(/declares no app id for ios/);
+  });
+
+  it("keeps a platform guard nested under a UI guard conditional", () => {
+    // Conditionality is inherited: the inner platform guard is only reached when
+    // the banner shows, so its launch still proves nothing about ios.
+    expect(() =>
+      parseFlow(
+        [
+          "requires: { platform: [ios] }",
+          "steps:",
+          "  - when: { visible: { id: banner } }",
+          "    steps:",
+          "      - when: { platform: ios }",
+          "        steps: [{ launch: { android: com.a } }]",
+        ].join("\n")
+      )
+    ).not.toThrow();
   });
 });
 

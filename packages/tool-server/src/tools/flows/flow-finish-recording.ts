@@ -22,9 +22,10 @@ import type { TextMatchMode } from "../../utils/ui-tree-match";
 /**
  * The platforms the flow's launch steps already limit it to, or null when they
  * limit nothing (a bare app id, or no launch at all). A platform is offered iff
- * some launch in its scope would run and every one declares an id for it — the
- * validator's own walk, so the hint can never suggest a block that fails
- * validation or skips a reachable `when:` branch.
+ * some launch in its scope would run and every one declares an id for it —
+ * stricter than the validator, which ignores conditionally reached launches, so
+ * the hint can never suggest a block that fails validation or skips a reachable
+ * `when:` branch.
  */
 function launchPlatforms(flow: FlowFile): WhenPlatform[] | null {
   const named = LAUNCH_PLATFORMS.filter((p) => launchCoverage(flow.steps, p) === "served");

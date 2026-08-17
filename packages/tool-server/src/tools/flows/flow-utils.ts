@@ -2979,43 +2979,50 @@ function platformCanPresent(platform: WhenPlatform, kind: FlowRuntimeKind): bool
  * body, so an ios-only launch guarded by an ios guard is not a contradiction
  * inside a flow that also allows android — and a block whose guard the
  * requirements already exclude is dead code, so its launches are not checked
- * at all.
+ * at all. Any other guard is decided at run time, so its body and everything
+ * nested under it is `conditional`: the launch may never be reached.
  */
 function* launchesInScope(
   steps: FlowStep[],
-  allowed: readonly WhenPlatform[]
-): Generator<{ app: Launch; allowed: readonly WhenPlatform[] }> {
+  allowed: readonly WhenPlatform[],
+  conditional = false
+): Generator<{ app: Launch; allowed: readonly WhenPlatform[]; conditional: boolean }> {
   for (const step of steps) {
     if (step.kind === "launch") {
-      yield { app: step.app, allowed };
+      yield { app: step.app, allowed, conditional };
     } else if (step.kind === "when") {
       const cond = step.condition;
-      const inner = cond.kind === "platform" ? allowed.filter((p) => p === cond.platform) : allowed;
-      if (inner.length > 0) yield* launchesInScope(step.steps, inner);
+      const isPlatform = cond.kind === "platform";
+      const inner = isPlatform ? allowed.filter((p) => p === cond.platform) : allowed;
+      if (inner.length > 0) yield* launchesInScope(step.steps, inner, conditional || !isPlatform);
     }
   }
 }
 
 /**
  * How these steps' launches relate to one platform under
- * `requires: { platform: [platform] }`: "unserved" when a launch in the
- * platform's scope declares no id for it (the block would fail validation),
+ * `requires: { platform: [platform] }`: "unserved" when a launch reached
+ * unconditionally declares no id for it (the block would fail validation),
  * "served" when at least one launch is in scope and every one declares an id,
- * and "no-launch" when nothing would launch at all — valid, but the launches
- * say nothing about the platform. Shared by {@link validateRequires} and
- * flow-finish-recording's requires hint, so the hint can never suggest a block
- * the validator refuses.
+ * and "unknown" when the launches settle neither: nothing launches at all, or
+ * only a conditionally reached launch is missing its id. Shared by
+ * {@link validateRequires} and flow-finish-recording's requires hint, so the
+ * hint can never suggest a block the validator refuses.
  */
 export function launchCoverage(
   steps: FlowStep[],
   platform: WhenPlatform
-): "served" | "unserved" | "no-launch" {
+): "served" | "unserved" | "unknown" {
   let sawLaunch = false;
-  for (const { app } of launchesInScope(steps, [platform])) {
+  let complete = true;
+  for (const { app, conditional } of launchesInScope(steps, [platform])) {
     sawLaunch = true;
-    if (appIdForPlatform(app, platform) === null) return "unserved";
+    if (appIdForPlatform(app, platform) === null) {
+      if (!conditional) return "unserved";
+      complete = false;
+    }
   }
-  return sawLaunch ? "served" : "no-launch";
+  return sawLaunch && complete ? "served" : "unknown";
 }
 
 function unsatisfiable(detail: string): FailureError {
@@ -3050,11 +3057,14 @@ function validateRequires(flow: FlowFile): void {
     // (flow-run's runLaunch), so a launch missing an id for a platform the flow
     // claims to support is that same error, decidable here without a device.
     // A platform runtimeKind already rules out can never host a run, so it
-    // owes no id.
+    // owes no id. Only unconditional launches prove anything: one behind a
+    // run-time guard may never be reached, and the flow completes end to end on
+    // every run where the guard stays shut.
     const viable = runtimeKind
       ? platform.filter((p) => platformCanPresent(p, runtimeKind))
       : platform;
-    for (const { app, allowed } of launchesInScope(flow.steps, viable)) {
+    for (const { app, allowed, conditional } of launchesInScope(flow.steps, viable)) {
+      if (conditional) continue;
       const missing = allowed.filter((p) => appIdForPlatform(app, p) === null);
       if (missing.length > 0) {
         throw unsatisfiable(

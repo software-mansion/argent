@@ -55,7 +55,7 @@ requires:
 
 On a target that does not satisfy them, `argent flow run <dir>` **skips** the flow — that is the point, one command over a mixed suite. Running that flow on its own is an **error**, and so is a `run:` fragment the run device cannot satisfy: a composed fragment silently not running would leave a green report for a scenario that only half happened. Use `when:` when you mean "optionally".
 
-Combinations nothing could satisfy are rejected at parse: `runtimeKind: tv` with `platform: [chromium]`, or a `launch` step declaring no app id for a platform `requires.platform` claims. A `launch` inside a `when: { platform: … }` guard is judged against that guard's platform only.
+Combinations nothing could satisfy are rejected at parse: `runtimeKind: tv` with `platform: [chromium]`, or a `launch` step that always runs declaring no app id for a platform `requires.platform` claims. A `launch` inside a `when: { platform: … }` guard is judged against that guard's platform only; one inside any other `when:` guard may never be reached, so it is not judged at all.
 
 ## Selectors
 
