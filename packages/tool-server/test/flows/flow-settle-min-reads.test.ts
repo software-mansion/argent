@@ -23,12 +23,16 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
   }),
 }));
 
+import { SETTLE_TIMEOUT_MS } from "../../src/tools/flows/flow-actions";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow } from "../../src/tools/flows/flow-utils";
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
-// Comfortably past the 3000ms settle window, the way a tree RPC's own timeout is.
-const SLOW_READ_MS = 3200;
+// Outlasts the settle window on its own, the way a tree RPC's own timeout does.
+// Derived rather than copied: a window raised past a pinned number would move
+// these cases onto the ordinary poll path, where the scroll-to round cost still
+// comes out at four reads and stops pricing the floor.
+const SLOW_READ_MS = SETTLE_TIMEOUT_MS + 200;
 const BUTTON_FRAME: DescribeFrame = { x: 0.2, y: 0.4, width: 0.6, height: 0.1 };
 // The same button a scroll further down, i.e. a screen still in motion.
 const MOVED_BUTTON_FRAME: DescribeFrame = { ...BUTTON_FRAME, y: 0.7 };

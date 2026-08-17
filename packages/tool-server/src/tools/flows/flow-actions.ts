@@ -232,7 +232,13 @@ const FOCUS_REPORTING_SOURCES: ReadonlySet<DescribeSource> = new Set([
 // Settle detection: re-read the tree until two consecutive reads match, so a tap
 // never lands mid-fling and a resolved frame can't go stale before we act.
 const SETTLE_POLL_MS = 250;
-const SETTLE_TIMEOUT_MS = 3000;
+/**
+ * How long that re-reading gets. Exported for flow-settle-min-reads.test.ts,
+ * which sizes its slow reads past this window: a hand-copied number there would
+ * survive this one being raised above it, and the read counts it prices would
+ * quietly stop measuring the floor below.
+ */
+export const SETTLE_TIMEOUT_MS = 3000;
 
 // Read attempts every settle makes before it may conclude anything, enforced
 // even once the window has closed. A read can fail by TIMING OUT, and every
