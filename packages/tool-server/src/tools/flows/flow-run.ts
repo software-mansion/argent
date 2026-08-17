@@ -1193,19 +1193,6 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
       // folds to, walked once here and threaded to every setup check below.
       const leading = await leadingRun(flow, rootEntry);
 
-      // The half of the run's requirements decidable from the call alone, run
-      // before anything else touches a device: the caller named a platform (or
-      // a device, whose platform is its id's shape) the leading chain's folded
-      // requires exclude. For such a caller this sits ahead of the
-      // prerequisite handshake — they are never asked to establish state for a
-      // run that cannot happen — and ahead of the chromium hoist, so no app is
-      // booted for one. A caller who named nothing is judged only by the
-      // resolution below, AFTER the handshake: what matters is the device
-      // landscape at acknowledge time (the prerequisite setup may itself boot
-      // the satisfying device), so refusing on the pre-notice listing would
-      // reject runs the setup was about to make possible.
-      assertParamsMeetRequires(params, leading.requires);
-
       // Run-time analog of validateFlow's e2e-has-prerequisite rule: parse sees
       // one file, but a leading `run:` chain crosses files — a fragment whose
       // chain reaches a launch still (re)starts the app at step 1, destroying
@@ -1213,6 +1200,11 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
       // handshake so a caller is never asked to establish state the run would
       // then throw away — and, resolving the pin by shape alone, before any
       // device listing or boot.
+      //
+      // Ahead of the requires refusal below, too: this verdict does not depend
+      // on the target, and FLOW_REQUIREMENTS_UNMET is a per-flow skip, so
+      // refusing on the block first would filter it silently out of every
+      // directory run the block excludes and red it only where it matches.
       //
       // Exempt: a run pinned to a chromium instance, whose leading launch
       // provably restarts nothing. An explicit `device` skips resolveRunDevice's
@@ -1242,6 +1234,23 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
           }
         );
       }
+
+      // The requirements decidable from the caller-named target alone: the
+      // platform it names (the `platform` param, or an explicit device's id
+      // shape) against requires.platform, plus runtimeKind where that platform
+      // presents a constant one. Reading no device, this sits ahead of the
+      // prerequisite handshake — such a caller is not asked to establish state
+      // for a target already refused — and ahead of the chromium hoist, so no
+      // app is booted for one.
+      //
+      // What it leaves open is judged by the resolution below, AFTER the
+      // handshake: runtimeKind on the platforms that must be probed for it, and
+      // the platform of an auto-detected device. Both read a device, and the
+      // landscape that decides them is the one at acknowledge time — the
+      // prerequisite setup may itself boot the satisfying device, or bring the
+      // named one back onto adb — so settling them pre-notice would refuse runs
+      // the setup was about to make possible.
+      assertParamsMeetRequires(params, leading.requires);
 
       // LLM-path prerequisite handshake (fragments only; a flow with a leading
       // launch step cannot declare one — validated at parse, and a leading

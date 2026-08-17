@@ -1214,6 +1214,93 @@ describe("requires folded along the leading run: chain", () => {
   });
 });
 
+describe("a flow with an execution prerequisite", () => {
+  /** The raw call, so a notice is inspectable rather than thrown away. */
+  const call = (
+    registry: Registry,
+    name: string,
+    params: Record<string, unknown> = {}
+  ): Promise<unknown> =>
+    createRunFlowTool(registry).execute({}, { name, project_root: tmpDir, ...params });
+
+  async function writePrereqPair(fragment: FlowStep[]): Promise<void> {
+    await writeFlow("frag", { steps: fragment });
+    await writeFlow("prereq-composed", {
+      executionPrerequisite: "the app is signed in",
+      requires: { platform: ["ios"] },
+      steps: [{ kind: "run", flow: "frag.yaml" }],
+    });
+  }
+
+  it("reds a leading launch on an excluded device instead of skipping it there", async () => {
+    // The file is broken on every target — the launch throws away the state the
+    // prerequisite demands — so its code must not depend on where it ran.
+    // FLOW_REQUIREMENTS_UNMET is a per-flow skip, which would filter the flow
+    // out of every directory run the block excludes and red it only on the
+    // machines that happen to match.
+    await writePrereqPair([{ kind: "launch", app: "com.acme.app" }]);
+    const { registry } = mockRegistry();
+
+    const err = await call(registry, "prereq-composed", { device: ANDROID }).catch(
+      (e: unknown) => e
+    );
+
+    // Not FLOW_REQUIREMENTS_UNMET: that code is a per-flow skip, so the broken
+    // file would vanish from every directory run this device's platform misses.
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE);
+  });
+
+  it("reports the same code on a device the block admits", async () => {
+    await writePrereqPair([{ kind: "launch", app: "com.acme.app" }]);
+    const { registry } = mockRegistry();
+
+    const err = await call(registry, "prereq-composed", { device: IOS }).catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE);
+  });
+
+  it("still skips a launch-free fragment its block excludes, before the handshake", async () => {
+    // Nothing is structurally wrong here, only inapplicable, so the skip code
+    // stands — and it is refused rather than noticed, so no state is
+    // established for a target the run has already rejected.
+    await writePrereqPair([OK_STEP]);
+    const { registry } = mockRegistry();
+
+    const err = await call(registry, "prereq-composed", { device: ANDROID }).catch(
+      (e: unknown) => e
+    );
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNMET);
+    expect(err).not.toHaveProperty("notice");
+  });
+
+  it("leaves the runtimeKind half to the acknowledged call, which reads the device", async () => {
+    // An explicit device's kind costs a probe, and the probe answers about the
+    // machine as it stands BEFORE the setup the notice asks for — a device the
+    // operator is about to bring back onto adb reads as unverifiable now and
+    // fine afterwards, so the notice has to come first.
+    await writeFlow("tv-prereq", {
+      executionPrerequisite: "the set-top box is on its home screen",
+      requires: { runtimeKind: "tv" },
+      steps: [OK_STEP],
+    });
+    probeFailures.set(ANDROID, "adb: device offline");
+    const { registry } = mockRegistry();
+
+    expect(await call(registry, "tv-prereq", { device: ANDROID })).toMatchObject({
+      notice: expect.stringContaining("prerequisite"),
+      executionPrerequisite: "the set-top box is on its home screen",
+    });
+
+    const err = await call(registry, "tv-prereq", {
+      device: ANDROID,
+      prerequisiteAcknowledged: true,
+    }).catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNVERIFIABLE);
+  });
+});
+
 describe("a flow that touches no device", () => {
   it("runs despite requirements — there is no target to judge", async () => {
     await writeFlow("narration", {
