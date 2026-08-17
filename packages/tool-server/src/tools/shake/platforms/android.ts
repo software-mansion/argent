@@ -2,7 +2,7 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { consolePortFromAdbSerial, isAndroidTv, runAdb } from "../../../utils/adb";
 import { UnsupportedOperationError } from "../../../utils/capability";
-import { shakeHostWindow } from "../../../utils/window-shake";
+import { prepareHostWindowShake } from "../../../utils/window-shake";
 import type { ShakeParams, ShakeResult, ShakeServices } from "../types";
 
 /**
@@ -171,6 +171,13 @@ export const androidImpl: PlatformImpl<ShakeServices, ShakeParams, ShakeResult> 
       );
     }
 
+    // Nothing about a sensor override is visible on screen, so wobble this
+    // emulator's own window in step with the burst. Cosmetic and flag-gated:
+    // `begin` never throws and `settle` never rejects, so the wobble can
+    // neither fail the shake nor delay it. Prepared before the lock so its one
+    // adb round trip never runs concurrently with the sensor burst.
+    const shaker = await prepareHostWindowShake({ kind: "android", serial });
+
     const setAcceleration = async (v: Vec3) => {
       await emuConsole(serial, ["sensor", "set", "acceleration", fmt(v)]);
     };
@@ -197,30 +204,18 @@ export const androidImpl: PlatformImpl<ShakeServices, ShakeParams, ShakeResult> 
 
       try {
         for (let gesture = 0; gesture < count; gesture++) {
-          // Nothing about a sensor override is visible on screen, so — behind
-          // the `microinteractions` flag — wobble this emulator's own window for
-          // the length of the burst. Cosmetic: it resolves either way, and the
-          // `finally` keeps a failed swing on its original path.
-          const wobble = shakeHostWindow({ kind: "android", serial });
-          try {
-            for (let swing = 0; swing < SWINGS_PER_SHAKE; swing++) {
-              // Alternate the X axis around the resting vector, leaving gravity on
-              // the other axes so the pose still reads as "held upright, jerked
-              // sideways" rather than "tumbling".
-              const direction = swing % 2 === 0 ? 1 : -1;
-              await setAcceleration({
-                x: rest.x + direction * SHAKE_AMPLITUDE,
-                y: rest.y,
-                z: rest.z,
-              });
-              await sleep(SWING_INTERVAL_MS);
-            }
-          } finally {
-            // Awaited, never dangling: no `osascript` outlives the tool call.
-            // The `catch` is belt-and-braces — `shakeHostWindow` already
-            // swallows its own failures, and a cosmetic effect must not decide
-            // the result or skip the resting-vector restore below.
-            await wobble.catch(() => {});
+          shaker.begin();
+          for (let swing = 0; swing < SWINGS_PER_SHAKE; swing++) {
+            // Alternate the X axis around the resting vector, leaving gravity on
+            // the other axes so the pose still reads as "held upright, jerked
+            // sideways" rather than "tumbling".
+            const direction = swing % 2 === 0 ? 1 : -1;
+            await setAcceleration({
+              x: rest.x + direction * SHAKE_AMPLITUDE,
+              y: rest.y,
+              z: rest.z,
+            });
+            await sleep(SWING_INTERVAL_MS);
           }
         }
       } catch (err) {
@@ -240,6 +235,11 @@ export const androidImpl: PlatformImpl<ShakeServices, ShakeParams, ShakeResult> 
         // a stuck override outlives this tool call and would skew every later one.
         await setAcceleration(rest).catch(() => {});
       }
+
+      // Settle once on the success path only, so no `osascript` outlives a
+      // successful tool call; a failed burst above throws without waiting on
+      // the wobble, and the restore in the `finally` never waits on it either.
+      await shaker.settle();
 
       return { shaken: true, count };
     });
