@@ -101,6 +101,19 @@ async function expectCombinedRejection(p: Promise<unknown>): Promise<void> {
   expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_TEXT_AND_KEY_COMBINED);
 }
 
+/** Assert the rejection is the 400-class one an unusable `key` value raises. */
+async function expectUnsupportedKey(p: Promise<unknown>): Promise<Error> {
+  const err = await p.then(
+    () => {
+      throw new Error("expected the empty-key call to reject, but it resolved");
+    },
+    (e: unknown) => e as Error
+  );
+  expect(err).toBeInstanceOf(InvalidToolInputError);
+  expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED);
+  return err;
+}
+
 /** Drive a combined call and hand back the error it rejected with. */
 async function combinedError(params: Record<string, unknown>): Promise<Error> {
   return createKeyboardTool(registry())
@@ -262,6 +275,58 @@ describe("keyboard — `text` and `key` are mutually exclusive", () => {
   });
 });
 
+// This tool decides `key` by presence, every backend dispatches it by
+// truthiness (`if (params.key)`). So `{ key: "" }` used to clear both checks,
+// reach a backend, press nothing, and still resolve `{ typed: "", keys: 0 }` —
+// indistinguishable from a real press, while the tool description promises a
+// failure for an unsupported key name, which `""` is. It is now rejected in
+// `execute`, above the dispatch, so one guard covers every backend.
+describe("keyboard — an empty `key` names no key", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    isAndroidTv.mockResolvedValue(false);
+  });
+
+  for (const { platform, udid, injections } of BACKENDS) {
+    it(`${platform}: rejects { key: "" } with nothing injected`, async () => {
+      await expectUnsupportedKey(
+        createKeyboardTool(registry()).execute({}, { udid, key: "", delayMs: 0 })
+      );
+      expect(injections()).toBe(0);
+    });
+  }
+
+  it("rejects it on a TV target too", async () => {
+    // The one backend that rejects `key` outright (platforms/tv.ts) read the
+    // empty one by truthiness as well, so it typed `""` and reported success
+    // instead. Its own rejection can therefore never be what covers this shape.
+    isAndroidTv.mockResolvedValue(true);
+    await expectUnsupportedKey(
+      createKeyboardTool(registry()).execute({}, { udid: "emulator-5554", key: "" })
+    );
+  });
+
+  it("leaves an empty `text` the no-op an omitted one is", async () => {
+    // Positive control, and the asymmetry the guard is built on: `key` names one
+    // member of a closed set, `text` carries a payload. A guard widened to
+    // "reject either empty value" turns this red.
+    await expect(
+      createKeyboardTool(registry()).execute({}, { udid: "emulator-5554", text: "", delayMs: 0 })
+    ).resolves.toEqual({ typed: "", keys: 0 });
+    expect(adbShell).not.toHaveBeenCalled();
+  });
+
+  it("tells the caller nothing was pressed, and names omitting `key`", async () => {
+    // A caller that sent `""` usually built the value from something absent, so
+    // the actionable repair is to drop the parameter — not to guess at a name.
+    const err = await expectUnsupportedKey(
+      createKeyboardTool(registry()).execute({}, { udid: "emulator-5554", key: "" })
+    );
+    expect(err.message).toMatch(/nothing was pressed/);
+    expect(err.message).toMatch(/omit `key`/);
+  });
+});
+
 // The rule is enforced in `execute`, so a client that only ever calls the tool
 // learns it from a 400. A client that validates arguments against the advertised
 // schema, or constrains generation from it, never gets that far — and for this
@@ -314,6 +379,8 @@ describe("keyboard — how the constraint reaches a client", () => {
       [{ text: "hi" }, false],
       [{ key: "enter" }, false],
       [{}, false], // neither is required — an empty request is a documented no-op
+      [{ text: "" }, false], // a payload: an empty one means what omitting it means
+      [{ key: "" }, true], // a name, and there is no key called ""
       [{ text: "hi", key: "enter" }, true],
       [{ text: "", key: "" }, true], // shape, not truthiness
     ];

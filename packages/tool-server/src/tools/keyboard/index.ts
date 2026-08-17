@@ -111,10 +111,11 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
       // validates whether it is a supported named key.
       //
       // `startedMsg` still words a text+key request because it renders BEFORE
-      // `execute` rejects the combination; `completedMsg` runs only after a call
-      // that succeeded, so it never sees both. Each formatter therefore has to
-      // word a different set of shapes, and the empty request — neither
-      // parameter, a documented no-op — reaches both.
+      // `execute` rejects the combination — and likewise words `{ key: "" }` as
+      // a key press, which `execute` also rejects. `completedMsg` runs only
+      // after a call that succeeded, so it sees neither. Each formatter
+      // therefore has to word a different set of shapes, and the empty
+      // request — neither parameter, a documented no-op — reaches both.
       startedMsg: ({ params }) => {
         if (params.text === undefined) return "Pressing a key";
         if (params.key === undefined) return "Entering text";
@@ -188,6 +189,34 @@ One call does one action: pass text OR key, never both. To type and then press a
           {
             error_code: FAILURE_CODES.KEYBOARD_TEXT_AND_KEY_COMBINED,
             failure_stage: "keyboard_text_and_key_combined",
+          }
+        );
+      }
+      // An empty `key` is rejected; an empty `text` is not. The two parameters
+      // hold different kinds of value: `key` names one member of a closed set,
+      // and `""` is not a member — exactly the case the tool description already
+      // promises to fail on ("if an unsupported key name is provided"). `text`
+      // is a payload, so an empty one means the same thing as omitting it and
+      // stays the documented no-op.
+      //
+      // Without this the empty name slips between both layers. This tool decides
+      // `key` by presence, every backend dispatches it by truthiness
+      // (`if (params.key)`), so `{ key: "" }` reached a device, pressed nothing,
+      // and still returned `{ typed: "", keys: 0 }` — a success the caller
+      // cannot tell apart from a real press.
+      if (params.key === "") {
+        throw new InvalidToolInputError(
+          // Names the omission as the alternative, because a caller that sent an
+          // empty string usually built the value from something absent.
+          "`key` is an empty string, which names no key — nothing was pressed. Pass a named key " +
+            "(enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, " +
+            "f1–f12), or omit `key` if there is nothing to press.",
+          {
+            // The same code an unknown name gets, because that is what this is:
+            // one telemetry bucket for every unusable `key` value.
+            error_code: FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED,
+            failure_stage: "keyboard_named_key_empty",
+            error_kind: "unsupported",
           }
         );
       }
