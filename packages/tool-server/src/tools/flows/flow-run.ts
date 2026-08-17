@@ -2516,6 +2516,10 @@ async function execRunStep(
   // graph — that second resolution could disagree with the executor's own if
   // the file changed in between, and the walk is exactly the work execRunStep
   // is already doing.
+  //
+  // On a device-free run there is no target to judge the block against, so it
+  // goes unexamined: the answer {@link resolveRunDevice} gives the root's own
+  // block, and the one this body would get written inline.
   if (fragment.requires && state.device) {
     try {
       await assertDeviceMeetsRequires(state.device, fragment.requires);

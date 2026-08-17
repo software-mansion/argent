@@ -626,6 +626,25 @@ describe("an explicitly targeted run", () => {
     );
   });
 
+  it("names a launch key a remote simulator's flow can actually declare", async () => {
+    // The advice has to be actionable: `parseFlow` rejects an `ios-remote`
+    // launch entry, so echoing the raw platform sends the author to a key the
+    // file cannot hold.
+    await writeFlow("android-only-launch", {
+      steps: [{ kind: "launch", app: { android: "com.acme.app" } }],
+    });
+    const { registry } = mockRegistry();
+
+    const result = await run(registry, "android-only-launch", { device: IOS_REMOTE });
+
+    expect(result.ok).toBe(false);
+    const reason = result.steps[0].reason ?? "";
+    expect(reason).toMatch(/no app id declared for platform "ios" — add a launch entry for it/);
+
+    const named = /platform "([^"]+)"/.exec(reason)?.[1];
+    expect(() => parseFlow(`steps:\n  - launch: { ${named}: com.acme.app }\n`)).not.toThrow();
+  });
+
   it("refuses a mobile remote simulator on a tv requirement, naming its kind", async () => {
     await writeFlow("tv-only", { requires: { runtimeKind: "tv" } });
     const { registry } = mockRegistry();
@@ -1513,6 +1532,32 @@ describe("a flow that touches no device", () => {
     expect(composed.device).toBe("");
     expect(composed.ok).toBe(inline.ok);
     expect(composed.device).toBe(inline.device);
+  });
+
+  it("leaves a composed fragment's own block unexamined, as it does the root's", async () => {
+    // execRunStep's per-fragment check is skipped for want of a device, not by
+    // accident: the same body written inline carries the block on the root and
+    // already runs green, so the composed spelling has to agree.
+    await writeFlow("frag-block", { requires: { platform: ["android"] }, steps: NARRATION_BODY });
+    await writeFlow("fragment-block-narration", {
+      steps: [{ kind: "run", flow: "frag-block.yaml" }, ROOT_TAIL],
+    });
+    // The twin: the same body and the same block, written as one file.
+    await writeFlow("inline-block-narration", {
+      requires: { platform: ["android"] },
+      steps: [...NARRATION_BODY, ROOT_TAIL],
+    });
+    const { registry, invokeTool } = mockRegistry([iosEntry(IOS)]);
+
+    const result = await run(registry, "fragment-block-narration");
+    const inline = await run(registry, "inline-block-narration");
+
+    expect(result.ok).toBe(true);
+    expect(result.device).toBe("");
+    expect(result.ok).toBe(inline.ok);
+    expect(result.device).toBe(inline.device);
+    expect(result.steps[0]).toMatchObject({ kind: "run", status: "pass" });
+    expect(invokeTool).not.toHaveBeenCalled();
   });
 
   it("still resolves and judges a leading fragment that does need a device", async () => {
