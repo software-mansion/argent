@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { FAILURE_CODES, getFailureSignal, type Registry } from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import {
+  foldLeadingRequires,
   parseFlow,
   serializeFlow,
   type FlowFile,
@@ -159,6 +160,29 @@ describe("parsing a requires block", () => {
       steps: [{ kind: "echo", message: "hi" }],
     };
     expect(parseFlow(serializeFlow(flow))).toEqual(flow);
+  });
+
+  it("never writes the fold-only `composed` marker into a file", () => {
+    // The marker has no YAML spelling, so a file carrying it would fail to
+    // re-parse. Two guards: the type split (the directive below) and
+    // serialize's key-by-key projection.
+    const folded = foldLeadingRequires("root", { platform: ["ios", "android"] }, [
+      { flow: "frag", requires: { runtimeKind: "mobile" } },
+    ]);
+    expect(folded).toEqual({ platform: ["ios", "android"], runtimeKind: "mobile", composed: true });
+
+    const yaml = serializeFlow({
+      executionPrerequisite: "",
+      // @ts-expect-error - a folded block is not a declarable one
+      requires: folded,
+      steps: [{ kind: "echo", message: "hi" }],
+    });
+
+    expect(yaml).not.toContain("composed");
+    expect(parseFlow(yaml).requires).toEqual({
+      platform: ["ios", "android"],
+      runtimeKind: "mobile",
+    });
   });
 
   it("names a misspelled key rather than silently running everywhere", () => {
