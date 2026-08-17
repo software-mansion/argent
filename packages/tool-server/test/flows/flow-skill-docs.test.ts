@@ -86,8 +86,11 @@ describe("create-flow idle docs", () => {
 
     const reference = readFileSync(FLOW_YAML, "utf8");
     expect(reference).toContain("It **never fails a run.**");
-    // The one outcome that does stop a run is the window, never the app.
-    expect(reference).toMatch(/Only a tree source that cannot be read stops the run/);
+    // The one outcome that does stop a run is the window, never the app - and
+    // it is scoped to the step that could not read, since the same outage
+    // leaves a selector-less gesture passing with a warning of its own.
+    expect(reference).toMatch(/Only a tree source this step could not read stops the run/);
+    expect(reference).toMatch(/stops no \[selector-less gesture\]/);
     // Both surfaces have to carry that caveat: the description is what an
     // authoring agent reads, and "never fails a run" on its own is not true
     // of a tree nobody could read.

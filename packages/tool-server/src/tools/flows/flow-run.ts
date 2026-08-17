@@ -965,8 +965,8 @@ when \`on\` is omitted; distinct from the \`rotate\` tool, which changes device 
 for a UI condition, and additionally takes the one condition that has no selector: \`idle: true\` waits
 until the screen has content and stops moving in BOTH the UI tree and the rendered pixels (it never
 fails a run — a screen that never settles passes carrying a \`warning\`, which is what makes it safe to
-persist; the one outcome that does stop the run is an \`error\` for a tree source that could not be read
-at all — a broken window rather than a verdict about the app, which leaves the run not-ok and skips
+persist; the one idle outcome that does stop the run is an \`error\` for a tree source THIS step could not
+read at all — a broken window rather than a verdict about the app, which leaves the run not-ok and skips
 every later step; it says nothing about WHICH screen settled — a dropped tap leaves the source screen
 perfectly idle — so pair it with the element check that names the destination); \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
 diffs a screenshot — or, with \`cropOn: <selector>\`, one element's cropped region — against a stored
@@ -974,6 +974,14 @@ baseline (a missing baseline fails the step — set updateBaselines to adopt the
 cropped element whose size drifted fails on dimensions); \`echo\` annotates; \`run\` executes another flow
 inline — a YAML path resolved against the directory of the flow file that references it (co-located
 runs only).
+A selector-less gesture — a coordinate \`tap\`/\`long-press\`, or a \`pinch\`/\`rotate\` with no \`on\` — resolves
+no frame out of the tree, so an unreadable tree source does NOT stop it the way it stops \`idle\`: it
+settles best-effort, dispatches anyway, and the step PASSES carrying a \`warning\` that quotes the source's
+own error. That green says the gesture was SENT, not that it landed. Restore the tree source (usually
+relaunch the app so the instrumentation loads), or accept the warning where the app can serve no tree;
+the first such gesture proves the outage and later ones spend that verdict without paying the settle
+window again. A tree read that comes back, or a relaunch, retires that verdict — which only makes the
+next gesture pay a fresh window, and it warns again if the source is still down.
 A \`when:\` block (condition + \`steps:\`, no else) runs its steps only if the condition holds —
 checked once with the short assert grace — for one-sided divergences like interstitials and coach
 marks; a skipped block reports distinctly and failures inside an entered block are real failures.
