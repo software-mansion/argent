@@ -37,7 +37,6 @@ function nativeApi(hierarchy: () => unknown, bundleId = APP): NativeDevtoolsApi 
   return {
     listConnectedBundleIds: () => [bundleId],
     getAppState: async (id: string) => appState(id),
-    requiresAppRestart: async () => false,
     queryViewHierarchy: async () => hierarchy(),
   } as unknown as NativeDevtoolsApi;
 }
