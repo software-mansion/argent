@@ -41,11 +41,7 @@ export async function fetchFlowTree(
 const FLOW_TREE_SOURCES: Partial<
   Record<
     Platform,
-    (
-      registry: Registry,
-      device: DeviceInfo,
-      target?: FlowTreeTarget
-    ) => Promise<DescribeTreeData>
+    (registry: Registry, device: DeviceInfo, target?: FlowTreeTarget) => Promise<DescribeTreeData>
   >
 > = {
   // Only iOS consumes the launch target (see queryFullHierarchyTree for what
