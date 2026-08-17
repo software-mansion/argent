@@ -28,6 +28,9 @@
  *   - a recorded `run-sequence` batch is covered too: its nested `steps[].args`
  *     reach the sub-tool's schema exactly as a `tool:` step's args reach its
  *     tool's, and the refusal names the nested position and the nested tool;
+ *   - that nested pass reads only args the carrying tool DECLARES, so a stray
+ *     value shaped like an invocation under an undeclared key - which the tool's
+ *     schema strips, and which therefore invokes nothing - is left alone;
  *   - the same step with `momentum: false` instead passes both the gate and
  *     validation - it then fails at service resolution (this bare registry has
  *     no blueprints, which is deterministic and never touches a device backend),
@@ -380,6 +383,24 @@ describe("flow-execute refuses the retired `settle` key through the real registr
     expect(step.reason).toContain("Service dependency failed");
     expect(step.reason).not.toContain("Invalid params");
     expect(step.reason).not.toContain("settle");
+  });
+
+  // The nested pass reads only args the carrying tool DECLARES. A non-batching
+  // tool's schema strips an unknown field before execute, so a stray value that
+  // merely looks like `{ tool, args }` never becomes an invocation - reading it
+  // as one would refuse the whole flow before any step runs, over a call to a
+  // tool this step never makes.
+  it("control: an arg the tool does not declare is not read as a nested invocation", async () => {
+    await writeSteps("swipe-junk", [
+      swipeStep({ junk: { tool: "gesture-drag", args: { settle: true } } }),
+    ]);
+
+    const step = await runSingleStepFlow("swipe-junk", IOS_DEVICE);
+
+    expect(step).toMatchObject({ kind: "tool", status: "error", tool: "gesture-swipe" });
+    expect(step.reason).toContain("Service dependency failed");
+    expect(step.reason).not.toContain("retired");
+    expect(step.reason).not.toContain("gesture-drag");
   });
 
   // The second line, pinned directly: every dispatch path that is not a flow

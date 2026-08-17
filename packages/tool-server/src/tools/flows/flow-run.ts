@@ -1114,15 +1114,24 @@ function retiredArgIn(
  * array (run-sequence's `steps`) or as an arg itself - and never by the carrying
  * tool's name, the rule {@link retiredKeyGuidance} follows for the key itself.
  *
+ * Only under a key the carrying tool DECLARES, though - `props` is its schema's
+ * properties. A tool's schema is non-strict, so an undeclared key is stripped
+ * before execute and the invocation it looks like is never made: reading one
+ * there would refuse the whole flow before any step runs, over a call to a tool
+ * that step never makes. Declaring the key is what a batching tool does to
+ * receive it at all, so the gate costs the shape rule nothing.
+ *
  * One level only: those args are forwarded verbatim to the named tool, which
  * parses them itself, and no tool that batches others allows a batching tool
  * among them - so a second level cannot exist, and crawling for one would read
  * every value of every recorded payload for nothing.
  */
 function* nestedInvocations(
+  props: Record<string, unknown>,
   args: Record<string, unknown>
 ): Generator<{ tool: string; args: Record<string, unknown>; at: string }> {
   for (const [key, value] of Object.entries(args)) {
+    if (!Object.hasOwn(props, key)) continue;
     const entries = Array.isArray(value) ? value : [value];
     for (const [i, entry] of entries.entries()) {
       const call = entry as { tool?: unknown; args?: unknown } | null | undefined;
@@ -1163,7 +1172,7 @@ function findRetiredToolArg(registry: Registry, steps: FlowStep[]): RetiredArgUs
     if (!props) continue;
     const direct = retiredArgIn(props, step.name, step.args, where);
     if (direct) return direct;
-    for (const call of nestedInvocations(step.args)) {
+    for (const call of nestedInvocations(props, step.args)) {
       const nestedProps = toolArgProps(registry, call.tool);
       if (!nestedProps) continue;
       // Spelled like walkSteps' block position, so both nestings read alike:
