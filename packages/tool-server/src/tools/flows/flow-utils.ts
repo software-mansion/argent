@@ -758,20 +758,25 @@ export type FlowFile = {
 /**
  * The literal child steps of a block directive, or undefined for a leaf step.
  *
- * The single predicate for "this step has authored children", read at seven
+ * The single predicate for "this step has authored children", read at nine
  * sites. Four expand a block that will NOT execute into skip lines, so a report
  * keeps one line per authored step no matter where the run ended: `execSteps`'
  * three gates — a hard stop, a device-free flow, a cancellation — plus
- * `reportBlockSkipped` recursing into a nested block. (A guard-unmet `when`
- * reaches those same skip lines by another route: `execWhenStep` has the block
- * in hand and passes `step.steps` straight to `reportBlockSkipped`.) The fifth
+ * `reportBlockSkipped` recursing into a nested block. (Two executors reach
+ * those same skip lines by another route, having the block in hand and passing
+ * `step.steps` straight to `reportBlockSkipped`: `execWhenStep` on an unmet
+ * guard, and `execRepeatStep` on a drain that runs no iteration.) The fifth
  * is the upload preflight's walk, where a block it cannot see hides a nested
  * `run:`/`snapshot` from validation. The sixth and seventh,
  * `flowRequiresDevice` and `flowScopesDevice` (flow-device.ts), read children
  * not to skip them but to resolve the flow's device decisions from a block's
  * body — the guard against a later block directive whose header reads nothing
  * off the device, and dead in a run while every block kind's header already
- * classifies device-requiring.
+ * classifies device-requiring. The eighth and ninth hunt a `snapshot:` down a
+ * block's nesting, the two halves of one refusal: `assertNoSnapshotInRepeat`
+ * below, throwing at parse for the file it can see, and `findFragmentSnapshot`
+ * (flow-run.ts), the same walk without the throw for a fragment resolved at run
+ * time. A block invisible to either hides the snapshot the refusal is about.
  *
  * Six sites asked `kind === "when"` directly before this existed: five for the
  * children, one for the dispatch (now {@link isBlockStep}/`execBlockStep`);
