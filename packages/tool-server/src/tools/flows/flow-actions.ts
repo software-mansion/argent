@@ -23,7 +23,7 @@ import {
 import { settleWithin, sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { bindDeviceArgs } from "./flow-device";
-import { fetchFlowTree } from "./flow-tree";
+import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
 import {
   capturePixelsWithin,
   comparePixels,
@@ -850,12 +850,19 @@ type GestureSettle = { aborted?: true; warning?: string };
  * than nodes.
  *
  * It is also the caller `skipProvenOutage` exists for, because a tree the run
- * can never read is not only the disconnect mid-run. `fetchFlowTree` serves no
- * tree at all on `ios-remote`, and an app that cannot load the instrumentation
- * fails every read off an in-memory list — an Apple system app, which flows
- * drive by coordinates for exactly that reason, so every step of such a flow
- * arrives here. Charging each of them a window for the same verdict is what the
- * memo takes off them.
+ * can never read is not only the disconnect mid-run: an app that cannot load
+ * the instrumentation fails every read off an in-memory list — an Apple system
+ * app, which flows drive by coordinates for exactly that reason, so every step
+ * of such a flow arrives here. Charging each of them a window for the same
+ * verdict is what the memo takes off them.
+ *
+ * A platform with no tree source at all is the one case that settles nothing
+ * and reports nothing. `ios-remote` is coordinate-driven by necessity —
+ * `fetchFlowTree` serves it no tree, so every selector directive already fails
+ * there and a coordinate flow is the only kind such a run can have. There is no
+ * source to be down, so there is no degradation to warn about: buying the
+ * window and warning would put ~400 characters of "restore the tree source" on
+ * every gesture of every green run there, and neither remedy it names exists.
  *
  * Swallowing the outage is not the same as hiding it: the returned `warning`
  * rides the step report, so a gesture dispatched into whatever motion was in
@@ -880,11 +887,15 @@ type GestureSettle = { aborted?: true; warning?: string };
  */
 async function settleForGesture(env: ActionEnv): Promise<GestureSettle> {
   let warning: string | undefined;
-  try {
-    await settleTree(env, { skipProvenOutage: true });
-  } catch (err) {
-    // tree-source outage — this gesture needs no frame from it, so dispatch anyway
-    warning = unsettledGestureWarning(err);
+  // A platform with no tree source settles nothing and is warned about nothing;
+  // the abort checkpoint below is owed to the gesture either way.
+  if (supportsFlowTree(env.device.platform)) {
+    try {
+      await settleTree(env, { skipProvenOutage: true });
+    } catch (err) {
+      // tree-source outage — this gesture needs no frame from it, so dispatch anyway
+      warning = unsettledGestureWarning(err);
+    }
   }
   if (env.signal?.aborted) return { aborted: true };
   return warning !== undefined ? { warning } : {};

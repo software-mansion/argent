@@ -26,7 +26,8 @@ vi.mock("../../src/utils/ios-devices", async (importOriginal) => ({
   isTvOsSimulator: vi.fn(async () => false),
 }));
 
-vi.mock("../../src/tools/flows/flow-tree", () => ({
+vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/tools/flows/flow-tree")>()),
   fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => {
     events.push({ kind: "read" });
     if (hangReads) return new Promise<never>(() => {});
@@ -40,6 +41,8 @@ import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flo
 import { serializeFlow } from "../../src/tools/flows/flow-utils";
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
+/** The same simulator addressed through sim-remote — platform `ios-remote`, which has no flow tree. */
+const REMOTE_DEVICE = `remote:${DEVICE}`;
 let tmpDir: string;
 
 const BUTTON = { x: 0.2, y: 0.4, width: 0.6, height: 0.1 };
@@ -71,10 +74,14 @@ async function writeFlow(name: string, yaml: Parameters<typeof serializeFlow>[0]
   await fs.writeFile(path.join(dir, `${name}.yaml`), serializeFlow(yaml), "utf8");
 }
 
-async function run(name: string, signal?: AbortSignal): Promise<FlowRunResult> {
+async function run(
+  name: string,
+  signal?: AbortSignal,
+  device: string = DEVICE
+): Promise<FlowRunResult> {
   const tool = createRunFlowTool(mockRegistry());
   const ctx = signal ? ({ signal } as never) : undefined;
-  const r = await tool.execute({}, { name, project_root: tmpDir, device: DEVICE }, ctx);
+  const r = await tool.execute({}, { name, project_root: tmpDir, device }, ctx);
   if (!("steps" in r)) throw new Error(`expected a run result, got notice: ${r.notice}`);
   return r;
 }
@@ -560,6 +567,53 @@ describe("a tree-source outage never fails a selector-less gesture", () => {
     expect(gestures()).toHaveLength(3);
     // And the selector step's reads cleared the memo for the tap behind it.
     expect(readsBetween(gestureAt(1), gestureAt(2))).toBe(2);
+  }, 20_000);
+});
+
+// The other half of that best effort: a source that is ABSENT is not a source
+// that is down. `fetchFlowTree` serves no tree on `ios-remote`, so every
+// selector directive already fails there and a coordinate flow is the only kind
+// such a run can have - charging each of its gestures a window, and then telling
+// every one of them to restore a source that never existed, warns a fully green
+// run about a degradation that never happened.
+describe("a platform with no tree source settles nothing and warns nothing", () => {
+  /** What a read gets on such a platform - `fetchTree`'s own refusal, verbatim. */
+  const unsupported = (): DescribeNode => {
+    throw new Error('ui-tree matching is not supported on platform "ios-remote"');
+  };
+
+  it("dispatches a coordinate tap without reading the tree at all", async () => {
+    currentTree = unsupported;
+    await writeFlow("tap-remote", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tap", x: 0.4, y: 0.6 }],
+    });
+
+    const result = await run("tap-remote", undefined, REMOTE_DEVICE);
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:pass"]);
+    // Not one read, let alone the whole window an outage is proven over.
+    expect(readsBeforeFirstGesture()).toBe(0);
+    expect(gestures()[0]).toMatchObject({ tool: "gesture-tap", args: { x: 0.4, y: 0.6 } });
+    // And the run prints clean: no `⚠` on the step, no warning count on the summary.
+    expect(result.steps[0].warning).toBeUndefined();
+  });
+
+  it("still fails a selector step there, exactly as before", async () => {
+    // Only the best-effort caller may skip. A selector needs a frame out of the
+    // tree, so a platform that serves none must keep failing the step outright
+    // rather than inheriting the pass this file's other case pins.
+    currentTree = unsupported;
+    await writeFlow("tap-remote-selector", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tap", selector: { text: "Continue", loose: true } }],
+    });
+
+    const result = await run("tap-remote-selector", undefined, REMOTE_DEVICE);
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:error"]);
+    expect(result.steps[0].reason).toContain("not supported on platform");
+    expect(gestures()).toEqual([]);
   }, 20_000);
 });
 

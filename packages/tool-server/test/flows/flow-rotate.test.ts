@@ -11,7 +11,8 @@ import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/co
 // optional pixel dimensions the rotate directive's physical-circle math reads.
 let currentTree: () => DescribeNode;
 let currentScreen: () => { width: number; height: number } | undefined;
-vi.mock("../../src/tools/flows/flow-tree", () => ({
+vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/tools/flows/flow-tree")>()),
   fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => {
     const screen = currentScreen();
     return { tree: currentTree(), source: "native-devtools", ...(screen ? { screen } : {}) };
