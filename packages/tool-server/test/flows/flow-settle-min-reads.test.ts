@@ -75,12 +75,15 @@ async function writeFlow(name: string, yaml: Parameters<typeof serializeFlow>[0]
 }
 
 async function run(
-  name: string
+  name: string,
+  signal?: AbortSignal
 ): Promise<FlowRunResult & { calls: Array<{ tool: string; args: Record<string, unknown> }> }> {
   const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+  const ctx = signal ? ({ signal } as never) : undefined;
   const r = await createRunFlowTool(mockRegistry(calls)).execute(
     {},
-    { name, project_root: tmpDir, device: DEVICE }
+    { name, project_root: tmpDir, device: DEVICE },
+    ctx
   );
   if (!("steps" in r)) throw new Error(`expected a run result, got notice: ${r.notice}`);
   return Object.assign(r, { calls });
@@ -215,6 +218,50 @@ describe("settleTree takes at least two read attempts", () => {
     // Two reads are what a settle has always cost a healthy run.
     expect(reads).toBe(2);
   });
+
+  it("ends a run cancelled while the floor's retry is in flight", async () => {
+    // The floor's read is the one cancelled here, not the first: read 1 answers
+    // past the window, so the deadline closes on a lone read and the retry goes
+    // out back-to-back with no poll sleep between them. Read 2 then never
+    // answers, and carries no budget of its own - the read keeps its own RPC
+    // tier so a slow cold start is ridden out - so the signal is all that ends
+    // the wait.
+    let retryStarted!: () => void;
+    const retryInFlight = new Promise<void>((resolve) => {
+      retryStarted = resolve;
+    });
+    onRead = async (attempt) => {
+      if (attempt === 1) {
+        await sleep(SLOW_READ_MS);
+        return tree();
+      }
+      retryStarted();
+      return new Promise<never>(() => {});
+    };
+    await writeTap("tap-cancelled-retry");
+
+    const controller = new AbortController();
+    const running = run("tap-cancelled-retry", controller.signal);
+    // Racing the run itself: a settle that never issued the retry fails on the
+    // assertions below rather than hanging here until this test's own timeout.
+    await Promise.race([retryInFlight, running]);
+    const abortedAt = Date.now();
+    controller.abort();
+    const result = await running;
+
+    // Nothing but the signal could have ended a read that never answers.
+    expect(Date.now() - abortedAt).toBeLessThan(2_000);
+    // The cancelled settle hands back no tree at all, not the pre-deadline one
+    // it already holds: that best-effort return would resolve a frame and land
+    // a tap after cancellation, reported as a pass rather than this skip.
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:skip"]);
+    expect(result.steps[0].reason).toBe("run aborted");
+    expect(result.calls).toHaveLength(0);
+    // And the retry really was in flight: an abort on read 1 is a different
+    // moment, already covered by flow-gesture-settle.test.ts, which hangs the
+    // first read instead.
+    expect(reads).toBe(2);
+  }, 20_000);
 });
 
 describe("the settle floor is paid on every `scroll-to` round", () => {
