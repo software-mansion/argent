@@ -1171,7 +1171,10 @@ multiplies that payload by the count. \`snapshot\` inside a repeat block is a pa
 bound (one baseline, a body written to be re-run); one reached through a \`run:\` fragment fails
 that \`run:\` step when the fragment loads, and a nested \`tool: flow-execute\` whose flow contains
 one is refused before it starts. Distinct from \`tap: { times }\`, which is ONE multi-tap gesture.
-A flow that begins with a \`launch\` step is a self-contained e2e flow; one that doesn't runs against the
+A flow that begins with a \`launch\` step is a self-contained e2e flow — written directly, or reached by
+descending into a leading \`times\`-bounded \`repeat:\` block, which runs it at step 1 just as the pasted
+spelling does, so such a flow is refused an \`executionPrerequisite\` (an \`until\` drain stays opaque:
+its body may run zero times). One that begins with no launch runs against the
 device's current state. Device id is injected by the runner (flows store none) — pass \`device\` or
 \`platform\` to pick one, else the single booted device is used. On Chromium a \`launch\` step's value is an
 Electron app path ({ chromium: <path> | { path, args } }) the runner boots (on the tool-server host) rather
