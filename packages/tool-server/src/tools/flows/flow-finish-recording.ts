@@ -8,6 +8,7 @@ import {
   withFlowFileLock,
   clientFileDirective,
   parseFlow,
+  runsSteps,
   serializeFlow,
   selectorToYaml,
   LAUNCH_PLATFORMS,
@@ -21,15 +22,31 @@ import type { TextMatchMode } from "../../utils/ui-tree-match";
 
 /**
  * The platforms the flow's launch steps already limit it to, or null when they
- * limit nothing (a bare app id, or no launch at all). A platform is offered iff
- * some launch in its scope would run and every one declares an id for it —
- * stricter than the validator, which ignores conditionally reached launches, so
- * the hint can never suggest a block that fails validation or skips a reachable
- * `when:` branch.
+ * limit nothing. A platform is a candidate iff at least one launch is in its scope
+ * and every launch there declares an id for it — stricter than the validator, which
+ * ignores conditionally reached launches, so the hint can never suggest a block
+ * that fails validation. Only a launch MAP ever narrows anything: the recorder
+ * writes a bare app id, which serves all four platforms.
+ *
+ * The offer is coverage-literal, so it can name a platform the recording never
+ * touched — a `native:` id serves vega, so a phone recording still offers vega —
+ * because a RecordingSession carries no device or platform to narrow it with.
+ *
+ * Nothing is offered unless every excluded platform is already lost: either doomed
+ * at a launch that certainly runs, or running no steps at all. A platform that is
+ * neither passes today — a launch missing its id only behind a run-time guard
+ * fails nothing on the runs that guard stays shut — and the block would silently
+ * retire it.
  */
 function launchPlatforms(flow: FlowFile): WhenPlatform[] | null {
   const named = LAUNCH_PLATFORMS.filter((p) => launchCoverage(flow.steps, p) === "served");
-  return named.length > 0 && named.length < LAUNCH_PLATFORMS.length ? named : null;
+  if (named.length === 0 || named.length === LAUNCH_PLATFORMS.length) return null;
+  // "unknown" is exactly the excluded-but-not-doomed set: the "served" platforms
+  // are the offered ones, and an "unserved" one already fails at its launch.
+  const retires = LAUNCH_PLATFORMS.some(
+    (p) => launchCoverage(flow.steps, p) === "unknown" && runsSteps(flow.steps, p)
+  );
+  return retires ? null : named;
 }
 
 /**
@@ -45,7 +62,9 @@ function requiresPrompt(flow: FlowFile): string | undefined {
   const platforms = launchPlatforms(flow);
   const hint = platforms
     ? ` Its launch step declares an app id only for ${platforms.join(", ")}, so ` +
-      `\`requires: { platform: [${platforms.join(", ")}] }\` is the likely answer.`
+      `\`requires: { platform: [${platforms.join(", ")}] }\` is the likely answer. Use it in ` +
+      `place of the template's \`platform:\` line, and keep the \`runtimeKind:\` line only if the ` +
+      `flow is also TV-specific.`
     : "";
   return (
     `This flow declares no \`requires:\` block, so it will run against any target — including ` +
@@ -54,9 +73,12 @@ function requiresPrompt(flow: FlowFile): string | undefined {
     `  requires:\n` +
     `    platform: [ios, android]   # one platform or a list; ios covers a remote simulator (--device remote:<udid> runs only — auto-detection never lists one)\n` +
     `    runtimeKind: tv            # tv (Apple TV / Android TV / Fire TV), or mobile for everything else\n` +
-    `Both keys are optional and ANDed. Leaving the block out is the right answer for a genuinely ` +
-    `portable flow; restrict it when the scenario is platform-specific (a platform-only screen, an ` +
-    `OS settings flow) or form-factor-specific (focus/remote navigation rather than touch).${hint}`
+    `Write only the lines that apply: each key is optional on its own, the block must declare at ` +
+    `least one of them, and declaring both ANDs them. Rejected when the file is read: a repeated ` +
+    `platform, an unknown key inside the block, and a pair no target can present (chromium with ` +
+    `tv, vega with mobile). Leaving the block out is the right answer for a genuinely portable ` +
+    `flow; restrict it when the scenario is platform-specific (a platform-only screen, an OS ` +
+    `settings flow) or form-factor-specific (focus/remote navigation rather than touch).${hint}`
   );
 }
 

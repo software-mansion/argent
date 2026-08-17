@@ -3075,6 +3075,33 @@ function scopedCoverage(
 }
 
 /**
+ * The steps that can still run on one platform, under the same `when:` scoping as
+ * {@link launchesInScope}: a `when: { platform: X }` guard for another platform
+ * takes its whole body out of scope, any other guard is decided at run time so its
+ * body stays in. The guard step itself is never yielded, since an unmet guard runs
+ * nothing.
+ */
+function* stepsInScope(steps: FlowStep[], platform: WhenPlatform): Generator<FlowStep> {
+  for (const step of steps) {
+    if (step.kind !== "when") {
+      yield step;
+    } else if (step.condition.kind !== "platform" || step.condition.platform === platform) {
+      yield* stepsInScope(step.steps, platform);
+    }
+  }
+}
+
+/**
+ * Whether this platform runs anything at all: some step is in its scope, every
+ * other platform's `when:` guard having taken its body out. A platform that runs
+ * nothing loses nothing to a `requires` block that excludes it, which is what
+ * flow-finish-recording's hint needs before it offers one.
+ */
+export function runsSteps(steps: FlowStep[], platform: WhenPlatform): boolean {
+  return !stepsInScope(steps, platform).next().done;
+}
+
+/**
  * Which launch-coverage promise these scopes break under `requires`, or null
  * when they keep it. Split out of {@link validateRequires} so
  * {@link assertComposedLaunchCoverage} can apply the identical judgement to a

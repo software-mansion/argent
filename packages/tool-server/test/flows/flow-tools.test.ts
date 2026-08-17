@@ -1919,10 +1919,10 @@ describe("flow-finish-recording", () => {
     expect(result.requiresPrompt).toContain("`requires: { platform: [ios] }` is the likely answer");
   });
 
-  it("excludes a platform only a UI-guarded launch fails to serve", async () => {
-    // The validator lets android pass here, since the guarded launch may never
-    // be reached; the hint is stricter, because the suggested block would break
-    // on android the first run the modal does show.
+  it("suggests nothing when only a UI-guarded launch fails to serve a platform", async () => {
+    // ios is excluded solely because the guarded helper launch names no ios id —
+    // a launch that never runs while the modal stays shut, so ios passes today
+    // and [android] would validate and then skip it for good.
     await flowStartRecordingTool.execute({}, { name: "guarded-helper", project_root: tmpDir });
     await overwriteFlowFile("guarded-helper", {
       executionPrerequisite: "",
@@ -1931,8 +1931,9 @@ describe("flow-finish-recording", () => {
         {
           kind: "when",
           condition: { kind: "ui", condition: "visible", selector: { identifier: "modal" } },
-          steps: [{ kind: "launch", app: { ios: "com.example.helper" } }],
+          steps: [{ kind: "launch", app: { android: "com.example.helper" } }],
         },
+        { kind: "echo", message: "done" },
       ],
     });
 
@@ -1941,7 +1942,122 @@ describe("flow-finish-recording", () => {
       { name: "guarded-helper", project_root: tmpDir }
     );
 
-    expect(result.requiresPrompt).toContain("`requires: { platform: [ios] }` is the likely answer");
+    expect(result.requiresPrompt).toContain("declares no `requires:` block");
+    expect(result.requiresPrompt).not.toContain("likely answer");
+  });
+
+  it("suggests nothing when an excluded platform runs steps but never launches", async () => {
+    // ios reaches no launch at all here, so it passes today: suggesting [android]
+    // would validate and then skip the whole ios branch.
+    await flowStartRecordingTool.execute({}, { name: "ios-branch", project_root: tmpDir });
+    await overwriteFlowFile("ios-branch", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "android" },
+          steps: [{ kind: "launch", app: { android: "com.example.app" } }],
+        },
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "ios" },
+          steps: [{ kind: "echo", message: "ios-only narration" }],
+        },
+      ],
+    });
+
+    const result = await flowFinishRecordingTool.execute(
+      {},
+      { name: "ios-branch", project_root: tmpDir }
+    );
+
+    expect(result.requiresPrompt).toContain("declares no `requires:` block");
+    expect(result.requiresPrompt).not.toContain("likely answer");
+  });
+
+  it("still suggests past a live branch an unguarded launch cannot serve", async () => {
+    // Not the same shape as the case above: the unguarded launch is in ios scope
+    // with no ios id, so an ios run fails at step 1 whatever the branch below
+    // would have done, and the block only turns that failure into a skip.
+    await flowStartRecordingTool.execute({}, { name: "unguarded-android", project_root: tmpDir });
+    await overwriteFlowFile("unguarded-android", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: { android: "com.example.app" } },
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "ios" },
+          steps: [{ kind: "echo", message: "ios-only narration" }],
+        },
+      ],
+    });
+
+    const result = await flowFinishRecordingTool.execute(
+      {},
+      { name: "unguarded-android", project_root: tmpDir }
+    );
+
+    expect(result.requiresPrompt).toContain(
+      "`requires: { platform: [android] }` is the likely answer"
+    );
+  });
+
+  it("still suggests when every platform-guarded branch launches", async () => {
+    // Control for the suppression above: same shape, but the ios branch launches
+    // too, so the platforms left out (chromium, vega) run no steps at all.
+    await flowStartRecordingTool.execute({}, { name: "both-branches", project_root: tmpDir });
+    await overwriteFlowFile("both-branches", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "android" },
+          steps: [{ kind: "launch", app: { android: "com.example.app" } }],
+        },
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "ios" },
+          steps: [
+            { kind: "launch", app: { ios: "com.example.app" } },
+            { kind: "echo", message: "ios-only narration" },
+          ],
+        },
+      ],
+    });
+
+    const result = await flowFinishRecordingTool.execute(
+      {},
+      { name: "both-branches", project_root: tmpDir }
+    );
+
+    expect(result.requiresPrompt).toContain(
+      "`requires: { platform: [ios, android] }` is the likely answer"
+    );
+  });
+
+  it("states the block's own parse rules, so the template is not merged blindly", async () => {
+    await flowStartRecordingTool.execute({}, { name: "prompt-rules", project_root: tmpDir });
+    await overwriteFlowFile("prompt-rules", {
+      executionPrerequisite: "",
+      steps: [{ kind: "launch", app: { chromium: "/tmp/app" } }],
+    });
+
+    const result = await flowFinishRecordingTool.execute(
+      {},
+      { name: "prompt-rules", project_root: tmpDir }
+    );
+
+    // `requires: {}` is rejected, so "optional" cannot be left to mean "omit both".
+    expect(result.requiresPrompt).toContain("each key is optional on its own");
+    expect(result.requiresPrompt).toContain("must declare at least one of them");
+    expect(result.requiresPrompt).toContain("a repeated platform");
+    expect(result.requiresPrompt).toContain("an unknown key inside the block");
+    // The hint's block replaces the template's platform line: pasting both would
+    // pair [chromium] with runtimeKind tv, which validation rejects.
+    expect(result.requiresPrompt).toContain(
+      "`requires: { platform: [chromium] }` is the likely answer"
+    );
+    expect(result.requiresPrompt).toContain("Use it in place of the template's `platform:` line");
   });
 
   it("suggests nothing when the launch names every platform", async () => {
