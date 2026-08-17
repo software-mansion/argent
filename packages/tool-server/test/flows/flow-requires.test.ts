@@ -1222,6 +1222,141 @@ describe("a flow that touches no device", () => {
     expect(result.device).toBe("");
     expect(invokeTool).not.toHaveBeenCalled();
   });
+
+  // Same flow, two spellings: one file, or a root composing a fragment through
+  // a leading `run:`. Factoring the body out must not decide the requires
+  // question differently — that would make a `requires` block start skipping
+  // (or failing) runs its inline twin lets straight through.
+  const NARRATION_BODY: FlowStep[] = [{ kind: "echo", message: "fragment body" }];
+  const ROOT_TAIL: FlowStep = { kind: "echo", message: "root tail" };
+
+  async function writeNarrationPair(): Promise<void> {
+    await writeFlow("frag-echo", { steps: NARRATION_BODY });
+    await writeFlow("composed-narration", {
+      requires: { platform: ["ios"] },
+      steps: [{ kind: "run", flow: "frag-echo.yaml" }, ROOT_TAIL],
+    });
+    await writeFlow("inline-narration", {
+      requires: { platform: ["ios"] },
+      steps: [...NARRATION_BODY, ROOT_TAIL],
+    });
+  }
+
+  it("stays device-free when its body is composed, on a machine the block excludes", async () => {
+    await writeNarrationPair();
+    const { registry, invokeTool } = mockRegistry([androidEntry(ANDROID)]);
+
+    const composed = await run(registry, "composed-narration");
+    const inline = await run(registry, "inline-narration");
+
+    expect(composed.ok).toBe(true);
+    expect(composed.device).toBe("");
+    expect(composed.ok).toBe(inline.ok);
+    expect(composed.device).toBe(inline.device);
+    // Neither spelling resolves a device, so neither ever lists one.
+    expect(invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("stays device-free when its body is composed, on an empty machine", async () => {
+    await writeNarrationPair();
+    const { registry } = mockRegistry([]);
+
+    const composed = await run(registry, "composed-narration");
+    const inline = await run(registry, "inline-narration");
+
+    expect(composed.ok).toBe(true);
+    expect(composed.device).toBe("");
+    expect(composed.ok).toBe(inline.ok);
+    expect(composed.device).toBe(inline.device);
+  });
+
+  it("still resolves and judges a leading fragment that does need a device", async () => {
+    // The composed picture answers "no device" only when the body really has
+    // no device step; one that does is resolved and judged against the fold as
+    // before.
+    await writeFlow("frag-tap", { steps: [OK_STEP] });
+    await writeFlow("composed-device", {
+      requires: { platform: ["ios"] },
+      steps: [{ kind: "run", flow: "frag-tap.yaml" }],
+    });
+    const { registry } = mockRegistry([iosEntry(IOS), androidEntry(ANDROID)]);
+
+    expect((await run(registry, "composed-device")).device).toBe(IOS);
+
+    const { registry: androidOnly } = mockRegistry([androidEntry(ANDROID)]);
+    const err = await run(androidOnly, "composed-device").catch((e: unknown) => e);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNMET);
+  });
+
+  it("keeps a chain it could not read to the end device-bound", async () => {
+    // The scan gave up at the missing hop, so nothing proves the unread body
+    // touches no device — the `run:` step keeps its conservative reading and
+    // the run resolves a device, exactly as before.
+    await writeFlow("broken-frag", {
+      steps: [
+        { kind: "echo", message: "before the broken hop" },
+        { kind: "run", flow: "missing.yaml" },
+      ],
+    });
+    await writeFlow("partial-narration", {
+      requires: { platform: ["ios"] },
+      steps: [{ kind: "run", flow: "broken-frag.yaml" }],
+    });
+    const { registry } = mockRegistry([androidEntry(ANDROID)]);
+
+    const err = await run(registry, "partial-narration").catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNMET);
+  });
+
+  it("keeps a run: past the first executable step device-bound", async () => {
+    // The leading walk stops at the first executable step, so this fragment is
+    // never read and cannot be judged device-free — even though the step that
+    // ended the walk needs no device itself.
+    const invokeTool = vi.fn(async (id: string) => {
+      if (id === "list-devices") return { devices: [androidEntry(ANDROID)] };
+      return { ok: true };
+    });
+    const registry = {
+      invokeTool,
+      getTool: vi.fn((name: string) => ({
+        inputSchema: { properties: name === "stop-metro" ? {} : { udid: {} } },
+      })),
+    } as unknown as Registry;
+    await writeFlow("frag-echo", { steps: NARRATION_BODY });
+    await writeFlow("late-run", {
+      requires: { platform: ["ios"] },
+      steps: [
+        { kind: "tool", name: "stop-metro", args: { port: 8081 } },
+        { kind: "run", flow: "frag-echo.yaml" },
+      ],
+    });
+
+    const err = await run(registry, "late-run").catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNMET);
+  });
+
+  it("keeps a run: behind a when: guard device-bound", async () => {
+    // A guarded body is not on the leading chain and is never composed into
+    // the picture; the guard's own header reads the device besides.
+    await writeFlow("frag-echo", { steps: NARRATION_BODY });
+    await writeFlow("guarded-narration", {
+      requires: { platform: ["ios"] },
+      steps: [
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "ios" },
+          steps: [{ kind: "run", flow: "frag-echo.yaml" }],
+        },
+      ],
+    });
+    const { registry } = mockRegistry([androidEntry(ANDROID)]);
+
+    const err = await run(registry, "guarded-narration").catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNMET);
+  });
 });
 
 describe("a cleanup flow that only scopes a device", () => {
@@ -1265,6 +1400,22 @@ describe("a cleanup flow that only scopes a device", () => {
       message: expect.stringMatching(/No booted device satisfies this flow's requires/),
     });
     expect(invokeTool).not.toHaveBeenCalledWith("stop-all-simulator-servers", expect.anything());
+  });
+
+  it("scopes to it just the same when the teardown is composed", async () => {
+    // The scope question reads the same composed picture the device question
+    // does. Reading only the root's steps would see a bare `run:`, find no
+    // scope, resolve nothing — and run the machine-wide sweep the block exists
+    // to prevent.
+    await writeFlow("teardown-frag", { steps: [TEARDOWN] });
+    await writeFlow("composed-teardown", {
+      requires: { platform: ["ios"] },
+      steps: [{ kind: "run", flow: "teardown-frag.yaml" }],
+    });
+    const { registry, invokeTool } = scopeRegistry([iosEntry(IOS), androidEntry(ANDROID)]);
+
+    expect((await run(registry, "composed-teardown")).ok).toBe(true);
+    expect(invokeTool).toHaveBeenCalledWith("stop-all-simulator-servers", { devices: [IOS] });
   });
 
   it("still sweeps unscoped when nothing is booted for the requirements to rule out", async () => {

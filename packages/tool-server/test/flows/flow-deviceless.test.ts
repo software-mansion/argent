@@ -156,6 +156,28 @@ describe("a flow that touches no device", () => {
     expect(asRun(await runAuto(registry, "no-schema")).ok).toBe(true);
   });
 
+  it("when the narration is factored into a fragment it composes", async () => {
+    // The leading walk has already read the fragment, so the `run:` step need
+    // not stand in for an unknown body — and the same steps answer the same way
+    // however they are split across files.
+    await writeFlow("child", [{ kind: "echo", message: "quiet" }]);
+    await writeFlow("parent", [
+      { kind: "echo", message: "calling child" },
+      { kind: "run", flow: "child.yaml" },
+    ]);
+    const { registry, invokeTool } = mockRegistry({ booted: [DEVICE] });
+
+    const result = asRun(await runAuto(registry, "parent"));
+
+    expect(result.ok).toBe(true);
+    expect(result.device).toBe("");
+    expect(invokeTool).not.toHaveBeenCalledWith(
+      "list-devices",
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
   it("runs an empty flow", async () => {
     await writeFlow("nothing", []);
     const { registry } = mockRegistry({ booted: [] });
@@ -227,15 +249,37 @@ describe("a flow that does touch a device still demands one", () => {
     await expectDemandsDevice("mystery");
   });
 
-  it("when it composes another flow, even a narration-only one", async () => {
-    // The fragment is resolved at run time, so composition is taken to need a
-    // device rather than resolved twice and risking disagreement.
-    await writeFlow("child", [{ kind: "echo", message: "quiet" }]);
-    await writeFlow("parent", [
+  it("when the flow it composes touches one", async () => {
+    await writeFlow("child-tap", [{ kind: "tap", x: 0.5, y: 0.5 }]);
+    await writeFlow("parent-tap", [
       { kind: "echo", message: "calling child" },
+      { kind: "run", flow: "child-tap.yaml" },
+    ]);
+    await expectDemandsDevice("parent-tap");
+  });
+
+  it("when a composed fragment sits past the first executable step", async () => {
+    // The leading walk stops at the first executable step, so this fragment is
+    // never read and the `run:` step keeps the reading it gets on its own:
+    // resolved at run time, so taken to need a device rather than resolved
+    // twice and risking disagreement.
+    await writeFlow("child", [{ kind: "echo", message: "quiet" }]);
+    await writeFlow("late-parent", [
+      { kind: "tool", name: "stop-metro", args: { port: 8081 } },
       { kind: "run", flow: "child.yaml" },
     ]);
-    await expectDemandsDevice("parent");
+    await expectDemandsDevice("late-parent");
+  });
+
+  it("when the fragment it composes cannot be read", async () => {
+    // An unreadable hop leaves the walk with no picture to judge, so the run
+    // resolves a device as before and the run: step reports the bad target.
+    await writeFlow("broken-child", [
+      { kind: "echo", message: "quiet" },
+      { kind: "run", flow: "missing.yaml" },
+    ]);
+    await writeFlow("broken-parent", [{ kind: "run", flow: "broken-child.yaml" }]);
+    await expectDemandsDevice("broken-parent");
   });
 });
 

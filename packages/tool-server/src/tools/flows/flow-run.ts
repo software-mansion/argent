@@ -1365,8 +1365,10 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
  * ({@link bootChromiumForLaunch}). `flowDir` is the root flow file's canonical
  * directory — the base for a relative chromium app path.
  *
- * Returns null when no step in the flow acts on a device: such a run needs none,
- * so demanding one would fail a flow that could have succeeded — and picking
+ * Returns null when no step acts on a device — asked of the flow composed along
+ * its leading `run:` chain ({@link LeadingRun}), so the answer does not depend
+ * on how the same steps were split across files. Such a run needs no device, so
+ * demanding one would fail a flow that could have succeeded — and picking
  * whichever device happens to be booted would make the report depend on what
  * else is running on the machine.
  */
@@ -1405,12 +1407,20 @@ async function resolveRunDevice(
     }
     // Checked after the chromium boot path, which only applies to a flow led by
     // a `launch` step — and a launch needs a device, so the two never compete.
-    if (!flowRequiresDevice(registry, flow.steps)) {
+    //
+    // Both questions read the leading chain's composed picture, so factoring a
+    // body into a fragment cannot turn a device-free flow into a device-bound
+    // one: `stepRequiresDevice` calls a bare `run:` device-requiring because
+    // its body is unread, and here it has been read. A chain the scan could not
+    // read end to end has no picture and falls back to the root's own steps,
+    // where that conservative answer still stands.
+    const steps = leading.composedSteps ?? flow.steps;
+    if (!flowRequiresDevice(registry, steps)) {
       // A run that touches no device has no target to judge, so its
       // requirements go unexamined here: resolving a device purely to refuse
       // one would fail a run that needs none. A caller-named platform or device
       // is judged at the tool's entry, by {@link assertParamsMeetRequires}.
-      if (!flowScopesDevice(registry, flow.steps)) return { device: null, booted: null };
+      if (!flowScopesDevice(registry, steps)) return { device: null, booted: null };
       // A flow that only SCOPES to a device (a cleanup flow) takes one when one
       // is unambiguous, so the teardown stays narrowed to the run device and
       // cannot reap what another agent is mid-session on. When resolution has
@@ -1561,6 +1571,15 @@ interface LeadingRun {
    * conditional or mid-run, judged where it executes ({@link execRunStep}).
    */
   requires: FlowRequires | undefined;
+  /**
+   * The run's steps and every followed `run:` step's body, with the `run:`
+   * steps themselves dropped, so the device question reads a composition
+   * exactly as it reads the same steps written inline
+   * ({@link resolveRunDevice}). A flat union rather than a positional splice:
+   * both readers only ask whether SOME step wants a device. Null when the scan
+   * gave up, since an unread body cannot be shown to touch none.
+   */
+  composedSteps: FlowStep[] | null;
 }
 
 /** What the leading walk accumulates on its way to the first executable step. */
@@ -1569,8 +1588,10 @@ interface LeadingScan {
    * Every fragment the walk entered, root excluded. Each is certain to be
    * reached, so both its `requires` block and its launches belong to the run —
    * the same certainty `validateRequires` already assumes within one file.
+   * `via` is the `run:` step it was reached through, which the composed
+   * picture drops in favour of these steps.
    */
-  entered: { flow: string; steps: FlowStep[]; requires?: FlowRequires }[];
+  entered: { flow: string; steps: FlowStep[]; requires?: FlowRequires; via: FlowStep }[];
   /**
    * Cleared once a hop is unreadable or refused: the picture is then missing
    * both launches and the blocks that could have narrowed them away, so it is
@@ -1596,7 +1617,14 @@ async function leadingRun(flow: FlowFile, rootEntry: RunStackEntry): Promise<Lea
       requires
     );
   }
-  return { launch: found === NO_EXECUTABLE_STEP ? null : found, requires };
+  const followed = new Set(scan.entered.map((f) => f.via));
+  return {
+    launch: found === NO_EXECUTABLE_STEP ? null : found,
+    requires,
+    composedSteps: scan.complete
+      ? [flow.steps, ...scan.entered.map((f) => f.steps)].flat().filter((s) => !followed.has(s))
+      : null,
+  };
 }
 
 /**
@@ -1661,6 +1689,7 @@ async function scanLeadingLaunch(
       flow: display,
       steps: nested.steps,
       ...(nested.requires ? { requires: nested.requires } : {}),
+      via: step,
     });
     const inner = await scanLeadingLaunch(nested, [...stack, { canonical, display }], scan);
     if (inner !== NO_EXECUTABLE_STEP) return inner;
@@ -2067,7 +2096,12 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
     // blockSteps, so no nesting hides a step: under `true` a device is resolved
     // and `!state.device` is false; under `false` this guard's own
     // stepRequiresDevice conjunct fails. The expansion below stays regardless.
-    if (!state.device && stepRequiresDevice(state.registry, step)) {
+    //
+    // A `run:` step is exempt: it acts on no device itself, and reaching one
+    // device-free means resolveRunDevice read its body and found nothing that
+    // does. Should the file have changed since, the offending step still meets
+    // this guard when execRunStep inlines it.
+    if (!state.device && step.kind !== "run" && stepRequiresDevice(state.registry, step)) {
       state.stopped = true;
       pushReport(state, {
         index,

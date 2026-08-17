@@ -510,8 +510,12 @@ export function stripDeviceKeys(args: Record<string, unknown>): Record<string, u
  *   over, the UI tree and a screenshot of it.
  * - `run` needs one without the fragment being read here. The flow it names is
  *   resolved at run time; resolving it a second time would duplicate that lookup
- *   and could disagree with it if the file changed in between. The cost is that
- *   composing a narration-only fragment still resolves a device.
+ *   and could disagree with it if the file changed in between. That is the right
+ *   answer for a `run:` whose body nothing has read — mid-run, behind a guard,
+ *   or past a leading chain the scan gave up on. The run-device decision
+ *   (`resolveRunDevice`) instead asks `flowRequiresDevice` about the picture its
+ *   leading walk already composed, where a followed `run:` step stands replaced
+ *   by its body, so composing a narration-only fragment stays device-free.
  */
 export function stepRequiresDevice(registry: Registry, step: FlowStep): boolean {
   switch (step.kind) {
