@@ -383,7 +383,7 @@ export async function queryFullHierarchyTree(
     // with the instrumentation loaded, so a missing connection means it's gone.
     if (!nativeApi.isConnected(bundleId)) {
       throw new FailureError(
-        `${bundleId} lost its devtools connection after launch (the app crashed, was terminated, or its socket closed) - relaunch it (launch-app, or a flow \`launch\` step) so the full view hierarchy is readable`,
+        `${bundleId} lost its devtools connection after launch (the app crashed, was terminated, or its socket closed) - restart it (restart-app, or a flow \`launch\` step) so the full view hierarchy is readable; launch-app recovers only the causes that killed the process, since on iOS it just foregrounds one that is still alive`,
         {
           error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_CONNECTED,
           failure_stage: "flow_tree_pinned_target",

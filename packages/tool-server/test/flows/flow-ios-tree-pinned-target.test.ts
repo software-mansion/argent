@@ -382,6 +382,12 @@ describe("queryFullHierarchyTree - pinned target vs poisoned auto-resolve", () =
     // Not the stale-instrumentation diagnosis - the launch gate proved the
     // instrumentation loaded, so blaming it would point away from the crash.
     expect(message).not.toMatch(/instrumentation loaded/);
+    // The recovery must be the one that recovers ALL three named causes. On
+    // iOS launch-app is `simctl launch`, which only foregrounds a live process
+    // whose socket dropped - the next read fails identically. restart-app
+    // terminates first, and a flow `launch` step routes through it.
+    expect(message).toContain("restart it (restart-app, or a flow `launch` step)");
+    expect(message).not.toMatch(/relaunch it \(launch-app/);
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NATIVE_DEVTOOLS_NOT_CONNECTED);
     // A dead pin is re-read every 300ms poll; requiresAppRestart's miss path
     // would run a full reverifyEnv per poll and latch the device's give-up
