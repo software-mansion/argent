@@ -956,11 +956,11 @@ type GestureSettle = { aborted?: true; warning?: string };
  * than nodes.
  *
  * It is also the caller `skipProvenOutage` exists for, because a tree the run
- * can never read is not only the disconnect mid-run: an app that cannot load
- * the instrumentation fails every read off an in-memory list — an Apple system
- * app, which flows drive by coordinates for exactly that reason, so every step
- * of such a flow arrives here. Charging each of them a window for the same
- * verdict is what the memo takes off them.
+ * can never read is not only the disconnect mid-run: flows drive an Apple
+ * system app by coordinates because argent refuses it a flow tree by policy on
+ * every read that names one, so every step of such a flow arrives here.
+ * Charging each of them a window for the same verdict is what the memo takes
+ * off them.
  *
  * A platform with no tree source at all is the one case that settles nothing
  * and reports nothing. `ios-remote` is coordinate-driven by necessity —
