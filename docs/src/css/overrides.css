@@ -1,0 +1,136 @@
+:root {
+  --swm-expandable-transition: transform 200ms ease;
+}
+
+table {
+  display: table;
+  width: 100%;
+}
+
+@media (max-width: 1280px) {
+  table {
+    display: block;
+    width: 100%;
+  }
+}
+
+table thead tr {
+  border-bottom: 1px solid var(--ifm-table-border-color);
+}
+
+.header-github {
+  margin-left: 1.5em;
+}
+
+.header-github:before {
+  display: flex;
+  height: 24px;
+  width: 24px;
+
+  mask: url("../../static/img/github.svg") no-repeat 100% 100%;
+  mask-size: cover;
+  content: "";
+
+  background-color: var(--ifm-navbar-link-color);
+}
+
+@media (max-height: 768px) {
+  .header-github:before {
+    height: 20px;
+    width: 20px;
+  }
+}
+
+.header-github:hover:before {
+  background-color: var(--ifm-navbar-link-hover-color);
+}
+
+[class*="codeBlockContent"] pre {
+  border: 1px solid var(--swm-border);
+}
+
+[class*="codeBlockContent"] pre,
+[class*="codeBlockContent"] code {
+  border-radius: 0;
+  background-color: var(--swm-off-background);
+}
+
+/* Add small padding, when some of the lines are too long in a code block */
+[class*="codeBlockLines"] span:last-of-type {
+  margin-right: 1em;
+}
+
+.theme-doc-version-badge {
+  color: var(--swm-version-badge);
+  background: var(--swm-version-badge-background);
+  padding: 6px;
+  border-radius: 8px;
+  border: none;
+  margin-bottom: 8px;
+}
+
+[class*="DocCategoryGeneratedIndexPage"][class*="title"] {
+  font-size: var(--swm-h1-font-size);
+}
+
+button[class*="DocSearch-Button"] {
+  margin: 0 !important;
+}
+
+/* Center logo vertically in navbar items */
+.navbar__items a[href="/argent/"] img,
+.navbar__brand a[href="/argent/"] img,
+.navbar__brand img {
+  vertical-align: middle;
+}
+
+[class*="hireUsContainer"] {
+  display: none;
+}
+
+[class*="headerWithBadges"] {
+  align-items: baseline;
+}
+
+.theme-doc-sidebar-container [class*="_badge_"] {
+  font-size: 11px;
+  padding: 1px 5px;
+  margin: 0 2px;
+  flex-shrink: 0;
+}
+
+.theme-doc-sidebar-container .menu__link {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+/* Tabs nested inside details: bump label contrast against the details background. */
+details .tabs__item {
+  color: var(--swm-details-color) !important;
+  opacity: 0.7;
+}
+
+details .tabs__item:hover {
+  opacity: 1;
+}
+
+details .tabs__item--active {
+  opacity: 1;
+  border-bottom-color: var(--swm-details-color) !important;
+}
+
+/*
+ * The shared theme always mounts a DocSearch bar. Argent has no DocSearch
+ * application yet, so keep it hidden until ALGOLIA_* credentials are wired up.
+ */
+.navbar [class*="navbarSearchWrapper"] {
+  display: none;
+}
+
+/*
+ * The hidden search bar was the flexible element in the left navbar group, so
+ * the color mode toggle takes over pushing the trailing items to the right.
+ */
+.navbar [class*="colorModeToggle"] {
+  margin-left: auto !important;
+}

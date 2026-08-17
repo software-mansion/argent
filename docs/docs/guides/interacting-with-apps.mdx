@@ -1,0 +1,24 @@
+---
+sidebar_position: 1
+sidebar_label: Interacting with apps
+title: Interacting with apps
+---
+
+Argent gives your agent the full control toolkit: tapping, swiping, pinching, typing, gestures and hardware buttons on mobile; the directional remote on TV; mouse, scroll and drag on desktop and web. The agent navigates your app exactly as a user would.
+
+## Discovery before interaction
+
+Coordinates are never guessed from a screenshot. Before every interaction the agent runs a discovery pass that returns the on-screen elements with their roles, labels and frames:
+
+- the accessibility tree on iOS and Android,
+- the React component tree for React Native apps,
+- the DOM for Chromium and Electron apps,
+- the focus tree on TV targets.
+
+## Launching apps
+
+Apps are opened by bundle id or package name rather than by tapping home-screen icons, so a run starts from a known state. Deep links can be opened directly by URL.
+
+## Sequences
+
+When several actions are known up front and there is nothing to observe in between, they run as a single sequence instead of separate round trips. Waiting is expressed as a condition on the UI, such as "wait until this element is visible", rather than as a fixed sleep.
