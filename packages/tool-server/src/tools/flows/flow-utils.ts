@@ -1187,6 +1187,27 @@ function targetToYaml(step: { selector?: FlowSelector; x?: number; y?: number })
   return { x: step.x, y: step.y };
 }
 
+/** Serialize a swipe's `from`/`to`, adding the unknown-key check parseTarget
+ * applies to a coordinate target — without it a programmatic `{ x, y, z }`
+ * drops the junk key in silence and parse then refuses the file serialize just
+ * wrote. It cannot live in targetToYaml: `tap`/`long-press` hand that the whole
+ * FlowStep, whose `kind`/`times`/`duration` are legitimate keys there, and
+ * swipe is the only caller passing a dedicated target sub-object. */
+function swipeTargetToYaml(target: GestureTarget, label: string): YamlTarget {
+  const yaml = targetToYaml(target);
+  // Read the coordinate/selector split off targetToYaml's verdict rather than
+  // re-deriving it from the input, so the two cannot drift on which shape a
+  // given target is.
+  if (
+    typeof yaml !== "string" &&
+    "x" in yaml &&
+    !Object.keys(target).every((key) => key === "x" || key === "y")
+  ) {
+    throw new Error(`Cannot serialize flow ${label}: a coordinate target takes only { x, y }`);
+  }
+  return yaml;
+}
+
 /**
  * The tap/swipe boundary, not a magnitude policy: a travel-vector magnitude
  * under the platform recognizers' slop (~8dp Android, ~10pt iOS) is read as a
@@ -1452,6 +1473,16 @@ function toYamlStep(step: FlowStep): YamlStep {
         throw new Error("Cannot serialize flow swipe: needs exactly one of direction, to, or by");
       }
 
+      // Same reason on `settle`, and it has to land before the sugar below:
+      // both that sugar and the body builder read the field for truthiness
+      // only, so a programmatic non-boolean is rewritten instead of refused —
+      // `settle: "false"` emits `settle: true`, inverting what was authored,
+      // and `settle: 0` collapses into the bare-direction spelling. parseSwipe
+      // takes nothing but a boolean.
+      if (step.settle !== undefined && typeof step.settle !== "boolean") {
+        throw new Error("Cannot serialize flow swipe.settle: must be true or false");
+      }
+
       // Canonical minimal spelling: a direction with no other field
       // round-trips to the bare-direction sugar (`swipe: left`). A falsy
       // `settle` counts as no field, matching the body builder below and
@@ -1469,9 +1500,9 @@ function toYamlStep(step: FlowStep): YamlStep {
         return { swipe: step.direction };
       }
       const body: Exclude<SwipeBody, SwipeDirection> = {};
-      if (step.from !== undefined) body.from = targetToYaml(step.from);
+      if (step.from !== undefined) body.from = swipeTargetToYaml(step.from, "swipe.from");
       if (step.direction !== undefined) body.direction = step.direction;
-      if (step.to !== undefined) body.to = targetToYaml(step.to);
+      if (step.to !== undefined) body.to = swipeTargetToYaml(step.to, "swipe.to");
       if (step.by !== undefined) body.by = swipeByToYaml(step.by);
       if (step.settle) body.settle = true;
       if (step.duration !== undefined) body.duration = swipeDurationToYaml(step.duration);

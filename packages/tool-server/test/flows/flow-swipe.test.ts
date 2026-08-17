@@ -121,6 +121,70 @@ describe("swipe: parse/serialize", () => {
   });
 
   it.each([
+    [
+      "from",
+      { kind: "swipe", from: { x: 0.5, y: 0.5, z: 9 }, by: { x: 0.5 } },
+      /cannot serialize flow swipe\.from: a coordinate target takes only \{ x, y \}/i,
+    ],
+    [
+      "to",
+      { kind: "swipe", from: { x: 0.9, y: 0.5 }, to: { x: 0.1, y: 0.5, z: 9 } },
+      /cannot serialize flow swipe\.to: a coordinate target takes only \{ x, y \}/i,
+    ],
+  ])(
+    "rejects a programmatic swipe %s coordinate target carrying a key that is not x or y",
+    (_description, step, message) => {
+      // The same junk-key hole as swipe.by, one level down: parseTarget refuses
+      // the shape loudly, so dropping `z` in silence writes a flow that can
+      // never be read back, and the run reports success on it.
+      expect(() => serializeFlow({ executionPrerequisite: "", steps: [step as never] })).toThrow(
+        message
+      );
+    }
+  );
+
+  it("serializes a selector from/to untouched by the coordinate key check", () => {
+    // A selector target is a different shape and must not be dragged through
+    // the { x, y } key set — the check applies to the coordinate branch only.
+    const yaml = serializeFlow({
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "swipe",
+          from: { selector: { identifier: "card" } },
+          to: { selector: { identifier: "archive" } },
+        },
+      ],
+    });
+    expect(parseFlow(yaml).steps).toEqual([
+      {
+        kind: "swipe",
+        from: { selector: { identifier: "card" } },
+        to: { selector: { identifier: "archive" } },
+      },
+    ]);
+  });
+
+  it.each([
+    ['the string "false"', "false"],
+    ['the string "true"', "true"],
+    ["zero", 0],
+    ["one", 1],
+    ["null", null],
+  ])("rejects a programmatic swipe settle of %s", (_description, settle) => {
+    // Both the bare-direction sugar and the body builder read `settle` for
+    // truthiness only, so an unguarded non-boolean is rewritten rather than
+    // refused: "false" would emit `settle: true` and 0 would vanish into the
+    // bare spelling. parseSwipe takes nothing but a boolean.
+    expect(() =>
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "swipe", direction: "left", settle } as never],
+      })
+    ).toThrow(/cannot serialize flow swipe\.settle: must be true or false/i);
+  });
+
+  it.each([
     ["a tap-scale delta", 0.02],
     ["a sub-threshold delta", 0.0005],
     ["float dust", 1e-17],
