@@ -1120,6 +1120,16 @@ interface BatchFlowResult {
 const REQUIREMENTS_UNMET_CODE: string = FAILURE_CODES.FLOW_REQUIREMENTS_UNMET;
 
 /**
+ * Step kinds that prove no work of their own: the `when:` and `run:` markers,
+ * whose guarded and composed steps are expanded into the same flat step list
+ * and counted there instead, plus `echo:` narration, which the tool-server's
+ * own summary omits too. Hand-mirrored, not imported: the CLI takes no
+ * tool-server dependency and types `kind` as a bare string, so a marker kind
+ * added there has to be added here as well or this guard silently reopens.
+ */
+const NON_EXECUTING_STEP_KINDS: ReadonlySet<string> = new Set(["when", "run", "echo"]);
+
+/**
  * Run every discovered flow in `dir` sequentially. Reports failures only (no
  * live step lines), then a flow-level summary; a flow failing its steps — or
  * one the tool-server rejects as invalid (a bad YAML, an unparseable step) —
@@ -1220,8 +1230,16 @@ async function runFlowDirectory(
   // pass with zero steps executed, and such a vacuous pass must not green-light
   // a suite where a mistyped `requires` filtered everything else out. Failures
   // still dominate (exit 1): a rejected file is a red result, not an empty one.
+  // Walked rather than read off report.passed: a met `when:` guard and a `run:`
+  // step each contribute a passing marker to that count, so one guarded or
+  // composed flow would satisfy the guard on its own while every authored step
+  // under it was skipped.
   const executedSteps = results.reduce(
-    (n, r) => n + (r.report ? r.report.passed + r.report.failed + r.report.errored : 0),
+    (n, r) =>
+      n +
+      (r.report?.steps ?? []).filter(
+        (s) => !NON_EXECUTING_STEP_KINDS.has(s.kind) && s.status !== "skip"
+      ).length,
     0
   );
   const ranNothing = counts.failed === 0 && counts.total > 0 && executedSteps === 0;
