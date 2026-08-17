@@ -150,6 +150,33 @@ project already opted into local mode (a committed `.argent/install.json`, or
 > x64, and Windows x64; other targets (Linux arm64, Windows arm) compile from source
 > and need a C/C++ toolchain.
 
+#### Install as an Agent Plugin
+
+`argent init` above is the supported path and stays the default — it detects your
+editor, writes the MCP config it actually reads, and copies skills, rules and agent
+definitions into your workspace. Nothing about it changes.
+
+For clients that implement [Agent Plugins 1.0.0](https://agent-plugins.org), the
+published npm package doubles as a plugin root: it carries a `plugin.json`, an
+`mcp.json`, and the `skills/` directory at the locations the spec fixes. Point such
+a client at an installed copy — for example, in VS Code:
+
+```jsonc
+// .vscode/settings.json
+{ "chat.pluginLocations": ["./node_modules/@swmansion/argent"] }
+```
+
+The plugin's MCP server launches via `npx -y @swmansion/argent@<version> mcp`, pinned
+to the same release the plugin ships, so a plugin copied away from its `node_modules`
+still starts the matching server. The first launch downloads the package (~36 MB of
+platform binaries) if it isn't cached.
+
+> **What a plugin cannot carry.** The spec defines only two portable component
+> types — Agent Skills and MCP servers. Argent's editor rules (`rules/argent.md`)
+> and the `argent-environment-inspector` subagent are not among them, and neither
+> are the per-client touches `init` applies (Windsurf's `alwaysAllow`, Cursor's
+> allowlist, stale-config cleanup). Run `argent init` to get those.
+
 ## CLI Reference
 
 | Command            | Description                                                                                                                                                                                               |
