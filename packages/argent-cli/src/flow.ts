@@ -132,8 +132,9 @@ skipped, so one command runs a mixed suite; running that same flow on its own
 is an error instead, since you asked for it by name. Skipping needs the check
 to have ANSWERED: a requirement that could not be verified (the device's
 runtime kind was unreadable) fails the flow instead, so a broken probe cannot
-pose as a filter. A run where no step executed exits 2 — nothing ran, which is
-not a pass.
+pose as a filter. A directory run in which no step executed exits 2 — nothing
+ran, which is not a pass. A single flow that executes nothing still exits 0 —
+its own report lists every step it skipped and why.
 
 Runs require the auto-started local tool server;
 ARGENT_TOOLS_URL and \`argent link\` routing are not supported.
