@@ -188,14 +188,20 @@ Pass settle:true for a momentum-free drag that decelerates into the release, so 
       lastY = y;
     }
     // The loop stops one short of the release, so the final frame is checked
-    // here or an abort landing after the last move would still spend the last
-    // wait and then deliver the endpoint. gesture-swipe's `i <= steps` loop
-    // covers the same frame from the inside.
+    // out here instead - once on each side of its wait. The first declines to
+    // spend that wait at all when the abort has already landed; the second
+    // catches one landing during it, which would otherwise deliver the endpoint
+    // the caller cancelled and return { dragged: true } on an aborted signal.
+    // Both report `steps`, because the number counts pointer events delivered
+    // and a wait delivers none. gesture-swipe covers the same frame from inside
+    // its `i <= steps` loop, which sleeps at the bottom and checks at the top,
+    // so the iteration sending its terminal Up spans the preceding wait.
     if (ctx?.signal?.aborted) await releaseAndAbort(steps);
     // Spend the last frame's wait here, not on another move at the endpoint: a
     // point there followed by a still frame reads as a hold, and app momentum
     // code derives its fling from this stream's release velocity.
     await sleep(Math.max(0, t0 + durationMs - Date.now()));
+    if (ctx?.signal?.aborted) await releaseAndAbort(steps);
     await chromium.dispatchMouseEvent({
       type: "mouseReleased",
       x: endPx.x,
