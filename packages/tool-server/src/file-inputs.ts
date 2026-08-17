@@ -70,38 +70,49 @@ export interface ResolveFileInputsResult {
 }
 
 /**
- * True when the wrapper's path is usable on THIS host. `directory` only needs
+ * `present`: the wrapper's path is usable on THIS host. `directory` only needs
  * to exist as a directory and `probe` to exist at all (size/mtime are
  * meaningless there); `file` and `tar-upload` must match the client-recorded
  * stat so a stale or unrelated file at the same path falls through to the
- * upload path instead of being read by accident.
+ * upload path instead of being read by accident. `statVerified` is the strong
+ * form — the wire carried both stat fields and the host file matched both —
+ * because presence alone is satisfiable by a hand-crafted stat-less wrapper
+ * and must not serve as containment.
  */
-async function probeHostPath(wire: FileInputWire, kind: FileInputSpec["kind"]): Promise<boolean> {
+async function probeHostPath(
+  wire: FileInputWire,
+  kind: FileInputSpec["kind"]
+): Promise<{ present: boolean; statVerified: boolean }> {
+  const miss = { present: false, statVerified: false };
   try {
     const st = await stat(wire.path);
-    if (kind === "directory") return st.isDirectory();
-    if (kind === "probe") return true;
-    if (kind === "tar-upload") {
-      if (st.isDirectory()) {
-        if (wire.mtimeMs != null && Math.round(st.mtimeMs) !== Math.round(wire.mtimeMs)) {
-          return false;
-        }
-        return true;
-      }
-      if (!st.isFile()) return false;
-      if (wire.size != null && st.size !== wire.size) return false;
+    if (kind === "directory") return { present: st.isDirectory(), statVerified: false };
+    if (kind === "probe") return { present: true, statVerified: false };
+    if (kind === "tar-upload" && st.isDirectory()) {
       if (wire.mtimeMs != null && Math.round(st.mtimeMs) !== Math.round(wire.mtimeMs)) {
-        return false;
+        return miss;
       }
-      return true;
+      return { present: true, statVerified: false };
     }
-    if (!st.isFile()) return false;
-    if (wire.size != null && st.size !== wire.size) return false;
-    if (wire.mtimeMs != null && Math.round(st.mtimeMs) !== Math.round(wire.mtimeMs)) return false;
-    return true;
+    if (!st.isFile()) return miss;
+    if (wire.size != null && st.size !== wire.size) return miss;
+    if (wire.mtimeMs != null && Math.round(st.mtimeMs) !== Math.round(wire.mtimeMs)) return miss;
+    return { present: true, statVerified: wire.size != null && wire.mtimeMs != null };
   } catch {
-    return false;
+    return miss;
   }
+}
+
+/**
+ * `skipWhenSet` / `unwrapWhenSet` gate: a param counts as set whenever the caller provided it —
+ * matching the `=== undefined` presence checks a tool's own dual-source
+ * validation uses, so a degenerate value ("", null) still routes the call to
+ * that validation instead of having the boundary vouch for a file the call is
+ * not using. A wrapper also counts: a wrapped source param may not be resolved
+ * yet when a later spec reads it.
+ */
+function isParamSet(value: unknown): boolean {
+  return value !== undefined;
 }
 
 function formatBytes(bytes: number | undefined): string {
@@ -190,10 +201,12 @@ async function resolveOne(
   tempDirs: string[],
   lookupUpload: UploadLookup | undefined
 ): Promise<{ value: string; meta: ResolvedFileInput }> {
+  const probe = await probeHostPath(wire, spec.kind);
   const meta: ResolvedFileInput = {
     clientPath: wire.path,
-    presentOnHost: await probeHostPath(wire, spec.kind),
+    presentOnHost: probe.present,
     viaUpload: false,
+    ...(probe.statVerified ? { statVerified: true } : {}),
   };
 
   if (spec.kind === "probe") {
@@ -279,6 +292,28 @@ export async function resolveFileInputs(
     for (const spec of specs) {
       const value = args[spec.target];
       if (!isFileInputWire(value)) continue;
+      if (spec.unwrapWhenSet !== undefined && isParamSet(args[spec.unwrapWhenSet])) {
+        // Caller-authored dual-source: the superseding source param is also
+        // set, so the tool's own exactly-one validation must diagnose the
+        // call — not this wrapper's resolution (whose outcome hinges on
+        // whether the unused file exists), and not a drop (which would
+        // rewrite the mistake into a valid single-source call and silently
+        // run the other source). Hand zod the plain client path; no
+        // resolution metadata is recorded because nothing was probed or
+        // vouched for.
+        args[spec.target] = value.path;
+        continue;
+      }
+      if (spec.skipWhenSet !== undefined && isParamSet(args[spec.skipWhenSet])) {
+        // Old-client skew: the client derived and wrapped this target even
+        // though the superseding source param is set. Drop the derived wrapper
+        // instead of resolving it, so zod sees the call the agent actually
+        // made and the tool's own dual-source rule — not this file's
+        // existence — diagnoses it. Explicit string values on the target are
+        // caller-authored, never wrappers, and pass through above.
+        delete args[spec.target];
+        continue;
+      }
       const { value: path, meta } = await resolveOne(spec, value, tempDirs, lookupUpload);
       args[spec.target] = path;
       resolved = { ...(resolved ?? {}), [spec.target]: meta };

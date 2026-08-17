@@ -2,26 +2,66 @@ import { z } from "zod";
 import * as fs from "node:fs/promises";
 import type { FileInputSpec, ToolContext, ToolDefinition } from "@argent/registry";
 import { parseFlow } from "./flow-utils";
-import { resolveFlowFilePath } from "./flow-run";
+import { resolveFlowSource } from "./flow-run";
 
-const zodSchema = z.object({
-  name: z.string().describe('Name of the flow to inspect (e.g. "settings-explore")'),
-  project_root: z
-    .string()
-    .describe(
-      "Absolute path to the project root directory that contains `.argent/flows/<name>.yaml`."
-    ),
-  flow_file: z
-    .string()
-    .optional()
-    .describe(
-      "Path to the flow .yaml as readable by the tool-server. Internal — the argent client derives it from project_root and name automatically; leave unset."
-    ),
-});
+const zodSchema = z
+  .object({
+    name: z
+      .string()
+      .optional()
+      .describe(
+        'Name of a saved flow to inspect from `.argent/flows` (e.g. "settings-explore"). Omit when flow_path is set.'
+      ),
+    project_root: z
+      .string()
+      .describe(
+        "Absolute path to the calling agent's project root — the cwd it is working in. With name, the saved flow is read from `.argent/flows/<name>.yaml` under this root; with flow_path, the prerequisite is read from that YAML instead, so pass the agent's cwd."
+      ),
+    flow_file: z
+      .string()
+      .optional()
+      .describe(
+        "Path to the flow .yaml as readable by the tool-server. Internal — the argent client derives it from project_root and name automatically; leave unset."
+      ),
+    flow_path: z
+      .string()
+      .optional()
+      .describe(
+        "Omit when name is set. Absolute path to a co-located flow .yaml on the client and tool server's shared filesystem. This must be supplied through the file-input boundary. Pass the same flow source here as to flow-execute, so the prerequisite you read belongs to the flow that will run; for remote reads, pass name + project_root instead."
+      ),
+  })
+  .superRefine((params, ctx) => {
+    if ((params.name === undefined) === (params.flow_path === undefined)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Pass exactly one flow source: name or flow_path.",
+        path: ["flow_path"],
+      });
+    }
+  });
 
-// Same boundary contract as flow-execute: the YAML is the agent's file.
+// Mirror of flow-execute's specs, field for field: the documented pre-flight is
+// "read the prerequisite, then run", so both tools must resolve the same source
+// under the same boundary rules. A spec that diverged — e.g. one that silently
+// dropped flow_path — would have this tool answer for the saved flow of the
+// same stem while flow-execute runs the explicit file: same flow identity, two
+// contracts. See flow-run.ts for why a dual-source wire is unwrapped
+// (caller-authored flow_path beside name) or dropped (client-derived flow_file
+// beside flow_path) rather than resolved.
 const fileInputs: FileInputSpec[] = [
-  { target: "flow_file", path: "${project_root}/.argent/flows/${name}.yaml", kind: "file" },
+  {
+    target: "flow_path",
+    path: "${flow_path}",
+    kind: "file",
+    optional: true,
+    unwrapWhenSet: "name",
+  },
+  {
+    target: "flow_file",
+    path: "${project_root}/.argent/flows/${name}.yaml",
+    kind: "file",
+    skipWhenSet: "flow_path",
+  },
 ];
 
 export const flowReadPrerequisiteTool: ToolDefinition<
@@ -35,20 +75,32 @@ export const flowReadPrerequisiteTool: ToolDefinition<
     failedMsg: ({ failureSignal }) =>
       `Failed to read flow prerequisite: ${failureSignal.error_code}`,
   },
-  description: `Read the execution prerequisite of a saved flow without running it.
+  description: `Read the execution prerequisite of a flow without running it — a saved flow from the .argent/flows/ directory, or an explicit boundary-managed flow_path.
 Returns the prerequisite description so you can verify the required state is met before calling flow-execute.
-Use when you need to check what app/simulator state is required before executing a flow.
-Fails if the flow file does not exist in the .argent/flows/ directory.`,
+Use when you need to check what app/simulator state is required before executing a flow; pass the same flow
+source (name or flow_path) you will pass to flow-execute, so the prerequisite you read is the contract of
+the flow that will actually run.
+Fails if the flow file does not exist.
+Address the flow exactly as you will address it in flow-execute: name or flow_path, one and only one; supplying both or neither is rejected.`,
   zodSchema,
   fileInputs,
   services: () => ({}),
   async execute(_services, params, ctx?: ToolContext) {
-    const filePath = resolveFlowFilePath(params, ctx?.fileInputs?.flow_file);
-    const fileContent = await fs.readFile(filePath, "utf8");
-    const flow = parseFlow(fileContent);
+    // The same resolver flow-execute uses, gates included: the prerequisite
+    // reported here must be the contract of exactly the file flow-execute
+    // would run for these params — flow_path clears the statVerified
+    // co-location boundary (never uploads, never raw server paths) and reports
+    // its basename-derived logical name, while the name branch keeps the
+    // flow_file containment under project_root.
+    const { filePath, flowName } = await resolveFlowSource(
+      params,
+      ctx?.fileInputs?.flow_file,
+      ctx?.fileInputs?.flow_path
+    );
+    const flow = parseFlow(await fs.readFile(filePath, "utf8"));
 
     return {
-      flow: params.name,
+      flow: flowName,
       executionPrerequisite: flow.executionPrerequisite,
     };
   },

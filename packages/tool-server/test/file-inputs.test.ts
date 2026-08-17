@@ -41,8 +41,60 @@ describe("resolveFileInputs", () => {
 
     expect(args.input).toBe(filePath);
     expect(fileInputs).toEqual({
-      input: { clientPath: filePath, presentOnHost: true, viaUpload: false },
+      input: { clientPath: filePath, presentOnHost: true, viaUpload: false, statVerified: true },
     });
+  });
+
+  it("resolves a stat-less wrapper in place but without statVerified", async () => {
+    const filePath = path.join(tmpDir, "stat-less.yaml");
+    await fs.writeFile(filePath, "steps: []\n");
+
+    const { args, fileInputs } = await resolveFileInputs(
+      { fileInputs: FILE_SPEC },
+      { input: wire({ path: filePath }) }
+    );
+
+    // Lenient presence stays (co-located callers that could not stat rely on
+    // it) but must not read as the strong same-file evidence containment
+    // gates require.
+    expect(args.input).toBe(filePath);
+    expect(fileInputs!.input).toMatchObject({ presentOnHost: true, viaUpload: false });
+    expect(fileInputs!.input.statVerified).toBeUndefined();
+  });
+
+  it("resolves a size-only wrapper in place but without statVerified", async () => {
+    const filePath = path.join(tmpDir, "size-only.yaml");
+    await fs.writeFile(filePath, "steps: []\n");
+    const st = await fs.stat(filePath);
+
+    const { args, fileInputs } = await resolveFileInputs(
+      { fileInputs: FILE_SPEC },
+      { input: wire({ path: filePath, size: st.size }) }
+    );
+
+    // The size matches the host file, but statVerified means BOTH stat fields
+    // were carried and matched — a size alone is far easier for a caller to
+    // know than the ms-rounded mtime and must not count as the strong form.
+    expect(args.input).toBe(filePath);
+    expect(fileInputs!.input).toMatchObject({ presentOnHost: true, viaUpload: false });
+    expect(fileInputs!.input.statVerified).toBeUndefined();
+  });
+
+  it("resolves an mtime-only wrapper in place but without statVerified", async () => {
+    const filePath = path.join(tmpDir, "mtime-only.yaml");
+    await fs.writeFile(filePath, "steps: []\n");
+    const st = await fs.stat(filePath);
+
+    const { args, fileInputs } = await resolveFileInputs(
+      { fileInputs: FILE_SPEC },
+      { input: wire({ path: filePath, mtimeMs: st.mtimeMs }) }
+    );
+
+    // Same conjunction from the other side: a matching mtime with no size on
+    // the wire is only half the client stat, so the strong form stays off.
+    expect(args.input).toBe(filePath);
+    expect(fileInputs!.input).toMatchObject({ presentOnHost: true, viaUpload: false });
+    expect(fileInputs!.input.statVerified).toBeUndefined();
   });
 
   it("falls back to uploaded content when the stat does not match", async () => {
@@ -245,5 +297,144 @@ describe("resolveFileInputs", () => {
     // Left untouched — the tool's own schema validation rejects the object.
     expect(args.smuggled).toEqual(body.smuggled);
     expect(fileInputs).toBeUndefined();
+  });
+
+  it("drops a derived wrapper whose skipWhenSet param is set instead of resolving it", async () => {
+    // Old-client skew: the client wrapped the derived target even though the
+    // superseding source param is also on the wire. The wrapper's path does
+    // not exist, which without the skip would fail resolution here — masking
+    // the tool's own dual-source validation.
+    const sourcePath = path.join(tmpDir, "explicit.yaml");
+    await fs.writeFile(sourcePath, "steps: []\n");
+    const st = await fs.stat(sourcePath);
+    const specs: FileInputSpec[] = [
+      { target: "source", path: "${source}", kind: "file", optional: true },
+      { target: "derived", path: "${root}/${name}.yaml", kind: "file", skipWhenSet: "source" },
+    ];
+
+    const { args, fileInputs } = await resolveFileInputs(
+      { fileInputs: specs },
+      {
+        name: "ghost",
+        root: tmpDir,
+        source: wire({ path: sourcePath, size: st.size, mtimeMs: st.mtimeMs }),
+        derived: wire({ path: path.join(tmpDir, "ghost.yaml") }),
+      }
+    );
+
+    // The derived wrapper is gone (not a dangling object that would fail the
+    // tool's string schema); the source resolved normally.
+    expect("derived" in args).toBe(false);
+    expect(args.source).toBe(sourcePath);
+    expect(fileInputs).toEqual({
+      source: { clientPath: sourcePath, presentOnHost: true, viaUpload: false, statVerified: true },
+    });
+  });
+
+  it("drops a derived wrapper even when the skipWhenSet param is an empty string", async () => {
+    // "" is a provided source to the tool's `=== undefined` dual-source check,
+    // so the wrapper must be dropped here too — resolving it would let a
+    // missing saved flow 422 before that check can name the real misuse.
+    const specs: FileInputSpec[] = [
+      { target: "source", path: "${source}", kind: "file", optional: true },
+      { target: "derived", path: "${root}/${name}.yaml", kind: "file", skipWhenSet: "source" },
+    ];
+
+    const { args } = await resolveFileInputs(
+      { fileInputs: specs },
+      {
+        name: "ghost",
+        root: tmpDir,
+        source: "",
+        derived: wire({ path: path.join(tmpDir, "ghost.yaml") }),
+      }
+    );
+
+    expect("derived" in args).toBe(false);
+    expect(args.source).toBe("");
+  });
+
+  it("resolves a derived wrapper normally when the skipWhenSet param is absent", async () => {
+    const derivedPath = path.join(tmpDir, "saved.yaml");
+    await fs.writeFile(derivedPath, "steps: []\n");
+    const st = await fs.stat(derivedPath);
+    const specs: FileInputSpec[] = [
+      { target: "source", path: "${source}", kind: "file", optional: true },
+      { target: "derived", path: "${root}/${name}.yaml", kind: "file", skipWhenSet: "source" },
+    ];
+
+    const { args } = await resolveFileInputs(
+      { fileInputs: specs },
+      {
+        name: "saved",
+        root: tmpDir,
+        derived: wire({ path: derivedPath, size: st.size, mtimeMs: st.mtimeMs }),
+      }
+    );
+
+    expect(args.derived).toBe(derivedPath);
+  });
+
+  const UNWRAP_SPEC: FileInputSpec[] = [
+    { target: "source", path: "${source}", kind: "file", optional: true, unwrapWhenSet: "name" },
+  ];
+
+  it("unwraps a caller-authored wrapper to its client path when the unwrapWhenSet param is set", async () => {
+    // Dual-source misuse on the CALLER-authored target: dropping it (the
+    // skipWhenSet remedy) would rewrite the call as valid single-source, and
+    // resolving it would make the error hinge on file existence — so the
+    // wrapper is handed on as the plain path string for the tool's own
+    // exactly-one validation to reject. The path is a ghost on purpose:
+    // resolution would throw here, unwrapping must not.
+    const ghost = path.join(tmpDir, "ghost.yaml");
+
+    const { args, fileInputs } = await resolveFileInputs(
+      { fileInputs: UNWRAP_SPEC },
+      { name: "saved", source: wire({ path: ghost }) }
+    );
+
+    expect(args.source).toBe(ghost);
+    // Nothing was probed — no metadata may vouch for a file never looked at.
+    expect(fileInputs).toBeUndefined();
+  });
+
+  it("unwraps even when the unwrapWhenSet param is an empty string", async () => {
+    // Same presence semantics as skipWhenSet: "" is a provided source to the
+    // tool's `=== undefined` dual-source check, so the check must see both.
+    const ghost = path.join(tmpDir, "ghost.yaml");
+
+    const { args } = await resolveFileInputs(
+      { fileInputs: UNWRAP_SPEC },
+      { name: "", source: wire({ path: ghost }) }
+    );
+
+    expect(args.source).toBe(ghost);
+  });
+
+  it("resolves a caller-authored wrapper normally when the unwrapWhenSet param is absent", async () => {
+    const sourcePath = path.join(tmpDir, "explicit.yaml");
+    await fs.writeFile(sourcePath, "steps: []\n");
+    const st = await fs.stat(sourcePath);
+
+    const { args, fileInputs } = await resolveFileInputs(
+      { fileInputs: UNWRAP_SPEC },
+      { source: wire({ path: sourcePath, size: st.size, mtimeMs: st.mtimeMs }) }
+    );
+
+    expect(args.source).toBe(sourcePath);
+    expect(fileInputs).toEqual({
+      source: { clientPath: sourcePath, presentOnHost: true, viaUpload: false, statVerified: true },
+    });
+  });
+
+  it("still throws for an unresolvable wrapper when the unwrapWhenSet param is absent", async () => {
+    // Single-source call, file genuinely missing: the boundary's own error is
+    // the right diagnosis, and unwrapWhenSet must not soften it.
+    await expect(
+      resolveFileInputs(
+        { fileInputs: UNWRAP_SPEC },
+        { source: wire({ path: path.join(tmpDir, "ghost.yaml") }) }
+      )
+    ).rejects.toThrow(FileInputError);
   });
 });

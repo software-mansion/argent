@@ -27,10 +27,11 @@ import { loadAndroidCombinedData } from "../../../utils/android-profiler/pipelin
 import { buildHotCommitSummaries } from "../../../utils/react-profiler/pipeline/00-hot-commits";
 import { preprocess } from "../../../utils/react-profiler/pipeline/00-preprocess";
 import { readCpuProfile, readCommitTree } from "../../../utils/react-profiler/debug/dump";
+import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z.string().describe("iOS Simulator/device UDID or Android serial"),
+  device_id: metroDeviceIdParam("iOS Simulator/device UDID or Android serial"),
 });
 
 interface HangCommitCorrelation {
@@ -102,6 +103,29 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
     // For iOS, the analyze step cached uiHangs + memoryLeaks in parsedData.
     // For Android, drill-down re-queries the .pftrace, so we load the same
     // shape on demand here.
+    // A session with no capture state at all was minted by THIS call: the
+    // device_id matched no existing session, so nothing is known about the
+    // device. Say so without naming a platform — classification is shape-based
+    // and falls back to "android" for any opaque id (utils/device-info.ts:52),
+    // so an id this tool cannot place would otherwise be reported as an Android
+    // device (#618). That happens routinely: a forwarded Metro logicalDeviceId
+    // resolves only while a debugger connection is live, and the alias is
+    // dropped when it disposes.
+    if (!nativeApi.traceFile && !nativeApi.exportedFiles && !nativeApi.parsedData) {
+      throw new FailureError(
+        `No native profiler capture is loaded for device \`${params.device_id}\`. Run ` +
+          "native-profiler-start → native-profiler-stop → native-profiler-analyze on this device " +
+          "first. (If that id came from debugger-connect, pass the id from list-devices instead — " +
+          "the simulator UDID or adb serial — since profiler sessions are keyed by that one.)",
+        {
+          error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
+          failure_stage: "profiler_combined_report_load_native_data",
+          failure_area: "tool_server",
+          error_kind: "not_found",
+        }
+      );
+    }
+
     let uiHangs: UiHang[];
     let memoryLeaks: MemoryLeak[];
     if (nativeApi.platform === "android") {

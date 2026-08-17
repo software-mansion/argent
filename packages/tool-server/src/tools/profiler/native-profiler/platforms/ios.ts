@@ -4,6 +4,7 @@ import { promises as fs } from "fs";
 import { existsSync } from "node:fs";
 import * as path from "path";
 import type { NativeProfilerSessionApi } from "../../../../blueprints/native-profiler-session";
+import { describeReapedSession, takeReapedSession } from "../../../../utils/reaped-sessions";
 import { deviceSetForUdid, simctlArgsForUdidSync } from "../../../../utils/ios-device-sets";
 import { getDebugDir } from "../../../../utils/react-profiler/debug/dump";
 import {
@@ -755,6 +756,35 @@ export async function startNativeProfilerIos(
   }
   const { child: xctraceProcess, pid: xctracePid } = started;
 
+  // A `stop-all-simulator-servers` that landed inside the readiness handshake
+  // above has already destroyed this session — `Registry._teardown` nulled the
+  // node's instance, so nothing can resolve `api` again and the owner's
+  // `native-profiler-stop` would answer "call native-profiler-start first".
+  // Reporting `status: "recording"` here would hand back a session that does
+  // not exist, with a trace file on disk and no way to reach it. Reap what this
+  // attempt spawned and say what happened instead.
+  if (api.disposed) {
+    try {
+      xctraceProcess.kill("SIGKILL");
+    } catch {
+      // already dead
+    }
+    resetStartState(api);
+    throw new FailureError(
+      `The native profiling session for ${api.deviceId} was torn down by a ` +
+        `stop-all-simulator-servers while this start was waiting for xctrace to become ` +
+        `ready, so nothing was recorded — one tool-server serves every agent using this ` +
+        `argent install, so this may have been another agent ending its session. Call ` +
+        `native-profiler-start again.`,
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_SESSION_TORN_DOWN,
+        failure_stage: "native_profiler_xctrace_start",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      }
+    );
+  }
+
   // Stamp the per-capture descriptors only now, on SUCCESS: a failed start
   // must leave the previous capture's still-loaded exports fully described
   // for analyze (trace name, all-processes filter PID, capture mode). The
@@ -777,6 +807,9 @@ export async function startNativeProfilerIos(
   api.cpuFilterPid = strategy ? strategy.cpuFilterPid(detected!) : null;
   api.profilingActive = true;
   api.wallClockStartMs = Date.now();
+  // See the Android twin: a live capture makes any earlier teardown breadcrumb
+  // unconsumable, and therefore a future false accusation.
+  takeReapedSession("native-profiler", api.deviceId);
   api.recordingTimeout = setTimeout(() => {
     try {
       xctraceProcess.kill("SIGINT");
@@ -834,8 +867,15 @@ export async function stopNativeProfilerIos(api: NativeProfilerSessionApi): Prom
   }
 
   if (!api.profilingActive || !api.captureProcess || !api.traceFile) {
+    // A teardown reaps NativeProfilerSession and the registry nulls the
+    // instance, so `api` here can be a fresh session that never saw the capture
+    // this caller started. Say that happened rather than "you never started
+    // one" — the trace really is gone, but the reason is not the caller's.
+    const reaped = takeReapedSession("native-profiler", api.deviceId);
     throw new FailureError(
-      "No active native profiling session found. Call native-profiler-start first.",
+      reaped
+        ? describeReapedSession(reaped, "native profiling session")
+        : "No active native profiling session found. Call native-profiler-start first.",
       {
         error_code: FAILURE_CODES.NATIVE_PROFILER_NO_ACTIVE_SESSION,
         failure_stage: "native_profiler_stop_session_state",

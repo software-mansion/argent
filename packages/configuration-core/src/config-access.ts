@@ -12,7 +12,12 @@ import { resolveProjectRoot, type FlagScope } from "./flags.js";
 import { resolveHomeDir, type ConfigPathOptions } from "./paths.js";
 import { readConfigObject, updateConfig, getAtPath, setAtPath, deleteAtPath } from "./config.js";
 import { applyMergePolicy } from "./merge.js";
-import { CONFIG_SCHEMA, getConfigDefinition, type ConfigDefinition } from "./config-schema.js";
+import {
+  CONFIG_SCHEMA,
+  describeExpectedValue,
+  getConfigDefinition,
+  type ConfigDefinition,
+} from "./config-schema.js";
 
 /** Read + parse one scope's value for a definition (no merge, no default). */
 function readScopeValue<T>(
@@ -93,10 +98,23 @@ export class ConfigScopeError extends Error {
   }
 }
 
-/** Thrown when a value fails the schema's `parse` validator. */
+/**
+ * Thrown when a value fails the schema's `parse` validator.
+ *
+ * Carries what the key accepts and an example of it, so a caller can tell the
+ * user what to type instead of only that they were wrong.
+ */
 export class ConfigValidationError extends Error {
-  constructor(public readonly key: string) {
-    super(`Invalid value for config key "${key}".`);
+  constructor(
+    public readonly key: string,
+    public readonly expected?: string,
+    public readonly example?: string
+  ) {
+    super(
+      expected
+        ? `Invalid value for config key "${key}": expected ${expected}.`
+        : `Invalid value for config key "${key}".`
+    );
     this.name = "ConfigValidationError";
   }
 }
@@ -133,7 +151,8 @@ export function setConfigValue(
   if (def.manageCommand) throw new ConfigManagedElsewhereError(key, def.manageCommand);
   if (!def.scopes.includes(scope)) throw new ConfigScopeError(key, scope, def.scopes);
   const parsed = def.parse(rawValue);
-  if (parsed === undefined) throw new ConfigValidationError(key);
+  if (parsed === undefined)
+    throw new ConfigValidationError(def.key, describeExpectedValue(def), def.example);
   updateConfig((config) => setAtPath(config, key, parsed), scope, options);
   return parsed;
 }
@@ -174,6 +193,10 @@ export interface ConfigEntryView {
   description: string;
   scopes: readonly FlagScope[];
   manageCommand?: string;
+  /** What a valid value looks like, in words. */
+  expected?: string;
+  /** An example of a valid value, as it would be typed. */
+  example?: string;
   /** Effective (merged + defaulted) value. */
   effective: unknown;
   /** Raw parsed value stored at the project scope, or undefined. */
@@ -192,6 +215,8 @@ export function listConfig(
     description: def.description,
     scopes: def.scopes,
     ...(def.manageCommand ? { manageCommand: def.manageCommand } : {}),
+    ...(describeExpectedValue(def) ? { expected: describeExpectedValue(def)! } : {}),
+    ...(def.example ? { example: def.example } : {}),
     effective: getConfigValue(def, options),
     project: readScopeValue(def, "project", options),
     global: readScopeValue(def, "global", options),

@@ -65,6 +65,12 @@ afterAll(() => {
   if (appDir) fs.rmSync(appDir, { recursive: true, force: true });
 });
 
+// Every boot-failure test runs killChildEscalating against a fake child
+// carrying a stand-in pid, and its group sweep signals through process.kill —
+// real signals must never escape onto whatever owns that pid. Never restored:
+// the unref'd 2s escalation timer can fire after the test that armed it.
+vi.spyOn(process, "kill").mockImplementation(() => true);
+
 beforeEach(() => {
   spawnMock.mockReset();
 });
