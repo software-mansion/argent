@@ -200,10 +200,13 @@ function platformMeets(platform: Platform, required: readonly WhenPlatform[]): b
 /**
  * The runtime kind of a device the runner already holds. The two constant
  * platforms are answered by definition; the rest go through the memoized
- * probes. A simulator's kind is fixed at creation, so its probe costs one
- * `simctl`/`sim-remote` round-trip and nothing after it; the Android one
- * re-lists adb on every call before its memo, so a cached kind can never answer
- * for a serial that has since dropped off.
+ * probes. A simulator's kind is fixed at creation, so once its probe lands a
+ * verdict that verdict is free for the life of the process; one answering
+ * "unknown" is not
+ * memoized on either simulator path, so a directory run against an unlistable
+ * udid pays a round-trip per flow. The Android probe re-lists adb on every call
+ * before its memo, so a cached kind can never answer for a serial that has
+ * since dropped off.
  *
  * Undefined means "could not be told" — a simulator its listing doesn't know,
  * or an Android target that dropped off adb. Callers refuse rather than waving

@@ -77,7 +77,10 @@ export async function simctlListDevices(): Promise<SimRemoteListDevicesResult> {
 
 // A simulator's runtime kind is fixed at creation, so memoize per bare udid and
 // keep a repeat requirement check off the `sim-remote` round-trip — the same
-// deal (and the same shape) as the local `getSimulatorRuntimeKind`.
+// deal (and the same shape) as the local `getSimulatorRuntimeKind`, down to
+// caching verdicts only: an unknown udid re-probes, since the sim may not have
+// been created yet when the first call landed, and probes racing the same udid
+// before either lands each pay their own round-trip.
 const remoteRuntimeKindCache = new Map<string, "mobile" | "tv">();
 
 /**
