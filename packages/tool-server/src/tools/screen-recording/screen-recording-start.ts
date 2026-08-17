@@ -160,7 +160,8 @@ Fails if a recording is already running on the device, the device is not booted,
  *
  * `disable` waits for any in-flight `enable` to settle before sending its own
  * `show:false`. Enabling is the one suspension point after a recording is
- * stamped, so a dispose (shutdown) can call `disable` while `enable`'s
+ * stamped, so a dispose (shutdown, or a stop-all-simulator-servers teardown of
+ * this device) can call `disable` while `enable`'s
  * `show:true` request is still outstanding. Without this barrier the two
  * requests race and the earlier-issued `show:false` can be overtaken by the
  * later `show:true`, leaving simulator-server's overlay stuck on after the

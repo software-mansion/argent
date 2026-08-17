@@ -1,6 +1,7 @@
 import { promises as fs } from "fs";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { ScreenRecordingSessionApi } from "../../blueprints/screen-recording-session";
+import { describeReapedSession, takeReapedSession } from "../../utils/reaped-sessions";
 
 export interface StartRecordingResult {
   status: "recording";
@@ -106,10 +107,21 @@ export function assertStoppableSession(api: ScreenRecordingSessionApi, stage: st
   }
   const recoverable = api.pendingRetrieval && api.outputFile !== null;
   if (!api.recordingActive && !recoverable) {
+    // A teardown reaps this device's ScreenRecordingSession, and the registry
+    // nulls the instance — so the session resolved above is a brand new one
+    // that has never heard of the capture that was running a moment ago. Absent
+    // the breadcrumb, the only thing distinguishing "your recording was
+    // destroyed, here is where the video landed" from "you never started one"
+    // is gone, and this reports the second.
+    const reaped = takeReapedSession("screen-recording", api.deviceId);
     throw new FailureError(
-      `No active screen recording on device ${api.deviceId}. Call \`screen-recording-start\` first.`,
+      reaped
+        ? describeReapedSession(reaped, "screen recording")
+        : `No active screen recording on device ${api.deviceId}. Call \`screen-recording-start\` first.`,
       {
-        error_code: FAILURE_CODES.SCREEN_RECORDING_NO_ACTIVE_SESSION,
+        error_code: reaped
+          ? FAILURE_CODES.SCREEN_RECORDING_SERVER_SHUTTING_DOWN
+          : FAILURE_CODES.SCREEN_RECORDING_NO_ACTIVE_SESSION,
         failure_stage: stage,
         failure_area: "tool_server",
         // Session-state, not caller input — matches the profiler family's
@@ -121,15 +133,27 @@ export function assertStoppableSession(api: ScreenRecordingSessionApi, stage: st
 }
 
 /**
- * Reject a start whose readiness resumed after the session was disposed
- * (process shutdown). Call synchronously right before spawn, with no await
- * between this check and the spawn/pendingChild stamp, so no capture is
- * launched that dispose's teardown can no longer see and reap.
+ * Reject a start whose readiness resumed after the session was disposed. Call
+ * synchronously right before spawn, with no await between this check and the
+ * spawn/pendingChild stamp, so no capture is launched that dispose's teardown
+ * can no longer see and reap.
+ *
+ * `dispose()` runs on process shutdown, but ALSO whenever
+ * `stop-all-simulator-servers` reaps this device — `ScreenRecordingSession` is a
+ * device-owned namespace, so a session-end teardown (commonly another agent's)
+ * disposes it. The two are indistinguishable from `api.disposed` alone, so the
+ * message names both and does not tell the caller a retry is pointless: on the
+ * teardown branch the device is usually still up and starting again succeeds.
+ * (`SCREEN_RECORDING_SERVER_SHUTTING_DOWN` is the enum carried into telemetry;
+ * the shutdown wording there is historical, not a second claim of the cause.)
  */
 export function assertNotDisposed(api: ScreenRecordingSessionApi, stage: string): void {
   if (api.disposed) {
     throw new FailureError(
-      `The tool-server is shutting down; screen recording was not started on device ${api.deviceId}.`,
+      `The screen-recording session for device ${api.deviceId} was torn down while this start ` +
+        `was still initializing, so nothing was recorded. That is either the tool-server shutting ` +
+        `down or a stop-all-simulator-servers reaping this device (e.g. another agent ending its ` +
+        `session). If the device is still up, start the recording again.`,
       {
         error_code: FAILURE_CODES.SCREEN_RECORDING_SERVER_SHUTTING_DOWN,
         failure_stage: stage,

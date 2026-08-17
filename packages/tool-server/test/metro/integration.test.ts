@@ -4,7 +4,7 @@ import * as http from "node:http";
 import { Registry } from "@argent/registry";
 import { jsRuntimeDebuggerBlueprint } from "../../src/blueprints/js-runtime-debugger";
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
-import { debuggerStatusTool } from "../../src/tools/debugger/debugger-status";
+import { createDebuggerStatusTool } from "../../src/tools/debugger/debugger-status";
 import { debuggerEvaluateTool } from "../../src/tools/debugger/debugger-evaluate";
 
 /**
@@ -154,7 +154,7 @@ beforeAll(async () => {
   registry = new Registry();
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
   registry.registerTool(debuggerConnectTool);
-  registry.registerTool(debuggerStatusTool);
+  registry.registerTool(createDebuggerStatusTool(registry));
   registry.registerTool(debuggerEvaluateTool);
 });
 
@@ -187,6 +187,7 @@ describe("JsRuntimeDebugger integration (mock server)", () => {
       device_id: "mock-device",
     })) as Record<string, unknown>;
 
+    expect(result.status).toBe("connected");
     expect(result.connected).toBe(true);
     expect(result.loadedScripts).toBeGreaterThanOrEqual(1);
     expect(result.enabledDomains).toContain("Runtime");

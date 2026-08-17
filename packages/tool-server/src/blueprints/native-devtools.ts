@@ -478,6 +478,16 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         );
       }
       const id = nextRpcId++;
+      // The injected handlers hop onto the app's MAIN thread; a heavy cold
+      // start (first Hermes parse, asset decode) can pin it for several
+      // seconds, and the flow runner re-reads the hierarchy through exactly
+      // that window. Give the flows' workhorse read time to ride the stall out
+      // instead of failing the step — mirroring the Android devtools client's
+      // 5s default / 15s getHierarchy tiers. Everything else (including the
+      // per-read Application.getState probe and the interactive point queries)
+      // keeps the 5s ceiling so one-shot agent tools stay snappy on a wedged
+      // app.
+      const timeoutMs = method === "ViewHierarchy.getFullHierarchy" ? 15_000 : 5_000;
       return new Promise((resolve, reject) => {
         pendingRpc.set(id, { resolve, reject });
         conn.socket.write(
@@ -498,7 +508,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
               })
             );
           }
-        }, 5000);
+        }, timeoutMs);
       });
     }
 

@@ -41,6 +41,12 @@ export interface ConfigDefinition<T = unknown> {
   readonly manageCommand?: string;
   /** Optional example value shown in help/usage. */
   readonly example?: string;
+  /**
+   * What a valid value looks like, in words ("an array of strings"), for the
+   * message shown when one is rejected. Only needed when `parse` is a bespoke
+   * function — a shared helper describes itself, see {@link describeExpectedValue}.
+   */
+  readonly expected?: string;
 }
 
 // ── parse/normalize helpers ──────────────────────────────────────────────
@@ -72,6 +78,29 @@ export function asStringArray(raw: unknown): string[] | undefined {
     if (typeof item === "string" && item.trim() !== "") out.push(item.trim());
   }
   return out;
+}
+
+/**
+ * How each shared validator describes the value it accepts.
+ *
+ * Keyed on the validator itself rather than restated per entry, so the wording
+ * cannot drift from what is actually enforced: swapping a key's `parse` swaps
+ * its description with it.
+ */
+const PARSER_EXPECTATIONS = new Map<ConfigDefinition["parse"], string>([
+  [asBoolean, "a boolean (true or false)"],
+  [asString, "a non-empty string"],
+  [asNumber, "a number"],
+  [asStringArray, "an array of strings"],
+]);
+
+/**
+ * What a valid value for this key looks like, in words — or undefined for a
+ * bespoke validator that has not said, in which case callers describe nothing
+ * rather than guessing.
+ */
+export function describeExpectedValue(def: ConfigDefinition): string | undefined {
+  return def.expected ?? PARSER_EXPECTATIONS.get(def.parse);
 }
 
 // ── The registry ─────────────────────────────────────────────────────────

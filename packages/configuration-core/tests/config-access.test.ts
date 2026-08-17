@@ -17,7 +17,11 @@ import {
   ConfigValidationError,
   ConfigManagedElsewhereError,
 } from "../src/config-access.js";
-import type { ConfigDefinition } from "../src/config-schema.js";
+import {
+  CONFIG_SCHEMA,
+  describeExpectedValue,
+  type ConfigDefinition,
+} from "../src/config-schema.js";
 
 // Sandbox both scopes: `homeDir` for global (~/.argent), `cwd` for the project
 // root (a tmp dir seeded with a `.git` marker so resolveProjectRoot stops there).
@@ -44,7 +48,8 @@ describe("dotted-path helpers", () => {
     expect(obj).toEqual({ ios: { deviceSet: "/tmp/set" } });
     expect(getAtPath(obj, "ios.deviceSet")).toBe("/tmp/set");
     expect(deleteAtPath(obj, "ios.deviceSet")).toBe(true);
-    expect(obj).toEqual({ ios: {} });
+    // The emptied parent goes with it, so unset restores the prior document.
+    expect(obj).toEqual({});
     expect(deleteAtPath(obj, "ios.deviceSet")).toBe(false);
   });
 
@@ -305,5 +310,74 @@ describe("getConfigValue — direct definition + custom-typed default", () => {
       default: "fallback",
     };
     expect(getConfigValue(def, opts())).toBe("fallback");
+  });
+});
+
+describe("every schema entry can describe itself", () => {
+  it("says what value it expects", () => {
+    for (const def of CONFIG_SCHEMA) {
+      expect(describeExpectedValue(def), `key: ${def.key}`).toBeTruthy();
+    }
+  });
+
+  it("offers an example for every key a user may set", () => {
+    for (const def of CONFIG_SCHEMA) {
+      if (def.manageCommand) continue;
+      expect(def.example, `key: ${def.key}`).toBeTruthy();
+    }
+  });
+
+  it("offers examples that are actually accepted", () => {
+    // An example that its own validator rejects would hand the user a command
+    // reproducing the error it exists to fix.
+    for (const def of CONFIG_SCHEMA) {
+      if (!def.example) continue;
+      expect(def.parse(coerceCliValue(def.example)), `key: ${def.key}`).not.toBeUndefined();
+    }
+  });
+});
+
+describe("deleteAtPath prunes only what it emptied", () => {
+  it("removes a container the delete emptied", () => {
+    const obj: Record<string, unknown> = { ios: { additionalDeviceSets: ["/a"] } };
+    expect(deleteAtPath(obj, "ios.additionalDeviceSets")).toBe(true);
+    expect(obj).toEqual({});
+  });
+
+  it("stops at the first ancestor that still holds something", () => {
+    const obj: Record<string, unknown> = { ios: { deviceSet: "x", additionalDeviceSets: ["/a"] } };
+    expect(deleteAtPath(obj, "ios.additionalDeviceSets")).toBe(true);
+    expect(obj).toEqual({ ios: { deviceSet: "x" } });
+  });
+
+  it("unwinds a chain deeper than one level", () => {
+    const obj: Record<string, unknown> = { a: { b: { c: { d: 1 } } } };
+    expect(deleteAtPath(obj, "a.b.c.d")).toBe(true);
+    expect(obj).toEqual({});
+  });
+
+  it("keeps a sibling group intact while unwinding", () => {
+    const obj: Record<string, unknown> = { a: { b: { c: 1 } }, keep: { x: 1 } };
+    expect(deleteAtPath(obj, "a.b.c")).toBe(true);
+    expect(obj).toEqual({ keep: { x: 1 } });
+  });
+
+  it("leaves an empty array sibling alone", () => {
+    const obj: Record<string, unknown> = { a: { list: [], gone: 1 } };
+    expect(deleteAtPath(obj, "a.gone")).toBe(true);
+    expect(obj).toEqual({ a: { list: [] } });
+  });
+
+  it("empties the root object rather than removing it", () => {
+    const obj: Record<string, unknown> = { lens: { agent: "claude" } };
+    expect(deleteAtPath(obj, "lens.agent")).toBe(true);
+    expect(obj).toEqual({});
+  });
+
+  it("changes nothing when the path does not resolve", () => {
+    const obj: Record<string, unknown> = { ios: { deviceSet: "x" } };
+    expect(deleteAtPath(obj, "ios.missing")).toBe(false);
+    expect(deleteAtPath(obj, "nope.missing")).toBe(false);
+    expect(obj).toEqual({ ios: { deviceSet: "x" } });
   });
 });

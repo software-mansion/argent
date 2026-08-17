@@ -12,22 +12,35 @@ import {
   isArgentProfilerFunction,
   type CpuSampleIndex,
 } from "../../../utils/react-profiler/pipeline/00-cpu-correlate";
+import type { CpuWindowResult } from "../../../utils/react-profiler/pipeline/00-cpu-correlate";
 import type { HermesProfileNode } from "../../../utils/react-profiler/types/input";
 import { readCpuProfile, readCommitTree } from "../../../utils/react-profiler/debug/dump";
+import {
+  resolveComponentName,
+  renderComponentNameMiss,
+  describeResolution,
+} from "../../../utils/react-profiler/component-names";
 import { promises as fs } from "fs";
+import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
 const timeWindowSchema = z.object({
-  start: z.coerce.number().describe("Start of window in ms (performance.now clock)"),
-  end: z.coerce.number().describe("End of window in ms (performance.now clock)"),
+  start: z.coerce
+    .number()
+    .describe(
+      "Start of window in ms since profiling started — the same clock profiler-commit-query prints"
+    ),
+  end: z.coerce
+    .number()
+    .describe(
+      "End of window in ms since profiling started — the same clock profiler-commit-query prints"
+    ),
 });
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z
-    .string()
-    .describe(
-      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
-    ),
+  device_id: metroDeviceIdParam(
+    "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
+  ),
   mode: z
     .enum(["top_functions", "time_window", "call_tree", "component_cpu"])
     .describe(
@@ -36,7 +49,9 @@ const zodSchema = z.object({
     ),
   time_window_ms: timeWindowSchema
     .optional()
-    .describe("Time window filter for time_window mode (ms, performance.now clock)"),
+    .describe(
+      "Time window filter for time_window mode (ms since profiling started — the same clock profiler-commit-query prints)"
+    ),
   component_name: z.string().optional().describe("Component name for component_cpu mode"),
   function_name: z.string().optional().describe("Function name for call_tree mode"),
   top_n: z.coerce
@@ -93,14 +108,85 @@ async function getIndex(sessionPaths: ProfilerSessionPaths): Promise<{
   // Slow path: build index from raw CPU profile
   const cpuProfile = await readCpuProfile(sessionPaths.cpuProfilePath);
   let commitTree = null;
-  let firstCommitTs: number | null = null;
   if (sessionPaths.commitsPath) {
     const onDisk = await readCommitTree(sessionPaths.commitsPath);
     commitTree = { commits: onDisk.commits };
-    firstCommitTs = onDisk.commits[0]?.timestamp ?? null;
   }
 
-  return { index: buildCpuSampleIndex(cpuProfile, firstCommitTs), commitTree };
+  return { index: buildCpuSampleIndex(cpuProfile), commitTree };
+}
+
+/**
+ * Explain a window that produced no ranked functions.
+ *
+ * "No CPU hotspots found" was indistinguishable from "this commit was cheap",
+ * which is what made the documented drill-down a dead end (#619). Each way of
+ * finding nothing has a different meaning and a different next step, so each
+ * says so — in particular a window that IS covered by samples but contains only
+ * idle frames, which on real Hermes data is the common case (99% of samples in
+ * the reported session were idle).
+ */
+function explainEmptyWindow(res: CpuWindowResult, startMs: number, endMs: number): string {
+  const range = `${res.sampleRangeMs.start.toFixed(1)}–${res.sampleRangeMs.end.toFixed(1)}ms`;
+  const window = `${startMs.toFixed(1)}–${endMs.toFixed(1)}ms`;
+
+  if (res.sampleRangeMs.end === 0 && res.samplesInWindow === 0) {
+    return (
+      "_The CPU profile contains no samples. Sampling produced no data for this session — " +
+      "that is a capture failure, not a measurement of idleness._"
+    );
+  }
+
+  if (endMs < res.sampleRangeMs.start || startMs > res.sampleRangeMs.end) {
+    return (
+      `_No CPU samples exist in ${window} — that is outside the recorded sample range ` +
+      `(${range}). This is a coverage gap, not a measurement: nothing can be concluded about CPU ` +
+      `cost here. Sample times are ms since profiling started, the same clock ` +
+      "`profiler-commit-query` prints._"
+    );
+  }
+
+  if (res.samplesInWindow > 0) {
+    // Covered, but nothing was running: the honest and useful answer.
+    return (
+      `_${res.samplesInWindow} sample(s) covering ${res.coveredMs.toFixed(1)}ms fell inside ` +
+      `${window}, and all of them were idle — the JS thread was not executing during this window. ` +
+      "Native or UI-thread work would not appear here; use `native-profiler-start` for that._"
+    );
+  }
+
+  return (
+    `_No CPU samples fell inside ${window} (${(endMs - startMs).toFixed(1)}ms wide), although it ` +
+    `lies within the recorded range (${range}). The sampler runs roughly every ` +
+    `${res.medianIntervalMs > 0 ? res.medianIntervalMs.toFixed(1) : "13"}ms, so a window this ` +
+    "narrow can contain none at all. **Absence of samples is not evidence that this commit was " +
+    "cheap.** Widen the window, or use `mode=component_cpu`._"
+  );
+}
+
+/** Coverage line: what the numbers below are actually a measurement of. */
+function coverageNote(res: CpuWindowResult, startMs: number, endMs: number): string {
+  const widthMs = endMs - startMs;
+  const lines = [
+    `**Window:** ${startMs.toFixed(1)}ms → ${endMs.toFixed(1)}ms (${widthMs.toFixed(1)}ms)`,
+    `**Samples:** ${res.samplesInWindow} covering ${res.coveredMs.toFixed(1)}ms` +
+      (res.idleMs > 0 ? `, of which ${res.idleMs.toFixed(1)}ms idle` : "") +
+      ` — sampling interval ~${res.medianIntervalMs.toFixed(1)}ms. Self-times sum to sampled` +
+      " coverage, not to the window width.",
+  ];
+  if (widthMs > 0 && widthMs < 3 * res.medianIntervalMs) {
+    lines.push(
+      `> This window is narrower than ~3 sampling intervals, so every figure carries ±1 sample` +
+        ` (≈${res.medianIntervalMs.toFixed(1)}ms).`
+    );
+  }
+  if (res.maxIntervalMs > 50 && res.maxIntervalMs > 5 * res.medianIntervalMs) {
+    lines.push(
+      `> The sampler stalled for ${res.maxIntervalMs.toFixed(1)}ms inside this window; that whole` +
+        " gap is attributed to whichever function was caught by the sample that ended it."
+    );
+  }
+  return lines.join("\n\n");
 }
 
 function renderTopFunctions(
@@ -109,25 +195,22 @@ function renderTopFunctions(
   startMs?: number,
   endMs?: number
 ): string {
-  const windowStart = startMs ?? index.timestampsMs[0]!;
-  const windowEnd = endMs ?? index.timestampsMs[index.timestampsMs.length - 1]!;
-  const hotspots = queryCpuWindow(index, windowStart, windowEnd, topN);
+  const windowStart = startMs ?? index.intervalStartsMs[0] ?? 0;
+  const windowEnd = endMs ?? index.timestampsMs[index.timestampsMs.length - 1] ?? 0;
+  const res = queryCpuWindow(index, windowStart, windowEnd, topN);
 
-  if (hotspots.length === 0) return "_No CPU hotspots found in the specified range._";
+  if (res.hotspots.length === 0) return explainEmptyWindow(res, windowStart, windowEnd);
 
   const header = "| Function | Self (ms) | Total (ms) | Location |";
   const sep = "|---|---|---|---|";
-  const rows = hotspots.map((hs) => {
+  const rows = res.hotspots.map((hs) => {
     const loc = hs.url
       ? `${shortenUrl(hs.url)}${hs.lineNumber != null ? `:${hs.lineNumber}` : ""}`
       : "—";
     return `| \`${hs.name}\` | ${hs.selfMs} | ${hs.totalMs} | ${loc} |`;
   });
 
-  const rangeNote =
-    startMs != null ? `**Window:** ${startMs.toFixed(1)}ms → ${endMs!.toFixed(1)}ms\n\n` : "";
-
-  return `## CPU Hotspots\n\n${rangeNote}${header}\n${sep}\n${rows.join("\n")}`;
+  return `## CPU Hotspots\n\n${coverageNote(res, windowStart, windowEnd)}\n\n${header}\n${sep}\n${rows.join("\n")}`;
 }
 
 function renderCallTree(
@@ -267,11 +350,25 @@ function renderComponentCpu(
     return "_No commit data available. Run react-profiler-analyze first._";
   }
 
-  // Find all commits where this component rendered
-  const componentCommits = commitTree.commits.filter((c) => c.componentName === componentName);
+  // The report prints display names (wrappers stripped), so accept those too —
+  // otherwise the tool refuses the name analyze just told the caller to use.
+  const resolution = resolveComponentName(
+    componentName,
+    commitTree.commits.map((c) => c.componentName)
+  );
+  if (resolution.kind === "ambiguous" || resolution.kind === "missing") {
+    return renderComponentNameMiss(resolution, {
+      fiberRenders: commitTree.commits.length,
+      commits: new Set(commitTree.commits.map((c) => c.commitIndex)).size,
+    });
+  }
+  const resolvedName = resolution.rawName;
+  const resolutionNote = describeResolution(resolution);
+
+  const componentCommits = commitTree.commits.filter((c) => c.componentName === resolvedName);
 
   if (componentCommits.length === 0) {
-    return `_Component \`${componentName}\` not found in commit data._`;
+    return `_Component \`${resolvedName}\` not found in commit data._`;
   }
 
   // Group by commitIndex to get unique commit windows
@@ -293,7 +390,7 @@ function renderComponentCpu(
   >();
 
   for (const window of commitWindows.values()) {
-    const hotspots = queryCpuWindow(index, window.start, window.end, 50);
+    const { hotspots } = queryCpuWindow(index, window.start, window.end, 50);
     for (const hs of hotspots) {
       const existing = aggregated.get(hs.name);
       if (existing) {
@@ -313,14 +410,15 @@ function renderComponentCpu(
   const sorted = [...aggregated.entries()].sort((a, b) => b[1].selfMs - a[1].selfMs).slice(0, topN);
 
   if (sorted.length === 0) {
-    return `_No CPU samples found during \`${componentName}\` commits._`;
+    return `_No CPU samples found during \`${resolvedName}\` commits._`;
   }
 
   const totalCommitMs = [...commitWindows.values()].reduce((sum, w) => sum + w.duration, 0);
 
   const lines: string[] = [
-    `## CPU During \`${componentName}\` Commits`,
+    `## CPU During \`${resolvedName}\` Commits`,
     "",
+    ...(resolutionNote ? [resolutionNote, ""] : []),
     `**Commits:** ${commitWindows.size}  **Total commit time:** ${totalCommitMs.toFixed(1)}ms`,
     "",
     "| Function | Self (ms) | Total (ms) | Location |",
@@ -354,6 +452,10 @@ Requires react-profiler-stop (and ideally react-profiler-analyze) to have been c
 Modes:
 - top_functions: Global CPU hotspots ranked by self-time. Optional time_window_ms to filter.
 - time_window: CPU breakdown for a specific time range (e.g. during a slow commit or hang).
+
+Self-times are the summed sampling intervals of the samples that landed in the window, so they
+measure sampled coverage rather than the window's width and do not change if you widen the query.
+Every table states how many samples it covers and how much of that was idle.
 - call_tree: For a given function_name, show its callees and optionally callers.
 - component_cpu: For a given component_name, aggregate CPU activity across all its commits.
 Use when investigating JS CPU hotspots or correlating CPU cost with specific components.

@@ -7,6 +7,7 @@ vi.mock("../src/utils/simulator-client", async (importOriginal) => ({
   sendCommand: vi.fn(),
 }));
 
+import { zodObjectToJsonSchema } from "@argent/registry";
 import { gestureRotateTool } from "../src/tools/gesture-rotate";
 import { sendCommand } from "../src/utils/simulator-client";
 
@@ -92,25 +93,9 @@ describe("gesture-rotate radiusX/radiusY", () => {
   });
 });
 
-// Minimal evaluator for the presence-only JSON Schema subset the anyOf uses
-// (required / anyOf / not), so the advertised schema can be checked semantically
-// without pulling in a full validator.
-interface PresenceConstraint {
-  required?: string[];
-  anyOf?: PresenceConstraint[];
-  not?: PresenceConstraint;
-}
-
-function satisfies(params: Record<string, unknown>, c: PresenceConstraint): boolean {
-  if (c.required && !c.required.every((key) => key in params)) return false;
-  if (c.anyOf && !c.anyOf.some((branch) => satisfies(params, branch))) return false;
-  if (c.not && satisfies(params, c.not)) return false;
-  return true;
-}
-
 describe("gesture-rotate inputSchema", () => {
-  it("keeps the radius trio optional at the top level, constrained only by the anyOf", () => {
-    const schema = gestureRotateTool.inputSchema!;
+  it("keeps the radius trio optional at the top level", () => {
+    const schema = zodObjectToJsonSchema(gestureRotateTool.zodSchema!);
     expect(schema.type).toBe("object");
     const required = schema.required as string[];
     expect(required).toEqual(
@@ -120,10 +105,12 @@ describe("gesture-rotate inputSchema", () => {
     expect(required).not.toContain("radiusX");
     expect(required).not.toContain("radiusY");
     expect(schema).not.toHaveProperty("$schema");
+    // The cross-field rule cannot live in the schema a client may receive (see
+    // tool-input-schema-contract.test.ts), so the description has to carry it.
+    expect(gestureRotateTool.description).toMatch(/one half of the pair alone/i);
   });
 
-  it("advertises exactly the radius shapes the zod refinements accept at runtime", () => {
-    const anyOf = gestureRotateTool.inputSchema!.anyOf as PresenceConstraint[];
+  it("the zod refinements accept exactly the documented radius shapes", () => {
     const base = { udid, centerX: 0.5, centerY: 0.5, startAngle: 0, endAngle: 90 };
     const shapes: Array<[radii: Record<string, number>, valid: boolean]> = [
       [{ radius: 0.15 }, true],
@@ -137,9 +124,6 @@ describe("gesture-rotate inputSchema", () => {
     ];
     for (const [radii, valid] of shapes) {
       const params = { ...base, ...radii };
-      expect(satisfies(params, { anyOf }), `advertised schema on ${JSON.stringify(radii)}`).toBe(
-        valid
-      );
       expect(
         gestureRotateTool.zodSchema!.safeParse(params).success,
         `zod schema on ${JSON.stringify(radii)}`

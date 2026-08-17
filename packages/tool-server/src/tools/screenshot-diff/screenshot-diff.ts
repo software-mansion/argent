@@ -105,6 +105,10 @@ interface DiffArtifactPaths {
 }
 
 const MAX_RGB_DISTANCE_SQUARED = 255 * 255 * 3;
+// Sized for a baseline PNG stored across sessions, machines and OS versions,
+// so it absorbs real drift. flow-pixels' PIXEL_THRESHOLD deliberately does NOT
+// mirror it (it compares two captures from one live session, a far lower noise
+// floor) — the two are independent by design; see the rationale there.
 const DEFAULT_THRESHOLD = 0.1;
 const DEFAULT_IGNORE_TOP_NORMALIZED_Y = 0.06;
 const DEFAULT_REGION_MERGE_DISTANCE = 8;
