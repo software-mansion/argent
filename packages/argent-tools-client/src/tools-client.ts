@@ -47,6 +47,25 @@ export interface CreateToolsClientOptions {
   paths?: ToolsServerPaths;
 }
 
+/**
+ * A tool invocation the SERVER answered with an error — an HTTP error status
+ * or the NDJSON stream's terminal `error` line — as opposed to a plain `Error`
+ * from callTool, which means the transport itself failed (fetch rejection,
+ * stream cut mid-run). `errorKind`/`errorCode` carry the server's failure
+ * signal (e.g. kind "validation" for a request the server deliberately
+ * rejected) when it sent one; a pre-signal server leaves them undefined.
+ */
+export class ToolInvocationError extends Error {
+  readonly errorCode?: string;
+  readonly errorKind?: string;
+  constructor(message: string, signal?: { errorCode?: string; errorKind?: string }) {
+    super(message);
+    this.name = "ToolInvocationError";
+    this.errorCode = signal?.errorCode;
+    this.errorKind = signal?.errorKind;
+  }
+}
+
 function authHeaders(token: string | undefined): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
@@ -69,10 +88,17 @@ async function consumeToolStream(
       data?: unknown;
       note?: string;
       error?: string;
+      error_code?: string;
+      error_kind?: string;
     };
     if (msg.event === "progress") onProgress(msg.data);
     else if (msg.event === "result") final = { data: msg.data, note: msg.note };
-    else if (msg.event === "error") throw new Error(msg.error ?? "tool invocation failed");
+    else if (msg.event === "error") {
+      throw new ToolInvocationError(msg.error ?? "tool invocation failed", {
+        errorCode: msg.error_code,
+        errorKind: msg.error_kind,
+      });
+    }
   };
 
   const reader = body.getReader();
@@ -188,9 +214,17 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       error?: string;
       message?: string;
       note?: string;
+      error_code?: string;
+      error_kind?: string;
     };
     if (!res.ok) {
-      throw new Error(json.error ?? json.message ?? `${res.status} ${res.statusText}`);
+      throw new ToolInvocationError(
+        json.error ?? json.message ?? `${res.status} ${res.statusText}`,
+        {
+          errorCode: json.error_code,
+          errorKind: json.error_kind,
+        }
+      );
     }
     // File boundary, inbound: persist any client-write directives (files that
     // belong in the caller's project, e.g. recorded flow YAMLs) and rewrite

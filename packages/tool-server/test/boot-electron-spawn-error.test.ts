@@ -65,6 +65,12 @@ afterAll(() => {
   if (appDir) fs.rmSync(appDir, { recursive: true, force: true });
 });
 
+// Every boot-failure test runs killChildEscalating against a fake child
+// carrying a stand-in pid, and its group sweep signals through process.kill —
+// real signals must never escape onto whatever owns that pid. Never restored:
+// the unref'd 2s escalation timer can fire after the test that armed it.
+vi.spyOn(process, "kill").mockImplementation(() => true);
+
 beforeEach(() => {
   spawnMock.mockReset();
 });
@@ -122,6 +128,34 @@ describe("bootElectronApp — spawn error handling", () => {
       if (prev === undefined) delete process.env.ELECTRON_RUN_AS_NODE;
       else process.env.ELECTRON_RUN_AS_NODE = prev;
     }
+  });
+
+  it("passes anti-throttling switches so a backgrounded window stays testable", async () => {
+    // Without these, Chromium throttles an unfocused/occluded/minimized
+    // window's compositor: mouse-input acks stall ~5s per event, wheel scrolls
+    // hang, and visibilityState flips to "hidden". Booted apps must stay
+    // drivable wherever the human puts the window.
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child);
+
+    const promise = bootElectronApp({
+      appPath: appDir,
+      port: 1,
+      readyTimeoutMs: 50,
+      extraArgs: ["--user-flag"],
+    });
+    promise.catch(() => {});
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const args = spawnMock.mock.calls[0]![1] as string[];
+    expect(args).toContain("--disable-background-timer-throttling");
+    expect(args).toContain("--disable-backgrounding-occluded-windows");
+    expect(args).toContain("--disable-renderer-backgrounding");
+    // User extras survive alongside the defaults.
+    expect(args).toContain("--user-flag");
+    expect(args).toContain("--remote-debugging-port=1");
+
+    await promise.catch(() => {});
   });
 
   it("rejects with a clear, actionable message when spawn emits ENOENT", async () => {

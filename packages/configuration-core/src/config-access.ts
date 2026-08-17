@@ -7,11 +7,17 @@
 // `unsetConfigValue` validate against the schema before writing. `argent config`
 // and the migrated lens getters are both thin wrappers over these.
 
-import type { FlagScope } from "./flags.js";
-import type { ConfigPathOptions } from "./paths.js";
+import * as path from "node:path";
+import { resolveProjectRoot, type FlagScope } from "./flags.js";
+import { resolveHomeDir, type ConfigPathOptions } from "./paths.js";
 import { readConfigObject, updateConfig, getAtPath, setAtPath, deleteAtPath } from "./config.js";
 import { applyMergePolicy } from "./merge.js";
-import { CONFIG_SCHEMA, getConfigDefinition, type ConfigDefinition } from "./config-schema.js";
+import {
+  CONFIG_SCHEMA,
+  describeExpectedValue,
+  getConfigDefinition,
+  type ConfigDefinition,
+} from "./config-schema.js";
 
 /** Read + parse one scope's value for a definition (no merge, no default). */
 function readScopeValue<T>(
@@ -92,10 +98,23 @@ export class ConfigScopeError extends Error {
   }
 }
 
-/** Thrown when a value fails the schema's `parse` validator. */
+/**
+ * Thrown when a value fails the schema's `parse` validator.
+ *
+ * Carries what the key accepts and an example of it, so a caller can tell the
+ * user what to type instead of only that they were wrong.
+ */
 export class ConfigValidationError extends Error {
-  constructor(public readonly key: string) {
-    super(`Invalid value for config key "${key}".`);
+  constructor(
+    public readonly key: string,
+    public readonly expected?: string,
+    public readonly example?: string
+  ) {
+    super(
+      expected
+        ? `Invalid value for config key "${key}": expected ${expected}.`
+        : `Invalid value for config key "${key}".`
+    );
     this.name = "ConfigValidationError";
   }
 }
@@ -132,7 +151,8 @@ export function setConfigValue(
   if (def.manageCommand) throw new ConfigManagedElsewhereError(key, def.manageCommand);
   if (!def.scopes.includes(scope)) throw new ConfigScopeError(key, scope, def.scopes);
   const parsed = def.parse(rawValue);
-  if (parsed === undefined) throw new ConfigValidationError(key);
+  if (parsed === undefined)
+    throw new ConfigValidationError(def.key, describeExpectedValue(def), def.example);
   updateConfig((config) => setAtPath(config, key, parsed), scope, options);
   return parsed;
 }
@@ -173,6 +193,10 @@ export interface ConfigEntryView {
   description: string;
   scopes: readonly FlagScope[];
   manageCommand?: string;
+  /** What a valid value looks like, in words. */
+  expected?: string;
+  /** An example of a valid value, as it would be typed. */
+  example?: string;
   /** Effective (merged + defaulted) value. */
   effective: unknown;
   /** Raw parsed value stored at the project scope, or undefined. */
@@ -191,6 +215,8 @@ export function listConfig(
     description: def.description,
     scopes: def.scopes,
     ...(def.manageCommand ? { manageCommand: def.manageCommand } : {}),
+    ...(describeExpectedValue(def) ? { expected: describeExpectedValue(def)! } : {}),
+    ...(def.example ? { example: def.example } : {}),
     effective: getConfigValue(def, options),
     project: readScopeValue(def, "project", options),
     global: readScopeValue(def, "global", options),
@@ -232,4 +258,57 @@ export function setRememberedAgent(agentId: string, options: ConfigPathOptions =
 /** Forget the remembered `argent lens` agent (so the picker shows again). */
 export function clearRememberedAgent(options: ConfigPathOptions = {}): void {
   unsetConfigValue(LENS_AGENT_KEY, "global", options);
+}
+
+// ── iOS additional device sets ────────────────────────────────────────────
+// `ios.additionalDeviceSets` is the first *additive* entry: instead of one
+// scope shadowing the other, the union of both applies — a repo can commit the
+// device sets its tooling needs and they extend (never replace) the user's
+// global ones. This reader is the runtime surface iOS tooling should call.
+
+const IOS_ADDITIONAL_DEVICE_SETS_KEY = "ios.additionalDeviceSets";
+
+/**
+ * The extra CoreSimulator device-set directories argent should consider, as
+ * normalized absolute paths. Entries are read per scope so relative paths keep
+ * their intuitive base — the project root for the project scope, the home
+ * directory for global — and `~`/`~/…` expands to home in either. Order
+ * matches the `union` merge preset (global baseline first, project extras
+ * after) with post-normalization duplicates dropped. Empty when unset.
+ */
+export function getAdditionalIosDeviceSets(options: ConfigPathOptions = {}): string[] {
+  const def = requireDefinition(IOS_ADDITIONAL_DEVICE_SETS_KEY) as ConfigDefinition<string[]>;
+  // Path resolution must happen per scope *before* deduplication, so the union
+  // is re-implemented here instead of going through `applyMergePolicy` — keep
+  // the order in sync with the schema entry's `union` preset.
+  if (def.merge !== "union") {
+    throw new Error(
+      `Expected "${IOS_ADDITIONAL_DEVICE_SETS_KEY}" to use the "union" merge preset; ` +
+        "update getAdditionalIosDeviceSets to match the new policy."
+    );
+  }
+  const home = resolveHomeDir(options);
+  const global = resolveDeviceSetEntries(readScopeValue(def, "global", options), home, home);
+  const project = resolveDeviceSetEntries(
+    readScopeValue(def, "project", options),
+    resolveProjectRoot(options.cwd ?? process.cwd()),
+    home
+  );
+  return Array.from(new Set([...global, ...project]));
+}
+
+/** Resolve one scope's entries against its base. `path.resolve` (rather than
+ * join/normalize) in every branch so trailing separators are stripped and the
+ * post-resolution dedup actually collapses equivalent spellings. */
+function resolveDeviceSetEntries(
+  entries: string[] | undefined,
+  baseDir: string,
+  home: string
+): string[] {
+  if (!entries || entries.length === 0) return [];
+  return entries.map((entry) => {
+    if (entry === "~") return path.resolve(home);
+    if (entry.startsWith("~/")) return path.resolve(home, entry.slice(2));
+    return path.resolve(baseDir, entry);
+  });
 }

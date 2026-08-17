@@ -28,6 +28,8 @@ export type {
 export {
   FILE_INPUT_MARKER,
   CLIENT_FILE_MARKER,
+  FLOW_NAME_PATTERN,
+  FLOW_FILE_NAME_PATTERN,
   isFileInputWire,
   isClientFileDirective,
   interpolateFileInputPath,

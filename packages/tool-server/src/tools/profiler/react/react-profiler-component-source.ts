@@ -3,6 +3,7 @@ import { promises as fs } from "fs";
 import type { FileInputSpec, ToolDefinition } from "@argent/registry";
 import { buildAstIndexWithDiagnostics } from "../../../utils/react-profiler/pipeline/06-resolve/ast-index";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { astLookupCandidates } from "../../../utils/react-profiler/component-names";
 
 const zodSchema = z.object({
   component_name: z.string().describe("Name of the React component to look up"),
@@ -47,7 +48,12 @@ When several files define a component with the same name (e.g. platform variants
   services: () => ({}),
   async execute(_services, params) {
     const astIndex = await buildAstIndexWithDiagnostics(params.project_root);
-    const entry = astIndex.index.get(params.component_name);
+    // The profiler reports DevTools names (`Forget(Foo)`); the index is keyed on
+    // source identifiers (`Foo`). Without this, the one name the query tools
+    // accept is the one name this tool can never find.
+    const lookupKeys = astLookupCandidates(params.component_name);
+    const matchedKey = lookupKeys.find((k) => astIndex.index.has(k));
+    const entry = matchedKey ? astIndex.index.get(matchedKey) : undefined;
 
     if (!entry) {
       if (!astIndex.treeSitterAvailable) {
@@ -63,7 +69,14 @@ When several files define a component with the same name (e.g. platform variants
       return {
         found: false,
         component: params.component_name,
-        message: `Component "${params.component_name}" not found in ${params.project_root} (searched ${astIndex.indexedFiles} files).`,
+        message:
+          `Component "${params.component_name}" not found in ${params.project_root} ` +
+          `(searched ${astIndex.indexedFiles} files; also tried ${
+            lookupKeys
+              .slice(1)
+              .map((k) => `"${k}"`)
+              .join(", ") || "no variants"
+          }).`,
       };
     }
 
@@ -80,7 +93,10 @@ When several files define a component with the same name (e.g. platform variants
 
     return {
       found: true,
-      component: params.component_name,
+      // The key that actually matched, so the caller can tell which name hit
+      // when a wrapped name resolved through to a bare source identifier.
+      component: matchedKey ?? params.component_name,
+      requested: params.component_name,
       file: entry.file,
       line: entry.line,
       col: entry.col,

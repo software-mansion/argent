@@ -161,6 +161,51 @@ export interface ToolFailProps extends FailureTelemetryProps, AiTelemetryProps {
   tool_invocation_id?: string;
   platform?: Platform;
   duration_ms: number;
+  /**
+   * Schema-declared parameter names that failed zod validation on an HTTP tool
+   * call (plus the literal token "unrecognized_keys" for strict-object
+   * violations). Names come from Argent's own tool schemas only — never values
+   * and never user-typed keys.
+   */
+  invalid_params?: string[];
+}
+
+// Debugger connectivity outcome event
+
+/**
+ * Reasons debugger-status / debugger-log-registry report a structured
+ * "not connected" result instead of failing. The outcome enum below must stay a
+ * superset of this list — both are consumed by sanitize.ts, so deriving one
+ * from the other keeps them from drifting.
+ */
+export const DEBUGGER_NOT_CONNECTED_REASONS = [
+  "metro_not_running",
+  "no_app_connected",
+  "device_mismatch",
+  "cdp_unreachable",
+  "runtime_unresponsive",
+  "stale_connection",
+  "reconnecting",
+] as const;
+export type DebuggerNotConnectedReason = (typeof DEBUGGER_NOT_CONNECTED_REASONS)[number];
+
+export const DEBUGGER_TOOL_OUTCOMES = ["connected", ...DEBUGGER_NOT_CONNECTED_REASONS] as const;
+export type DebuggerToolOutcome = (typeof DEBUGGER_TOOL_OUTCOMES)[number];
+
+/**
+ * Emitted by debugger-status / debugger-log-registry: exactly once whenever the
+ * tool returns a result, never on a thrown failure (unclassified faults, zod
+ * rejects, and capability gates still emit tool:fail only). Not-connected
+ * preconditions emit no tool:fail — this event is where they are counted:
+ * outcome carries the coded reason (never error text), and tool_invocation_id
+ * joins 1:1 against the tool:invoke / tool:complete pair (which carry
+ * ai_client and duration).
+ */
+export interface DebuggerToolOutcomeProps {
+  tool: "debugger-status" | "debugger-log-registry";
+  outcome: DebuggerToolOutcome;
+  platform?: Platform;
+  tool_invocation_id?: string;
 }
 
 // CLI command events
@@ -331,6 +376,7 @@ export interface EventPropertyMap {
   "tool:invoke": ToolInvokeProps;
   "tool:complete": ToolCompleteProps;
   "tool:fail": ToolFailProps;
+  "debugger:tool_outcome": DebuggerToolOutcomeProps;
   "cli:run_fail": CliRunFailProps;
   "toolserver:start": ToolserverStartProps;
   "toolserver:stop": ToolserverStopProps;
@@ -364,6 +410,7 @@ export const EVENT_NAMES: readonly EventName[] = [
   "tool:invoke",
   "tool:complete",
   "tool:fail",
+  "debugger:tool_outcome",
   "cli:run_fail",
   "toolserver:start",
   "toolserver:stop",

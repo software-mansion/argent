@@ -126,11 +126,74 @@ describe("diffPngFiles", () => {
 
     expect(result.dimensionMismatch).toBeUndefined();
     expect(result.summary).not.toContain("dimension_mismatch");
+    // …but the rescale is now disclosed rather than absorbed silently.
+    expect(result.sizeNormalization).toBeDefined();
     expect(result.imageSize).toEqual({ width: 10, height: 20 });
     expect(result.diffPath).toBe(path.join(dir, "current-diff.png"));
     const diff = PNG.sync.read(await fs.readFile(result.diffPath!));
     expect(diff.width).toBe(10);
     expect(diff.height).toBe(20);
+  });
+
+  it("does not call a rescaled comparison `unchanged` (issue #617)", async () => {
+    const dir = await makeTempDir();
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    // A solid fill downscales to the identical colour under Lanczos3, so this is
+    // a genuine zero-diff — the false green exactly as reported: same aspect,
+    // different resolution, nothing said about it.
+    await writePng(baselinePath, 20, 40, { r: 30, g: 60, b: 90 });
+    await writePng(currentPath, 10, 20, { r: 30, g: 60, b: 90 });
+
+    const result = await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
+
+    expect(result.differentPixels).toBe(0);
+    expect(result.dimensionMismatch).toBeUndefined();
+    expect(result.sizeNormalization).toEqual({
+      baseline: { width: 20, height: 40 },
+      current: { width: 10, height: 20 },
+      comparedAt: { width: 10, height: 20 },
+    });
+    // A gate reading the status must not see a plain pass.
+    expect(result.summary).toContain("- status: resized_no_change");
+    expect(result.summary).not.toContain("- status: unchanged");
+    expect(result.summary).toContain(
+      "- size_normalized: baseline=20x40 current=10x20 compared_at=10x20"
+    );
+  });
+
+  it("still reports a real difference as `changed` when sizes were normalized", async () => {
+    const dir = await makeTempDir();
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    // The caveat must never soften an actual regression into a caveat status —
+    // this pins the ordering inside screenshotDiffStatus.
+    await writePng(baselinePath, 20, 40, { r: 20, g: 20, b: 20 });
+    await writePng(currentPath, 10, 20, { r: 20, g: 20, b: 20 }, [
+      // Clear of the ignored top band (ceil(20 * 0.06) = 2 rows).
+      ...rectPixels(2, 12, 4, 4, { r: 255, g: 0, b: 0 }),
+    ]);
+
+    const result = await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
+
+    expect(result.differentPixels).toBeGreaterThan(0);
+    expect(result.summary).toContain("- status: changed");
+    // …and the rescale is still disclosed, so the figures can be read correctly.
+    expect(result.summary).toContain("- size_normalized:");
+  });
+
+  it("says nothing about normalization when the sizes already matched", async () => {
+    const dir = await makeTempDir();
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    await writePng(baselinePath, 10, 20, { r: 30, g: 60, b: 90 });
+    await writePng(currentPath, 10, 20, { r: 30, g: 60, b: 90 });
+
+    const result = await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
+
+    expect(result.sizeNormalization).toBeUndefined();
+    expect(result.summary).not.toContain("size_normalized");
+    expect(result.summary).toContain("- status: unchanged");
   });
 
   it("hard-fails same-aspect resolution differences when normalizeSizes is false", async () => {

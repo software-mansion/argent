@@ -13,7 +13,9 @@
 
 # Tools with no required flags that would actually EXECUTE (touch a device /
 # network / state) if called empty — excluded from missing-required here and
-# covered by the device tiers instead.
+# covered by the device tiers instead. `stop-all-simulator-servers` gets its own
+# targeted cases below, since skipping it outright left its `.strict()`
+# rejection and its `unmatched` report with no coverage anywhere.
 _VAL_EXCLUDE_MISSING="list-devices stop-all-simulator-servers stop-metro native-devtools-status update-argent"
 
 # Build a JSON object with valid dummies for every required flag in a model,
@@ -85,6 +87,26 @@ run_phase() {
       local args; args="$(_build_args "$model" "$ef=\"__not_a_valid_enum__\"")"
       assert_reject "$P" "$t" "bad-enum:$ef" "$args" "$ef" "invalid_value"
     done
+
+    # --- stop-all-simulator-servers' strict schema and unmatched report -----
+    # It is on _VAL_EXCLUDE_MISSING (calling it empty would sweep the machine),
+    # so the generated matrix skips it entirely — leaving the two properties
+    # that make its `devices` scope safe with no E2E coverage at all.
+    if [ "$t" = "stop-all-simulator-servers" ]; then
+      # `.strict()`: `udids` is the natural slip (every sibling tool spells the
+      # device parameter `udid`), and under a stripping schema that typo would
+      # be a silent machine-wide sweep.
+      assert_reject "$P" "$t" strict-unknown-key '{"udids":["nope"]}' "udids" "unrecognized_keys"
+      # `unmatched`: an id owning nothing must not read as a clean machine. A
+      # scope of one bogus id reaps nothing and touches no device, so this is
+      # safe to run here.
+      run_tool "$t" '{"devices":["__e2e_no_such_device__"]}'
+      if [ "$RT_RC" -eq 0 ] && [ "$(printf '%s' "$RT_JSON" | jq -r '.unmatched[0] // ""')" = "__e2e_no_such_device__" ]; then
+        pass "$P" "$t" unmatched "bogus id reported, not silently clean"
+      else
+        fail "$P" "$t" unmatched "expected unmatched:[__e2e_no_such_device__], got rc=$RT_RC $RT_JSON"
+      fi
+    fi
 
     # --- bad-type (first required number flag gets a string) ---------------
     local nf

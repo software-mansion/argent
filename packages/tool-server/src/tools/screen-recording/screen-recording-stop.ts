@@ -22,7 +22,10 @@ const zodSchema = z.object({
  * materializer copies (co-located) or downloads (remote `argent link`) the mp4
  * here, so a recording always lands under `<project>/.argent/recordings/` on the
  * client host rather than in disposable temp — even when the tool-server that
- * produced it is remote.
+ * produced it is remote. This value is a fixed wire hint, not the final path:
+ * the client may redirect it via its `recordings.directory` configuration —
+ * which is why it must stay constant here (changing it would fall off the
+ * client's allowlist and demote recordings to scratch).
  */
 const RECORDINGS_DIR = ".argent/recordings";
 

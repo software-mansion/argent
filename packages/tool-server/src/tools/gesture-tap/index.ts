@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
+import { assertChromiumWindowVisible } from "../../utils/chromium-visibility";
 import { resolveDevice } from "../../utils/device-info";
 import { sendCommand } from "../../utils/simulator-client";
 
@@ -112,6 +113,9 @@ Before tapping, determine the correct coordinates by using discovery tools — p
     const clickCount = params.clickCount ?? 1;
     if (device.platform === "chromium") {
       const chromium = services.chromium as ChromiumCdpApi;
+      // Mouse dispatches wait on compositor hit-testing, which a hidden
+      // window services at ~5s per event — refuse up front like gesture-scroll.
+      await assertChromiumWindowVisible(chromium, "tap", "chromium_tap_window_hidden");
       await tapChromium(chromium, params.x, params.y, clickCount);
       return { tapped: true, timestampMs };
     }

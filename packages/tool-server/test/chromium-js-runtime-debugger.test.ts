@@ -8,6 +8,7 @@ import {
 import { resolveDevice } from "../src/utils/device-info";
 import type { ChromiumCdpApi } from "../src/blueprints/chromium-cdp";
 import type { CDPClientEvents } from "../src/utils/debugger/cdp-client";
+import { takeReapedSession, __resetReapedSessionsForTesting } from "../src/utils/reaped-sessions";
 
 function makeFakeChromiumCdpApi(): {
   api: ChromiumCdpApi;
@@ -129,6 +130,50 @@ describe("ChromiumJsRuntimeDebugger blueprint", () => {
       timestamp: Date.now(),
     });
     expect(received).toHaveLength(0);
+  });
+
+  it("dispose leaves a reaped-session breadcrumb when it deletes captured history", async () => {
+    // `debugger-log-registry` documents itself as working against Hermes AND
+    // V8, and promises that an empty registry with no `note` means the app
+    // logged nothing. `logWriter.close()` here unlinks the log file, and since
+    // ChromiumJsRuntimeDebugger joined DEVICE_OWNED_NAMESPACES a
+    // stop-all-simulator-servers (or a stop-simulator-server cascading through
+    // ChromiumCdp) routinely triggers this dispose. Without the breadcrumb the
+    // promise is false on V8: destroyed history reads as a silent app.
+    __resetReapedSessionsForTesting();
+    const fake = makeFakeChromiumCdpApi();
+    const instance = await chromiumJsRuntimeDebuggerBlueprint.factory(
+      { chromium: fake.api },
+      "chromium-cdp-19222",
+      { device: chromiumDevice }
+    );
+    for (let i = 0; i < 18; i++) {
+      instance.api.logWriter.write({
+        id: i,
+        timestamp: new Date(1710000000000 + i * 1000).toISOString(),
+        level: "log",
+        message: `captured ${i}`,
+      });
+    }
+    await instance.dispose();
+
+    const reaped = takeReapedSession("js-runtime-debugger", "chromium-cdp-19222");
+    expect(reaped).toBeDefined();
+    expect(reaped!.salvage).toContain("18 captured console entries");
+  });
+
+  it("dispose leaves NO breadcrumb when there was no history to lose", async () => {
+    // A dispose of a session that captured nothing destroyed nothing, and
+    // claiming otherwise would make every empty registry look like a lost one.
+    __resetReapedSessionsForTesting();
+    const fake = makeFakeChromiumCdpApi();
+    const instance = await chromiumJsRuntimeDebuggerBlueprint.factory(
+      { chromium: fake.api },
+      "chromium-cdp-19222",
+      { device: chromiumDevice }
+    );
+    await instance.dispose();
+    expect(takeReapedSession("js-runtime-debugger", "chromium-cdp-19222")).toBeUndefined();
   });
 
   it("dispose does NOT disconnect the underlying CDP — that belongs to ChromiumCdp", async () => {

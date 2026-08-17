@@ -166,7 +166,30 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
   }): Promise<TabInfo[]> {
     const url = opts?.url ?? "about:blank";
     const created = await withBrowserClient(async (browser) => {
-      const out = (await browser.send("Target.createTarget", { url })) as { targetId?: string };
+      let out: { targetId?: string };
+      try {
+        out = (await browser.send("Target.createTarget", { url })) as { targetId?: string };
+      } catch (err) {
+        // Electron answers this with a bare "Not supported": it embeds a
+        // renderer but no browser shell, so there is nothing to create a target
+        // in. Said plainly the message reads as if the whole tool were broken,
+        // when in fact only this action is unavailable — and the app can open
+        // the window itself. The underlying error is kept so a different cause
+        // (a dropped connection, a real Chrome refusing the url) is still legible.
+        throw new FailureError(
+          `Could not open a tab: ${err instanceof Error ? err.message : String(err)}. ` +
+            `An Electron app has no browser-level target creation, so a tab cannot be made from ` +
+            `outside it — have the app open one (e.g. \`window.open()\` through ` +
+            `\`debugger-evaluate\`) and it will show up in \`chromium-tabs list\`. ` +
+            `The list, select and close actions are unaffected.`,
+          {
+            error_code: FAILURE_CODES.CHROMIUM_TAB_OPEN_FAILED,
+            failure_stage: "chromium_tab_open",
+            failure_area: "tool_server",
+            error_kind: "unknown",
+          }
+        );
+      }
       if (!out.targetId)
         throw new FailureError("Target.createTarget returned no targetId.", {
           error_code: FAILURE_CODES.CHROMIUM_TAB_OPEN_FAILED,
