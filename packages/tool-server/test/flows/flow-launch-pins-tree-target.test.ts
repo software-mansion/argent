@@ -4,23 +4,27 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Registry } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
+import type { FlowTreeTarget } from "../../src/tools/flows/flow-actions";
 import type { PixelFrame } from "../../src/tools/flows/flow-pixels";
 
 // A launch step must pin every later tree read to the launched app - unpinned
 // iOS reads auto-resolve across every connected process, which one poisoned
-// background system process sinks. The mock sits at the iOS tree SOURCE
+// background system process sinks. A raw `tool:` step demotes that pin to an
+// unpinned hint (still the timeout arbiter for the fan-out, see
+// flow-ios-tree.ts) - or drops it outright, when the tool can change the
+// foreground app. The mock sits at the iOS tree SOURCE
 // (queryFullHierarchyTree), not at fetchFlowTree, so the real fetchFlowTree
-// dispatches every read and dropping the pin on its ios branch is observable
-// here; treePins records the bundleId each read actually reached the source
-// with.
+// dispatches every read and dropping the target on its ios branch is
+// observable here; treeTargets records the target each read actually reached
+// the source with, rendered by `label` as level:bundleId.
 
-let treePins: Array<string | undefined>;
+let treeTargets: Array<FlowTreeTarget | undefined>;
 let treeData: () => DescribeTreeData;
 vi.mock("../../src/tools/flows/flow-ios-tree", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/tools/flows/flow-ios-tree")>()),
   queryFullHierarchyTree: vi.fn(
-    async (_r: unknown, _d: unknown, bundleId?: string): Promise<DescribeTreeData> => {
-      treePins.push(bundleId);
+    async (_r: unknown, _d: unknown, target?: FlowTreeTarget): Promise<DescribeTreeData> => {
+      treeTargets.push(target);
       return treeData();
     }
   ),
@@ -47,6 +51,16 @@ const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
 const APP = "com.acme.app";
 const STILL_FRAME: PixelFrame = { width: 10, height: 10, data: Buffer.alloc(400) };
 let tmpDir: string;
+
+/** One read's target as `pinned:<app>` / `hint:<app>` / `none`. */
+function label(target: FlowTreeTarget | undefined): string {
+  return target ? `${target.pinned ? "pinned" : "hint"}:${target.bundleId}` : "none";
+}
+
+/** What every read of the run carried, in order. */
+function labels(): string[] {
+  return treeTargets.map(label);
+}
 
 function n(partial: Partial<DescribeNode>): DescribeNode {
   return {
@@ -110,7 +124,7 @@ async function run(
 }
 
 beforeEach(async () => {
-  treePins = [];
+  treeTargets = [];
   treeData = readyTree;
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-pin-"));
 });
@@ -134,8 +148,8 @@ describe("launch pins the flow tree target", () => {
       "launch:pass",
       "assert:pass",
     ]);
-    expect(treePins.length).toBeGreaterThan(0);
-    expect(treePins.every((pin) => pin === APP)).toBe(true);
+    expect(treeTargets.length).toBeGreaterThan(0);
+    expect(labels().every((l) => l === `pinned:${APP}`)).toBe(true);
   });
 
   it("a fragment's steps inherit the pin from the parent run's launch", async () => {
@@ -158,14 +172,16 @@ describe("launch pins the flow tree target", () => {
       "run:pass",
       "assert:pass",
     ]);
-    expect(treePins.length).toBeGreaterThan(0);
-    expect(treePins.every((pin) => pin === APP)).toBe(true);
+    expect(treeTargets.length).toBeGreaterThan(0);
+    expect(labels().every((l) => l === `pinned:${APP}`)).toBe(true);
   });
 
-  it("a raw tool step clears the pin - later reads auto-resolve again", async () => {
-    // The tool step's effect on the screen is opaque to the runner (it could
-    // be launch-app, open-url, button {home}...), so the pin must not survive
-    // it: reads before the tool step carry the launched app, reads after none.
+  it("a foreground-neutral tool step demotes the pin to a hint - later reads auto-resolve again", async () => {
+    // The tool step's effect on the screen is opaque to the runner, so the pin
+    // must not survive it: reads after it auto-resolve. screenshot cannot
+    // change the foreground app though, so the launched app stays behind as an
+    // unpinned hint - the arbiter that rescues an auto-resolve a wedged
+    // sibling process timed out (see flow-tool-step-tree-target-e2e.test.ts).
     await writeFlow("escaped", {
       executionPrerequisite: "",
       steps: [
@@ -184,13 +200,59 @@ describe("launch pins the flow tree target", () => {
       "tool:pass",
       "assert:pass",
     ]);
-    const firstUnpinned = treePins.indexOf(undefined);
+    const firstUnpinned = labels().indexOf(`hint:${APP}`);
     expect(firstUnpinned).toBeGreaterThan(0);
-    expect(treePins.slice(0, firstUnpinned).every((pin) => pin === APP)).toBe(true);
-    expect(treePins.slice(firstUnpinned).every((pin) => pin === undefined)).toBe(true);
+    expect(
+      labels()
+        .slice(0, firstUnpinned)
+        .every((l) => l === `pinned:${APP}`)
+    ).toBe(true);
+    expect(
+      labels()
+        .slice(firstUnpinned)
+        .every((l) => l === `hint:${APP}`)
+    ).toBe(true);
   });
 
-  it("a later launch re-pins after a tool step cleared the pin", async () => {
+  it("a foreground-changing tool step that names no app drops the target outright", async () => {
+    // `button` home can put anything on screen and names nothing, so the
+    // launched app is not even a hint afterwards: keeping it would let the
+    // arbiter target an app that is no longer frontmost. `launch-app` /
+    // `restart-app` are the exception - their args name the app they just
+    // started, which is restored as a hint (flow-composition.test.ts).
+    await writeFlow("switched", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: APP },
+        { kind: "assert", condition: "visible", selector: { identifier: "ready" } },
+        { kind: "tool", name: "button", args: { name: "home" } },
+        { kind: "assert", condition: "visible", selector: { identifier: "ready" } },
+      ],
+    });
+
+    const result = await run("switched", mockRegistry());
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "launch:pass",
+      "assert:pass",
+      "tool:pass",
+      "assert:pass",
+    ]);
+    const firstDropped = labels().indexOf("none");
+    expect(firstDropped).toBeGreaterThan(0);
+    expect(
+      labels()
+        .slice(0, firstDropped)
+        .every((l) => l === `pinned:${APP}`)
+    ).toBe(true);
+    expect(
+      labels()
+        .slice(firstDropped)
+        .every((l) => l === "none")
+    ).toBe(true);
+  });
+
+  it("a later launch re-pins after a tool step demoted the pin", async () => {
     const OTHER = "com.acme.other";
     await writeFlow("repinned", {
       executionPrerequisite: "",
@@ -213,11 +275,20 @@ describe("launch pins the flow tree target", () => {
       "assert:pass",
     ]);
     // First reads carry the first app, final reads the second - the second
-    // launch must overwrite (not keep-if-set) the cleared pin.
-    const firstOther = treePins.indexOf(OTHER);
+    // launch must overwrite (not keep-if-set) the demoted target, and re-pin
+    // it rather than inherit its unpinned level.
+    const firstOther = labels().indexOf(`pinned:${OTHER}`);
     expect(firstOther).toBeGreaterThan(0);
-    expect(treePins.slice(0, firstOther).every((pin) => pin === APP)).toBe(true);
-    expect(treePins.slice(firstOther).every((pin) => pin === OTHER)).toBe(true);
+    expect(
+      labels()
+        .slice(0, firstOther)
+        .every((l) => l.endsWith(`:${APP}`))
+    ).toBe(true);
+    expect(
+      labels()
+        .slice(firstOther)
+        .every((l) => l === `pinned:${OTHER}`)
+    ).toBe(true);
   });
 
   it("back-to-back launches move the pin to the newest app", async () => {
@@ -242,10 +313,10 @@ describe("launch pins the flow tree target", () => {
       "launch:pass",
       "assert:pass",
     ]);
-    expect(treePins).toEqual([APP, OTHER]);
+    expect(labels()).toEqual([`pinned:${APP}`, `pinned:${OTHER}`]);
   });
 
-  it("a run with no launch step keeps the auto-resolve fallback (no pin)", async () => {
+  it("a run with no launch step keeps the auto-resolve fallback (no target)", async () => {
     await writeFlow("unpinned", {
       executionPrerequisite: "App is running",
       steps: [{ kind: "assert", condition: "visible", selector: { identifier: "ready" } }],
@@ -254,8 +325,8 @@ describe("launch pins the flow tree target", () => {
     const result = await run("unpinned", mockRegistry(), { prerequisiteAcknowledged: true });
 
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["assert:pass"]);
-    expect(treePins.length).toBeGreaterThan(0);
-    expect(treePins.every((pin) => pin === undefined)).toBe(true);
+    expect(treeTargets.length).toBeGreaterThan(0);
+    expect(labels().every((l) => l === "none")).toBe(true);
   });
 
   it("every retry poll of a condition carries the pin, not just the first", async () => {
@@ -268,10 +339,10 @@ describe("launch pins the flow tree target", () => {
     });
     // The element appears only on the third poll, so waitForCondition retries
     // - a regression that pins only the first read of a step cannot hide
-    // behind a first-poll pass. The mock pushes the pin before serving, so
-    // treePins.length is the 1-based index of the read being served.
+    // behind a first-poll pass. The mock pushes the target before serving, so
+    // treeTargets.length is the 1-based index of the read being served.
     treeData = () =>
-      treePins.length <= 2
+      treeTargets.length <= 2
         ? {
             tree: screen([n({ identifier: "loading", label: "Loading" })]),
             source: "native-devtools",
@@ -284,14 +355,14 @@ describe("launch pins the flow tree target", () => {
       "launch:pass",
       "assert:pass",
     ]);
-    expect(treePins.length).toBeGreaterThanOrEqual(3);
-    expect(treePins.every((pin) => pin === APP)).toBe(true);
+    expect(treeTargets.length).toBeGreaterThanOrEqual(3);
+    expect(labels().every((l) => l === `pinned:${APP}`)).toBe(true);
   });
 });
 
 // Each directive below routes its reads through a different fetchFlowTree call
 // site (settleTree, waitForFocus, fetchScreenAspect, waitForIdle) - dropping
-// env.launchedAppId from any one of them must fail its test here.
+// env.treeTarget from any one of them must fail its test here.
 describe("every read path carries the launch pin", () => {
   it("tap - the settle reads resolving the target (settleTree)", async () => {
     await writeFlow("tapped", {
@@ -306,7 +377,7 @@ describe("every read path carries the launch pin", () => {
 
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:pass", "tap:pass"]);
     // settleTree resolves the target on two identical consecutive reads.
-    expect(treePins).toEqual([APP, APP]);
+    expect(labels()).toEqual([`pinned:${APP}`, `pinned:${APP}`]);
   });
 
   it("type - the focus-wait read (waitForFocus) after the settle reads", async () => {
@@ -328,7 +399,7 @@ describe("every read path carries the launch pin", () => {
 
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:pass", "type:pass"]);
     // Two settle reads resolve the field, one focus-wait read confirms.
-    expect(treePins).toEqual([APP, APP, APP]);
+    expect(labels()).toEqual([`pinned:${APP}`, `pinned:${APP}`, `pinned:${APP}`]);
   });
 
   it("rotate - the screen-aspect read (fetchScreenAspect)", async () => {
@@ -348,7 +419,7 @@ describe("every read path carries the launch pin", () => {
     ]);
     // A selector-less rotate settles first (two reads), then reads once more
     // for the aspect.
-    expect(treePins).toEqual([APP, APP, APP]);
+    expect(labels()).toEqual([`pinned:${APP}`, `pinned:${APP}`, `pinned:${APP}`]);
   });
 
   it("idle - every settle-poll read (waitForIdle)", async () => {
@@ -364,6 +435,6 @@ describe("every read path carries the launch pin", () => {
 
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:pass", "idle:pass"]);
     // A settle is three reads spanning two still intervals (tree + pixels).
-    expect(treePins).toEqual([APP, APP, APP]);
+    expect(labels()).toEqual([`pinned:${APP}`, `pinned:${APP}`, `pinned:${APP}`]);
   });
 });

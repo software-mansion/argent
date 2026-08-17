@@ -8,6 +8,7 @@ import {
   type NativeDevtoolsApi,
 } from "../../blueprints/native-devtools";
 import { chooseFrontmostConnectedApp, resolveNativeTargetApp } from "../../utils/native-target-app";
+import type { FlowTreeTarget } from "./flow-actions";
 import { flattenHoisting, type FlatNode } from "./flow-tree-flatten";
 import {
   type DescribeFrame,
@@ -302,15 +303,18 @@ async function unreadableHierarchyReason(
  * `fetchFlowTree`), so the caller's retry loop either rides out a transient
  * failure or surfaces this message as the step's failure reason.
  *
- * `bundleId` is the app this run's `launch:` step started, when it had one. It
- * pins the read to that app instead of auto-resolving over every connection,
- * and with the connected list empty it names the app whose disconnection needs
- * explaining.
+ * `target` carries the runner's two confidence levels (see
+ * {@link FlowTreeTarget}). Pinned, it names the target outright and skips
+ * auto-resolve's `Application.getState` fan-out over every connection -
+ * injection is simulator-wide, so one suspended system process that never
+ * answers getState fails every auto-resolved read. Unpinned, auto-resolve
+ * decides and the target is only the arbiter for a fan-out that timed out -
+ * or, with nothing connected at all, the app whose disconnection is explained.
  */
 export async function queryFullHierarchyTree(
   registry: Registry,
   device: DeviceInfo,
-  bundleId?: string
+  target?: FlowTreeTarget
 ): Promise<DescribeTreeData> {
   let nativeApi: NativeDevtoolsApi;
   try {
@@ -322,27 +326,10 @@ export async function queryFullHierarchyTree(
       { cause: err }
     );
   }
-  // The pin does not come from `listConnectedBundleIds`, the map auto-targeting
-  // draws its candidates from, so it survives a disconnection auto-targeting
-  // could not describe: an empty list is exactly the set of states
-  // `appConnectionState` explains, and the error auto-targeting raises there
-  // ("Launch or restart the app first") is the restart loop this measurement
-  // exists to break.
-  //
-  // Tested directly rather than by catching the throw: the failure code travels
-  // on a module-local symbol, so a duplicate `@argent/registry` instance would
-  // read it as absent and silently fall back to the stock message.
-  if (bundleId !== undefined && nativeApi.listConnectedBundleIds().length === 0) {
-    throw new Error(await unreadableHierarchyReason(nativeApi, bundleId));
-  }
-  // An explicit bundleId (the launched app) skips the getState fan-out over
-  // every connection - injection is simulator-wide, and one suspended system
-  // process that never answers getState fails every auto-resolved read.
-  // resolveNativeTargetApp's own errors (no connected app / ambiguous frontmost)
-  // already carry the actionable next step, so they propagate unwrapped.
-  const target = await resolveNativeTargetApp(nativeApi, bundleId);
 
-  if (bundleId) {
+  let bundleId: string;
+  if (target?.pinned) {
+    bundleId = target.bundleId;
     // The pin was proven connected at launch, but the app can crash or be
     // killed later - the socket close removes it from the connections map. Gate
     // on isConnected (a pure map lookup), never requiresAppRestart: its miss
@@ -392,10 +379,49 @@ export async function queryFullHierarchyTree(
         }
       );
     }
+  } else {
+    // The target does not come from `listConnectedBundleIds`, the map
+    // auto-resolve draws its candidates from, so it survives a disconnection
+    // auto-resolve could not describe: an empty list is exactly the set of
+    // states `appConnectionState` explains, and the error auto-resolve raises
+    // there ("Launch or restart the app first") is the restart loop this
+    // measurement exists to break.
+    //
+    // Tested directly rather than by catching the throw: its failure code
+    // travels on a module-local symbol, so a duplicate `@argent/registry`
+    // instance would read it as absent and silently fall back to the stock
+    // message.
+    if (target && nativeApi.listConnectedBundleIds().length === 0) {
+      throw new Error(await unreadableHierarchyReason(nativeApi, target.bundleId));
+    }
+    // resolveNativeTargetApp's own errors (no connected app / ambiguous
+    // frontmost) already carry the actionable next step, so they propagate
+    // unwrapped - with one exception. Its `Application.getState` fan-out probes
+    // every connection at once, and each probe hops onto that app's MAIN
+    // thread: one process whose main thread is pinned (a suspended system app,
+    // or the launched app mid-cold-start) times the whole resolution out, and
+    // leaves the read no target at all. ONLY then, and only while the target's
+    // own devtools connection is still up, read it instead - it is the app this
+    // run launched. A resolution that ANSWERS (including the deliberate "single
+    // app but backgrounded" error) always wins: the arbiter never overrides a
+    // guard that fired, it only rides out a probe the stall made unanswerable.
+    let resolved: { bundleId: string };
+    try {
+      resolved = await resolveNativeTargetApp(nativeApi, undefined);
+    } catch (err) {
+      const timedOut =
+        getFailureSignal(err)?.error_code === FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT;
+      if (timedOut && target && nativeApi.listConnectedBundleIds().includes(target.bundleId)) {
+        resolved = { bundleId: target.bundleId };
+      } else {
+        throw err;
+      }
+    }
+    bundleId = resolved.bundleId;
   }
 
   const rawResult = (await nativeApi.queryViewHierarchy(
-    target.bundleId,
+    bundleId,
     "ViewHierarchy.getFullHierarchy",
     {
       fields: FULL_HIERARCHY_FIELDS,
@@ -404,7 +430,7 @@ export async function queryFullHierarchyTree(
   )) as { windows?: unknown[]; error?: string };
 
   if (rawResult.error) {
-    throw new Error(`getFullHierarchy failed for ${target.bundleId}: ${rawResult.error}`);
+    throw new Error(`getFullHierarchy failed for ${bundleId}: ${rawResult.error}`);
   }
 
   // No windows is an untrustworthy read (non-injectable app, backgrounded, or a
@@ -414,7 +440,7 @@ export async function queryFullHierarchyTree(
   // genuinely sparse, trusted screen.
   if (!Array.isArray(rawResult.windows) || rawResult.windows.length === 0) {
     throw new Error(
-      `getFullHierarchy returned no windows for ${target.bundleId} — the app is not injectable ` +
+      `getFullHierarchy returned no windows for ${bundleId} — the app is not injectable ` +
         `(e.g. an Apple system app) or has no readable foreground window, so flows cannot resolve ` +
         `selectors against its view hierarchy`
     );

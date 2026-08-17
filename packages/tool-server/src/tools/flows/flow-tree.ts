@@ -1,5 +1,6 @@
 import type { DeviceInfo, Platform, Registry } from "@argent/registry";
 import { fetchTree } from "../../utils/ui-tree-match";
+import type { FlowTreeTarget } from "./flow-actions";
 import { queryFullHierarchyTree } from "./flow-ios-tree";
 import { queryAndroidFullHierarchy } from "./flow-android-tree";
 import { queryChromiumTree } from "./flow-chromium-tree";
@@ -27,13 +28,13 @@ import type { DescribeTreeData } from "../describe/contract";
 export async function fetchFlowTree(
   registry: Registry,
   device: DeviceInfo,
-  launchedAppId?: string
+  target?: FlowTreeTarget
 ): Promise<DescribeTreeData> {
   const source = FLOW_TREE_SOURCES[device.platform];
   // Only `ios-remote` is left, and `fetchTree` throws its not-supported error
   // naming the platform.
   if (!source) return fetchTree(registry, device);
-  return source(registry, device, launchedAppId);
+  return source(registry, device, target);
 }
 
 /** The source {@link fetchFlowTree} reads on each platform that has one. */
@@ -43,16 +44,15 @@ const FLOW_TREE_SOURCES: Partial<
     (
       registry: Registry,
       device: DeviceInfo,
-      launchedAppId?: string
+      target?: FlowTreeTarget
     ) => Promise<DescribeTreeData>
   >
 > = {
-  // Only iOS consumes the pin (see queryFullHierarchyTree for why it matters).
-  // The platforms below resolve their tree source per-device and never
-  // auto-resolve; ios-remote has no entry here at all and falls through to
-  // fetchFlowTree's not-supported throw.
-  ios: (registry, device, launchedAppId) =>
-    queryFullHierarchyTree(registry, device, launchedAppId),
+  // Only iOS consumes the launch target (see queryFullHierarchyTree for what
+  // its two confidence levels buy). The platforms below resolve their tree
+  // source per-device and never auto-resolve; ios-remote has no entry here at
+  // all and falls through to fetchFlowTree's not-supported throw.
+  ios: (registry, device, target) => queryFullHierarchyTree(registry, device, target),
   android: (registry, device) => queryAndroidFullHierarchy(registry, device),
   chromium: (registry, device) => queryChromiumTree(registry, device),
   vega: (_registry, device) => queryVegaTree(device),

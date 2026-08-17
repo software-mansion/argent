@@ -577,18 +577,22 @@ async function probeAgainstRunnerTree(
  * replay tree keeps. A describe-derived selector could fail — or hit a
  * different element — at replay while recording reported success.
  *
- * The launched app the read is given plays the part it plays at replay (see
- * `ActionEnv`): on iOS it pins the read to that app instead of auto-resolving
- * the frontmost connection, so the recorder resolves against the target replay
- * will. The recorder is where that matters most — a recording relaunches the
- * app AFTER this tool-server bound its listener, so the first tap reads during
- * the connect window, whose measured messages say NOT to restart the app.
- * Without it the kept-coordinates warning quotes auto-targeting's "Launch or
- * restart the app first" instead.
+ * Same source is not the same target on iOS: recording has no run state to
+ * vouch for the foreground app — the author drives the device by hand — so this
+ * read auto-resolves the frontmost connected app, and the recorded `launch`
+ * step's app rides along only as the unpinned hint (see `ActionEnv`). It
+ * decides nothing while auto-resolve answers, and buys the case the recorder
+ * hits most: a recording relaunches the app AFTER this tool-server bound its
+ * listener, so the first tap reads during the connect window, where the hint is
+ * the only id the iOS tree source can measure and its measured message says NOT
+ * to restart the app. Without it the kept-coordinates warning quotes
+ * auto-targeting's "Launch or restart the app first" instead.
  *
- * A pinned read is verified still foreground-like - not frontmost - so it keeps
- * reading the launched app where auto-resolve would refuse a tie as ambiguous
- * and would elect a uniquely-active sibling.
+ * Replay pins those reads instead, between a `launch:` and the next raw `tool:`
+ * step, so the two can diverge: a pinned read is verified still foreground-like
+ * - not frontmost - so where the pin and another connected app both look
+ * foreground-like, auto-resolve refuses a tie as ambiguous but resolves a
+ * uniquely-active sibling, while the pin keeps reading the launched app.
  */
 async function captureTapSelector(
   registry: Registry,
@@ -599,7 +603,11 @@ async function captureTapSelector(
   try {
     const device = resolveDevice(udid);
     const launched = recordedLaunchedApp(session, device.platform);
-    const { tree, source } = await fetchFlowTree(registry, device, launched);
+    const { tree, source } = await fetchFlowTree(
+      registry,
+      device,
+      launched ? { bundleId: launched, pinned: false } : undefined
+    );
     const node = nodeAtPoint(tree, point);
     if (!node) return { warning: "no element found under the tap; kept coordinates (brittle)" };
     const selector = deriveSelector(node);
