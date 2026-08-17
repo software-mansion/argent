@@ -331,8 +331,16 @@ describe("queryFullHierarchyTree - pinned target vs poisoned auto-resolve", () =
     const message = (err as Error).message;
     expect(message).toContain(`${APP} (the launched app) stopped answering Application.getState`);
     expect(message).toContain("an earlier one in this run answered");
-    // The escape hatch for a flow whose subject genuinely IS the other app.
-    expect(message).toContain("clears the pin");
+    // The escape hatch for a flow whose subject genuinely IS the other app is a
+    // `launch:` step - NOT the raw `tool:` step the answered-state refusal
+    // offers. Demoting the pin sends reads back to auto-resolve, whose
+    // Promise.all fan-out this same still-connected, still-silent app sinks;
+    // the arbiter then targets it again and pays the 15s getFullHierarchy, i.e.
+    // exactly the generic timeout this refusal exists to avoid.
+    expect(message).toContain("give the flow a `launch:` step for that app");
+    expect(message).toContain("a raw `tool:` step does not work here");
+    expect(message).not.toContain("clears the pin");
+    expect(message).not.toContain("returns reads to frontmost auto-resolve");
     // The timeout's own classification, kept because no app state was observed
     // here - the flow-level diagnosis rides in the message, and the stage
     // separates it from a bare transport timeout.
