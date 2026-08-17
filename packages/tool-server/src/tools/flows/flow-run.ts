@@ -1105,7 +1105,7 @@ reads "inside card inside list", each container's frame inside the next);
 \`swipe\` performs one finger flick (\`swipe: left\`, or \`swipe: { from?, direction|to|by, settle?, duration? }\` —
 direction is the FINGER's travel, the opposite sense of scroll-to's content direction; \`by: { x?, y? }\` — signed
 0–1 screen fractions, combined length at least 0.03 (a diagonal clears it where neither axis does); duration in ms,
-default 300, minimum 150; either floor is a parse error that rejects the file before any step runs);
+default 300, minimum 150, maximum 10000; each bound is a parse error that rejects the file before any step runs);
 \`scroll-to\` scrolls (momentum-free) until a target is visible; \`pinch\` zooms
 (\`pinch: { on?, scale }\` — scale > 1 in, < 1 out; screen center when \`on\` is omitted); \`rotate\` is the
 two-finger rotation gesture (\`rotate: { on?, by }\` — degrees, + clockwise, within ±3000°; screen center
