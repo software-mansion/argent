@@ -464,8 +464,13 @@ function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
  * evidence. The price lands on the best-effort return: if that retry then
  * fails, `prevTree` is the first read's tree handed back a read-duration later
  * (bounded by the tree source's own RPC ceiling), older than what the bare
- * deadline would have returned. Paid because a single successful read has been
- * compared against nothing and is no settle at all.
+ * deadline would have returned. Paid for what the retry buys, which differs by
+ * branch. After a failed first read it buys evidence: the outage throw rests on
+ * two failed attempts rather than on one slow read, and a retry that succeeds
+ * there still returns a lone tree matched against nothing. After a successful
+ * first read it buys a fresher sample, since the retry's tree comes back
+ * whether or not the fingerprints match, and with it the settle's only chance
+ * to converge.
  *
  * `skipProvenOutage` rethrows {@link ActionEnv.treeOutage} instead of buying
  * that whole settle again, window and floor reads alike. Not a shorter budget:
