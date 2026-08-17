@@ -157,9 +157,7 @@ describe("boot-device Android — `sound` argument", () => {
     const hotArgs = spawnedArgs();
     expect(hotArgs).not.toContain("-noaudio");
     // The rest of the hardening set must survive the sound opt-in untouched.
-    expect(hotArgs).toEqual(
-      expect.arrayContaining(["-no-boot-anim", "-netfast", "-no-metrics"])
-    );
+    expect(hotArgs).toEqual(expect.arrayContaining(["-no-boot-anim", "-netfast", "-no-metrics"]));
   });
 
   it("sound:true drops -noaudio from the cold-boot spawn too", async () => {
@@ -171,9 +169,7 @@ describe("boot-device Android — `sound` argument", () => {
 
     const coldArgs = spawnedArgs();
     expect(coldArgs).not.toContain("-noaudio");
-    expect(coldArgs).toEqual(
-      expect.arrayContaining(["-no-boot-anim", "-netfast", "-no-metrics"])
-    );
+    expect(coldArgs).toEqual(expect.arrayContaining(["-no-boot-anim", "-netfast", "-no-metrics"]));
   });
 
   it("the boot-sound flag flips the DEFAULT: unset sound boots with audio when enabled", async () => {
