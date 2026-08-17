@@ -198,6 +198,8 @@ The guard accepts one `exists`, `visible`, `hidden`, or `text` condition, or `{ 
 
 A count is the body pasted that many times, down to a completed run's counts: the block's opening line and its per-iteration lines are structure, not steps, so they are not counted (the treatment `echo` already gets) and `repeat: 3` over one tap reports 3 passed. That equivalence is the point, so the count is always a literal - there is deliberately no loop variable and no parameter.
 
+Step numbers are not equivalent: `tool: flow-execute` numbers every report line and counts them in its header, markers included, where `argent flow run` skips them. So a `repeat: 3` over one tap makes the step after the block `[8]` over MCP and step 4 in the CLI. The pass and fail counts agree either way, so cite a step number with the surface it came from.
+
 Four deliberate edges stop short of the paste:
 
 - A block cut short by a failure does not pad its unrun iterations as skips.

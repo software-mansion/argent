@@ -263,8 +263,14 @@ export interface StepReport {
    * completed, because a block cut short by a failure does not pad its unrun
    * iterations as skips (see {@link execRepeatStep}), and not on the MCP
    * renderer, which numbers raw report entries exactly as it already does for
-   * `echo`. Counted, the markers would scale the totals with the iteration
-   * count. A block's terminal line (a drain converged, cap reached, guard
+   * `echo`. An `echo` shifts that numbering by one line; a block shifts it by
+   * its opening marker plus one per iteration run, up to
+   * MAX_REPEAT_ITERATIONS + 1, so an agent over MCP can cite a step number
+   * absent from `argent flow run`'s output. Kept: those numbers index this
+   * report and the `--json` beside it, and the argent-create-flow flow-yaml
+   * reference states the divergence for agents. Counted, the markers would
+   * scale the totals with the iteration count. A block's terminal line (a
+   * drain converged, cap reached, guard
    * errored; either bound cancelled) is NOT structural — it is the block's
    * verdict, and the cap's `fail` is the only thing making a drain that never
    * converged report FAIL.
