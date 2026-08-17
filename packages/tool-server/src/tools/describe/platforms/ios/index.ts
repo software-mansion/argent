@@ -49,7 +49,8 @@ const TVOS_HINT =
 // hint is reached only once `describe`'s own ax-service path has already
 // returned empty, so it leads with `screenshot` (re-recommending `describe`
 // would be circular) and shares the `native-*` dead-end warning verbatim with
-// the precheck throw and `native-devtools-status`.
+// the precheck throw, `native-devtools-status`, and the flow runner's
+// pinned-read refusal.
 const NON_INJECTABLE_HINT =
   "This is an Apple system app (com.apple.*) - not a target argent's native-devtools " +
   "instrumentation supports: the native view hierarchy is unavailable and restarting the app " +

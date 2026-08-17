@@ -4,6 +4,7 @@ import {
   buildAppStateMessage,
   isInjectableBundleId,
   nativeDevtoolsRef,
+  NON_INJECTABLE_NATIVE_WARNING,
   type NativeAppState,
   type NativeDevtoolsApi,
 } from "../../blueprints/native-devtools";
@@ -352,6 +353,26 @@ export async function queryFullHierarchyTree(
   let bundleId: string;
   if (target?.pinned) {
     bundleId = target.bundleId;
+    // Same policy gate every other explicit-bundleId hierarchy read applies via
+    // precheckNativeDevtools - nothing upstream applies it for a pinned flow
+    // target: `launch` reaches restart-app, which runs the 2-arg precheck (no
+    // bundleId, so no throw), and treeSourceGate only waits for isConnected,
+    // which simulator-wide injection lets a background system process satisfy.
+    // Placed before the isConnected gate and the getState probe so the refusal
+    // stays terminal AND free, instead of costing a 5s probe plus a 15s
+    // getFullHierarchy timeout to arrive at "RPC timed out".
+    if (!isInjectableBundleId(bundleId)) {
+      throw new FailureError(
+        `${bundleId} is an Apple system app (com.apple.*) - never a valid flow target: it is not the app under test, and argent's native devtools refuse to read one (a system process either never services the read, or describes offscreen UI as if it were the launched app). Point this flow's \`launch\` step at the app under test; no relaunch or retry changes this verdict. ` +
+          NON_INJECTABLE_NATIVE_WARNING,
+        {
+          error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE,
+          failure_stage: "flow_tree_pinned_target",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
+      );
+    }
     // The pin was proven connected at launch, but the app can crash or be
     // killed later - the socket close removes it from the connections map. Gate
     // on isConnected (a pure map lookup), never requiresAppRestart: its miss

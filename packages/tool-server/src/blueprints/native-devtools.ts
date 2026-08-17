@@ -58,11 +58,13 @@ export function isInjectableBundleId(bundleId: string): boolean {
 /**
  * The invariant half of the non-injectable recovery guidance: which tools NOT
  * to fall back to. Shared VERBATIM by every surface that reports this terminal
- * state (this precheck's throw, the `describe` iOS fallback hint, and the
- * `native-devtools-status` description) so none of them can drift into
- * recommending a dead-end. The flow tree source reports the same terminal state
- * without this text: its reader is authoring a flow, not choosing an inspection
- * tool, so it names the flow-level remedy (drive by coordinate) instead.
+ * state (this precheck's throw, the `describe` iOS fallback hint, the
+ * `native-devtools-status` description, and the flow runner's pinned-read
+ * refusal in `flow-ios-tree.ts`) so none of them can drift into
+ * recommending a dead-end. The flow tree source's measured diagnosis reports
+ * the same terminal state without this text: its reader is authoring a flow,
+ * not choosing an inspection tool, so it names the flow-level remedy (drive by
+ * coordinate) instead.
  *
  * Every native-* *feature* tool — notably the two
  * view-at-point tools, which run this same 3-arg precheck — re-throws this
@@ -93,7 +95,7 @@ export const NON_INJECTABLE_NATIVE_WARNING =
  * already returned empty, so re-recommending `describe` there would be circular.
  * That hint leads with `screenshot` and appends
  * {@link NON_INJECTABLE_NATIVE_WARNING}, so the dead-end warning is identical
- * across all three surfaces. (The one runtime exception is that `describeIos`
+ * across every surface. (The one runtime exception is that `describeIos`
  * substitutes the sim's re-boot hint for `NON_INJECTABLE_HINT` when the
  * ax-service is degraded — see that call site.)
  */
