@@ -2,8 +2,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { FAILURE_CODES, getFailureSignal, type Registry } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  getFailureSignal,
+  zodObjectToJsonSchema,
+  type Registry,
+} from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
+import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import {
   foldLeadingRequires,
   parseFlow,
@@ -1356,6 +1362,86 @@ describe("a flow that touches no device", () => {
     const err = await run(registry, "guarded-narration").catch((e: unknown) => e);
 
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNMET);
+  });
+});
+
+describe("a flow whose only device step hides its target in an opaque arg", () => {
+  // `flow-add-step` forwards the recorded command's own udid inside its `args`
+  // JSON, so declared arg names alone read the step as device-free — and an
+  // Apple-TV-only flow ran green against an android emulator, its block never
+  // judged, while the recorded screenshot came off that emulator.
+  const addStep = createFlowAddStepTool({} as unknown as Registry);
+  const RECORDER_STEP: FlowStep = {
+    kind: "tool",
+    name: "flow-add-step",
+    args: {
+      name: "rec-target",
+      project_root: "/proj",
+      command: "screenshot",
+      args: `{"udid":"${ANDROID}","scale":0.05}`,
+    },
+  };
+
+  /** Answers with the REAL recorder definition, so the marker cannot drift off it. */
+  function recorderRegistry(booted: ListedDevice[]) {
+    const invokeTool = vi.fn(async (id: string) => {
+      if (id === "list-devices") return { devices: booted };
+      return { ok: true };
+    });
+    const registry = {
+      invokeTool,
+      getTool: vi.fn((name: string) =>
+        name === "flow-add-step"
+          ? { ...addStep, inputSchema: zodObjectToJsonSchema(addStep.zodSchema!) }
+          : { inputSchema: { properties: { udid: {} } } }
+      ),
+    } as unknown as Registry;
+    return { registry, invokeTool };
+  }
+
+  it("judges its requirements instead of running device-free", async () => {
+    await writeFlow("tv-recorder", {
+      requires: { platform: ["ios"], runtimeKind: "tv" },
+      steps: [RECORDER_STEP],
+    });
+    const { registry, invokeTool } = recorderRegistry([androidEntry(ANDROID)]);
+
+    const err = await run(registry, "tv-recorder").catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNMET);
+    expect(invokeTool).not.toHaveBeenCalledWith("flow-add-step", expect.anything());
+  });
+
+  it("runs on the device its requirements pick out", async () => {
+    await writeFlow("tv-recorder", {
+      requires: { platform: ["ios"], runtimeKind: "tv" },
+      steps: [RECORDER_STEP],
+    });
+    const { registry } = recorderRegistry([
+      iosEntry(IOS_TV, "tv"),
+      androidEntry(ANDROID, "mobile"),
+    ]);
+
+    const result = await run(registry, "tv-recorder");
+
+    expect(result.ok).toBe(true);
+    expect(result.device).toBe(IOS_TV);
+  });
+
+  it("leaves a genuinely device-free flow device-free", async () => {
+    // The same block over narration alone still has no target to judge, so the
+    // marker must not turn every flow into a device-bound one.
+    await writeFlow("narration", {
+      requires: { platform: ["ios"], runtimeKind: "tv" },
+      steps: [{ kind: "echo", message: "hi" }],
+    });
+    const { registry, invokeTool } = recorderRegistry([androidEntry(ANDROID)]);
+
+    const result = await run(registry, "narration");
+
+    expect(result.ok).toBe(true);
+    expect(result.device).toBe("");
+    expect(invokeTool).not.toHaveBeenCalled();
   });
 });
 

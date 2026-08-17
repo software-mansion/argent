@@ -66,13 +66,17 @@ const DEVICE_BIND_LIST_KEYS = ["devices"] as const;
  * deliberately not the scope keys in {@link DEVICE_BIND_LIST_KEYS}.
  *
  * `toolRequiresDevice` consults this, and `resolveRunDevice` skips resolving a
- * device for a flow no step here matches. The distinction is what a missing
- * device does to the step: a `screenshot` with no `udid` has nothing to point
- * at and cannot run, while `stop-all-simulator-servers` with no `devices` is
- * the machine-wide sweep — a complete, meaningful call, and the whole content
- * of a cleanup flow. Listing `devices` here made such a flow demand a device it
- * has no use for, so the two situations a cleanup flow actually runs in — none
- * booted, or several — failed it outright.
+ * device for a flow no step here matches. Declared keys are only half of that
+ * question: a target reaching a tool inside an opaque arg is declared on the
+ * tool itself, via `ToolDefinition.opaqueDeviceTarget`.
+ *
+ * The distinction against a scope key is what a missing device does to the
+ * step: a `screenshot` with no `udid` has nothing to point at and cannot run,
+ * while `stop-all-simulator-servers` with no `devices` is the machine-wide
+ * sweep — a complete, meaningful call, and the whole content of a cleanup flow.
+ * Listing `devices` here made such a flow demand a device it has no use for, so
+ * the two situations a cleanup flow actually runs in — none booted, or
+ * several — failed it outright.
  *
  * A scope key is therefore bound OPPORTUNISTICALLY: {@link bindDeviceArgs}
  * injects it when the run resolved a device (so a replayed teardown cannot reap
@@ -596,10 +600,15 @@ export function flowScopesDevice(registry: Registry, steps: FlowStep[]): boolean
 }
 
 function toolRequiresDevice(registry: Registry, toolName: string): boolean {
+  const toolDef = registry.getTool(toolName);
   // An unknown tool is assumed to need a device: the step is going to fail
   // either way, and it fails more usefully with one resolved.
-  if (!registry.getTool(toolName)) return true;
-  return declaresAny(registry, toolName, DEVICE_ARG_KEYS);
+  if (!toolDef) return true;
+  // `opaqueDeviceTarget` covers the target a schema cannot show: `flow-add-step`
+  // carries the recorded command's device id inside its `args` JSON, so reading
+  // declared keys alone left such a flow device-free with its `requires`
+  // unjudged.
+  return toolDef.opaqueDeviceTarget === true || declaresAny(registry, toolName, DEVICE_ARG_KEYS);
 }
 
 function declaresAny(registry: Registry, toolName: string, keys: readonly string[]): boolean {

@@ -486,6 +486,9 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
 Returns { message, toolResult, stepCount, recorded, savedTo } on success. If it fails an error is returned and nothing is recorded.
 If a step was recorded by mistake, edit the .yaml to remove it — against a remote client, only after \`flow-finish-recording\`: the in-memory copy is authoritative there, and every write serializes it over your edit.`,
     zodSchema,
+    // The recorded command's own target rides inside the `args` JSON string, so
+    // the schema shows no device key while the step drives a device.
+    opaqueDeviceTarget: true,
     services: () => ({}),
     async execute(_services, params, ctx) {
       const session = await requireRecordingSession(params.project_root, params.name);

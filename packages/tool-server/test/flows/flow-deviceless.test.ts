@@ -12,6 +12,7 @@ import {
   stepRequiresDevice,
 } from "../../src/tools/flows/flow-device";
 import { createStopAllSimulatorServersTool } from "../../src/tools/simulator/stop-all-simulator-servers";
+import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab";
 let tmpDir: string;
@@ -20,9 +21,15 @@ let tmpDir: string;
  * Tools keyed by the device argument they declare — what decides whether a step
  * acts on a device. `undefined` models a tool the registry does not know.
  */
-const TOOLS: Record<string, { inputSchema?: unknown } | undefined> = {
+const TOOLS: Record<string, { inputSchema?: unknown; opaqueDeviceTarget?: boolean } | undefined> = {
   "tap": { inputSchema: { properties: { udid: {}, x: {}, y: {} } } },
   "stop-metro": { inputSchema: { properties: { port: {} } } },
+  // Drives a device its schema never names: the recorded command's own udid
+  // rides inside the `args` JSON string, so only the marker says so.
+  "flow-add-step": {
+    inputSchema: { properties: { name: {}, project_root: {}, command: {}, args: {} } },
+    opaqueDeviceTarget: true,
+  },
   // Declares a device LIST rather than a single id — the shape the runner has
   // to rebind to the run device, and therefore one that makes a step need one.
   "stop-all-simulator-servers": { inputSchema: { properties: { devices: {} } } },
@@ -244,6 +251,24 @@ describe("a flow that does touch a device still demands one", () => {
     await expectDemandsDevice("nested");
   });
 
+  it("when a tool step's tool takes its target inside an opaque arg", async () => {
+    // The recorder forwards the recorded command's udid inside `args`, so
+    // nothing in its schema says device while the step drives one.
+    await writeFlow("recording", [
+      {
+        kind: "tool",
+        name: "flow-add-step",
+        args: {
+          name: "rec",
+          project_root: ".",
+          command: "screenshot",
+          args: '{"udid":"emulator-5554"}',
+        },
+      },
+    ]);
+    await expectDemandsDevice("recording");
+  });
+
   it("when the tool is unknown to the registry", async () => {
     await writeFlow("mystery", [{ kind: "tool", name: "not-a-tool", args: {} }]);
     await expectDemandsDevice("mystery");
@@ -341,23 +366,40 @@ describe("stepRequiresDevice", () => {
     expect(stepRequiresDevice(registry, toolStep("not-a-tool"))).toBe(true);
   });
 
+  it("counts the REAL flow-add-step, whose target its schema never names", () => {
+    // Against the real definition, like the teardown case below: a marker that
+    // drifts off the tool it describes leaves the hole it was added to close.
+    const def = createFlowAddStepTool({} as unknown as Registry);
+    const schema = zodObjectToJsonSchema(def.zodSchema!);
+    const props = Object.keys((schema as { properties: Record<string, unknown> }).properties);
+    // The gap itself: the target reaches the tool inside `args`, not as a key.
+    expect(props).not.toContain("udid");
+    expect(props).toContain("args");
+
+    const registry = { getTool: () => ({ ...def, inputSchema: schema }) } as unknown as Registry;
+    expect(stepRequiresDevice(registry, { kind: "tool", name: "flow-add-step", args: {} })).toBe(
+      true
+    );
+  });
+
   it("does NOT count the REAL stop-all-simulator-servers schema as needing a device", () => {
-    // Against the derived JSON schema, not the mock above: the mock is only as
-    // good as its agreement with the tool, and the failure this guards is
-    // exactly a drift between the two. Catches a rename of `devices` too.
+    // Against the derived JSON schema AND the definition around it, not the
+    // mock above: the mock is only as good as its agreement with the tool, and
+    // the failure this guards is exactly a drift between the two. Catches a
+    // rename of `devices`, and an `opaqueDeviceTarget` marker put on the
+    // teardown, too.
     //
     // `devices` is a SCOPE, not a target: the unscoped call is a complete,
     // meaningful machine-wide sweep, so a flow whose only step is this one
     // needs no device. Counting it made such a flow demand one — see the
     // cleanup-flow cases below, which are the two situations it actually runs
     // in.
-    const schema = zodObjectToJsonSchema(
-      createStopAllSimulatorServersTool({} as unknown as Registry).zodSchema!
-    );
+    const def = createStopAllSimulatorServersTool({} as unknown as Registry);
+    const schema = zodObjectToJsonSchema(def.zodSchema!);
     expect(Object.keys((schema as { properties: Record<string, unknown> }).properties)).toContain(
       "devices"
     );
-    const registry = { getTool: () => ({ inputSchema: schema }) } as unknown as Registry;
+    const registry = { getTool: () => ({ ...def, inputSchema: schema }) } as unknown as Registry;
     expect(
       stepRequiresDevice(registry, { kind: "tool", name: "stop-all-simulator-servers", args: {} })
     ).toBe(false);
