@@ -190,15 +190,27 @@ describe("queryFullHierarchyTree surfaces the measured diagnosis", () => {
     // state's remedy is a retry of something.
     const registry = registryWith([]);
 
-    await expect(queryFullHierarchyTree(registry, DEVICE, { bundleId: "com.apple.Preferences", pinned: false, probeAnswered: false })).rejects.toThrow(
-      /Apple system app/
-    );
     await expect(
-      queryFullHierarchyTree(registry, DEVICE, { bundleId: "com.apple.Preferences", pinned: false, probeAnswered: false })
+      queryFullHierarchyTree(registry, DEVICE, {
+        bundleId: "com.apple.Preferences",
+        pinned: false,
+        probeAnswered: false,
+      })
+    ).rejects.toThrow(/Apple system app/);
+    await expect(
+      queryFullHierarchyTree(registry, DEVICE, {
+        bundleId: "com.apple.Preferences",
+        pinned: false,
+        probeAnswered: false,
+      })
     ).rejects.not.toThrow(/argent server stop|restart-app/);
     // The remedy has to name a step form that exists AND reads no tree.
-    await expect(queryFullHierarchyTree(registry, DEVICE, { bundleId: "com.apple.Preferences", pinned: false, probeAnswered: false })).rejects.toThrow(
-      /tap: \{ x: [\d.]+, y: [\d.]+ \}/
-    );
+    await expect(
+      queryFullHierarchyTree(registry, DEVICE, {
+        bundleId: "com.apple.Preferences",
+        pinned: false,
+        probeAnswered: false,
+      })
+    ).rejects.toThrow(/tap: \{ x: [\d.]+, y: [\d.]+ \}/);
   });
 });
