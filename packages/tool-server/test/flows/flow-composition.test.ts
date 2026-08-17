@@ -2678,6 +2678,58 @@ describe("flow composition (run:)", () => {
     expect(reason).not.toMatch(/Launch or restart the app first/);
   });
 
+  // `launch-app` / `restart-app` are in FOREGROUND_CHANGING_TOOLS, which drops
+  // the launched id — but unlike the rest of that set they NAME the app they
+  // switched to. Dropping it there sends every read from that step onward back
+  // to the auto-target text, in the middle of a run that has a launched app.
+  it.each(["restart-app", "launch-app"])(
+    "keeps the launched id across a %s tool step that names the same app",
+    async (name) => {
+      await writeFlow("main", {
+        executionPrerequisite: "",
+        steps: [
+          { kind: "launch", app: "com.apple.Preferences" },
+          { kind: "tool", name, args: { bundleId: "com.apple.Preferences" } },
+          { kind: "assert", selector: { text: "General" }, condition: "visible" },
+        ],
+      });
+
+      const result = asRun(
+        await createRunFlowTool(mockRegistry()).execute(
+          {},
+          { name: "main", project_root: tmpDir, device: DEVICE }
+        )
+      );
+
+      const reason = result.steps[2].reason ?? "";
+      expect(reason).toMatch(/Apple system app/);
+      expect(reason).not.toMatch(/Launch or restart the app first/);
+    }
+  );
+
+  // The control that keeps the restore scoped: `button` can send the app to the
+  // background with nothing naming what replaced it, so there the id really is
+  // unknown and auto-targeting is the honest fallback.
+  it("still drops the launched id across a foreground-changing tool that names no app", async () => {
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: "com.apple.Preferences" },
+        { kind: "tool", name: "button", args: { name: "home" } },
+        { kind: "assert", selector: { text: "General" }, condition: "visible" },
+      ],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps[2].reason ?? "").toMatch(/Launch or restart the app first/);
+  });
+
   // The measured half says what is wrong with the app; without this half a flow
   // author is told to restart a tool-server with no mention that a selector
   // needed a hierarchy.

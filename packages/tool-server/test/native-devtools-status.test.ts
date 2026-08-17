@@ -963,6 +963,48 @@ describe("precheckNativeDevtools maps a measured state to its remedy", () => {
     expect(result.nextLaunchWillBeInjected).toBe(false);
   });
 
+  // The other half of that reading, and the reason it is conditional. The
+  // recorded failure only contradicts the latch where something re-applied the
+  // env to record it — `appConnectionState` does that for an app it finds
+  // UNCONNECTED. A connected one answers off the connections map first, so the
+  // record beside it is whatever an earlier call for another bundle left, and
+  // nothing re-tests it while this app stays connected: the reading would be
+  // wrong for as long as the app is up, against a process that is demonstrably
+  // injected.
+  it("keeps reporting the env a live connection proves was in place", async () => {
+    const { api, reverifyEnv } = makeNativeApi({ envSetup: true, connected: true });
+    api.getInitFailure = () => ({ attempts: 1, lastError: "Invalid device", givenUp: false });
+
+    const result = (await nativeDevtoolsStatusTool.execute(
+      { nativeDevtools: api },
+      { udid: "UDID", bundleId: "com.example.app" }
+    )) as { envSetup: boolean; connected: boolean; nextLaunchWillBeInjected: boolean };
+
+    // The premise: nothing on this path re-applied the env, so the failure it
+    // would have consulted is stale by construction.
+    expect(reverifyEnv).not.toHaveBeenCalled();
+    expect(result.connected).toBe(true);
+    expect(result.envSetup).toBe(true);
+    expect(result.nextLaunchWillBeInjected).toBe(true);
+  });
+
+  // Same rule on the terminal branch, which runs no env work at all — and a
+  // system app CAN be connected there (#453 saw one runtime refuse the dylib,
+  // an E2E run another accept it), so the same contradiction is reachable.
+  it("keeps reporting a working env for a connected non-injectable app", async () => {
+    const { api } = makeNativeApi({ envSetup: true, connected: true, appRunning: true });
+    api.getInitFailure = () => ({ attempts: 1, lastError: "Invalid device", givenUp: false });
+
+    const result = (await nativeDevtoolsStatusTool.execute(
+      { nativeDevtools: api },
+      { udid: "UDID", bundleId: "com.apple.Preferences" }
+    )) as { envSetup: boolean; connected: boolean; injectable: boolean };
+
+    expect(result.injectable).toBe(false);
+    expect(result.connected).toBe(true);
+    expect(result.envSetup).toBe(true);
+  });
+
   // Same reading on the branch that runs no env work of its own: a system app
   // on a sim whose env is broken must not report the env as in place either.
   it("stops reporting a working env for a non-injectable app once it has failed", async () => {
@@ -1143,6 +1185,27 @@ describe("native-* tool descriptions document every precheck outcome", () => {
     const line = guidanceLine("indeterminate");
     expect(line).toContain("do NOT restart the app again");
     expect(line).toContain("argent server stop && argent server start --detach");
+  });
+
+  // `indeterminate` sets `requiresRestart: true`, so it matches the boolean
+  // rule as well as its own `If state is` line — and an agent that acts on the
+  // earlier, more general rule never reaches the later one. That earlier rule
+  // is where the bound has to be stated, and on a remote simulator it is the
+  // ordinary path rather than a rare one: no app process can be inspected
+  // there, so `indeterminate` is the only unconnected state a running app can
+  // reach. Verbatim for the reason the stop-conditions below are: the failure
+  // is a softened or deleted bound, which any pattern over the opening clause
+  // reads straight past.
+  it("bounds the requiresRestart rule rather than leaving it open", () => {
+    const line = nativeDevtoolsStatusTool
+      .description!.split("\n")
+      .find((l) => l.startsWith("If requiresRestart is true:"));
+    expect(line, "description has no requiresRestart rule").toBeTypeOf("string");
+    expect(line!).toBe(
+      "If requiresRestart is true: call restart-app once, then proceed with the native feature. " +
+        "Read state before acting on a second such reading — indeterminate reaches this rule too, " +
+        "and its line below bounds it at that one restart."
+    );
   });
 
   // Rename a state in one place and the prose describes names the tool never

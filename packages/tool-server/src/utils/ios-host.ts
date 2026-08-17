@@ -385,7 +385,17 @@ async function inspectRunningAppLocal(
   const jobs = parseUIKitApplicationJobs(await listRunningApps(udid));
   if (!jobs.has(bundleId)) return { running: false, process: null };
   const pid = jobs.get(bundleId) ?? null;
-  return { running: true, process: pid === null ? null : await readProcessLaunchState(pid) };
+  const process = pid === null ? null : await readProcessLaunchState(pid);
+  if (process !== null) return { running: true, process };
+  // No process behind a job the table had just listed. An app that exited in
+  // the round-trip between the two reads produces exactly this, and
+  // `{running: true, process: null}` is what `appConnectionState` maps to
+  // `indeterminate` — the one unconnected state whose remedy escalates to
+  // restarting the tool-server, where the truth is `not_running` and the app
+  // only needs launching. Re-read the table to tell the two apart: gone means
+  // it exited, still listed means the probe itself is what failed.
+  const stillListed = parseUIKitApplicationJobs(await listRunningApps(udid)).has(bundleId);
+  return { running: stillListed, process: null };
 }
 
 function spawnAxDaemonLocal(udid: string, endpoint: IosEndpoint): ChildProcess {

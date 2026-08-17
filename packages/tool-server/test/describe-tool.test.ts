@@ -790,6 +790,16 @@ describe("describe tool", () => {
     );
     expect(result.source).toBe("ax-service");
     expect(elementLineCount(result.description)).toBe(0);
+    // The third site that returns an empty tree after a failed corroboration —
+    // its two siblings (the resolve catch and the outer catch) are both pinned,
+    // and this one answered with an in-band error rather than throwing. Returned
+    // bare, the empty tree reads as a blank screen, and `await-ui-element`'s
+    // blind-read guard keys off exactly `hint` / `should_restart`: with neither
+    // set, a `hidden` wait resolves against an element still on screen.
+    expect(result.hint).toMatch(/not evidence that nothing is on screen/);
+    expect(result.hint).toContain("view hierarchy unavailable");
+    // Nothing was measured about the app, so no relaunch may be prescribed.
+    expect(result.should_restart).toBeUndefined();
   });
 
   it("routes a tvOS target to the focus-driven view instead of the iOS ax-service", async () => {

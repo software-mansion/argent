@@ -265,6 +265,54 @@ export type NativeDevtoolsPrecheckBlock =
   | { status: "service_stale"; message: string }
   | { status: "connect_pending"; message: string };
 
+/**
+ * Every tool whose handler answers a blocked precheck with one of these status
+ * objects instead of doing its work. The six feature tools run the 3-arg
+ * overload and can return any of the four; the rest run the 2-arg one and can
+ * only return `init_failed`.
+ */
+const NATIVE_DEVTOOLS_PRECHECK_TOOLS = new Set([
+  "native-describe-screen",
+  "native-find-views",
+  "native-full-hierarchy",
+  "native-network-logs",
+  "native-view-at-point",
+  "native-user-interactable-view-at-point",
+  "native-devtools-status",
+  "launch-app",
+  "restart-app",
+]);
+
+const NATIVE_DEVTOOLS_BLOCK_STATUSES = new Set<NativeDevtoolsPrecheckBlock["status"]>([
+  "init_failed",
+  "restart_required",
+  "service_stale",
+  "connect_pending",
+]);
+
+/**
+ * Flow integration: a blocked precheck is a RESOLVED tool result, so a recorded
+ * step that runs one of these tools would otherwise report `pass` for a call
+ * that never reached its work. Mirrors `isDebuggerNotConnectedResult` for the
+ * debugger's precondition results and `isUnmetUiWaitResult` for await-ui-element.
+ *
+ * Keyed on the tool id as well as the shape: the four status strings are
+ * unremarkable words, and matching them on any tool's result would let an
+ * unrelated tool that happens to answer `{status: "..."}` fail a step it passed.
+ */
+export function isNativeDevtoolsBlockResult(
+  toolId: string,
+  result: unknown
+): result is NativeDevtoolsPrecheckBlock {
+  if (!NATIVE_DEVTOOLS_PRECHECK_TOOLS.has(toolId)) return false;
+  if (typeof result !== "object" || result === null) return false;
+  const status = (result as { status?: unknown }).status;
+  return (
+    typeof status === "string" &&
+    NATIVE_DEVTOOLS_BLOCK_STATUSES.has(status as NativeDevtoolsPrecheckBlock["status"])
+  );
+}
+
 export async function precheckNativeDevtools(
   api: NativeDevtoolsApi,
   udid: string

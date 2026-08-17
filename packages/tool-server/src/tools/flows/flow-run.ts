@@ -65,11 +65,11 @@ import {
 import {
   buildAppStateMessage,
   isInjectableBundleId,
+  isNativeDevtoolsBlockResult,
   nativeDevtoolsRef,
   NATIVE_DEVTOOLS_CONNECT_BUDGET_MS,
   type NativeDevtoolsApi,
   type NativeDevtoolsAppState,
-  type NativeDevtoolsInitFailedResult,
 } from "../../blueprints/native-devtools";
 import { androidDevtoolsRef, type AndroidDevtoolsApi } from "../../blueprints/android-devtools";
 import {
@@ -325,6 +325,10 @@ export const LAUNCH_TO_VERDICT_MS = POST_LAUNCH_SETTLE_MS + NATIVE_READY_TIMEOUT
  * {@link ActionEnv.treeOutage}. `button` is included for its `home` case;
  * distinguishing button kinds here would couple this list to that tool's arg
  * schema for little gain.
+ *
+ * `launch-app` and `restart-app` re-set the id from their own `bundleId` once
+ * they return — they name the app they switched to, where the rest leave it
+ * unknown.
  */
 const FOREGROUND_CHANGING_TOOLS = new Set([
   "launch-app",
@@ -558,19 +562,6 @@ async function treeSourceGate(
 }
 
 /**
- * Whether a sub-tool answered with the native-devtools init failure instead of
- * doing its work — the one blocking result `restart-app` can resolve with, its
- * iOS handler running the precheck's 2-arg overload.
- */
-function isInitFailed(result: unknown): result is NativeDevtoolsInitFailedResult {
-  return (
-    typeof result === "object" &&
-    result !== null &&
-    (result as { status?: unknown }).status === "init_failed"
-  );
-}
-
-/**
  * Execute a `launch` step: start the app from a clean state — terminate and
  * relaunch via `restart-app`, so a copy left running by a prior run can't leak
  * state in. Then let the app settle and wait for the platform's full-hierarchy
@@ -618,7 +609,7 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   // that never ran and `not_running` becomes "it exited after launch", sending
   // the author after a crash that did not happen while the message naming the
   // real cause is dropped.
-  if (isInitFailed(restart)) {
+  if (isNativeDevtoolsBlockResult("restart-app", restart)) {
     return { ok: false, reason: `restart-app did not start ${bundleId}: ${restart.message}` };
   }
   if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
@@ -2511,6 +2502,34 @@ async function execLeafStep(
             outputHint,
             args,
           };
+        }
+        // Same hazard as the two above, on the native-devtools precheck: it
+        // RESOLVES its block rather than throwing, so a step that never reached
+        // the tool's work read as green — and a saved regression flow reported
+        // `ok: true` for a native read that returned nothing. `launch:` already
+        // guards its own `restart-app` (see runLaunch); this is the `tool:`
+        // spelling of the same sub-tools, plus the six feature tools it never
+        // covered.
+        if (isNativeDevtoolsBlockResult(step.name, result)) {
+          return {
+            ...base,
+            status: "fail",
+            tool: step.name,
+            reason: `${step.name} did not run (${result.status}): ${result.message}`,
+            result,
+            outputHint,
+            args,
+          };
+        }
+        // The launch-derived hint the clear above spent, restored for the two
+        // tools whose args name the app they just started: they change WHICH
+        // app is in front, not whether the run has one, so discarding the id
+        // drops the iOS tree source back to auto-targeting's "Launch or restart
+        // the app first" — the very advice the measured diagnosis replaces.
+        // After the invoke, like `runLaunch`: a tool that threw started nothing.
+        if (step.name === "launch-app" || step.name === "restart-app") {
+          const launched = (args as { bundleId?: unknown }).bundleId;
+          if (typeof launched === "string") state.launchedNativeApp = launched;
         }
         return { ...base, status: "pass", tool: step.name, result, outputHint, args };
       } catch (err) {

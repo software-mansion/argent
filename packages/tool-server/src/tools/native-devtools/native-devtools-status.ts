@@ -39,6 +39,24 @@ type Result =
       injectable: boolean;
     };
 
+/**
+ * Whether the simulator's launchd env carries argent's instrumentation.
+ *
+ * `isEnvSetup()` latches true on the first successful apply and is never
+ * cleared, so a simulator whose env has since been wiped keeps reporting a
+ * readiness it does not have. A recorded init failure is what contradicts the
+ * latch — any later success clears it — but only where something re-applied the
+ * env to record it. `appConnectionState` does that on its way to a verdict for
+ * an app it finds UNCONNECTED; a connected one answers off the connections map
+ * first, and the non-injectable branch runs no env work at all. On those paths
+ * the record is whatever some earlier call for another bundle left, nothing
+ * re-tests it while this app stays connected, and the live connection is the
+ * better evidence: the process reached this endpoint, so the env was in place.
+ */
+function envSetupReading(api: NativeDevtoolsApi, connected: boolean): boolean {
+  return api.isEnvSetup() && (connected || api.getInitFailure() === null);
+}
+
 export const nativeDevtoolsStatusTool: ToolDefinition<Params, Result> = {
   id: "native-devtools-status",
   interaction: {
@@ -68,7 +86,7 @@ Returns { envSetup, appRunning, connected, requiresRestart, state, message, next
 Call this before using app-scoped native hierarchy tools or native-network-logs.
 If injectable is false: treat this as TERMINAL — injection cannot be relied on for this app, and no relaunch changes which way it goes. Do NOT restart/retry. Use the standard \`describe\` tool (its accessibility path reads the screen without injection) or \`screenshot\` (then interact by coordinate). Do not fall back to the native-devtools feature tools (native-describe-screen, native-find-views, native-full-hierarchy, native-network-logs, native-view-at-point, native-user-interactable-view-at-point) — they run the same injection precheck and fail with the same non-injectable error.
 If appRunning is false and nextLaunchWillBeInjected is true: use launch-app normally.
-If requiresRestart is true: call restart-app, then proceed with the native feature.
+If requiresRestart is true: call restart-app once, then proceed with the native feature. Read state before acting on a second such reading — indeterminate reaches this rule too, and its line below bounds it at that one restart.
 If state is unregistered: do NOT restart the app again — it already launched under the terms a restart would recreate. Restart the tool-server (\`argent server stop && argent server start --detach\`), then retry. If it reads unregistered again after that restart, stop: the process loads argent's dylib but never dials, and no further restart on either side changes it — treat native devtools as unavailable, then use \`describe\` or \`screenshot\` and drive by coordinate.
 If state is connecting: do NOT restart the app — launching it is what starts the connection, so a relaunch discards the one in progress and returns this same state. Wait a few seconds and repeat this call.
 If state is indeterminate: the process could not be inspected, so restart-app is worth one attempt. If this call still reports it after that restart, do NOT restart the app again — the service is stale rather than the app uninjected, so restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. Remote simulators can never inspect the process, so this is the only unconnected state a running app reaches there.
@@ -96,6 +114,10 @@ Fails if the simulator server is not running for the given UDID.`,
     // re-verify runs for an app that may never inject — so that reading is
     // whatever the last attempt left rather than a fresh one.
     if (!isInjectableBundleId(params.bundleId)) {
+      // A system app CAN carry the injection on some runtimes (#453 saw one
+      // way, an E2E run the other), and a live connection is what settles it
+      // for this process.
+      const connected = api.isConnected(params.bundleId);
       let appRunning: boolean;
       try {
         appRunning = await api.isAppRunning(params.bundleId);
@@ -112,9 +134,9 @@ Fails if the simulator server is not running for the given UDID.`,
         throw err;
       }
       return {
-        envSetup: api.isEnvSetup() && api.getInitFailure() === null,
+        envSetup: envSetupReading(api, connected),
         appRunning,
-        connected: api.isConnected(params.bundleId),
+        connected,
         requiresRestart: false,
         nextLaunchWillBeInjected: false,
         injectable: false,
@@ -164,13 +186,7 @@ Fails if the simulator server is not running for the given UDID.`,
     } else {
       appRunning = state !== "not_running";
     }
-    // `isEnvSetup()` latches true on the first successful apply and is never
-    // cleared, so a simulator whose env has since been wiped keeps reporting a
-    // readiness it does not have. The re-apply above tests it and records a
-    // failure any later success clears — so a failure standing beside the latch
-    // is exactly the case where the launchd env is NOT in place, and reporting
-    // otherwise sends the agent relaunching into an uninjected process.
-    const envSetup = api.isEnvSetup() && api.getInitFailure() === null;
+    const envSetup = envSetupReading(api, connected);
 
     return {
       envSetup,
