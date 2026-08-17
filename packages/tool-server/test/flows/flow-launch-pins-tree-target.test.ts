@@ -88,10 +88,18 @@ function readyTree(): DescribeTreeData {
   };
 }
 
-function mockRegistry(): Registry {
+/**
+ * `failLaunchOf` rejects that bundle id's `restart-app` - the tool runLaunch
+ * starts the app with, so its rejection is a launch that fails after runLaunch
+ * has already cleared the pin.
+ */
+function mockRegistry(failLaunchOf?: string): Registry {
   return {
-    invokeTool: vi.fn(async (id: string) => {
+    invokeTool: vi.fn(async (id: string, args: Record<string, unknown>) => {
       if (id === "list-devices") return { devices: [] };
+      if (failLaunchOf !== undefined && id === "restart-app" && args.bundleId === failLaunchOf) {
+        throw new Error("simulated relaunch failure");
+      }
       return { ok: true };
     }),
     getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
@@ -369,6 +377,53 @@ describe("launch pins the flow tree target", () => {
     ]);
   });
 
+  it("a failed launch hard-stops the run - nothing reads after it", async () => {
+    // runLaunch clears the pin before restart-app, so a failed launch cannot
+    // leave the terminated app's target behind. That clear has no reader today:
+    // a failed launch reports `error`, which hard-stops the run, so every later
+    // step reports skip without reading - a plain directive, a `when:` block
+    // and its inner steps, a `run:` fragment alike. Deleting the clear
+    // therefore changes no label, here or anywhere in the flows suite, so it is
+    // not what this test asserts. The assertion is the hard stop it shelters
+    // behind, which fails the moment a failed launch stops halting the run -
+    // the point at which a later read exists again and the clear needs a pin
+    // assertion of its own.
+    const OTHER = "com.acme.other";
+    await writeFlow("afterfail", {
+      executionPrerequisite: "App is running",
+      steps: [{ kind: "assert", condition: "visible", selector: { identifier: "ready" } }],
+    });
+    await writeFlow("launchfailed", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: APP },
+        { kind: "assert", condition: "visible", selector: { identifier: "ready" } },
+        { kind: "launch", app: OTHER },
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "ios" },
+          steps: [{ kind: "assert", condition: "visible", selector: { identifier: "ready" } }],
+        },
+        { kind: "run", flow: "afterfail.yaml" },
+      ],
+    });
+
+    const result = await run("launchfailed", mockRegistry(OTHER));
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "launch:pass",
+      "assert:pass",
+      "launch:error",
+      "when:skip",
+      "assert:skip",
+      "run:skip",
+    ]);
+    expect(result.steps[2]?.reason).toContain("restart-app failed");
+    // The one read of the run is the first assert's, taken before the failed
+    // launch - no later read exists to carry a target, cleared or stale.
+    expect(labels()).toEqual([`pinned:${APP}`]);
+  });
+
   it("a run with no launch step keeps the auto-resolve fallback (no target)", async () => {
     await writeFlow("unpinned", {
       executionPrerequisite: "App is running",
@@ -413,9 +468,12 @@ describe("launch pins the flow tree target", () => {
   });
 });
 
-// Each directive below routes its reads through a different fetchFlowTree call
-// site (settleTree, waitForFocus, fetchScreenAspect, waitForIdle) - dropping
-// env.treeTarget from any one of them must fail its test here.
+// Every read below goes through the one `readFlowTree` helper, the only place
+// `env.treeTarget` is passed - there is no per-site target argument left to
+// drop. What each test pins is its directive's own read path: a label fails a
+// read that reaches the tree source outside that helper (auto-resolving,
+// unpinned), and the label COUNT fails a directive that stops making one of its
+// reads - a settle round, the focus wait, the aspect read, an idle poll.
 describe("every read path carries the launch pin", () => {
   it("tap - the settle reads resolving the target (settleTree)", async () => {
     await writeFlow("tapped", {
