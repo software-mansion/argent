@@ -53,7 +53,7 @@ import {
   stepRequiresDevice,
   type FlowPlatform,
 } from "./flow-device";
-import { nestedOrchestratorOutcome } from "./flow-nested-outcome";
+import { isNestedOrchestratorTool, nestedOrchestratorOutcome } from "./flow-nested-outcome";
 import {
   runDirective,
   invokeOnDevice,
@@ -1118,9 +1118,11 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
         device,
         deviceIsExplicit: Boolean(params.device),
         signal,
-        // One holder for the whole run, including nested `run:` flows, which
-        // share this state. `deviceEnv` spreads the reference, so what one
-        // step's settle learns about the tree source the next one already has.
+        // One holder per ExecState, shared by nested `run:` flows: `deviceEnv`
+        // spreads the reference, so what one step's settle learns about the
+        // tree source the next one already has. A `tool: flow-execute` builds
+        // its own instead, which is why that step spends this verdict rather
+        // than inheriting whatever the sub-run proved.
         treeOutage: {},
         flowsDir,
         viaUpload,
@@ -2300,6 +2302,14 @@ async function execLeafStep(
         if (FOREGROUND_CHANGING_TOOLS.has(step.name)) {
           state.launchedNativeApp = undefined;
           if (state.treeOutage) state.treeOutage.proven = undefined;
+        }
+        // A nested orchestrator runs its tools outside this run's holder -
+        // `flow-execute` on an ExecState of its own, `run-sequence` on none -
+        // so a tree read or relaunch inside it retires nothing here. Cleared
+        // before the invoke for the same reason as above, and over-clearing
+        // only costs a later gesture a window it would have skipped.
+        if (isNestedOrchestratorTool(step.name) && state.treeOutage) {
+          state.treeOutage.proven = undefined;
         }
         const result = await invokeSubTool(registry, ctx, step.name, args);
         if (isUnmetUiWaitResult(step.name, result)) {

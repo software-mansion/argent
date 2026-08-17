@@ -140,6 +140,24 @@ function runSequenceOutcome(result: Record<string, unknown>): NestedOutcome | un
 }
 
 /**
+ * Every nested orchestrator with the reader for its result shape. One list, so
+ * a caller asking only WHETHER a tool runs a nested flow — the flow runner
+ * spends its tree-outage verdict on one — cannot drift from this dispatch.
+ */
+const NESTED_ORCHESTRATORS = new Map<
+  string,
+  (result: Record<string, unknown>) => NestedOutcome | undefined
+>([
+  [FLOW_EXECUTE_TOOL_ID, flowExecuteOutcome],
+  [RUN_SEQUENCE_TOOL_ID, runSequenceOutcome],
+]);
+
+/** Whether a `tool:` step runs other tools through a run of its own. */
+export function isNestedOrchestratorTool(tool: string): boolean {
+  return NESTED_ORCHESTRATORS.has(tool);
+}
+
+/**
  * Classify a nested orchestrator's result, or `undefined` when this is not one
  * of them, when it succeeded, or when the shape is not recognised — in every
  * one of which cases the runner's existing handling is correct.
@@ -149,7 +167,5 @@ export function nestedOrchestratorOutcome(
   result: unknown
 ): NestedOutcome | undefined {
   if (!isRecord(result)) return undefined;
-  if (tool === FLOW_EXECUTE_TOOL_ID) return flowExecuteOutcome(result);
-  if (tool === RUN_SEQUENCE_TOOL_ID) return runSequenceOutcome(result);
-  return undefined;
+  return NESTED_ORCHESTRATORS.get(tool)?.(result);
 }

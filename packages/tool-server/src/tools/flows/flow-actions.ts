@@ -103,8 +103,9 @@ export interface ActionEnv {
    * health whichever directive asked for it. A relaunch clears it too, whether
    * spelled `launch` or as one of flow-run's `FOREGROUND_CHANGING_TOOLS`: it is
    * the repair the commonest of these errors asks for, and no read need follow
-   * it before a gesture does. Absent for a caller that builds an `ActionEnv` by
-   * hand, which simply leaves every settle on its own budget.
+   * it before a gesture does. So does a nested orchestrator step, which can do
+   * either out of this holder's sight. Absent for a caller that builds an
+   * `ActionEnv` by hand, which simply leaves every settle on its own budget.
    *
    * The write carries the device it was proven against: a verdict about a
    * device the run has left says nothing about the one it moved onto (a

@@ -55,6 +55,14 @@ const outage = (): DescribeNode => {
   throw new Error("native devtools is unavailable");
 };
 
+/** Dead until the named tool runs, healthy after: the gesture behind it can read again. */
+const deadUntilTool = (tool: string) => (): DescribeNode => {
+  if (!events.some((e) => e.kind === "invoke" && e.tool === tool)) {
+    throw new Error("native devtools is unavailable");
+  }
+  return screen();
+};
+
 function mockRegistry(): Registry {
   return {
     invokeTool: vi.fn(async (id: string, args: Record<string, unknown>) => {
@@ -655,14 +663,6 @@ describe("a launch clears a proven outage", () => {
 // because over-clearing only costs a later gesture a window it would have
 // skipped, while missing a repair leaves it dispatching blind.
 describe("a raw `tool:` relaunch clears a proven outage", () => {
-  /** Dead until the named tool runs, healthy after: the gesture behind it can read again. */
-  const deadUntilTool = (tool: string) => (): DescribeNode => {
-    if (!events.some((e) => e.kind === "invoke" && e.tool === tool)) {
-      throw new Error("native devtools is unavailable");
-    }
-    return screen();
-  };
-
   // Every entry of `FOREGROUND_CHANGING_TOOLS`, with the args its own schema
   // asks for: the clear is unkeyed, so each spelling has to be pinned.
   it.each([
@@ -693,6 +693,44 @@ describe("a raw `tool:` relaunch clears a proven outage", () => {
       ]);
       // Exactly the two identical reads a settle converges on. A verdict only
       // `launch:` spent would leave the second tap with zero.
+      expect(readsBetween(gestureAt(1), gestureAt(2))).toBe(2);
+    },
+    20_000
+  );
+});
+
+// A nested `run:` shares this run's ExecState and so its memo, but a `tool:`
+// orchestrator runs outside this holder entirely - whatever it reads or
+// relaunches retires nothing here. So the step spends the verdict on the way
+// in, or an authored composition (the shape `flow-add-step` records for a
+// nested run) leaves every gesture behind it skipping its settle on evidence a
+// whole sub-run may have disproved.
+describe("a nested orchestrator step clears a proven outage", () => {
+  it.each([
+    { tool: "flow-execute", args: { name: "inner", project_root: "/repo" } },
+    { tool: "run-sequence", args: { steps: [{ tool: "gesture-tap", args: { x: 0.5, y: 0.5 } }] } },
+  ])(
+    "makes the gesture after `tool: $tool` pay for a settle of its own",
+    async ({ tool, args }) => {
+      currentTree = deadUntilTool(tool);
+      await writeFlow(`tap-${tool}-tap`, {
+        executionPrerequisite: "",
+        steps: [
+          { kind: "tap", x: 0.1, y: 0.1 },
+          { kind: "tool", name: tool, args },
+          { kind: "tap", x: 0.2, y: 0.2 },
+        ],
+      });
+
+      const result = await run(`tap-${tool}-tap`);
+
+      expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+        "tap:pass",
+        "tool:pass",
+        "tap:pass",
+      ]);
+      // Exactly the two identical reads a settle converges on. A verdict the
+      // nested step left standing would leave the second tap with zero.
       expect(readsBetween(gestureAt(1), gestureAt(2))).toBe(2);
     },
     20_000
