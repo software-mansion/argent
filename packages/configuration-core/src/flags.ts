@@ -68,6 +68,11 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     description: "Write structured tool-server lifecycle events to a JSONL file.",
   },
   {
+    name: "microinteractions",
+    description:
+      "Amplify a device gesture with a matching animation of the host window — the Simulator / emulator window physically shakes while `shake` runs. Purely cosmetic, macOS only, and never affects whether the gesture itself succeeds. Off by default.",
+  },
+  {
     name: "video-watermark",
     description:
       "Overlay the argent corner watermark on recorded screen videos. On by default; turn it off with `argent disable video-watermark`.",

@@ -11,6 +11,7 @@ import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
 import { isRemoteTvOsSimulator, simctlSpawn } from "../../../utils/sim-remote";
 import { isTvOsSimulator } from "../../../utils/ios-devices";
 import { UnsupportedOperationError } from "../../../utils/capability";
+import { shakeHostWindow } from "../../../utils/window-shake";
 import type { ShakeParams, ShakeResult, ShakeServices } from "../types";
 
 const execFileAsync = promisify(execFile);
@@ -90,11 +91,21 @@ export const iosImpl: PlatformImpl<ShakeServices, ShakeParams, ShakeResult> = {
 
     for (let i = 0; i < count; i++) {
       if (i > 0) await sleep(SHAKE_INTERVAL_MS);
+      // The notification is invisible from outside the guest, so — behind the
+      // `microinteractions` flag — wobble the Simulator window in step with it.
+      // Started before the notification rather than after so the two coincide;
+      // it resolves either way and can never fail the shake.
+      const wobble = shakeHostWindow({ kind: "ios" });
       try {
         await execFileAsync("xcrun", args, { timeout: 15_000 });
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
         throw shakeFailure(udid, error.message, error);
+      } finally {
+        // Awaited, never dangling: no `osascript` outlives the tool call. The
+        // `catch` is belt-and-braces — `shakeHostWindow` already swallows its
+        // own failures, and a cosmetic effect must not decide the result.
+        await wobble.catch(() => {});
       }
     }
 

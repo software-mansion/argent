@@ -37,6 +37,14 @@ vi.mock("../src/utils/adb", async (importOriginal) => ({
   isAndroidTv: vi.fn(async () => false),
 }));
 
+// The host-window wobble is cosmetic, flag-gated and macOS-only. Stub it so
+// these tests neither read the developer's real flags.json nor script a window,
+// and so the calls can be asserted directly. Its own behaviour — the gate, the
+// generated AppleScript, the swallow-and-warn — lives in window-shake.test.ts.
+vi.mock("../src/utils/window-shake", () => ({
+  shakeHostWindow: vi.fn(async () => {}),
+}));
+
 // `dispatchByPlatform` preflights each branch's `requires`; CI has neither
 // xcrun nor adb, so treat both as present.
 vi.mock("../src/utils/check-deps", async (importOriginal) => ({
@@ -54,6 +62,7 @@ import { isAndroidTv, runAdb } from "../src/utils/adb";
 import { isRemoteTvOsSimulator, simctlSpawn } from "../src/utils/sim-remote";
 import { isTvOsSimulator } from "../src/utils/ios-devices";
 import { UnsupportedOperationError } from "../src/utils/capability";
+import { shakeHostWindow } from "../src/utils/window-shake";
 
 const iosUdid = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
 const androidEmulator = "emulator-5554";
@@ -63,6 +72,7 @@ beforeEach(() => {
   vi.mocked(execFile).mockClear();
   vi.mocked(runAdb).mockClear();
   vi.mocked(simctlSpawn).mockClear();
+  vi.mocked(shakeHostWindow).mockClear();
 });
 
 describe("shake tool — iOS", () => {
@@ -86,6 +96,23 @@ describe("shake tool — iOS", () => {
       count: 3,
     });
     expect(execFile).toHaveBeenCalledTimes(3);
+  });
+
+  it("wobbles the Simulator window once per gesture", async () => {
+    await shakeTool.execute(services, { udid: iosUdid, count: 2 });
+    expect(shakeHostWindow).toHaveBeenCalledTimes(2);
+    expect(shakeHostWindow).toHaveBeenCalledWith({ kind: "ios" });
+  });
+
+  it("still reports a shake when the window animation is unavailable", async () => {
+    // The animation swallows its own failures, but a regression that let one
+    // escape would turn every shake on a machine without Accessibility
+    // permission into a failure. Pin the contract from this side too.
+    vi.mocked(shakeHostWindow).mockRejectedValueOnce(new Error("not authorized (-1743)"));
+    await expect(shakeTool.execute(services, { udid: iosUdid })).resolves.toEqual({
+      shaken: true,
+      count: 1,
+    });
   });
 });
 
@@ -170,6 +197,37 @@ describe("shake tool — Android", () => {
       .mock.calls.map(([args]) => args as string[])
       .filter((a) => a[4] === "set");
     expect(sets.at(-1)![6]).toBe("0.0000:9.8100:0.0000");
+  });
+
+  it("wobbles this emulator's own window, once per gesture", async () => {
+    await shakeTool.execute(services, { udid: androidEmulator, count: 2 });
+    expect(shakeHostWindow).toHaveBeenCalledTimes(2);
+    // Carrying the serial is what lets the animation pick the right window when
+    // several emulators are running.
+    expect(shakeHostWindow).toHaveBeenCalledWith({ kind: "android", serial: androidEmulator });
+  });
+
+  it("still restores the resting vector when the window animation fails", async () => {
+    // Set explicitly rather than relying on the suite default: the mid-burst
+    // failure test above installs its own `mockImplementation`, which the
+    // shared `mockClear` does not undo.
+    vi.mocked(runAdb).mockImplementation(async (args: string[]) =>
+      args.includes("get")
+        ? { stdout: "acceleration = 0:9.77631:0.812349\nOK\n", stderr: "" }
+        : { stdout: "OK\n", stderr: "" }
+    );
+    vi.mocked(shakeHostWindow).mockRejectedValueOnce(new Error("not authorized (-1743)"));
+
+    await expect(shakeTool.execute(services, { udid: androidEmulator })).resolves.toEqual({
+      shaken: true,
+      count: 1,
+    });
+
+    const sets = vi
+      .mocked(runAdb)
+      .mock.calls.map(([args]) => args as string[])
+      .filter((a) => a[4] === "set");
+    expect(sets.at(-1)![6]).toBe("0.0000:9.7763:0.8123");
   });
 
   it("rejects a physical device at the capability gate, before any adb traffic", async () => {
