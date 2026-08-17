@@ -38,7 +38,7 @@ export type CDPClientEvents = {
 /**
  * Where a `Debugger.paused` stopped the runtime, reduced to what an error needs.
  */
-export interface PausedState {
+interface PausedState {
   /** First call frame's source location, when the event carried one. */
   location?: string;
   /** CDP's own word for why: `other` for a breakpoint, `exception`, … */

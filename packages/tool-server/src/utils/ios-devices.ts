@@ -36,7 +36,7 @@ interface SimctlOutput {
 }
 
 /** List one device set's iOS/tvOS simulators; [] on any failure. */
-export async function listDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSimulator[]> {
+async function listDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSimulator[]> {
   // Never query a configured set whose directory doesn't exist — simctl would
   // materialize the set dir as a side effect, turning a config typo into a
   // stray directory on disk.

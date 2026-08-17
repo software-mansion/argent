@@ -6,6 +6,7 @@ import * as readline from "node:readline";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { nativeDevtoolsBlueprint } from "../src/blueprints/native-devtools";
+import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import { resolveDevice } from "../src/utils/device-info";
 import {
   __resetExternalDeviceCacheForTesting,
@@ -126,10 +127,15 @@ beforeEach(() => {
   delete process.env.ARGENT_DISABLE_DEVICE_PROVIDERS;
   __resetExternalDeviceCacheForTesting();
   __resetProviderWarningsForTesting();
+  /**
+   * The tools check for `xcrun` first and Linux CI has none. Nothing runs it.
+   */
+  __primeDepCacheForTests(["xcrun"]);
 });
 
 afterEach(() => {
   delete process.env.ARGENT_DEVICE_PROVIDERS;
+  __resetDepCacheForTests();
   fs.rmSync(temporaryDirectory, { force: true, recursive: true });
 });
 

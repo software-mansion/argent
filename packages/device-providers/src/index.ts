@@ -9,6 +9,11 @@
  *
  * The JSON document in `~/.argent/providers/` stays the contract of record;
  * this package is a convenience for providers that happen to be Node.
+ *
+ * This package is CommonJS, unlike its ESM siblings. `@argent/tool-server` is
+ * CommonJS and requires it and on Node older than 20.19 requiring an ESM module
+ * that imports zod overflows the stack. CommonJS loads zod's CommonJS build
+ * instead, so the crash never happens.
  */
 
 export {

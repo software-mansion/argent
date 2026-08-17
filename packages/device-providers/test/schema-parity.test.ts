@@ -12,6 +12,7 @@
 
 import { describe, expect, it } from "vitest";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import type { z } from "zod";
 import {
   EXTERNAL_CAPABILITIES,
@@ -32,7 +33,7 @@ type JsonSchemaNode = {
 };
 
 const document = JSON.parse(
-  fs.readFileSync(new URL("../schemas/device-provider-v1.json", import.meta.url), "utf8")
+  fs.readFileSync(path.join(__dirname, "../schemas/device-provider-v1.json"), "utf8")
 ) as { $defs: Record<string, JsonSchemaNode> };
 
 /** Field names a JSON Schema object node declares, sorted. */

@@ -3,7 +3,6 @@
   "name": "@argent/device-providers",
   "version": "0.20.0",
   "description": "The external device provider contract (schema v1): types, validators, discovery and the publish helpers providers write with",
-  "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
