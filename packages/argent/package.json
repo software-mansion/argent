@@ -42,9 +42,9 @@
     "assets/"
   ],
   "dependencies": {
-    "@fails-components/webtransport": "^1.6.3",
-    "@fails-components/webtransport-transport-http3-quiche": "^1.6.3",
-    "@modelcontextprotocol/sdk": "^1.20.0",
+    "@fails-components/webtransport": "^1.6.7",
+    "@fails-components/webtransport-transport-http3-quiche": "^1.6.7",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "tree-sitter": "^0.21.1",
     "tree-sitter-typescript": "^0.23.2"
   },
@@ -57,15 +57,15 @@
     "@argent/installer": "file:../argent-installer",
     "@argent/mcp": "file:../argent-mcp",
     "@argent/tools-client": "file:../argent-tools-client",
-    "@clack/prompts": "^1.6.0",
-    "@types/node": "^26.0.1",
-    "esbuild": "^0.28.1",
+    "@clack/prompts": "^1.7.0",
+    "@types/node": "^26.2.0",
+    "esbuild": "^0.28.2",
     "picocolors": "^1.1.1",
-    "posthog-node": "5.38.6",
+    "posthog-node": "5.49.1",
     "semver": "^7.8.5",
-    "smol-toml": "^1.7.0",
+    "smol-toml": "^1.8.0",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.9",
+    "vitest": "^4.1.10",
     "yaml": "^2.8.3"
   }
 }
