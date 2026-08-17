@@ -320,19 +320,39 @@ async function unreadableHierarchyReason(
 
 /**
  * Query the raw UIView tree via native-devtools `getFullHierarchy` and adapt
- * it. Throws — with the reason — when native-devtools is unavailable / not yet
- * connected / errored, or when the resolved target returns no windows (a
- * non-injectable or backgrounded app): flows never degrade to the AX tree (see
- * `fetchFlowTree`), so the caller's retry loop either rides out a transient
- * failure or surfaces this message as the step's failure reason.
+ * it. Flows never degrade to the AX tree (see `fetchFlowTree`), so every
+ * failure throws with its reason: the caller's poll rides out a transient one,
+ * and whatever is still failing at its deadline becomes the step's failure
+ * reason.
  *
- * `target` carries the runner's two confidence levels (see
- * {@link FlowTreeTarget}). Pinned, it names the target outright and skips
- * auto-resolve's `Application.getState` fan-out over every connection -
- * injection is simulator-wide, so one suspended system process that never
- * answers getState fails every auto-resolved read. Unpinned, auto-resolve
- * decides and the target is only the arbiter for a fan-out that timed out -
- * or, with nothing connected at all, the app whose disconnection is explained.
+ * `target` carries the runner's two confidence levels ({@link FlowTreeTarget}),
+ * and they take different paths.
+ *
+ * PINNED — the target names the app outright and auto-resolve never runs, so
+ * the `Application.getState` fan-out over every connection is skipped:
+ * injection is simulator-wide, and one background system process that never
+ * answers getState sinks the whole fan-out. Skipping it also skips what it
+ * decided, so this path re-decides it against the pinned app alone — four
+ * throws, each a verdict about that app rather than a read that might yet
+ * succeed: the `com.apple.*` policy gate (nothing upstream of a `launch` step
+ * applies it), a connection dropped after launch, a getState probe that stopped
+ * answering once one in this run had, and an app with no foreground presence at
+ * all. A probe that fails any other way propagates unwrapped.
+ *
+ * UNPINNED — auto-resolve picks the target and its own errors (no connected
+ * app, ambiguous frontmost, a single backgrounded app) propagate unwrapped;
+ * `target` decides only when that fan-out times out AND its own connection is
+ * still up. With nothing connected at all it is the app the disconnection is
+ * measured and explained for, ahead of auto-resolve's own "Launch or restart
+ * the app first" — the restart loop that measurement exists to break. No
+ * injectability gate applies here: auto-resolve ranks whatever connected, so a
+ * system app the simulator spawned can be resolved and read. Filtering those
+ * connections is the follow-up the pinned gate does not cover.
+ *
+ * Both paths end in the same read. It throws on an explicit getFullHierarchy
+ * error and on a target that returns no windows (a non-injectable app, one
+ * backgrounded, or a window not yet attached), and can still fail at the
+ * transport — the 15s RPC timeout, or a connection lost after the gate.
  */
 export async function queryFullHierarchyTree(
   registry: Registry,
