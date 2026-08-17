@@ -72,6 +72,14 @@ export const nativeUserInteractableViewAtPointTool: ToolDefinition<Params, Resul
 Unlike native-view-at-point, this respects userInteractionEnabled and is closer to
 UIKit hit-testing semantics.
 
+Use when a tap lands somewhere unexpected or does nothing, to see which control
+UIKit would hand the touch to — a transparent overlay swallowing it, a parent
+recognizer, a disabled button.
+
+Returns { status: "ok", view }: the hit-test winner with its class name, frames,
+identifier, label and layer name, its ancestor chain by default, and its subviews on
+request. view is null when no touchable view sits under that point.
+
 IMPORTANT: x and y are raw iOS window coordinates in points, NOT normalized [0,1]
 simulator tap coordinates.
 

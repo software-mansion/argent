@@ -72,6 +72,14 @@ export const nativeViewAtPointTool: ToolDefinition<Params, Result> = {
 Unlike native-user-interactable-view-at-point, this ignores userInteractionEnabled,
 so it answers "what is visually here?" rather than "what would receive the touch?".
 
+Use when a screenshot shows something the accessibility tree does not name — an
+unlabeled icon, a decorative overlay, a custom-drawn cell — and you need the class,
+identifier or nativeID of whatever draws it.
+
+Returns { status: "ok", view }: the matched view with its class name, frames,
+identifier, label and layer name, its ancestor chain by default, and its subviews on
+request. view is null when nothing is drawn at that point.
+
 IMPORTANT: x and y are raw iOS window coordinates in points, NOT normalized [0,1]
 simulator tap coordinates.
 
