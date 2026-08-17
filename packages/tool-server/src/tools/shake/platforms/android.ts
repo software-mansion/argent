@@ -171,11 +171,10 @@ export const androidImpl: PlatformImpl<ShakeServices, ShakeParams, ShakeResult> 
       );
     }
 
-    // Nothing about a sensor override is visible on screen, so wobble this
-    // emulator's own window in step with the burst. Cosmetic and flag-gated:
-    // `begin` never throws and `settle` never rejects, so the wobble can
-    // neither fail the shake nor delay it. Prepared before the lock so its one
-    // adb round trip never runs concurrently with the sensor burst.
+    // A sensor override is invisible on screen, so wobble this emulator's
+    // window in step with the burst. Cosmetic and flag-gated; it can neither
+    // fail nor delay the shake. Prepared before the lock so its adb round trip
+    // never runs concurrently with the burst.
     const shaker = await prepareHostWindowShake({ kind: "android", serial });
 
     const setAcceleration = async (v: Vec3) => {
@@ -236,9 +235,8 @@ export const androidImpl: PlatformImpl<ShakeServices, ShakeParams, ShakeResult> 
         await setAcceleration(rest).catch(() => {});
       }
 
-      // Settle once on the success path only, so no `osascript` outlives a
-      // successful tool call; a failed burst above throws without waiting on
-      // the wobble, and the restore in the `finally` never waits on it either.
+      // Success path only, so no `osascript` outlives the tool call. A failed
+      // burst throws past this and abandons the wobble.
       await shaker.settle();
 
       return { shaken: true, count };

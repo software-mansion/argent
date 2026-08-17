@@ -37,12 +37,10 @@ vi.mock("../src/utils/adb", async (importOriginal) => ({
   isAndroidTv: vi.fn(async () => false),
 }));
 
-// The host-window wobble is cosmetic, flag-gated and macOS-only. Stub it so
-// these tests neither read the developer's real flags.json nor script a window,
-// and so the calls can be asserted directly. Its own behaviour — the gate, the
-// generated AppleScript, the swallow-and-warn — lives in window-shake.test.ts.
-// The shaker is hoisted so every prepare call hands back the same instance and
-// begin/settle can be asserted per test.
+// Stub the host-window wobble so these tests neither read the developer's real
+// flags.json nor script a window; its own behaviour lives in
+// window-shake.test.ts. Hoisted so every prepare call hands back the same
+// shaker and begin/settle can be asserted per test.
 const { mockShaker } = vi.hoisted(() => ({
   mockShaker: { begin: vi.fn(), settle: vi.fn(async () => {}) },
 }));
@@ -107,8 +105,8 @@ describe("shake tool — iOS", () => {
 
   it("prepares one wobble for the tool call and begins it once per gesture", async () => {
     await shakeTool.execute(services, { udid: iosUdid, count: 2 });
-    // Prepared once per call, carrying the device identity so the animation
-    // can title-match this simulator's own window.
+    // Carries the device identity so the animation title-matches this
+    // simulator's own window.
     expect(prepareHostWindowShake).toHaveBeenCalledTimes(1);
     expect(prepareHostWindowShake).toHaveBeenCalledWith({
       kind: "ios",
@@ -121,8 +119,8 @@ describe("shake tool — iOS", () => {
   });
 
   it("fails a bad gesture immediately, without waiting out the wobble", async () => {
-    // The wobble is cosmetic: a genuine gesture failure must surface at once,
-    // and the abandoned wobble handles its own cleanup.
+    // A genuine gesture failure must surface at once; the abandoned wobble
+    // cleans up after itself.
     vi.mocked(execFile).mockImplementationOnce(((
       _file: string,
       _args: string[],
@@ -228,8 +226,8 @@ describe("shake tool — Android", () => {
     );
 
     await shakeTool.execute(services, { udid: androidEmulator, count: 2 });
-    // Prepared once per call, before the sensor traffic. Carrying the serial is
-    // what lets the animation pick the right window when several emulators run.
+    // Prepared before the sensor traffic; the serial is what picks the right
+    // window when several emulators run.
     expect(prepareHostWindowShake).toHaveBeenCalledTimes(1);
     expect(prepareHostWindowShake).toHaveBeenCalledWith({
       kind: "android",
@@ -240,8 +238,8 @@ describe("shake tool — Android", () => {
   });
 
   it("restores the accelerometer after a failed burst without waiting on the wobble", async () => {
-    // The wobble is cosmetic: a genuine burst failure must surface at once and
-    // the resting-vector restore must not be delayed behind the animation tail.
+    // A genuine burst failure must surface at once, and the resting-vector
+    // restore must not queue behind the animation tail.
     let call = 0;
     vi.mocked(runAdb).mockImplementation(async (args: string[]) => {
       call++;

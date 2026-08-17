@@ -89,10 +89,9 @@ export const iosImpl: PlatformImpl<ShakeServices, ShakeParams, ShakeResult> = {
     // upload or install — this is the whole implementation.
     const args = await simctlArgsForUdid(udid, ["spawn", udid, ...NOTIFYUTIL_ARGV]);
 
-    // The notification is invisible from outside the guest, so wobble the
-    // Simulator window in step with it. Cosmetic and flag-gated: `begin` never
-    // throws and `settle` never rejects, so the wobble can neither fail the
-    // shake nor delay a gesture.
+    // The notification is invisible outside the guest, so wobble the Simulator
+    // window in step with it. Cosmetic and flag-gated; it can neither fail nor
+    // delay the shake.
     const shaker = await prepareHostWindowShake({ kind: "ios", udid, name: device.name });
 
     for (let i = 0; i < count; i++) {
@@ -106,9 +105,8 @@ export const iosImpl: PlatformImpl<ShakeServices, ShakeParams, ShakeResult> = {
       }
     }
 
-    // Settle once after the loop so no `osascript` outlives a successful tool
-    // call; on the error path above the wobble is abandoned (it swallows its
-    // own failures and is hard-capped at a few seconds).
+    // So no `osascript` outlives the tool call. The error path above abandons
+    // the wobble, which swallows its own failures and is capped at 5s.
     await shaker.settle();
 
     return { shaken: true, count };
