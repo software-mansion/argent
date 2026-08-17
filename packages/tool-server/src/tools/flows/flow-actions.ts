@@ -92,15 +92,16 @@ export interface ActionEnv {
    * direction - that only ever costs a later gesture a window it would have
    * skipped - but it is a clear by arrival, not by sequence.
    *
-   * Only {@link settleForGesture} and {@link fetchScreenAspect} READ it, each
-   * to skip work it has been shown cannot pay off: a settle window, and a read
-   * whose failure the caller degrades past anyway. The skip is not silent: the
-   * gesture warns its step report that it dispatched unsettled, so the memo
-   * never makes an outage cheaper to miss than it was to prove. It is written
-   * by the one place that can prove a source dead (a {@link settleTree} whose
-   * whole window failed) and cleared by {@link readFlowTree}, which every
-   * directive's reads go through, since a read that came back is evidence of
-   * health whichever directive asked for it. A relaunch clears it too, whether
+   * Only {@link settleForGesture} READS it, and only to skip a window it has
+   * already been shown is unaffordable - never a read whose answer is
+   * dispatched rather than waited on, which is why {@link fetchScreenAspect}
+   * does not consult it. The skip is not silent: the gesture warns its step
+   * report that it dispatched unsettled, so the memo never makes an outage
+   * cheaper to miss than it was to prove. It is written by the one place that
+   * can prove a source dead (a {@link settleTree} whose whole window failed)
+   * and cleared by {@link readFlowTree}, which every directive's reads go
+   * through, since a read that came back is evidence of health whichever
+   * directive asked for it. A relaunch clears it too, whether
    * spelled `launch` or as one of flow-run's `FOREGROUND_CHANGING_TOOLS`: it is
    * the repair the commonest of these errors asks for, and no read need follow
    * it before a gesture does. So does a nested orchestrator step, which can do
@@ -395,15 +396,14 @@ function provenTreeOutage(env: ActionEnv): Error | undefined {
 /**
  * Every tree read a directive makes, so that a read which comes back clears
  * {@link ActionEnv.treeOutage} whichever directive asked for it. Routing them
- * all through here is what keeps the memo's claim honest: `await`/`assert` and
- * `idle`'s read never settle, so a clear living in {@link settleTree} alone
- * would let a run read the tree successfully, over and over, and still have
- * every later coordinate gesture skip its settle on the strength of one old
- * failure.
+ * all through here is what keeps the memo's claim honest: `await`/`assert`,
+ * `idle`'s read and the rotate aspect read never settle, so a clear living in
+ * {@link settleTree} alone would let a run read the tree successfully, over and
+ * over, and still have every later coordinate gesture skip its settle on the
+ * strength of one old failure.
  *
- * The other two route here for uniformity but can never be the read that
- * clears a verdict: {@link fetchScreenAspect} skips itself while one stands,
- * and the `type` focus wait runs only once {@link waitForFrame} has resolved a
+ * The `type` focus wait routes here for uniformity but can never be the read
+ * that clears a verdict: it runs only once {@link waitForFrame} has resolved a
  * frame, which takes a settle that read the tree - and that read already
  * cleared it.
  */
@@ -1088,14 +1088,23 @@ async function runPinch(
  * the tree several times per step, so the extra fetch is noise, and the
  * resolution path every other directive shares stays untouched.
  *
- * Skipped outright on a proven outage, for the same reason {@link
- * settleForGesture} skips its window: the caller degrades to aspect 1 whether
- * the read is skipped or fails, and a failing read is not free. On iOS it is
- * the dearest thing a centre-anchored rotate does, the hierarchy RPC sitting on
- * a 15s tier against the 3s window just saved.
+ * The one read {@link ActionEnv.treeOutage} must not spare, unlike the settle
+ * window {@link settleForGesture} skips: this answer is DISPATCHED, not waited
+ * on. A stale verdict would degrade a centre rotate on a phone from the
+ * edge-safe vertical placement the real aspect picks (Down points at
+ * y = 0.278 / 0.722) to the aspect-1 fallback, which puts both fingers 0.48 off
+ * centre on whichever axis wins: on iOS the two candidates tie and horizontal
+ * takes it (x = 0.02 / 0.98, inside the 0.08 side guard), while Android's wider
+ * side guards pick vertical (y = 0.02 / 0.98, inside the top/bottom one).
+ * Either way both fingers start in a guard.
+ *
+ * A true verdict costs one failed read instead, which the caller degrades past
+ * exactly as it degrades past a skip - but not for free: this read carries no
+ * budget and no signal, so on iOS it is the 15s hierarchy tier, longer than the
+ * 3s window the memo saved. That is the price of never dispatching geometry off
+ * a prediction, and it is what every rotate paid before the memo existed.
  */
 async function fetchScreenAspect(env: ActionEnv): Promise<number | undefined> {
-  if (provenTreeOutage(env)) return undefined;
   try {
     const { screen } = await readFlowTree(env);
     return screen && screen.width > 0 && screen.height > 0

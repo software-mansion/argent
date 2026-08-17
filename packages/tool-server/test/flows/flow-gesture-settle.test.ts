@@ -15,6 +15,8 @@ let currentTree: () => DescribeNode;
 let hangReads: boolean;
 /** How long a read takes to answer, for the tests that need one slower than a settle window. */
 let readDelayMs: number;
+/** Pixel dimensions the source serves, for the tests whose dispatched geometry reads them. */
+let currentScreen: { width: number; height: number } | undefined;
 
 // `idle` masks the status bar before comparing captures, which asks the iOS
 // runtime whether this UDID is a tvOS simulator. DEVICE is fabricated, so a
@@ -32,7 +34,11 @@ vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
     events.push({ kind: "read" });
     if (hangReads) return new Promise<never>(() => {});
     if (readDelayMs > 0) await new Promise((r) => setTimeout(r, readDelayMs));
-    return { tree: currentTree(), source: "native-devtools" };
+    return {
+      tree: currentTree(),
+      source: "native-devtools",
+      ...(currentScreen ? { screen: currentScreen } : {}),
+    };
   }),
 }));
 
@@ -120,6 +126,7 @@ beforeEach(async () => {
   currentTree = screen;
   hangReads = false;
   readDelayMs = 0;
+  currentScreen = undefined;
 });
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
@@ -260,10 +267,12 @@ describe("a tree-source outage never fails a selector-less gesture", () => {
     expect(readsBeforeFirstGesture()).toBeGreaterThan(2);
   }, 20_000);
 
-  it("charges a centre-anchored rotate nothing at all, settle or aspect read", async () => {
-    // `rotate` reads the screen aspect on top of its settle. That read must
-    // honour the verdict too, or every rotate step hands back the window the
-    // skip just saved - and on iOS the hierarchy read is the dearer half.
+  it("charges a centre-anchored rotate its aspect read, but no settle window", async () => {
+    // `rotate` reads the screen aspect on top of its settle, and only the
+    // settle is the memo's to spare: the aspect decides where the fingers go
+    // down, so it is re-asked every time. One failed read per rotate is what
+    // that costs against a source that is genuinely dead - unbudgeted, so on a
+    // stalled iOS source it outlasts the window the memo saved.
     currentTree = outage;
     await writeFlow("tap-rotate-rotate", {
       executionPrerequisite: "",
@@ -281,15 +290,61 @@ describe("a tree-source outage never fails a selector-less gesture", () => {
       "rotate:pass",
       "rotate:pass",
     ]);
-    // Every read belongs to the tap's window: neither rotate settles, and
-    // neither asks for an aspect it has been shown the source cannot serve. One
-    // unguarded aspect read per rotate would make this 2.
-    expect(readsBetween(gestureAt(0), events.length)).toBe(0);
+    // Every other read belongs to the tap's window: neither rotate settles, and
+    // each asks for the aspect exactly once. A rotate that settled too would
+    // make this a dozen-odd.
+    expect(readsBetween(gestureAt(0), events.length)).toBe(2);
     expect(gestures().map((g) => g.tool)).toEqual([
       "gesture-tap",
       "gesture-rotate",
       "gesture-rotate",
     ]);
+    // The read failed, so the geometry degrades to the legacy normalized-space
+    // orbit - `radius`, the aspect-unknown spelling, on the horizontal axis.
+    expect(gestures()[1]?.args).toMatchObject({ radius: 0.48, startAngle: 0 });
+  }, 20_000);
+
+  it("reads the aspect for a centre-anchored rotate though the verdict still stands", async () => {
+    // The verdict is a prediction about a settle, not about the source: here it
+    // is already stale when the rotate runs. Skipping the aspect read on it
+    // would not just cost the step a wait, it would move both Down points -
+    // and the placement it would move them to is the worse one.
+    currentTree = deadUntilTool("gesture-tap");
+    currentScreen = { width: 390, height: 844 };
+    await writeFlow("tap-rotate-phone", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "tap", x: 0.1, y: 0.1 },
+        { kind: "rotate", by: 90 },
+      ],
+    });
+
+    const result = await run("tap-rotate-phone");
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:pass", "rotate:pass"]);
+    // The settle is still skipped - one read between the gestures, the aspect's.
+    expect(readsBetween(gestureAt(0), gestureAt(1))).toBe(1);
+    // And the step says which half it lost: the wait, never the geometry.
+    expect(result.steps[1].warning).toContain("without settling the screen");
+    // radiusX = 0.5 - SCREEN_EDGE_INSET = 0.48, radiusY = 0.48 · 390/844, so the
+    // vertical candidate's Down points are y = 0.278 / 0.722, clear of the 0.08
+    // iOS top/bottom guard - the only fullyEdgeSafe candidate, hence selected.
+    // At aspect 1 both tie unsafe at radius 0.48 and the horizontal one wins,
+    // putting the fingers at x = 0.02 / 0.98, inside the back-gesture zone.
+    expect(gestures()[1]).toMatchObject({
+      tool: "gesture-rotate",
+      args: {
+        centerX: 0.5,
+        centerY: 0.5,
+        radiusX: 0.48,
+        radiusY: 0.22180094786729856,
+        startAngle: 90,
+        endAngle: 180,
+        durationMs: 300,
+      },
+    });
+    // `radius` is the aspect-unknown spelling; its absence is the read landing.
+    expect(gestures()[1]?.args).not.toHaveProperty("radius");
   }, 20_000);
 
   it("proves no outage from a window that read the tree but never settled", async () => {
@@ -356,8 +411,9 @@ describe("a tree-source outage never fails a selector-less gesture", () => {
         expect(step.warning).toContain("without settling the screen");
         expect(step.warning).toContain(OUTAGE_REASON);
       }
-      // And only the first step paid a window for what all four report.
-      expect(readsBetween(gestureAt(0), events.length)).toBe(0);
+      // And only the first step paid a window for what all four report - the
+      // one read behind it is the rotate's aspect, which no verdict spares.
+      expect(readsBetween(gestureAt(0), events.length)).toBe(1);
     }, 20_000);
 
     it("warns a centre-anchored pinch too", async () => {
