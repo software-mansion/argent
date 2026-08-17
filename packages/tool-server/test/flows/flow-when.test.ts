@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Registry } from "@argent/registry";
+import { FAILURE_CODES, getFailureSignal, type Registry } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
 
 // Serve the flow tree directly: flows resolve selectors against the platform's
@@ -175,14 +175,100 @@ describe("when: parse/serialize", () => {
     ).toThrow(/no other keys/i);
   });
 
+  // Hand-written, and ONE copy for the three tests below: the prefix names the
+  // registered block directives, so a second one must update this literal
+  // consciously. Deriving it from BLOCK_DIRECTIVE_KEYS would move it with the
+  // source and pin nothing; restating it per test made that three edits to find.
+  const DEPTH_CAP_MESSAGE = "`when:` blocks nest deeper than 20 levels";
+
   it("rejects a cyclic YAML alias on when steps with a structured error", () => {
     // The yaml library materializes `steps: *s` as a cyclic object; without
     // the depth cap the parser would recurse forever and escape as a raw
     // RangeError instead of a flow parse error.
-    expect(() => parseFlow("steps: &s\n  - when: { visible: X }\n    steps: *s\n")).toThrow(
-      /nest deeper than 20 levels/i
+    let thrown: unknown;
+    try {
+      parseFlow("steps: &s\n  - when: { visible: X }\n    steps: *s\n");
+    } catch (err) {
+      thrown = err;
+    }
+    // The only site that pins the whole message: the alias hint is what points
+    // the author at the actual mistake here, so it is part of the contract.
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain(
+      `${DEPTH_CAP_MESSAGE} — check for a cyclic YAML alias (\`steps: &s … steps: *s\`)`
     );
+    // A raw RangeError would carry no signal — this is what makes it structured.
+    const signal = getFailureSignal(thrown);
+    expect(signal?.error_kind).toBe("validation");
+    expect(signal?.error_code).toBe(FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED);
   });
+
+  it("parses when: nested to the depth cap and rejects one level deeper", () => {
+    // The cyclic-alias test above only proves SOME cap exists; this pins its
+    // value from both sides so it cannot drift in either direction. The literal
+    // 20 IS the pin — reading MAX_BLOCK_DEPTH would move with the constant and
+    // assert nothing.
+    const nestedWhens = (levels: number): string => {
+      let steps = "[{ echo: deepest }]";
+      for (let i = 0; i < levels; i++) steps = `[{ when: { platform: ios }, steps: ${steps} }]`;
+      return `steps: ${steps}\n`;
+    };
+
+    let step = parseFlow(nestedWhens(20)).steps[0];
+    let depth = 0;
+    while (step.kind === "when") {
+      depth++;
+      step = step.steps[0];
+    }
+    expect(depth).toBe(20);
+    expect(step).toEqual({ kind: "echo", message: "deepest" });
+
+    // 21 levels is plain over-deep YAML, not a cycle, so it must still land as
+    // the structured parse error rather than escaping as a RangeError.
+    let thrown: unknown;
+    try {
+      parseFlow(nestedWhens(21));
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(Error); // a raised cap would leave this unset
+    expect((thrown as Error).message).toContain(DEPTH_CAP_MESSAGE);
+    expect(getFailureSignal(thrown)?.error_code).toBe(FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED);
+  });
+
+  // The only pin on parseWhenStep's EARLY assertBlockDepth call: the cap itself
+  // outlives it (parseBlockSteps asserts again before recursing) and the cyclic
+  // alias above reports the depth error either way, so deleting the early call
+  // leaves the rest of the suite green while exactly these entries — at the cap
+  // and carrying a second defect — flip to the shallower check's message.
+  it.each([
+    ["an else branch", "when: { platform: ios }, else: 1, steps: [{ echo: x }]", "has no else"],
+    [
+      "a third sibling key",
+      "when: { platform: ios }, foo: 1, steps: [{ echo: x }]",
+      "takes exactly { when: <condition>, steps: [...] }",
+    ],
+    ["an unknown condition key", "when: { nope: X }, steps: [{ echo: x }]", "one condition key"],
+  ])(
+    "reports the depth, not %s, for the entry sitting at the cap",
+    (_defect, innermost, shallow) => {
+      // 20 wrappers occupy depths 0-19, so the defective entry is the one at 20.
+      let steps = `[{ ${innermost} }]`;
+      for (let i = 0; i < 20; i++) steps = `[{ when: { platform: ios }, steps: ${steps} }]`;
+
+      let thrown: unknown;
+      try {
+        parseFlow(`steps: ${steps}\n`);
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toContain(DEPTH_CAP_MESSAGE);
+      // Not just "the depth error is in there": the shallower check must not be
+      // what answered, which is the whole difference the early call makes.
+      expect((thrown as Error).message).not.toContain(shallow);
+    }
+  );
 
   it("rejects a per-step optional key, pointing at when:", () => {
     // No silent drop: an ignored `optional: true` would leave a step the

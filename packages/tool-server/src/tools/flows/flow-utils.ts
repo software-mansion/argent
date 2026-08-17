@@ -727,6 +727,48 @@ export type FlowFile = {
 };
 
 /**
+ * The literal child steps of a block directive, or undefined for a leaf step.
+ *
+ * The single predicate for "this step has authored children", read at seven
+ * sites. Four expand a block that will NOT execute into skip lines, so a report
+ * keeps one line per authored step no matter where the run ended: `execSteps`'
+ * three gates — a hard stop, a device-free flow, a cancellation — plus
+ * `reportBlockSkipped` recursing into a nested block. (A guard-unmet `when`
+ * reaches those same skip lines by another route: `execWhenStep` has the block
+ * in hand and passes `step.steps` straight to `reportBlockSkipped`.) The fifth
+ * is the upload preflight's walk, where a block it cannot see hides a nested
+ * `run:`/`snapshot` from validation. The sixth and seventh,
+ * `flowRequiresDevice` and `flowScopesDevice` (flow-device.ts), read children
+ * not to skip them but to resolve the flow's device decisions from a block's
+ * body — the guard against a later block directive whose header reads nothing
+ * off the device, and dead in a run while `when`, whose header already
+ * classifies device-requiring, is the only block kind.
+ *
+ * Six sites asked `kind === "when"` directly before this existed: five for the
+ * children, one for the dispatch (now {@link isBlockStep}/`execBlockStep`);
+ * `flowRequiresDevice`'s walk arrived after the predicate and never had to. A
+ * second block directive would have had to remember all six; a forgotten one
+ * drops a whole block from the report or preflight silently. Now both are one
+ * case here, the same case the PARSER exempts from the single-key sibling
+ * check: the kinds come from {@link BLOCK_DIRECTIVE_KEYS}, not restated.
+ */
+export function blockSteps(step: FlowStep): FlowStep[] | undefined {
+  return isBlockStep(step) ? (step.steps satisfies FlowStep[]) : undefined;
+}
+
+/**
+ * Narrow a step to the kinds {@link BLOCK_DIRECTIVE_KEYS} lists. `Extract` is
+ * what makes the list load-bearing: {@link blockSteps}' `.steps` typechecks
+ * only while EVERY listed kind's step type carries children. The `satisfies`
+ * there pins them to a REQUIRED `steps`; an optional one types as
+ * `FlowStep[] | undefined`, which the return type alone would accept while
+ * every reader sees a childless leaf.
+ */
+export function isBlockStep(step: FlowStep): step is BlockStep {
+  return isBlockDirectiveKey(step.kind);
+}
+
+/**
  * A flow is end-to-end iff it BEGINS by launching an app — its first step
  * (ignoring `echo` narration) is a `launch`. Such a flow controls its own
  * start state, so it is the natural standalone/suite entry point and must not
@@ -1422,7 +1464,7 @@ const SELECTOR_KEYS: readonly string[] = [
 /**
  * Total number of scopes one selector may carry, counted across its whole
  * relation TREE rather than down a single branch — the selector analog of
- * MAX_WHEN_DEPTH. A size bound, not a depth bound, because each level can open
+ * MAX_BLOCK_DEPTH. A size bound, not a depth bound, because each level can open
  * three branches: capping depth alone still admits 3^depth scopes, and the
  * runner's loose-alternative expansion is exponential in the number of
  * bare-string scopes (`selectorAlternatives`), so a few hundred bytes of YAML
@@ -1967,6 +2009,72 @@ const STEP_DIRECTIVE_KEYS: readonly string[] = [
 ];
 
 /**
+ * The directive keys that carry a sibling `steps:` list — the single registry
+ * of what a block directive is: {@link blockSteps} reads THIS list rather than
+ * restating the kinds, so parse time and run time cannot answer differently.
+ * Three constraints keep an entry honest. Two judge the keys already listed:
+ * `satisfies` rejects a key that is not a real step kind, and blockSteps'
+ * `.steps` read rejects a kind with no usable `steps` - `Extract` catches a
+ * missing one, its own `satisfies` one that is not a `FlowStep[]`, so a
+ * childless directive listed here is a compile error, not a silent runtime
+ * `undefined`. Neither can force a key IN, which is what
+ * {@link _everyChildBearingKindIsRegistered} does — without it a child-bearing
+ * kind added later is simply absent here, and absent is not an error.
+ *
+ * At parse time these keys are exempt from the single-key sibling check,
+ * because their own parser validates their siblings with pointed messages.
+ */
+export const BLOCK_DIRECTIVE_KEYS = ["when"] as const satisfies readonly FlowStep["kind"][];
+
+/** The step kinds {@link BLOCK_DIRECTIVE_KEYS} names. */
+type BlockDirectiveKind = (typeof BLOCK_DIRECTIVE_KEYS)[number];
+
+/** The step union those kinds select - what {@link isBlockStep} narrows to. */
+export type BlockStep = Extract<FlowStep, { kind: BlockDirectiveKind }>;
+
+/**
+ * Every step kind whose type carries a `steps` property, whatever its spelling:
+ * optional, `readonly`, any element type. Distributes over the union and asks
+ * `keyof` rather than matching structurally, because the obvious
+ * `Extract<FlowStep, { steps: FlowStep[] }>` misses a `steps?` or a
+ * `readonly FlowStep[]` - anything not both required and assignable to
+ * `FlowStep[]` reads as a childless leaf.
+ */
+type ChildBearingKind<S extends FlowStep = FlowStep> = S extends unknown
+  ? "steps" extends keyof S
+    ? S["kind"]
+    : never
+  : never;
+
+/** The child-bearing step kinds {@link BLOCK_DIRECTIVE_KEYS} fails to list. */
+type UnregisteredBlockKind = Exclude<ChildBearingKind, BlockDirectiveKind>;
+
+/**
+ * Forces a child-bearing kind INTO the registry — the direction the two
+ * constraints on {@link BLOCK_DIRECTIVE_KEYS} cannot cover, since both only
+ * judge kinds already listed. An unlisted one parses like any other step and
+ * then reads as `undefined` from {@link blockSteps}, so every reader listed
+ * there silently misses its children. {@link ChildBearingKind} is what makes
+ * this reach every spelling of `steps`, not just the one a structural match
+ * names. Spelled as a conditional rather than a bare `never` so the compile
+ * error names the missing kind.
+ */
+const _everyChildBearingKindIsRegistered: [UnregisteredBlockKind] extends [never]
+  ? true
+  : UnregisteredBlockKind = true;
+
+/**
+ * Is this directive key a block directive? The parser and runner's only
+ * CLASSIFYING read of {@link BLOCK_DIRECTIVE_KEYS} ({@link assertBlockDepth}
+ * reads it to NAME the keys in its message); the widening is the lookup
+ * itself — the const tuple's own `includes` accepts only keys already known to
+ * be block kinds, which is the question being asked.
+ */
+function isBlockDirectiveKey(key: string): key is BlockDirectiveKind {
+  return (BLOCK_DIRECTIVE_KEYS as readonly string[]).includes(key);
+}
+
+/**
  * Parse `times` on a tap body: an integer tap count dispatched as ONE
  * multi-tap gesture (2 = double-tap; the OS may recognize it as such — N
  * *independent* taps are N tap steps). `times: 1` is the default and
@@ -2270,13 +2378,65 @@ function parseWhenCondition(raw: unknown): WhenCondition {
 }
 
 /**
- * Nesting cap for `when` blocks — the parse-side analog of flow-run's
- * MAX_RUN_DEPTH. `when` is the only step kind whose parse recurses into child
- * steps, and the yaml library happily materializes a cyclic alias
- * (`steps: &s … steps: *s`) as a cyclic object; without a cap that cycle
+ * Nesting cap for block directives — the parse-side analog of flow-run's
+ * MAX_RUN_DEPTH. A block directive is the only kind of step whose parse
+ * recurses into child steps, and the yaml library happily materializes a cyclic
+ * alias (`steps: &s … steps: *s`) as a cyclic object; without a cap that cycle
  * escapes parseFlow as a raw RangeError instead of a structured parse error.
+ *
+ * ONE counter shared by every block directive, deliberately: a per-directive
+ * counter would let an alternating chain evade all of them and reopen the hole.
  */
-const MAX_WHEN_DEPTH = 20;
+const MAX_BLOCK_DEPTH = 20;
+
+/**
+ * Guard a block directive's recursion depth. Called FIRST in a block's parse —
+ * before its own key/shape checks — so an entry that has REACHED the cap
+ * reports the depth rather than its second defect: nest `when` to the cap and
+ * give the entry AT it an `else:`, a third sibling key, or an unknown condition
+ * key, and it reports the depth, not that check's message. (A cyclic alias is
+ * NOT that case — the same object repeats at every level, so a shape defect in
+ * it fires at depth 0 and a well-formed cycle reaches the cap with or without
+ * this call.) That early call buys the error PRECEDENCE only, not the cap
+ * itself: {@link parseBlockSteps} asserts again before it recurses, so
+ * forgetting the early call costs a directive the precedence and nothing more.
+ */
+function assertBlockDepth(raw: unknown, depth: number): void {
+  if (depth >= MAX_BLOCK_DEPTH) {
+    const directives = BLOCK_DIRECTIVE_KEYS.map((key) => `\`${key}:\``).join("/");
+    badEntry(
+      raw,
+      `${directives} blocks nest deeper than ${MAX_BLOCK_DEPTH} levels — check for a cyclic YAML alias (\`steps: &s … steps: *s\`)`
+    );
+  }
+}
+
+/**
+ * Parse a block directive's sibling `steps:` list: non-empty, every entry an
+ * object, each parsed one level deeper so the shared depth cap sees the whole
+ * chain. `emptyDetail` is the directive's own message for an absent or empty
+ * list — the one part worth phrasing per directive, since it is where an author
+ * lands when they wrote the guard but not the body.
+ *
+ * Asserts the depth cap here too, on the one path every block directive must go
+ * through to recurse, so no directive can opt out of the cap by forgetting the
+ * early {@link assertBlockDepth} call. `depth` is unchanged between the two
+ * calls, so for a directive that made the early one this is a no-op. While
+ * every registered directive makes that call, no input can make THIS assert the
+ * one that fires, so nothing pins it until one skips the early call.
+ */
+function parseBlockSteps(
+  raw: Record<string, unknown>,
+  depth: number,
+  emptyDetail: string
+): FlowStep[] {
+  assertBlockDepth(raw, depth);
+  if (!Array.isArray(raw.steps) || raw.steps.length === 0) badEntry(raw, emptyDetail);
+  return (raw.steps as unknown[]).map((s) => {
+    if (s !== null && typeof s === "object") return fromYamlStep(s as YamlStep, depth + 1);
+    return badEntry(s, "step must be an object");
+  });
+}
 
 /**
  * Parse a `when` step: `{ when: <condition>, steps: [<step>, …] }` — a guarded
@@ -2285,12 +2445,7 @@ const MAX_WHEN_DEPTH = 20;
  * back on the known path), so paths may only reconverge, never diverge.
  */
 function parseWhenStep(raw: Record<string, unknown>, depth: number): FlowStep {
-  if (depth >= MAX_WHEN_DEPTH) {
-    badEntry(
-      raw,
-      `when blocks nest deeper than ${MAX_WHEN_DEPTH} levels — check for a cyclic YAML alias (\`steps: &s … steps: *s\`)`
-    );
-  }
+  assertBlockDepth(raw, depth);
   if ("else" in raw) {
     badEntry(
       raw,
@@ -2301,13 +2456,7 @@ function parseWhenStep(raw: Record<string, unknown>, depth: number): FlowStep {
     badEntry(raw, "a when step takes exactly { when: <condition>, steps: [...] }");
   }
   const condition = parseWhenCondition(raw.when);
-  if (!Array.isArray(raw.steps) || raw.steps.length === 0) {
-    badEntry(raw, "when needs a non-empty steps list to guard");
-  }
-  const steps = (raw.steps as unknown[]).map((s) => {
-    if (s !== null && typeof s === "object") return fromYamlStep(s as YamlStep, depth + 1);
-    return badEntry(s, "step must be an object");
-  });
+  const steps = parseBlockSteps(raw, depth, "when needs a non-empty steps list to guard");
   return { kind: "when", condition, steps };
 }
 
@@ -2416,7 +2565,7 @@ function completeRunExtension(value: string): string {
   return FLOW_FILE_NAME_PATTERN.test(path.posix.basename(candidate)) ? candidate : value;
 }
 
-function fromYamlStep(raw: YamlStep, whenDepth = 0): FlowStep {
+function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
   const entry = raw as Record<string, unknown>;
   // There is deliberately no per-step `optional:` — it would have to be
   // re-plumbed into every action directive (and each future gesture
@@ -2453,12 +2602,13 @@ function fromYamlStep(raw: YamlStep, whenDepth = 0): FlowStep {
   }
   // Only a `tool` step carries sibling keys (`args`, `delayMs`); every other
   // directive step is a single-key mapping — its options live INSIDE the
-  // value, so a sibling key is a mis-nested or misspelled option. A `when`
-  // step also carries siblings (`steps`, and the rejected `else`), but
-  // parseWhenStep validates them itself with pointed messages, so the generic
-  // check stays out of its way.
+  // value, so a sibling key is a mis-nested or misspelled option. A block
+  // directive also carries siblings (`steps`, and whatever it rejects beside
+  // it), but its own parser validates them with pointed messages - a promise
+  // flow-utils.test.ts pins per registry entry - so the generic check stays
+  // out of its way.
   const kind = kinds[0]!;
-  if (kind !== "when") {
+  if (!isBlockDirectiveKey(kind)) {
     const siblings = kind === "tool" ? ["tool", "args", "delayMs"] : [kind];
     const extras = Object.keys(entry).filter((k) => !siblings.includes(k));
     if (extras.length > 0) {
@@ -2475,7 +2625,7 @@ function fromYamlStep(raw: YamlStep, whenDepth = 0): FlowStep {
   if ("echo" in raw) return { kind: "echo", message: String(raw.echo) };
   if ("launch" in raw) return { kind: "launch", app: parseLaunch(raw.launch) };
   if ("run" in raw) return { kind: "run", flow: parseRunTarget(raw, raw.run) };
-  if ("when" in raw) return parseWhenStep(entry, whenDepth);
+  if ("when" in raw) return parseWhenStep(entry, blockDepth);
 
   if ("tap" in raw) return parseTap((raw as { tap: unknown }).tap, raw);
 

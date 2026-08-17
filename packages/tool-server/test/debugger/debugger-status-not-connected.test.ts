@@ -13,8 +13,8 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 
-// Capture telemetry without touching PostHog: keep every real export and spy
-// only `track` (same pattern as preview-opened-telemetry.test.ts).
+// Capture telemetry without touching the transport: keep every real export and
+// spy only `track` (same pattern as preview-opened-telemetry.test.ts).
 vi.mock("@argent/telemetry", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@argent/telemetry")>();
   return { ...actual, track: vi.fn() };

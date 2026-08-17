@@ -154,6 +154,12 @@ jobs:
       - run: npx tsc --build
 
       - run: npm run build -w @swmansion/argent
+        env:
+          # Release-only: build-package-artifact.yml deliberately builds without
+          # this, so test tarballs stay inert instead of reporting into
+          # production. An unset secret bakes in an empty token, which disables
+          # telemetry rather than failing the build.
+          ARGENT_OTEL_INGEST_TOKEN: ${{ secrets.ARGENT_OTEL_INGEST_TOKEN }}
 
       # Per-platform bundle layout (commit 80e724a). darwin is always required;
       # both Linux keys (x86_64 "linux" and arm64 "linux-arm64") are gated by

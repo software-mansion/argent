@@ -190,7 +190,9 @@ describe("a provider that lends its native-devtools agent", () => {
 
     expect(instance.api.isEnvSetup()).toBe(true);
     expect(instance.api.getInitFailure()).toBeNull();
-    await expect(instance.api.requiresAppRestart("com.example.other")).resolves.toBe(false);
+    await expect(instance.api.appConnectionState("com.example.other")).resolves.toBe(
+      "provider_attached"
+    );
 
     await instance.dispose();
     await agent.close();

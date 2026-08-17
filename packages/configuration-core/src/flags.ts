@@ -68,6 +68,11 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     description: "Write structured tool-server lifecycle events to a JSONL file.",
   },
   {
+    name: "microinteractions",
+    description:
+      "Amplify device actions with matching animations of the host window, so what happens on the guest is also visible on the desktop. Purely cosmetic, macOS only, and never affects whether the underlying action succeeds. Off by default.",
+  },
+  {
     name: "video-watermark",
     description:
       "Overlay the argent corner watermark on recorded screen videos. On by default; turn it off with `argent disable video-watermark`.",

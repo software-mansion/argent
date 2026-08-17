@@ -2607,14 +2607,20 @@ describe("flow-read-prerequisite", () => {
     // The pre-flight must offer the same source contract as the run it
     // precedes — a schema still requiring `name` would leave flow_path flows
     // unaddressable and silently answer for a saved flow of the same stem.
-    expect(flowReadPrerequisiteTool.inputSchema).toMatchObject({
+    const schema = zodObjectToJsonSchema(flowReadPrerequisiteTool.zodSchema!);
+    expect(schema).toMatchObject({
       type: "object",
       properties: {
         name: { type: "string" },
         flow_path: { type: "string" },
       },
-      oneOf: [{ required: ["name"] }, { required: ["flow_path"] }],
     });
+    // Neither source may be `required`: the exactly-one rule cannot be a
+    // top-level oneOf (tool-input-schema-contract.test.ts), so the zod
+    // superRefine enforces it and the description states it.
+    expect(schema.required as string[]).not.toContain("name");
+    expect(schema.required as string[]).not.toContain("flow_path");
+    expect(flowReadPrerequisiteTool.description).toMatch(/one and only one/i);
   });
 
   it("reads a boundary-verified flow_path's prerequisite, not the saved flow of the same stem", async () => {

@@ -246,4 +246,28 @@ describe("containsSecretPlaceholder", () => {
     circular.self = circular;
     expect(containsSecretPlaceholder(circular)).toBe(true);
   });
+
+  it("does NOT cover the separate submit call the keyboard tool now forces", () => {
+    // The asymmetry the skipped-screenshot note has to warn about. `keyboard`
+    // rejects `{ text, key }`, so submitting after typing a secret is a second
+    // call — and that call's own arguments carry no placeholder, so the scan
+    // says false and the capture fires. `keyboard` is in AUTO_SCREENSHOT_TOOLS,
+    // so the image is taken 300ms after the Enter lands, over a screen that may
+    // still show the plaintext.
+    expect(containsSecretPlaceholder({ udid: "X", key: "enter" })).toBe(false);
+    expect(shouldAutoScreenshot("keyboard")).toBe(true);
+    // The one form that keeps the skip across both steps: `run-sequence` is
+    // scanned as a whole request, and is itself in AUTO_SCREENSHOT_TOOLS — so
+    // without the scan reaching into its steps it would capture the same screen.
+    expect(
+      containsSecretPlaceholder({
+        udid: "X",
+        steps: [
+          { tool: "keyboard", args: { text: "{{secret:PW}}" } },
+          { tool: "keyboard", args: { key: "enter" } },
+        ],
+      })
+    ).toBe(true);
+    expect(shouldAutoScreenshot("run-sequence")).toBe(true);
+  });
 });

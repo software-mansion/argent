@@ -8,6 +8,7 @@ import {
   CLIENT_FILE_MARKER,
   FAILURE_CODES,
   getFailureSignal,
+  zodObjectToJsonSchema,
 } from "@argent/registry";
 
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
@@ -498,15 +499,21 @@ describe("flow replay with a boundary-resolved flow_file", () => {
 describe("flow replay with an explicit boundary-resolved flow_path", () => {
   it("advertises exactly one of name and flow_path as the flow source", () => {
     const runFlow = createRunFlowTool(createMockRegistry());
+    const schema = zodObjectToJsonSchema(runFlow.zodSchema!);
 
-    expect(runFlow.inputSchema).toMatchObject({
+    expect(schema).toMatchObject({
       type: "object",
       properties: {
         name: { type: "string" },
         flow_path: { type: "string" },
       },
-      oneOf: [{ required: ["name"] }, { required: ["flow_path"] }],
     });
+    // Neither source may be `required`: the exactly-one rule cannot be a
+    // top-level oneOf (tool-input-schema-contract.test.ts), so the zod
+    // superRefine enforces it and the description states it.
+    expect(schema.required as string[]).not.toContain("name");
+    expect(schema.required as string[]).not.toContain("flow_path");
+    expect(runFlow.description).toMatch(/exactly one flow source/i);
   });
 
   it("states the absolute-path requirement in the flow_path description", () => {
@@ -515,7 +522,7 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
     // An agent reading only the schema is the caller that gets this wrong —
     // `argent flow list` hands it a relative path — so the requirement has to
     // be legible before the call, the way project_root's description states it.
-    expect(runFlow.inputSchema).toMatchObject({
+    expect(zodObjectToJsonSchema(runFlow.zodSchema!)).toMatchObject({
       properties: { flow_path: { description: expect.stringMatching(/absolute/i) } },
     });
   });
@@ -527,7 +534,7 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
     // resolve beside the YAML — project_root locates nothing there — so the
     // description must not promise `.argent/flows/<name>.yaml` lives under it
     // (`name` is exactly what that branch forbids).
-    expect(runFlow.inputSchema).toMatchObject({
+    expect(zodObjectToJsonSchema(runFlow.zodSchema!)).toMatchObject({
       properties: {
         project_root: {
           description: expect.stringMatching(/with flow_path.*beside the YAML/i),

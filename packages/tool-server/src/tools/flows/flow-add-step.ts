@@ -5,6 +5,7 @@ import { FAILURE_CODES, FailureError, type Registry, type ToolDefinition } from 
 import {
   requireRecordingSession,
   appendStepToFlow,
+  appIdForPlatform,
   parseFlow,
   assertSafeFlowName,
   classifyOnDiskSpelling,
@@ -61,6 +62,21 @@ const REPLAY_TREE_SOURCES: Record<string, DescribeSource> = {
   android: "android-devtools",
 };
 
+/**
+ * The app this recording last started, from the `launch` step the recorder
+ * captured for it — the session's stand-in for the runner's
+ * {@link ActionEnv.launchedNativeApp}. Last rather than first: a recording that
+ * relaunches mid-way is about the newer app from that point on, exactly as a
+ * nested `launch:` retargets a run.
+ */
+function recordedLaunchedApp(session: RecordingSession, platform: string): string | undefined {
+  for (let i = session.flow.steps.length - 1; i >= 0; i--) {
+    const step = session.flow.steps[i];
+    if (step.kind === "launch") return appIdForPlatform(step.app, platform) ?? undefined;
+  }
+  return undefined;
+}
+
 function fallbackSourceWarning(source: DescribeSource, platform: string): string | undefined {
   const expected = REPLAY_TREE_SOURCES[platform];
   if (!expected || source === expected) return undefined;
@@ -81,15 +97,25 @@ function fallbackSourceWarning(source: DescribeSource, platform: string): string
  * the testID-only containers the replay tree keeps. A selector derived from
  * the describe tree could fail — or hit a different element — at replay while
  * recording reported success.
+ *
+ * The launched app the read is given plays the part it plays at replay (see
+ * `ActionEnv`): with nothing connected it is the only id the iOS tree source
+ * can measure, and the recorder is where that matters most — a recording
+ * relaunches the app AFTER this tool-server bound its listener, so the first
+ * tap reads during the connect window, whose measured messages say NOT to
+ * restart the app. Without it the kept-coordinates warning quotes
+ * auto-targeting's "Launch or restart the app first" instead.
  */
 async function captureTapSelector(
   registry: Registry,
+  session: RecordingSession,
   udid: string,
   point: { x: number; y: number }
 ): Promise<{ selector?: Selector; warning?: string }> {
   try {
     const device = resolveDevice(udid);
-    const { tree, source } = await fetchFlowTree(registry, device);
+    const launched = recordedLaunchedApp(session, device.platform);
+    const { tree, source } = await fetchFlowTree(registry, device, launched);
     const node = nodeAtPoint(tree, point);
     if (!node) return { warning: "no element found under the tap; kept coordinates (brittle)" };
     const selector = deriveSelector(node);
@@ -482,7 +508,7 @@ If a step was recorded by mistake, edit the .yaml to remove it — against a rem
 
       let captured: { selector?: Selector; warning?: string } | undefined;
       if (isTap) {
-        captured = await captureTapSelector(registry, args.udid as string, {
+        captured = await captureTapSelector(registry, session, args.udid as string, {
           x: args.x as number,
           y: args.y as number,
         });

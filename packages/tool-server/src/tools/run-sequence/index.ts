@@ -17,6 +17,10 @@ const ALLOWED_TOOLS = new Set([
   "button",
   "keyboard",
   "rotate",
+  // Sequencing matters for shake: the interesting cases are races (shake while
+  // a sheet is dismissing, shake right after typing), which need the steps
+  // dispatched back-to-back rather than across separate round-trips.
+  "shake",
   // `tv-remote` drives the D-pad on a TV target (Apple TV / Android TV / Vega);
   // `keyboard` types into the focused field there.
   "tv-remote",
@@ -35,7 +39,7 @@ const zodSchema = z.object({
         tool: z
           .string()
           .describe(
-            "Tool name — one of: gesture-tap, gesture-swipe, gesture-scroll, gesture-drag, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, rotate, tv-remote, await-ui-element. On a TV target (Apple TV / Android TV / Vega) use tv-remote (remote presses) and keyboard (text)."
+            "Tool name — one of: gesture-tap, gesture-swipe, gesture-scroll, gesture-drag, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, rotate, shake, tv-remote, await-ui-element. On a TV target (Apple TV / Android TV / Vega) use tv-remote (remote presses) and keyboard (text)."
           ),
         args: z
           .record(z.string(), z.unknown())
@@ -94,7 +98,8 @@ export function createRunSequenceTool(
 Use when you need sequential actions and do NOT need to observe the screen between them
 (e.g. scrolling multiple times, typing then pressing enter, rotating back and forth).
 Returns { completed, total, steps } with per-step results. Fails if an unrecognised tool name is used in a step (error returned at that step, execution stops).
-No screenshot is captured automatically — call screenshot separately after the sequence if needed.
+One screenshot is captured automatically after the whole sequence (not per step) — call screenshot separately only for a baseline BEFORE it, or to observe an intermediate step.
+That single capture is also why a secret belongs in this call rather than in two bare ones: the skip is decided from the whole request, so a \`{{secret:...}}\` in any step suppresses the capture that would otherwise follow the submit.
 
 ONLY use this when every step is known in advance. If any step depends on the
 result of a previous one (e.g. tapping a menu item that only appears after
@@ -110,9 +115,10 @@ Allowed tools and their args (udid is auto-injected, do NOT include it in args):
   gesture-pinch:  { centerX: number, centerY: number, startDistance: number, endDistance: number, endCenterX?: number, endCenterY?: number, angle?: number, durationMs?: number }  [ios/android]
   gesture-rotate: { centerX: number, centerY: number, radius?: number, radiusX?: number, radiusY?: number, startAngle: number, endAngle: number, durationMs?: number }  [ios/android]
   button:         { button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton" }                  [ios/android]
-  keyboard:       { text?: string, key?: string, delayMs?: number }  (key pressed after text; TV: text only)            [ios/android/chromium/vega/tv]
+  keyboard:       { text?: string, key?: string, delayMs?: number }  (text OR key per step, never both; TV: text only)  [ios/android/chromium/vega/tv]
                   text supports {{secret:<NAME>}} placeholders, resolved server-side from ARGENT_SECRET_<NAME> env vars or an argent secrets file — credentials never enter agent context
   rotate:         { orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown" }                     [ios/android]
+  shake:          { count?: number }                                                                                    [ios sim/android emu]
   tv-remote:      { button: <remote button | array of them>, repeat?: number }                                          [apple tv/android tv/vega]
                   buttons: up/down/left/right/select/back/home/menu/playPause (+ rewind/fastForward/next/previous/volumeUp/volumeDown/mute — work on Android TV and Vega; rejected on the Apple TV simulator)
   await-ui-element: { condition: "exists"|"visible"|"hidden"|"text", selector: {text?,identifier?,role?}, expectedText?, timeoutMs?, pollIntervalMs? }  [ios/android/chromium]
@@ -124,9 +130,10 @@ Example — scroll down three times (use gesture-scroll with positive deltaY on 
     { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } }
   ]}
 
-Example — type text and submit (one step: the key is pressed after the text is typed):
+Example — type text and submit (two keyboard steps; one call cannot carry both):
   { "udid": "<UDID>", "steps": [
-    { "tool": "keyboard", "args": { "text": "hello world", "key": "enter" } }
+    { "tool": "keyboard", "args": { "text": "hello world" } },
+    { "tool": "keyboard", "args": { "key": "enter" } }
   ]}
 
 Example — TV: move focus right twice then activate (one tv-remote step with a path is cheaper):

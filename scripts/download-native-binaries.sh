@@ -186,9 +186,12 @@ echo "Downloaded native binaries to ${DYLIBS_DIR}/, ${IOS_BIN_DIR}/, and ${ANDRO
 # This is the exact failure a mis-built release can reintroduce: a tvOS-built
 # libArgentInjectionBootstrap.dylib landing in the flat iOS slot. dyld silently
 # skips a DYLD_INSERT_LIBRARIES library whose LC_BUILD_VERSION platform does not
-# match the process, so native-devtools never injects on an iOS simulator and
-# every native-* tool returns restart_required — with no error at download,
-# sign, or pack time. Fail loudly here rather than bundle a dead dylib.
+# match the process, so native-devtools never injects on an iOS simulator — with
+# no error at download, sign, or pack time. The process still carries the insert
+# in its environment, so it reads as injected-but-silent: the native-* tools
+# report service_stale and send the agent to restart a tool-server that was never
+# the problem, or restart_required, an app relaunch that changes nothing. Fail
+# loudly here rather than bundle a dead dylib.
 # vtool is macOS-only; on hosts without it (non-macOS) the check is skipped.
 if command -v vtool &>/dev/null; then
   echo "Verifying dylib platforms..."

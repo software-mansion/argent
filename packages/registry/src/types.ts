@@ -237,7 +237,15 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
   description?: string;
   /** Zod schema for tool input; used for runtime validation. When provided, inputSchema is auto-derived at registration time. */
   zodSchema?: z.ZodObject<any>;
-  /** JSON Schema for tool input; used for listing (GET /tools). Auto-derived from zodSchema if not explicitly set. */
+  /**
+   * JSON Schema for tool input; used for listing (GET /tools). Auto-derived from zodSchema if not
+   * explicitly set — and it should never need to be set. A hand-written schema is how top-level
+   * `oneOf`/`allOf`/`anyOf` reached clients once before (#773): the Anthropic Messages API rejects
+   * those outright with a 400 that fails the WHOLE request, every tool in it. Express a cross-field
+   * rule as a zod `.refine()`/`.superRefine()` plus a sentence in `description` instead. Combinators
+   * nested inside `properties` (e.g. a `z.union` field) are fine.
+   * Enforced by tool-server/test/tool-input-schema-contract.test.ts.
+   */
   inputSchema?: Record<string, unknown>;
   /** Optional hint for adapters (e.g. "image" for MCP to return base64 image content). */
   outputHint?: string;

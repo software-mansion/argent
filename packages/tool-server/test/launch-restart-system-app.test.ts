@@ -54,7 +54,7 @@ function makeNativeApi(): NativeDevtoolsApi {
     isConnected: () => false,
     isAppRunning: async () => false,
     listConnectedBundleIds: () => [],
-    requiresAppRestart: async () => false,
+    appConnectionState: async () => "connected",
     activateNetworkInspection: () => {},
     getNetworkLog: () => [],
     clearNetworkLog: () => {},

@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "@argent/telemetry",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "description": "Opt-out telemetry client for Argent CLI / installer / tool-server",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -15,8 +15,12 @@
     "@argent/configuration-core": "file:../configuration-core",
     "@argent/native-devtools-ios": "file:../native-devtools-ios",
     "@argent/registry": "file:../registry",
-    "ci-info": "^4.4.0",
-    "posthog-node": "5.38.6"
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/api-logs": "0.221.0",
+    "@opentelemetry/exporter-logs-otlp-http": "0.221.0",
+    "@opentelemetry/resources": "2.10.0",
+    "@opentelemetry/sdk-logs": "0.221.0",
+    "ci-info": "^4.4.0"
   },
   "devDependencies": {
     "@types/node": "^26.0.1",

@@ -11,30 +11,8 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
   const delay = params.delayMs ?? 50;
   let keysPressed = 0;
 
-  // Resolve the named key before typing anything so an unknown name fails
-  // fast instead of after the text has already been typed.
-  let named: (typeof CHROMIUM_NAMED_KEYS)[string] | undefined;
-  if (params.key) {
-    const lower = params.key.toLowerCase();
-    // Own-property check: a prototype key like "constructor" would otherwise
-    // pass the falsy guard with a garbage value and dispatch a broken CDP key
-    // event instead of rejecting as an unknown key.
-    named = Object.hasOwn(CHROMIUM_NAMED_KEYS, lower) ? CHROMIUM_NAMED_KEYS[lower] : undefined;
-    if (!named) {
-      // Well-typed but unusable input (`key` is a free string) — a caller
-      // mistake mapped to 400 (matching the Android path, uniform across
-      // backends), keeping the KEYBOARD_KEY_UNSUPPORTED telemetry code (#420).
-      throw new InvalidToolInputError(
-        `Unknown key "${params.key}". Supported: ${Object.keys(CHROMIUM_NAMED_KEYS).join(", ")}`,
-        {
-          error_code: FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED,
-          failure_stage: "keyboard_named_key_chromium",
-          error_kind: "unsupported",
-        }
-      );
-    }
-  }
-
+  // The tool rejects a request carrying both `text` and `key` (see ../index.ts),
+  // so at most one of the two blocks below runs.
   if (params.text) {
     for (const char of params.text) {
       const desc = charToChromiumKey(char);
@@ -67,9 +45,27 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
     }
   }
 
-  // Key after text: a combined call means "type, then submit" (text +
-  // key:"enter"). Pressing the key first submits the still-empty field.
-  if (named) {
+  if (params.key) {
+    const lower = params.key.toLowerCase();
+    // Own-property check: a prototype key like "constructor" would otherwise
+    // pass the falsy guard with a garbage value and dispatch a broken CDP key
+    // event instead of rejecting as an unknown key.
+    const named = Object.hasOwn(CHROMIUM_NAMED_KEYS, lower)
+      ? CHROMIUM_NAMED_KEYS[lower]
+      : undefined;
+    if (!named) {
+      // Well-typed but unusable input (`key` is a free string) — a caller
+      // mistake mapped to 400 (matching the Android path, uniform across
+      // backends), keeping the KEYBOARD_KEY_UNSUPPORTED telemetry code (#420).
+      throw new InvalidToolInputError(
+        `Unknown key "${params.key}". Supported: ${Object.keys(CHROMIUM_NAMED_KEYS).join(", ")}`,
+        {
+          error_code: FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED,
+          failure_stage: "keyboard_named_key_chromium",
+          error_kind: "unsupported",
+        }
+      );
+    }
     await api.dispatchKeyEvent({
       type: "keyDown",
       key: named.key,

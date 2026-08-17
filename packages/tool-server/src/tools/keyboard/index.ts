@@ -1,13 +1,35 @@
 import { z } from "zod";
+import { FAILURE_CODES } from "@argent/registry";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { redactSecretsFromError, resolveSecretPlaceholders } from "../../utils/secrets";
+import { InvalidToolInputError } from "../../utils/capability";
+import {
+  SECRET_PLACEHOLDER_MARKER,
+  redactSecretsFromError,
+  resolveSecretPlaceholders,
+} from "../../utils/secrets";
 import type { KeyboardParams, KeyboardResult } from "./types";
 import { makeIosImpl, makeIosRemoteImpl } from "./platforms/ios";
 import { makeAndroidImpl } from "./platforms/android";
 import { makeChromiumImpl } from "./platforms/chromium";
 import { vegaImpl } from "./platforms/vega";
 
+// NOTE on mutual exclusion: `text` and `key` are at-most-one. Two house rules
+// decide where that constraint can live, and neither leaves room for the
+// generated JSON Schema:
+//
+//   - zod's `.refine()` returns a ZodEffects the Registry ToolDefinition type
+//     does not accept (it requires a ZodObject so the JSON Schema generator can
+//     walk `.shape`), so the check runs inside `execute` — as on `boot-device`.
+//   - A hand-written `inputSchema` cannot carry it either. `not` is one of the
+//     top-level keys #782 banned repo-wide, and
+//     `tool-input-schema-contract.test.ts` fails any tool that declares one: the
+//     Messages API rejects a request whose schemas carry a top-level combinator,
+//     and that 400 fails EVERY tool in the request, not just this one.
+//
+// So the constraint reaches a client only as prose, and it is restated in BOTH
+// fields' `.describe()` as well as in the tool description — a caller reading
+// either parameter alone still sees it.
 const zodSchema = z.object({
   udid: z
     .string()
@@ -18,7 +40,9 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Text to type character by character. Handles uppercase and common punctuation. " +
+      "Text to type character by character. Cannot be combined with `key` in one call — one call per action; " +
+        "to type and then press a key, put two `keyboard` steps in one `run-sequence`. " +
+        "Handles uppercase and common punctuation. " +
         "To type a credential without its plaintext ever entering your context, use a secret placeholder: " +
         '`{{secret:<NAME>}}` — e.g. text: "{{secret:APP_PASSWORD}}". The value is resolved on the machine running the ' +
         "tool-server, from the first source that defines the name: the `ARGENT_SECRET_<NAME>` environment variable, " +
@@ -32,7 +56,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1–f12. When combined with `text`, the key is pressed AFTER the text is typed (so text + enter types and submits). Not supported on TV targets — move focus with `tv-remote` (up/down/left/right) instead."
+      "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1–f12. Cannot be combined with `text` in one call — one call per action; to type and then press a key, put two `keyboard` steps in one `run-sequence`. Not supported on TV targets — move focus with `tv-remote` (up/down/left/right) instead."
     ),
   delayMs: z
     .number()
@@ -85,25 +109,29 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
       // Treat both text and key as sensitive. `key` is an unrestricted string at
       // this boundary, so a value must not reach the event log before execution
       // validates whether it is a supported named key.
+      //
+      // `startedMsg` still words a text+key request because it renders BEFORE
+      // `execute` rejects the combination — and likewise words `{ key: "" }` as
+      // a key press, which `execute` also rejects. `completedMsg` runs only
+      // after a call that succeeded, so it sees neither. Each formatter
+      // therefore has to word a different set of shapes, and the empty
+      // request — neither parameter, a documented no-op — reaches both.
       startedMsg: ({ params }) => {
         if (params.text === undefined) return "Pressing a key";
         if (params.key === undefined) return "Entering text";
         return "Entering text and pressing a key";
       },
-      completedMsg: ({ params }) => {
-        if (params.text === undefined) return "Pressed a key";
-        if (params.key === undefined) return "Entered text";
-        return "Entered text and pressed a key";
-      },
+      completedMsg: ({ params }) => (params.text === undefined ? "Pressed a key" : "Entered text"),
       failedMsg: ({ failureSignal }) => `Failed to use keyboard: ${failureSignal.error_code}`,
     },
     description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
 Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; use keyboard to type into a focused text field (e.g. a search or login box).
-Returns { typed: string, keys: number }. Fails if an unsupported key name is provided or the device's input backend is not reachable.
-- text: types a string (supports uppercase, digits, common punctuation). To type a credential, use \`{{secret:<NAME>}}\` — resolved server-side from the \`ARGENT_SECRET_<NAME>\` env var or an argent secrets file (\`.argent/secrets.env\` in the project, \`~/.argent/secrets.env\`, or an \`ARGENT_SECRET_\`-prefixed key in the project's \`.env\`/\`.env.local\`), so the plaintext never enters agent context; the result echoes the placeholder, not the value, and the after-typing auto-screenshot is skipped.
+Returns { typed: string, keys: number }. Fails if text and key are both given in one call (rejected before anything is typed), if an unsupported key name is provided, or if the device's input backend is not reachable.
+A failure is not rolled back. An unsupported key name is always rejected before anything is sent. Un-typeable text is not: the iOS simulator and Chromium reject it mid-string and leave the characters before it in the field (Android, Vega and TV targets check the whole string up front). A transport failure partway also leaves the text already sent. On a retry, read the field's actual contents — do not assume it is unchanged.
+- text: types a string (supports uppercase, digits, common punctuation). To type a credential, use \`{{secret:<NAME>}}\` — resolved server-side from the \`ARGENT_SECRET_<NAME>\` env var or an argent secrets file (\`.argent/secrets.env\` in the project, \`~/.argent/secrets.env\`, or an \`ARGENT_SECRET_\`-prefixed key in the project's \`.env\`/\`.env.local\`), so the plaintext never enters agent context; the result echoes the placeholder, not the value, and the after-typing auto-screenshot is skipped. To submit after typing a secret, put both steps in ONE \`run-sequence\` — that keeps the skip covering the Enter, which a second bare \`keyboard\` call would not.
 - key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1–f12) — NOT supported on TV targets; move focus with \`tv-remote\` instead.
 On a TV target (runtimeKind 'tv') only \`text\` applies — focus a text field first (with \`tv-remote\`), then type into it (injected HID keyboard on Apple TV, \`adb input text\` on Android TV).
-Provide text, key, or both — when both are given, the text is typed first and the key is pressed after it (text + key:"enter" types and submits).`,
+One call does one action: pass text OR key, never both. To type and then press a key, send two \`keyboard\` steps in one \`run-sequence\` — { text: "hello" } then { key: "enter" } — which also keeps it to a single round-trip.`,
     zodSchema,
     capability,
     searchHint:
@@ -113,6 +141,85 @@ Provide text, key, or both — when both are given, the text is typed first and 
     // async and a tvOS udid must never resolve simulator-server.
     services: () => ({}),
     execute: async (services, params, options) => {
+      // `text` and `key` are mutually exclusive. A combined call has no meaning a
+      // caller can rely on: `key: "enter"` reads as "type, then submit", while
+      // `key: "backspace"` reads just as naturally as "delete, then type" — and
+      // whichever order a backend picks, the other reading silently corrupts the
+      // field (#579). One call, one action; a sequence is expressed by making two
+      // calls, batched into one `run-sequence` when the round-trip matters.
+      //
+      // Rejected here, ahead of the secret resolution and the platform dispatch
+      // below, so a combined request never resolves an `ARGENT_SECRET_*` value
+      // and never reaches a device — no backend has to defend against the shape.
+      if (params.text !== undefined && params.key !== undefined) {
+        // `undefined`-based, not truthiness: the rule is about the shape of the
+        // request, so `{ text: "", key: "enter" }` is rejected too rather than
+        // carving out an empty string nobody would have to document.
+        throw new InvalidToolInputError(
+          // Says what did NOT happen, so the caller retries instead of first
+          // inspecting the field — and spells the retry out with a literal
+          // example rather than an ellipsis the Android backend can't type.
+          //
+          // The TV caveat is carried statically rather than by probing the
+          // target: this guard runs above the dispatch precisely so a combined
+          // request reaches no device, and distinguishing a TV kind is an async
+          // probe. Without it the prescribed `{ key: "enter" }` is a retry that
+          // cannot succeed on a TV, where `key` is rejected outright
+          // (platforms/tv.ts) — which is the diagnosis this guard would
+          // otherwise pre-empt.
+          "keyboard takes `text` or `key`, not both — nothing was typed. To type and then press " +
+            'a key, send two `keyboard` steps in one `run-sequence`: { text: "hello" } followed by ' +
+            '{ key: "enter" }. On a TV target (Apple TV / Android TV) `key` is not supported at ' +
+            "all — type with `text` and move focus with `tv-remote` (up/down/left/right/select)." +
+            // The one-`run-sequence` form and two bare calls are NOT equivalent
+            // once the text carries a placeholder, and this message is where an
+            // agent converts a combined secret call — the tool description's
+            // caveat is read long before that moment, if at all. The check is
+            // syntactic (the same `.includes` flow-utils.ts uses), so the guard
+            // still resolves nothing.
+            (params.text.includes(SECRET_PLACEHOLDER_MARKER)
+              ? " This `text` carries a `" +
+                SECRET_PLACEHOLDER_MARKER +
+                "...}}` placeholder, so keep both steps in that ONE `run-sequence` rather than " +
+                "splitting them into two bare calls: the auto-screenshot skip is decided per tool " +
+                'call from the whole request, and a separate { key: "enter" } call carries no ' +
+                "placeholder — its screenshot is taken after the key lands and can capture the " +
+                "still-visible secret."
+              : ""),
+          {
+            error_code: FAILURE_CODES.KEYBOARD_TEXT_AND_KEY_COMBINED,
+            failure_stage: "keyboard_text_and_key_combined",
+          }
+        );
+      }
+      // An empty `key` is rejected; an empty `text` is not. The two parameters
+      // hold different kinds of value: `key` names one member of a closed set,
+      // and `""` is not a member — exactly the case the tool description already
+      // promises to fail on ("if an unsupported key name is provided"). `text`
+      // is a payload, so an empty one means the same thing as omitting it and
+      // stays the documented no-op.
+      //
+      // Without this the empty name slips between both layers. This tool decides
+      // `key` by presence, every backend dispatches it by truthiness
+      // (`if (params.key)`), so `{ key: "" }` reached a device, pressed nothing,
+      // and still returned `{ typed: "", keys: 0 }` — a success the caller
+      // cannot tell apart from a real press.
+      if (params.key === "") {
+        throw new InvalidToolInputError(
+          // Names the omission as the alternative, because a caller that sent an
+          // empty string usually built the value from something absent.
+          "`key` is an empty string, which names no key — nothing was pressed. Pass a named key " +
+            "(enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, " +
+            "f1–f12), or omit `key` if there is nothing to press.",
+          {
+            // The same code an unknown name gets, because that is what this is:
+            // one telemetry bucket for every unusable `key` value.
+            error_code: FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED,
+            failure_stage: "keyboard_named_key_empty",
+            error_kind: "unsupported",
+          }
+        );
+      }
       // Secret placeholders resolve here — inside execute, after every logging
       // boundary (agent transcript, mcp-calls.log, the event log, recorded
       // flow YAMLs all see only the placeholder) and before the platform
