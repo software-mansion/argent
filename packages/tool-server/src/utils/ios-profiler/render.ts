@@ -98,13 +98,22 @@ export async function renderNativeProfilerReport(
 
   const shownHotspots = Math.min(MAX_INLINE_HOTSPOTS, cpuHotspotsCount);
   const shownHangs = Math.min(MAX_INLINE_HANGS, uiHangsCount);
+  // Name only the categories that are actually shown — "top 0 CPU hotspots" /
+  // "top 0 hangs" read as report artifacts. Both can be 0 at once (e.g. an
+  // RSS-growth-only trace still has bottlenecks), hence the fallback.
+  const shownParts = [
+    ...(shownHotspots > 0 ? [`top ${shownHotspots} CPU hotspots`] : []),
+    ...(shownHangs > 0 ? [`top ${shownHangs} hangs`] : []),
+  ];
+  const shownSummary =
+    shownParts.length > 0 ? `showing ${shownParts.join(" and ")} inline` : `summary inline`;
   // Reference the result field rather than embedding the host path: the
   // client materializes `reportFile` to a path on ITS machine, and the raw
   // server path would dangle when the tool-server runs remotely.
   const report =
     wroteFile && reportFile
       ? inlineReport +
-        `\n\n> Full report saved — ${bottlenecksTotal} bottleneck(s) total, showing ${shownHotspots > 0 ? `top ${shownHotspots} CPU hotspots and ` : ``}top ${shownHangs} hangs inline. Use the Read tool on the \`reportFile\` path in this result to view all details.`
+        `\n\n> Full report saved — ${bottlenecksTotal} bottleneck(s) total, ${shownSummary}. Use the Read tool on the \`reportFile\` path in this result to view all details.`
       : inlineReport;
 
   return {
