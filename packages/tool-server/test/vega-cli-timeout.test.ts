@@ -250,8 +250,8 @@ describe("runVega timeout (real subprocess)", () => {
       // Observe the pair BEFORE the reap. `waitForClear` reads 0 just as readily for a
       // launcher that never spawned them, so without this the reap below is asserted
       // against nothing — and the deadline is loose enough that the launcher is never
-      // racing it. This also covers the sibling reap assertions: they all reach their
-      // workers through the same `secs` argv the fake threads into `spawn`/`spawnSync`.
+      // racing it. The two output-cap reaps below stay unpinned for want of such a
+      // window — theirs fires within ~100ms of the spawn (#841).
       expect(await waitForCount(SENTINEL_REAP, 2)).toBe(2);
       const err = await run;
       expect(err).toBeInstanceOf(Error);
