@@ -160,16 +160,15 @@ afterEach(() => sweep());
  * `$` carries the run isolation: sentinels are all `<pid><3 digits><1 digit>` wide (see
  * `sentinel`), so without the tail anchor a run's sweep glob also matches the sentinels
  * of a run whose pid is one digit longer, and its `pkill` reaches into that run's
- * namespace. `^` pins the match to argv[0], so only the bare `sleep` the fake launcher
+ * namespace. `^` pins the match to argv[0]: only the bare `sleep` the fake launcher
  * spawns can match — never a longer command line that merely ends in one of our
- * sentinels.
+ * sentinels, and never the `/bin/sh -c "pgrep -f '<pattern>' || true"` wrapper execSync
+ * spawns, whose own argv carries the pattern text.
  *
- * Escaping the sentinel's `.` — its one ERE metacharacter; the `[0-9]` slot glob passes
- * through as the character class it is — does double duty. Besides stopping the `.` from
- * matching as a wildcard, it is what keeps the `/bin/sh -c "pgrep -f '<pattern>' || true"`
- * wrapper execSync spawns from matching itself: the wrapper's argv carries the pattern
- * text with the backslash in it, and `\.` wants a literal `.` where that backslash sits.
- * A sentinel with no `.` in it would need the anchors for that job instead.
+ * The sentinel's `.` is its one ERE metacharacter, so escape it; a `[0-9]` slot glob
+ * passes through as the character class it is. The escape excludes that wrapper a second
+ * time over — `\.` wants a literal `.` where the wrapper's argv has a backslash — so it
+ * takes both a bare sentinel and a dropped anchor to bring the match back.
  */
 function cmdlinePattern(target: string): string {
   return `^sleep ${target.replaceAll(".", "\\.")}$`;
@@ -213,6 +212,13 @@ async function waitForClear(sentinel: string, timeoutMs = 3_000): Promise<number
   return waitForCount(sentinel, 0, timeoutMs);
 }
 
+// The two reap regressions fail SLOWLY — the runVega deadline elapses, then the clearance
+// poll runs its full budget — which overruns vitest's 5s default and reports "Test timed
+// out" instead of naming the workers that survived. Give those two tests room to print
+// their own diagnostic.
+const REAP_FAILURE_BUDGET_MS = 15_000;
+const DRAIN_FAILURE_BUDGET_MS = 20_000;
+
 describe("runVega timeout (real subprocess)", () => {
   it("rejects on its own deadline when the CLI never returns", async () => {
     const start = Date.now();
@@ -234,21 +240,30 @@ describe("runVega timeout (real subprocess)", () => {
     expect(elapsed).toBeLessThan(2_500);
   });
 
-  it("reaps the ENTIRE worker tree on timeout — including a worker that escaped the group", async () => {
-    const run = runVega(["hang", SENTINEL_REAP], { timeoutMs: 2_000 });
-    // Observe the pair BEFORE the reap. `waitForClear` reads 0 just as readily for a
-    // launcher that never spawned them, so without this the reap below is asserted
-    // against nothing — and the deadline is loose enough that the launcher is never
-    // racing it. This also covers the sibling reap assertions: they all reach their
-    // workers through the same `secs` argv the fake threads into `spawn`/`spawnSync`.
-    expect(await waitForCount(SENTINEL_REAP, 2)).toBe(2);
-    await expect(run).rejects.toThrow(/timed out/i);
-    // Two sleeps must disappear: the launcher's same-group sleep (reaped by the group
-    // SIGKILL) AND the detached worker in its OWN group (reaped only by the descendant
-    // sweep). With a group-only kill — or the old single-child kill — the escaped
-    // worker would survive its full sleep and this would never reach 0.
-    expect(await waitForClear(SENTINEL_REAP)).toBe(0);
-  });
+  it(
+    "reaps the ENTIRE worker tree on timeout — including a worker that escaped the group",
+    async () => {
+      // Settled through `.catch` rather than left floating: nothing awaits this promise
+      // until the observation below finishes, and an unawaited rejection is reported as
+      // an unhandled one that vitest does not retract when the handler attaches late.
+      const run = runVega(["hang", SENTINEL_REAP], { timeoutMs: 2_000 }).catch((e: unknown) => e);
+      // Observe the pair BEFORE the reap. `waitForClear` reads 0 just as readily for a
+      // launcher that never spawned them, so without this the reap below is asserted
+      // against nothing — and the deadline is loose enough that the launcher is never
+      // racing it. This also covers the sibling reap assertions: they all reach their
+      // workers through the same `secs` argv the fake threads into `spawn`/`spawnSync`.
+      expect(await waitForCount(SENTINEL_REAP, 2)).toBe(2);
+      const err = await run;
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toMatch(/timed out/i);
+      // Two sleeps must disappear: the launcher's same-group sleep (reaped by the group
+      // SIGKILL) AND the detached worker in its OWN group (reaped only by the descendant
+      // sweep). With a group-only kill — or the old single-child kill — the escaped
+      // worker would survive its full sleep and this would never reach 0.
+      expect(await waitForClear(SENTINEL_REAP)).toBe(0);
+    },
+    REAP_FAILURE_BUDGET_MS
+  );
 
   it("returns normally when the CLI responds before the deadline", async () => {
     await expect(runVega(["go"], { timeoutMs: 5_000 })).resolves.toEqual({
@@ -289,24 +304,30 @@ describe("runVega timeout (real subprocess)", () => {
     ).resolves.toEqual({ stdout: "OK-linger", stderr: "" });
   });
 
-  it("reaps a pipe-holding worker that stayed in the launcher's process group (drain path)", async () => {
-    // The clean-exit drain path with the COMMON pipe-inheritance worker: it inherited our
-    // stdout (so `close` is delayed past the launcher's clean exit) but stayed in the
-    // launcher's process group. Once the launcher exits, reapVegaGroup's mechanisms can't
-    // reach it (ppid sweep → reparented to init; group kill → gated on the launcher being
-    // alive), BUT a live group member pins the launcher's pid as a pgid, so a pgid-
-    // membership-gated `-pid` group kill is both safe and effective. runVega must resolve
-    // with the captured output AND leave NO orphan — proving it doesn't resolve-and-leak on
-    // this path. (The detached `linger` worker above escapes into its own group and is the
-    // rare genuinely-unreapable case, deliberately not covered by this reap.)
-    const run = runVega(["linger-grouped", SENTINEL_LINGER_GROUPED], { timeoutMs: 10_000 });
-    // Same reason as the timeout reap: see the worker alive first, or "no orphan" is a
-    // claim about a worker that may never have existed. It outlives the launcher's exit
-    // by the drain grace, so there is a comfortable window to catch it in.
-    expect(await waitForCount(SENTINEL_LINGER_GROUPED, 1)).toBe(1);
-    await expect(run).resolves.toEqual({ stdout: "OK-linger", stderr: "" });
-    expect(await waitForClear(SENTINEL_LINGER_GROUPED)).toBe(0);
-  });
+  it(
+    "reaps a pipe-holding worker that stayed in the launcher's process group (drain path)",
+    async () => {
+      // The clean-exit drain path with the COMMON pipe-inheritance worker: it inherited our
+      // stdout (so `close` is delayed past the launcher's clean exit) but stayed in the
+      // launcher's process group. Once the launcher exits, reapVegaGroup's mechanisms can't
+      // reach it (ppid sweep → reparented to init; group kill → gated on the launcher being
+      // alive), BUT a live group member pins the launcher's pid as a pgid, so a pgid-
+      // membership-gated `-pid` group kill is both safe and effective. runVega must resolve
+      // with the captured output AND leave NO orphan — proving it doesn't resolve-and-leak on
+      // this path. (The detached `linger` worker above escapes into its own group and is the
+      // rare genuinely-unreapable case, deliberately not covered by this reap.)
+      const run = runVega(["linger-grouped", SENTINEL_LINGER_GROUPED], {
+        timeoutMs: 10_000,
+      }).catch((e: unknown) => e);
+      // Same reason as the timeout reap: see the worker alive first, or "no orphan" is a
+      // claim about a worker that may never have existed. It outlives the launcher's exit
+      // by the drain grace, so there is a comfortable window to catch it in.
+      expect(await waitForCount(SENTINEL_LINGER_GROUPED, 1)).toBe(1);
+      expect(await run).toEqual({ stdout: "OK-linger", stderr: "" });
+      expect(await waitForClear(SENTINEL_LINGER_GROUPED)).toBe(0);
+    },
+    DRAIN_FAILURE_BUDGET_MS
+  );
 
   it("rejects a non-zero exit as a `subprocess` failure (not `timeout`)", async () => {
     // The common, non-hung failure path (e.g. "device offline"). It must surface the
@@ -375,6 +396,9 @@ describe("sentinel bookkeeping", () => {
     // trailing digits where ours carry one, so an unterminated glob reaches straight
     // into its namespace and SIGTERMs its live workers — the cross-run kill the per-run
     // tag exists to prevent, and one that no single-run suite would ever notice.
+    // Being that shape, it briefly sits in that run's namespace rather than ours, so it
+    // is killed the moment the assertions are done rather than left to afterEach — whose
+    // sweep, by the very property under test, cannot reach it.
     const foreign = `${SENTINEL_PREFIX}12`;
     const decoy = spawn("sleep", [foreign], { stdio: "ignore" });
     try {
