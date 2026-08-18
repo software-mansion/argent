@@ -152,9 +152,11 @@ export function evaluateMatches(params: Params, matches: DescribeNode[]): boolea
 // trustworthy evidence the element is gone, so we must not let `hidden` (the only
 // condition that resolves true on an empty tree) resolve positively off it. Two
 // ways an empty tree is untrustworthy:
-//   - the adapter flagged it as unreliable: iOS AX down or native injection
-//     pending → `describeIos` returns an empty tree plus a hint / should_restart
-//     instead of throwing. Android / Chromium never set these flags.
+//   - the adapter flagged it as unreliable: iOS AX down, native injection
+//     pending, or a native hierarchy that could not be read at all (nothing
+//     connected to auto-target, the service down, the query failing) →
+//     `describeIos` returns an empty tree plus a hint / should_restart instead
+//     of throwing. Android / Chromium never set these flags.
 //   - the selector matched on an EARLIER poll (`everMatched`) yet the whole tree
 //     is now empty. A genuinely-hidden element leaves the rest of the screen
 //     behind; a wholly empty tree after we'd already read content is a transient

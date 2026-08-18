@@ -5,9 +5,10 @@ import {
   getClient,
   getConstructedClient,
   resetClient,
-  POSTHOG_HOST,
+  OTLP_LOGS_ENDPOINT,
   resolveConfig,
-} from "./posthog.js";
+  type TelemetryClient,
+} from "./otel.js";
 import { sanitize } from "./sanitize.js";
 import { getBaseProps, type Runtime } from "./base-props.js";
 import {
@@ -35,7 +36,6 @@ export type { TelemetryResetResult } from "./uninstall-reset.js";
 export { resetLocalTelemetryState } from "./uninstall-reset.js";
 export type { ConsentState, ConsentSource } from "./consent.js";
 export { attachRegistryTelemetry } from "./registry-listener.js";
-export { POSTHOG_HOST, resolveConfig } from "./posthog.js";
 export { _resetConsentCacheForTest } from "./consent.js";
 export { EVENT_NAMES } from "./events.js";
 export { describeCrash } from "./crash-diagnostics.js";
@@ -107,9 +107,9 @@ export async function warmTelemetryIdentity(): Promise<void> {
     // Mirror track()/buildPayload, which resolve the client before provisioning
     // the id: there is no reason to spawn the fingerprint binary and write a
     // durable per-machine id for events that can never be transmitted (no usable
-    // PostHog key). Unreachable in the shipped build (the bundled token is
+    // ingest token). Unreachable in the shipped build (the bundled token is
     // usable), but reachable in the emergency-local / token-stripped builds that
-    // resolveConfig() anticipates ("" / "phc_disabled").
+    // resolveConfig() anticipates ("" / "otel_disabled").
     if (!getClient()) return;
     await warmIdentity(resolveHostFingerprintAsync);
   } catch (err) {
@@ -138,7 +138,7 @@ export function warmTelemetryIdentitySync(): void {
   try {
     if (!isEnabled()) return;
     // Mirror warmTelemetryIdentity/track: don't provision a durable id for events
-    // that can never be transmitted (no usable PostHog key).
+    // that can never be transmitted (no usable ingest token).
     if (!getClient()) return;
     warmIdentitySync(resolveHostFingerprint);
   } catch (err) {
@@ -181,11 +181,12 @@ function buildPayload(
 }
 
 /**
- * Enqueue a telemetry event on the shared PostHog client.
+ * Enqueue a telemetry event on the shared OpenTelemetry logs client.
  *
- * This does not force a network send. Short-lived commands must call
- * shutdown() before process exit; shutdown() waits for PostHog's async capture
- * preparation and drains the queue with a bounded timeout.
+ * This does not force a network send: the event is handed to the batch log-record
+ * processor and exported on its schedule. Short-lived commands must call
+ * shutdown() before process exit; shutdown() force-flushes the batch and drains
+ * the queue with a bounded timeout.
  */
 export function track<E extends EventName>(event: E, props: EventPropertyMap[E]): void {
   try {
@@ -193,7 +194,7 @@ export function track<E extends EventName>(event: E, props: EventPropertyMap[E])
     // Resolve the client before buildPayload(): buildPayload creates/persists
     // the anon-id file, and there's no reason to provision a persistent
     // identifier on disk for an event that can never be transmitted (no usable
-    // PostHog key).
+    // ingest token).
     const client = getClient();
     if (!client) return;
 
@@ -210,13 +211,13 @@ export function track<E extends EventName>(event: E, props: EventPropertyMap[E])
     }
 
     try {
-      client.capture({
+      client.emit({
         distinctId: built.distinctId,
         event,
         properties: built.properties,
       });
     } catch (err) {
-      emitDebugError(`track: capture(${event}) failed`, err);
+      emitDebugError(`track: emit(${event}) failed`, err);
     }
   } catch (err) {
     emitDebugError(`track: outer wrapper caught ${event}`, err);
@@ -224,11 +225,42 @@ export function track<E extends EventName>(event: E, props: EventPropertyMap[E])
 }
 
 /**
+ * Slack between the export deadline and the race that abandons it.
+ *
+ * The exporter's own EXPORT_TIMEOUT_MS equals this budget, so a race armed at
+ * exactly timeoutMs fires the same instant the export would give up — the batch
+ * is always abandoned rather than allowed to finish failing. Every drain waits
+ * this much longer than the deadline it is bounding, so the inner one wins.
+ */
+const DRAIN_GRACE_MS = 250;
+
+/**
+ * Race a client drain against its budget, so no caller waits on the exporter
+ * indefinitely. Shared by shutdown() and markDisabled() so the two cannot drift
+ * apart on the grace period.
+ */
+async function raceDrain(client: TelemetryClient, timeoutMs: number): Promise<void> {
+  await Promise.race([
+    client.shutdown(timeoutMs),
+    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs + DRAIN_GRACE_MS).unref()),
+  ]);
+}
+
+/**
  * Drain queued telemetry and reset the shared client.
  *
- * PostHog capture() performs async event preparation before queueing. Use
- * shutdown(), not flush(), at command boundaries so pending capture work is
- * joined before the queue is flushed.
+ * The OpenTelemetry batch log-record processor buffers events and exports them on
+ * a timer. Call shutdown() at command boundaries so the buffered batch is
+ * force-flushed and the exporter is torn down before the process exits.
+ *
+ * Resolving is not quite the same as the process being free to exit: an export
+ * still in flight holds a ref'd socket, and the exporter's retry backoff a ref'd
+ * timer. The batch timer is not one of them — the SDK unrefs that, which is also
+ * why an event emitted and never drained is simply dropped at exit rather than
+ * delaying it. Both of the ref'd ones are bounded by the exporter's own deadline,
+ * which otel.ts holds at or below this budget and pairs with a socket timeout
+ * that covers connection establishment, so a collector that refuses or blackholes
+ * costs milliseconds past this race rather than the OS connect timeout.
  */
 export async function shutdown(timeoutMs = SHORT_FLUSH_TIMEOUT_MS): Promise<void> {
   const client = getConstructedClient();
@@ -237,10 +269,7 @@ export async function shutdown(timeoutMs = SHORT_FLUSH_TIMEOUT_MS): Promise<void
     return;
   }
   try {
-    await Promise.race([
-      client.shutdown(timeoutMs),
-      new Promise<void>((resolve) => setTimeout(resolve, timeoutMs + 250).unref()),
-    ]);
+    await raceDrain(client, timeoutMs);
   } catch (err) {
     emitDebugError("shutdown failed", err);
   } finally {
@@ -265,10 +294,7 @@ export async function markDisabled(): Promise<void> {
     writeConsentFlag(false);
     if (client) {
       try {
-        await Promise.race([
-          client.shutdown(SHORT_FLUSH_TIMEOUT_MS),
-          new Promise<void>((resolve) => setTimeout(resolve, SHORT_FLUSH_TIMEOUT_MS).unref()),
-        ]);
+        await raceDrain(client, SHORT_FLUSH_TIMEOUT_MS);
       } catch {
         /* swallow */
       }
@@ -303,7 +329,7 @@ export function status(): {
     source: consent.source,
     anonIdPrefix,
     hasAnonIdOnDisk,
-    host: POSTHOG_HOST,
+    host: OTLP_LOGS_ENDPOINT,
     isKeyConfigured: config.isUsable,
   };
 }

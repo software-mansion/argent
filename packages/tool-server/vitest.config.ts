@@ -5,9 +5,10 @@ export default defineConfig({
   test: {
     include: ["test/**/*.test.ts"],
     globals: true,
-    // Suite-wide guard against unit tests incidentally shelling out to real
-    // `xcrun simctl` / adb (see the setup file's comment).
-    setupFiles: ["test/setup/stub-status-bar.ts"],
+    // Suite-wide guards, each documented in its own file: strip the developer's
+    // ARGENT_* overrides so assertions test the shipped defaults, and stop unit
+    // tests incidentally shelling out to real `xcrun simctl` / adb.
+    setupFiles: ["test/setup/clear-argent-env.ts", "test/setup/stub-status-bar.ts"],
   },
   resolve: {
     alias: {

@@ -14,8 +14,8 @@
 //   • `error_syscall`   — the Node system-error code (e.g. EADDRINUSE) when present
 //   • `crash_fingerprint` — a hash over the *de-identified* top stack frames
 // The sanitizer (sanitize.ts) is the final gate: any value that doesn't match a
-// strict coded shape is dropped before it can reach PostHog. Everything here is
-// belt-and-suspenders on top of that.
+// strict coded shape is dropped before it can reach the OTLP collector.
+// Everything here is belt-and-suspenders on top of that.
 
 import { createHash } from "node:crypto";
 

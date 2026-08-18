@@ -13,7 +13,12 @@ vi.mock("../src/utils/vega-automation", () => ({
   emulatorSerial: vi.fn(async () => ({ serial: "emulator-5554", consolePort: 5554 })),
 }));
 
-import { injectVegaButtons, injectVegaNamedKey, injectVegaText } from "../src/utils/vega-input";
+import {
+  NAMED_KEYCODES,
+  injectVegaButtons,
+  injectVegaNamedKey,
+  injectVegaText,
+} from "../src/utils/vega-input";
 
 // Real device output (verified on a VVD): get_screen_size prints this when
 // developer mode is ON; when OFF the dev-shell service is down and every
@@ -81,8 +86,12 @@ describe("injectVegaText", () => {
   });
 
   it("shell-quotes the text so a quote/space can't break out of the command", async () => {
-    await injectVegaText("it's a test");
-    expect(lastScript()).toContain("send_text 'it'\\''s a test'");
+    // Capital "I" so the fixture also pins the case at the `send_text` sink:
+    // with an all-lowercase string a `.toLowerCase()` here emits the identical
+    // command, and the keyboard backend's `typed` echoes the request rather
+    // than what was sent — the same hole the android `input text` test names.
+    await injectVegaText("It's a test");
+    expect(lastScript()).toContain("send_text 'It'\\''s a test'");
   });
 });
 
@@ -92,9 +101,42 @@ describe("injectVegaNamedKey", () => {
     expect(lastScript()).toContain("button_press KEY_ENTER");
   });
 
-  it("throws on an unknown key instead of silently dropping it", async () => {
+  it("presses each named key with its own keycode (not one hardcoded value)", async () => {
+    // Half of a two-part scheme, and vacuous without the other half: this
+    // compares the emitted code against the same map the resolver reads, so it
+    // pins that the lookup READS the map, for every entry in it — not that any
+    // entry holds the right value. vega-input.test.ts pins all 24 literals; it
+    // used to spot-check 8, which left a wrong value for `backspace`, `delete`,
+    // `tab`, `space`, three of the arrows or f2–f10 satisfying both tests.
+    //
+    // What this half catches is a lookup that resolved every name to one code —
+    // the realistic fold/refactor slip. Only `enter` and `arrow-down` are
+    // pressed by other tests in this file, so such a fold is green everywhere
+    // else while `backspace`, `escape`, `tab` and f1–f12 all submit the field
+    // instead of navigating. Twin of the android exhaustive test.
+    for (const [name, keycode] of Object.entries(NAMED_KEYCODES)) {
+      adbShell.mockClear();
+      adbShell.mockResolvedValue(SIZE_OK);
+      await injectVegaNamedKey(name);
+      expect(lastScript().match(/button_press \S+/g), `wrong keycode for "${name}"`).toEqual([
+        `button_press ${keycode}`,
+      ]);
+    }
+  });
+
+  it("case-folds the named key, like every other backend", async () => {
+    // `keyboard`'s `key` is a free `z.string()`, and the sim-server/android
+    // backends fold case, so an uppercase name must not read as unknown here.
+    await injectVegaNamedKey("Arrow-Down");
+    expect(lastScript()).toContain(`button_press ${NAMED_KEYCODES["arrow-down"]}`);
+  });
+
+  it("names the offending key when it is unknown, instead of dropping it", async () => {
     // f1–f12 are mapped; f13 is the first out-of-range function key.
-    await expect(injectVegaNamedKey("f13")).rejects.toThrow(/Unknown Vega key/i);
+    // The NAME is part of the contract — it is what a caller needs to retry, and
+    // a bare `/Unknown Vega key/` prefix leaves stripping it green here, which
+    // is the only place this backend's message is asserted at all.
+    await expect(injectVegaNamedKey("f13")).rejects.toThrow(/Unknown Vega key "f13"/);
     expect(adbShell).not.toHaveBeenCalled();
   });
 });

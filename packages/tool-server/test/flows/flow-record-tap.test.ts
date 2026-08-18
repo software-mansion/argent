@@ -13,6 +13,7 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
   fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => currentTreeData()),
 }));
 
+import { fetchFlowTree } from "../../src/tools/flows/flow-tree";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { summarizeStep } from "../../src/tools/flows/flow-finish-recording";
@@ -76,6 +77,78 @@ beforeEach(async () => {
 afterEach(async () => {
   __resetRecordingsForTesting();
   await fs.rm(tmpDir, { recursive: true, force: true });
+});
+
+// The tree source needs the launched bundle id to measure and explain a read it
+// could not take; without one it raises auto-targeting's stock "Launch or
+// restart the app first". The recorder is where that lands hardest: it relaunches
+// the app AFTER this tool-server bound its listener, so the first tap reads
+// during the connect window — the states whose measured message says NOT to
+// restart the app. The runner threads the id from its `launch:` step; here the
+// equivalent is the `launch` the recorder just captured.
+describe("flow-add-step tap capture targets the recorded launch", () => {
+  const BUNDLE = "com.example.app";
+  // A leading `launch` and an executionPrerequisite are mutually exclusive, so
+  // this block records into an e2e flow of its own rather than the fragment the
+  // outer setup opens.
+  const E2E_FLOW = "rec-e2e";
+
+  beforeEach(async () => {
+    await flowStartRecordingTool.execute(
+      {},
+      { name: E2E_FLOW, project_root: tmpDir, executionPrerequisite: "" }
+    );
+  });
+
+  function registryWithRestart(): Registry {
+    return {
+      invokeTool: vi.fn(async (id: string) => {
+        if (id === "gesture-tap") return { tapped: true };
+        if (id === "restart-app") return { restarted: true };
+        throw new Error(`Tool "${id}" not found`);
+      }),
+      getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
+    } as unknown as Registry;
+  }
+
+  async function recordRestart(): Promise<void> {
+    await createFlowAddStepTool(registryWithRestart()).execute(
+      {},
+      {
+        name: E2E_FLOW,
+        project_root: tmpDir,
+        command: "restart-app",
+        args: JSON.stringify({ udid: DEVICE, bundleId: BUNDLE }),
+      }
+    );
+  }
+
+  it("passes the recorded launch's app to the tree read", async () => {
+    setTree([]);
+    await recordRestart();
+    vi.mocked(fetchFlowTree).mockClear();
+
+    await createFlowAddStepTool(registryWithRestart()).execute(
+      {},
+      {
+        name: E2E_FLOW,
+        project_root: tmpDir,
+        command: "gesture-tap",
+        args: JSON.stringify({ udid: DEVICE, x: 0.5, y: 0.5 }),
+      }
+    );
+
+    expect(vi.mocked(fetchFlowTree).mock.calls[0]![2]).toBe(BUNDLE);
+  });
+
+  it("passes nothing when the recording has captured no launch", async () => {
+    setTree([]);
+    vi.mocked(fetchFlowTree).mockClear();
+
+    await recordTap({ x: 0.5, y: 0.5 });
+
+    expect(vi.mocked(fetchFlowTree).mock.calls[0]![2]).toBeUndefined();
+  });
 });
 
 describe("flow-add-step tap selector capture", () => {

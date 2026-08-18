@@ -89,9 +89,9 @@ To be explicit, Argent telemetry never includes:
 
 ## Who we disclose the data to
 
-We use PostHog (provided by PostHog, Inc., San Francisco, USA) as our product analytics provider, acting as our processor under a Data Processing Agreement.
+Telemetry is transmitted using the OpenTelemetry protocol to a telemetry collector operated by Software Mansion, the controller named below. We do not share it with a third-party product-analytics provider.
 
-Telemetry data is hosted in the European Union (Frankfurt, Germany) on PostHog's EU Cloud. PostHog engages its own sub-processors (cloud hosting and operational monitoring) located in the EU for the EU Cloud and keeps this list to a strict minimum. You can find the current list of PostHog sub-processors on PostHog's website, and a set of useful links is available from us on request.
+Telemetry data is stored within the European Economic Area (EEA). Where we rely on an infrastructure provider (for example, cloud hosting) to operate the collector, that provider acts as our processor under a Data Processing Agreement and is engaged on the basis of EEA hosting; we keep any such list of sub-processors to a strict minimum, and the current list is available from us on request.
 
 ## Legal basis for processing
 
@@ -103,7 +103,7 @@ Telemetry events are retained for up to 72 months, after which they are deleted 
 
 ## International data transfers
 
-Telemetry data is stored within the EEA (Germany). As PostHog, Inc. is established in the United States, access from outside the EEA (e.g. for support) may occur and is governed by the European Commission's Standard Contractual Clauses.
+Telemetry data is stored within the EEA. Should any access from outside the EEA occur (for example, for support or to operate our infrastructure), it is governed by an appropriate transfer mechanism, such as the European Commission's Standard Contractual Clauses.
 
 ## Your rights
 

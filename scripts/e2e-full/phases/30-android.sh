@@ -69,6 +69,20 @@ run_phase() {
   assert_ok   "$P" rotate portrait  "{\"udid\":\"$DEV\",\"orientation\":\"Portrait\"}"
   assert_ok   "$P" keyboard text "{\"udid\":\"$DEV\",\"text\":\"hello e2e\"}"
   assert_ok   "$P" keyboard key  "{\"udid\":\"$DEV\",\"key\":\"enter\"}"
+  # Both halves in ONE call is rejected, and the rejection is what the two calls
+  # above cannot show: each of them is a legal request, so a guard that never
+  # fires leaves them green. The 400 has to come from the running tool-server
+  # rather than from schema validation — the constraint is cross-field, so it
+  # lives in `execute` and nothing in the advertised JSON Schema encodes it.
+  assert_reject "$P" keyboard text-and-key \
+    "{\"udid\":\"$DEV\",\"text\":\"hello e2e\",\"key\":\"enter\"}"
+  # And the remedy the rejection prescribes, driven end to end. `run-sequence`
+  # dispatches each step through the same tool, so this is the shape that would
+  # break if the guard were widened to reject a step carrying only one of the
+  # two. `.completed` = 2 proves neither step was skipped.
+  assert_field "$P" run-sequence keyboard-text-then-key \
+    "{\"udid\":\"$DEV\",\"steps\":[{\"tool\":\"keyboard\",\"args\":{\"text\":\"hello e2e\"}},{\"tool\":\"keyboard\",\"args\":{\"key\":\"enter\"}}]}" \
+    '.completed' '2'
   assert_ok   "$P" run-sequence seq "{\"udid\":\"$DEV\",\"steps\":[{\"tool\":\"button\",\"args\":{\"button\":\"home\"}},{\"tool\":\"gesture-tap\",\"args\":{\"x\":0.5,\"y\":0.5}}]}"
 
   # --- url navigation -------------------------------------------------------

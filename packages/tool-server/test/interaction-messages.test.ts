@@ -32,6 +32,50 @@ describe("tool interaction messages", () => {
       })
     ).toBe("Double-tapped at (50%, 25%)");
 
+    // `keyboard` picks its wording from which of `text` / `key` was given, and
+    // the two formatters see DIFFERENT sets of shapes. `startedMsg` renders
+    // before `execute` runs, so it still sees a combined call — the one
+    // `execute` is about to reject — and has to word four: text alone, key
+    // alone, both, and neither. `completedMsg` runs only after a call that
+    // succeeded, so the combined shape never reaches it and it words three. In
+    // both, "neither" is a documented no-op returning { typed:"", keys:0 }
+    // rather than an error (see keyboard-android.test.ts).
+    const keyboard = definitions.get("keyboard")!.interaction!;
+    expect(keyboard.startedMsg!({ params: { udid: "device-1", text: "hi" } })).toBe(
+      "Entering text"
+    );
+    expect(keyboard.startedMsg!({ params: { udid: "device-1", key: "enter" } })).toBe(
+      "Pressing a key"
+    );
+    // The combined shape, which only THIS formatter reaches: `startedMsg` runs
+    // before the rejection. Without it, a `startedMsg` reduced to the two-way
+    // text/key split would still satisfy every other assertion here while
+    // announcing a rejected text+enter call as plain "Entering text".
+    expect(keyboard.startedMsg!({ params: { udid: "device-1", text: "hi", key: "enter" } })).toBe(
+      "Entering text and pressing a key"
+    );
+    // The empty request, on this formatter too. `completedMsg` appears in no
+    // other test file, `startedMsg` only in this file's secret-leak check (which
+    // every branch string satisfies), so neither empty-request branch is pinned
+    // anywhere else. Narrowing BOTH to `params.text === undefined &&
+    // params.key !== undefined` — so `keyboard {}` falls through to "Entering
+    // text" / "Entered text" — stays green across the whole suite once this
+    // assertion and its `completedMsg` twin below are removed. Both are
+    // load-bearing.
+    expect(keyboard.startedMsg!({ params: { udid: "device-1" } })).toBe("Pressing a key");
+    expect(keyboard.completedMsg!({ params: { udid: "device-1", text: "hi" }, result: {} })).toBe(
+      "Entered text"
+    );
+    expect(keyboard.completedMsg!({ params: { udid: "device-1", key: "enter" }, result: {} })).toBe(
+      "Pressed a key"
+    );
+    // The third shape. "Pressed a key" for a call that pressed nothing is
+    // inherited, not introduced here — pinned so the wording and the no-op
+    // contract can only diverge deliberately.
+    expect(keyboard.completedMsg!({ params: { udid: "device-1" }, result: {} })).toBe(
+      "Pressed a key"
+    );
+
     expect(
       definitions.get("screenshot")!.interaction!.completedMsg!({
         params: { udid: "device-1" },

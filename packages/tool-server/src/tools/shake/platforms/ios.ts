@@ -11,6 +11,7 @@ import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
 import { isRemoteTvOsSimulator, simctlSpawn } from "../../../utils/sim-remote";
 import { isTvOsSimulator } from "../../../utils/ios-devices";
 import { UnsupportedOperationError } from "../../../utils/capability";
+import { prepareHostWindowShake } from "../../../utils/window-shake";
 import type { ShakeParams, ShakeResult, ShakeServices } from "../types";
 
 const execFileAsync = promisify(execFile);
@@ -88,8 +89,14 @@ export const iosImpl: PlatformImpl<ShakeServices, ShakeParams, ShakeResult> = {
     // upload or install — this is the whole implementation.
     const args = await simctlArgsForUdid(udid, ["spawn", udid, ...NOTIFYUTIL_ARGV]);
 
+    // The notification is invisible outside the guest, so wobble the Simulator
+    // window in step with it. Cosmetic and flag-gated; it can neither fail nor
+    // delay the shake.
+    const shaker = await prepareHostWindowShake({ kind: "ios", udid, name: device.name });
+
     for (let i = 0; i < count; i++) {
       if (i > 0) await sleep(SHAKE_INTERVAL_MS);
+      shaker.begin();
       try {
         await execFileAsync("xcrun", args, { timeout: 15_000 });
       } catch (err) {
@@ -97,6 +104,10 @@ export const iosImpl: PlatformImpl<ShakeServices, ShakeParams, ShakeResult> = {
         throw shakeFailure(udid, error.message, error);
       }
     }
+
+    // So no `osascript` outlives the tool call. The error path above abandons
+    // the wobble, which swallows its own failures and is capped at 5s.
+    await shaker.settle();
 
     return { shaken: true, count };
   },
