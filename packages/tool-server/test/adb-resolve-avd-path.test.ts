@@ -11,12 +11,15 @@ import * as path from "node:path";
 import { resolveAvdPath } from "../src/utils/adb";
 
 // resolveAvdPath consults five roots in priority order; ANDROID_AVD_HOME is
-// only the second. Snapshot all of them (plus HOME, which backs the default
-// ~/.android/avd root) so an ambient ANDROID_USER_HOME — the Studio >= 4.2
-// convention, which outranks ANDROID_AVD_HOME — cannot decide these answers.
-// Same set avd-snapshot.test.ts pins for the same function.
+// only the second. Snapshot all of them, plus the pair backing the default
+// root: it is os.homedir()/.android/avd, and os.homedir() reads USERPROFILE on
+// Windows — where this file also runs (.github/workflows/windows-e2e.yml) — and
+// HOME elsewhere. With those pinned, an ambient ANDROID_USER_HOME (the Studio
+// >= 4.2 convention, which outranks ANDROID_AVD_HOME) cannot decide these
+// answers.
 const ENV_KEYS = [
   "HOME",
+  "USERPROFILE",
   "ANDROID_USER_HOME",
   "ANDROID_AVD_HOME",
   "ANDROID_SDK_HOME",
@@ -30,6 +33,7 @@ beforeEach(async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "argent-avd-home-"));
   created.push(home);
   process.env.HOME = home;
+  process.env.USERPROFILE = home;
   delete process.env.ANDROID_USER_HOME;
   delete process.env.ANDROID_AVD_HOME;
   delete process.env.ANDROID_SDK_HOME;

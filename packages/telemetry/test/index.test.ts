@@ -80,13 +80,16 @@ vi.mock("@opentelemetry/sdk-logs", () => ({
 const attrsOf = (provider: ProviderInstance, n: number): Record<string, unknown> =>
   (provider.emit.mock.calls[n]![0] as { attributes: Record<string, unknown> }).attributes;
 
-// DO_NOT_TRACK is a consortium-standard opt-out any developer may export. Left
-// ambient it disables consent for every describe below, so these tests would
-// assert what the developer's shell says rather than what markEnabled() does.
+// getConsentState honours two env opt-outs ahead of the config file:
+// DO_NOT_TRACK (the consortium standard) and a falsy ARGENT_TELEMETRY. Either
+// one, exported in the developer's shell, disables consent for every describe
+// below, so these tests would assert what that shell says rather than what
+// markEnabled() does.
+const CONSENT_ENV_KEYS = ["DO_NOT_TRACK", "ARGENT_TELEMETRY"];
 let restoreOptOut: () => void;
 beforeEach(() => {
-  restoreOptOut = snapshotEnv(["DO_NOT_TRACK"]);
-  delete process.env.DO_NOT_TRACK;
+  restoreOptOut = snapshotEnv(CONSENT_ENV_KEYS);
+  for (const k of CONSENT_ENV_KEYS) delete process.env[k];
 });
 afterEach(() => {
   restoreOptOut();

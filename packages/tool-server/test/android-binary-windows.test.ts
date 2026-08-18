@@ -10,7 +10,14 @@ vi.mock("../src/utils/command-on-path", () => ({
   commandOnPath: vi.fn(async () => null),
 }));
 
-const ENV_KEYS = ["PATH", "ANDROID_HOME", "ANDROID_SDK_ROOT", "HOME", "LOCALAPPDATA"] as const;
+const ENV_KEYS = [
+  "PATH",
+  "ANDROID_HOME",
+  "ANDROID_SDK_ROOT",
+  "HOME",
+  "USERPROFILE",
+  "LOCALAPPDATA",
+] as const;
 const originalEnv: Record<string, string | undefined> = {};
 const originalPlatform = process.platform;
 
@@ -41,10 +48,13 @@ describe("resolveAndroidBinary on Windows", () => {
     delete process.env.ANDROID_SDK_ROOT;
     tmpRoot = await mkdtemp(join(tmpdir(), "argent-android-win-"));
     // The win32 resolver also derives a root from the home directory
-    // (%USERPROFILE%\AppData\Local\Android\Sdk). Point HOME at the same empty
-    // temp root so a real Studio install under the developer's home cannot
-    // satisfy a lookup these tests expect to fail.
+    // (%USERPROFILE%\AppData\Local\Android\Sdk). os.homedir() reads USERPROFILE
+    // on Windows and HOME elsewhere, and this file runs on a real windows-latest
+    // host, so pin both at the same empty temp root — otherwise a stock Studio
+    // install under the developer's profile satisfies a lookup these tests
+    // expect to fail.
     process.env.HOME = tmpRoot;
+    process.env.USERPROFILE = tmpRoot;
   });
 
   afterEach(async () => {
