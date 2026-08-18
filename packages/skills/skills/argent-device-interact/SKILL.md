@@ -1,6 +1,6 @@
 ---
 name: argent-device-interact
-description: Interact with an iOS simulator, Android emulator, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, or checking visible app state after interactions.
+description: Interact with an iOS simulator, Android emulator, or Chromium (CDP) app using argent MCP tools. Use when installing remote app builds, tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, or checking visible app state after interactions.
 ---
 
 ## Unified tool surface
@@ -38,6 +38,16 @@ Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`
 
 **Never navigate to an app by tapping home-screen icons.** Use `launch-app` or `open-url` — they are instant and reliable.
 
+### install-app — from a remote build URL
+
+```json
+{ "udid": "<UDID>", "url": "https://example.com/build/app.apk" }
+```
+
+Use this when a CI/EAS build is available remotely and you do not have a local build path. It downloads the artifact on the tool-server host, installs it without clearing existing app data, and returns the resolved `bundleId` (the Android package name or iOS `CFBundleIdentifier`) for a subsequent `launch-app` call. Android accepts one APK directly or inside an archive; iOS simulators accept an IPA/ZIP or tarball containing one simulator-compatible `.app`. Pass `headers` only when the artifact URL requires authentication. URLs and redirects must resolve to public hosts.
+
+For a clean local reinstall that intentionally clears app data and runtime permissions, keep using `reinstall-app` with `bundleId` and `appPath`.
+
 ### launch-app — by bundle ID
 
 ```json
@@ -56,27 +66,28 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 
 ## 4. Choosing the Right Tool
 
-| Action            | Tool                | Notes                                                            |
-| ----------------- | ------------------- | ---------------------------------------------------------------- |
-| Multiple actions  | `run-sequence`      | Batch steps in one call (no intermediate screenshots)            |
-| Open an app       | `launch-app`        | **Always — never tap home-screen icons**                         |
-| Restart an app    | `restart-app`       | Terminate and relaunch by bundle ID                              |
-| Open URL/scheme   | `open-url`          | Web pages, deep links, URL schemes                               |
-| Single tap        | `gesture-tap`       | Buttons, links, checkboxes                                       |
-| Scroll/swipe      | `gesture-swipe`     | Straight-line scroll or swipe                                    |
-| Scroll (Chromium) | `gesture-scroll`    | Wheel-based; deltas are window fractions, positive deltaY = down |
-| Drag (Chromium)   | `gesture-drag`      | Sliders, drag-and-drop, text selection                           |
-| Long press        | `gesture-custom`    | Context menus, drag start                                        |
-| Drag & drop       | `gesture-custom`    | Complex drag interactions                                        |
-| Pinch/zoom        | `gesture-pinch`     | Two-finger pinch with auto-interpolation                         |
-| Rotation          | `gesture-rotate`    | Two-finger rotation with auto-interpolation                      |
-| Custom gesture    | `gesture-custom`    | Arbitrary touch sequences, optional interpolation                |
-| Hardware key      | `button`            | Home, back, power, volume, appSwitch, actionButton               |
-| Type text         | `keyboard`          | Every platform. Text or one named key per call, never both       |
-| Rotate device     | `rotate`            | Orientation changes                                              |
-| Shake device      | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu   |
-| Wait for UI       | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text    |
-| Wait for idle     | `await-screen-idle` | Block until a non-empty screen tree stops changing               |
+| Action               | Tool                | Notes                                                            |
+| -------------------- | ------------------- | ---------------------------------------------------------------- |
+| Install remote build | `install-app`       | Download artifact, install in place, and resolve its bundle ID   |
+| Multiple actions     | `run-sequence`      | Batch steps in one call (no intermediate screenshots)            |
+| Open an app          | `launch-app`        | **Always — never tap home-screen icons**                         |
+| Restart an app       | `restart-app`       | Terminate and relaunch by bundle ID                              |
+| Open URL/scheme      | `open-url`          | Web pages, deep links, URL schemes                               |
+| Single tap           | `gesture-tap`       | Buttons, links, checkboxes                                       |
+| Scroll/swipe         | `gesture-swipe`     | Straight-line scroll or swipe                                    |
+| Scroll (Chromium)    | `gesture-scroll`    | Wheel-based; deltas are window fractions, positive deltaY = down |
+| Drag (Chromium)      | `gesture-drag`      | Sliders, drag-and-drop, text selection                           |
+| Long press           | `gesture-custom`    | Context menus, drag start                                        |
+| Drag & drop          | `gesture-custom`    | Complex drag interactions                                        |
+| Pinch/zoom           | `gesture-pinch`     | Two-finger pinch with auto-interpolation                         |
+| Rotation             | `gesture-rotate`    | Two-finger rotation with auto-interpolation                      |
+| Custom gesture       | `gesture-custom`    | Arbitrary touch sequences, optional interpolation                |
+| Hardware key         | `button`            | Home, back, power, volume, appSwitch, actionButton               |
+| Type text            | `keyboard`          | Every platform. Text or one named key per call, never both       |
+| Rotate device        | `rotate`            | Orientation changes                                              |
+| Shake device         | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu   |
+| Wait for UI          | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text    |
+| Wait for idle        | `await-screen-idle` | Block until a non-empty screen tree stops changing               |
 
 ## 5. Finding Tap Targets
 
@@ -376,7 +387,8 @@ Stops on the first error (or unmet `await-ui-element` condition) and returns par
 - **First-launch permission prompts**: `reinstall-app` on Android always installs with `-g` so runtime permissions are pre-granted on first launch — no flag to pass.
 - **Locked screen / secure surfaces**: `describe` throws a clear error if it can't capture (keyguard, DRM, Play Integrity). Unlock the device or fall back to `screenshot`.
 - **APK vs .app in `reinstall-app`**: pass `.apk` absolute path on Android; `.app` directory on iOS.
+- **Remote builds**: use `install-app` with an APK URL. It updates in place and also installs with `-g`; use `reinstall-app` when app data must be cleared first.
 
 ### iOS
 
-_(no iOS-only gotchas collected here yet — add them as they come up)_
+- **Remote builds**: `install-app` requires a simulator-compatible `.app` inside the downloaded IPA/ZIP/tarball. A device-only App Store/TestFlight IPA cannot run in the simulator.

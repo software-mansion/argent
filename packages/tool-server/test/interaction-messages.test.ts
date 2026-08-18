@@ -250,6 +250,13 @@ describe("tool interaction messages", () => {
           url: `https://user:${secret}@example.com/path?token=${secret}#fragment`,
         },
       }),
+      definitions.get("install-app")!.interaction!.startedMsg!({
+        params: {
+          udid: "device-1",
+          url: `https://downloads.example.com/app.apk?token=${secret}`,
+          headers: { Authorization: `Bearer ${secret}` },
+        },
+      }),
       definitions.get("debugger-evaluate")!.interaction!.startedMsg!({
         params: { device_id: "device-1", port: 8081, expression: secret },
       }),

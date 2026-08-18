@@ -127,13 +127,14 @@ Once you discover the correct build/run workflow for a project, **save it to pro
 
 ### 3.4 When to Reinstall vs Refresh
 
-| Situation                                             | Action                                                                                |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| JS/React only changed                                 | Use `debugger-reload-metro` tool. No rebuild.                                         |
-| Native code or `pod install` / project config changed | Rebuild: `npx react-native run-ios` (Metro can stay running).                         |
-| `node_modules` or `package.json` changed              | `npm install`, then if native deps changed run `cd ios && pod install`. Then rebuild. |
-| App needs reinstalling from .app path                 | Use `reinstall-app` tool with UDID, bundle ID, and .app path.                         |
-| Persistent native build errors                        | Full clean + reinstall (step 2 above).                                                |
+| Situation                                             | Action                                                                                  |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| JS/React only changed                                 | Use `debugger-reload-metro` tool. No rebuild.                                           |
+| Native code or `pod install` / project config changed | Rebuild: `npx react-native run-ios` (Metro can stay running).                           |
+| `node_modules` or `package.json` changed              | `npm install`, then if native deps changed run `cd ios && pod install`. Then rebuild.   |
+| App build is available only at a remote URL           | Use `install-app` with the target UDID and artifact URL; launch its returned bundle ID. |
+| App needs reinstalling from .app path                 | Use `reinstall-app` tool with UDID, bundle ID, and .app path.                           |
+| Persistent native build errors                        | Full clean + reinstall (step 2 above).                                                  |
 
 ### 3.5 Device Control
 
@@ -142,6 +143,7 @@ Once you discover the correct build/run workflow for a project, **save it to pro
 | List devices               | `list-devices` tool (iOS + Android)                                                                                                                                                                        |
 | Boot an iOS simulator      | `boot-device` tool with `udid`                                                                                                                                                                             |
 | Boot an Android emulator   | `boot-device` tool with `avdName`                                                                                                                                                                          |
+| Install a remote app build | `install-app` tool with device id + public artifact URL                                                                                                                                                    |
 | Launch an app              | `launch-app` tool (pass device id + bundle id / package name)                                                                                                                                              |
 | Restart an app             | `restart-app` tool (pass device id + bundle id / package name)                                                                                                                                             |
 | Open a URL / deep link     | `open-url` tool (pass device id + URL)                                                                                                                                                                     |
@@ -219,6 +221,7 @@ If the user's intent is ambiguous (run existing tests, write new tests, or find 
 | Run Android app              | `npx react-native run-android`                                                                                                           |
 | List devices                 | `list-devices` tool (iOS + Android)                                                                                                      |
 | Boot a device                | `boot-device` tool (pass `udid` for iOS or `avdName` for Android)                                                                        |
+| Install a remote app build   | `install-app` tool; use its returned bundle ID with `launch-app`                                                                         |
 | Take screenshot              | `screenshot` tool                                                                                                                        |
 | Compare visible UI changes   | `screenshot-diff` tool; follow the `argent-screenshot-diff` skill for baseline/current capture choices                                   |
 | Describe screen (a11y tree)  | `describe` tool for normal app screens and in-app modals; use `screenshot` only when permission/system overlays are not exposed reliably |
