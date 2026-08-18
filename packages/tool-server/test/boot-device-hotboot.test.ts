@@ -837,8 +837,9 @@ describe("boot-device Android — `-crash-report-mode` feature gate", () => {
 
     expect(supportsFlagMock).toHaveBeenCalledWith(FLAG);
 
-    // The probe must carry it too: it changes emulator startup config, and the
-    // probe/boot argv have to agree or a loadable snapshot gets rejected.
+    // The probe must carry it too: it is itself an emulator spawn, so it needs
+    // the same crash-dialog suppression. Not a snapshot-parity requirement —
+    // the flag selects crash reporting, not qemu devices.
     expect(probeMock).toHaveBeenCalledTimes(1);
     const probeArgs = (probeMock.mock.calls[0]![2] as { extraArgs: string[] }).extraArgs;
     expectFlagOccurrences(probeArgs, 1);
