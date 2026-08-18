@@ -167,8 +167,8 @@ afterEach(() => sweep());
  *
  * The sentinel's `.` is its one ERE metacharacter, so escape it; a `[0-9]` slot glob
  * passes through as the character class it is. The escape excludes that wrapper a second
- * time over — `\.` wants a literal `.` where the wrapper's argv has a backslash — so it
- * takes both a bare sentinel and a dropped anchor to bring the match back.
+ * time over — `\.` wants a literal `.` where that argv has a backslash — and `$` a third,
+ * since it ends `|| true`. All three must go before the wrapper can match itself.
  */
 function cmdlinePattern(target: string): string {
   return `^sleep ${target.replaceAll(".", "\\.")}$`;
@@ -212,10 +212,10 @@ async function waitForClear(sentinel: string, timeoutMs = 3_000): Promise<number
   return waitForCount(sentinel, 0, timeoutMs);
 }
 
-// The two reap regressions fail SLOWLY — the runVega deadline elapses, then the clearance
-// poll runs its full budget — which overruns vitest's 5s default and reports "Test timed
-// out" instead of naming the workers that survived. Give those two tests room to print
-// their own diagnostic.
+// A regression on these paths fails SLOWLY: the drain tests wait out their 10s `timeoutMs`,
+// and the reap test's clearance poll runs a further 3s past its 2s deadline. Both overrun
+// vitest's 5s default, which reports "Test timed out" instead of the assertion naming what
+// actually broke. Give them room to print their own diagnostic.
 const REAP_FAILURE_BUDGET_MS = 15_000;
 const DRAIN_FAILURE_BUDGET_MS = 20_000;
 
@@ -272,21 +272,25 @@ describe("runVega timeout (real subprocess)", () => {
     });
   });
 
-  it("resolves a clean exit even when a worker holds the stdout pipe open (delayed close)", async () => {
-    // The pipe-inheritance freeze on the SUCCESS path: the launcher exits 0 with its
-    // output already written, but a grandchild keeps the stdout pipe open so `close`
-    // never arrives. Resolving only on `close` would stall this finished call until the
-    // timeout and then reject it as a timeout — discarding valid output. runVega instead
-    // falls back to `exit` + a short drain grace and resolves with the captured stdout.
-    const start = Date.now();
-    await expect(runVega(["linger", SENTINEL_LINGER], { timeoutMs: 10_000 })).resolves.toEqual({
-      stdout: "OK-linger",
-      stderr: "",
-    });
-    // Settles around the ~1s drain grace, well under the 10s timeout — proving it does
-    // not wait out the timeout (which would also have rejected rather than resolved).
-    expect(Date.now() - start).toBeLessThan(5_000);
-  });
+  it(
+    "resolves a clean exit even when a worker holds the stdout pipe open (delayed close)",
+    async () => {
+      // The pipe-inheritance freeze on the SUCCESS path: the launcher exits 0 with its
+      // output already written, but a grandchild keeps the stdout pipe open so `close`
+      // never arrives. Resolving only on `close` would stall this finished call until the
+      // timeout and then reject it as a timeout — discarding valid output. runVega instead
+      // falls back to `exit` + a short drain grace and resolves with the captured stdout.
+      const start = Date.now();
+      await expect(runVega(["linger", SENTINEL_LINGER], { timeoutMs: 10_000 })).resolves.toEqual({
+        stdout: "OK-linger",
+        stderr: "",
+      });
+      // Settles around the ~1s drain grace, well under the 10s timeout — proving it does
+      // not wait out the timeout (which would also have rejected rather than resolved).
+      expect(Date.now() - start).toBeLessThan(5_000);
+    },
+    DRAIN_FAILURE_BUDGET_MS
+  );
 
   it("resolves a clean exit whose drain grace outlasts the deadline (does not reject as timeout)", async () => {
     // Regression for the drain-grace-vs-deadline race: the child exits CLEANLY (code 0,
