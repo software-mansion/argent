@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach } from
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { execSync } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import { getFailureSignal } from "@argent/registry";
 import { runVega, __resetVegaBinaryCacheForTests } from "../src/utils/vega-cli";
 
@@ -44,7 +44,16 @@ import { runVega, __resetVegaBinaryCacheForTests } from "../src/utils/vega-cli";
 const RUN_TAG = `${process.pid}${Math.floor(Math.random() * 900 + 100)}`;
 const WORKER_LIFETIME_SECONDS = 600;
 const SENTINEL_PREFIX = `${WORKER_LIFETIME_SECONDS}.${RUN_TAG}`;
-const sentinel = (slot: number): string => `${SENTINEL_PREFIX}${slot}`;
+/**
+ * One worker slot. The slot is a single digit by type and has to stay one: it makes every
+ * sentinel exactly `<pid><3 digits><1 digit>` wide, which — together with the `$` anchor in
+ * cmdlinePattern — is what keeps one run from matching another's workers. Equal-width
+ * sentinels force equal-width pids, hence the same pid, which two live processes cannot
+ * have. A two-digit slot breaks that: pid 1234 / 567 / slot 10 spells `600.123456710`,
+ * which pid 12345 / 671's sweep glob `600\.12345671[0-9]` matches and kills.
+ */
+type SentinelSlot = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+const sentinel = (slot: SentinelSlot): string => `${SENTINEL_PREFIX}${slot}`;
 const SENTINEL_DEADLINE = sentinel(1);
 const SENTINEL_REAP = sentinel(2);
 const SENTINEL_OVERFLOW = sentinel(3);
@@ -52,6 +61,7 @@ const SENTINEL_LINGER = sentinel(4);
 const SENTINEL_OVERFLOW_ERR = sentinel(5);
 const SENTINEL_LINGER_NEAR_DEADLINE = sentinel(6);
 const SENTINEL_LINGER_GROUPED = sentinel(7);
+const SENTINEL_SWEEP = sentinel(8);
 let dir: string;
 let prevPath: string | undefined;
 
@@ -147,13 +157,14 @@ afterEach(() => sweep());
  * `sleep <target>`, where `target` is one sentinel or `<SENTINEL_PREFIX>[0-9]` for all
  * of this run's.
  *
- * Anchored to the WHOLE command line (`^…$`). With a bare `sleep <sentinel>` substring,
- * Linux's procps `pgrep -f` also matches the wrapper shell `/bin/sh -c "pgrep -f 'sleep
- * <sentinel>' || true"` that execSync spawns — its own argv contains the literal
- * pattern, and pgrep excludes only its own pid, not that parent shell — so a clean reap
- * still reported 1 phantom stray and every waitForClear assertion failed on CI. (macOS's
- * BSD pgrep doesn't match the wrapper, which is why it only bit Linux.) Anchoring also
- * keeps a `sleep` from unrelated work on the machine from ever being matched.
+ * Both anchors are load-bearing. `$` confines a run to its own sentinels: they are all
+ * `<pid><3 digits><1 digit>` wide (see `sentinel`), and without the tail anchor a run's
+ * sweep glob also matches the sentinels of a run whose pid is one digit longer. `^` keeps
+ * the `/bin/sh -c "pgrep -f '<pattern>' || true"` wrapper execSync spawns from counting as
+ * a stray — the wrapper's own argv carries the pattern text, and Linux's procps excludes
+ * only pgrep's own pid, not that parent shell (BSD pgrep excludes its ancestors, so the
+ * asymmetry shows up only on Linux). Both also keep a `sleep` from unrelated work on the
+ * machine off `pkill`.
  *
  * The sentinel's decimal point is its one ERE metacharacter, so escape it; a `[0-9]`
  * slot glob passes through as the character class it is.
@@ -181,17 +192,23 @@ function strayCount(sentinel: string): number {
   }
 }
 
-// Poll until this test's workers are gone (reap is a SIGKILL the OS applies
-// asynchronously). Returns the final count; a complete reap reaches 0 within a
-// moment, whereas an orphaned tree would survive for the full sleep and never clear.
-async function waitForClear(sentinel: string, timeoutMs = 3_000): Promise<number> {
+// Poll `strayCount` until it reaches `want`, or the deadline passes. Returns the final
+// count, so the caller asserts on a number rather than on having timed out.
+async function waitForCount(sentinel: string, want: number, timeoutMs = 3_000): Promise<number> {
   const deadline = Date.now() + timeoutMs;
   let count = strayCount(sentinel);
-  while (count > 0 && Date.now() < deadline) {
+  while (count !== want && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 50));
     count = strayCount(sentinel);
   }
   return count;
+}
+
+// Poll until this test's workers are gone (reap is a SIGKILL the OS applies
+// asynchronously). Returns the final count; a complete reap reaches 0 within a
+// moment, whereas an orphaned tree would survive for the full sleep and never clear.
+async function waitForClear(sentinel: string, timeoutMs = 3_000): Promise<number> {
+  return waitForCount(sentinel, 0, timeoutMs);
 }
 
 describe("runVega timeout (real subprocess)", () => {
@@ -321,5 +338,24 @@ describe("runVega timeout (real subprocess)", () => {
     expect(err).toBeInstanceOf(Error);
     expect(getFailureSignal(err)?.error_kind).toBe("subprocess");
     expect(await waitForClear(SENTINEL_OVERFLOW_ERR)).toBe(0);
+  });
+});
+
+describe("sentinel bookkeeping", () => {
+  it("sees a live worker and sweeps it", async () => {
+    // Positive control for every `waitForClear(...)).toBe(0)` above. Those read 0 both
+    // when a reap succeeded and when the pattern matches nothing at all, so a sentinel
+    // whose escaping broke — or a host without `pgrep`/`pkill`, where `|| true` makes
+    // strayCount return 0 rather than throw — would turn all of them vacuously green.
+    // Requiring a count of 1 first makes that failure loud.
+    //
+    // It also pins sweep(), which is otherwise unasserted: the two `linger` tests'
+    // detached workers are documented as unreapable by runVega, so this is the only
+    // thing that removes them.
+    const worker = spawn("sleep", [SENTINEL_SWEEP], { stdio: "ignore" });
+    worker.unref();
+    expect(await waitForCount(SENTINEL_SWEEP, 1)).toBe(1);
+    sweep();
+    expect(await waitForClear(SENTINEL_SWEEP)).toBe(0);
   });
 });
