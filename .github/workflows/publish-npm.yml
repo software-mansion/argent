@@ -153,6 +153,22 @@ jobs:
 
       - run: npx tsc --build
 
+      # Canary version: <patch-bump of highest published>-next.<counter>, where
+      # the counter resets to 0 per base and increments per publish (derived
+      # from the registry). Stamped into package.json so the published build
+      # reports it. Sequenced after `npm ci` (the checked-out lockfile still
+      # matches the original version at install time) and before the bundle
+      # build, which bakes the version into the telemetry payload as a string
+      # literal — a build that ran first would stamp every canary's events with
+      # the previous release's version.
+      - name: Compute and stamp canary version
+        if: steps.mode.outputs.mode == 'canary'
+        id: canary
+        run: |
+          VERSION="$(node scripts/next-canary-version.mjs --write)"
+          echo "Canary version: ${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
       - run: npm run build -w @swmansion/argent
         env:
           # Release-only: build-package-artifact.yml deliberately builds without
@@ -223,21 +239,6 @@ jobs:
       - run: head -c4 packages/argent/assets/trace-processor/trace_processor.wasm | grep -q $'\x00asm'
       - run: ls packages/argent/bin/argent-android-devtools-*.apk
 
-      # Canary version: <patch-bump of highest published>-next.<counter>, where
-      # the counter resets to 0 per base and increments per publish (derived
-      # from the registry). Stamped into package.json so the published build
-      # reports it. Done after `npm ci` (the checked-out lockfile still matches
-      # the original version at install time) and after the build (the CLI reads
-      # its version from package.json at runtime — nothing bakes it in), but
-      # before pack/publish.
-      - name: Compute and stamp canary version
-        if: steps.mode.outputs.mode == 'canary'
-        id: canary
-        run: |
-          VERSION="$(node scripts/next-canary-version.mjs --write)"
-          echo "Canary version: ${VERSION}"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-
       # The shipped CLI reads its version from package.json at runtime, so this
       # is exactly what `argent --version` prints after install. Fail loudly if
       # they ever diverge.
@@ -248,6 +249,47 @@ jobs:
           EXPECTED="${{ steps.canary.outputs.version }}"
           echo "argent --version → ${REPORTED} (expected ${EXPECTED})"
           [ "${REPORTED}" = "${EXPECTED}" ] || { echo "::error::argent --version (${REPORTED}) != published version (${EXPECTED})"; exit 1; }
+
+      # `argent --version` reads package.json at runtime, so it stays correct
+      # however the build is sequenced and cannot catch a stale *baked* version.
+      # Telemetry's cli_version is a different value: esbuild substitutes it into
+      # each bundle at build time, so it is only right while the stamp precedes
+      # the build. Assert the literal every bundle actually carries, so a
+      # re-ordering that silently mis-attributes every canary's events fails the
+      # publish instead of shipping.
+      - name: Verify the bundled telemetry version matches the canary version
+        if: steps.mode.outputs.mode == 'canary'
+        env:
+          EXPECTED: ${{ steps.canary.outputs.version }}
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const expected = process.env.EXPECTED;
+            const dir = "packages/argent/dist";
+            // esbuild folds the ARGENT_CLI_VERSION define into readCliVersion.
+            const re = /function readCliVersion\(\)\s*\{[^}]*?return\s*"([^"]*)"/s;
+            let checked = 0;
+            let failed = false;
+            for (const file of fs.readdirSync(dir).filter((f) => /\.(mjs|cjs)$/.test(f))) {
+              const m = re.exec(fs.readFileSync(path.join(dir, file), "utf8"));
+              // Bundles that do not carry telemetry (e.g. mcp-server) bake no version.
+              if (!m) continue;
+              checked++;
+              const ok = m[1] === expected;
+              console.log(`${ok ? "ok  " : "FAIL"} ${file}: baked cli_version ${m[1]} (expected ${expected})`);
+              if (!ok) failed = true;
+            }
+            if (checked === 0) {
+              console.log(`::error::no bundle in ${dir} bakes a telemetry cli_version — the check can no longer see what ships`);
+              process.exit(1);
+            }
+            if (failed) {
+              console.log("::error::bundled telemetry cli_version != published version — the canary stamp must run before the bundle build");
+              process.exit(1);
+            }
+            console.log(`Verified the baked telemetry version in ${checked} bundle(s).`);
+          '
 
       - run: npm pack --dry-run -w @swmansion/argent
 
