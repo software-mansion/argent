@@ -11,6 +11,7 @@ describe("parseLinkFlags — defaults", () => {
       url: null,
       yes: false,
       noVerify: false,
+      syncPreferences: true,
       help: false,
     });
   });
@@ -28,10 +29,11 @@ describe("parseLinkFlags — flag forms", () => {
     expect(parseLinkFlags(["--port=4000"]).port).toBe(4000);
   });
 
-  it("parses boolean flags --yes/-y, --no-verify, --help/-h", () => {
+  it("parses boolean flags --yes/-y, --no-verify, --no-sync-preferences, --help/-h", () => {
     expect(parseLinkFlags(["--yes"]).yes).toBe(true);
     expect(parseLinkFlags(["-y"]).yes).toBe(true);
     expect(parseLinkFlags(["--no-verify"]).noVerify).toBe(true);
+    expect(parseLinkFlags(["--no-sync-preferences"]).syncPreferences).toBe(false);
     expect(parseLinkFlags(["--help"]).help).toBe(true);
     expect(parseLinkFlags(["-h"]).help).toBe(true);
   });
@@ -45,6 +47,7 @@ describe("parseLinkFlags — flag forms", () => {
       url: null,
       yes: true,
       noVerify: true,
+      syncPreferences: true,
       help: false,
     });
   });

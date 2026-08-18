@@ -9,6 +9,7 @@ import {
   type LinkConfig,
 } from "@argent/tools-client";
 import { parsePort, StartFlagError } from "./server.js";
+import { syncLinkedServerPreferences } from "./remote-preferences.js";
 
 interface LinkFlags {
   host: string | null;
@@ -18,6 +19,7 @@ interface LinkFlags {
   url: string | null;
   yes: boolean;
   noVerify: boolean;
+  syncPreferences: boolean;
   help: boolean;
 }
 
@@ -60,6 +62,7 @@ export function parseLinkFlags(argv: string[]): LinkFlags {
     url: null,
     yes: false,
     noVerify: false,
+    syncPreferences: true,
     help: false,
   };
 
@@ -81,6 +84,10 @@ export function parseLinkFlags(argv: string[]): LinkFlags {
     }
     if (tok === "--no-verify") {
       flags.noVerify = true;
+      continue;
+    }
+    if (tok === "--no-sync-preferences") {
+      flags.syncPreferences = false;
       continue;
     }
     if (tok === "--host") {
@@ -179,6 +186,9 @@ Flags:
   --token <t>       Bearer token for a server that enforces auth. Usually
                     supplied inside the argent:// string instead.
   --no-verify       Skip the pre-flight GET /tools health check.
+  --no-sync-preferences
+                    Do not overlay portable local preferences on the linked
+                    server process. Sync is enabled by default.
   --yes, -y         Non-interactive. Requires --host (port defaults to 3001).
                     Fails if --host is missing.
   --help, -h        Show this help.
@@ -201,6 +211,9 @@ Security:
 
 Notes:
   - If ARGENT_TOOLS_URL is also set in your environment, it overrides the link.
+  - Portable, live server preferences are overlaid for the remote process
+    lifetime by default. Remote config files are not changed. Server-owned,
+    startup-only, and client-only settings are never copied.
   - To stop using the remote target, run \`argent unlink\`.
   - \`argent server start/stop/status\` manage the local tool-server lifecycle
     and are unaffected by linking.
@@ -230,6 +243,8 @@ Notes:
     precedence after unlinking — unset it manually for fully local behaviour.
   - This does not stop or start any tool-server process. Use
     \`argent server stop\` if you also want to terminate a running local server.
+  - Preferences already synced to the remote process remain active until that
+    process restarts or another \`argent link\` sync replaces them.
   - Restart your editor afterwards — a running \`argent mcp\` process won't
     revert to local auto-spawn until it's relaunched.
 `);
@@ -402,21 +417,18 @@ export async function link(argv: string[]): Promise<void> {
   // Resolve token: an explicit --token / argent:// URL wins; otherwise reuse
   // the existing link's token when re-pointing at the same target, so a bare
   // `argent link` re-run doesn't silently drop authentication.
-  const token: string | undefined =
+  const resolveToken = (): string | undefined =>
     flags.token ??
     (existing && existing.host === host && existing.port === port ? existing.token : undefined);
+  let token = resolveToken();
 
   // A full http(s):// / argent:// target carries its own canonical URL (scheme,
   // optional path); the --host/--port path builds a plain http://host:port.
   let url = flags.url ?? formatToolsServerUrl(host, port);
 
   // Overwrite confirmation (interactive only)
-  if (!flags.yes && existing) {
-    if (existing.url === url) {
-      p.log.info(`Already linked to ${pc.cyan(url)}.`);
-      p.outro("No changes.");
-      return;
-    }
+  const initiallySameTarget = existing?.url === url;
+  if (!flags.yes && existing && !initiallySameTarget) {
     const overwrite = await p.confirm({
       message: `Replace existing link ${pc.dim(existing.url)} with ${pc.cyan(url)}?`,
       initialValue: true,
@@ -476,11 +488,18 @@ export async function link(argv: string[]): Promise<void> {
         host = await promptHost(existing, host);
         port = await promptPort(existing, port);
         url = formatToolsServerUrl(host, port);
+        // A token inherited from the old same-target link must not follow the
+        // user to a different host. An explicitly supplied --token still wins.
+        token = resolveToken();
       }
       // "retry" (or after "modify") loops and re-runs preflightHealth.
     }
   }
 
+  // Verification may have changed the target through the interactive
+  // "Modify host and port" path, so compare the final URL when reporting what
+  // was saved rather than reusing the pre-verification result.
+  const sameTarget = existing?.url === url;
   const cfg: LinkConfig = {
     url,
     host,
@@ -490,12 +509,25 @@ export async function link(argv: string[]): Promise<void> {
   };
   await writeLinkConfig(cfg);
 
-  if (existing && existing.url !== url) {
+  if (sameTarget) {
+    console.log(`${pc.green("✓")} Link refreshed: ${pc.cyan(url)}`);
+  } else if (existing) {
     console.log(`${pc.green("✓")} Link updated: ${pc.dim(existing.url)} → ${pc.cyan(url)}`);
   } else {
     console.log(`${pc.green("✓")} Linked: ${pc.cyan(url)}`);
   }
   if (token) console.log(pc.dim("  auth: token stored in ~/.argent/link.json (0600)"));
+  if (flags.syncPreferences) {
+    const syncResult = await syncLinkedServerPreferences(url, token);
+    if (syncResult.status === "synced") {
+      const detail = syncResult.telemetryDisabled ? " (including telemetry opt-out)" : "";
+      console.log(pc.dim(`  preferences: synced${detail}`));
+    } else if (syncResult.status === "unsupported") {
+      console.log(pc.dim("  preferences: remote server does not support sync; link saved anyway"));
+    } else {
+      console.log(pc.yellow(`  preferences: sync failed (${syncResult.error}); link saved anyway`));
+    }
+  }
   printSecurityCaveat(host, token, url);
   if (process.env.ARGENT_TOOLS_URL) {
     console.log(

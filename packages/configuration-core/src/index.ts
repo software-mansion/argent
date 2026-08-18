@@ -9,10 +9,20 @@ export {
   unsetFlag,
   isFlagEnabled,
   isFeatureEnabled,
+  clearRuntimeFlagOverrides,
   type FlagScope,
   type FlagDefinition,
   type FlagsPathOptions,
 } from "./flags.js";
+
+export {
+  REMOTE_PREFERENCES_VERSION,
+  RemotePreferencesValidationError,
+  buildRemotePreferencesSnapshot,
+  parseRemotePreferencesSnapshot,
+  applyRemotePreferenceFlags,
+  type RemotePreferencesSnapshot,
+} from "./remote-preferences.js";
 
 export {
   argentHomeDir,

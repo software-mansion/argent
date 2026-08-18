@@ -19,7 +19,12 @@ import {
   peekAnonId,
 } from "./identity.js";
 import { resolveHostFingerprint, resolveHostFingerprintAsync } from "./fingerprint.js";
-import { isEnabled, writeConsentFlag, getConsentState } from "./consent.js";
+import {
+  isEnabled,
+  writeConsentFlag,
+  getConsentState,
+  setSessionConsentOverride,
+} from "./consent.js";
 import { emitDebugError, emitDebugPayload, isDebugEnabled } from "./debug.js";
 import type { EventName, EventPropertyMap } from "./events.js";
 
@@ -304,6 +309,22 @@ export async function markDisabled(): Promise<void> {
     state = null;
   } catch (err) {
     emitDebugError("markDisabled failed", err);
+  }
+}
+
+/**
+ * Disable telemetry for this process without changing the host's config file.
+ * Returns the observed consent state so administrative callers never report a
+ * privacy change that failed to take effect.
+ */
+export async function disableForSession(): Promise<boolean> {
+  try {
+    setSessionConsentOverride(false);
+    await shutdown();
+    return getConsentState().enabled === false;
+  } catch (err) {
+    emitDebugError("disableForSession failed", err);
+    return false;
   }
 }
 
