@@ -109,6 +109,8 @@ Run a YAML flow without an LLM in the loop. \`run\` takes any of these forms:
            path instead); a path is what reaches flows kept elsewhere, and
            what \`argent flow list\` prints for nested ones
   a dir    Every flow in that directory, run sequentially
+  nothing  Every flow in .argent/flows, subdirectories included: exactly the
+           set \`argent flow list\` prints
 
 For a name and for a file path alike, the
 filename (minus .yaml) names the run's report and artifacts, so it must
@@ -122,18 +124,23 @@ multi-platform launch auto-detects a device instead. Pass --device to attach to
 a running instance.
 
 A directory run prints only failing steps plus a final flow summary;
---recursive walks subdirectories too (dot-directories and node_modules are
-skipped). An invalid flow file fails alone and the batch continues; an infra
-error stops the batch and counts the remaining flows skipped.
+subdirectories are walked by a bare run and by --recursive on a typed path
+(dot-directories, node_modules and __baselines__ are skipped there and by
+\`flow list\`). An invalid flow file fails alone and the batch continues; an
+infra error stops the batch and counts the remaining flows skipped.
 
 Runs require the auto-started local tool server;
 ARGENT_TOOLS_URL and \`argent link\` routing are not supported.
 
 Subcommands:
-  run <flow|flow.yaml|dir>   Run a saved flow by name, a YAML file by path, or
+  run [flow|flow.yaml|dir]   Run a saved flow by name, a YAML file by path, or
                              every flow in a directory, and report pass/fail
-                             (exit reflects result)
-  list                       List runnable YAML paths in .argent/flows
+                             (exit reflects result). Omit the argument to run
+                             every flow \`argent flow list\` prints, i.e. all of
+                             .argent/flows, subdirectories included
+  list                       List runnable YAML paths in .argent/flows,
+                             subdirectories included and the same directories
+                             skipped
 
 Options (run):
   --device <id>          Device id to run against (auto-detected when omitted)
@@ -147,6 +154,7 @@ Options (run):
                          instead (with a warning), so no flow's evidence is
                          overwritten
   -r, --recursive        With a directory path, also run flows in subdirectories
+                         (a bare \`argent flow run\` already does)
   --json                 Print the raw JSON report
   --help, -h             Show this help
   --                     End of options — only needed for a flow whose name
@@ -157,6 +165,7 @@ Examples:
   argent flow run .argent/flows/checkout.yaml --output flow-artifacts --json
   argent flow run ~/shared-flows/checkout.yaml --device <UDID> --update-baselines
   argent flow run .argent/flows --recursive
+  argent flow run
 `);
 }
 
@@ -186,6 +195,17 @@ export function parseRunArgs(argv: string[]): {
     if (out.flowRef !== undefined) {
       throw new FlagParseException(
         `unexpected argument ${JSON.stringify(tok)}; flow run accepts one flow name, YAML file path, or directory path`
+      );
+    }
+    // An empty token names nothing, and it must not be read as "no argument":
+    // it would resolve to the current directory and batch every flow found
+    // there. Reachable as `argent flow run "$FLOW"` with the variable unset.
+    // Ordered after the duplicate check, which owns `run checkout ""`: a flow
+    // was named, so "omit the argument" would be the wrong correction.
+    if (tok === "") {
+      throw new FlagParseException(
+        `flow run requires a flow name, a YAML file path, or a directory path; ` +
+          `omit the argument to run every flow in ${FLOWS_DIR}`
       );
     }
     out.flowRef = tok;
@@ -841,46 +861,64 @@ async function isRunnableFlowFile(filePath: string): Promise<boolean> {
 }
 
 /**
- * Every runnable flow path under `dir`, relative to it. `flow run` binds its
- * name contract to the filename alone — intermediate directory names are
- * unconstrained — so a YAML at any depth is runnable and a non-recursive
- * listing would hide paths `run` accepts. Two deliberate exclusions:
+ * Directories a recursive walk never enters, none of them a place flows are
+ * authored: dot-directories and `node_modules` (descending them turns one
+ * mistyped path into a walk of an entire dependency tree), and `__baselines__`
+ * (at any depth, since nested flows keep their baselines beside themselves),
+ * which is machine-managed snapshot storage - reaching into an output
+ * directory invites keying baselines of baselines. `run` would execute a YAML
+ * typed inside any of the three, so all three are where "cover what run
+ * accepts" yields to "cover what is a flow".
+ */
+function isSkippedFlowDir(name: string): boolean {
+  return name.startsWith(".") || name === "node_modules" || name === "__baselines__";
+}
+
+/**
+ * Every runnable flow path under `dir`, relative to it and sorted. The single
+ * walker behind both `flow list` and a directory `run`, so what one covers the
+ * other cannot miss: agreement is structural here, not two rule sets kept in
+ * step by hand.
  *
- * - `__baselines__` directories (at any depth: nested flows keep their
- *   baselines beside themselves) are machine-managed snapshot storage, not a
- *   place flows live. `run` would technically execute a YAML dropped in one,
- *   but advertising the inside of an output directory invites keying
- *   baselines of baselines — the one spot where "list what run accepts"
- *   yields to "list what is a flow".
- * - Symlinked directories are not entered: a link cycle would walk forever
- *   (Node's own recursive readdir refuses to follow them for the same
- *   reason). A symlinked flow FILE is still listed — the runnability probe
- *   stats through it, exactly as `flow run` does.
+ * `flow run` binds its name contract to the filename alone (intermediate
+ * directory names are unconstrained), so a YAML at any depth is runnable and
+ * the recursive mode is what `list` and a bare `run` use. Symlinked
+ * directories are never entered even then: a link cycle would walk forever
+ * (Node's own recursive readdir refuses to follow them for the same reason). A
+ * symlinked flow FILE is still found - the runnability probe stats through it,
+ * exactly as `flow run` does.
+ *
+ * Sorting over the full relative paths, once at the end, keeps the order a
+ * pure function of the path set rather than of walk order.
  *
  * An unreadable subdirectory omits its subtree like any other per-entry
  * failure; only the top-level readdir's error propagates, so a missing
  * `.argent/flows` still gets its own message.
  */
-async function collectRunnableFlowPaths(dir: string, relDir = ""): Promise<string[]> {
+async function collectRunnableFlowPaths(dir: string, recursive: boolean): Promise<string[]> {
   const found: string[] = [];
-  const entries = await fsp.readdir(dir, { withFileTypes: true });
-  for (const entry of entries) {
-    const rel = relDir ? path.join(relDir, entry.name) : entry.name;
-    if (entry.isDirectory()) {
-      if (entry.name === "__baselines__") continue;
-      found.push(
-        ...(await collectRunnableFlowPaths(path.join(dir, entry.name), rel).catch(() => []))
-      );
-      continue;
+  const walk = async (current: string, rel: string): Promise<void> => {
+    for (const entry of await fsp.readdir(current, { withFileTypes: true })) {
+      const entryRel = rel ? path.join(rel, entry.name) : entry.name;
+      if (entry.isDirectory()) {
+        if (recursive && !isSkippedFlowDir(entry.name)) {
+          // Best-effort like isRunnableFlowFile: an unreadable subtree is
+          // skipped so the rest of the walk still runs - only the top-level
+          // readdir failure (thrown by the outer walk call) aborts discovery.
+          await walk(path.join(current, entry.name), entryRel).catch(() => {});
+        }
+        continue;
+      }
+      // Same name gates as `run`: exact lowercase .yaml, stem in the safe
+      // charset. readdir returns on-disk names, so what passes here is the
+      // spelling `run`'s exact-basename check accepts.
+      if (!entry.name.endsWith(".yaml")) continue;
+      if (!SAFE_FLOW_NAME.test(path.basename(entry.name, ".yaml"))) continue;
+      if (await isRunnableFlowFile(path.join(current, entry.name))) found.push(entryRel);
     }
-    // Same name gates as `run`: exact lowercase .yaml, stem in the safe
-    // charset. readdir returns on-disk names, so what passes here is the
-    // spelling `run`'s exact-basename check accepts.
-    if (!entry.name.endsWith(".yaml")) continue;
-    if (!SAFE_FLOW_NAME.test(path.basename(entry.name, ".yaml"))) continue;
-    if (await isRunnableFlowFile(path.join(dir, entry.name))) found.push(rel);
-  }
-  return found;
+  };
+  await walk(dir, "");
+  return found.sort();
 }
 
 /**
@@ -980,36 +1018,6 @@ async function savedFlowHint(projectRoot: string, missingPath: string): Promise<
 }
 
 /**
- * Discover runnable flows under `dir`, as paths relative to it, sorted for a
- * deterministic run order. Same acceptance rules as `flow list`, so `list` and
- * a directory `run` can never disagree. The recursive walk skips
- * dot-directories and node_modules and never follows a directory symlink (its
- * dirent is not a directory, and a `*.yaml` one fails isRunnableFlowFile).
- */
-async function collectFlowFiles(dir: string, recursive: boolean): Promise<string[]> {
-  const found: string[] = [];
-  const walk = async (current: string, rel: string): Promise<void> => {
-    for (const entry of await fsp.readdir(current, { withFileTypes: true })) {
-      const entryRel = rel ? path.join(rel, entry.name) : entry.name;
-      if (entry.isDirectory()) {
-        if (recursive && !entry.name.startsWith(".") && entry.name !== "node_modules") {
-          // Best-effort like isRunnableFlowFile: an unreadable subtree is
-          // skipped so the rest of the walk still runs — only the top-level
-          // readdir failure (thrown by the outer walk call) aborts discovery.
-          await walk(path.join(current, entry.name), entryRel).catch(() => {});
-        }
-        continue;
-      }
-      if (!entry.name.endsWith(".yaml")) continue;
-      if (!SAFE_FLOW_NAME.test(path.basename(entry.name, ".yaml"))) continue;
-      if (await isRunnableFlowFile(path.join(current, entry.name))) found.push(entryRel);
-    }
-  };
-  await walk(dir, "");
-  return found.sort();
-}
-
-/**
  * CLI runs rely on the caller and tool-server sharing a filesystem: the
  * runner resolves `run:` targets against each containing flow file's
  * directory (fragments may live across directories) and reads/writes
@@ -1094,23 +1102,28 @@ interface BatchFlowResult {
  * one the tool-server rejects as invalid (a bad YAML, an unparseable step) —
  * lets the batch continue, while an infra error (transport throw, unclassified
  * failure, non-report result) stops it and counts the remaining flows skipped.
+ *
+ * `recursive` is the effective mode rather than `args.recursive`: a bare `run`
+ * recurses without the flag, and both the walk and the -r hint below must
+ * follow what the run actually does.
  */
 async function runFlowDirectory(
   dir: string,
   args: ReturnType<typeof parseRunArgs>,
+  recursive: boolean,
   projectRoot: string,
   options: FlowCommandOptions
 ): Promise<void> {
   let flows: string[];
   try {
-    flows = await collectFlowFiles(dir, args.recursive);
+    flows = await collectRunnableFlowPaths(dir, recursive);
   } catch {
     console.error(`Could not read flow directory: ${dir}`);
     return exitAfterFlush(2);
   }
   if (flows.length === 0) {
     console.error(`No flows found in ${dir}`);
-    if (!args.recursive) console.error("Pass -r/--recursive to include subdirectories.");
+    if (!recursive) console.error("Pass -r/--recursive to include subdirectories.");
     return exitAfterFlush(2);
   }
 
@@ -1198,12 +1211,9 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
   if (sub === "list") {
     const dir = path.join(process.cwd(), FLOWS_DIR);
     try {
-      // One final sort over full relative paths, not per-directory: the
-      // ordering must be a pure function of the set of paths, never of the
-      // walk order.
-      const paths = (await collectRunnableFlowPaths(dir))
-        .sort()
-        .map((rel) => path.join(FLOWS_DIR, rel));
+      const paths = (await collectRunnableFlowPaths(dir, true)).map((rel) =>
+        path.join(FLOWS_DIR, rel)
+      );
       if (paths.length === 0) console.log("No flows found in .argent/flows");
       else console.log(paths.join("\n"));
     } catch {
@@ -1236,13 +1246,15 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     }
     throw err;
   }
-  if (!args.flowRef) {
-    console.error(
-      "argent flow run <flow|flow.yaml|dir> requires a flow name, a YAML file path, or a directory path."
-    );
-    printHelp();
-    return exitAfterFlush(2);
-  }
+  // A bare `run` means the default flows directory, so "run everything I have
+  // saved" costs no argument. It resolves and dispatches exactly as a typed
+  // path does, so the two spellings cannot drift; what it adds is recursion,
+  // because a bare run is the run half of `flow list` and must cover the very
+  // set that command prints. Only this form implies it: a typed directory
+  // still runs what the operator spelled and nothing below it without -r.
+  const flowRef = args.flowRef ?? FLOWS_DIR;
+  const defaulted = args.flowRef === undefined;
+  const recursive = args.recursive || defaulted;
 
   const projectRoot = process.cwd();
   // A saved-flow name is turned into its `.argent/flows` path here and is
@@ -1250,7 +1262,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
   // one resolved identity, one run (see resolveFlowRef). `fromName` survives
   // only to aim the not-found recovery, since a name resolves somewhere the
   // user never spelled out.
-  const { suppliedPath, fromName } = resolveFlowRef(args.flowRef);
+  const { suppliedPath, fromName } = resolveFlowRef(flowRef);
   // path.resolve collapses ".." lexically, without consulting symlinks, so a
   // ".." following a symlinked directory would make the CLI stat and run a
   // different file than the one the kernel opens for this string. Rejected
@@ -1299,20 +1311,34 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     isDirectory = (await fsp.stat(resolvedPath)).isDirectory();
   } catch {
     // Only a spelled-out path can be missing a directory the user meant; a
-    // name resolves to a .yaml file it never named, so "directory not found"
-    // would quote a path they never typed. That form falls through instead.
-    if (args.recursive && !fromName) {
+    // name resolves to a .yaml file it never named, and a defaulted ref names
+    // nothing at all, so "directory not found" would quote a path they never
+    // typed. Those forms fall through instead.
+    if (recursive && !fromName && !defaulted) {
       console.error(`Flow directory not found: ${resolvedPath}`);
       return exitAfterFlush(2);
     }
   }
-  if (isDirectory) {
-    return runFlowDirectory(resolvedPath, args, projectRoot, options);
+  // A defaulted ref addresses that directory or nothing at all, while every
+  // message below is written for a path the operator typed — a missing flows
+  // directory would surface as "Flow path must end in .yaml: .argent/flows",
+  // complaining about a string this run never wrote. Say what happened instead.
+  if (defaulted && !isDirectory) {
+    console.error(
+      `No ${FLOWS_DIR} directory in the current working directory.\n` +
+        `Pass a flow name, a YAML file path, or a directory path to run a flow kept elsewhere.`
+    );
+    return exitAfterFlush(2);
   }
+  if (isDirectory) {
+    return runFlowDirectory(resolvedPath, args, recursive, projectRoot, options);
+  }
+  // The flag as typed, not the effective mode: this explains --recursive, and
+  // a bare run never passed it.
   if (args.recursive) {
     console.error(
       fromName
-        ? `flow run --recursive requires a directory path; "${args.flowRef}" is a saved-flow name, ` +
+        ? `flow run --recursive requires a directory path; "${flowRef}" is a saved-flow name, ` +
             `which always addresses the single file ${suppliedPath}.`
         : `flow run --recursive requires a directory path: ${suppliedPath}`
     );
@@ -1413,7 +1439,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     let recovery = "";
     if (code === "ENOENT") {
       recovery = fromName
-        ? `\nNo flow named "${args.flowRef}" is saved there — run \`argent flow list\` to see the saved flows.`
+        ? `\nNo flow named "${flowRef}" is saved there — run \`argent flow list\` to see the saved flows.`
         : await savedFlowHint(projectRoot, flowPath);
     }
     console.error(`${detail}: ${flowPath}${recovery}`);
