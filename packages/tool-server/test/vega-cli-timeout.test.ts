@@ -289,12 +289,14 @@ describe("runVega timeout (real subprocess)", () => {
     // that grace elapses, settling on it would reject a finished call AS A TIMEOUT —
     // discarding valid output and (worse) classifying `error_kind: "timeout"`, which
     // suppresses listVegaDevices' `device info` recovery and drops a running VVD. With
-    // `timeoutMs` (600) below VEGA_EXIT_DRAIN_GRACE_MS (1000) the exit-at-~0ms schedules
-    // its drain ~1s out while the deadline is only 600ms away, so the race is forced
-    // deterministically. The child having exited makes the wall-clock deadline moot, so
-    // it must resolve from the exit/drain with the captured output, not reject.
+    // any `timeoutMs` below VEGA_EXIT_DRAIN_GRACE_MS (1000) the deadline is always due
+    // before the drain the exit schedules 1s out, so the race is forced. The child having
+    // exited makes the wall-clock deadline moot, so it must resolve from the exit/drain
+    // with the captured output, not reject. What the value has to clear is the launcher's
+    // own startup — the deadline runs from the call, the drain only from the exit — and a
+    // cold `node` spawn under load has been measured at 618ms.
     await expect(
-      runVega(["linger", SENTINEL_LINGER_NEAR_DEADLINE], { timeoutMs: 600 })
+      runVega(["linger", SENTINEL_LINGER_NEAR_DEADLINE], { timeoutMs: 900 })
     ).resolves.toEqual({ stdout: "OK-linger", stderr: "" });
   });
 
