@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -33,9 +33,17 @@ afterAll(() => {
   rmSync(TEST_HOME, { recursive: true, force: true });
 });
 
-// Ensure no stray children survive a failing test.
 const spawnedPids: number[] = [];
+// TTL safety net. The reaper below can only kill a pid that reached
+// `spawnedPids`, and every site records one only after the spawn has already
+// happened — so an assertion throwing in between leaves a real server running
+// while this same hook deletes the record that could find it. Sixty seconds
+// outlasts the longest test here (30s) and expires well before the next run.
+beforeEach(() => {
+  process.env.FAKE_TTL_MS = "60000";
+});
 afterEach(async () => {
+  delete process.env.FAKE_TTL_MS;
   for (const pid of spawnedPids.splice(0)) {
     try {
       process.kill(pid, "SIGKILL");
