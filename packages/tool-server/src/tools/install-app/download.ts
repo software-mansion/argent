@@ -1,19 +1,37 @@
 import { open, mkdtemp, rm } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
+import type { IncomingHttpHeaders, IncomingMessage, RequestOptions } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
-import { validatePublicDownloadUrl } from "./public-url";
+import { resolvePublicDownloadUrl, type PublicDownloadAddress } from "./public-url";
 
 const DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
 const MAX_REDIRECTS = 5;
 export const MAX_APP_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024;
 
-const SENSITIVE_REDIRECT_HEADERS = new Set(["authorization", "cookie", "proxy-authorization"]);
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const FORBIDDEN_REQUEST_HEADERS = new Set([
+  "connection",
+  "content-length",
+  "host",
+  "proxy-connection",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+]);
 const RECOGNIZED_SUFFIXES = [".tar.gz", ".tgz", ".apk", ".ipa", ".zip"];
 
 export interface DownloadedAppArtifact {
   path: string;
   cleanup(): Promise<void>;
+}
+
+interface PinnedResponse {
+  body: IncomingMessage;
+  finalUrl: URL;
 }
 
 function sourceFailure(message: string): FailureError {
@@ -49,7 +67,7 @@ function downloadFailure(
             options.cause instanceof Error
               ? options.cause
               : new Error(
-                  typeof options.cause === "string" ? options.cause : "Unknown download error"
+                  typeof options.cause === "string" ? options.cause : "Unknown app download error"
                 ),
         }
   );
@@ -63,50 +81,114 @@ function parseUrl(rawUrl: string): URL {
   }
 }
 
-function redirectedHeaders(headers: Headers, from: URL, to: URL): Headers {
-  if (from.origin === to.origin) return headers;
-  const next = new Headers(headers);
-  for (const header of SENSITIVE_REDIRECT_HEADERS) next.delete(header);
-  return next;
-}
-
-function requestHeaders(values: Record<string, string> | undefined): Headers {
+function requestHeaders(values: Record<string, string> | undefined): Record<string, string> {
+  let headers: Headers;
   try {
-    return new Headers(values);
+    headers = new Headers(values);
   } catch {
     throw sourceFailure("App download headers are invalid.");
   }
+  const result: Record<string, string> = {};
+  for (const [name, value] of headers) {
+    if (FORBIDDEN_REQUEST_HEADERS.has(name)) {
+      throw sourceFailure(`App download header ${name} cannot be overridden.`);
+    }
+    result[name] = value;
+  }
+  return result;
 }
 
-async function fetchFollowingPublicRedirects(
-  initialUrl: URL,
-  initialHeaders: Headers,
+function redirectedHeaders(
+  headers: Record<string, string>,
+  from: URL,
+  to: URL
+): Record<string, string> {
+  // Every caller-provided header may be a credential (PRIVATE-TOKEN,
+  // X-Api-Key, signed cookies, etc.). An allowlist cannot identify them all,
+  // so no caller header crosses an origin boundary.
+  return from.origin === to.origin ? headers : {};
+}
+
+function headerValue(headers: IncomingHttpHeaders, name: string): string | undefined {
+  const value = headers[name];
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function pinnedRequest(
+  url: URL,
+  headers: Record<string, string>,
+  pinnedAddress: PublicDownloadAddress,
   signal: AbortSignal
-): Promise<{ response: Response; finalUrl: URL }> {
+): Promise<IncomingMessage> {
+  return new Promise((resolveResponse, rejectResponse) => {
+    const options: RequestOptions = {
+      headers,
+      signal,
+      family: pinnedAddress.family,
+      // Keep the URL hostname for Host and TLS SNI, but force the socket to the
+      // exact public IP returned by the validation lookup. fetch() would resolve
+      // the hostname again and reopen a DNS-rebinding window.
+      lookup: (_hostname, _options, callback) => {
+        callback(null, pinnedAddress.address, pinnedAddress.family);
+      },
+    };
+    const request = (url.protocol === "https:" ? httpsRequest : httpRequest)(
+      url,
+      options,
+      resolveResponse
+    );
+    request.once("error", rejectResponse);
+    request.end();
+  });
+}
+
+function transportFailure(
+  error: unknown,
+  timeoutSignal: AbortSignal,
+  requestSignal?: AbortSignal
+): FailureError {
+  if (timeoutSignal.aborted) {
+    return downloadFailure(`App download timed out after ${DOWNLOAD_TIMEOUT_MS}ms.`, {
+      timeout: true,
+      cause: error,
+    });
+  }
+  if (requestSignal?.aborted) {
+    return downloadFailure("App download was canceled.", { cause: error });
+  }
+  return downloadFailure("Failed to download the app artifact.", { cause: error });
+}
+
+async function requestFollowingPublicRedirects(
+  initialUrl: URL,
+  initialHeaders: Record<string, string>,
+  signal: AbortSignal,
+  timeoutSignal: AbortSignal,
+  requestSignal?: AbortSignal
+): Promise<PinnedResponse> {
   let currentUrl = initialUrl;
   let headers = initialHeaders;
   for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount += 1) {
-    await validatePublicDownloadUrl(currentUrl);
-    let response: Response;
+    if (signal.aborted) throw transportFailure(signal.reason, timeoutSignal, requestSignal);
+    const addresses = await resolvePublicDownloadUrl(currentUrl);
+    if (signal.aborted) throw transportFailure(signal.reason, timeoutSignal, requestSignal);
+    const pinnedAddress = addresses.find(({ family }) => family === 4) ?? addresses[0]!;
+
+    let response: IncomingMessage;
     try {
-      response = await fetch(currentUrl, { headers, redirect: "manual", signal });
+      response = await pinnedRequest(currentUrl, headers, pinnedAddress, signal);
     } catch (error) {
-      throw downloadFailure("Failed to download the app artifact.", {
-        timeout: signal.aborted,
-        cause: error,
-      });
+      throw transportFailure(error, timeoutSignal, requestSignal);
     }
-    if (response.status < 300 || response.status >= 400) {
-      return { response, finalUrl: currentUrl };
-    }
-    const location = response.headers.get("location");
+    const status = response.statusCode ?? 0;
+    if (!REDIRECT_STATUSES.has(status)) return { body: response, finalUrl: currentUrl };
+
+    const location = headerValue(response.headers, "location");
+    response.destroy();
     if (!location) {
-      throw downloadFailure(
-        `App download returned redirect ${response.status} without a location.`,
-        {
-          invalidResponse: true,
-        }
-      );
+      throw downloadFailure(`App download returned redirect ${status} without a location.`, {
+        invalidResponse: true,
+      });
     }
     if (redirectCount === MAX_REDIRECTS) {
       throw downloadFailure(`App download exceeded ${MAX_REDIRECTS} redirects.`, {
@@ -127,7 +209,7 @@ async function fetchFollowingPublicRedirects(
   throw downloadFailure("App download redirect handling failed.", { invalidResponse: true });
 }
 
-function contentDispositionFilename(value: string | null): string | undefined {
+function contentDispositionFilename(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const encoded = value.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
   if (encoded) {
@@ -145,17 +227,19 @@ function safeFilename(value: string): string {
   return cleaned && cleaned !== "." && cleaned !== ".." ? cleaned : "app-artifact";
 }
 
-function hasRecognizedSuffix(filename: string): boolean {
-  const lower = filename.toLowerCase();
-  return RECOGNIZED_SUFFIXES.some((suffix) => lower.endsWith(suffix));
-}
-
-function downloadedFilename(response: Response, finalUrl: URL): string {
-  const headerName = contentDispositionFilename(response.headers.get("content-disposition"));
+function downloadedFilename(response: IncomingMessage, finalUrl: URL): string {
+  const headerName = contentDispositionFilename(
+    headerValue(response.headers, "content-disposition")
+  );
   let filename = safeFilename(headerName ?? basename(finalUrl.pathname) ?? "app-artifact");
-  if (hasRecognizedSuffix(filename)) return filename;
+  if (RECOGNIZED_SUFFIXES.some((suffix) => filename.toLowerCase().endsWith(suffix))) {
+    return filename;
+  }
 
-  const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+  const contentType = headerValue(response.headers, "content-type")
+    ?.split(";", 1)[0]
+    ?.trim()
+    .toLowerCase();
   if (contentType === "application/vnd.android.package-archive") filename += ".apk";
   else if (contentType === "application/zip" || contentType === "application/x-zip-compressed") {
     filename += ".zip";
@@ -165,24 +249,23 @@ function downloadedFilename(response: Response, finalUrl: URL): string {
   return filename;
 }
 
-async function writeResponseBody(response: Response, destination: string): Promise<void> {
-  const declaredLength = Number(response.headers.get("content-length"));
+async function writeResponseBody(response: IncomingMessage, destination: string): Promise<void> {
+  const declaredLength = Number(headerValue(response.headers, "content-length"));
   if (Number.isFinite(declaredLength) && declaredLength > MAX_APP_DOWNLOAD_BYTES) {
+    response.destroy();
     throw sourceFailure(
       `App artifact is larger than the ${MAX_APP_DOWNLOAD_BYTES}-byte download limit.`
     );
-  }
-  if (!response.body) {
-    throw downloadFailure("App download response had no body.", { invalidResponse: true });
   }
 
   const file = await open(destination, "wx");
   let received = 0;
   try {
-    for await (const chunk of response.body) {
-      const bytes = Buffer.from(chunk);
+    for await (const chunk of response) {
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       received += bytes.byteLength;
       if (received > MAX_APP_DOWNLOAD_BYTES) {
+        response.destroy();
         throw sourceFailure(
           `App artifact exceeded the ${MAX_APP_DOWNLOAD_BYTES}-byte download limit.`
         );
@@ -203,27 +286,28 @@ export async function downloadAppArtifact(
   const timeoutSignal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
   const signal = requestSignal ? AbortSignal.any([requestSignal, timeoutSignal]) : timeoutSignal;
   try {
-    const initialUrl = parseUrl(rawUrl);
-    const { response, finalUrl } = await fetchFollowingPublicRedirects(
-      initialUrl,
+    const { body, finalUrl } = await requestFollowingPublicRedirects(
+      parseUrl(rawUrl),
       requestHeaders(headers),
-      signal
+      signal,
+      timeoutSignal,
+      requestSignal
     );
-    if (!response.ok) {
+    const status = body.statusCode ?? 0;
+    if (status < 200 || status >= 300) {
+      body.destroy();
       throw downloadFailure(
-        `App download failed with HTTP ${response.status} ${response.statusText}.`,
+        `App download failed with HTTP ${status} ${body.statusMessage ?? ""}.`.trim(),
         { invalidResponse: true }
       );
     }
-    const destination = join(tempDir, downloadedFilename(response, finalUrl));
+    const destination = join(tempDir, downloadedFilename(body, finalUrl));
     try {
-      await writeResponseBody(response, destination);
+      await writeResponseBody(body, destination);
     } catch (error) {
+      body.destroy();
       if (error instanceof FailureError) throw error;
-      throw downloadFailure("Failed while saving the app artifact.", {
-        timeout: signal.aborted,
-        cause: error,
-      });
+      throw transportFailure(error, timeoutSignal, requestSignal);
     }
     return {
       path: destination,
@@ -233,12 +317,7 @@ export async function downloadAppArtifact(
     };
   } catch (error) {
     await rm(tempDir, { recursive: true, force: true }).catch(() => {});
-    if (timeoutSignal.aborted && !(error instanceof FailureError)) {
-      throw downloadFailure(`App download timed out after ${DOWNLOAD_TIMEOUT_MS}ms.`, {
-        timeout: true,
-        cause: error,
-      });
-    }
-    throw error;
+    if (error instanceof FailureError) throw error;
+    throw transportFailure(error, timeoutSignal, requestSignal);
   }
 }

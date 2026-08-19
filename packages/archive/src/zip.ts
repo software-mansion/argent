@@ -1,19 +1,24 @@
-import { chmod, mkdir, open, symlink, writeFile } from "node:fs/promises";
+import { createReadStream, createWriteStream } from "node:fs";
+import { chmod, mkdir, open, rm, symlink, writeFile } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { dirname, posix, resolve, sep } from "node:path";
-import { promisify } from "node:util";
-import { inflateRaw } from "node:zlib";
-import { FAILURE_CODES, FailureError } from "@argent/registry";
+import { PassThrough, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { createInflateRaw, inflateRaw } from "node:zlib";
+import { ArchiveError } from "./errors.js";
 
-const inflateRawAsync = promisify(inflateRaw);
 const EOCD_SIGNATURE = 0x06054b50;
 const CENTRAL_ENTRY_SIGNATURE = 0x02014b50;
 const LOCAL_ENTRY_SIGNATURE = 0x04034b50;
 const ZIP64_SENTINEL = 0xffffffff;
 const MAX_EOCD_SEARCH = 65_557;
 const MAX_CENTRAL_DIRECTORY_BYTES = 64 * 1024 * 1024;
+const MAX_ZIP_ENTRIES = 50_000;
+const MAX_BUFFERED_COMPRESSED_ENTRY_BYTES = 64 * 1024 * 1024;
 const MAX_EXTRACTED_ENTRY_BYTES = 512 * 1024 * 1024;
 const MAX_EXTRACTED_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024;
+const MAX_READ_ENTRY_BYTES = 32 * 1024 * 1024;
+const MAX_SYMLINK_TARGET_BYTES = 4 * 1024;
 
 interface ZipEntry {
   name: string;
@@ -27,15 +32,9 @@ interface ZipEntry {
   symlink: boolean;
 }
 
-function artifactFailure(message: string, cause?: unknown): FailureError {
-  return new FailureError(
+function artifactFailure(message: string, cause?: unknown): ArchiveError {
+  return new ArchiveError(
     message,
-    {
-      error_code: FAILURE_CODES.APP_INSTALL_ARTIFACT_INVALID,
-      failure_stage: "app_install_read_zip",
-      failure_area: "tool_server",
-      error_kind: "validation",
-    },
     cause === undefined
       ? undefined
       : {
@@ -104,6 +103,9 @@ async function readZipEntriesFromHandle(file: FileHandle): Promise<ZipEntry[]> {
   if (entryCount === 0xffff || centralSize === ZIP64_SENTINEL || centralOffset === ZIP64_SENTINEL) {
     throw artifactFailure("ZIP64 app artifacts are not supported.");
   }
+  if (entryCount > MAX_ZIP_ENTRIES) {
+    throw artifactFailure(`ZIP artifact contains more than ${MAX_ZIP_ENTRIES} entries.`);
+  }
   if (centralSize <= 0 || centralSize > MAX_CENTRAL_DIRECTORY_BYTES) {
     throw artifactFailure("ZIP artifact central directory is empty or too large.");
   }
@@ -165,11 +167,30 @@ async function readZipEntriesFromHandle(file: FileHandle): Promise<ZipEntry[]> {
   return entries;
 }
 
-async function readEntryData(file: FileHandle, entry: ZipEntry): Promise<Buffer> {
+function inflateRawBounded(compressed: Buffer, maxOutputLength: number): Promise<Buffer> {
+  return new Promise((resolveInflated, rejectInflated) => {
+    inflateRaw(compressed, { maxOutputLength: Math.max(1, maxOutputLength) }, (error, result) => {
+      if (error) rejectInflated(error);
+      else resolveInflated(result);
+    });
+  });
+}
+
+async function readEntryData(
+  file: FileHandle,
+  entry: ZipEntry,
+  maxOutputBytes: number
+): Promise<Buffer> {
   if ((entry.flags & 0x1) !== 0)
     throw artifactFailure("Encrypted ZIP artifacts are not supported.");
-  if (entry.uncompressedSize > MAX_EXTRACTED_ENTRY_BYTES) {
+  if (entry.compressedSize > MAX_BUFFERED_COMPRESSED_ENTRY_BYTES) {
+    throw artifactFailure(`ZIP entry ${entry.name} is too large to read into memory safely.`);
+  }
+  if (entry.uncompressedSize > maxOutputBytes) {
     throw artifactFailure(`ZIP entry ${entry.name} is too large to extract safely.`);
+  }
+  if (entry.compressionMethod === 0 && entry.compressedSize !== entry.uncompressedSize) {
+    throw artifactFailure(`Stored ZIP entry ${entry.name} has inconsistent sizes.`);
   }
   const localHeader = await readAt(file, 30, entry.localHeaderOffset);
   if (localHeader.readUInt32LE(0) !== LOCAL_ENTRY_SIGNATURE) {
@@ -177,6 +198,12 @@ async function readEntryData(file: FileHandle, entry: ZipEntry): Promise<Buffer>
   }
   const nameLength = localHeader.readUInt16LE(26);
   const extraLength = localHeader.readUInt16LE(28);
+  const localName = normalizeEntryName(
+    (await readAt(file, nameLength, entry.localHeaderOffset + 30)).toString("utf8")
+  );
+  if (localName !== entry.name) {
+    throw artifactFailure(`ZIP entry ${entry.name} does not match its local header name.`);
+  }
   const dataOffset = entry.localHeaderOffset + 30 + nameLength + extraLength;
   const compressed = await readAt(file, entry.compressedSize, dataOffset);
 
@@ -184,7 +211,10 @@ async function readEntryData(file: FileHandle, entry: ZipEntry): Promise<Buffer>
   if (entry.compressionMethod === 0) result = compressed;
   else if (entry.compressionMethod === 8) {
     try {
-      result = await inflateRawAsync(compressed);
+      // The central-directory size is attacker controlled, so the decompressor
+      // itself must enforce the bound. Comparing only after inflateRaw returns
+      // would allow a tiny, lying entry to allocate until the process OOMs.
+      result = await inflateRawBounded(compressed, entry.uncompressedSize);
     } catch (error) {
       throw artifactFailure(`Could not decompress ZIP entry ${entry.name}.`, error);
     }
@@ -197,6 +227,84 @@ async function readEntryData(file: FileHandle, entry: ZipEntry): Promise<Buffer>
     throw artifactFailure(`ZIP entry ${entry.name} did not match its declared size.`);
   }
   return result;
+}
+
+async function writeEntryData(
+  filePath: string,
+  file: FileHandle,
+  entry: ZipEntry,
+  outputPath: string,
+  signal?: AbortSignal
+): Promise<void> {
+  signal?.throwIfAborted();
+  if ((entry.flags & 0x1) !== 0) {
+    throw artifactFailure("Encrypted ZIP artifacts are not supported.");
+  }
+  if (entry.uncompressedSize > MAX_EXTRACTED_ENTRY_BYTES) {
+    throw artifactFailure(`ZIP entry ${entry.name} is too large to extract safely.`);
+  }
+  if (entry.compressionMethod !== 0 && entry.compressionMethod !== 8) {
+    throw artifactFailure(
+      `ZIP entry ${entry.name} uses unsupported compression method ${entry.compressionMethod}.`
+    );
+  }
+  if (entry.compressionMethod === 0 && entry.compressedSize !== entry.uncompressedSize) {
+    throw artifactFailure(`Stored ZIP entry ${entry.name} has inconsistent sizes.`);
+  }
+
+  const localHeader = await readAt(file, 30, entry.localHeaderOffset);
+  if (localHeader.readUInt32LE(0) !== LOCAL_ENTRY_SIGNATURE) {
+    throw artifactFailure(`ZIP entry ${entry.name} has an invalid local header.`);
+  }
+  const nameLength = localHeader.readUInt16LE(26);
+  const extraLength = localHeader.readUInt16LE(28);
+  const localName = normalizeEntryName(
+    (await readAt(file, nameLength, entry.localHeaderOffset + 30)).toString("utf8")
+  );
+  if (localName !== entry.name) {
+    throw artifactFailure(`ZIP entry ${entry.name} does not match its local header name.`);
+  }
+  const dataOffset = entry.localHeaderOffset + 30 + nameLength + extraLength;
+
+  if (entry.compressedSize === 0) {
+    if (entry.uncompressedSize !== 0) {
+      throw artifactFailure(`ZIP entry ${entry.name} did not match its declared size.`);
+    }
+    await writeFile(outputPath, Buffer.alloc(0), { flag: "wx" });
+    return;
+  }
+
+  let written = 0;
+  const counter = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      written += chunk.byteLength;
+      callback(
+        written > entry.uncompressedSize
+          ? artifactFailure(`ZIP entry ${entry.name} exceeded its declared size.`)
+          : undefined,
+        chunk
+      );
+    },
+  });
+  const source = createReadStream(filePath, {
+    start: dataOffset,
+    end: dataOffset + entry.compressedSize - 1,
+  });
+  const destination = createWriteStream(outputPath, { flags: "wx" });
+  try {
+    if (entry.compressionMethod === 8) {
+      await pipeline(source, createInflateRaw(), counter, destination, { signal });
+    } else {
+      await pipeline(source, new PassThrough(), counter, destination, { signal });
+    }
+    if (written !== entry.uncompressedSize) {
+      throw artifactFailure(`ZIP entry ${entry.name} did not match its declared size.`);
+    }
+  } catch (error) {
+    await rm(outputPath, { force: true }).catch(() => {});
+    if (error instanceof ArchiveError) throw error;
+    throw artifactFailure(`Could not extract ZIP entry ${entry.name}.`, error);
+  }
 }
 
 export async function looksLikeZip(filePath: string): Promise<boolean> {
@@ -225,7 +333,7 @@ export async function readZipEntry(
   try {
     const entries = await readZipEntriesFromHandle(file);
     const entry = entries.find((candidate) => candidate.name === entryName);
-    return entry ? await readEntryData(file, entry) : undefined;
+    return entry ? await readEntryData(file, entry, MAX_READ_ENTRY_BYTES) : undefined;
   } finally {
     await file.close();
   }
@@ -239,7 +347,11 @@ function assertInsideRoot(root: string, outputPath: string): void {
   }
 }
 
-export async function extractZipArchive(filePath: string, outputDir: string): Promise<void> {
+export async function extractZipArchive(
+  filePath: string,
+  outputDir: string,
+  options: { signal?: AbortSignal } = {}
+): Promise<void> {
   const file = await open(filePath, "r");
   try {
     const entries = await readZipEntriesFromHandle(file);
@@ -248,31 +360,64 @@ export async function extractZipArchive(filePath: string, outputDir: string): Pr
       throw artifactFailure("ZIP artifact is too large to extract safely.");
     }
 
+    const symlinkNames = new Set(
+      entries.filter((entry) => entry.symlink).map((entry) => entry.name)
+    );
+    for (const entry of entries) {
+      options.signal?.throwIfAborted();
+      const parts = entry.name.split("/");
+      for (let index = 1; index < parts.length; index += 1) {
+        if (symlinkNames.has(parts.slice(0, index).join("/"))) {
+          throw artifactFailure(
+            `ZIP entry ${entry.name} is nested below an archive-controlled symlink.`
+          );
+        }
+      }
+    }
+
+    const symlinkTargets = new Map<string, string>();
+    for (const entry of entries.filter((candidate) => candidate.symlink)) {
+      options.signal?.throwIfAborted();
+      const outputPath = resolve(outputDir, entry.name);
+      assertInsideRoot(outputDir, outputPath);
+      const target = (await readEntryData(file, entry, MAX_SYMLINK_TARGET_BYTES)).toString("utf8");
+      const normalizedTarget = target.replace(/\\/g, "/");
+      if (
+        !target ||
+        target.includes("\0") ||
+        target.includes("\\") ||
+        posix.isAbsolute(normalizedTarget) ||
+        /^[A-Za-z]:\//.test(normalizedTarget) ||
+        posix.normalize(normalizedTarget).split("/").includes("..")
+      ) {
+        throw artifactFailure(`ZIP entry ${entry.name} contains an unsafe symlink.`);
+      }
+      assertInsideRoot(outputDir, resolve(dirname(outputPath), normalizedTarget));
+      symlinkTargets.set(entry.name, target);
+    }
+
     // Materialize regular files before symlinks. No archive-controlled symlink
     // can therefore redirect a later write outside the fresh extraction root.
     for (const entry of entries.filter((candidate) => !candidate.symlink)) {
+      options.signal?.throwIfAborted();
       const outputPath = resolve(outputDir, entry.name);
       assertInsideRoot(outputDir, outputPath);
       if (entry.directory) {
         await mkdir(outputPath, { recursive: true });
       } else {
         await mkdir(dirname(outputPath), { recursive: true });
-        await writeFile(outputPath, await readEntryData(file, entry), { flag: "wx" });
+        await writeEntryData(filePath, file, entry, outputPath, options.signal);
       }
       const permissions = entry.unixMode & 0o777;
       if (permissions) await chmod(outputPath, permissions);
     }
 
     for (const entry of entries.filter((candidate) => candidate.symlink)) {
+      options.signal?.throwIfAborted();
       const outputPath = resolve(outputDir, entry.name);
       assertInsideRoot(outputDir, outputPath);
-      const target = (await readEntryData(file, entry)).toString("utf8");
-      if (!target || target.includes("\0") || posix.isAbsolute(target)) {
-        throw artifactFailure(`ZIP entry ${entry.name} contains an unsafe symlink.`);
-      }
-      assertInsideRoot(outputDir, resolve(dirname(outputPath), target));
       await mkdir(dirname(outputPath), { recursive: true });
-      await symlink(target, outputPath);
+      await symlink(symlinkTargets.get(entry.name)!, outputPath);
     }
   } finally {
     await file.close();

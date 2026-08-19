@@ -48,7 +48,7 @@ describe("install-app platform handlers", () => {
     });
     expect(mocks.runAdb).toHaveBeenCalledWith(
       ["-s", "emulator-5554", "install", "-r", "-d", "-g", "/tmp/materialized/app.apk"],
-      { timeoutMs: 180_000 }
+      { timeoutMs: 180_000, signal: undefined }
     );
     expect(mocks.androidCleanup).toHaveBeenCalledOnce();
   });
@@ -67,8 +67,19 @@ describe("install-app platform handlers", () => {
     });
     expect(mocks.simctlInstall).toHaveBeenCalledWith(
       remoteParams.udid,
-      "/tmp/materialized/App.app"
+      "/tmp/materialized/App.app",
+      { signal: undefined }
     );
     expect(mocks.iosCleanup).toHaveBeenCalledOnce();
+  });
+
+  it("threads caller cancellation to download and Android installation", async () => {
+    const controller = new AbortController();
+    await androidImpl.handler({}, params, {} as never, { signal: controller.signal });
+    expect(mocks.prepareAndroid).toHaveBeenCalledWith(params, controller.signal);
+    expect(mocks.runAdb).toHaveBeenCalledWith(expect.any(Array), {
+      timeoutMs: 180_000,
+      signal: controller.signal,
+    });
   });
 });

@@ -23,6 +23,7 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 interface SimRemoteOptions {
   timeoutMs?: number;
   stdin?: string;
+  signal?: AbortSignal;
 }
 
 async function run(args: string[], options?: SimRemoteOptions): Promise<{ stdout: string }> {
@@ -31,6 +32,8 @@ async function run(args: string[], options?: SimRemoteOptions): Promise<{ stdout
       timeout: options?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       maxBuffer: 16 * 1024 * 1024,
       encoding: "utf8",
+      killSignal: "SIGKILL",
+      signal: options?.signal,
       // sim-remote pipes stdin through to pbcopy etc.
       input: options?.stdin,
     } as Parameters<typeof execFileAsync>[2]);
@@ -137,11 +140,16 @@ export async function simctlTerminate(udid: string, bundleId: string): Promise<v
   await run(["simctl", "terminate", stripRemotePrefix(udid), bundleId]);
 }
 
-export async function simctlInstall(udid: string, localAppPath: string): Promise<void> {
+export async function simctlInstall(
+  udid: string,
+  localAppPath: string,
+  options?: { signal?: AbortSignal }
+): Promise<void> {
   // sim-remote uploads the local .app to the orchestrator over QUIC.
   // Large bundles can take a while; give 5 min.
   await run(["simctl", "install", stripRemotePrefix(udid), localAppPath], {
     timeoutMs: 5 * 60_000,
+    signal: options?.signal,
   });
 }
 

@@ -30,7 +30,7 @@ const zodSchema = z.object({
     .record(z.string(), z.string())
     .optional()
     .describe(
-      "Optional HTTP request headers for authenticated artifact URLs (for example Authorization). Sensitive headers are not forwarded to a different origin after a redirect."
+      "Optional HTTP request headers for authenticated artifact URLs (for example Authorization). Caller-provided headers are not forwarded to a different origin after a redirect."
     ),
 });
 
@@ -60,7 +60,7 @@ export const installAppTool: ToolDefinition<Params, InstallAppResult> = {
   },
   description: `Download and install an app build from a remote URL, resolving its bundle/package id automatically.
 Use when an app build is available as a CI or EAS artifact and is not present in the local checkout. The existing installation is updated in place when possible; unlike reinstall-app, this tool does not uninstall first or clear app data.
-Android supports a direct .apk or an archive containing exactly one .apk. iOS simulators support .ipa/.zip, .tar.gz, or .tgz artifacts containing exactly one simulator-compatible .app bundle. GitHub Actions ZIPs that wrap a single app archive are supported. URLs and every redirect must resolve to public network addresses; use optional headers for authenticated downloads.
+Android supports a direct .apk or an archive containing exactly one .apk. iOS simulators support .ipa/.zip, .tar.gz, or .tgz artifacts containing exactly one simulator-compatible .app bundle. GitHub Actions ZIPs that wrap a single app archive are supported. URLs and every redirect must resolve to public network addresses; use optional headers for authenticated downloads. Caller-provided headers are dropped if a redirect changes origin.
 Returns { installed, bundleId }, where bundleId is the Android package name or iOS CFBundleIdentifier. The downloaded artifact is removed after installation.`,
   searchHint:
     "install app apk ipa app bundle remote url download CI EAS GitHub artifact simulator emulator device",

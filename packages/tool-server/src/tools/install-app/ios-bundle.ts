@@ -1,10 +1,8 @@
-import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
+import { readBinaryPlistString } from "./binary-plist";
 
-const execFileAsync = promisify(execFile);
 const BUNDLE_ID_PATTERN = /^[A-Za-z_][A-Za-z0-9._-]*$/;
 
 function artifactFailure(message: string): FailureError {
@@ -36,19 +34,6 @@ function readXmlBundleId(plist: Buffer): string | undefined {
   return match?.[1] ? decodeXmlText(match[1].trim()) : undefined;
 }
 
-async function readWithPlutil(infoPlistPath: string): Promise<string | undefined> {
-  try {
-    const { stdout } = await execFileAsync(
-      "plutil",
-      ["-extract", "CFBundleIdentifier", "raw", "-o", "-", infoPlistPath],
-      { encoding: "utf8", timeout: 10_000, maxBuffer: 1024 * 1024 }
-    );
-    return stdout.trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 export async function resolveIosBundleId(appBundlePath: string): Promise<string> {
   const infoPlistPath = join(appBundlePath, "Info.plist");
   let plist: Buffer;
@@ -57,7 +42,7 @@ export async function resolveIosBundleId(appBundlePath: string): Promise<string>
   } catch {
     throw artifactFailure("iOS app artifact is missing Info.plist.");
   }
-  const bundleId = readXmlBundleId(plist) ?? (await readWithPlutil(infoPlistPath));
+  const bundleId = readXmlBundleId(plist) ?? readBinaryPlistString(plist, "CFBundleIdentifier");
   if (!bundleId || !BUNDLE_ID_PATTERN.test(bundleId)) {
     throw artifactFailure("Could not resolve CFBundleIdentifier from the iOS app artifact.");
   }

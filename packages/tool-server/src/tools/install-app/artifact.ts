@@ -1,17 +1,21 @@
 import { mkdtemp, open, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { safeExtractTarGz } from "@argent/archive";
+import {
+  ArchiveError,
+  extractZipArchive,
+  looksLikeZip,
+  safeExtractTarGzArchive,
+} from "@argent/archive";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { InstallAppParams } from "./types";
 import { downloadAppArtifact, type DownloadedAppArtifact } from "./download";
 import { resolveAndroidPackageName } from "./android-manifest";
 import { resolveIosBundleId } from "./ios-bundle";
-import { extractZipArchive, looksLikeZip } from "./zip";
 
 const MAX_SEARCH_DEPTH = 6;
 const MAX_ARCHIVE_DEPTH = 2;
-const MAX_GZIP_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024;
+const MAX_EXTRACTED_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024;
 
 export interface PreparedAppArtifact {
   installablePath: string;
@@ -58,41 +62,31 @@ async function hasGzipHeader(filePath: string): Promise<boolean> {
   }
 }
 
-async function assertGzipSize(filePath: string): Promise<void> {
-  const file = await open(filePath, "r");
-  try {
-    const fileStat = await file.stat();
-    if (fileStat.size < 18) throw artifactFailure("App artifact is not a valid gzip archive.");
-    const trailer = Buffer.alloc(4);
-    await file.read(trailer, 0, 4, fileStat.size - 4);
-    const uncompressedSize = trailer.readUInt32LE(0);
-    if (uncompressedSize === 0 || uncompressedSize > MAX_GZIP_UNCOMPRESSED_BYTES) {
-      throw artifactFailure("Gzip app artifact is empty or too large to extract safely.");
-    }
-  } finally {
-    await file.close();
-  }
-}
-
-function expectedTarMemberName(filePath: string): string {
-  return basename(filePath).replace(/(?:\.tar\.gz|\.tgz)$/i, "") || "app-artifact";
-}
-
-async function extractArchive(filePath: string, tempDirs: string[]): Promise<string> {
+async function extractArchive(
+  filePath: string,
+  tempDirs: string[],
+  signal?: AbortSignal
+): Promise<string> {
   const outputDir = await mkdtemp(join(tmpdir(), "argent-app-archive-"));
   tempDirs.push(outputDir);
   try {
     if (await looksLikeZip(filePath)) {
-      await extractZipArchive(filePath, outputDir);
+      await extractZipArchive(filePath, outputDir, { signal });
       return outputDir;
     }
     if (await hasGzipHeader(filePath)) {
-      await assertGzipSize(filePath);
-      await safeExtractTarGz(filePath, outputDir, expectedTarMemberName(filePath));
+      await safeExtractTarGzArchive(filePath, outputDir, {
+        maxUncompressedBytes: MAX_EXTRACTED_ARTIFACT_BYTES,
+        signal,
+      });
       return outputDir;
     }
   } catch (error) {
     if (error instanceof FailureError) throw error;
+    if (signal?.aborted) throw error;
+    if (error instanceof ArchiveError) {
+      throw artifactFailure(error.message, error);
+    }
     throw artifactFailure("Could not extract the downloaded app artifact.", error);
   }
   throw artifactFailure(
@@ -154,7 +148,8 @@ async function findSingleNestedArchive(rootPath: string): Promise<string | undef
 async function resolveAndroidArtifact(
   sourcePath: string,
   tempDirs: string[],
-  depth = 0
+  depth = 0,
+  signal?: AbortSignal
 ): Promise<{ installablePath: string; bundleId: string }> {
   try {
     return { installablePath: sourcePath, bundleId: await resolveAndroidPackageName(sourcePath) };
@@ -162,7 +157,7 @@ async function resolveAndroidArtifact(
     if (depth >= MAX_ARCHIVE_DEPTH) throw directError;
   }
 
-  const extractedPath = await extractArchive(sourcePath, tempDirs);
+  const extractedPath = await extractArchive(sourcePath, tempDirs, signal);
   const apkPaths = await collectPaths(
     extractedPath,
     (entryPath, kind) => kind === "file" && entryPath.toLowerCase().endsWith(".apk")
@@ -180,14 +175,15 @@ async function resolveAndroidArtifact(
   }
 
   const nestedArchive = await findSingleNestedArchive(extractedPath);
-  if (nestedArchive) return resolveAndroidArtifact(nestedArchive, tempDirs, depth + 1);
+  if (nestedArchive) return resolveAndroidArtifact(nestedArchive, tempDirs, depth + 1, signal);
   throw artifactFailure("Downloaded Android artifact does not contain an APK.");
 }
 
 async function resolveIosArtifact(
   sourcePath: string,
   tempDirs: string[],
-  depth = 0
+  depth = 0,
+  signal?: AbortSignal
 ): Promise<{ installablePath: string; bundleId: string }> {
   const sourceStat = await stat(sourcePath).catch(() => undefined);
   if (sourceStat?.isDirectory() && sourcePath.toLowerCase().endsWith(".app")) {
@@ -197,7 +193,7 @@ async function resolveIosArtifact(
     throw artifactFailure("Downloaded iOS artifact does not contain an .app bundle.");
   }
 
-  const extractedPath = await extractArchive(sourcePath, tempDirs);
+  const extractedPath = await extractArchive(sourcePath, tempDirs, signal);
   const appPaths = await collectPaths(
     extractedPath,
     (entryPath, kind) => kind === "directory" && entryPath.toLowerCase().endsWith(".app")
@@ -215,7 +211,7 @@ async function resolveIosArtifact(
   }
 
   const nestedArchive = await findSingleNestedArchive(extractedPath);
-  if (nestedArchive) return resolveIosArtifact(nestedArchive, tempDirs, depth + 1);
+  if (nestedArchive) return resolveIosArtifact(nestedArchive, tempDirs, depth + 1, signal);
   throw artifactFailure("Downloaded iOS artifact does not contain an .app bundle.");
 }
 
@@ -229,8 +225,8 @@ async function prepareRemoteArtifact(
   try {
     const artifact =
       platform === "android"
-        ? await resolveAndroidArtifact(download.path, tempDirs)
-        : await resolveIosArtifact(download.path, tempDirs);
+        ? await resolveAndroidArtifact(download.path, tempDirs, 0, signal)
+        : await resolveIosArtifact(download.path, tempDirs, 0, signal);
     return {
       ...artifact,
       cleanup: async () => {

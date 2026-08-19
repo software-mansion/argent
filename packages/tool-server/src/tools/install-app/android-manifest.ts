@@ -1,6 +1,6 @@
 import { TextDecoder } from "node:util";
+import { ArchiveError, readZipEntry } from "@argent/archive";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
-import { readZipEntry } from "./zip";
 
 const RES_XML_TYPE = 0x0003;
 const RES_STRING_POOL_TYPE = 0x0001;
@@ -170,7 +170,15 @@ function parseManifestPackageName(manifest: Buffer): string | undefined {
 }
 
 export async function resolveAndroidPackageName(apkPath: string): Promise<string> {
-  const manifest = await readZipEntry(apkPath, "AndroidManifest.xml");
+  let manifest: Buffer | undefined;
+  try {
+    manifest = await readZipEntry(apkPath, "AndroidManifest.xml");
+  } catch (error) {
+    if (error instanceof ArchiveError) {
+      throw artifactFailure(`Could not read the APK archive: ${error.message}`);
+    }
+    throw error;
+  }
   if (!manifest) {
     throw artifactFailure("Android app artifact is not an APK (AndroidManifest.xml is missing).");
   }

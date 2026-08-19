@@ -15,7 +15,7 @@ export const iosRemoteImpl: PlatformImpl<
   ReinstallAppResult
 > = {
   requires: ["sim-remote"],
-  handler: async (_services, params) => {
+  handler: async (_services, params, _device, options) => {
     const { udid, bundleId, appPath } = params;
     const absolute = resolvePath(appPath);
     try {
@@ -23,7 +23,7 @@ export const iosRemoteImpl: PlatformImpl<
     } catch {
       // App may not be installed — continue to install.
     }
-    await simctlInstall(udid, absolute);
+    await simctlInstall(udid, absolute, { signal: options?.signal });
     return { reinstalled: true, bundleId };
   },
 };
