@@ -145,9 +145,9 @@ process.stdout.write("OK-" + cmd);
   // load) and nothing after it; a fresh `#!/bin/sh` script shows the same jump, so this is
   // not `node` starting and warming `node` elsewhere does not help — only running THIS
   // file does. It has to happen here because the near-deadline test gives the launcher
-  // 900ms and cannot give it more. A whole-file run pays it in the tests before that one,
-  // so only running that test by itself was exposed, and only at concurrency: 38 of 60
-  // solo runs rejected at 20-way, none sequentially. Linux has no such penalty, so this
+  // 900ms and cannot give it more. Without this, whichever test runs first pays it, so
+  // only a solo run of that test was exposed, and only at concurrency: 38 of 60 solo runs
+  // rejected at 20-way, none sequentially. Linux has no such penalty, so this
   // buys CI nothing. Any unknown argument takes the write-and-exit default.
   spawnSync(join(dir, "vega"), ["warmup"], { stdio: "ignore" });
   // Hooks do not take the testTimeout set below, and this one spawns a process.
