@@ -34,6 +34,12 @@ const zodSchema = z.object({
     .describe(
       "Android-only: relaunch a non-launcher Activity (e.g. `.SettingsActivity` or `com.example/com.example.SettingsActivity`). If omitted, the app's default launcher activity is used. Ignored on iOS."
     ),
+  launchArgs: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Apple simulator-only: process arguments forwarded verbatim after the bundle id in `simctl launch`. Useful for launch-time feature flags and UserDefaults overrides such as `["-FeatureFlag", "YES"]`. Ignored on Android / Vega.'
+    ),
 });
 
 type Params = z.infer<typeof zodSchema>;
@@ -65,6 +71,7 @@ export function createRestartAppTool(registry: Registry): ToolDefinition<Params,
     },
     description: `Terminate then relaunch an app by bundle id / package name.
 Use when you need a clean in-memory state without a full reinstall. Also refreshes the native-devtools injection before the relaunch (the iOS slice on iOS, the tvOS slice on Apple TV); on tvOS, interaction is focus-driven — use the tv-* tools rather than coordinate taps.
+On Apple simulators, pass launchArgs to forward process arguments after the bundle id in \`simctl launch\`.
 Returns { restarted, bundleId }. Fails if the app is not installed.`,
     alwaysLoad: true,
     searchHint:
