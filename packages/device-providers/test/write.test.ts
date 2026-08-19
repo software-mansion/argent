@@ -118,9 +118,20 @@ describe("publishProvider", () => {
     );
   });
 
-  it("writes the validated document, dropping fields the contract does not define", () => {
-    const result = publishProvider(descriptor({ vendorSecret: "hunter2" }));
-    expect("vendorSecret" in JSON.parse(fs.readFileSync(result.path, "utf8"))).toBe(false);
+  /**
+   * An older CLI may publish for a newer tool-server, so fields this build does
+   * not know must survive the write.
+   */
+  it("preserves fields the contract does not define, top-level and per device", () => {
+    const result = publishProvider(
+      descriptor({
+        devices: [{ ...iosDevice(), futureDeviceField: "kept" }],
+        futureField: { nested: true },
+      })
+    );
+    const written = JSON.parse(fs.readFileSync(result.path, "utf8"));
+    expect(written.futureField).toEqual({ nested: true });
+    expect(written.devices[0].futureDeviceField).toBe("kept");
   });
 
   it("round-trips a device through publish unharmed", () => {

@@ -58,17 +58,41 @@ export interface PublishResult {
  * Validate `record` the way `argent providers check` does and write it to its
  * canonical path.
  *
- * Two deliberate differences from writing the file by hand:
+ * Two deliberate properties beyond writing the file by hand:
  *
  * - The filename comes from the id. Argent keys on `id` and keeps only the
  *   first file claiming one, so a provider choosing its own filename can shadow
  *   itself across a restart. This makes that unrepresentable.
- * - The document is re-serialized from the validated record, dropping unknown
- *   fields. Safe because the CLI that validates ships with the tool-server that
- *   reads, so there is no version gap to skew across.
+ * - The document is written as given, unknown fields included. The publishing
+ *   CLI can be older than the reading tool-server (several installs share one
+ *   machine-wide `cli.json`), and stripping unknown fields would silently drop
+ *   anything added to v1 after this CLI shipped. The read side ignores what it
+ *   does not know, so writing it through is safe.
  *
  * @throws {ProviderValidationError} when the descriptor is not conformant.
  */
+/**
+ * Deep-sort object keys (arrays keep their order) so the unchanged-document
+ * dedupe does not care about key order. The JSON round-trip first reduces the
+ * value to plain objects, the way stringify would (`toJSON`, dropped
+ * `undefined`s).
+ */
+function canonicalize(value: unknown): unknown {
+  const normalized: unknown = JSON.parse(JSON.stringify(value));
+
+  const sort = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(sort);
+    if (node === null || typeof node !== "object") return node;
+    return Object.fromEntries(
+      Object.entries(node)
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([key, child]) => [key, sort(child)])
+    );
+  };
+
+  return sort(normalized);
+}
+
 export function publishProvider(record: unknown, options: PublishOptions = {}): PublishResult {
   const candidate =
     options.pid === undefined
@@ -116,7 +140,8 @@ export function publishProvider(record: unknown, options: PublishOptions = {}): 
 
   const directory = providersDirectory();
   const file = path.join(directory, `${validated.id}.json`);
-  const body = JSON.stringify(validated, null, 2) + "\n";
+  /** The document as given, not `validated`. See the note above. */
+  const body = JSON.stringify(canonicalize(candidate), null, 2) + "\n";
 
   /**
    * Compared against the file rather than an in-memory copy. It survives a
