@@ -233,9 +233,9 @@ function sampleWorkers(sentinel: string): { workers: number; groups: number } {
   }
 }
 
-// Poll until `want` workers are up, and return the sample that saw them - group count
-// included, not waited on (see below). Returning values rather than a timed-out flag lets
-// the caller assert on the numbers.
+// Poll until `want` workers are up, or the deadline passes; either way return the last
+// sample - group count included, not waited on (see below). Values rather than a
+// timed-out flag, so the caller asserts on the numbers.
 async function waitForWorkerGroups(
   sentinel: string,
   want: number,
