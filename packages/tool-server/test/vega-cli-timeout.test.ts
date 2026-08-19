@@ -173,19 +173,16 @@ afterEach(() => sweep());
  * `sleep <target>`, where `target` is one sentinel or `<SENTINEL_PREFIX>[0-9]` for all
  * of this run's.
  *
- * `$` carries the run isolation: sentinels are all `<pid><3 digits><1 digit>` wide (see
- * `sentinel`), so without the tail anchor a run's sweep glob also matches the sentinels
- * of a run whose pid is one digit longer, and its `pkill` reaches into that run's
- * namespace. `^` pins the match to argv[0]: only the bare `sleep` the fake launcher
- * spawns can match — never a longer command line that merely ends in one of our
- * sentinels, and never the `/bin/sh -c "pgrep -f '<pattern>' || true"` wrapper execSync
- * spawns, whose own argv carries the pattern text.
+ * `$` is what confines a sweep to its own run: without it the glob also matches the
+ * sentinels of a run whose pid is one digit longer (see `SentinelSlot`). `^` pins the
+ * match to argv[0], so a longer command line that merely ends in one of our sentinels
+ * cannot match — including the `/bin/sh -c "pgrep -f '<pattern>' || true"` wrapper
+ * execSync spawns, whose own argv carries the pattern text.
  *
  * The sentinel's `.` is its one ERE metacharacter, so escape it; a `[0-9]` slot glob
- * passes through as the character class it is. The escape excludes that wrapper a second
- * time over — `\.` wants a literal `.` where that argv has a backslash — and `$` a third,
- * since it ends `|| true`. Only a bare sentinel with all three gone matches it, and only
- * under GNU procps (CI): BSD pgrep drops its own ancestors, so macOS never reproduces it.
+ * passes through as the character class it is. Each of the three independently excludes
+ * that wrapper, and only GNU procps (CI) can match it at all: BSD pgrep drops its own
+ * ancestors, so macOS never reproduces it.
  */
 function cmdlinePattern(target: string): string {
   return `^sleep ${target.replaceAll(".", "\\.")}$`;
@@ -275,8 +272,8 @@ describe("runVega timeout (real subprocess)", () => {
     // Observe the pair BEFORE the reap. `waitForClear` reads 0 just as readily for a
     // launcher that never spawned them, so without this the reap below is asserted
     // against nothing. The reap itself ends the window, so the poll gets the deadline's
-    // budget — on `waitForCount`'s shorter default it would expire first and report a
-    // launcher that had not forked yet as a reap that left nothing behind. The two
+    // budget: on `waitForCount`'s shorter default a slow launcher start expires it first
+    // and fails this observation rather than the reap it guards. The two
     // output-cap reaps below stay unpinned for want of such a window — theirs fires
     // within ~100ms of the spawn (#841).
     expect(await waitForCount(SENTINEL_REAP, 2, REAP_DEADLINE_MS)).toBe(2);
@@ -432,22 +429,18 @@ describe("sentinel bookkeeping", () => {
   });
 
   it("leaves a longer-pid run's sentinel alone", async () => {
-    // The `$` in cmdlinePattern is what confines the sweep to this run. A run whose pid
-    // has one more digit builds sentinels that begin with our entire tag and carry two
-    // trailing digits where ours carry one, so an unterminated glob reaches straight
-    // into its namespace and SIGTERMs its live workers — the cross-run kill the per-run
-    // tag exists to prevent, and one that no single-run suite would ever notice.
-    // Being that shape, it briefly sits in that run's namespace rather than ours, so it
-    // is killed the moment the assertions are done rather than left to afterEach — whose
-    // sweep, by the very property under test, cannot reach it.
+    // A run whose pid has one more digit builds sentinels that begin with our entire tag
+    // and carry two trailing digits where ours carry one, so a sweep without `$` reaches
+    // into its namespace and kills its live workers — which no single-run suite notices.
+    // Being that shape, the decoy sits in that run's namespace rather than ours, so
+    // afterEach cannot reach it either: hence the kill in `finally`.
     const foreign = `${SENTINEL_PREFIX}12`;
     const decoy = spawn("sleep", [foreign], { stdio: "ignore" });
     try {
       expect(await waitForCount(foreign, 1)).toBe(1);
       sweep();
-      // Poll for it clearing and require that it never does: a mis-scoped sweep gets the
-      // full window to land rather than being declared harmless before the signal
-      // arrives. afterEach's sweep is equally unable to reach it, hence the kill below.
+      // Require that it never clears: a mis-scoped sweep gets the full window to land
+      // rather than being declared harmless before the signal arrives.
       expect(await waitForCount(foreign, 0, 500)).toBe(1);
     } finally {
       decoy.kill("SIGKILL");
