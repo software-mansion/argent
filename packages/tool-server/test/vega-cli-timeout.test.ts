@@ -144,9 +144,9 @@ process.stdout.write("OK-" + cmd);
   // Pay `node`'s first-spawn cost here, where no deadline is running. The near-deadline
   // test gives the launcher 900ms to start, which a warm spawn clears comfortably and a
   // cold one does not — first-in-process has been measured at 1684ms under load. A whole-
-  // file run happens to warm it in the tests before that one; running that test alone
-  // (`-t`, `it.only`, an editor's run-this-test) would otherwise reject on the deadline
-  // ~15% of the time. Any unknown argument takes the launcher's write-and-exit default.
+  // file run happens to warm it in the tests before that one; running that test alone — a
+  // `-t` filter, a focused test, an editor's run-this-test — would otherwise reject on the
+  // deadline ~15% of the time. Any unknown argument takes the write-and-exit default.
   spawnSync(join(dir, "vega"), ["warmup"], { stdio: "ignore" });
 });
 
