@@ -153,7 +153,9 @@ process.stdout.write("OK-" + cmd);
   // rejected at 20-way, none sequentially. Linux has no such penalty, so this
   // buys CI nothing. Any unknown argument takes the write-and-exit default.
   spawnSync(join(dir, "vega"), ["warmup"], { stdio: "ignore" });
-  // Hooks do not take the testTimeout set below, and this one spawns a process.
+  // Explicit because this hook spawns: a hook resolves its budget when it is REGISTERED,
+  // so the vi.setConfig below - which runs later - cannot reach it, and its hookTimeout
+  // would silently leave this on the 10s default.
 }, 20_000);
 
 afterAll(() => {
@@ -322,16 +324,20 @@ describe("runVega timeout (real subprocess)", () => {
     // with the captured output, not reject. What the value has to clear is the launcher's
     // own startup, since the deadline is armed at the spawn but the drain only at the exit:
     // 32-37ms warmed, rising to 643ms at 4x CPU oversubscription and 700ms at 80-way.
+    // One const for both: the assertion below is what proves the deadline fell due before
+    // the drain, so raising this past VEGA_EXIT_DRAIN_GRACE_MS has to break it rather than
+    // quietly stop forcing the race.
+    const NEAR_DEADLINE_MS = 900;
     const start = Date.now();
     await expect(
-      runVega(["linger", SENTINEL_LINGER_NEAR_DEADLINE], { timeoutMs: 900 })
+      runVega(["linger", SENTINEL_LINGER_NEAR_DEADLINE], { timeoutMs: NEAR_DEADLINE_MS })
     ).resolves.toEqual({ stdout: "OK-linger", stderr: "" });
     // Outliving the deadline is the whole point: it proves the timer was DISARMED rather
     // than never reached. Without this the test rests on a source constant it cannot see,
     // and a drain grace shortened below the deadline would settle the call early, leaving
     // it to pass while no longer forcing the race — the drain can only fire at grace ms,
     // so this also holds structurally, never on how fast the launcher started.
-    expect(Date.now() - start).toBeGreaterThan(900);
+    expect(Date.now() - start).toBeGreaterThan(NEAR_DEADLINE_MS);
   });
 
   it("reaps a pipe-holding worker that stayed in the launcher's process group (drain path)", async () => {
