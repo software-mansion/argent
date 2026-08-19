@@ -275,6 +275,30 @@ describe("vscodeAdapter.findShadowingConfigs", () => {
     expect(fs.existsSync(userMcpJsonPath())).toBe(false);
   });
 
+  it("resolves the user profile from %APPDATA% on Windows", () => {
+    // vscodeUserDirs() reads process.platform at call time and takes a %APPDATA%
+    // branch that never touches homedir(), so this is the one arm the homedir
+    // mock cannot reach — and the arm whose remove() deletes a real user's
+    // mcp.json. Without this the branch can be deleted with every suite green.
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      const appDataMcpJson = path.join(process.env.APPDATA!, "Code", "User", "mcp.json");
+      writeJsonFile(appDataMcpJson, {
+        servers: { argent: { type: "stdio", command: "argent", args: ["mcp"] } },
+      });
+
+      const findings = vscode.findShadowingConfigs!(root, "local");
+      expect(findings).toHaveLength(1);
+      expect(findings[0].location).toBe(appDataMcpJson);
+    } finally {
+      Object.defineProperty(process, "platform", {
+        value: originalPlatform,
+        configurable: true,
+      });
+    }
+  });
+
   it("returns nothing when no user-profile config exists", () => {
     expect(vscode.findShadowingConfigs!(root, "local")).toHaveLength(0);
   });

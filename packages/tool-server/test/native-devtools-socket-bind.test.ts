@@ -44,7 +44,7 @@ afterEach(() => {
     }
   }
   // Nothing else reaps these: they sit directly under the shared /tmp that
-  // SOCK_ROOT pins, so without this they accumulate three per run.
+  // SOCK_ROOT pins, so without this they accumulate one per tmpSock call.
   for (const d of sockDirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
 });
 

@@ -1,7 +1,30 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, rm, writeFile, chmod } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+
+// `defaultAndroidRoots()` ends with three LITERAL roots — /opt/android-sdk,
+// /usr/lib/android-sdk (the Debian `android-sdk` apt package) and
+// /usr/local/share/android-sdk (the Homebrew cask) — that no environment
+// variable can suppress. On a host that has one, the three tests below that
+// assert "not resolvable" find it and go red, so their answer is a property of
+// the machine rather than of the resolver. Confine the probe to the temp
+// directory this file's fixtures live in; every candidate outside it reports
+// absent, which is also what those tests want from a machine that has no SDK.
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    access: async (path: Parameters<typeof actual.access>[0], mode?: number) => {
+      if (!String(path).startsWith(tmpdir())) {
+        throw Object.assign(new Error(`ENOENT: outside the test sandbox, ${String(path)}`), {
+          code: "ENOENT",
+        });
+      }
+      return actual.access(path, mode);
+    },
+  };
+});
 import {
   __resetAndroidBinaryCacheForTesting,
   resolveAndroidBinary,
@@ -17,10 +40,11 @@ import {
 // other suites and a stale ANDROID_HOME would silently flip their behavior).
 // HOME and USERPROFILE are included because `defaultAndroidRoots()` derives
 // Android Studio's default install paths from `os.homedir()`, which reads
-// USERPROFILE on Windows and HOME elsewhere. Pinning both to a tmpdir keeps the
-// resolver from finding the dev's real SDK during tests that assert "not
-// resolvable". The fixtures here are extensionless, so the file itself is
-// POSIX-only — `android-binary-windows.test.ts` covers the `.exe` resolver.
+// USERPROFILE on Windows and HOME elsewhere. Pinning both to a tmpdir keeps
+// those roots off the dev's real SDK during tests that assert "not resolvable";
+// the literal system roots are handled by the fs mock above. `fakeSdk` writes
+// extensionless binaries, which the win32 resolver never accepts, so both
+// describes skip there — `android-binary-windows.test.ts` covers `.exe`.
 const ENV_KEYS = ["PATH", "ANDROID_HOME", "ANDROID_SDK_ROOT", "HOME", "USERPROFILE"] as const;
 const originalEnv: Record<string, string | undefined> = {};
 
@@ -36,7 +60,7 @@ async function fakeSdk(root: string, name: "adb" | "emulator"): Promise<string> 
   return path;
 }
 
-describe("resolveAndroidBinary", () => {
+describe.skipIf(process.platform === "win32")("resolveAndroidBinary", () => {
   let tmpRoot: string;
 
   beforeEach(async () => {
@@ -196,7 +220,7 @@ describe("resolveAndroidBinary", () => {
   });
 });
 
-describe("ensureDep('emulator')", () => {
+describe.skipIf(process.platform === "win32")("ensureDep('emulator')", () => {
   let tmpRoot: string;
 
   beforeEach(async () => {
