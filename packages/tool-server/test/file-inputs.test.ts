@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { FILE_INPUT_MARKER, type FileInputSpec } from "@argent/registry";
 import { resolveFileInputs, FileInputError } from "../src/file-inputs";
+import { redirectTmpdir } from "./helpers/tmpdir-env";
 
 let tmpDir: string;
 
@@ -178,13 +179,12 @@ describe("resolveFileInputs", () => {
     ];
 
     // resolveFileInputs materializes into mkdtemp(join(os.tmpdir(),
-    // "argent-file-input-")), and os.tmpdir() reads process.env.TMPDIR at call
-    // time. Scope TMPDIR to this test so the listing below covers only dirs
-    // this run created — the machine-wide tmpdir also holds the in-flight dirs
-    // of any concurrent run, which would read as an uncleaned leak.
-    const savedTmpdir = process.env.TMPDIR;
+    // "argent-file-input-")). Scope the tmpdir to this test so the listing
+    // below covers only dirs this run created — the machine-wide tmpdir also
+    // holds the in-flight dirs of any concurrent run, which would read as an
+    // uncleaned leak.
     const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "argent-file-input-scan-"));
-    process.env.TMPDIR = scratch;
+    const restoreTmpdir = redirectTmpdir(scratch);
 
     const listInputTempDirs = async () => {
       const entries = await fs.readdir(scratch);
@@ -208,8 +208,7 @@ describe("resolveFileInputs", () => {
 
       expect(await listInputTempDirs()).toEqual([]);
     } finally {
-      if (savedTmpdir === undefined) delete process.env.TMPDIR;
-      else process.env.TMPDIR = savedTmpdir;
+      restoreTmpdir();
       await fs.rm(scratch, { recursive: true, force: true });
     }
   });

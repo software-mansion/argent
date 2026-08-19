@@ -1,7 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import net from "node:net";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import { bindNativeDevtoolsUnixSocket } from "../src/blueprints/native-devtools.js";
@@ -76,10 +75,14 @@ describe.skipIf(process.platform === "win32")("bindNativeDevtoolsUnixSocket", ()
   });
 
   it("rejects with a coded FailureError when the path stays unbindable", async () => {
-    // Point at a path under a non-existent directory: listen() fails with
-    // ENOENT, which is not the self-heal case, so it must reject (not throw
-    // uncaught) with our coded shape.
-    const socketPath = path.join(os.tmpdir(), "argent-nd-nope", "does", "not", "exist.sock");
+    // Point at a path under a non-existent directory. listen() rejects it —
+    // with ENOENT or EACCES depending on the platform, neither of which is the
+    // stale-socket case that self-heals — so the call must reject (not throw
+    // uncaught) with our coded shape. Build it under a fixture dir like every
+    // other path here: off os.tmpdir() an ambient $TMPDIR long enough to push
+    // this past sun_path rejects it for that reason instead, and the
+    // assertions below cannot tell the two apart.
+    const socketPath = path.join(tmpSock("nope"), "does", "not", "exist.sock");
     const server = track(net.createServer());
 
     const err = await bindNativeDevtoolsUnixSocket(server, socketPath).catch((e) => e);

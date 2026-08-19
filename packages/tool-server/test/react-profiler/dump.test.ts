@@ -9,26 +9,25 @@ import {
   readCpuProfile,
   readCommitTree,
 } from "../../src/utils/react-profiler/debug/dump";
+import { redirectTmpdir } from "../helpers/tmpdir-env";
 
-// getDebugDir() resolves join(os.tmpdir(), "argent-profiler-cwd"), and
-// os.tmpdir() reads process.env.TMPDIR at call time. Point TMPDIR at a scratch
-// dir per test so the fixed dump filenames below (test-dump.json, cpu-profile.json,
-// …) land somewhere this run owns: against the machine-wide /tmp/argent-profiler-cwd
-// a concurrent run writes and unlinks those very names underneath us.
+// getDebugDir() resolves join(os.tmpdir(), "argent-profiler-cwd"). Point the
+// tmpdir at a scratch dir per test so the fixed dump filenames below
+// (test-dump.json, cpu-profile.json, …) land somewhere this run owns: against
+// the machine-wide /tmp/argent-profiler-cwd a concurrent run writes and unlinks
+// those very names underneath us.
 const debugDir = () => join(tmpdir(), "argent-profiler-cwd");
 
-let savedTmpdir: string | undefined;
+let restoreTmpdir: () => void;
 let scratch: string;
 
 beforeEach(async () => {
-  savedTmpdir = process.env.TMPDIR;
   scratch = await fs.mkdtemp(join(tmpdir(), "argent-profiler-dump-test-"));
-  process.env.TMPDIR = scratch;
+  restoreTmpdir = redirectTmpdir(scratch);
 });
 
 afterEach(async () => {
-  if (savedTmpdir === undefined) delete process.env.TMPDIR;
-  else process.env.TMPDIR = savedTmpdir;
+  restoreTmpdir();
   await fs.rm(scratch, { recursive: true, force: true });
   vi.restoreAllMocks();
 });

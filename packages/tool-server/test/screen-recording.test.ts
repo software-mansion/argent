@@ -47,6 +47,7 @@ import {
   getActiveScreenRecordings,
 } from "../src/utils/screen-recording-reminder";
 import { __resetReapedSessionsForTesting } from "../src/utils/reaped-sessions";
+import { redirectTmpdir } from "./helpers/tmpdir-env";
 
 const mockSpawn = vi.mocked(spawn);
 const mockOpenStream = vi.mocked(openMjpegStream);
@@ -196,15 +197,13 @@ const androidDevice: DeviceInfo = {
 // fixtures, and vi.useFakeTimers() seeds its clock from the real time rather
 // than a constant, so the millisecond two runs start in is the only thing
 // separating their paths — and each test ends by deleting the path it derived.
-// os.tmpdir() reads process.env.TMPDIR at call time, so scoping it per test
-// removes that window instead of leaving it narrow.
-let savedTmpdir: string | undefined;
+// Scoping the tmpdir per test removes that window instead of leaving it narrow.
+let restoreTmpdir: () => void;
 let scratch: string;
 
 beforeEach(async () => {
-  savedTmpdir = process.env.TMPDIR;
   scratch = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screen-recording-test-"));
-  process.env.TMPDIR = scratch;
+  restoreTmpdir = redirectTmpdir(scratch);
   __resetActiveScreenRecordingsForTesting();
   __resetReapedSessionsForTesting();
   mockSpawn.mockReset();
@@ -216,10 +215,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.useRealTimers();
-  // Restore TMPDIR before the rm below, so a later suite still resolves the
-  // real tmpdir even if that cleanup rejects.
-  if (savedTmpdir === undefined) delete process.env.TMPDIR;
-  else process.env.TMPDIR = savedTmpdir;
+  restoreTmpdir();
   await fs.rm(scratch, { recursive: true, force: true });
 });
 

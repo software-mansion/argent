@@ -16,6 +16,7 @@ import {
   waitForFrame,
   type ActionEnv,
 } from "../../src/tools/flows/flow-actions";
+import { redirectTmpdir } from "../helpers/tmpdir-env";
 
 // Stub settle + capture so the tests exercise only the baseline write/diff decision.
 const h = vi.hoisted(() => ({
@@ -584,14 +585,12 @@ describe("runSnapshot cropOn", () => {
   it("fails a sub-pixel crop region instead of writing an empty PNG", async () => {
     h.cropFrame = { x: 0.5, y: 0.5, width: 0.001, height: 0.001 };
     // runSnapshot builds its crop scratch dir with
-    // mkdtemp(join(os.tmpdir(), "argent-flow-crop-")), and os.tmpdir() reads
-    // process.env.TMPDIR at call time. Point TMPDIR at a dir only this test
-    // owns, so the leftover sweep below sees this run's crop dirs and nothing
-    // else — scanning the machine-wide tmpdir would also list the in-flight
-    // crop dir of any concurrent run.
-    const savedTmpdir = process.env.TMPDIR;
+    // mkdtemp(join(os.tmpdir(), "argent-flow-crop-")). Point the tmpdir at a
+    // dir only this test owns, so the leftover sweep below sees this run's crop
+    // dirs and nothing else — scanning the machine-wide tmpdir would also list
+    // the in-flight crop dir of any concurrent run.
     const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "argent-flow-crop-scan-"));
-    process.env.TMPDIR = scratch;
+    const restoreTmpdir = redirectTmpdir(scratch);
 
     try {
       const r = await runSnapshot(env, opts({ cropOn }));
@@ -608,8 +607,7 @@ describe("runSnapshot cropOn", () => {
       );
       expect(leftoverCropDirs).toEqual([]);
     } finally {
-      if (savedTmpdir === undefined) delete process.env.TMPDIR;
-      else process.env.TMPDIR = savedTmpdir;
+      restoreTmpdir();
       await fs.rm(scratch, { recursive: true, force: true });
     }
   });

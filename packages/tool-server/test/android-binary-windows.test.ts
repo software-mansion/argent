@@ -108,6 +108,24 @@ describe("resolveAndroidBinary on Windows", () => {
     expect(await resolveAndroidBinary("emulator")).toBe(emuExe);
   });
 
+  it("falls back to <home>\\AppData\\Local\\Android\\Sdk when LOCALAPPDATA is unset", async () => {
+    // A GUI-spawned MCP server can start without %LOCALAPPDATA% in its
+    // environment, which is the only reason the resolver also derives that
+    // path from the home directory.
+    const adbDir = join(homeRoot, "AppData", "Local", "Android", "Sdk", "platform-tools");
+    await mkdir(adbDir, { recursive: true });
+    const adbExe = join(adbDir, "adb.exe");
+    await writeFile(adbExe, "", { mode: 0o755 });
+    await chmod(adbExe, 0o755);
+    delete process.env.LOCALAPPDATA;
+
+    const { resolveAndroidBinary, __resetAndroidBinaryCacheForTesting } =
+      await loadResolverAsWin32();
+    __resetAndroidBinaryCacheForTesting();
+
+    expect(await resolveAndroidBinary("adb")).toBe(adbExe);
+  });
+
   it("returns null when only the extensionless binary exists (Windows can't exec it)", async () => {
     const adbDir = join(tmpRoot, "Android", "Sdk", "platform-tools");
     await mkdir(adbDir, { recursive: true });
