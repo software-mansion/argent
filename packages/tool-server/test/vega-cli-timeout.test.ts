@@ -195,9 +195,10 @@ function sweep(): void {
     execSync(`pkill -f '${cmdlinePattern(`${SENTINEL_PREFIX}[0-9]`)}' || true`);
   } catch {
     // `|| true` maps every `pkill` exit - no-match, or `pkill` itself missing - to 0, so
-    // only a failure to run the shell at all reaches here: fork EAGAIN under load, the
-    // same mode strayCount absorbs. Throwing out of cleanup would mask the result of the
-    // test that just ran, and any stray this misses dies within WORKER_LIFETIME_SECONDS.
+    // only the shell itself failing reaches here - fork EAGAIN under load, the same mode
+    // strayCount absorbs, or the shell dying on a signal. Throwing out of cleanup would
+    // mask the result of the test that just ran, and any stray this misses dies within
+    // WORKER_LIFETIME_SECONDS.
   }
 }
 
@@ -327,12 +328,12 @@ describe("runVega timeout (real subprocess)", () => {
     // against nothing. Two GROUPS, not just two workers — that is what makes one of them
     // escaped, and the descendant sweep rather than the group SIGKILL the only thing that
     // can reap it; left unasserted, the fake's `detached: true` can be dropped and this
-    // test stays green with the sweep deleted. Both come from one sample inside the poll,
-    // so the group read cannot land in the window where the count has just been satisfied
-    // and the reap is already running. The poll gets the whole deadline as its budget:
-    // on `waitForCount`'s 3s default a 3.5s launcher start, which the call itself still
-    // tolerates, fails this observation instead of the reap it guards. The two output-cap reaps below stay unpinned for want of
-    // such a window — theirs fires within ~100ms of the spawn (#841).
+    // test stays green with the sweep deleted. Both numbers come from one process-table
+    // read, so a count of 2 can never be paired with the 0 groups that a look taken after
+    // the reap began would report. The poll gets the whole deadline as its budget: on a 3s
+    // one, a 3.5s launcher start — which the call itself still tolerates — would fail this
+    // observation instead of the reap it guards. The two output-cap reaps below stay
+    // unpinned for want of such a window — theirs fires within ~100ms of the spawn (#841).
     expect(await waitForWorkerGroups(SENTINEL_REAP, 2, REAP_DEADLINE_MS)).toEqual({
       workers: 2,
       groups: 2,
