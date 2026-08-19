@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -49,8 +49,17 @@ afterAll(() => {
   rmSync(TEST_HOME, { recursive: true, force: true });
 });
 
+// TTL safety net, the same one launcher-duplicate-spawn sets around its spawn:
+// every server this file starts self-exits after a minute. The reaper below can
+// only kill a pid that reached `spawnedPids`, and nothing reaches it until after
+// `ensureToolsServer` has already spawned — so on a red run the TTL is what stops
+// a real tool-server outliving the suite while its STATE_DIR record is deleted.
 const spawnedPids: number[] = [];
+beforeEach(() => {
+  process.env.FAKE_TTL_MS = "60000";
+});
 afterEach(() => {
+  delete process.env.FAKE_TTL_MS;
   for (const pid of spawnedPids.splice(0)) {
     try {
       process.kill(pid, "SIGKILL");
@@ -105,10 +114,13 @@ describe("ensureToolsServer — disk-version gate", () => {
       expect(launcher.isToolsServerProcessAlive(old.pid)).toBe(false);
       const state = await launcher.readToolsServerState(bundlePath);
       expect(state).not.toBeNull();
+      // Record before asserting on it: an assertion that throws here would
+      // otherwise leave this server unreapable, and the afterEach deletes the
+      // STATE_DIR entry that is the only other way to find it.
+      spawnedPids.push(state!.pid);
       expect(state!.pid).not.toBe(old.pid);
       // The record carries what the new server actually runs: the disk version.
       expect(state!.version).toBe("1.0.0");
-      spawnedPids.push(state!.pid);
       expect(handle.url).toBe(launcher.formatToolsServerUrl("127.0.0.1", state!.port));
     }
   );
@@ -125,8 +137,9 @@ describe("ensureToolsServer — disk-version gate", () => {
       await waitForDeath(old.pid);
       expect(launcher.isToolsServerProcessAlive(old.pid)).toBe(false);
       const state = await launcher.readToolsServerState(bundlePath);
-      expect(state!.version).toBe("1.0.0-rc.2");
+      expect(state).not.toBeNull();
       spawnedPids.push(state!.pid);
+      expect(state!.version).toBe("1.0.0-rc.2");
     }
   );
 
