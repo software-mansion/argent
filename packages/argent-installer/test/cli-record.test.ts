@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   cliRecordPath,
+  healCliRecord,
   readCliRecord,
   removeCliRecordFor,
   writeCliRecord,
@@ -142,6 +143,96 @@ describe("removeCliRecordFor", () => {
   it("is a no-op when there is no record, or no install directory to compare", () => {
     expect(removeCliRecordFor(globalRoot)).toBe(false);
     expect(removeCliRecordFor(null)).toBe(false);
+  });
+});
+
+/**
+ * The `argent mcp` startup heal. Writes the record where `init` never ran and
+ * fixes stale ones. One rule, defer to a record that is alive and not older.
+ */
+describe("healCliRecord", () => {
+  it("writes the record when none exists", () => {
+    const cli = fakeInstall(globalRoot, "1.2.3");
+
+    expect(healCliRecord({ cli, mode: "global", version: "1.2.3" })).toBe(cliRecordPath());
+    expect(readCliRecord()).toMatchObject({ cli, node: process.execPath, version: "1.2.3" });
+  });
+
+  it("records nothing for an entrypoint that does not exist", () => {
+    expect(
+      healCliRecord({
+        cli: path.join(globalRoot, "dist", "cli.js"),
+        mode: "global",
+        version: "1.2.3",
+      })
+    ).toBeNull();
+    expect(fs.existsSync(cliRecordPath())).toBe(false);
+  });
+
+  it("defers to an alive record of the same or newer version", () => {
+    const incumbent = fakeInstall(globalRoot, "1.3.0");
+    healCliRecord({ cli: incumbent, mode: "global", version: "1.3.0" });
+
+    const localRoot = path.join(projectRoot, "node_modules", "@swmansion", "argent");
+    const challenger = fakeInstall(localRoot, "1.2.3");
+
+    expect(healCliRecord({ cli: challenger, mode: "local", version: "1.2.3" })).toBeNull();
+    expect(healCliRecord({ cli: challenger, mode: "local", version: "1.3.0" })).toBeNull();
+    expect(readCliRecord()).toMatchObject({ cli: incumbent, version: "1.3.0" });
+  });
+
+  it("displaces an older alive record", () => {
+    const incumbent = fakeInstall(globalRoot, "1.2.3");
+    healCliRecord({ cli: incumbent, mode: "global", version: "1.2.3" });
+
+    const localRoot = path.join(projectRoot, "node_modules", "@swmansion", "argent");
+    const challenger = fakeInstall(localRoot, "1.3.0");
+
+    expect(healCliRecord({ cli: challenger, mode: "local", version: "1.3.0" })).toBe(
+      cliRecordPath()
+    );
+    expect(readCliRecord()).toMatchObject({ cli: challenger, mode: "local", version: "1.3.0" });
+  });
+
+  /** The nvm-prune / deleted-project case the heal exists for. */
+  it("displaces a record whose paths are gone, regardless of version", () => {
+    const incumbent = fakeInstall(globalRoot, "9.9.9");
+    healCliRecord({ cli: incumbent, mode: "global", version: "9.9.9" });
+    fs.rmSync(globalRoot, { recursive: true, force: true });
+
+    const localRoot = path.join(projectRoot, "node_modules", "@swmansion", "argent");
+    const challenger = fakeInstall(localRoot, "1.2.3");
+
+    expect(healCliRecord({ cli: challenger, mode: "local", version: "1.2.3" })).toBe(
+      cliRecordPath()
+    );
+    expect(readCliRecord()).toMatchObject({ cli: challenger, version: "1.2.3" });
+  });
+
+  /** A known version beats "unknown". */
+  it("displaces an alive record whose version is unparseable", () => {
+    const incumbent = fakeInstall(globalRoot, "1.2.3");
+    healCliRecord({ cli: incumbent, mode: "global", version: null });
+    expect(readCliRecord()).toMatchObject({ version: "unknown" });
+
+    const localRoot = path.join(projectRoot, "node_modules", "@swmansion", "argent");
+    const challenger = fakeInstall(localRoot, "1.0.0");
+
+    expect(healCliRecord({ cli: challenger, mode: "local", version: "1.0.0" })).toBe(
+      cliRecordPath()
+    );
+    expect(readCliRecord()).toMatchObject({ cli: challenger, version: "1.0.0" });
+  });
+
+  it("defers to any alive record when its own version is unknown", () => {
+    const incumbent = fakeInstall(globalRoot, "1.0.0");
+    healCliRecord({ cli: incumbent, mode: "global", version: "1.0.0" });
+
+    const localRoot = path.join(projectRoot, "node_modules", "@swmansion", "argent");
+    const challenger = fakeInstall(localRoot, "1.3.0");
+
+    expect(healCliRecord({ cli: challenger, mode: "local", version: null })).toBeNull();
+    expect(readCliRecord()).toMatchObject({ cli: incumbent, version: "1.0.0" });
   });
 });
 

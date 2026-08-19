@@ -536,12 +536,13 @@ Writing ${providersDirectory()}/<id>.json
 yourself remains fully supported — it is the contract of record, and a provider
 that cannot spawn a Node CLI must do exactly that. These commands exist so a
 provider that CAN does not have to reimplement the atomic write, the no-op
-dedupe and the orphan prune, and so its validator is always the one belonging to
-the argent install that will read the result.
+dedupe and the orphan prune. Validation gates on this build's contract; fields
+this build does not know pass through to the file untouched, so publishing
+through an older install than the one reading loses nothing.
 
 To spawn these commands without relying on PATH — which an editor extension
 host frequently cannot — read ~/.argent/cli.json, written by \`argent init\`
-and \`argent update\`:
+and \`argent update\` and healed best-effort on every \`argent mcp\` start:
 
   { "node": "/abs/path/to/node", "cli": "/abs/path/to/dist/cli.js",
     "version": "...", "mode": "global" | "local", "updatedAt": "..." }

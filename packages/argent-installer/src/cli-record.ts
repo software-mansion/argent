@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import semver from "semver";
 import { argentHomeDir } from "@argent/configuration-core";
 import {
   argentBinSubpath,
@@ -20,13 +21,15 @@ import type { InstallMode } from "./install-record.js";
  * a provider spawn `[node, cli, ...args]` with no shell, which also sidesteps
  * Windows `.cmd` shims.
  *
- * An nvm prune or a moved install makes it stale and nothing rewrites it until
- * the next `init`/`update`. A provider that cannot resolve a CLI from it
- * should fall back to `PATH` and then go quietly dark. The descriptor file
- * remains the contract of record.
+ * An nvm prune or a moved install makes it stale. `init`/`update` rewrite it
+ * unconditionally, and `argent mcp` heals it at startup (see
+ * {@linkcode healCliRecord}) — that covers installs `init` never touched, like
+ * a committed devDependency set up with plain `npm install`. A provider that
+ * still cannot resolve a CLI falls back to PATH and then goes quietly dark, the
+ * descriptor file remains the contract of record.
  *
- * Last writer wins. The schema is frozen, so any working CLI copy produces the
- * same result and arbitrating between installs would buy nothing.
+ * Last writer wins, except the heal. It defers to a live, not-older record, so
+ * the record converges on the newest install that actually runs.
  */
 interface CliRecord {
   /** Absolute path to the CLI entrypoint (`<install>/dist/cli.js`). */
@@ -92,14 +95,16 @@ export function writeCliRecord(input: {
 
   if (!cli) return null;
 
-  const record: CliRecord = {
+  return persistCliRecord({
     cli,
     mode: input.mode,
     node: process.execPath,
     updatedAt: new Date().toISOString(),
     version: input.version,
-  };
+  });
+}
 
+function persistCliRecord(record: CliRecord): string | null {
   const file = cliRecordPath();
 
   try {
@@ -112,6 +117,52 @@ export function writeCliRecord(input: {
     fs.writeFileSync(temporary, JSON.stringify(record, null, 2) + "\n");
     fs.renameSync(temporary, file);
     return file;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Refresh the record from a running install; called on `argent mcp` startup.
+ * On some machines `init`/`update` never run (a committed devDependency set up
+ * with plain `npm install`) and an nvm prune can strand the record. Every MCP
+ * start proves a working CLI at a known path, so heal here.
+ *
+ * Unlike `writeCliRecord`, this defers to a record whose paths are alive and
+ * whose version is not older, so the record converges on the newest running
+ * install instead of flapping between installs on every editor session. An
+ * unparseable version counts as older.
+ *
+ * Never throws, like {@linkcode writeCliRecord}.
+ */
+export function healCliRecord(input: {
+  /** Absolute path to this install's `dist/cli.js`. */
+  cli: string;
+  mode: InstallMode | "dev";
+  version: string | null;
+}): string | null {
+  try {
+    if (!fs.existsSync(input.cli)) return null;
+
+    const existing = readCliRecord();
+
+    if (existing) {
+      const alive = fs.existsSync(existing.node) && fs.existsSync(existing.cli);
+      const ourVersion = semver.valid(input.version);
+      const theirVersion = semver.valid(existing.version);
+      const newerThanExisting =
+        ourVersion !== null && (theirVersion === null || semver.gt(ourVersion, theirVersion));
+
+      if (alive && !newerThanExisting) return null;
+    }
+
+    return persistCliRecord({
+      cli: input.cli,
+      mode: input.mode,
+      node: process.execPath,
+      updatedAt: new Date().toISOString(),
+      version: input.version ?? "unknown",
+    });
   } catch {
     return null;
   }
