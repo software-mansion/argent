@@ -194,9 +194,10 @@ function sweep(): void {
   try {
     execSync(`pkill -f '${cmdlinePattern(`${SENTINEL_PREFIX}[0-9]`)}' || true`);
   } catch {
-    // `|| true` swallows a no-match, so only a failure to spawn `pkill` reaches here.
-    // Throwing out of cleanup would mask the result of the test that just ran, and any
-    // stray this misses dies of old age within WORKER_LIFETIME_SECONDS.
+    // `|| true` maps every `pkill` exit - no-match, or `pkill` itself missing - to 0, so
+    // only a failure of the shell reaches here (no /bin/sh, killed, output over
+    // maxBuffer). Throwing out of cleanup would mask the result of the test that just
+    // ran, and any stray this misses dies of old age within WORKER_LIFETIME_SECONDS.
   }
 }
 
@@ -205,19 +206,44 @@ function livePids(sentinel: string): string[] {
   return out.split("\n").filter((l) => l.trim());
 }
 
-// Distinct process groups across every live `sleep <sentinel>`. Empty when none are up.
-function pgidsOf(sentinel: string): Set<number> {
-  const pids = livePids(sentinel);
-  if (pids.length === 0) return new Set();
-  // `|| true`, as everywhere else here: a pid that exits between the two calls makes
-  // `ps` exit 1, and an empty read fails the caller's count rather than throwing at it.
-  const out = execSync(`ps -o pgid= -p ${pids.join(",")} || true`, { encoding: "utf-8" });
-  return new Set(
-    out
-      .split("\n")
-      .map((l) => Number(l.trim()))
-      .filter((n) => n > 0)
-  );
+// How many `sleep <sentinel>` workers are live, and how many distinct process groups
+// they occupy. Both from one pgrep, so the two facts describe the same instant.
+function sampleWorkers(sentinel: string): { workers: number; groups: number } {
+  try {
+    const pids = livePids(sentinel);
+    if (pids.length === 0) return { workers: 0, groups: 0 };
+    // `|| true` because `ps` exits 1 only once EVERY pid is gone - a partial read is a 0
+    // exit with fewer rows, which the group count below reports honestly either way.
+    const out = execSync(`ps -o pgid= -p ${pids.join(",")} || true`, { encoding: "utf-8" });
+    const groups = new Set(
+      out
+        .split("\n")
+        .map((l) => Number(l.trim()))
+        .filter((n) => n > 0)
+    );
+    return { workers: pids.length, groups: groups.size };
+  } catch {
+    // -1s for the same reason strayCount returns one: a look that never happened must
+    // not read as a legitimate count, and no `want` matches it, so the poll continues
+    // through a transient spawn failure.
+    return { workers: -1, groups: -1 };
+  }
+}
+
+// Poll until `want` workers occupy `want` distinct groups. Returns the last sample, so a
+// caller asserts on the values rather than on having timed out.
+async function waitForWorkerGroups(
+  sentinel: string,
+  want: number,
+  timeoutMs: number
+): Promise<{ workers: number; groups: number }> {
+  const deadline = Date.now() + timeoutMs;
+  let sample = sampleWorkers(sentinel);
+  while ((sample.workers !== want || sample.groups !== want) && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 50));
+    sample = sampleWorkers(sentinel);
+  }
+  return sample;
 }
 
 function strayCount(sentinel: string): number {
@@ -288,19 +314,21 @@ describe("runVega timeout (real subprocess)", () => {
     const run = runVega(["hang", SENTINEL_REAP], { timeoutMs: REAP_DEADLINE_MS }).catch(
       (e: unknown) => e
     );
-    // Observe the pair BEFORE the reap. `waitForClear` reads 0 just as readily for a
+    // Observe the pair BEFORE the reap: `waitForClear` reads 0 just as readily for a
     // launcher that never spawned them, so without this the reap below is asserted
-    // against nothing. The reap itself ends the window, so the poll gets the deadline's
-    // budget: on `waitForCount`'s shorter default a slow launcher start expires it first
-    // and fails this observation rather than the reap it guards. The two
-    // output-cap reaps below stay unpinned for want of such a window — theirs fires
-    // within ~100ms of the spawn (#841).
-    expect(await waitForCount(SENTINEL_REAP, 2, REAP_DEADLINE_MS)).toBe(2);
-    // ...and in TWO groups, which is what makes one of them escaped and the descendant
-    // sweep - not the group SIGKILL - the only thing that can reap it. Left unasserted,
-    // the fake's `detached: true` can be dropped and this test stays green with the
-    // sweep deleted, i.e. with the mechanism it exists to pin gone.
-    expect(pgidsOf(SENTINEL_REAP).size).toBe(2);
+    // against nothing. Two GROUPS, not just two workers — that is what makes one of them
+    // escaped, and the descendant sweep rather than the group SIGKILL the only thing that
+    // can reap it; left unasserted, the fake's `detached: true` can be dropped and this
+    // test stays green with the sweep deleted. Both come from one sample inside the poll,
+    // so the group read cannot land in the window where the count has just been satisfied
+    // and the reap is already running. The poll gets the whole deadline as its budget:
+    // anything shorter expires on a slow launcher start and fails this observation rather
+    // than the reap it guards. The two output-cap reaps below stay unpinned for want of
+    // such a window — theirs fires within ~100ms of the spawn (#841).
+    expect(await waitForWorkerGroups(SENTINEL_REAP, 2, REAP_DEADLINE_MS)).toEqual({
+      workers: 2,
+      groups: 2,
+    });
     const err = await run;
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toMatch(/timed out/i);
