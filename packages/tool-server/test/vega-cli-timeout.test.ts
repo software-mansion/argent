@@ -24,23 +24,15 @@ import { runVega, __resetVegaBinaryCacheForTests } from "../src/utils/vega-cli";
 // enough to be timed out and snapshotted. A complete reap therefore requires BOTH the
 // group kill (launcher + its sleep) and the descendant sweep (the detached worker).
 // Each test passes its OWN sentinel so one test's strays can't be mistaken for
-// another's, and every sentinel carries this process's pid so a second run on the
-// same machine owns a disjoint range. `pkill` and `pgrep` match the whole process
-// table, so with a range fixed in the source two concurrent runs reap each other's
-// live workers and count each other's strays: the escaped-worker test then sees
-// runVega resolve instead of time out, because the sleep it was waiting on was
-// killed by the other run's sweep.
-//
-// Suffixes are always two digits, so the anchored sweep pattern is `<pid>` plus
-// exactly two more — runs whose pids differ in length cannot match each other.
-const SENTINEL_BASE = String(process.pid);
-const SENTINEL_DEADLINE = `${SENTINEL_BASE}01`;
-const SENTINEL_REAP = `${SENTINEL_BASE}02`;
-const SENTINEL_OVERFLOW = `${SENTINEL_BASE}03`;
-const SENTINEL_LINGER = `${SENTINEL_BASE}04`;
-const SENTINEL_OVERFLOW_ERR = `${SENTINEL_BASE}05`;
-const SENTINEL_LINGER_NEAR_DEADLINE = `${SENTINEL_BASE}06`;
-const SENTINEL_LINGER_GROUPED = `${SENTINEL_BASE}07`;
+// another's. Sentinels share the `6910x` range so afterEach can sweep them all with
+// a single tight pattern (see sweep()).
+const SENTINEL_DEADLINE = "69101";
+const SENTINEL_REAP = "69102";
+const SENTINEL_OVERFLOW = "69103";
+const SENTINEL_LINGER = "69104";
+const SENTINEL_OVERFLOW_ERR = "69105";
+const SENTINEL_LINGER_NEAR_DEADLINE = "69106";
+const SENTINEL_LINGER_GROUPED = "69107";
 let dir: string;
 let prevPath: string | undefined;
 
@@ -133,13 +125,13 @@ afterEach(() => sweep());
 
 function sweep(): void {
   try {
-    // Match only this run's sentinels (`<pid>` + two digits) rather than a loose
-    // substring, so neither a stray `sleep` from unrelated work nor a concurrent run of
-    // this file is ever killed. Anchored to the whole command line (`^…$`) for the same
-    // reason as strayCount: an unanchored `-f` pattern would also match the wrapper
-    // shell execSync spawns to run it (whose argv contains the literal pattern). The
-    // real sleeps' cmdline is exactly `sleep <sentinel>`.
-    execSync(`pkill -f '^sleep ${SENTINEL_BASE}[0-9][0-9]$' || true`);
+    // Match only this suite's sentinels (6910[0-9]) rather than a loose `sleep 691`
+    // substring, so a stray `sleep` from unrelated work on the machine is never killed.
+    // Anchored to the whole command line (`^…$`) for the same reason as strayCount: an
+    // unanchored `-f` pattern would also match the wrapper shell execSync spawns to run
+    // it (whose argv contains the literal pattern). The real sleeps' cmdline is exactly
+    // `sleep 6910<n>`.
+    execSync(`pkill -f '^sleep 6910[0-9]$' || true`);
   } catch {
     /* nothing to clean */
   }
