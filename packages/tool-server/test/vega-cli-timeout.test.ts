@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } 
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { execSync, spawn } from "node:child_process";
+import { execSync, spawn, spawnSync } from "node:child_process";
 import { getFailureSignal } from "@argent/registry";
 import { runVega, __resetVegaBinaryCacheForTests } from "../src/utils/vega-cli";
 
@@ -141,6 +141,13 @@ process.stdout.write("OK-" + cmd);
   );
   prevPath = process.env.PATH;
   process.env.PATH = `${dir}:${process.env.PATH ?? ""}`;
+  // Pay `node`'s first-spawn cost here, where no deadline is running. The near-deadline
+  // test gives the launcher 900ms to start, which a warm spawn clears comfortably and a
+  // cold one does not — first-in-process has been measured at 1684ms under load. A whole-
+  // file run happens to warm it in the tests before that one; running that test alone
+  // (`-t`, `it.only`, an editor's run-this-test) would otherwise reject on the deadline
+  // ~15% of the time. Any unknown argument takes the launcher's write-and-exit default.
+  spawnSync(join(dir, "vega"), ["warmup"], { stdio: "ignore" });
 });
 
 afterAll(() => {
