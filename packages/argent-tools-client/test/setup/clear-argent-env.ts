@@ -4,12 +4,13 @@
 // child. ARGENT_HOST is the one that bites: the fixture binds the host it names
 // while the launcher records and health-checks 127.0.0.1, so reuse misses, a
 // second server is spawned, and the first is left listening after the run.
-// ARGENT_TOOLS_URL, ARGENT_AUTH_TOKEN and ARGENT_ARTIFACTS_DIR are read
-// in-process and retarget assertions the same way.
 //
-// Clearing the whole prefix (rather than a hand-maintained list) also covers
-// overrides added to src later without a second edit here. A test that
-// exercises an override sets it itself, so nothing depends on the ambient value.
+// Clearing the whole prefix rather than that one name is what covers overrides
+// added to src later without a second edit here. ARGENT_HOST is the only one
+// that currently changes an outcome: the three other in-process reads
+// (ARGENT_TOOLS_URL, ARGENT_AUTH_TOKEN, ARGENT_ARTIFACTS_DIR) are set by the
+// tests that exercise them, so exporting all three and dropping this file still
+// leaves the suite at 191 passed.
 //
 // This runs before the test module graph is imported, so module-level env reads
 // observe the cleared state too.

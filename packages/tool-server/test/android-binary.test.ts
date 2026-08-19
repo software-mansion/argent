@@ -11,6 +11,11 @@ import { tmpdir } from "node:os";
 // the machine rather than of the resolver. Confine the probe to the temp
 // directory this file's fixtures live in; every candidate outside it reports
 // absent, which is also what those tests want from a machine that has no SDK.
+//
+// This mock is not coverage of those three roots, and nothing here can be:
+// reaching one positively would mean writing under /opt or /usr. Deleting any
+// of them from the resolver leaves this file green — only the two home-derived
+// Studio roots are pinned, each by the test named for it.
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
