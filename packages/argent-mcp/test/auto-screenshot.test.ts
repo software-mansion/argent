@@ -142,9 +142,9 @@ describe("autoScreenshotEnabled", () => {
 describe("getAutoScreenshotDelayMs", () => {
   const original = process.env.ARGENT_AUTO_SCREENSHOT_DELAY_MS;
 
-  // The override was snapshotted but never cleared, so the three tests below
-  // that do not set it themselves asserted the developer's exported value.
-  // This package has no ARGENT_*-stripping setup file, unlike tool-server.
+  // Three of the tests below never set this themselves, and this package has no
+  // ARGENT_*-stripping setup file the way tool-server does — so without this
+  // they assert whatever the developer happens to have exported.
   beforeEach(() => {
     delete process.env.ARGENT_AUTO_SCREENSHOT_DELAY_MS;
   });

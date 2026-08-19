@@ -7,8 +7,11 @@
  * concurrent runs — a second checkout, a CI matrix cell — silently destroy each
  * other's live socket, and the loser reads its own device back as unregistered.
  *
- * `tail` supplies the remaining UDID groups, so a file that needs two distinct
- * devices can still tell them apart.
+ * `tail` supplies the remaining UDID groups, which distinguish two devices to
+ * everything EXCEPT the socket: getNativeDevtoolsSocketPath reads only the
+ * first 8 characters, so every UDID from this helper maps to one
+ * `/tmp/argent-nd-<pid8>.sock`. A file needing two devices that both bind has
+ * to vary the leading group itself.
  */
 export function processScopedUdid(tail: string): string {
   return `${process.pid.toString(16).toUpperCase().padStart(8, "0")}${tail}`;
