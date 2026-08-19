@@ -213,9 +213,9 @@ async function waitForClear(sentinel: string, timeoutMs = 3_000): Promise<number
   return waitForCount(sentinel, 0, timeoutMs);
 }
 
-// Regressions here fail SLOWLY: a test waits out its runVega deadline (up to 10s), then a 3s
-// clearance poll. Under vitest's 5s default that reports "Test timed out" instead of the
-// assertion naming what broke.
+// Regressions here fail SLOWLY: a test can spend 3s observing workers, wait out a 10s runVega
+// deadline, then poll 3s for the reap. Under vitest's 5s default that reports "Test timed
+// out" instead of the assertion naming what broke.
 vi.setConfig({ testTimeout: 20_000 });
 
 describe("runVega timeout (real subprocess)", () => {
@@ -254,8 +254,8 @@ describe("runVega timeout (real subprocess)", () => {
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toMatch(/timed out/i);
     // Two sleeps must disappear: the launcher's own child AND the worker that escaped
-    // into its own group. Both fall to the descendant sweep, which is why the old
-    // single-child kill left the escaped one to survive its full sleep.
+    // into its own group. Both fall to the descendant sweep — killing the launcher alone
+    // leaves both behind, and a group kill without the sweep still misses the escaped one.
     expect(await waitForClear(SENTINEL_REAP)).toBe(0);
   });
 
