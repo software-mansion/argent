@@ -256,13 +256,21 @@ describe("runVega timeout (real subprocess)", () => {
     // Settled through `.catch` rather than left floating: nothing awaits this promise
     // until the observation below finishes, and an unawaited rejection is reported as
     // an unhandled one that vitest does not retract when the handler attaches late.
-    const run = runVega(["hang", SENTINEL_REAP], { timeoutMs: 2_000 }).catch((e: unknown) => e);
+    // Both workers have to be up before this reaps them, so the launcher's start races
+    // this deadline: 1485ms of it has been measured at 50-way concurrency, and this
+    // leaves that 2.7x.
+    const REAP_DEADLINE_MS = 4_000;
+    const run = runVega(["hang", SENTINEL_REAP], { timeoutMs: REAP_DEADLINE_MS }).catch(
+      (e: unknown) => e
+    );
     // Observe the pair BEFORE the reap. `waitForClear` reads 0 just as readily for a
     // launcher that never spawned them, so without this the reap below is asserted
-    // against nothing — and the deadline is loose enough that the launcher is never
-    // racing it. The two output-cap reaps below stay unpinned for want of such a
-    // window — theirs fires within ~100ms of the spawn (#841).
-    expect(await waitForCount(SENTINEL_REAP, 2)).toBe(2);
+    // against nothing. The reap itself ends the window, so the poll gets the deadline's
+    // budget — on `waitForCount`'s shorter default it would expire first and report a
+    // launcher that had not forked yet as a reap that left nothing behind. The two
+    // output-cap reaps below stay unpinned for want of such a window — theirs fires
+    // within ~100ms of the spawn (#841).
+    expect(await waitForCount(SENTINEL_REAP, 2, REAP_DEADLINE_MS)).toBe(2);
     const err = await run;
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toMatch(/timed out/i);
@@ -331,13 +339,16 @@ describe("runVega timeout (real subprocess)", () => {
     // with the captured output AND leave NO orphan — proving it doesn't resolve-and-leak on
     // this path. (The detached `linger` worker above escapes into its own group and is the
     // rare genuinely-unreapable case, deliberately not covered by this reap.)
+    const DRAIN_DEADLINE_MS = 10_000;
     const run = runVega(["linger-grouped", SENTINEL_LINGER_GROUPED], {
-      timeoutMs: 10_000,
+      timeoutMs: DRAIN_DEADLINE_MS,
     }).catch((e: unknown) => e);
     // Same reason as the timeout reap: see the worker alive first, or "no orphan" is a
-    // claim about a worker that may never have existed. It outlives the launcher's exit
-    // by the drain grace, so there is a comfortable window to catch it in.
-    expect(await waitForCount(SENTINEL_LINGER_GROUPED, 1)).toBe(1);
+    // claim about a worker that may never have existed. Nothing here cuts the window
+    // short, so the poll gets the whole call's budget rather than `waitForCount`'s
+    // default — 3.3x tighter than the call it watches, and expiring first would blame
+    // the reap for a launcher that had not forked yet.
+    expect(await waitForCount(SENTINEL_LINGER_GROUPED, 1, DRAIN_DEADLINE_MS)).toBe(1);
     expect(await run).toEqual({ stdout: "OK-linger", stderr: "" });
     expect(await waitForClear(SENTINEL_LINGER_GROUPED)).toBe(0);
   });
