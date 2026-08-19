@@ -4,9 +4,8 @@
 // child. ARGENT_HOST is the one that bites: the fixture binds the host it names
 // while the launcher records and health-checks 127.0.0.1, so reuse misses, a
 // second server is spawned, and the first is left listening after the run.
-// ARGENT_TOOLS_URL, ARGENT_AUTH_TOKEN, ARGENT_ARTIFACTS_DIR and
-// ARGENT_IDLE_TIMEOUT_MINUTES are read in-process and retarget assertions the
-// same way.
+// ARGENT_TOOLS_URL, ARGENT_AUTH_TOKEN and ARGENT_ARTIFACTS_DIR are read
+// in-process and retarget assertions the same way.
 //
 // Clearing the whole prefix (rather than a hand-maintained list) also covers
 // overrides added to src later without a second edit here. A test that
