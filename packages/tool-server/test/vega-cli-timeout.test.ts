@@ -43,9 +43,9 @@ import { runVega, __resetVegaBinaryCacheForTests } from "../src/utils/vega-cli";
 // It rides in the FRACTION of the sleep duration rather than being the duration: a run
 // killed before afterAll leaves the workers behind, so the whole-second part caps that
 // leak at ~ten minutes. That part must also outlast the longest assertion window - the
-// 4s reap deadline plus a 3s clearance poll - by a wide margin, because a worker that
-// dies of old age inside it satisfies every clearance assertion without a reap: at 5s
-// the descendant sweep can be deleted with the suite still 12/12 green.
+// drain test's 10s observation plus its 3s clearance poll - by a wide margin, because a
+// worker that dies of old age inside it satisfies every clearance assertion without a
+// reap: at 5s the descendant sweep can be deleted with the suite still 12/12 green.
 const randomTagBlock = (): string => String(Math.floor(Math.random() * 1000)).padStart(3, "0");
 const RUN_TAG = `${process.pid}${randomTagBlock()}`;
 const WORKER_LIFETIME_SECONDS = 600;
