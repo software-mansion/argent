@@ -34,7 +34,23 @@ _spawn_sim_server() { # native-id subcommand
   if ! command -v argent-simulator-server >/dev/null 2>&1; then
     return 1
   fi
-  argent-simulator-server "$subcommand" --id "$native" >"$logf" 2>&1 &
+  # The sim-server takes `paste` on stdin and treats EOF there as "my parent is
+  # gone", exiting immediately. A plain `&` in a non-interactive shell hands it
+  # `/dev/null` (EOF on the first read), so it would die right after printing
+  # its ready lines. Feed it a FIFO instead and hold the write end open in the
+  # harness shell. The server lives until the phase kills it (or this shell
+  # exits, which closes the fd and lets it shut down on its own).
+  local fifo="$E2E_WORK/provider-simserver.stdin"
+  rm -f "$fifo" && mkfifo "$fifo"
+  # Read-write so this open never blocks (and no rendezvous can deadlock on a
+  # child that failed to start). Fixed fd: macOS ships bash 3.2, which has no
+  # {var}<> automatic allocation.
+  exec 9<>"$fifo"
+  # Real `$HOME``: a real provider runs under the user's home, and CoreSimulator
+  # resolves its default device set from it; under the sandbox home the
+  # simulator we were pointed at does not exist.
+  HOME="${HOME_REAL:-$HOME}" \
+    argent-simulator-server "$subcommand" --id "$native" <"$fifo" >"$logf" 2>&1 &
   PROV_SIM_PID=$!
 
   local i
@@ -61,6 +77,7 @@ _descriptor_json() { # native-id platform kind capabilities-json
     --arg id "$PROVIDER_ID" --arg nativeId "$native" --arg platform "$platform" \
     --arg kind "$kind" --arg api "$PROV_API_URL" \
     --arg stream "${PROV_STREAM_URL:-$PROV_API_URL}" \
+    --arg deviceSet "${PROV_DEVICE_SET:-}" \
     --argjson capabilities "$capabilities" \
     '{schemaVersion:1,id:$id,name:"E2E Provider",
       supportUrl:"https://example.invalid/issues",
@@ -69,7 +86,8 @@ _descriptor_json() { # native-id platform kind capabilities-json
         name:"E2E provider device",
         state:(if $platform=="ios" then "Booted" else "device" end),
         capabilities:$capabilities,
-        simulatorServer:{apiUrl:$api,streamUrl:$stream,version:"e2e"}}]}'
+        simulatorServer:{apiUrl:$api,streamUrl:$stream,version:"e2e"}}
+        + (if $deviceSet != "" then {deviceSet:$deviceSet} else {} end)]}'
 }
 
 # Publish the descriptor naming the simulator-server we just spawned. This is
@@ -111,6 +129,12 @@ run_phase() {
   elif [ -n "${E2E_PROVIDER_IOS_UDID:-}" ]; then
     NATIVE="$E2E_PROVIDER_IOS_UDID"; PLATFORM=ios; KIND=simulator
     SUBCOMMAND=ios; CAPS='["simulator-server","simctl","ax-service"]'
+    # The harness sandboxes `$HOME``, but the simulator was booted under the
+    # real one and CoreSimulator's default device set lives under `$HOME`.
+    # Publish the real set in the descriptor (the contract's own mechanism for
+    # "my devices are not in your default set") so the sandboxed tool-server's
+    # `simctl` calls can find the device.
+    PROV_DEVICE_SET="${HOME_REAL:-$HOME}/Library/Developer/CoreSimulator/Devices"
   else
     skip "$P" tier all "no device (set E2E_ANDROID_SERIAL or E2E_PROVIDER_IOS_UDID)"; return 0
   fi
@@ -217,7 +241,11 @@ run_phase() {
   # --- capability denial ----------------------------------------------------
   # Neither declared capability grants CDP or dylib injection, so both must fail
   # with the capability-denied message rather than crashing or half-working.
-  run_tool native-describe-screen "$U"
+  # `bundleId` is required by the tool's schema; without it validation fails
+  # (rc=2, usage text) before the capability gate ever runs and the denial this
+  # case exists to prove never happens. Any value will do, the grant check fires
+  # before the app is looked up.
+  run_tool native-describe-screen "{\"udid\":\"$DEV\",\"bundleId\":\"com.e2e.denied\"}"
   if [ "$RT_RC" -ne 0 ] && printf '%s' "$RT_OUT" | grep -qi "did not grant"; then
     pass "$P" native-describe-screen "denied: native-devtools not granted"
   else
