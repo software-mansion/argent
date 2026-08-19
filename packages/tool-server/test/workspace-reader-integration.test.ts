@@ -25,10 +25,11 @@ beforeAll(async () => {
   projectDir = await mkdtemp(join(tmpdir(), "rn-project-integration-"));
 
   // readWorkspaceSnapshot probes eight tool versions by spawning
-  // `<tool> --version` off PATH. Six are package-manager shims that install
-  // themselves on first run — corepack fetches yarn/pnpm into
-  // ~/.cache/node/corepack and eas populates ~/Library/Caches/eas-cli, ~44 MB
-  // off the network, into the developer's real home. Only `node` is asserted
+  // `<tool> --version` off PATH (node, npm, yarn, pnpm, bun, pod, eas, expo).
+  // Three of them fetch themselves on first run rather than reporting absent:
+  // corepack pulls yarn and pnpm into ~/.cache/node/corepack, and eas populates
+  // ~/Library/Caches/eas-cli — ~44 MB off the network, measured, into the
+  // developer's real home. Only `node` is asserted
   // below, so restrict PATH to a directory holding just that: every other
   // probe then fails to resolve and reports null, which is also what this test
   // wants from a machine that lacks the tool.

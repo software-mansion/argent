@@ -27,6 +27,15 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+// Keep trackChromiumPort from persisting booted ports to on-disk state — the
+// success-path test below completes a boot, and persistPorts writes to
+// os.homedir()/.argent/chromium-cdp-ports.json. Same mock, same reason, as
+// boot-electron-kill and boot-electron-ready-race.
+vi.mock("../src/utils/chromium-discovery", () => ({
+  trackChromiumPort: vi.fn(),
+  untrackChromiumPort: vi.fn(),
+}));
+
 import { bootElectronApp } from "../src/tools/devices/boot-electron";
 
 interface FakeChild extends EventEmitter {
