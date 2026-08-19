@@ -85,9 +85,11 @@ vi.mock("@argent/registry", async (importOriginal) => {
   return { ...actual, attachRegistryLogger: vi.fn() };
 });
 // start() gates its event log on the `tool-server-event-log` flag, which the
-// real reader resolves from the developer's own ~/.argent/flags.json. Left
-// live, a developer who enables that documented flag fails these tests and
-// gets unit-test records appended to their real event log. Pin it off.
+// real reader resolves from a project-scoped .argent/flags.json first and the
+// developer's ~/.argent/flags.json second. Left live, a developer who enables
+// that documented flag fails these tests — and createToolServerEventLog opens
+// the log with a truncating write, so their real event log is emptied before
+// start() throws. Pin it off.
 vi.mock("@argent/configuration-core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@argent/configuration-core")>();
   return { ...actual, isFlagEnabled: vi.fn(() => false) };

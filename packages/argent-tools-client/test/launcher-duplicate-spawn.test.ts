@@ -27,10 +27,18 @@ const fakePaths = (): import("../src/launcher.js").ToolsServerPaths => ({
 
 beforeAll(async () => {
   TEST_HOME = mkdtempSync(join(tmpdir(), "argent-dup-test-"));
+  // os.homedir() — which STATE_DIR and the link file are built from — reads
+  // USERPROFILE on Windows and HOME elsewhere, so pin both or the redirect
+  // is inert there and these tests operate on the real ~/.argent.
   process.env.HOME = TEST_HOME;
+  process.env.USERPROFILE = TEST_HOME;
   vi.resetModules();
   launcher = await import("../src/launcher.js");
   expect(existsSync(FAKE_BUNDLE)).toBe(true);
+  // Same assertion launcher-sweep and launcher-state make: the afterEach below
+  // deletes STATE_DIR recursively, so refuse to run at all if it did not land
+  // inside the sandbox.
+  expect(launcher.STATE_PATHS.STATE_DIR.startsWith(TEST_HOME)).toBe(true);
 });
 
 afterAll(() => {

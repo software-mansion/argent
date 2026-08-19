@@ -13,7 +13,11 @@ let LEGACY_STATE_FILE: string;
 
 beforeAll(async () => {
   TEST_HOME = mkdtempSync(join(tmpdir(), "argent-state-test-"));
+  // os.homedir() — which STATE_DIR and the link file are built from — reads
+  // USERPROFILE on Windows and HOME elsewhere, so pin both or the redirect
+  // is inert there and these tests operate on the real ~/.argent.
   process.env.HOME = TEST_HOME;
+  process.env.USERPROFILE = TEST_HOME;
   vi.resetModules();
   launcher = await import("../src/launcher.js");
   STATE_DIR = launcher.STATE_PATHS.STATE_DIR;

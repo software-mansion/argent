@@ -10,6 +10,7 @@ import { hasDefaultBootSnapshot, resolveAvdPath } from "../src/utils/adb";
 // any AVD-aware test that runs next).
 const ENV_KEYS = [
   "HOME",
+  "USERPROFILE",
   "ANDROID_USER_HOME",
   "ANDROID_AVD_HOME",
   "ANDROID_SDK_HOME",
@@ -72,6 +73,7 @@ describe("resolveAvdPath", () => {
     // Force HOME into the temp tree so a stray ~/.android on the host
     // running the suite cannot accidentally satisfy a lookup.
     process.env.HOME = join(tmpRoot, "home");
+    process.env.USERPROFILE = process.env.HOME;
     await mkdir(process.env.HOME, { recursive: true });
     delete process.env.ANDROID_USER_HOME;
     delete process.env.ANDROID_AVD_HOME;
@@ -224,6 +226,7 @@ describe("hasDefaultBootSnapshot", () => {
     for (const k of ENV_KEYS) originalEnv[k] = process.env[k];
     tmpRoot = await mkdtemp(join(tmpdir(), "argent-avd-snapshot-"));
     process.env.HOME = join(tmpRoot, "home");
+    process.env.USERPROFILE = process.env.HOME;
     const avdRoot = join(process.env.HOME, ".android", "avd");
     avdPath = join(avdRoot, "Pixel_7.avd");
     await mkdir(avdPath, { recursive: true });

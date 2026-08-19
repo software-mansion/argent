@@ -49,7 +49,10 @@ afterEach(() => {
   for (const d of sockDirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
 });
 
-describe("bindNativeDevtoolsUnixSocket", () => {
+// Production pins the socket under /tmp unconditionally
+// (getNativeDevtoolsSocketPath), so this path is POSIX-only by construction
+// and SOCK_ROOT above follows it. On win32 there is no /tmp to mkdtemp into.
+describe.skipIf(process.platform === "win32")("bindNativeDevtoolsUnixSocket", () => {
   it("binds cleanly on a free path", async () => {
     const socketPath = tmpSock("free.sock");
     const server = track(net.createServer());
