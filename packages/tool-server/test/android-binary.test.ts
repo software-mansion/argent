@@ -38,13 +38,14 @@ import {
 // Snapshot the env vars we mutate so a failing assertion can't leak state into
 // the next test (or the surrounding process: vitest reuses the worker for
 // other suites and a stale ANDROID_HOME would silently flip their behavior).
-// HOME and USERPROFILE are included because `defaultAndroidRoots()` derives
-// Android Studio's default install paths from `os.homedir()`, which reads
-// USERPROFILE on Windows and HOME elsewhere. Pinning both to a tmpdir keeps
-// those roots off the dev's real SDK during tests that assert "not resolvable";
-// the literal system roots are handled by the fs mock above. `fakeSdk` writes
-// extensionless binaries, which the win32 resolver never accepts, so both
-// describes skip there — `android-binary-windows.test.ts` covers `.exe`.
+// HOME is included because `defaultAndroidRoots()` derives Android Studio's
+// default install paths from `os.homedir()`; pinning it to a tmpdir keeps those
+// roots off the dev's real SDK during tests that assert "not resolvable", and
+// the literal system roots are handled by the fs mock above. USERPROFILE rides
+// along only to keep the snapshot total: `os.homedir()` reads it instead of HOME
+// on Windows, but `fakeSdk` writes extensionless binaries the win32 resolver
+// never accepts, so both describes skip there and nothing here runs on that
+// platform — `android-binary-windows.test.ts` covers `.exe`.
 const ENV_KEYS = ["PATH", "ANDROID_HOME", "ANDROID_SDK_ROOT", "HOME", "USERPROFILE"] as const;
 const originalEnv: Record<string, string | undefined> = {};
 
