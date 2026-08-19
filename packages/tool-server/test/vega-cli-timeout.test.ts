@@ -150,7 +150,8 @@ process.stdout.write("OK-" + cmd);
   // solo runs rejected at 20-way, none sequentially. Linux has no such penalty, so this
   // buys CI nothing. Any unknown argument takes the write-and-exit default.
   spawnSync(join(dir, "vega"), ["warmup"], { stdio: "ignore" });
-});
+  // Hooks do not take the testTimeout set below, and this one spawns a process.
+}, 20_000);
 
 afterAll(() => {
   process.env.PATH = prevPath;
@@ -202,7 +203,11 @@ function strayCount(sentinel: string): number {
     });
     return out.split("\n").filter((l) => l.trim()).length;
   } catch {
-    return 0;
+    // -1, not 0: 0 is the pass value of every clearance assertion, so a look that never
+    // happened would read as "reaped, nothing left behind". -1 matches no `want`, so
+    // waitForCount polls on through a transient spawn failure (EAGAIN under load) and
+    // returns it only if it never managed to look at all.
+    return -1;
   }
 }
 
