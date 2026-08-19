@@ -315,8 +315,7 @@ describe("runVega timeout (real subprocess)", () => {
     // exited makes the wall-clock deadline moot, so it must resolve from the exit/drain
     // with the captured output, not reject. What the value has to clear is the launcher's
     // own startup, since the deadline runs from the call but the drain only from the exit:
-    // ~70ms unloaded, but 643ms measured at this call site under 4x CPU oversubscription,
-    // which is what put 600ms over the line.
+    // 32-37ms warmed, rising to 643ms at 4x CPU oversubscription and 700ms at 80-way.
     const start = Date.now();
     await expect(
       runVega(["linger", SENTINEL_LINGER_NEAR_DEADLINE], { timeoutMs: 900 })
@@ -344,10 +343,10 @@ describe("runVega timeout (real subprocess)", () => {
       timeoutMs: DRAIN_DEADLINE_MS,
     }).catch((e: unknown) => e);
     // Same reason as the timeout reap: see the worker alive first, or "no orphan" is a
-    // claim about a worker that may never have existed. Nothing here cuts the window
-    // short, so the poll gets the whole call's budget rather than `waitForCount`'s
-    // default — 3.3x tighter than the call it watches, and expiring first would blame
-    // the reap for a launcher that had not forked yet.
+    // claim about a worker that may never have existed. The window is narrow — the drain
+    // grace that ends it leaves ~1.1s — but under load it OPENS late, so the poll spans
+    // the whole call: on `waitForCount`'s default a 3.5s launcher start, which the call
+    // itself still tolerates, fails the observation of it instead.
     expect(await waitForCount(SENTINEL_LINGER_GROUPED, 1, DRAIN_DEADLINE_MS)).toBe(1);
     expect(await run).toEqual({ stdout: "OK-linger", stderr: "" });
     expect(await waitForClear(SENTINEL_LINGER_GROUPED)).toBe(0);
