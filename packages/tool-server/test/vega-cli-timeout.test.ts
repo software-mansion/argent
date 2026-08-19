@@ -21,8 +21,10 @@ import { runVega, __resetVegaBinaryCacheForTests } from "../src/utils/vega-cli";
 // setsid'd `dutyfree-vega` worker the group SIGKILL alone would orphan) — which also
 // inherits the launcher's stdout (reproducing the pipe-held-open freeze), and (b)
 // itself blocks on a same-group `sleep <secs>` so the launcher stays alive long
-// enough to be timed out and snapshotted. A complete reap therefore requires BOTH the
-// group kill (launcher + its sleep) and the descendant sweep (the detached worker).
+// enough to be timed out and snapshotted. Once both workers exist the descendant sweep
+// reaps them by itself; the group kill covers the window before they do, which is where
+// the overflow reap fires — it trips on the launcher's first write, so the snapshot is
+// still empty and only killing the group stops the sleep from outliving the call.
 // Each test passes its OWN sentinel so one test's strays can't be mistaken for
 // another's, and every sentinel shares a per-run prefix so afterEach can sweep them
 // all with a single tight pattern (see sweep()).
@@ -41,7 +43,8 @@ import { runVega, __resetVegaBinaryCacheForTests } from "../src/utils/vega-cli";
 // It rides in the FRACTION of the sleep duration rather than being the duration: the
 // workers only need to outlive the assertions (a few seconds), but a run killed before
 // afterAll leaves them behind, so the whole-second part caps that leak at ~ten minutes.
-const RUN_TAG = `${process.pid}${String(Math.floor(Math.random() * 1000)).padStart(3, "0")}`;
+const randomTagBlock = (): string => String(Math.floor(Math.random() * 1000)).padStart(3, "0");
+const RUN_TAG = `${process.pid}${randomTagBlock()}`;
 const WORKER_LIFETIME_SECONDS = 600;
 const SENTINEL_PREFIX = `${WORKER_LIFETIME_SECONDS}.${RUN_TAG}`;
 /**
@@ -213,9 +216,10 @@ async function waitForClear(sentinel: string, timeoutMs = 3_000): Promise<number
   return waitForCount(sentinel, 0, timeoutMs);
 }
 
-// Regressions here fail SLOWLY: a test can spend 3s observing workers, wait out a 10s runVega
-// deadline, then poll 3s for the reap. Under vitest's 5s default that reports "Test timed
-// out" instead of the assertion naming what broke.
+// Regressions here fail SLOWLY: a test waits out its runVega deadline (up to 10s, with any
+// worker observation running concurrently against it), then polls 3s for the reap. Under
+// vitest's 5s default that reports "Test timed out" instead of the assertion naming what
+// actually broke.
 vi.setConfig({ testTimeout: 20_000 });
 
 describe("runVega timeout (real subprocess)", () => {
@@ -293,11 +297,19 @@ describe("runVega timeout (real subprocess)", () => {
     // before the drain the exit schedules 1s out, so the race is forced. The child having
     // exited makes the wall-clock deadline moot, so it must resolve from the exit/drain
     // with the captured output, not reject. What the value has to clear is the launcher's
-    // own startup — the deadline runs from the call, the drain only from the exit — and a
-    // cold `node` spawn under load has been measured at 618ms.
+    // own startup, since the deadline runs from the call but the drain only from the exit:
+    // ~70ms unloaded, but 643ms measured at this call site under 4x CPU oversubscription,
+    // which is what put 600ms over the line.
+    const start = Date.now();
     await expect(
       runVega(["linger", SENTINEL_LINGER_NEAR_DEADLINE], { timeoutMs: 900 })
     ).resolves.toEqual({ stdout: "OK-linger", stderr: "" });
+    // Outliving the deadline is the whole point: it proves the timer was DISARMED rather
+    // than never reached. Without this the test rests on a source constant it cannot see,
+    // and a drain grace shortened below the deadline would settle the call early, leaving
+    // it to pass while no longer forcing the race — the drain can only fire at grace ms,
+    // so this also holds structurally, never on how fast the launcher started.
+    expect(Date.now() - start).toBeGreaterThan(900);
   });
 
   it("reaps a pipe-holding worker that stayed in the launcher's process group (drain path)", async () => {
@@ -365,6 +377,15 @@ describe("runVega timeout (real subprocess)", () => {
 });
 
 describe("sentinel bookkeeping", () => {
+  it("keeps the random block a fixed three digits", () => {
+    // The other half of the equal-width invariant `SentinelSlot` documents: the slot is a
+    // compile error if it widens, but the random block only stays three digits because it
+    // is padded. Dropping the padding narrows it 10% of the time — too rare to surface as
+    // a failing run, and it hands a shorter-pid run a sweep glob that reaches into ours.
+    const widths = new Set(Array.from({ length: 2_000 }, () => randomTagBlock().length));
+    expect([...widths]).toEqual([3]);
+  });
+
   it("sees a live worker and sweeps it", async () => {
     // Positive control for every `waitForClear(...)).toBe(0)` above. Those read 0 both
     // when a reap succeeded and when the pattern matches nothing at all — a
