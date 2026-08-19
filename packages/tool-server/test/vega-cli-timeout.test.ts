@@ -13,9 +13,8 @@ import { runVega, __resetVegaBinaryCacheForTests } from "../src/utils/vega-cli";
 // rest of the tree. runVega spawns the launcher `detached` (its own process
 // group), SIGKILLs the whole group on timeout, AND sweeps any descendant that
 // escaped the group — so a timed-out call settles on its own deadline and leaves no
-// orphans behind it. We
-// exercise that with a fake `vega` on PATH (not mocks) so the real spawn / detached
-// / group-kill / descendant-sweep path is what runs.
+// orphans behind it. We exercise that with a fake `vega` on PATH (not mocks) so the real
+// spawn / detached / group-kill / descendant-sweep path is what runs.
 //
 // The fake is a node launcher that (a) forks a `detached` `sleep <secs>` worker — its
 // OWN process group, so a group-only kill can't reach it (this reproduces the
@@ -234,8 +233,9 @@ function sampleWorkers(sentinel: string): { workers: number; groups: number } {
   }
 }
 
-// Poll until `want` workers occupy `want` distinct groups. Returns the last sample, so a
-// caller asserts on the values rather than on having timed out.
+// Poll until `want` workers are up, and return the sample that saw them - group count
+// included, not waited on (see below). Returning values rather than a timed-out flag lets
+// the caller assert on the numbers.
 async function waitForWorkerGroups(
   sentinel: string,
   want: number,
