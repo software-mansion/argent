@@ -28,7 +28,8 @@ vi.mock("../src/utils/update-checker", () => ({
   suppressUpdateNote: vi.fn(),
 }));
 
-vi.mock("@argent/configuration-core", () => ({
+vi.mock("@argent/configuration-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@argent/configuration-core")>()),
   isFlagEnabled: isFlagEnabledMock,
 }));
 

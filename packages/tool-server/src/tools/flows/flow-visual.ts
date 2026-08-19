@@ -207,8 +207,8 @@ export async function runSnapshot(
   const store = requireArtifacts(env.ctx);
 
   // Full-resolution capture, not attached to any agent context — a baseline.
-  // The screenshot tool already registers the capture, so `shot.image` is a
-  // ready-made handle for the `current` artifact.
+  // Only the captured file is taken from here; the `current` artifact is
+  // registered separately below (see `registerCurrent`).
   const shot = (await invokeOnDevice(env, "screenshot", {
     scale: 1.0,
     includeImageInContext: false,
@@ -246,6 +246,27 @@ export async function runSnapshot(
   }
   opts.seenKeys.set(snapshotKey, opts.appIdentity);
 
+  // Register the compared image as this snapshot's own `current` artifact rather
+  // than handing back the `screenshot` tool's handle. Two reasons, both because
+  // the handle means something different here than to that tool's own caller:
+  //  - The `screenshot` tool tags its output for durable saving under the
+  //    client's `.argent/screenshots/`. A snapshot's capture is an intermediate
+  //    of a comparison, not a screenshot anyone asked for, and every failing
+  //    snapshot step in every run would pile one into the project. What is worth
+  //    keeping a snapshot already persists deliberately: an adopted baseline
+  //    under `__baselines__/`, and failure artifacts through the CLI's
+  //    `--output` export (which materializes these handles and copies them, so a
+  //    durable hint would also write the same PNG twice, in two places).
+  //  - A remote client materializes downloads by filename, and `baseline` is
+  //    registered from a path whose basename is `key` — so `current` names
+  //    itself `<key>-current.png` to land beside it instead of on top of it
+  //    (the same disambiguation the context diff below uses).
+  const registerCurrent = (hostPath: string): Promise<ArtifactHandle> =>
+    store.register(hostPath, {
+      mimeType: "image/png",
+      filename: `${snapshotKey}-current.png`,
+    });
+
   // Under cropOn everything downstream (compare, baseline write, `current`
   // artifact) operates on the cropped image, written to its own scratch dir.
   // It is registered lazily, only in branches that return it — the finally
@@ -255,16 +276,9 @@ export async function runSnapshot(
   let cropDir: string | undefined;
   let keepCropped = false;
   const currentArtifact = async (): Promise<ArtifactHandle> => {
-    if (cropDir === undefined) return shot.image;
-    keepCropped = true;
-    // Explicit filename: the crop file's basename IS the baseline's `key`, and
-    // a remote client materializes downloads by filename — defaulting to the
-    // basename would land `current` on the same cache path as `baseline` and
-    // clobber it (the diff artifact below disambiguates the same way).
-    return store.register(currentPath, {
-      mimeType: "image/png",
-      filename: `${snapshotKey}-current.png`,
-    });
+    // A crop lives in scratch, so returning it means sparing it from the sweep.
+    if (cropDir !== undefined) keepCropped = true;
+    return registerCurrent(currentPath);
   };
 
   try {
@@ -279,8 +293,11 @@ export async function runSnapshot(
             `cropOn matched ${describeSelector(opts.cropOn!)} but its on-screen region is ` +
             `empty at this resolution — nothing was compared`,
           snapshotKey,
-          // No crop exists to show, so attach the full capture (already registered).
-          artifacts: { current: shot.image },
+          // No crop exists to show, so attach the full capture. Registered
+          // directly rather than via `currentArtifact()`: `cropDir` is set by
+          // now, so that would spare the never-written crop from the sweep and
+          // leave an empty scratch dir behind instead of removing it.
+          artifacts: { current: await registerCurrent(shot.image.hostPath) },
         };
       }
       currentPath = croppedPath;

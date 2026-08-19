@@ -12,7 +12,11 @@ import {
   normalizeToolName,
   shouldAutoScreenshot,
   getAutoScreenshotDelayMs,
+  autoScreenshotContext,
+  renderAutoScreenshot,
 } from "../src/auto-screenshot.js";
+import { toMcpContent } from "../src/content.js";
+import { ARTIFACT_MARKER, artifactsRoot, type ArtifactHandle } from "@argent/tools-client";
 
 // ---------------------------------------------------------------------------
 // normalizeToolName
@@ -269,5 +273,128 @@ describe("containsSecretPlaceholder", () => {
       })
     ).toBe(true);
     expect(shouldAutoScreenshot("run-sequence")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// autoScreenshotContext — the explicit-vs-auto durability boundary
+// ---------------------------------------------------------------------------
+describe("autoScreenshotContext", () => {
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x01, 0x02]);
+
+  let cache: string; // ARGENT_ARTIFACTS_DIR (the disposable temp cache)
+  let projectRoot: string; // the client's project, where a durable PNG would land
+  let originalCwd: string;
+
+  beforeEach(() => {
+    cache = fs.mkdtempSync(path.join(os.tmpdir(), "argent-artifacts-"));
+    projectRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-proj-")));
+    fs.writeFileSync(path.join(projectRoot, "package.json"), "{}"); // the project marker
+    process.env.ARGENT_ARTIFACTS_DIR = cache;
+    originalCwd = process.cwd();
+    process.chdir(projectRoot);
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    delete process.env.ARGENT_ARTIFACTS_DIR;
+    fs.rmSync(cache, { recursive: true, force: true });
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+  });
+
+  // A screenshot handle exactly as the tool-server emits one: tagged for durable
+  // saving under the project's `.argent/screenshots/`.
+  function shotHandle(): ArtifactHandle {
+    return {
+      [ARTIFACT_MARKER]: true,
+      id: "shot",
+      filename: "screenshot-SIM-1785400000000.png",
+      mimeType: "image/png",
+      size: PNG.length,
+      saveDir: ".argent/screenshots",
+    };
+  }
+
+  // The same handle, but pointing at a real file on this host — what a
+  // co-located tool-server emits. Lets the render run with no fetch at all, so
+  // `renderAutoScreenshot` can be called exactly as mcp-server.ts calls it.
+  function coLocatedShotHandle(): ArtifactHandle {
+    const hostPath = path.join(cache, "backend-capture.png");
+    fs.writeFileSync(hostPath, PNG);
+    const st = fs.statSync(hostPath);
+    return { ...shotHandle(), hostPath, size: st.size, mtimeMs: st.mtimeMs };
+  }
+
+  const fetchImpl = (async () => ({
+    ok: true,
+    arrayBuffer: async () => PNG.buffer.slice(PNG.byteOffset, PNG.byteOffset + PNG.byteLength),
+  })) as unknown as typeof fetch;
+
+  function screenshotsDir(): string[] {
+    try {
+      return fs.readdirSync(path.join(projectRoot, ".argent", "screenshots"));
+    } catch {
+      return [];
+    }
+  }
+
+  it("carries the request identity through unchanged", () => {
+    const ctx = autoScreenshotContext({
+      toolsUrl: "http://remote:3001",
+      authToken: "tok",
+      udid: "SIM-1",
+    });
+    expect(ctx.toolsUrl).toBe("http://remote:3001");
+    expect(ctx.authToken).toBe("tok");
+    expect(ctx.deviceId).toBe("SIM-1");
+  });
+
+  it("renders an auto-screenshot into the temp cache, leaving the project untouched", async () => {
+    // Driven through `renderAutoScreenshot`, the function `mcp-server.ts`
+    // actually calls — not through a context assembled here. A test that builds
+    // its own context proves the helper works and says nothing about whether
+    // the auto-screenshot path still uses it.
+    const blocks = await renderAutoScreenshot(
+      { image: coLocatedShotHandle() },
+      { toolsUrl: "http://remote:3001", udid: "SIM-1" }
+    );
+
+    expect(screenshotsDir()).toEqual([]);
+    const savedText = blocks.find((b) => b.type === "text");
+    expect(
+      savedText?.type === "text" && savedText.text.startsWith(`Saved: ${artifactsRoot()}`)
+    ).toBe(true);
+    expect(blocks.some((b) => b.type === "image")).toBe(true);
+  });
+
+  it("keeps an auto-screenshot in the temp cache, leaving the project untouched", async () => {
+    const blocks = await toMcpContent({ image: shotHandle() }, "image", {
+      ...autoScreenshotContext({ toolsUrl: "http://remote:3001", udid: "SIM-1" }),
+      fetchImpl,
+    });
+
+    // Nothing written into the working tree — not even the directory.
+    expect(screenshotsDir()).toEqual([]);
+    const saved = blocks.find((b) => b.type === "text");
+    expect(saved?.type === "text" && saved.text.startsWith(`Saved: ${artifactsRoot()}`)).toBe(true);
+    // Suppressing persistence must not suppress the inline image.
+    expect(blocks.some((b) => b.type === "image")).toBe(true);
+  });
+
+  it("an explicitly requested screenshot with the same handle DOES reach the project", async () => {
+    // The discriminator: identical artifact and identical rendering path; only
+    // the context differs, and only this one persists.
+    const blocks = await toMcpContent({ image: shotHandle() }, "image", {
+      toolsUrl: "http://remote:3001",
+      deviceId: "SIM-1",
+      fetchImpl,
+    });
+
+    expect(screenshotsDir()).toEqual(["screenshot-SIM-1785400000000.png"]);
+    const saved = blocks.find((b) => b.type === "text");
+    expect(
+      saved?.type === "text" &&
+        saved.text.startsWith(`Saved: ${path.join(projectRoot, ".argent", "screenshots")}`)
+    ).toBe(true);
   });
 });

@@ -347,6 +347,17 @@ Examples:
       toolsUrl: url,
       authToken: token,
       deviceId: getDeviceIdFromArgs(payload),
+      // `--out` is the caller naming the destination, and the image is written
+      // there below. Persisting durably as well would put the same PNG in two
+      // places and leave the unasked-for one accumulating in the project — the
+      // reason a flow snapshot's capture is withheld from the durable tag too.
+      // Without `--out`, the durable copy is the only one the caller gets.
+      //
+      // Gated on the same condition as that write, not on `--out` alone: a
+      // `--out` passed to a non-image tool is inert there, and suppressing
+      // persistence for it would drop `screen-recording-stop`'s mp4 — the other
+      // durable producer — into the temp cache.
+      transient: Boolean(outPath) && meta.outputHint === "image",
     });
     result = materialized.result;
     images = materialized.images;

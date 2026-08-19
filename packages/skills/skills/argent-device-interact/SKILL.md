@@ -266,6 +266,8 @@ Use full-resolution screenshots only when saving baseline/current PNG files for 
 { "udid": "<UDID>", "scale": 1.0, "includeImageInContext": false }
 ```
 
+**Where the file lands.** A screenshot you request is saved on the client into `<project>/.argent/screenshots/` — the project being the nearest ancestor of the working directory with a `.git`/`package.json`/`.argent` — or `~/.argent/screenshots/` outside a project, as `screenshot-<device>-<timestamp>.png`. It survives the session, so a baseline path stays usable for a later `screenshot-diff`, and it is written on the client host even when the tool-server is remote. Because these files persist in the working tree, mention the path when the user may want the image, and treat them as untracked (add to `.gitignore` or clean up). The screenshot appended automatically after an interaction is not saved there: it stays in the disposable temp cache, since it is shown to you once rather than kept.
+
 For visual regression checks, before/after screenshot comparisons, and detailed `screenshot-diff` parameter guidance, use the `argent-screenshot-diff` skill. Keep this skill focused on device interaction mechanics and screenshot capture.
 
 ### Troubleshooting

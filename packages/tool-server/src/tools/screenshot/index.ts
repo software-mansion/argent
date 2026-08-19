@@ -3,7 +3,13 @@ import { promisify } from "node:util";
 import * as os from "node:os";
 import * as path from "node:path";
 import { z } from "zod";
-import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
+import type {
+  DeviceInfo,
+  Registry,
+  ToolCapability,
+  ToolContext,
+  ToolDefinition,
+} from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
@@ -72,6 +78,45 @@ const capability: ToolCapability = {
 };
 
 /**
+ * Where a captured screenshot is durably saved, relative to the client's project
+ * root (or its home dir when not in a project — the client decides). The client
+ * materializer copies (co-located) or downloads (remote `argent link`) the PNG
+ * here, so a screenshot lands under `<project>/.argent/screenshots/` on the
+ * client host and outlives the session that captured it, instead of sitting in a
+ * temp cache the OS reclaims. Sibling of `screen-recording-stop`'s
+ * `.argent/recordings`; both are entries on the client's own allowlist of
+ * durable destinations.
+ */
+const SCREENSHOTS_DIR = ".argent/screenshots";
+
+/**
+ * Register a captured PNG as a durable artifact.
+ *
+ * The presented filename is argent's own rather than the capture backend's: the
+ * four capture paths name their temp files inconsistently (simulator-server
+ * emits a bare `<hrtime>-<epochMs>.png`, Chromium and tvOS prefix `argent-`),
+ * and the durable directory accumulates captures across sessions, where an
+ * opaque numeric name identifies neither the device nor what the file is. One
+ * canonical name mirrors the recording's
+ * `screen-recording-<device>-<timestamp>.mp4` and drops the internal `argent-`
+ * temp prefix with it. Two captures of one device in the same millisecond would
+ * collide; the client resolves that by saving the second alongside as
+ * `… (2).png`, never overwriting.
+ */
+function registerScreenshot(
+  ctx: Partial<ToolContext> | undefined,
+  capturedPath: string,
+  device: DeviceInfo
+): Promise<ArtifactHandle> {
+  const deviceSlug = device.id.replace(/[^A-Za-z0-9._-]/g, "-");
+  return requireArtifacts(ctx).register(capturedPath, {
+    mimeType: "image/png",
+    filename: `screenshot-${deviceSlug}-${Date.now()}.png`,
+    saveDir: SCREENSHOTS_DIR,
+  });
+}
+
+/**
  * tvOS screenshot path. The simulator-server backend does not support tvOS, so
  * capture via `xcrun simctl io <udid> screenshot` instead and (optionally)
  * downscale with `sips` to match the iOS/Android scale behaviour.
@@ -133,6 +178,7 @@ export function createScreenshotTool(registry: Registry): ToolDefinition<Params,
     },
     description: `Capture a screenshot of the device screen (iOS simulator, Android emulator, Apple TV simulator, Vega, or Chromium app). Returns { image }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
 Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.
+The PNG is saved on your machine under \`.argent/screenshots/\` (in the current project, else \`~/.argent/screenshots/\`) and the saved path is reported with the result, so a capture stays readable later in the session — mention the path when you tell the user about a screenshot they may want to keep.
 Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.`,
     alwaysLoad: true,
     searchHint: "device simulator emulator chromium screen image capture baseline tvos apple tv",
@@ -157,7 +203,7 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
           scale: params.scale,
           downscaler: params.downscaler,
         });
-        const image = await requireArtifacts(ctx).register(capturedPath, { mimeType: "image/png" });
+        const image = await registerScreenshot(ctx, capturedPath, device);
         return { image };
       }
 
@@ -165,7 +211,7 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
       // tvOS has no simulator-server backend, so capture via xcrun instead.
       if (device.platform === "ios" && (await isTvOsSimulator(params.udid))) {
         const pngPath = await tvScreenshot(params.udid, scale, signal);
-        const image = await requireArtifacts(ctx).register(pngPath, { mimeType: "image/png" });
+        const image = await registerScreenshot(ctx, pngPath, device);
         return { image };
       }
 
@@ -174,7 +220,7 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
       // Vega device would throw), so capture directly here.
       if (device.platform === "vega") {
         const pngPath = await captureVegaScreenshotPng({ scale: params.scale });
-        const image = await requireArtifacts(ctx).register(pngPath, { mimeType: "image/png" });
+        const image = await registerScreenshot(ctx, pngPath, device);
         return { image };
       }
 
@@ -186,7 +232,7 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
         signal,
         params.scale
       );
-      const image = await requireArtifacts(ctx).register(capturedPath, { mimeType: "image/png" });
+      const image = await registerScreenshot(ctx, capturedPath, device);
       return { image };
     },
   };
