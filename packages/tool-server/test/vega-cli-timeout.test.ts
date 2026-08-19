@@ -36,12 +36,12 @@ import { runVega, __resetVegaBinaryCacheForTests } from "../src/utils/vega-cli";
 // cleanly at ~100ms instead of timing out, so both `hang` tests fail. The tag is the
 // pid (unique among live processes, so two concurrent runs can never share one) plus
 // three random digits, so a worker leaked by an earlier run is mistaken for one of
-// ours only if its pid has since been recycled AND the random digits collide (1/900).
+// ours only if its pid has since been recycled AND the random digits collide (1/1000).
 //
 // It rides in the FRACTION of the sleep duration rather than being the duration: the
 // workers only need to outlive the assertions (a few seconds), but a run killed before
 // afterAll leaves them behind, so the whole-second part caps that leak at ~ten minutes.
-const RUN_TAG = `${process.pid}${Math.floor(Math.random() * 900 + 100)}`;
+const RUN_TAG = `${process.pid}${String(Math.floor(Math.random() * 1000)).padStart(3, "0")}`;
 const WORKER_LIFETIME_SECONDS = 600;
 const SENTINEL_PREFIX = `${WORKER_LIFETIME_SECONDS}.${RUN_TAG}`;
 /**
