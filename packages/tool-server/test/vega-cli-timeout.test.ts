@@ -205,8 +205,8 @@ function strayCount(sentinel: string): number {
   } catch {
     // -1, not 0: 0 is the pass value of every clearance assertion, so a look that never
     // happened would read as "reaped, nothing left behind". -1 matches no `want`, so
-    // waitForCount polls on through a transient spawn failure (EAGAIN under load) and
-    // returns it only if it never managed to look at all.
+    // waitForCount polls on through a transient spawn failure (EAGAIN under load); it
+    // surfaces only when the failure was the last poll before the deadline.
     return -1;
   }
 }
@@ -261,9 +261,10 @@ describe("runVega timeout (real subprocess)", () => {
     // Settled through `.catch` rather than left floating: nothing awaits this promise
     // until the observation below finishes, and an unawaited rejection is reported as
     // an unhandled one that vitest does not retract when the handler attaches late.
-    // Both workers have to be up before this reaps them, so the launcher's start races
-    // this deadline: 1485ms of it has been measured at 50-way concurrency, and this
-    // leaves that 2.7x.
+    // Both workers have to be up before this reaps them, so their spawn races this
+    // deadline. The observation below has taken 1485ms at 50-way concurrency - more than
+    // the launcher's own start, since it also covers the second spawn, pgrep's fork and
+    // the 50ms poll step - and this leaves that 2.7x.
     const REAP_DEADLINE_MS = 4_000;
     const run = runVega(["hang", SENTINEL_REAP], { timeoutMs: REAP_DEADLINE_MS }).catch(
       (e: unknown) => e
@@ -319,7 +320,7 @@ describe("runVega timeout (real subprocess)", () => {
     // before the drain the exit schedules 1s out, so the race is forced. The child having
     // exited makes the wall-clock deadline moot, so it must resolve from the exit/drain
     // with the captured output, not reject. What the value has to clear is the launcher's
-    // own startup, since the deadline runs from the call but the drain only from the exit:
+    // own startup, since the deadline is armed at the spawn but the drain only at the exit:
     // 32-37ms warmed, rising to 643ms at 4x CPU oversubscription and 700ms at 80-way.
     const start = Date.now();
     await expect(
