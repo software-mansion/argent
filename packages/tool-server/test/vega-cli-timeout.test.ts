@@ -12,7 +12,8 @@ import { runVega, __resetVegaBinaryCacheForTests } from "../src/utils/vega-cli";
 // pending for the full timeout, and SIGKILLing only the direct child orphaned the
 // rest of the tree. runVega spawns the launcher `detached` (its own process
 // group), SIGKILLs the whole group on timeout, AND sweeps any descendant that
-// escaped the group — so it settles on its own deadline and leaves no orphans. We
+// escaped the group — so a timed-out call settles on its own deadline and leaves no
+// orphans behind it. We
 // exercise that with a fake `vega` on PATH (not mocks) so the real spawn / detached
 // / group-kill / descendant-sweep path is what runs.
 //
@@ -22,9 +23,9 @@ import { runVega, __resetVegaBinaryCacheForTests } from "../src/utils/vega-cli";
 // inherits the launcher's stdout (reproducing the pipe-held-open freeze), and (b)
 // itself blocks on a same-group `sleep <secs>` so the launcher stays alive long
 // enough to be timed out and snapshotted. Once both workers exist the descendant sweep
-// reaps them by itself. The group kill covers the window before they do: the overflow
-// reap trips on the launcher's first write, so under load it can snapshot an empty tree
-// and only killing the group stops the sleep from outliving the call.
+// reaps them by itself; the group kill covers the window before they do, which is what the
+// overflow tests hit — their reap trips on the launcher's first write, so under load it can
+// snapshot an empty tree and only killing the group stops the sleep from outliving the call.
 // Each test passes its OWN sentinel so one test's strays can't be mistaken for
 // another's, and every sentinel shares a per-run prefix so afterEach can sweep them
 // all with a single tight pattern (see sweep()).
@@ -202,11 +203,6 @@ function sweep(): void {
   }
 }
 
-function livePids(sentinel: string): string[] {
-  const out = execSync(`pgrep -f '${cmdlinePattern(sentinel)}' || true`, { encoding: "utf-8" });
-  return out.split("\n").filter((l) => l.trim());
-}
-
 // How many `sleep <sentinel>` workers are live, and how many distinct process groups they
 // occupy, from ONE `ps` rather than this file's usual `pgrep`. A pgrep for the pids
 // followed by a `ps` for their groups is two looks: the second can land after the reap has
@@ -232,9 +228,8 @@ function sampleWorkers(sentinel: string): { workers: number; groups: number } {
     }
     return { workers, groups: groups.size };
   } catch {
-    // -1s rather than 0s so a failed look is legible in the failure message as a look
-    // that did not happen, instead of reading as "nothing had spawned yet". Either way
-    // no `want` matches it, so the poll continues through a transient spawn failure.
+    // -1s, not 0s: see strayCount. Here 0 would fail the assertion too, so this is only
+    // to keep a failed look legible in the diff instead of reading as "none spawned yet".
     return { workers: -1, groups: -1 };
   }
 }
@@ -248,7 +243,12 @@ async function waitForWorkerGroups(
 ): Promise<{ workers: number; groups: number }> {
   const deadline = Date.now() + timeoutMs;
   let sample = sampleWorkers(sentinel);
-  while ((sample.workers !== want || sample.groups !== want) && Date.now() < deadline) {
+  // Waits on the workers appearing, not on the groups being right: `detached` gives a child
+  // its own pgid before it execs, so once `want` of them are up the group count is already
+  // final. Polling on the groups as well would burn the whole budget whenever the premise is
+  // false, and by then the reap has run - reporting {0,0} instead of the count that shows
+  // which half broke.
+  while (sample.workers !== want && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 50));
     sample = sampleWorkers(sentinel);
   }
@@ -257,7 +257,8 @@ async function waitForWorkerGroups(
 
 function strayCount(sentinel: string): number {
   try {
-    return livePids(sentinel).length;
+    const out = execSync(`pgrep -f '${cmdlinePattern(sentinel)}' || true`, { encoding: "utf-8" });
+    return out.split("\n").filter((l) => l.trim()).length;
   } catch {
     // -1, not 0: 0 is the pass value of every clearance assertion, so a look that never
     // happened would read as "reaped, nothing left behind". -1 matches no `want`, so
@@ -328,12 +329,10 @@ describe("runVega timeout (real subprocess)", () => {
     // against nothing. Two GROUPS, not just two workers — that is what makes one of them
     // escaped, and the descendant sweep rather than the group SIGKILL the only thing that
     // can reap it; left unasserted, the fake's `detached: true` can be dropped and this
-    // test stays green with the sweep deleted. Both numbers come from one process-table
-    // read, so a count of 2 can never be paired with the 0 groups that a look taken after
-    // the reap began would report. The poll gets the whole deadline as its budget: on a 3s
-    // one, a 3.5s launcher start — which the call itself still tolerates — would fail this
-    // observation instead of the reap it guards. The two output-cap reaps below stay
-    // unpinned for want of such a window — theirs fires within ~100ms of the spawn (#841).
+    // test stays green with the sweep deleted. The poll gets the whole deadline as its
+    // budget, for the reason the drain observation below spells out. The two output-cap
+    // reaps stay unpinned for want of such a window — theirs fires within ~100ms of the
+    // spawn (#841).
     expect(await waitForWorkerGroups(SENTINEL_REAP, 2, REAP_DEADLINE_MS)).toEqual({
       workers: 2,
       groups: 2,
