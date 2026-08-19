@@ -174,10 +174,11 @@ describe("validateAndroidAppProcess", () => {
 });
 
 describe("renderNativeProfilerReport — freshness note", () => {
-  // The renderer writes its report beside the trace (deriveReportPath =
-  // dirname(traceFile) + "-report.md"), so the fixture path decides where a
-  // real file lands. Own the directory: a literal one would have every
-  // concurrent run write the same name, and nothing would ever remove it.
+  // The renderer writes a real report file next to the trace, named after it
+  // (deriveReportPath: `<traceFile without extension>-report.md`), so the
+  // fixture path decides where that lands. Own the directory: a literal one
+  // would have every concurrent run write the same name, and nothing would
+  // ever remove it.
   let traceDir: string;
   let traceFile: string;
 

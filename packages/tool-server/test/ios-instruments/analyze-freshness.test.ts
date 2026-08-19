@@ -21,10 +21,11 @@ import { analyzeNativeProfilerIos } from "../../src/tools/profiler/native-profil
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// The renderer writes its report beside the trace (deriveReportPath =
-// dirname(traceFile) + "-report.md"), so this fixture path decides where a
-// real file lands. Own the directory: a literal one would have every
-// concurrent run write the same name, and nothing would ever remove it.
+// The renderer writes a real report file next to the trace, named after it
+// (deriveReportPath: `<traceFile without extension>-report.md`), so this
+// fixture path decides where that lands. Own the directory: a literal one would
+// have every concurrent run write the same name, and nothing would ever remove
+// it.
 let traceDir: string;
 
 beforeEach(async () => {

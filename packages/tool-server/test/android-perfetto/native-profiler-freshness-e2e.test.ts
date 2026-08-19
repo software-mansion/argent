@@ -136,7 +136,7 @@ describe("native-profiler freshness flagging — real analyze/render path", () =
     vi.clearAllMocks();
   });
 
-  // Directory getDebugDir() resolves to once TMPDIR points at tempDir.
+  // Directory getDebugDir() resolves to once the tmpdir points at tempDir.
   function debugDir(): string {
     return join(tempDir, "argent-profiler-cwd");
   }

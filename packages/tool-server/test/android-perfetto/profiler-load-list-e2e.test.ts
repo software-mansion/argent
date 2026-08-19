@@ -32,7 +32,7 @@ let debugDir: string;
 let restoreTmpdir: () => void;
 
 // Imported once; it reads getDebugDir() lazily inside execute, so per-test
-// TMPDIR changes are honoured without re-importing.
+// tmpdir changes are honoured without re-importing.
 import { profilerLoadTool } from "../../src/tools/profiler/query/profiler-load";
 import { redirectTmpdir } from "../helpers/tmpdir-env";
 

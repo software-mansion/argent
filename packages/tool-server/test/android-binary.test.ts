@@ -19,8 +19,8 @@ import {
 // Android Studio's default install paths from `os.homedir()`, which reads
 // USERPROFILE on Windows and HOME elsewhere. Pinning both to a tmpdir keeps the
 // resolver from finding the dev's real SDK during tests that assert "not
-// resolvable", and lets the two tests that plant a fixture at a home-derived
-// root reach it on either platform.
+// resolvable". The fixtures here are extensionless, so the file itself is
+// POSIX-only — `android-binary-windows.test.ts` covers the `.exe` resolver.
 const ENV_KEYS = ["PATH", "ANDROID_HOME", "ANDROID_SDK_ROOT", "HOME", "USERPROFILE"] as const;
 const originalEnv: Record<string, string | undefined> = {};
 
