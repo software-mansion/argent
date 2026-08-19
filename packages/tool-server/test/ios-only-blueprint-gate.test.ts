@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import type { DeviceInfo } from "@argent/registry";
+import { processScopedUdid } from "./helpers/process-scoped-udid";
 
 // The native-profiler and native-devtools blueprints both open real OS
 // resources (sockets, processes) if we let them reach past the gate. Stub the
@@ -78,7 +79,7 @@ describe("iOS-only blueprints reject Android targets up-front", () => {
     // resolves or rejects depends on socket state which this test doesn't
     // control — the invariant we care about is that the failure mode is
     // never the iOS-only gate message for an iOS target.
-    const device = iosDevice("11111111-2222-3333-4444-555555555555");
+    const device = iosDevice(processScopedUdid("-2222-3333-4444-555555555555"));
     let threwGateError = false;
     try {
       const instance = await nativeDevtoolsBlueprint.factory({}, device, { device });

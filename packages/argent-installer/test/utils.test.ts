@@ -864,7 +864,7 @@ describe("detectProjectPackageManager", () => {
     expect(detectProjectPackageManager(tmpDir)).toBe("pnpm");
   });
   it("falls back to a valid PM when no lockfile is present", () => {
-    expect(["npm", "yarn", "pnpm", "bun"]).toContain(detectProjectPackageManager(tmpDir));
+    expect(detectProjectPackageManager(tmpDir)).toBe("npm");
   });
   it("honors the corepack packageManager field over lockfiles", () => {
     fs.writeFileSync(path.join(tmpDir, "yarn.lock"), "");
@@ -918,7 +918,7 @@ describe("detectProjectPackageManager", () => {
     );
     // No lockfile: nothing identifies a single manager, so detection falls
     // back to the user-agent default rather than guessing from entry order.
-    expect(["npm", "yarn", "pnpm", "bun"]).toContain(detectProjectPackageManager(tmpDir));
+    expect(detectProjectPackageManager(tmpDir)).toBe("npm");
   });
   it("a stale devEngines declaration does not outrank the lockfile (pnpm→yarn/bun migration)", () => {
     // yarn and bun neither read nor update devEngines, so a `pnpm init`-era

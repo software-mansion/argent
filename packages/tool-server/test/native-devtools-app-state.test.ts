@@ -114,9 +114,10 @@ import {
 } from "../src/blueprints/native-devtools";
 import { NATIVE_READY_TIMEOUT_MS } from "../src/tools/flows/flow-run";
 import { parsePsElapsedSeconds, processCarriesInjection } from "../src/utils/ios-host";
+import { processScopedUdid } from "./helpers/process-scoped-udid";
 
-const UDID = "AAAAAAAA-1111-2222-3333-444444444444";
-const SOCKET = "/tmp/argent-nd-AAAAAAAA.sock";
+const UDID = processScopedUdid("-1111-2222-3333-444444444444");
+const SOCKET = `/tmp/argent-nd-${UDID.slice(0, 8)}.sock`;
 const BUNDLE = "com.example.app";
 const PID = 4242;
 
@@ -199,7 +200,7 @@ describe("processCarriesInjection", () => {
   });
 
   it("does not accept an endpoint that merely starts the same way", () => {
-    // A whole-token match, not a substring one: `…-AAAAAAAA.sock.old` shares a
+    // A whole-token match, not a substring one: `<our socket>.old` shares a
     // prefix with our path but is another run's socket, and taking it as ours
     // calls a genuinely relaunchable process unregistered.
     const env =

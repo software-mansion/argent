@@ -192,12 +192,12 @@ const androidDevice: DeviceInfo = {
 } as DeviceInfo;
 
 // startCapture names its output join(os.tmpdir(),
-// `argent-screen-recording-${deviceId}-${Date.now()}.mp4`). Both halves are
-// constant here — the device ids are fixtures and the fake timers below freeze
-// Date.now() — so every run of this file derives the SAME path, and each test
-// ends by removing it. Two concurrent runs therefore delete each other's
-// recording mid-test. os.tmpdir() reads process.env.TMPDIR at call time, so
-// scope it per test.
+// `argent-screen-recording-${deviceId}-${Date.now()}.mp4`). The device ids are
+// fixtures, and vi.useFakeTimers() seeds its clock from the real time rather
+// than a constant, so the millisecond two runs start in is the only thing
+// separating their paths — and each test ends by deleting the path it derived.
+// os.tmpdir() reads process.env.TMPDIR at call time, so scoping it per test
+// removes that window instead of leaving it narrow.
 let savedTmpdir: string | undefined;
 let scratch: string;
 
@@ -216,8 +216,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.useRealTimers();
-  // Restore TMPDIR before the cleanup rm so it and any later suite resolve the
-  // real tmpdir again.
+  // Restore TMPDIR before the rm below, so a later suite still resolves the
+  // real tmpdir even if that cleanup rejects.
   if (savedTmpdir === undefined) delete process.env.TMPDIR;
   else process.env.TMPDIR = savedTmpdir;
   await fs.rm(scratch, { recursive: true, force: true });

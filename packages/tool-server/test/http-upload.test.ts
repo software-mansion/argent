@@ -165,8 +165,6 @@ describe("POST /upload", () => {
       const entries = await fs.readdir(scratch);
       return new Set(entries.filter((e) => e.startsWith("argent-upload-")));
     };
-    const before = await uploadFiles();
-
     const server = handle.app.listen(0);
     try {
       const { port } = server.address() as { port: number };
@@ -187,9 +185,7 @@ describe("POST /upload", () => {
 
       // Cleanup is async — poll briefly for the partial file to disappear.
       await vi.waitFor(async () => {
-        const after = await uploadFiles();
-        const leaked = [...after].filter((f) => !before.has(f));
-        expect(leaked).toEqual([]);
+        expect([...(await uploadFiles())]).toEqual([]);
       });
     } finally {
       server.close();

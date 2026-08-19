@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, writeFile, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { readWorkspaceSnapshot } from "../src/utils/workspace-reader";
@@ -10,6 +10,8 @@ import { readWorkspaceSnapshot } from "../src/utils/workspace-reader";
  */
 
 let projectDir: string;
+let binDir: string;
+let savedPath: string | undefined;
 
 async function writeJson(dir: string, name: string, data: unknown) {
   await writeFile(join(dir, name), JSON.stringify(data, null, 2));
@@ -21,6 +23,19 @@ async function writeText(path: string, content: string) {
 
 beforeAll(async () => {
   projectDir = await mkdtemp(join(tmpdir(), "rn-project-integration-"));
+
+  // readWorkspaceSnapshot probes eight tool versions by spawning
+  // `<tool> --version` off PATH. Six are package-manager shims that install
+  // themselves on first run — corepack fetches yarn/pnpm into
+  // ~/.cache/node/corepack and eas populates ~/Library/Caches/eas-cli, ~44 MB
+  // off the network, into the developer's real home. Only `node` is asserted
+  // below, so restrict PATH to a directory holding just that: every other
+  // probe then fails to resolve and reports null, which is also what this test
+  // wants from a machine that lacks the tool.
+  binDir = await mkdtemp(join(tmpdir(), "rn-project-integration-bin-"));
+  await symlink(process.execPath, join(binDir, "node"));
+  savedPath = process.env.PATH;
+  process.env.PATH = binDir;
 
   // ── package.json ───────────────────────────────────────────────
   await writeJson(projectDir, "package.json", {
@@ -192,7 +207,10 @@ module.exports = mergeConfig(getDefaultConfig(__dirname), config);
 });
 
 afterAll(async () => {
+  if (savedPath === undefined) delete process.env.PATH;
+  else process.env.PATH = savedPath;
   await rm(projectDir, { recursive: true, force: true });
+  await rm(binDir, { recursive: true, force: true });
 });
 
 describe("workspace-reader integration (realistic RN project)", () => {

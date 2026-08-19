@@ -28,8 +28,12 @@ const track = (s: net.Server) => {
 // fails the bind with EINVAL, testing the host's TMPDIR instead of the code.
 const SOCK_ROOT = "/tmp";
 
+const sockDirs: string[] = [];
+
 function tmpSock(name: string): string {
-  return path.join(fs.mkdtempSync(path.join(SOCK_ROOT, "argent-nd-test-")), name);
+  const dir = fs.mkdtempSync(path.join(SOCK_ROOT, "argent-nd-test-"));
+  sockDirs.push(dir);
+  return path.join(dir, name);
 }
 
 afterEach(() => {
@@ -40,6 +44,9 @@ afterEach(() => {
       /* already closed */
     }
   }
+  // Nothing else reaps these: they sit directly under the shared /tmp that
+  // SOCK_ROOT pins, so without this they accumulate three per run.
+  for (const d of sockDirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
 });
 
 describe("bindNativeDevtoolsUnixSocket", () => {
