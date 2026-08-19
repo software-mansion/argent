@@ -46,6 +46,7 @@ import { resolveInstallableUpdateTarget } from "./update-target.js";
 import { killToolServer, killToolServerForInstallDir } from "@argent/tools-client";
 import { finalizeTelemetry } from "./telemetry-finalize.js";
 import { resolveTelemetryConsent } from "./first-run-notice.js";
+import { canPromptUser, noTerminalMessage } from "./terminal.js";
 
 function getRequestedVersion(args: string[]): string | null {
   for (let i = 0; i < args.length; i += 1) {
@@ -120,6 +121,13 @@ const UPDATE_PACKAGE_ACTION_FAILED: InstallerFailureSignal = {
 const UPDATE_GLOBAL_PREFIX_UNWRITABLE: InstallerFailureSignal = {
   error_code: FAILURE_CODES.UPDATE_GLOBAL_PREFIX_UNWRITABLE,
   failure_stage: "installer_update_global_prefix_preflight",
+  failure_area: "installer",
+  error_kind: "validation",
+};
+
+const UPDATE_NEEDS_TERMINAL: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.UPDATE_NEEDS_TERMINAL,
+  failure_stage: "installer_update_prompt",
   failure_area: "installer",
   error_kind: "validation",
 };
@@ -411,6 +419,12 @@ export async function update(args: string[]): Promise<void> {
       const cmdStr = formatShellCommand(cmd);
 
       if (!nonInteractive) {
+        if (!canPromptUser()) {
+          p.log.error(noTerminalMessage("argent update"));
+          await trackPackageAction("update_failed", updateStartTime, false, UPDATE_NEEDS_TERMINAL);
+          return { failed: UPDATE_NEEDS_TERMINAL };
+        }
+
         p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
         const proceed = await p.confirm({
@@ -638,6 +652,13 @@ export async function update(args: string[]): Promise<void> {
 
     let targets: InstallMode[];
     if (decision.kind === "prompt") {
+      if (!canPromptUser()) {
+        p.log.error(noTerminalMessage("argent update"));
+        await failUpdateTelemetry(UPDATE_NEEDS_TERMINAL);
+        p.outro(pc.red("Update failed."));
+        process.exit(1);
+      }
+
       const picked = await promptInstallTargets("update");
       if (picked === "cancel") {
         await completeUpdateTelemetry();
@@ -805,23 +826,26 @@ export async function update(args: string[]): Promise<void> {
         scope: localAdapters.length > 0 ? "local" : "global",
         effectiveRoot: projectRoot,
         // Same one-shot confirmation init uses for cross-project removals.
-        // --yes passes no confirmer (sweep goes report-only there) — the agent-
-        // triggered `update --yes` must never delete cross-project state on a
-        // fallible PATH probe.
-        confirmCrossProjectRemovals: nonInteractive
-          ? undefined
-          : async (items) => {
-              p.log.warn(
-                `Dead argent entries from a previous global install were found in\n` +
-                  `  global (cross-project) config files:\n` +
-                  items.map((item) => `    ${pc.cyan(item)}`).join("\n")
-              );
-              const choice = await p.confirm({
-                message: "Remove these dead global entries? - recommended",
-                initialValue: true,
-              });
-              return !p.isCancel(choice) && choice === true;
-            },
+        // An update with nobody to ask — --yes, or no terminal — passes no
+        // confirmer and the sweep reports instead of removing: an unattended
+        // run must never delete cross-project state on a fallible PATH probe.
+        // A terminal-less run gets this far whenever it had nothing to install,
+        // which is the only question asked before here.
+        confirmCrossProjectRemovals:
+          nonInteractive || !canPromptUser()
+            ? undefined
+            : async (items) => {
+                p.log.warn(
+                  `Dead argent entries from a previous global install were found in\n` +
+                    `  global (cross-project) config files:\n` +
+                    items.map((item) => `    ${pc.cyan(item)}`).join("\n")
+                );
+                const choice = await p.confirm({
+                  message: "Remove these dead global entries? - recommended",
+                  initialValue: true,
+                });
+                return !p.isCancel(choice) && choice === true;
+              },
       });
       if (staleCleanup.lines.length > 0) {
         p.note(staleCleanup.lines.join("\n"), "Stale Config Cleanup");

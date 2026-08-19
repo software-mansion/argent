@@ -23,6 +23,7 @@ on:
       - "packages/argent-installer/src/update.ts"
       - "packages/argent-installer/src/uninstall.ts"
       - "packages/argent-installer/src/package-manager.ts"
+      - "packages/argent-installer/src/terminal.ts"
       - "scripts/ci/nix-install/**"
       - ".github/workflows/nix-install-e2e.yml"
 

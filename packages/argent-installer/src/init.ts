@@ -20,6 +20,7 @@ import {
 import { PACKAGE_NAME } from "./constants.js";
 import { resolveTelemetryConsent } from "./first-run-notice.js";
 import { parseInitArgs, InitCancelled } from "./init-args.js";
+import { canPromptUser, noTerminalMessage } from "./terminal.js";
 import {
   InitTelemetry,
   INSTALL_MODE_FLAG_CONFLICT,
@@ -53,6 +54,14 @@ export async function init(args: string[]): Promise<void> {
 
     let version = getInstalledVersion() ?? "unknown";
     p.log.info(`${pc.dim("Package:")} ${PACKAGE_NAME}@${version}`);
+
+    // Without --yes every path below has a prompt in it, so a run with nobody
+    // to ask is refused before it installs or configures anything. Nothing is
+    // tracked: the consent that would govern it is itself one of the prompts.
+    if (!parsed.nonInteractive && !canPromptUser()) {
+      p.log.error(noTerminalMessage("argent init"));
+      process.exit(2);
+    }
 
     // Resolve telemetry consent before the first track() so the user's choice
     // governs whether this session's installation events are collected at all.

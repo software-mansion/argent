@@ -131,7 +131,7 @@ interface InstallerCommandMeta {
 
 const NON_INTERACTIVE_OPTION: InstallerOption = {
   flag: "--yes, -y",
-  description: "Run without prompts, accepting defaults.",
+  description: "Run without prompts, accepting defaults. Required with no terminal on stdin.",
 };
 const NO_TELEMETRY_OPTION: InstallerOption = {
   flag: "--no-telemetry",
@@ -206,7 +206,10 @@ export const INSTALLER_COMMAND_META: Record<InstallerCommand, InstallerCommandMe
     details: ["(--global/--local choose which install — package and its", "configs — is removed)"],
     usage: "argent uninstall [options]",
     options: [
-      { flag: "--yes, -y", description: "Skip the confirmation prompt." },
+      {
+        flag: "--yes, -y",
+        description: "Skip the confirmation prompt. Required with no terminal on stdin.",
+      },
       {
         flag: "--global",
         description: "Remove the global (PATH) install — the package and its configs.",

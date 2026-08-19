@@ -53,6 +53,12 @@ vi.mock("../src/first-run-notice.js", () => ({
 vi.mock("../src/telemetry-finalize.js", () => ({
   finalizeTelemetry: vi.fn(async (capture: () => void) => capture()),
 }));
+// The sweep itself is covered in init-stale-config.test.ts; here only the
+// confirmer update hands it matters.
+const staleConfigMock = vi.hoisted(() => ({
+  cleanupStaleMcpConfigs: vi.fn(async () => ({ lines: [], removedCount: 0, warnedCount: 0 })),
+}));
+vi.mock("../src/init-stale-config.js", () => staleConfigMock);
 vi.mock("../src/update-target.js", () => ({
   resolveInstallableUpdateTarget: vi.fn(async () => ({
     latestVersion: "99.0.0",
@@ -73,6 +79,12 @@ vi.mock("../src/utils.js", async (importOriginal) => {
   };
 });
 
+// Node leaves isTTY undefined on a stdin that is not a terminal; the declared
+// type admits only boolean, hence the cast.
+function setIsTty(value: boolean | undefined): void {
+  (process.stdin as { isTTY?: boolean }).isTTY = value;
+}
+
 class ExitSentinel extends Error {
   constructor(public readonly code: number | undefined) {
     super(`process.exit(${code})`);
@@ -85,9 +97,13 @@ let originalCwd: string;
 let savedHome: string | undefined;
 let savedUserProfile: string | undefined;
 let exitSpy: ReturnType<typeof vi.spyOn>;
+let savedIsTty: boolean | undefined;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The prompts these tests answer only exist for a user who can answer them.
+  savedIsTty = process.stdin.isTTY;
+  setIsTty(true);
   // clearAllMocks keeps implementations, and the tests below install their own
   // on execFileSync — reset it so one test's package-manager stub cannot decide
   // the next test's outcome.
@@ -117,6 +133,7 @@ beforeEach(() => {
 
 afterEach(() => {
   exitSpy.mockRestore();
+  setIsTty(savedIsTty);
   process.chdir(originalCwd);
   if (savedHome === undefined) delete process.env.HOME;
   else process.env.HOME = savedHome;
@@ -177,6 +194,48 @@ describe("update — interactive decline", () => {
         action: "update_failed",
         error_code: "UPDATE_GLOBAL_PREFIX_UNWRITABLE",
       })
+    );
+  });
+
+  // A confirm with no terminal behind it never settles: the run would end at a
+  // rendered prompt, exit 0, and have updated nothing.
+  it("refuses an update it cannot ask about, leaving the install alone", async () => {
+    setIsTty(undefined);
+
+    await expect(update([])).rejects.toThrow(ExitSentinel);
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(promptsMock.confirm).not.toHaveBeenCalled();
+    expect(npmInstallCalls()).toHaveLength(0);
+    const errors = promptsMock.log.error.mock.calls.map(([m]) => m as string);
+    expect(errors.some((m) => m.includes("--yes"))).toBe(true);
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:package_action",
+      expect.objectContaining({ action: "update_failed", error_code: "UPDATE_NEEDS_TERMINAL" })
+    );
+  });
+
+  // An update with nothing to install asks nothing, so it reaches the config
+  // refresh with no terminal — where the sweep's cross-project removals would
+  // otherwise open a confirmation nobody can answer.
+  it("hands the sweep no confirmer when there is no terminal", async () => {
+    topologyState.globalVersion = "99.0.0";
+    setIsTty(undefined);
+
+    await update([]);
+
+    expect(staleConfigMock.cleanupStaleMcpConfigs).toHaveBeenCalledWith(
+      expect.objectContaining({ confirmCrossProjectRemovals: undefined })
+    );
+  });
+
+  it("keeps the sweep's confirmation for a run that can ask", async () => {
+    topologyState.globalVersion = "99.0.0";
+
+    await update([]);
+
+    expect(staleConfigMock.cleanupStaleMcpConfigs).toHaveBeenCalledWith(
+      expect.objectContaining({ confirmCrossProjectRemovals: expect.any(Function) })
     );
   });
 

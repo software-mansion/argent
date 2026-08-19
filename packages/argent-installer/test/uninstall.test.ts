@@ -8,6 +8,7 @@ import {
   addClaudePermission,
   removeClaudePermission,
 } from "../src/mcp-configs.js";
+import { confirm, log } from "@clack/prompts";
 import {
   cleanupSkillsLockFile,
   getBundledSkillNames,
@@ -55,6 +56,12 @@ vi.mock("@clack/prompts", () => ({
   note: vi.fn(),
 }));
 
+// Node leaves isTTY undefined on a stdin that is not a terminal; the declared
+// type admits only boolean, hence the cast.
+function setIsTty(value: boolean | undefined): void {
+  (process.stdin as { isTTY?: boolean }).isTTY = value;
+}
+
 let tmpDir: string;
 let originalCwd: string;
 
@@ -74,6 +81,42 @@ beforeEach(() => {
 afterEach(() => {
   process.chdir(originalCwd);
   fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+describe("uninstall — nobody to confirm with", () => {
+  // A confirm with no terminal behind it never settles: the run would end at a
+  // rendered prompt, exit 0, and have removed nothing.
+  it("refuses before removing anything when stdin is not a terminal", async () => {
+    process.chdir(tmpDir);
+    const savedIsTty = process.stdin.isTTY;
+    setIsTty(undefined);
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`process.exit(${code})`);
+    }) as never);
+
+    try {
+      await expect(uninstall([])).rejects.toThrow("process.exit(2)");
+
+      expect(confirm).not.toHaveBeenCalled();
+      expect(childProcessMock.execFileSync).not.toHaveBeenCalledWith(
+        "npm",
+        expect.arrayContaining(["uninstall", "-g"]),
+        expect.anything()
+      );
+      const errors = vi.mocked(log.error).mock.calls.map(([m]) => m as string);
+      expect(errors.some((m) => m.includes("--yes"))).toBe(true);
+      expect(telemetryMock.track).toHaveBeenCalledWith(
+        "installation:cli_uninstall_complete",
+        expect.objectContaining({
+          has_uninstalled_package: false,
+          error_code: "UNINSTALL_NEEDS_TERMINAL",
+        })
+      );
+    } finally {
+      exitSpy.mockRestore();
+      setIsTty(savedIsTty);
+    }
+  });
 });
 
 describe("uninstall — telemetry consent preservation", () => {

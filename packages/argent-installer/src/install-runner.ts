@@ -323,13 +323,10 @@ async function recoverBlockedGlobalInstall(opts: {
   const canMovePrefix = pm === "npm";
   // A local install needs a package.json to add the devDependency to.
   const canInstallLocally = hasProjectPackageJson(resolveProjectRoot(process.cwd()));
-  // A prompt with no terminal behind it never settles: the run would end at a
-  // rendered menu, exit 0, and have installed nothing.
-  const canAsk = !nonInteractive && process.stdin.isTTY === true;
-
-  // Nobody to ask, or nothing to offer them — spell the ways out as commands
+  // Nobody to ask (init refuses a run with no terminal before reaching here,
+  // so this is --yes), or nothing to offer them: spell the ways out as commands
   // instead of opening a prompt whose only option is to give up.
-  if (!canAsk || !(canMovePrefix || canInstallLocally)) return failWithAdvice(target);
+  if (nonInteractive || !(canMovePrefix || canInstallLocally)) return failWithAdvice(target);
 
   if (acknowledged) {
     // Chosen knowing the block, but for a manager whose directory argent
