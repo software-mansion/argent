@@ -195,9 +195,9 @@ function sweep(): void {
     execSync(`pkill -f '${cmdlinePattern(`${SENTINEL_PREFIX}[0-9]`)}' || true`);
   } catch {
     // `|| true` maps every `pkill` exit - no-match, or `pkill` itself missing - to 0, so
-    // only a failure of the shell reaches here (no /bin/sh, killed, output over
-    // maxBuffer). Throwing out of cleanup would mask the result of the test that just
-    // ran, and any stray this misses dies of old age within WORKER_LIFETIME_SECONDS.
+    // only a failure to run the shell at all reaches here: fork EAGAIN under load, the
+    // same mode strayCount absorbs. Throwing out of cleanup would mask the result of the
+    // test that just ran, and any stray this misses dies within WORKER_LIFETIME_SECONDS.
   }
 }
 
@@ -206,26 +206,34 @@ function livePids(sentinel: string): string[] {
   return out.split("\n").filter((l) => l.trim());
 }
 
-// How many `sleep <sentinel>` workers are live, and how many distinct process groups
-// they occupy. Both from one pgrep, so the two facts describe the same instant.
+// How many `sleep <sentinel>` workers are live, and how many distinct process groups they
+// occupy, from ONE `ps` rather than this file's usual `pgrep`. A pgrep for the pids
+// followed by a `ps` for their groups is two looks: the second can land after the reap has
+// begun and pair a count of 2 with 0 groups, failing the observation over a state that
+// never existed. One table read cannot disagree with itself.
 function sampleWorkers(sentinel: string): { workers: number; groups: number } {
   try {
-    const pids = livePids(sentinel);
-    if (pids.length === 0) return { workers: 0, groups: 0 };
-    // `|| true` because `ps` exits 1 only once EVERY pid is gone - a partial read is a 0
-    // exit with fewer rows, which the group count below reports honestly either way.
-    const out = execSync(`ps -o pgid= -p ${pids.join(",")} || true`, { encoding: "utf-8" });
-    const groups = new Set(
-      out
-        .split("\n")
-        .map((l) => Number(l.trim()))
-        .filter((n) => n > 0)
-    );
-    return { workers: pids.length, groups: groups.size };
+    // Whole table: `-p <pids>` would need the pid list this call exists to avoid reading
+    // separately. maxBuffer is raised because -A scales with the machine, not the match.
+    const out = execSync("ps -Ao pgid=,command=", {
+      encoding: "utf-8",
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    const groups = new Set<number>();
+    let workers = 0;
+    for (const line of out.split("\n")) {
+      const row = line.trim();
+      const gap = row.indexOf(" ");
+      // Whole-command equality, the same shape cmdlinePattern's `^`/`$` anchor for pgrep.
+      if (gap < 0 || row.slice(gap + 1) !== `sleep ${sentinel}`) continue;
+      workers += 1;
+      groups.add(Number(row.slice(0, gap)));
+    }
+    return { workers, groups: groups.size };
   } catch {
-    // -1s for the same reason strayCount returns one: a look that never happened must
-    // not read as a legitimate count, and no `want` matches it, so the poll continues
-    // through a transient spawn failure.
+    // -1s rather than 0s so a failed look is legible in the failure message as a look
+    // that did not happen, instead of reading as "nothing had spawned yet". Either way
+    // no `want` matches it, so the poll continues through a transient spawn failure.
     return { workers: -1, groups: -1 };
   }
 }
@@ -322,8 +330,8 @@ describe("runVega timeout (real subprocess)", () => {
     // test stays green with the sweep deleted. Both come from one sample inside the poll,
     // so the group read cannot land in the window where the count has just been satisfied
     // and the reap is already running. The poll gets the whole deadline as its budget:
-    // anything shorter expires on a slow launcher start and fails this observation rather
-    // than the reap it guards. The two output-cap reaps below stay unpinned for want of
+    // on `waitForCount`'s 3s default a 3.5s launcher start, which the call itself still
+    // tolerates, fails this observation instead of the reap it guards. The two output-cap reaps below stay unpinned for want of
     // such a window — theirs fires within ~100ms of the spawn (#841).
     expect(await waitForWorkerGroups(SENTINEL_REAP, 2, REAP_DEADLINE_MS)).toEqual({
       workers: 2,
