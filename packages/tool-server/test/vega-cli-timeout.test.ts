@@ -22,9 +22,9 @@ import { runVega, __resetVegaBinaryCacheForTests } from "../src/utils/vega-cli";
 // inherits the launcher's stdout (reproducing the pipe-held-open freeze), and (b)
 // itself blocks on a same-group `sleep <secs>` so the launcher stays alive long
 // enough to be timed out and snapshotted. Once both workers exist the descendant sweep
-// reaps them by itself; the group kill covers the window before they do, which is where
-// the overflow reap fires — it trips on the launcher's first write, so the snapshot is
-// still empty and only killing the group stops the sleep from outliving the call.
+// reaps them by itself. The group kill covers the window before they do: the overflow
+// reap trips on the launcher's first write, so under load it can snapshot an empty tree
+// and only killing the group stops the sleep from outliving the call.
 // Each test passes its OWN sentinel so one test's strays can't be mistaken for
 // another's, and every sentinel shares a per-run prefix so afterEach can sweep them
 // all with a single tight pattern (see sweep()).
@@ -141,12 +141,14 @@ process.stdout.write("OK-" + cmd);
   );
   prevPath = process.env.PATH;
   process.env.PATH = `${dir}:${process.env.PATH ?? ""}`;
-  // Pay `node`'s first-spawn cost here, where no deadline is running. The near-deadline
-  // test gives the launcher 900ms to start, which a warm spawn clears comfortably and a
-  // cold one does not — first-in-process has been measured at 1684ms under load. A whole-
-  // file run happens to warm it in the tests before that one; running that test alone — a
-  // `-t` filter, a focused test, an editor's run-this-test — would otherwise reject on the
-  // deadline ~15% of the time. Any unknown argument takes the write-and-exit default.
+  // macOS charges the FIRST exec of a newly written file (~110-180ms idle, far more under
+  // load) and nothing after it; a fresh `#!/bin/sh` script shows the same jump, so this is
+  // not `node` starting and warming `node` elsewhere does not help — only running THIS
+  // file does. It has to happen here because the near-deadline test gives the launcher
+  // 900ms and cannot give it more. A whole-file run pays it in the tests before that one,
+  // so only running that test by itself was exposed, and only at concurrency: 38 of 60
+  // solo runs rejected at 20-way, none sequentially. Linux has no such penalty, so this
+  // buys CI nothing. Any unknown argument takes the write-and-exit default.
   spawnSync(join(dir, "vega"), ["warmup"], { stdio: "ignore" });
 });
 
