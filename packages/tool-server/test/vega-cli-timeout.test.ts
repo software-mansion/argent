@@ -10,7 +10,7 @@ import { runVega, __resetVegaBinaryCacheForTests } from "../src/utils/vega-cli";
 // Against a wedged device agent the `vega` CLI forks a launcher → worker tree that
 // never returns; a worker holding the stdout pipe kept the old execFile-based call
 // pending for the full timeout, and SIGKILLing only the direct child orphaned the
-// rest of the tree. runVega now spawns the launcher `detached` (its own process
+// rest of the tree. runVega spawns the launcher `detached` (its own process
 // group), SIGKILLs the whole group on timeout, AND sweeps any descendant that
 // escaped the group — so it settles on its own deadline and leaves no orphans. We
 // exercise that with a fake `vega` on PATH (not mocks) so the real spawn / detached
@@ -86,8 +86,8 @@ if (cmd === "hang") {
   // unambiguously.
   const worker = spawn("sleep", [secs], { detached: true, stdio: ["ignore", "inherit", "ignore"] });
   worker.unref();
-  // The launcher itself also hangs (same group as us) so it stays alive to be timed
-  // out and snapshotted; the group SIGKILL reaps this one.
+  // The launcher itself also hangs so it stays alive to be timed out and snapshotted.
+  // This sleep is a descendant, so the sweep reaps it before the group kill runs.
   spawnSync("sleep", [secs]);
   process.exit(0);
 }
@@ -194,16 +194,35 @@ function sweep(): void {
   try {
     execSync(`pkill -f '${cmdlinePattern(`${SENTINEL_PREFIX}[0-9]`)}' || true`);
   } catch {
-    /* nothing to clean */
+    // `|| true` swallows a no-match, so only a failure to spawn `pkill` reaches here.
+    // Throwing out of cleanup would mask the result of the test that just ran, and any
+    // stray this misses dies of old age within WORKER_LIFETIME_SECONDS.
   }
+}
+
+function livePids(sentinel: string): string[] {
+  const out = execSync(`pgrep -f '${cmdlinePattern(sentinel)}' || true`, { encoding: "utf-8" });
+  return out.split("\n").filter((l) => l.trim());
+}
+
+// Distinct process groups across every live `sleep <sentinel>`. Empty when none are up.
+function pgidsOf(sentinel: string): Set<number> {
+  const pids = livePids(sentinel);
+  if (pids.length === 0) return new Set();
+  // `|| true`, as everywhere else here: a pid that exits between the two calls makes
+  // `ps` exit 1, and an empty read fails the caller's count rather than throwing at it.
+  const out = execSync(`ps -o pgid= -p ${pids.join(",")} || true`, { encoding: "utf-8" });
+  return new Set(
+    out
+      .split("\n")
+      .map((l) => Number(l.trim()))
+      .filter((n) => n > 0)
+  );
 }
 
 function strayCount(sentinel: string): number {
   try {
-    const out = execSync(`pgrep -f '${cmdlinePattern(sentinel)}' || true`, {
-      encoding: "utf-8",
-    });
-    return out.split("\n").filter((l) => l.trim()).length;
+    return livePids(sentinel).length;
   } catch {
     // -1, not 0: 0 is the pass value of every clearance assertion, so a look that never
     // happened would read as "reaped, nothing left behind". -1 matches no `want`, so
@@ -225,9 +244,7 @@ async function waitForCount(sentinel: string, want: number, timeoutMs = 3_000): 
   return count;
 }
 
-// Poll until this test's workers are gone (signal delivery and teardown are
-// asynchronous). Returns the final count; a complete reap reaches 0 within a
-// moment, whereas an orphaned tree would survive for the full sleep and never clear.
+// Signal delivery and teardown are asynchronous, so poll rather than sample once.
 async function waitForClear(sentinel: string, timeoutMs = 3_000): Promise<number> {
   return waitForCount(sentinel, 0, timeoutMs);
 }
@@ -279,6 +296,11 @@ describe("runVega timeout (real subprocess)", () => {
     // output-cap reaps below stay unpinned for want of such a window — theirs fires
     // within ~100ms of the spawn (#841).
     expect(await waitForCount(SENTINEL_REAP, 2, REAP_DEADLINE_MS)).toBe(2);
+    // ...and in TWO groups, which is what makes one of them escaped and the descendant
+    // sweep - not the group SIGKILL - the only thing that can reap it. Left unasserted,
+    // the fake's `detached: true` can be dropped and this test stays green with the
+    // sweep deleted, i.e. with the mechanism it exists to pin gone.
+    expect(pgidsOf(SENTINEL_REAP).size).toBe(2);
     const err = await run;
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toMatch(/timed out/i);
