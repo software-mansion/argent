@@ -505,19 +505,19 @@ describe("describe tool", () => {
   });
 
   it("does NOT return should_restart for a non-injectable Apple system app (no restart loop)", async () => {
-    // A com.apple.* app cannot be relied on to load the dylib, so it may never
-    // connect — yet the simulator's launchd env is applied process-wide, so its
-    // process carries the injection tokens and the measurement judges it on age.
-    // Older than this tool-server's listener (the usual case: system apps are
-    // already running when the server starts) reads `stale_process`, whose
-    // remedy is restart-app. Without an injectability gate that is
-    // should_restart:true → restart → AX still empty → describe → unbounded
-    // loop. The fallback must return the (empty) AX result with a screenshot
-    // hint instead.
+    // com.apple.* apps are refused as native-devtools targets, and measuring
+    // one cannot rescue it: the simulator's launchd env is applied
+    // process-wide, so a system app's process carries the injection tokens and
+    // is judged on age - older than this tool-server's listener (the usual
+    // case: system apps are already running when the server starts) reads
+    // `stale_process`, whose remedy is restart-app. Without the gate, describe
+    // returns should_restart:true → the agent restarts the system app → AX is
+    // still empty → describe again → unbounded loop. The fallback must instead
+    // return the (empty) AX result with a screenshot hint.
     const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
     const nativeApi = makeNativeDevtoolsApi({
       connectedBundleIds: [],
-      requiresRestart: true, // real behavior: a com.apple.* app never connects
+      requiresRestart: true, // an unconnected system app reports restart-required
     });
     const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
     const tool = createDescribeTool(registry);
@@ -613,7 +613,7 @@ describe("describe tool", () => {
         },
       ],
     });
-    // requiresRestart:true mirrors a real com.apple.* app (it never connects);
+    // requiresRestart:true mirrors a com.apple.* app argent never saw connect;
     // it must stay irrelevant here because the non-empty tree returns before the
     // native fallback that would ever consult it.
     const nativeApi = makeNativeDevtoolsApi({

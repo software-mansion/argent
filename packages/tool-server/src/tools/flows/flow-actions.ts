@@ -57,6 +57,44 @@ import {
   type ScrollDirection,
 } from "./flow-utils";
 
+/**
+ * The app an iOS tree read should describe, and how far the runner will vouch
+ * for it (see `queryFullHierarchyTree` for what each level buys).
+ */
+export interface FlowTreeTarget {
+  /** App id of the run's most recent successful `launch` step. */
+  bundleId: string;
+  /**
+   * Whether the runner still vouches that `bundleId` is what is on screen. A
+   * pinned read targets it directly, skipping the auto-resolve fan-out that
+   * probes every connected app. Unpinned, it is only a hint: auto-resolve
+   * decides the target, and `bundleId` breaks the tie solely when that
+   * resolution times out.
+   */
+  pinned: boolean;
+  /**
+   * Whether a pinned read's `Application.getState` probe has ever answered for
+   * THIS target. MUTATED IN PLACE by `queryFullHierarchyTree` (its only writer
+   * after construction) rather than reported back: `deviceEnv` shallow-spreads
+   * the run state, so every read of the same pin reaches the same object, and
+   * that is what makes "has any read already answered" available to the next
+   * read.
+   *
+   * It is the only evidence the runner has that the app's main queue was ever
+   * serviced, which tells the two causes of a timed-out probe apart: before any
+   * answer the timeout is read as the cold start that can pin the main thread
+   * right after launch, and ridden out; after one it is an app that stopped
+   * servicing a queue it demonstrably serviced, and refused. One-sided by
+   * construction - a flow that leaves the app before its first read still reads
+   * as a cold start and pays both RPC timeouts - and not separable here, since
+   * the launch gate waits only for the connect, which precedes the startup work
+   * the ride-out exists for. A later `launch` builds a fresh target, since a
+   * re-pinned app cold-starts again. Meaningless while unpinned: those reads
+   * auto-resolve and never probe the target.
+   */
+  probeAnswered: boolean;
+}
+
 /** Everything a directive needs to act on the run's device. */
 export interface ActionEnv {
   registry: Registry;
@@ -64,21 +102,15 @@ export interface ActionEnv {
   device: DeviceInfo;
   signal?: AbortSignal;
   /**
-   * Bundle id of the last successful native `launch:` in this RUN — nested
-   * `run:` flows share it (ExecState is per-run, so a nested launch updates
-   * the whole run's hint, matching "a nested e2e launch restarts its app").
-   * Undefined until a launch runs, so a fragment brought to its entry state out
-   * of band has none. Cleared by `tool:` steps that can change the foreground
-   * app (launch-app, restart-app, open-url, button, reinstall-app).
-   *
-   * iOS tree reads use it for the two things auto-targeting cannot do, both
-   * following from it resolving only out of the connected list: as an arbiter
-   * when auto-resolution itself times out, and to name the app whose
-   * disconnection needs explaining when that list is empty — see
-   * `queryFullHierarchyTree`. Never to override a resolution that answered, so
-   * foreground-likeness guards keep firing whenever the app answers at all.
+   * The app the run's most recent successful `launch` step started, and
+   * whether the runner still vouches for it being on screen. Demoted to an
+   * unpinned hint by a raw `tool:` step (its effect on the foreground is opaque
+   * to the runner), dropped outright by a `tool:` step that can change the
+   * foreground app and by a launch attempt until it succeeds. Chromium launches
+   * hand off before the assignment, so chromium runs never set it. Only iOS
+   * tree reads consume it (see `fetchFlowTree`).
    */
-  launchedNativeApp?: string;
+  treeTarget?: FlowTreeTarget;
   /**
    * Run-scoped memo of a tree source that answered nothing: set by a
    * {@link settleTree} that failed every read attempt, cleared by the next
@@ -462,7 +494,7 @@ function provenTreeOutage(env: ActionEnv): Error | undefined {
  * cleared it.
  */
 function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
-  return fetchFlowTree(env.registry, env.device, env.launchedNativeApp).then((data) => {
+  return fetchFlowTree(env.registry, env.device, env.treeTarget).then((data) => {
     if (env.treeOutage) env.treeOutage.proven = undefined;
     return data;
   });
@@ -924,11 +956,11 @@ type GestureSettle = { aborted?: true; warning?: string };
  * than nodes.
  *
  * It is also the caller `skipProvenOutage` exists for, because a tree the run
- * can never read is not only the disconnect mid-run: an app that cannot load
- * the instrumentation fails every read off an in-memory list — an Apple system
- * app, which flows drive by coordinates for exactly that reason, so every step
- * of such a flow arrives here. Charging each of them a window for the same
- * verdict is what the memo takes off them.
+ * can never read is not only the disconnect mid-run: flows drive an Apple
+ * system app by coordinates because argent refuses it a flow tree by policy on
+ * every read that names one, so every step of such a flow arrives here.
+ * Charging each of them a window for the same verdict is what the memo takes
+ * off them.
  *
  * A platform with no tree source at all is the one case that settles nothing
  * and reports nothing. `ios-remote` is coordinate-driven by necessity —

@@ -65,7 +65,7 @@ const REPLAY_TREE_SOURCES: Record<string, DescribeSource> = {
 /**
  * The app this recording last started, from the `launch` step the recorder
  * captured for it — the session's stand-in for the runner's
- * {@link ActionEnv.launchedNativeApp}. Last rather than first: a recording that
+ * {@link ActionEnv.launchedAppId}. Last rather than first: a recording that
  * relaunches mid-way is about the newer app from that point on, exactly as a
  * nested `launch:` retargets a run.
  */
@@ -98,13 +98,22 @@ function fallbackSourceWarning(source: DescribeSource, platform: string): string
  * the describe tree could fail — or hit a different element — at replay while
  * recording reported success.
  *
- * The launched app the read is given plays the part it plays at replay (see
- * `ActionEnv`): with nothing connected it is the only id the iOS tree source
- * can measure, and the recorder is where that matters most — a recording
- * relaunches the app AFTER this tool-server bound its listener, so the first
- * tap reads during the connect window, whose measured messages say NOT to
- * restart the app. Without it the kept-coordinates warning quotes
+ * Same source is not the same target on iOS: recording has no run state to
+ * vouch for the foreground app — the author drives the device by hand — so this
+ * read auto-resolves the frontmost connected app, and the recorded `launch`
+ * step's app rides along only as the unpinned hint (see `ActionEnv`). It
+ * decides nothing while auto-resolve answers, and buys the case the recorder
+ * hits most: a recording relaunches the app AFTER this tool-server bound its
+ * listener, so the first tap reads during the connect window, where the hint is
+ * the only id the iOS tree source can measure and its measured message says NOT
+ * to restart the app. Without it the kept-coordinates warning quotes
  * auto-targeting's "Launch or restart the app first" instead.
+ *
+ * Replay pins those reads instead, between a `launch:` and the next raw `tool:`
+ * step, so the two can diverge: a pinned read is verified still foreground-like
+ * - not frontmost - so where the pin and another connected app both look
+ * foreground-like, auto-resolve refuses a tie as ambiguous but resolves a
+ * uniquely-active sibling, while the pin keeps reading the launched app.
  */
 async function captureTapSelector(
   registry: Registry,
@@ -115,7 +124,11 @@ async function captureTapSelector(
   try {
     const device = resolveDevice(udid);
     const launched = recordedLaunchedApp(session, device.platform);
-    const { tree, source } = await fetchFlowTree(registry, device, launched);
+    const { tree, source } = await fetchFlowTree(
+      registry,
+      device,
+      launched ? { bundleId: launched, pinned: false, probeAnswered: false } : undefined
+    );
     const node = nodeAtPoint(tree, point);
     if (!node) return { warning: "no element found under the tap; kept coordinates (brittle)" };
     const selector = deriveSelector(node);

@@ -59,16 +59,20 @@ Use single quotes for anchored, case-sensitive regexes:
 
 Flow selectors and live discovery use different screen projections:
 
-| Platform | Runner tree                                               | `describe` / `await-ui-element` | Important difference                                                  |
-| -------- | --------------------------------------------------------- | ------------------------------- | --------------------------------------------------------------------- |
-| iOS      | native UIView hierarchy                                   | accessibility tree              | Each contains elements the other lacks; roles are derived differently |
-| Android  | full accessibility hierarchy                              | trimmed interactables           | Discovery can omit testID-only containers or merge nodes              |
-| Chromium | filtered DOM nodes with id, label, value, click, or focus | full DOM walk                   | The runner tree is a strict subset                                    |
-| Vega     | toolkit page source                                       | same source                     | Same elements, different shape                                        |
+| Platform | Runner tree                                               | `describe` / `await-ui-element` | Important difference                                                                                                  |
+| -------- | --------------------------------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| iOS      | native UIView hierarchy                                   | accessibility tree              | Each contains elements the other lacks; roles are derived differently, and a `launch:` also changes which app is read |
+| Android  | full accessibility hierarchy                              | trimmed interactables           | Discovery can omit testID-only containers or merge nodes                                                              |
+| Chromium | filtered DOM nodes with id, label, value, click, or focus | full DOM walk                   | The runner tree is a strict subset                                                                                    |
+| Vega     | toolkit page source                                       | same source                     | Same elements, different shape                                                                                        |
 
 On iOS and Android, an id absent from `describe` can still resolve in a flow. Prefer the stable id and verify it in a scratch fragment. On Chromium, an element absent from `describe` cannot resolve. Add a test id instead.
 
 A live wait can pass against its tree while the converted directive cannot resolve. Replay after conversion. Treat failure there as a polish blocker, not a recording failure.
+
+**On iOS, a `launch:` step also decides which app the runner reads.** A successful `launch:` pins later runner-tree reads to that app: a pinned read probes only that app, instead of fanning out over every connected one to find the frontmost. It still refuses, with a named reason, when the app has no foreground presence left, when it stops answering after an earlier read got through (the suspension iOS applies once a flow leaves an app), when its devtools connection dropped, or when the pinned id is a `com.apple.*` system app. Any raw `tool:` step ends the pin, because its effect on the screen is opaque to the runner, and reads auto-detect the frontmost app again until the next `launch:` re-pins. A tool that cannot change the foreground app still leaves the launched id behind as an unpinned fallback: it decides nothing while auto-detection answers, and takes the read only when auto-detection's probe of every connection times out and the launched app is still connected. `launch-app`, `restart-app`, `reinstall-app`, `open-url`, and `button` can change the foreground app, so they drop that fallback too. Nested `run:` fragments share the run's state, so they inherit both the pin and its clearing. Only iOS tree reads consult the pin.
+
+So on iOS recording and replay can read different apps, not only different projections. Recording has no run state and always auto-detects the frontmost connected app, while a replay read between a `launch:` and the next raw `tool:` step reads the launched app. Foreground-like is not frontmost, so when the launched app and a sibling both qualify the two diverge: recording resolves a uniquely active sibling, or refuses a tie as ambiguous, while replay stays on the launched app.
 
 **On iOS, never copy a `role` from `describe` into a flow selector.** The runner derives iOS roles from the UIView class name and `describe` from accessibility traits, so a React Native `Pressable` (class `RCTView`) is `AXGroup` to the runner and `AXButton` to `describe`. Select on `id`/`text`, or confirm the role against the runner's own tree.
 
@@ -99,7 +103,7 @@ Scopes can combine and nest, with at most six scope keys. Use strict selectors f
 
 Directives stop the flow on failure and skip later steps. `flow-execute` documents their shapes. The available directives are `launch`, `tap`, `long-press`, `type`, `scroll-to`, `pinch`, `rotate`, `await`, `assert`, `wait`, `snapshot`, `run`, `when`, `echo`, and `tool`.
 
-Use the launch map for cross-platform flows. A bare launch applies everywhere and becomes an app path on Chromium. The map takes `native:`, `ios:`, `android:`, `vega:`, and `chromium:`. `native:` is one id shared by iOS, Android, and Vega, and a per-platform key overrides it for that platform. `chromium:` accepts a relative or absolute app path. A launch that declares no id for the run's platform is an error, not a cue to switch platforms.
+Use the launch map for cross-platform flows. A bare launch applies everywhere and becomes an app path on Chromium. The map takes `native:`, `ios:`, `android:`, `vega:`, and `chromium:`. `native:` is one id shared by iOS, Android, and Vega, and a per-platform key overrides it for that platform. `chromium:` accepts a relative or absolute app path. A launch that declares no id for the run's platform is an error, not a cue to switch platforms. On iOS, a successful launch also pins later tree reads to that app until the next raw `tool:` step, so read [The runner tree is not the discovery tree](#the-runner-tree-is-not-the-discovery-tree) when a read describes the wrong screen.
 
 ```yaml
 - launch: { native: com.acme.app, chromium: ../../app }
