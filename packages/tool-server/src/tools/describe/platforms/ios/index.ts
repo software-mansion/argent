@@ -1,9 +1,10 @@
 import type { DeviceInfo, Registry, ToolDependency } from "@argent/registry";
 import { axServiceRef, AXServiceApi } from "../../../../blueprints/ax-service";
 import {
-  buildAppStateMessage,
+  adviseOnUninjectedApp,
   isInjectableBundleId,
   NON_INJECTABLE_NATIVE_WARNING,
+  UNINJECTED_NATIVE_WARNING,
   nativeDevtoolsRef,
   NativeDevtoolsApi,
 } from "../../../../blueprints/native-devtools";
@@ -55,6 +56,15 @@ const NON_INJECTABLE_HINT =
   "help. Take a `screenshot` to see the screen and interact by coordinate. " +
   NON_INJECTABLE_NATIVE_WARNING;
 
+// Recovery half of the MEASURED terminal state, for the same reason
+// NON_INJECTABLE_HINT above has its own: this hint is reached only once
+// `describe`'s accessibility path has already returned empty, so the blueprint's
+// wording — which leads with `describe` — would be circular here. Leads with
+// `screenshot` and shares the native-* dead-end warning verbatim with the
+// precheck's version of this state.
+const INJECTION_FAILED_DESCRIBE_RECOVERY =
+  "Take a `screenshot` to see the screen and interact by coordinate. " + UNINJECTED_NATIVE_WARNING;
+
 function emptyTree(): DescribeNode {
   return parseDescribeResult({
     role: "AXGroup",
@@ -71,6 +81,14 @@ export interface DescribeIosOptions {
   // Pre-resolved tvOS verdict, passed by poll/retry callers so the hot path
   // skips re-shelling `xcrun` each iteration. Omitted callers probe once.
   isTvOs?: boolean;
+  // Whether this read's `hint` is certain to reach an agent, which only the
+  // `describe` tool's own handlers can promise. await-ui-element renders one
+  // too — see the timeout note below — but one poll's worth, and only when the
+  // wait times out, while the record is written per read. Opting it in would
+  // arm a relaunch hand-out on waits that go on to succeed, and a later process
+  // replacement would then read as a relaunch nobody was asked to perform. The
+  // remaining callers never render it at all.
+  hintReachesAgent?: boolean;
 }
 
 // describe on iOS resolves the ax-service via Registry; the blueprint factory
@@ -175,8 +193,14 @@ export async function describeIos(
       // `unregistered` already launched under the terms a restart recreates, and
       // `connecting` is the handshake exec begins, so flagging either would
       // rebuild the restart-app → describe loop.
-      const diagnosis = buildAppStateMessage(target.bundleId, state);
-      const merged = hint ? `${hint} ${diagnosis}` : diagnosis;
+      const advice = adviseOnUninjectedApp(
+        nativeApi,
+        target.bundleId,
+        state,
+        INJECTION_FAILED_DESCRIBE_RECOVERY,
+        { recordAdvice: options.hintReachesAgent === true }
+      );
+      const merged = hint ? `${hint} ${advice.message}` : advice.message;
       return state === "unregistered" || state === "connecting"
         ? { tree, source: "ax-service", hint: merged }
         : { tree, source: "ax-service", should_restart: true, hint: merged };

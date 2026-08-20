@@ -105,7 +105,9 @@ function makeDescribeExecute(
         // Probe tvOS once here, then pass the verdict into describeIos.
         (await isTvOsSimulator(device.id))
           ? describeTv(registry, device)
-          : withDescription(await describeIos(registry, device, params, { isTvOs: false })),
+          : withDescription(
+              await describeIos(registry, device, params, { isTvOs: false, hintReachesAgent: true })
+            ),
     },
     iosRemote: {
       // describeIos already handles both ax-service (TCP) and native-devtools
@@ -114,7 +116,9 @@ function makeDescribeExecute(
       // (never tvOS), so the isTvOs verdict is always false.
       requires: ["sim-remote"],
       handler: async (_services, params, device) =>
-        withDescription(await describeIos(registry, device, params, { isTvOs: false })),
+        withDescription(
+          await describeIos(registry, device, params, { isTvOs: false, hintReachesAgent: true })
+        ),
     },
     android: {
       requires: androidRequires,

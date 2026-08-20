@@ -1,6 +1,6 @@
 import { FAILURE_CODES, getFailureSignal, type DeviceInfo, type Registry } from "@argent/registry";
 import {
-  buildAppStateMessage,
+  adviseOnUninjectedApp,
   isInjectableBundleId,
   nativeDevtoolsRef,
   type NativeDevtoolsApi,
@@ -268,6 +268,19 @@ const FULL_HIERARCHY_FIELDS = [
 ];
 
 /**
+ * The flow-level way past an app whose view hierarchy native devtools will never
+ * serve. Both terminal branches of {@link unreadableHierarchyReason} name it, so
+ * neither can come to offer a different escape than the other; only the
+ * non-injectable branch appends the alternative that is specific to an Apple
+ * system app (targeting one argent installs instead).
+ */
+const FLOW_COORDINATE_REMEDY =
+  "Replace the selector steps with coordinate ones — `tap: { x: 0.5, y: 0.35 }` takes a point " +
+  "directly and reads no tree";
+
+const FLOW_SELECTOR_RECOVERY = `${FLOW_COORDINATE_REMEDY}.`;
+
+/**
  * Why the app a flow launched serves no view hierarchy, for the case where
  * nothing at all is connected.
  *
@@ -291,8 +304,7 @@ async function unreadableHierarchyReason(
     return (
       `${bundleId} is an Apple system app: it is a platform binary with library validation, so ` +
       `argent's native devtools cannot be relied on to inject into it, and without them a flow has ` +
-      `no view hierarchy to resolve selectors against. Replace the selector steps with coordinate ` +
-      `ones — \`tap: { x: 0.5, y: 0.35 }\` takes a point directly and reads no tree — or target an app ` +
+      `no view hierarchy to resolve selectors against. ${FLOW_COORDINATE_REMEDY} — or target an app ` +
       `argent installs.`
     );
   }
@@ -311,7 +323,11 @@ async function unreadableHierarchyReason(
   // The diagnosis already names the corrective action — for `unregistered` a
   // tool-server restart, where telling a flow author to relaunch would loop.
   // The trailing sentence says why a tree read needed one at all.
-  return `${buildAppStateMessage(bundleId, state)} Flows resolve selectors against the full view hierarchy native devtools serve.`;
+  const advice = adviseOnUninjectedApp(nativeApi, bundleId, state, FLOW_SELECTOR_RECOVERY);
+  // The terminal diagnosis carries the flow-level remedy already, so the
+  // trailing sentence would only restate what it just said.
+  if (advice.terminal) return advice.message;
+  return `${advice.message} Flows resolve selectors against the full view hierarchy native devtools serve.`;
 }
 
 /**
