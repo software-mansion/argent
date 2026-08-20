@@ -75,9 +75,9 @@ async function startFakeCdpServer(options?: {
 /**
  * A port whose probe can never be answered: Node's fetch refuses port 1 as a
  * WHATWG "bad port" before it opens a socket, so no listener can satisfy it.
- * A port from the kernel's ephemeral range can be — `listen(0)`, here and in
- * sibling test files, hands out exactly those, and the fake CDP server above
- * serves the very /json responses a probe accepts.
+ * A port from the kernel's ephemeral range can be: that is what `listen(0)`
+ * hands out, and the fake CDP server above answers the very /json requests a
+ * probe makes.
  */
 const UNREACHABLE_PORT = 1;
 

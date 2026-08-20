@@ -299,12 +299,10 @@ describe("bootElectronApp — spawn error handling", () => {
         readyTimeoutMs: 5000,
       });
 
-      // A completed boot persists its port, and nothing here may let that
-      // reach the developer's real ~/.argent/chromium-cdp-ports.json. Two
-      // things hold it back: the module mock above, and the scoped HOME that
-      // keeps this check about this run's writes rather than a file the
-      // developer already had. Assert the absence, so a mock that stops
-      // intercepting fails here instead of silently appending a port per run.
+      // A completed boot persists its port. Two guards keep it out of the
+      // developer's real ~/.argent/chromium-cdp-ports.json — the mock above,
+      // and the scoped HOME that makes this about the run's own writes — and
+      // asserting the absence is what fails when either stops working.
       expect(fs.existsSync(path.join(os.homedir(), ".argent", "chromium-cdp-ports.json"))).toBe(
         false
       );
@@ -353,10 +351,9 @@ describe("bootElectronApp — spawn error handling", () => {
 
     try {
       // The readiness probe cannot be answered, so waitForCdpReady exhausts
-      // readyTimeoutMs and the boot takes the catch path. earlyExit /
-      // spawnError aren't fired by us. Pin the failure code: a failure raised
-      // before spawn attaches no boot listener, so the assertions below would
-      // pass vacuously.
+      // readyTimeoutMs and the boot takes the catch path; earlyExit and
+      // spawnError aren't fired by us. Pin the code: a failure raised before
+      // spawn attaches no listener, so the assertions below go vacuous.
       const signal = getFailureSignal(
         await bootElectronApp({
           appPath: appDir,
