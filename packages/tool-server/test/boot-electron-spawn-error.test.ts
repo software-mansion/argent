@@ -297,8 +297,8 @@ describe("bootElectronApp — spawn error handling", () => {
       });
 
       // A successful boot persists its port for later discovery. Asserting it
-      // also pins the module mock above: without that mock this line writes to
-      // the developer's real ~/.argent/chromium-cdp-ports.json on every run.
+      // pins the module mock above, whose absence would send that write to the
+      // developer's real ~/.argent/chromium-cdp-ports.json.
       expect(trackChromiumPort).toHaveBeenCalledWith(realPort);
 
       // After successful boot, both boot-time listeners MUST be detached.
