@@ -18,22 +18,17 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 /**
- * CDP port for the boots below that must never reach a live endpoint.
+ * CDP port for the boots below, which must never reach a live endpoint: when
+ * the readiness probe succeeds, `bootElectronApp` resolves and the synthetic
+ * spawn error under test never becomes its rejection.
  *
- * The spawn-error and early-exit tests need `waitForCdpReady` to keep failing,
- * so the readiness probe cannot win `bootElectronApp`'s `Promise.race`. When it
- * does win, the boot resolves and detaches the child's boot listeners — the
- * synthetic `'error'` / `'exit'` emit that follows then hits an EventEmitter
- * with no listener and throws instead of rejecting, failing the test. The
- * no-pid tests don't depend on this: their throw is synchronous in the impl,
- * before the readiness race is ever constructed, but they keep the constant so
- * every boot here is host-independent.
+ * Node's fetch refuses port 1 as a WHATWG "bad port" before it opens a socket,
+ * so `ensureCdpReachable` fails whatever the host happens to be running.
+ * Privilege is not the mechanism and would not be enough on its own: 2 and
+ * 1023 are equally privileged yet dial normally.
  *
- * Port 1 is privileged, so no unprivileged process on the host can bind it.
- * A port in the unprivileged range is bindable by anything: argent's own
- * examples and sibling tests use `chromium-cdp-19222`, so a real Chromium /
- * Electron endpoint on 19222-19226 is exactly the kind of neighbour that turns
- * these tests into host-dependent coin flips.
+ * The no-pid boots throw before the probe is reached, so the value is inert
+ * there; they take the constant for uniformity.
  */
 const UNREACHABLE_CDP_PORT = 1;
 
@@ -47,7 +42,14 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+// Keep trackChromiumPort from persisting booted ports to on-disk state.
+vi.mock("../src/utils/chromium-discovery", () => ({
+  trackChromiumPort: vi.fn(),
+  untrackChromiumPort: vi.fn(),
+}));
+
 import { bootElectronApp } from "../src/tools/devices/boot-electron";
+import { trackChromiumPort } from "../src/utils/chromium-discovery";
 
 interface FakeChild extends EventEmitter {
   pid: number | undefined;
@@ -70,19 +72,7 @@ function makeFakeChild(opts: { pid?: number | undefined } = {}): FakeChild {
 }
 
 let appDir: string;
-let prevPortsFile: string | undefined;
-const TEST_PORTS_FILE = path.join(
-  os.tmpdir(),
-  `argent-boot-electron-spawn-ports-${process.pid}.json`
-);
 beforeAll(() => {
-  // The successful boot below calls trackChromiumPort, which persists the
-  // booted port to ~/.argent/chromium-cdp-ports.json. Redirect that to a
-  // throwaway file so tests never touch the real state on a developer machine
-  // or CI runner — the port they would leave behind is an ephemeral one that
-  // list-devices then probes on every call.
-  prevPortsFile = process.env.ARGENT_CHROMIUM_PORTS_FILE;
-  process.env.ARGENT_CHROMIUM_PORTS_FILE = TEST_PORTS_FILE;
   // resolveLauncher() fs-checks the app path before spawn, so the test needs
   // a real directory on disk. The spawn itself is mocked, so the contents
   // don't matter — only the path's existence.
@@ -94,9 +84,6 @@ beforeAll(() => {
   fs.writeFileSync(path.join(appDir, "main.js"), "// fake\n");
 });
 afterAll(() => {
-  if (prevPortsFile === undefined) delete process.env.ARGENT_CHROMIUM_PORTS_FILE;
-  else process.env.ARGENT_CHROMIUM_PORTS_FILE = prevPortsFile;
-  fs.rmSync(TEST_PORTS_FILE, { force: true });
   if (appDir) fs.rmSync(appDir, { recursive: true, force: true });
 });
 
@@ -306,6 +293,11 @@ describe("bootElectronApp — spawn error handling", () => {
         readyTimeoutMs: 5000,
       });
 
+      // A successful boot persists its port for later discovery. Asserting it
+      // also pins the module mock above: without that mock this line writes to
+      // the developer's real ~/.argent/chromium-cdp-ports.json on every run.
+      expect(trackChromiumPort).toHaveBeenCalledWith(realPort);
+
       // After successful boot, both boot-time listeners MUST be detached.
       // Exactly one 'exit' listener remains: the kill-registry cleanup hook
       // installed for killChromiumByPort. It only evicts the retained handle —
@@ -349,18 +341,17 @@ describe("bootElectronApp — spawn error handling", () => {
     process.on("unhandledRejection", onUnhandled);
 
     try {
-      // No HTTP server on the port → waitForCdpReady will time out fast,
-      // taking the catch path. earlyExit / spawnError aren't fired by us.
+      // No HTTP server on the port → waitForCdpReady times out fast, taking
+      // the catch path. earlyExit / spawnError aren't fired by us. Match the
+      // timeout message: a failure raised before spawn attaches no boot
+      // listener, so the assertions below would pass vacuously.
       await expect(
         bootElectronApp({
           appPath: appDir,
-          // ensureCdpReachable fails repeatedly until readyTimeoutMs elapses.
-          // Don't pick 0 — we want a real unreachable port, not an OS-assigned
-          // ephemeral one.
           port: UNREACHABLE_CDP_PORT,
           readyTimeoutMs: 100,
         })
-      ).rejects.toBeInstanceOf(Error);
+      ).rejects.toThrow(/CDP never became reachable/);
 
       // Both listeners must be detached in the catch path.
       expect(child.listenerCount("error")).toBe(0);
