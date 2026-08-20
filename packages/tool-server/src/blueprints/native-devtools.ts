@@ -259,7 +259,7 @@ export function buildInitFailedResult(
 }
 
 // Overloads for proper return-type inference.
-type NativeDevtoolsPrecheckBlock =
+export type NativeDevtoolsPrecheckBlock =
   | NativeDevtoolsInitFailedResult
   | { status: "restart_required"; message: string }
   | { status: "service_stale"; message: string }
