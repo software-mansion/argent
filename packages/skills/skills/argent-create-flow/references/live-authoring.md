@@ -256,4 +256,6 @@ A plain `type:` with unconfirmed focus passes as best effort. A clear fails when
 
 A [selector-less gesture](flow-yaml.md#directives) raises a warning of a different shape, not one of those six: a tree-source outage left it unsettled, so it dispatched blind and the green says only that the gesture was sent. Restore the source, usually by relaunching the app so the instrumentation loads. Accept it only where the app serves no tree at all, such as the [injection-free iOS form](reliability-and-recovery.md#terminally-non-injectable-ios-apps).
 
+A clear raises a third shape. On Android the `keyboard` tool prefers one accessibility edit and reads the field back; when it cannot, the result carries a note and the step warns. This reaches the report from a `type:` step and from a raw `keyboard` tool step alike. Read the note. A helper that is missing, too old, or could not start is environment: let it start on the device and rerun. A field the helper cannot read back — every password box — can never produce a verified clear, so accept the warning and gate the next action on an app result instead of on the field.
+
 One uninterrupted full pass completes a normal flow. `argent-qa-flows` requires two consecutive passes of unchanged YAML. For CI, use `argent flow run <name> [--platform ...]`; it exits non-zero on failure.

@@ -99,12 +99,14 @@ async function runSimulatorServerType(
   // `keys` counts what the caller asked to be *entered* — one per character of
   // `text`, plus one for a named `key`. The clear's own presses are deliberately
   // excluded: they are an implementation detail of emptying the field, and what
-  // that costs differs wildly per backend (two HID presses here; on Android one
+  // that costs differs wildly per backend (two HID presses here; on Android
+  // NO key events at all when the accessibility replace serves it, otherwise one
   // `input keycombination` plus a `KEYCODE_DEL`, or on a level without that
   // subcommand a MOVE_END plus one delete per character — up to 159 key events;
   // two CDP key events on Chromium). Counting them would make the same request
-  // report a different `keys` on every platform. The clear is reported by
-  // `cleared` instead.
+  // report a different `keys` on every platform — and on Android it would vary
+  // by which path happened to be available. The clear is reported by `cleared`
+  // instead, plus a `note` on Android when the weaker path ran.
   const pressAndCount = async (keyCode: number, modifierKeyCode?: number) => {
     await pressKeyCode(keyCode, modifierKeyCode);
     keysPressed++;

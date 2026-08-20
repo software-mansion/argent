@@ -114,6 +114,7 @@ Classify before editing:
 | Acceptance failure | Actions pass but a requested check fails       | Preserve the check and investigate behavior                                                                                                             |
 | Idle warning       | A readiness step passes without settling       | Read [which of the six warnings](flow-yaml.md#idle-readiness) it is, then gate the next action on a stable element                                      |
 | Unsettled gesture  | A selector-less gesture passes unsettled       | Restore the tree source, usually by relaunching the app; the green says [only that the gesture was sent](flow-yaml.md#directives)                       |
+| Unverified clear   | An Android clear passes on a weaker path       | Read the note. Start the devtools helper and rerun; on a field it cannot read back, accept it and gate the next action on an app result                 |
 
 Then:
 

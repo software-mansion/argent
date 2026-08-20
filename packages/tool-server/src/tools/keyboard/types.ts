@@ -17,6 +17,27 @@ export interface KeyboardParams {
    * and Android levels with `input keycombination`; caret-to-end-of-line plus
    * one backspace per character on older Android levels, which is therefore
    * line-scoped rather than buffer-scoped.
+   *
+   * Android has THREE paths for it and prefers them in this order:
+   *
+   *   1. One atomic accessibility edit through the devtools helper
+   *      (`ACTION_SET_TEXT`). No select-all chord, no per-character injection,
+   *      and the field is read back afterwards — so a widget that cannot do it
+   *      says so instead of reporting a clear that never happened.
+   *   2. The select-all chord, when the helper cannot serve the request. A
+   *      `{ clear, text }` stops AT the chord and lets `text` replace the
+   *      selection, so the field is never observed empty in between; a
+   *      clear-only call sends the delete and then reads the field back.
+   *   3. Caret-to-end-of-line plus one backspace per character — on a level with
+   *      no `input keycombination`, or to finish a chord that did not take.
+   *
+   * Paths 2 and 3 exist because of the same race, and it is the reason a
+   * combined call is not simply the two halves run back to back: an app that
+   * reacts to its field becoming empty does so asynchronously, and the reaction
+   * landed mid-typing and wiped the characters already sent. See
+   * `AndroidClearOptions.keepSelection` for the measurements. Whenever path 1 is
+   * not the one that ran, the result carries a {@link KeyboardResult.note}
+   * saying so and why.
    */
   clear?: boolean;
   /** Delay in ms between key presses (default 50). */
@@ -47,13 +68,21 @@ export interface KeyboardResult {
    *   cross-origin iframe), a field the page detached, or a slot assignment the
    *   page refused all fall back to best-effort, so `cleared: true` there means
    *   "seen empty, or not observable" — never "seen NOT empty".
-   * - Android parses the `input keycombination` output, so a level without the
-   *   subcommand takes the measured delete path instead of silently degrading
-   *   to a one-character backspace. It does not read the field back, though, so
-   *   a widget that swallows the select-all chord on a level that HAS the
-   *   subcommand leaves the following delete acting as a plain backspace: the
-   *   field is left one character shorter and reported as cleared. That is a
-   *   mutated field, not a no-op.
+   * - Android depends on WHICH of its three paths ran, and {@link note} says
+   *   whenever it was not the first:
+   *     - Atomic (devtools helper, `ACTION_SET_TEXT`): the field IS read back and
+   *       compared, and a mismatch falls through to the injected paths rather
+   *       than being reported. So `cleared: true` from this path is as strong as
+   *       Chromium's — "seen holding the requested value".
+   *     - Injected (`input`): parses the `keycombination` output, so a level
+   *       without the subcommand takes the measured delete path instead of
+   *       silently degrading to a one-character backspace, and a clear-only call
+   *       reads the field back afterwards and finishes with a delete run if the
+   *       chord left a residue. A `{ clear, text }` cannot be checked that way —
+   *       the field is meant to still hold its value when the chord lands — so a
+   *       widget that swallows the chord (a Flutter `TextField` does) keeps its
+   *       whole value with the text spliced in at the caret, reported as
+   *       cleared.
    * - The iOS HID transport is fire-and-forget and cannot read the field at
    *   all: `cleared: true` means the chord was dispatched, nothing more.
    *
@@ -61,4 +90,23 @@ export interface KeyboardResult {
    * the value if that matters.
    */
   cleared?: boolean;
+  /**
+   * An advisory the caller should read, present only when there is one.
+   *
+   * Android sets it when a `clear` could not take the atomic accessibility path
+   * — naming why, which weaker path ran instead, and what that path cannot
+   * promise about the field. ON ANDROID, absent therefore means the clear WAS
+   * the verified one, and "no note" is itself the strong result rather than the
+   * absence of information.
+   *
+   * Nowhere else. No other backend can set it: the iOS and Chromium returns are
+   * `{ typed, keys, cleared? }` literals, so an iOS chord nothing observed and a
+   * Chromium clear on a page it could not read are "absent" in exactly the same
+   * way. Read the absence together with the platform, not on its own.
+   *
+   * Never carries the field's contents or its length: it travels into the
+   * agent's transcript and the tool-server's log, and a `{{secret:…}}` request
+   * is aimed at the box that already holds a credential.
+   */
+  note?: string;
 }

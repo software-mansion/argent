@@ -11,10 +11,15 @@
  *     never typed while the call still reported it as typed. Shift had the same
  *     window before `clear` existed, where the worst outcome was a mis-cased
  *     character; Command is the modifier that makes it destructive.
- *   - Android's modern clear issues the select-all (`input keycombination`) and
- *     the delete (`input keyevent`) as two separate adb invocations, leaving the
- *     field fully SELECTED in between, and its text goes out as a third. A
- *     character arriving in that window replaces the whole selection.
+ *   - Android's INJECTED clear issues the select-all (`input keycombination`) as
+ *     its own adb invocation and whatever consumes that selection as another —
+ *     the delete on a clear-only call, or the caller's own text on a
+ *     `{ clear, text }`, which sends no delete at all. Either way the field is
+ *     fully SELECTED in between, and a character arriving in that window
+ *     replaces the whole selection. The preferred path above it (one
+ *     accessibility replace) holds no selection, but it shares this chain
+ *     anyway: it can fall back INTO the injected one, and a second call must not
+ *     arrive mid-fallback.
  *   - Chromium runs the clear and then the typing loop as many separate CDP
  *     round trips.
  *

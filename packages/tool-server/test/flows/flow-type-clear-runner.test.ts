@@ -471,12 +471,19 @@ const textInputLayoutWrapperXml = () =>
 
 function mockRegistry(
   calls: Call[],
-  getHierarchy: () => { xml: string } | Promise<{ xml: string }>
+  getHierarchy: () => { xml: string } | Promise<{ xml: string }>,
+  /**
+   * What the `keyboard` tool answers. Only the clear-carrying call is worth
+   * varying: it is the one that can succeed in a weaker way than asked and say
+   * so in a `note`.
+   */
+  keyboardResult?: (args: Record<string, unknown>) => unknown
 ): Registry {
   return {
     invokeTool: vi.fn(async (id: string, args: Record<string, unknown>) => {
       calls.push({ id, args });
       if (id === "list-devices") return { devices: [] };
+      if (id === "keyboard" && keyboardResult) return keyboardResult(args);
       return { ok: true };
     }),
     getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
@@ -550,6 +557,100 @@ describe("type directive — clear dispatch", () => {
       .filter((c) => c.id === "gesture-tap" || c.id === "keyboard")
       .map((c) => c.id);
     expect(order[0]).toBe("gesture-tap");
+  });
+
+  it("carries the keyboard's `note` into the step report instead of dropping it", async () => {
+    // The step still PASSES — the clear was carried out — but on Android it may
+    // have been carried out by a path nothing can verify, and the note is the
+    // only thing that says which. A QA flow's value is knowing what its green
+    // bought, so dropping it here is the one place it matters most.
+    const calls: Call[] = [];
+    const NOTE = "keyboard clear: the atomic accessibility replace was not used (…).";
+    const registry = mockRegistry(
+      calls,
+      () => ({ xml: fieldXml("old.remembered.login") }),
+      (args) =>
+        args.clear === true ? { typed: "x", keys: 1, cleared: true, note: NOTE } : { ok: true }
+    );
+
+    await writeFlow("f", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "type", into: { identifier: "email" }, text: "new@example.com", clear: true },
+      ],
+    });
+
+    const result = asRun(await run(registry));
+    expect(result.steps.map((s) => s.status)).toEqual(["pass"]);
+    expect(result.steps[0]!.warning).toBe(NOTE);
+  });
+
+  it("leaves the step warning-free when the clear reported none", async () => {
+    // The counterpart: a verified clear says nothing, and a step report that
+    // warned anyway would train the reader to ignore the field.
+    const calls: Call[] = [];
+    const registry = mockRegistry(
+      calls,
+      () => ({ xml: fieldXml("old.remembered.login") }),
+      () => ({
+        typed: "x",
+        keys: 1,
+        cleared: true,
+      })
+    );
+
+    await writeFlow("f", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "type", into: { identifier: "email" }, text: "new@example.com", clear: true },
+      ],
+    });
+
+    const result = asRun(await run(registry));
+    expect(result.steps[0]!.status).toBe("pass");
+    expect(result.steps[0]!.warning).toBeUndefined();
+  });
+
+  it("carries the note of a clear recorded as a RAW tool step too", async () => {
+    // `flow-add-step` has no `keyboard` → `type` rewrite, so a recorded clear
+    // replays as a raw tool step. Its report used to carry the note inside
+    // `result` and no warning at all — and `argent-cli`'s own `StepReport` has no
+    // `result` field, so the CLI printed a clean pass over an unverified clear.
+    const calls: Call[] = [];
+    const NOTE = "keyboard clear: the atomic accessibility replace was not used (…).";
+    const registry = mockRegistry(
+      calls,
+      () => ({ xml: fieldXml("old.remembered.login") }),
+      (args) =>
+        args.clear === true ? { typed: "x", keys: 1, cleared: true, note: NOTE } : { ok: true }
+    );
+
+    await writeFlow("f", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tool", name: "keyboard", args: { clear: true, text: "new@example.com" } }],
+    });
+
+    const result = asRun(await run(registry));
+    expect(result.steps.map((s) => s.status)).toEqual(["pass"]);
+    expect(result.steps[0]!.warning).toBe(NOTE);
+  });
+
+  it("leaves a raw tool step warning-free when its result carries no note", async () => {
+    const calls: Call[] = [];
+    const registry = mockRegistry(
+      calls,
+      () => ({ xml: fieldXml("old.remembered.login") }),
+      () => ({ typed: "x", keys: 1, cleared: true })
+    );
+
+    await writeFlow("f", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tool", name: "keyboard", args: { clear: true, text: "new@example.com" } }],
+    });
+
+    const result = asRun(await run(registry));
+    expect(result.steps[0]!.status).toBe("pass");
+    expect(result.steps[0]!.warning).toBeUndefined();
   });
 
   it("refuses to clear when the focus wait never sees focus reach the target", async () => {

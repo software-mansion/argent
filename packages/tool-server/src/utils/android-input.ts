@@ -159,7 +159,9 @@ export async function injectAndroidKeycode(serial: string, keycode: number): Pro
   await adbShell(serial, `input keyevent ${keycode}`, { timeoutMs: ADB_INPUT_TIMEOUT_MS });
 }
 
-// Keycodes used by the clear (select-all + delete) sequence.
+// Keycodes used by the clear (select-all, then delete — or, when the caller's
+// own text is what replaces the selection, no delete at all; see
+// AndroidClearOptions.keepSelection).
 const KEYCODE_CTRL_LEFT = 113;
 const KEYCODE_A = 29;
 const KEYCODE_DEL = 67;
@@ -183,13 +185,18 @@ const DELETE_RUN_RESERVE_MS = 11_000;
  * Wall-clock budget for one whole clear, shared across every adb round trip it
  * makes.
  *
- * A clear is up to four sequential adb calls plus an in-process backoff: the
- * `keycombination` probe, then on a legacy level a `uiautomator dump`, a
- * DUMP_RETRY_BACKOFF_MS wait, a second dump (see {@link readHierarchy}) and the
- * delete run. One `text` OR `key` injection still follows it inside the same
- * request — the tool rejects both together — under its own ADB_INPUT_TIMEOUT_MS
- * cap, so a `{ clear, text }` worst case of ~41s still sums past the argent-mcp
- * adapter's 30s per-request fetch timeout
+ * A clear is up to four sequential adb calls plus, on the legacy path only, an
+ * in-process backoff. Modern: the `keycombination` probe, the DEL, one dump to
+ * read the field back, and the delete run that dump can call for. Legacy: the
+ * probe, a `uiautomator dump`, a DUMP_RETRY_BACKOFF_MS wait, a second dump (see
+ * {@link readHierarchy}) and the delete run. The two never compose — a rescue
+ * carries its measurement down, so it does not dump again. One `text` OR `key`
+ * injection still follows it inside the same request — the tool rejects both
+ * together — under its own ADB_INPUT_TIMEOUT_MS cap. And the whole injected
+ * clear is itself the SECOND tier: the accessibility replace runs first, under
+ * its own ATOMIC_CLEAR_BUDGET_MS (8s) plus a 5s `ping` and a 15s `setText`. So
+ * an Android `{ clear, text }` worst case sums to 8 + 5 + 15 + 26 + 15 = 69s,
+ * well past the argent-mcp adapter's 30s per-request fetch timeout
  * (`FETCH_TIMEOUT_MS`, mcp-server.ts) — which is why `keyboard` declares
  * `longRunning` and the adapter does not apply that timeout to it. The clear's
  * own legs still share ONE deadline rather than being sized individually: the
@@ -275,6 +282,68 @@ interface AndroidClearOptions {
    */
   readHierarchy?: () => Promise<string | undefined>;
   /**
+   * Text follows in the same request, so leave the field's contents SELECTED
+   * instead of deleting them: the first character typed replaces the selection,
+   * and the field never passes through an empty state at all.
+   *
+   * SECOND CHOICE, and only reached when the devtools helper cannot do the job.
+   * A `{ clear, … }` is served first by one atomic accessibility edit
+   * (`AndroidDevtoolsApi.setText`, see `tryAtomicClear` in the keyboard
+   * backend), which needs no select-all chord and is verified by reading the
+   * field back. This option is what the injected path does when that is
+   * unavailable — no helper running, a helper too old to know the method, or a
+   * widget that refused. It closes the SAME race, so the corruption below cannot
+   * come back on that path; what it cannot do is notice a select-all the app
+   * ignored. Measured: a Flutter `TextField` swallows the Ctrl+A chord silently,
+   * so this path leaves the old value whole and splices the text in at the caret
+   * while still reporting `cleared: true` — which is why the keyboard backend
+   * attaches a `note` whenever the atomic path was not the one that ran.
+   *
+   * This is the fix for a race that made `{ clear, text }` corrupt the value it
+   * was replacing, reproduced on a Pixel 3a (API 36) against Bluesky's search
+   * box: 4/10 and 3/14 direct calls, and 5 of 12 runs of a saved flow built on
+   * them. Every failure was a proper SUFFIX of the requested text — `Friends`
+   * came back as `riends`, `iends`, `ends`, `ds`, and twice as nothing at all —
+   * which is the shape of an edit that emptied the field again PART WAY THROUGH
+   * the typing, destroying the characters already sent.
+   *
+   * The empty field is what provokes it, and the app's reaction is asynchronous:
+   * it lands a few hundred milliseconds after the delete, by which time the next
+   * `adb shell input` has started typing. Three measurements place the blame
+   * there. Typing the same string with no clear at all — over the selection the
+   * app itself makes on focus — never corrupted (8/8), so the typing is not what
+   * breaks. Removing only the delete, so the text replaces the selection, never
+   * corrupted (3 runs of 10). And leaving the delete in but pausing 300ms before
+   * typing never corrupted either (10/10) — the reaction had already landed.
+   * It also takes a real focus change first (a tap that re-focuses an already
+   * focused field reproduced nothing in 10 runs), which is what puts the app's
+   * JS thread far enough behind for the reaction to land mid-typing.
+   *
+   * So the window cannot be timed out of: the delete and the text are separate
+   * `input` invocations, the gap between them is one process spawn on the device
+   * (~300ms), and the reaction latency moves with the JS thread's load — which
+   * is why the fix removes the trigger rather than waiting for it. The app is
+   * handed `F`, never `""`.
+   *
+   * Only the `keycombination` path can honour this — {@link clearByDeleting}
+   * has no selection primitive to leave behind (that is the whole reason it
+   * backspaces), so on those levels the empty state, and the race with it,
+   * remain. {@link AndroidClearOutcome.keptSelection} is what actually happened;
+   * this is only what was asked for.
+   */
+  keepSelection?: boolean;
+  /**
+   * An accessibility replace was ACCEPTED by the widget before this ran, so the
+   * field may already hold the value the caller asked for.
+   *
+   * Only the over-length refusal reads it, and only to stop saying "Nothing was
+   * modified" — a sentence that makes a retry against the original value look
+   * safe. The caller sets it for the two `setText` outcomes where `applied` is
+   * true and the write could not be confirmed (`unverifiable`, `value_mismatch`),
+   * which is exactly when the injected path is a SECOND write.
+   */
+  atomicWriteApplied?: boolean;
+  /**
    * The value the caller is about to type came from a `{{secret:…}}`
    * placeholder, so the over-length refusal must not quote the field's exact
    * character count.
@@ -290,13 +359,76 @@ interface AndroidClearOptions {
 }
 
 /**
+ * Which of the injected clears actually ran, so the keyboard backend can say so
+ * in its `note` rather than inferring it from the request.
+ *
+ * Inference does not work here: every one of these is chosen from something the
+ * DEVICE said (the probe's output, the field read back afterwards), not from
+ * anything the caller asked for. `keepSelection` in particular is a request the
+ * legacy path cannot honour.
+ *
+ * - `select-all` — the chord, then DEL. Either the field read back empty, or it
+ *   could not be read at all; those are not distinguished, because an unreadable
+ *   field is evidence of nothing (see the read-back leg).
+ * - `select-all-kept` — the chord alone, with the caller's own text left to
+ *   replace the selection. Nothing verified it, and nothing can: the field is
+ *   SUPPOSED to still hold its value at that point.
+ * - `select-all-rescued` — the chord did not take, and the delete run finished
+ *   what it left behind.
+ * - `delete-run` — this level has no `input keycombination` at all.
+ */
+type AndroidClearPath = "select-all" | "select-all-kept" | "select-all-rescued" | "delete-run";
+
+export interface AndroidClearOutcome {
+  path: AndroidClearPath;
+  /**
+   * A selection was left standing for the caller's text to replace.
+   *
+   * NOT the same as {@link AndroidClearOptions.keepSelection} having been asked
+   * for: the legacy fallback has no selection primitive, so it empties the field
+   * however the option was set. A caller that reports the field's state on a
+   * later failure has to read it from here rather than from its own request.
+   */
+  keptSelection: boolean;
+  /**
+   * A delete run ran without a length to size it, so it sent the fixed
+   * BLIND_DELETE_COUNT — see there for the field it still truncates. Absent on
+   * every path that sent no delete run, and on every run that WAS sized.
+   *
+   * Typed `true` rather than `boolean` so "absent" is the only way to say no: a
+   * `false` here would read as "a sized run happened", which is a different
+   * claim from "no run happened at all", and both spell the same word.
+   */
+  blindDeleteRun?: true;
+  /**
+   * The field was read back after the delete and reported NO text.
+   *
+   * Only `select-all` carries it, and only for one of the three read-backs that
+   * reach that path. The other two are a screen the reader could not capture at
+   * all, and a focused field it could not measure — a password box is floored to
+   * the blind count rather than dropped (see `measureFocusedTextLength`). Both
+   * end the same way as an empty field and neither confirms anything, so the
+   * caller's note has to tell them apart.
+   *
+   * Typed `true` rather than `boolean` for the reason `blindDeleteRun` is: the
+   * paths that read nothing back must carry nothing, not a `false` that reads as
+   * "read back, and not empty".
+   */
+  readBackEmpty?: true;
+}
+
+/**
  * Empty the focused text field: select its whole contents, then delete.
+ *
+ * With {@link AndroidClearOptions.keepSelection} the delete is skipped and the
+ * contents are left SELECTED for the caller's own text to replace — see that
+ * option for why a `{ clear, text }` must not empty the field first.
  *
  * Ctrl+A is the Android select-all chord (it is what a hardware keyboard sends),
  * and `input keycombination` is the only `input` subcommand that can hold one
- * key while pressing another. Verified on a native `EditText` (Settings search)
- * and a React Native `TextInput` (Bluesky sign-in) — the field empties, the
- * placeholder returns and focus is retained.
+ * key while pressing another. On a native `EditText` (Settings search) it is
+ * exact — 104 runs, no miss. On a React Native `TextInput` it is not, which is
+ * why the result is read back rather than trusted; see the verify leg below.
  *
  * `keycombination` is a recent `input` subcommand; older levels do not have it
  * (measured absent on API 30, present on API 34 and 36) — and its absence
@@ -340,7 +472,7 @@ interface AndroidClearOptions {
 export async function injectAndroidClear(
   serial: string,
   options: AndroidClearOptions = {}
-): Promise<void> {
+): Promise<AndroidClearOutcome> {
   // One deadline for every leg below — see ANDROID_CLEAR_BUDGET_MS.
   const deadline = Date.now() + ANDROID_CLEAR_BUDGET_MS;
   const out = await adbShell(
@@ -349,9 +481,20 @@ export async function injectAndroidClear(
     { timeoutMs: clearLegTimeout(deadline, DELETE_RUN_RESERVE_MS) }
   );
   if (/unknown command|usage: input/i.test(out)) {
-    await clearByDeleting(serial, deadline, options);
-    return;
+    // `keepSelection` is unhonourable here — the fallback backspaces, so the
+    // field ends up EMPTY whatever was asked for.
+    const blind = await clearByDeleting(serial, deadline, options);
+    return { path: "delete-run", keptSelection: false, ...blind };
   }
+  // Text follows, so the select-all IS the clear: the caller's first character
+  // replaces the selection in one edit, and the app never sees the empty field
+  // it would otherwise react to. See AndroidClearOptions.keepSelection for the
+  // race this removes and why no delay closes it.
+  //
+  // Nothing verifies this one, and the read-back below could not: the field is
+  // supposed to still hold its whole value here, so a residue is the expected
+  // state rather than the failure signal it is after a DEL.
+  if (options.keepSelection) return { path: "select-all-kept", keptSelection: true };
   // Capped at the ordinary per-`input` budget as well as at the shared deadline.
   // `clearLegTimeout(deadline)` alone handed this leg everything the probe did
   // not spend — ~25s after a warm probe, 10s past the cap every other `input`
@@ -384,6 +527,59 @@ export async function injectAndroidClear(
       }
     );
   }
+  // The chord lands; the SELECTION does not always follow it. Against a React
+  // Native `TextInput` 15 of 85 clears over this path left the field short by
+  // exactly the character the DEL took, every one of them returning
+  // `cleared: true` over a value the `text` then appended to (Expo dev-launcher
+  // URL field, Pixel 6 / API 34; the same 85 against a native `EditText` and the
+  // fixed path both ran clean). `input` exits 0 either way — the same silent
+  // no-op as the missing subcommand above, so the probe cannot catch it.
+  //
+  // Holding the chord longer is not the fix: `-t 100` still missed 2/30 and
+  // `-t 300` 7/30, worse rather than better. Reading the field back is, and a
+  // residue goes to the delete run, which needs no selection to be correct.
+  //
+  // Short fields are the ones that fail: 11 of 80 at 6 characters, 0 of 80 at
+  // 160 and 200 (settling time is not the variable — a 4s pause before the chord
+  // left the 6-character rate unchanged). So a residue reaching the delete run
+  // has always been far inside MAX_DELETE_COUNT, and its length refusal below is
+  // a guard, not a limit this path has been seen to hit.
+  //
+  // Only a POSITIVE, SIZED reading redirects. Unreadable is evidence of nothing,
+  // and treating it as failure would spend a blind BLIND_DELETE_COUNT run on
+  // every clear taken where `measureFocusedTextLength` cannot see. A measurement
+  // that is really a placeholder costs a run that deletes nothing.
+  //
+  // `sized` is load-bearing, not belt-and-braces. An unmeasurable focused
+  // editable — a password field is the reachable shape — is not absent from the
+  // measurement: it is FLOORED to BLIND_DELETE_COUNT (see
+  // measureFocusedTextLength), so a bare `chars > 0` reads 150 as a residue and
+  // rescues every single clear on such a field, whether or not the chord took.
+  // That is the opposite of "only a positive reading redirects".
+  //
+  // What a SIZED reading still cannot say is WHICH of the two it is. An empty
+  // field reports its placeholder in the same `text` attribute as a real value,
+  // and neither reader carries a hint attribute to tell them apart on the levels
+  // this path serves (checked on API 34: `uiautomator` emits no `hint`, and the
+  // helper's `captureXml` does not either). So a focused, emptied `EditText` with
+  // a placeholder — a search box, a login field — measures its placeholder's
+  // length and takes the rescue. Sending the run anyway is the right side to err
+  // on: backspace on an empty field is a no-op, while skipping it on a real
+  // residue leaves the value the clear was asked to remove. The note is worded to
+  // match — it reports the reading, and does not claim the chord failed.
+  const residue = await measureFocusedTextLength(serial, deadline, options.readHierarchy, 1);
+  if (residue?.sized === true && residue.chars > 0) {
+    const blind = await clearByDeleting(serial, deadline, options, residue.chars);
+    return { path: "select-all-rescued", keptSelection: false, ...blind };
+  }
+  // A SIZED zero is the only reading that says the field is empty. An unreadable
+  // screen and an unmeasurable field both arrive here too, and neither confirms
+  // anything — see AndroidClearOutcome.readBackEmpty.
+  return {
+    path: "select-all",
+    keptSelection: false,
+    ...(residue?.sized === true ? { readBackEmpty: true as const } : {}),
+  };
 }
 
 const KEYCODE_MOVE_END = 123;
@@ -450,9 +646,14 @@ export const MAX_DELETE_COUNT = 150;
 const BLIND_DELETE_COUNT = MAX_DELETE_COUNT;
 
 /**
- * Empty the focused field on an Android level whose `input` has no
- * `keycombination`: move the caret to the end of the line, then backspace over
- * the contents.
+ * Empty the focused field without a selection: move the caret to the end of the
+ * line, then backspace over the contents.
+ *
+ * Two callers. A level whose `input` has no `keycombination` has no other clear
+ * available, and reaches this having sent nothing. The select-all path reaches
+ * it with `rescueFrom` set, having already measured the residue its chord failed
+ * to remove — so this must not dump a second time, and the over-length refusal
+ * below must not tell that caller the field is untouched.
  *
  * The count is measured where it can be. A `uiautomator dump` is read first and
  * the focused editable node's `text` gives the number of characters to remove,
@@ -464,23 +665,23 @@ const BLIND_DELETE_COUNT = MAX_DELETE_COUNT;
  * and BLIND_DELETE_COUNT for what it covers.
  *
  * Note the dump reports an EMPTY field's hint in the same `text` attribute, so a
- * measurement can be the placeholder rather than real content — and on the
- * levels this fallback actually serves there is nothing to tell them apart:
- * checked on API 30, whose dump carries no `hint` attribute at all. (API 36 does
+ * measurement can be the placeholder rather than real content. API 30 carries no
+ * `hint` attribute at all, so there is nothing to tell the two apart; API 36 does
  * emit one — a focused empty Settings search box dumps as `text="Search
- * settings" … hint="Search settings"` — but that level has `input
- * keycombination`, so it never reaches this path.) For the delete run the
+ * settings" … hint="Search settings"` — and since the rescue path reaches here
+ * on exactly the levels that HAVE `keycombination`, that signal is now within
+ * reach. It is unread: `measureFocusedTextLength` is the shared measurement and
+ * would have to gain a level-conditional rule to use it. For the delete run the
  * over-measurement is harmless — it only makes the run
  * slightly longer than needed, and backspace on an empty field does nothing. It
  * is NOT harmless for the MAX_DELETE_COUNT gate below, which turns any
  * over-measurement into a refusal: an empty field whose placeholder is longer
  * than the limit is refused with a length it does not hold. Accepted rather than
- * fixed, because nothing in the dump distinguishes the two on the levels this
- * fallback serves, and the alternative (delete first, judge after) can only
- * discover a real over-long field by having already truncated it. A placeholder
- * that long is also not a shape these single-line fields take.
+ * fixed, because the alternative (delete first, judge after) can only discover a
+ * real over-long field by having already truncated it. A placeholder that long is
+ * also not a shape these single-line fields take.
  *
- * Known limit, and the reason this is the fallback rather than the primary path:
+ * Known limit, and the reason the select-all is tried first rather than this:
  * `KEYCODE_MOVE_END` is end-of-LINE, not end-of-buffer, so a multi-line field
  * keeps whatever sits below the caret. Single-line inputs — every login, search
  * and form field — are emptied exactly.
@@ -492,10 +693,23 @@ const BLIND_DELETE_COUNT = MAX_DELETE_COUNT;
 async function clearByDeleting(
   serial: string,
   deadline: number,
-  options: AndroidClearOptions
-): Promise<void> {
-  const count =
-    (await measureFocusedTextLength(serial, deadline, options.readHierarchy)) ?? BLIND_DELETE_COUNT;
+  options: AndroidClearOptions,
+  rescueFrom?: number
+): Promise<{ blindDeleteRun?: true }> {
+  // Kept as its own binding rather than folded into the `??` chain: the caller's
+  // note has to say whether this run was SIZED or blind, and `count` alone
+  // cannot answer that — an unmeasurable focused editable is floored to
+  // BLIND_DELETE_COUNT by the measurement itself (see there), so the number is
+  // the same either way.
+  // A rescue arrives with the residue its caller already measured off the field,
+  // and its caller only redirects on a SIZED reading (see injectAndroidClear), so
+  // this is sized by construction rather than by assumption; only the legacy path
+  // has to ask.
+  const measured: FocusedTextMeasurement | undefined =
+    rescueFrom === undefined
+      ? await measureFocusedTextLength(serial, deadline, options.readHierarchy)
+      : { chars: rescueFrom, sized: true };
+  const count = measured?.chars ?? BLIND_DELETE_COUNT;
   const keys = count + DELETE_MARGIN;
   // Refuse BEFORE touching the field, and on length alone. Time is deliberately
   // not a second ground: the run is already bounded by DELETE_RUN_RESERVE_MS,
@@ -513,24 +727,65 @@ async function clearByDeleting(
     const reports = options.secretText
       ? `reports more characters than`
       : `reports ${count} characters, more than`;
+    // Why backspaces are the only clear left, and what the field is holding now,
+    // both differ by caller: the legacy path is chosen because the level has no
+    // `keycombination` and refuses before sending anything, while the rescue is
+    // reached after a select-all and a DEL have already gone out.
+    //
+    // The rescue arm states no more than that. The count comes from the same
+    // whole-screen measurement the sentence below warns about, so it does not
+    // prove the chord failed on the field the caller meant: the reading can be
+    // ANOTHER window's focused field, or this field's own placeholder. Naming
+    // the two possible states is what a caller can act on; asserting one of them
+    // is how a message ends up describing a clear that fully worked.
+    const why =
+      rescueFrom === undefined
+        ? `Without \`input keycombination\` (added after API 30) the only available clear is ` +
+          `one backspace per character, which is too slow to finish reliably past ` +
+          `${MAX_DELETE_COUNT}.`
+        : `A select-all and a delete were already sent, and a focused field still reports this ` +
+          `much, so one backspace per character is the only clear left — too slow to finish ` +
+          `reliably past ${MAX_DELETE_COUNT}.`;
+    // "Nothing was modified" is only true when nothing reached the field at all.
+    // The legacy arm can be entered after an accessibility replace the widget
+    // ACCEPTED — nothing ties the helper's protocol to the API level, so a
+    // protocol-2 helper on a level without `keycombination` is an ordinary
+    // configuration — and there the sentence is what makes a retry against the
+    // original value look safe.
+    const prior = options.atomicWriteApplied
+      ? ` An accessibility replace was ACCEPTED by the widget before this ran, so the field may ` +
+        `already hold the value you asked for.`
+      : ``;
+    const state =
+      rescueFrom === undefined
+        ? options.atomicWriteApplied
+          ? `Nothing was typed.${prior}`
+          : `Nothing was modified and nothing was typed.`
+        : `The field HAS been touched: if the select-all took, the delete emptied it; if it did ` +
+          `not, the delete removed one character. Nothing was typed.${prior}`;
+    const remedy =
+      rescueFrom === undefined
+        ? `Clear the field with the app's own affordance, or use an emulator on a newer API ` +
+          `level.`
+        : `Read the field's actual contents, then clear it with the app's own affordance.`;
     throw new InvalidToolInputError(
       `keyboard clear: a focused text field on this screen ${reports} ` +
-        `this Android level can clear. Without \`input keycombination\` (added after API ` +
-        `30) the only available clear is one backspace per character, which is too slow to ` +
-        `finish reliably past ${MAX_DELETE_COUNT}. The count comes from the screen's view ` +
+        `this Android level can clear. ${why} The count comes from the screen's view ` +
         `hierarchy, which reports an empty field's placeholder in the same attribute as its ` +
         `value and covers every window, so it may belong to a different focused field than ` +
-        `the one you meant. Nothing was modified and nothing was typed. Clear the field with ` +
-        `the app's own affordance, or use an emulator on a newer API level.`,
+        `the one you meant. ${state} ${remedy}`,
       {
-        // Its own code rather than KEYBOARD_CLEAR_INEFFECTIVE: this is a
-        // caller-fixable rejection (a 400) decided BEFORE anything was sent,
-        // whereas INEFFECTIVE is raised after the edit was attempted and
-        // observed not to take — a page-side cancellation of the key or the
+        // Its own code rather than KEYBOARD_CLEAR_INEFFECTIVE: both callers reach
+        // this with the same caller-fixable condition (a 400) — the field is
+        // longer than backspaces can clear, and the remedy is the app's own
+        // affordance — whereas INEFFECTIVE is raised after the edit was attempted
+        // and observed not to take, a page-side cancellation of the key or the
         // `beforeinput`, which is a 500 because the caller cannot fix it, not
         // because anything inside the tool went wrong. Sharing one code would
-        // mix "nothing happened, fix the request" with "the edit was refused by
-        // the app" in any dashboard slicing on it.
+        // mix "this field cannot be cleared this way" with "the edit was refused
+        // by the app" in any dashboard slicing on it. What differs between the
+        // two callers is only whether anything was sent first, and that is
+        // carried by the message rather than by a second code.
         error_code: FAILURE_CODES.KEYBOARD_CLEAR_FIELD_TOO_LONG,
         failure_stage: "keyboard_clear_too_long_android",
         error_kind: "unsupported",
@@ -586,6 +841,11 @@ async function clearByDeleting(
       }
     );
   }
+  // Only ever `true` or absent, never `false`: it spreads into
+  // {@link AndroidClearOutcome}, where the field is optional precisely so the
+  // paths that send no delete run at all carry nothing rather than a `false`
+  // that reads as "a sized run happened".
+  return measured?.sized === true ? {} : { blindDeleteRun: true };
 }
 
 // The winner of a UiAutomation race holds the connection for the whole dump
@@ -634,8 +894,14 @@ const hasNodes = (xml: string) => xml.includes("<hierarchy") && xml.includes("<n
  * waiting out the holder — two dumps plus the backoff still fit the read legs'
  * share of the budget.
  *
- * Returns undefined when neither attempt produced a hierarchy, or when there is
- * not enough budget left to try.
+ * Returns undefined when no attempt produced a hierarchy, or when there is not
+ * enough budget left to try.
+ *
+ * `maxDumps` is what the select-all's read-back turns down to 1. The retry is
+ * paid for by the sizing read above — there, failing means the blind count and a
+ * truncated field. The read-back has no such stake: an unreadable answer leaves
+ * the fast path exactly as it was, so a second dump only adds
+ * DUMP_RETRY_BACKOFF_MS to every clear on a screen that will not dump.
  *
  * `preferredRead` is tried first and is what makes the common case work at all:
  * the connection's usual holder is argent's own `android-devtools` helper, for
@@ -646,7 +912,8 @@ const hasNodes = (xml: string) => xml.includes("<hierarchy") && xml.includes("<n
 async function readHierarchy(
   serial: string,
   deadline: number,
-  preferredRead?: () => Promise<string | undefined>
+  preferredRead?: () => Promise<string | undefined>,
+  maxDumps = 2
 ): Promise<string | undefined> {
   // Withhold BOTH the delete run's reserve and one dump's worth of budget. The
   // helper's own `getHierarchy` RPC timeout is 15s — longer than this whole read
@@ -680,7 +947,7 @@ async function readHierarchy(
       clearTimeout(timer);
     }
   }
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < maxDumps; attempt++) {
     const waitMs = attempt > 0 ? DUMP_RETRY_BACKOFF_MS : 0;
     // Withhold the delete run's reserve, and count the backoff BEFORE spending
     // it: sleeping first and checking after would let the wait itself come out
@@ -709,6 +976,22 @@ async function readHierarchy(
     if (hasNodes(xml)) return xml;
   }
   return undefined;
+}
+
+/**
+ * How long the focused field is, and whether that number was actually READ off
+ * it.
+ *
+ * The two cannot be collapsed into the number alone: an unmeasurable focused
+ * editable is floored to BLIND_DELETE_COUNT (see below), which is also exactly
+ * what a genuine 150-character field measures. The delete run does not care —
+ * it sends the same keys either way — but the caller's `note` does, because an
+ * unsized run is the one that silently truncates a longer field.
+ */
+interface FocusedTextMeasurement {
+  chars: number;
+  /** The count came from a field's readable `text`, not from the blind floor. */
+  sized: boolean;
 }
 
 /**
@@ -752,11 +1035,12 @@ async function readHierarchy(
 async function measureFocusedTextLength(
   serial: string,
   deadline: number,
-  preferredRead?: () => Promise<string | undefined>
-): Promise<number | undefined> {
+  preferredRead?: () => Promise<string | undefined>,
+  maxDumps?: number
+): Promise<FocusedTextMeasurement | undefined> {
   let xml: string | undefined;
   try {
-    xml = await readHierarchy(serial, deadline, preferredRead);
+    xml = await readHierarchy(serial, deadline, preferredRead, maxDumps);
   } catch {
     return undefined;
   }
@@ -765,6 +1049,10 @@ async function measureFocusedTextLength(
   if (!root) return undefined;
 
   let longest: number | undefined;
+  // Whether the winning number came from a field whose text could actually be
+  // read. A floored one is BLIND_DELETE_COUNT, and so is a genuine 150-character
+  // field, so the count alone cannot answer it — see FocusedTextMeasurement.
+  let sized = false;
   const stack = [root];
   while (stack.length > 0) {
     const node = stack.pop()!;
@@ -786,9 +1074,23 @@ async function measureFocusedTextLength(
     // keeps `longest` monotonic, which is what makes the "over-deleting is a
     // no-op, under-deleting truncates" rule above actually hold.
     const text = attrIsTrue(attrs, "password") ? undefined : attrs.text;
-    longest = Math.max(longest ?? 0, text === undefined ? BLIND_DELETE_COUNT : [...text].length);
+    const chars = text === undefined ? BLIND_DELETE_COUNT : [...text].length;
+    // `>` and not `>=`, so a tie keeps the EARLIER verdict rather than letting
+    // whichever node the walk reached last decide it — except that an
+    // unmeasurable field always wins a tie, below. The walk's order is an
+    // implementation detail of the stack, and a report that flips with it is
+    // worse than either answer.
+    if (longest === undefined || chars > longest) {
+      longest = chars;
+      sized = text !== undefined;
+    } else if (chars === longest && text === undefined) {
+      // A tie against an unmeasurable field still means the run is not sized to
+      // anything that was read: the same number arrived from a field nobody
+      // could measure, so claiming it was measured would be a guess dressed up.
+      sized = false;
+    }
   }
-  return longest;
+  return longest === undefined ? undefined : { chars: longest, sized };
 }
 
 /**

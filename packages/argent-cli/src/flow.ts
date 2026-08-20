@@ -25,13 +25,16 @@ export interface StepReport {
   status: "pass" | "fail" | "skip" | "error";
   reason?: string;
   /**
-   * A step that passed in a way that weakens it as proof — raised today by
+   * A step that passed in a way that weakens it as proof — raised by
    * `await: { idle: true }`, which never fails a run and says here what its
-   * green actually bought (see StepReport.warning in the tool-server's
+   * green actually bought; by a selector-less gesture a tree-source outage left
+   * unsettled; and by a `keyboard` clear that could not take its verified path,
+   * which says which weaker one ran (see StepReport.warning in the tool-server's
    * flow-run). Also carries the caveat older tool-servers put on a snapshot
    * that adopted a missing baseline, which now fails the step instead. Live
-   * either way: dropping the field would silently delete the only thing the
-   * readiness check reports.
+   * either way: dropping the field would silently delete the only thing those
+   * checks report — this type has no `result` field, so a tool step's own
+   * payload is never displayed.
    */
   warning?: string;
   tool?: string;

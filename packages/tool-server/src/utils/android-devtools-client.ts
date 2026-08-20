@@ -117,8 +117,23 @@ export function connectAndroidDevtoolsClient(
               );
             }
             const id = nextId++;
+            // `setText` shares `getHierarchy`'s longer budget for a different
+            // reason. `getHierarchy` needs it because a capture is slow;
+            // `setText` needs it because abandoning the request does NOT stop
+            // the device — nothing is sent to cancel it, and the helper's own
+            // worker budget is WORKER_TIMEOUT_MS (12s), longer than the default
+            // here. Every other abandoned RPC in this file is a READ, where
+            // giving up early costs only the answer. This one is a WRITE: a
+            // host that timed out at 5s reports "fall back", the keyboard
+            // backend runs the injected clear, and the accessibility
+            // `ACTION_SET_TEXT` it stopped waiting for can still land in the
+            // middle of it — writing the value once, then again on top. Sitting
+            // past the helper's own budget means the helper always answers
+            // first, so the host learns the outcome instead of guessing it.
             const timeoutMs =
-              method === "getHierarchy" ? LONG_RPC_TIMEOUT_MS : DEFAULT_RPC_TIMEOUT_MS;
+              method === "getHierarchy" || method === "setText"
+                ? LONG_RPC_TIMEOUT_MS
+                : DEFAULT_RPC_TIMEOUT_MS;
             return new Promise<T>((resolveReq, rejectReq) => {
               const timer = setTimeout(() => {
                 pending.delete(id);

@@ -55,10 +55,83 @@ export interface HierarchyResult {
   elapsedMs: number;
 }
 
+/**
+ * Why a `setText` failure is a RESULT rather than a throw: every outcome below
+ * is a device fact the caller acts on by falling back to `adb shell input`, not
+ * an error. A broken RPC throws, and so does a `params.text` that is not a
+ * string — a caller bug rather than a device fact, which the helper names
+ * instead of coercing into the user's field.
+ *
+ * - `no_focused_input` — nothing holds input focus, so there is no field to set.
+ * - `not_editable` — the focused node refused and does not claim to be editable.
+ * - `action_refused` — an editable node refused the action.
+ * - `action_threw` — the node died mid-call, or the connection was severed.
+ * - `unverifiable` — the set was applied, but the node could not be re-read to
+ *   confirm it. Treated as a miss by the caller: an unverified atomic write is
+ *   worth less than a fallback that reports honestly. A PASSWORD field is
+ *   always this for a non-empty write — it publishes one bullet per character
+ *   rather than its value, so the read-back cannot confirm anything. Clearing
+ *   one still verifies, because empty is empty whether or not it is masked.
+ * - `value_mismatch` — the set was applied AND read back, and the field holds
+ *   something else. Distinct from `action_refused` in the one way that matters
+ *   downstream: the widget did not refuse, so the write may be sitting in the
+ *   field already and the fallback is about to add a second one.
+ *
+ * The last two are the pair where `applied` is true. Everything else means
+ * nothing was written.
+ */
+export type SetTextReason =
+  | "no_focused_input"
+  | "not_editable"
+  | "action_refused"
+  | "action_threw"
+  | "unverifiable"
+  | "value_mismatch";
+
+export interface SetTextResult {
+  /** The action was accepted by the widget. Not the same as it having taken. */
+  applied: boolean;
+  /**
+   * The field was re-read after the write and holds exactly the requested value.
+   * This is the only flag worth trusting: `applied` is the widget's own claim.
+   */
+  matched: boolean;
+  reason?: SetTextReason;
+}
+
+/**
+ * The `protocol` string {@link AndroidDevtoolsApi.setText} needs the helper to
+ * report. A helper below it does not know the method and answers "Unknown
+ * method", which the RPC surfaces as a rejection — so callers ask `ping` first
+ * rather than reading a fallback out of an error path.
+ *
+ * A device provisioned before this method existed is moved onto the new helper
+ * by the install path: the manifest's `versionCode` went to 2 alongside it, and
+ * `ensureAndroidDevtoolsInstalled` pushes new bytes whenever the device reports
+ * less than that. The two numbers have to move together — the APK is linked
+ * with its code in argent-private's `build-native-binaries.yml`, and a bump
+ * here without one there leaves the gate unsatisfiable, reinstalling on every
+ * tool-server process.
+ *
+ * What can still answer with an older protocol is the race: the process holding
+ * the UiAutomation connection is whatever started first, possibly from another
+ * argent install, so even a correctly-provisioned device can report `1`.
+ */
+export const SET_TEXT_MIN_PROTOCOL = 2;
+
 export interface AndroidDevtoolsApi {
   isReady(): boolean;
   getHierarchy(options?: GetHierarchyOptions): Promise<HierarchyResult>;
   getScreenSize(): Promise<{ width: number; height: number; rotation: number }>;
+  /**
+   * Replace the focused field's whole contents in ONE edit, via the
+   * accessibility `ACTION_SET_TEXT`.
+   *
+   * Requires helper protocol >= {@link SET_TEXT_MIN_PROTOCOL}; an older helper
+   * answers "Unknown method" and the RPC rejects, which callers must treat as
+   * "fall back", not as a fault.
+   */
+  setText(text: string): Promise<SetTextResult>;
   ping(): Promise<{ ok: boolean; idleMs: number; protocol: string }>;
 }
 
@@ -344,6 +417,9 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
       },
       getScreenSize() {
         return client.request<{ width: number; height: number; rotation: number }>("getScreenSize");
+      },
+      setText(text: string) {
+        return client.request<SetTextResult>("setText", { text });
       },
       ping() {
         return client.request<{ ok: boolean; idleMs: number; protocol: string }>("ping");
