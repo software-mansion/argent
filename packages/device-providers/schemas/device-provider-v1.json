@@ -1,0 +1,222 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/software-mansion/argent/packages/device-providers/schemas/device-provider-v1.json",
+  "title": "Argent external device provider, contract version 1",
+  "description": "A provider descriptor written to `~/.argent/providers/<any-name>.json`, listing the provider's identity and the devices it is currently offering. See `packages/device-providers/src/contract.ts` for the zod schemas these definitions mirror; `packages/device-providers/test/schema-parity.test.ts` fails the build if the two drift.",
+  "$defs": {
+    "providerId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,31}$",
+      "description": "Unique per LIVE provider instance. Shape it as <vendor>-<instance>: Argent reports only the leading <vendor> segment in telemetry and treats the rest as opaque."
+    },
+    "nativeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "description": "The real iOS UDID or adb serial. Constrained because it reaches xcrun/adb as argv: no leading '-' and no shell or whitespace characters."
+    },
+    "httpUrl": {
+      "type": "string",
+      "maxLength": 2048,
+      "pattern": "^https?://",
+      "format": "uri"
+    },
+    "capability": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "A mechanism the provider grants. Argent ignores tokens it does not recognise, so a provider may declare capabilities from a newer Argent version.",
+      "anyOf": [
+        {
+          "enum": [
+            "adb",
+            "ax-service",
+            "js-debugger",
+            "native-devtools",
+            "native-profiler",
+            "simctl",
+            "simulator-server"
+          ]
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "providerRecord": {
+      "type": "object",
+      "title": "Provider descriptor (~/.argent/providers/<any-name>.json)",
+      "required": ["devices", "id", "name", "schemaVersion"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1,
+          "description": "Any other value and Argent skips this provider silently. That is the guarantee that a provider can never break Argent."
+        },
+        "id": {
+          "$ref": "#/$defs/providerId"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Human-readable. Shown to the agent and in every error attributed to this provider."
+        },
+        "supportUrl": {
+          "$ref": "#/$defs/httpUrl",
+          "description": "Where Argent points users when something fails on this provider's device. Strongly recommended: without it, the provider's bugs land in Argent's tracker."
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The process that wrote this file. Argent's runtime ignores it entirely; its only job is to let tooling (`argent providers prune`) remove descriptors left behind by a provider that died without withdrawing. Omit it and a crashed instance's descriptor has to be removed by hand."
+        },
+        "workspace": {
+          "type": "object",
+          "description": "Optional project context, surfaced verbatim in list-devices so an agent can prefer the device belonging to the project it is working in. Argent does no filtering of its own.",
+          "required": ["name", "path"],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          }
+        },
+        "devices": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/providerDevice"
+          },
+          "description": "The devices on offer right now. Required \u2014 an empty array is the correct way to say 'I am running but have nothing booted', and is meaningfully different from omitting the field (which is malformed). Republish whenever a device starts or stops."
+        }
+      }
+    },
+    "providerDevice": {
+      "type": "object",
+      "title": "One device a provider is offering",
+      "required": ["capabilities", "kind", "name", "nativeId", "platform", "state"],
+      "properties": {
+        "nativeId": {
+          "$ref": "#/$defs/nativeId"
+        },
+        "platform": {
+          "enum": ["android", "ios"],
+          "description": "Must agree with what nativeId's shape implies, or Argent rejects the device \u2014 classification stays single-sourced."
+        },
+        "kind": {
+          "enum": ["device", "emulator", "simulator"]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "state": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Free text in the platform's own vocabulary (e.g. 'Booted', 'device')."
+        },
+        "capabilities": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/capability"
+          },
+          "description": "REQUIRED. A device without this field is rejected: absent must never read as 'allow everything'."
+        },
+        "simulatorServer": {
+          "type": "object",
+          "description": "Required when the 'simulator-server' capability is declared. Argent probes apiUrl during discovery as its liveness signal \u2014 a device whose server is not listening is dropped from list-devices.",
+          "required": ["apiUrl", "streamUrl"],
+          "properties": {
+            "apiUrl": {
+              "$ref": "#/$defs/httpUrl"
+            },
+            "streamUrl": {
+              "$ref": "#/$defs/httpUrl"
+            },
+            "version": {
+              "type": "string",
+              "maxLength": 64,
+              "description": "Informational. Argent never branches on it, but surfaces it in errors so version skew is diagnosable."
+            }
+          }
+        },
+        "deviceSet": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "description": "iOS only. The CoreSimulator device set the simulator lives in; present means Argent scopes every simctl verb with --set <deviceSet>. Absent means the default set."
+        },
+        "metroPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "The Metro port serving this device. Supplies the default port for every tool that speaks CDP to the app's JS runtime, so a caller never has to be told where the bundler is; an explicitly requested port still wins. Independent of the 'js-debugger' capability, which decides whether argent may attach at all."
+        },
+        "jsDebugger": {
+          "type": "object",
+          "description": "Where to attach a CDP client instead of the target Metro advertises. React Native's inspector-proxy admits exactly one debugger per device and evicts the incumbent to accept a new one, so a provider that is already debugging this runtime should re-serve its own connection here and multiplex it. Omit it when nothing else is debugging, and argent connects to Metro directly. Argent still reads Metro for the session's metadata; only the socket changes.",
+          "properties": {
+            "webSocketUrl": {
+              "type": "string",
+              "maxLength": 2048,
+              "description": "ws:// or wss:// URL speaking the Chrome DevTools Protocol."
+            }
+          },
+          "required": ["webSocketUrl"]
+        },
+        "nativeDevtools": {
+          "type": "object",
+          "description": "Where to attach to the native-devtools agent already inside the app, instead of injecting Argent's own dylib. DYLD_INSERT_LIBRARIES and the agent's endpoint are simulator-wide launchd values, so two products arming their own injection overwrite each other, and two builds of the same agent in one process would duplicate its classes and swizzles. A provider that already injects should re-serve its agent connection here and stay the only one in the app. The socket speaks the same newline-delimited JSON envelope Argent's own agent does — { type: 'Control' | 'ViewInspector' | 'CDP', payload } — opening with a Control frame naming the connected bundleId.",
+          "properties": {
+            "socketPath": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 104,
+              "description": "Path to a listening unix socket. Bounded by sockaddr_un.sun_path, which is 104 bytes on macOS."
+            }
+          },
+          "required": ["socketPath"]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "capabilities": {
+                "contains": {
+                  "const": "simulator-server"
+                }
+              }
+            },
+            "required": ["capabilities"]
+          },
+          "then": {
+            "required": ["simulatorServer"]
+          }
+        },
+        {
+          "if": {
+            "required": ["deviceSet"]
+          },
+          "then": {
+            "properties": {
+              "platform": {
+                "const": "ios"
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "$ref": "#/$defs/providerRecord"
+}

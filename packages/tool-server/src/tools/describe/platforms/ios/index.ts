@@ -9,6 +9,11 @@ import {
 } from "../../../../blueprints/native-devtools";
 import { resolveNativeTargetApp } from "../../../../utils/native-target-app";
 import { isTvOsSimulator } from "../../../../utils/ios-devices";
+import {
+  externalSupportHint,
+  findExternalDevice,
+  isExternalId,
+} from "../../../../utils/external-devices";
 import { parseNativeDescribeScreenResult } from "../../../native-devtools/native-describe-contract";
 import { DescribeTreeData, parseDescribeResult, type DescribeNode } from "../../contract";
 import { adaptAXDescribeToDescribeResult } from "./ios-ax-adapter";
@@ -63,6 +68,14 @@ function emptyTree(): DescribeNode {
   });
 }
 
+/**
+ * The only shape in which the fallback can run on a device we did not boot.
+ */
+function lendsNativeDevtools(deviceId: string): boolean {
+  const external = findExternalDevice(deviceId);
+  return Boolean(external?.capabilities.has("native-devtools") && external.nativeDevtools);
+}
+
 export interface DescribeIosParams {
   bundleId?: string;
 }
@@ -114,6 +127,18 @@ export async function describeIos(
     hint = tcpArtifactHint(err) ?? DEGRADED_HINT;
   }
 
+  /**
+   * `DEGRADED_HINT` tells the agent to re-boot through argent, a dead end
+   * here, since `boot-device` refuses provider-supplied devices by design.
+   * Swap in guidance addressed to the party that does own the device.
+   */
+  if (hint === DEGRADED_HINT && isExternalId(device.id)) {
+    hint =
+      `${externalSupportHint(device.id) ?? "This device is supplied by an external provider."} ` +
+      `Argent cannot re-boot it to apply full accessibility settings — restart it from that ` +
+      `application if the tree looks incomplete.`;
+  }
+
   if (tree.children.length > 0) {
     return { tree, source: "ax-service", hint };
   }
@@ -138,6 +163,23 @@ export async function describeIos(
   // this falls back to the terminal non-injectable hint.
   if (params.bundleId && !isInjectableBundleId(params.bundleId)) {
     return { tree, source: "ax-service", hint: hint ?? NON_INJECTABLE_HINT };
+  }
+
+  /**
+   * Without a lent socket the fallback would inject our own dylib, which is
+   * refused here. Say so rather than let that error replace describe's real
+   * empty-tree result. An unexplained "no elements" reads as a bug.
+   */
+  if (isExternalId(device.id) && !lendsNativeDevtools(device.id)) {
+    return {
+      hint:
+        hint ??
+        `${externalSupportHint(device.id) ?? "This device is supplied by an external provider."} ` +
+          `The native view-hierarchy fallback is unavailable on it, so an empty tree here ` +
+          `means the accessibility tree itself was empty. Take a screenshot to see the screen.`,
+      source: "ax-service",
+      tree,
+    };
   }
 
   // AX returned zero elements (or failed entirely) — attempt native-devtools fallback

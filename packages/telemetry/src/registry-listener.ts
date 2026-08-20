@@ -6,6 +6,8 @@ import { aiTelemetryFromMeta, type AiTelemetryProps } from "./ai-identity.js";
 // HTTP captures request-only metadata here so registry lifecycle events can
 // include platform context (and the coarse AI client) without carrying raw params.
 export interface InvocationMeta extends AiTelemetryProps {
+  /** Vendor label of the external provider supplying the target device. */
+  device_provider?: string;
   platform?: Platform;
 }
 
@@ -34,6 +36,7 @@ export function attachRegistryTelemetry(registry: Registry): AttachHandle {
     track("tool:invoke", {
       tool: toolId,
       tool_invocation_id: toolInvocationId,
+      ...(meta.device_provider ? { device_provider: meta.device_provider } : {}),
       ...(meta.platform ? { platform: meta.platform } : {}),
       ...aiTelemetryFromMeta(meta),
     });
@@ -44,6 +47,7 @@ export function attachRegistryTelemetry(registry: Registry): AttachHandle {
     track("tool:complete", {
       tool: toolId,
       tool_invocation_id: toolInvocationId,
+      ...(meta.device_provider ? { device_provider: meta.device_provider } : {}),
       ...(meta.platform ? { platform: meta.platform } : {}),
       duration_ms: durationMs,
       ...aiTelemetryFromMeta(meta),
@@ -66,6 +70,7 @@ export function attachRegistryTelemetry(registry: Registry): AttachHandle {
     track("tool:fail", {
       tool: toolId,
       tool_invocation_id: toolInvocationId,
+      ...(meta.device_provider ? { device_provider: meta.device_provider } : {}),
       ...(meta.platform ? { platform: meta.platform } : {}),
       duration_ms: durationMs,
       ...signal,

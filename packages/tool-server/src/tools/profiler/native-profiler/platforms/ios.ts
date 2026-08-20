@@ -4,6 +4,7 @@ import { promises as fs } from "fs";
 import { existsSync } from "node:fs";
 import * as path from "path";
 import type { NativeProfilerSessionApi } from "../../../../blueprints/native-profiler-session";
+import { externalNativeId } from "../../../../utils/external-devices";
 import { describeReapedSession, takeReapedSession } from "../../../../utils/reaped-sessions";
 import { deviceSetForUdid, simctlArgsForUdidSync } from "../../../../utils/ios-device-sets";
 import { getDebugDir } from "../../../../utils/react-profiler/debug/dump";
@@ -112,7 +113,9 @@ export function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: nu
   try {
     launchctlOutput = execFileSync(
       "xcrun",
-      simctlArgsForUdidSync(udid, ["spawn", udid, "launchctl", "list"]),
+      simctlArgsForUdidSync(udid, ["spawn", udid, "launchctl", "list"], {
+        granted: "native-profiler",
+      }),
       {
         encoding: "utf-8",
         timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
@@ -253,11 +256,15 @@ function getInstalledApps(udid: string): Record<string, AppInfo> {
     // is ever interpolated into a shell. Each stage buffers its full stdout in Node
     // rather than the OS pipe, so both raise maxBuffer to run-with-timeout.ts's 256 MiB;
     // Node's 1 MiB default would throw ENOBUFS on a well-populated simulator.
-    const listAppsPlist = execFileSync("xcrun", simctlArgsForUdidSync(udid, ["listapps", udid]), {
-      encoding: "utf-8",
-      timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
-      maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
-    });
+    const listAppsPlist = execFileSync(
+      "xcrun",
+      simctlArgsForUdidSync(udid, ["listapps", udid], { granted: "native-profiler" }),
+      {
+        encoding: "utf-8",
+        timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+        maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
+      }
+    );
     listAppsOutput = execFileSync("plutil", ["-convert", "json", "-o", "-", "--", "-"], {
       input: listAppsPlist,
       encoding: "utf-8",
@@ -288,7 +295,9 @@ function getAppBundlePath(udid: string, bundleId: string): string {
   try {
     appPath = execFileSync(
       "xcrun",
-      simctlArgsForUdidSync(udid, ["get_app_container", udid, bundleId, "app"]),
+      simctlArgsForUdidSync(udid, ["get_app_container", udid, bundleId, "app"], {
+        granted: "native-profiler",
+      }),
       {
         encoding: "utf-8",
         timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
@@ -501,6 +510,14 @@ export async function startNativeProfilerIos(
   // Warm the UDID → device-set cache so the synchronous simctl helpers below
   // (enumerate/list/terminate/launch via execFileSync) target the right set.
   await deviceSetForUdid(params.device_id);
+
+  /**
+   * `xctrace --device` resolves a CoreSimulator UDID, and the `ext:` prefix a
+   * provider-supplied id carries means nothing outside Argent. simctl argv is
+   * substituted by {@linkcode simctlArgsForUdidSync}, this one isn't.
+   */
+  const xctraceDevice = externalNativeId(params.device_id);
+
   if (api.profilingActive) {
     throw new FailureError(
       `A native profiling session is already running (PID: ${api.capturePid}).`,
@@ -574,11 +591,11 @@ export async function startNativeProfilerIos(
     try {
       execFileSync(
         "xcrun",
-        simctlArgsForUdidSync(params.device_id, [
-          "terminate",
+        simctlArgsForUdidSync(
           params.device_id,
-          info.CFBundleIdentifier,
-        ]),
+          ["terminate", params.device_id, info.CFBundleIdentifier],
+          { granted: "native-profiler" }
+        ),
         {
           timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
           stdio: "ignore",
@@ -636,7 +653,7 @@ export async function startNativeProfilerIos(
         "--template",
         templatePath,
         "--device",
-        params.device_id,
+        xctraceDevice,
         "--output",
         outputFile,
         "--no-prompt",
@@ -652,7 +669,7 @@ export async function startNativeProfilerIos(
       // host-wide --all-processes) build the argv.
       xctraceArgs = strategy!.buildRecordArgs({
         templatePath,
-        deviceId: params.device_id,
+        deviceId: xctraceDevice,
         target: detected!,
         outputFile,
         notifyName: notify ? notifyName : undefined,
@@ -738,11 +755,11 @@ export async function startNativeProfilerIos(
       try {
         execFileSync(
           "xcrun",
-          simctlArgsForUdidSync(params.device_id, [
-            "launch",
+          simctlArgsForUdidSync(
             params.device_id,
-            mallocRelaunchBundleId,
-          ]),
+            ["launch", params.device_id, mallocRelaunchBundleId],
+            { granted: "native-profiler" }
+          ),
           {
             timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
             stdio: "ignore",

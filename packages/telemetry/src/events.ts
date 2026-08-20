@@ -144,12 +144,14 @@ export interface InstallationCliUninstallCompleteProps extends FailureTelemetryP
 // Tool usage events
 
 export interface ToolInvokeProps extends AiTelemetryProps {
+  device_provider?: string;
   tool: string;
   tool_invocation_id: string;
   platform?: Platform;
 }
 
 export interface ToolCompleteProps extends AiTelemetryProps {
+  device_provider?: string;
   tool: string;
   tool_invocation_id: string;
   platform?: Platform;
@@ -157,6 +159,7 @@ export interface ToolCompleteProps extends AiTelemetryProps {
 }
 
 export interface ToolFailProps extends FailureTelemetryProps, AiTelemetryProps {
+  device_provider?: string;
   tool: string;
   tool_invocation_id?: string;
   platform?: Platform;

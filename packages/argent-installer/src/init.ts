@@ -17,6 +17,7 @@ import {
   type InstallMode,
 } from "./utils.js";
 import { PACKAGE_NAME } from "./constants.js";
+import { writeCliRecord } from "./cli-record.js";
 import { resolveTelemetryConsent } from "./first-run-notice.js";
 import { parseInitArgs, InitCancelled } from "./init-args.js";
 import {
@@ -241,6 +242,12 @@ export async function init(args: string[]): Promise<void> {
         p.log.info(pc.dim("Removed stale .argent/install.json (previous local-mode marker)."));
       }
     }
+
+    /**
+     * Record where this install's CLI lives so a device provider can spawn it
+     * without PATH (see `cli-record.ts`).
+     */
+    writeCliRecord({ mode: tel.installMode, projectRoot, version });
 
     // ── Tool Auto-Approval ────────────────────────────────────────────────────
 

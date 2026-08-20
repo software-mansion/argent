@@ -1219,6 +1219,7 @@ describe("native-* tool descriptions document every precheck outcome", () => {
     unregistered: true,
     connecting: true,
     indeterminate: true,
+    provider_attached: true,
   };
 
   it("spells every emitted state exactly as the description names it", () => {

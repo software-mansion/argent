@@ -466,6 +466,15 @@ export function flowLaunchGateReason(
         `${measured} This step already performed that one restart, so re-run the flow at most once more ` +
         `before restarting the tool-server rather than the app.`
       );
+    case "provider_attached":
+      // The measured text offers a retry to a reader whose app has only just
+      // started; this step already spent that wait. What survives is the half
+      // that does not ask argent to restart a process the provider owns.
+      return (
+        `${measured} This step already waited ${LAUNCH_TO_VERDICT_MS} ms after launching it, so the ` +
+        `provider is lending a different app rather than one still connecting. Re-run the flow only ` +
+        `once it is lending this one; otherwise drive the app by coordinate.`
+      );
   }
 }
 

@@ -9,6 +9,10 @@ const WORKSPACE_ROOT = path.resolve(__dirname, "../../..");
 
 // esbuild entry points (source) and bundle outputs.
 const TOOLS_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/tool-server/src/index.ts");
+const DEVICE_PROVIDERS_ENTRY = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/device-providers/src/index.ts"
+);
 const ARCHIVE_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/archive/src/index.ts");
 const REGISTRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/registry/src/index.ts");
 const TELEMETRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/telemetry/src/index.ts");
@@ -52,6 +56,7 @@ const ALIASES = {
   "@argent/cli": CLI_ENTRY,
   "@argent/configuration-core": CONFIGURATION_ENTRY,
   "@argent/telemetry": TELEMETRY_ENTRY,
+  "@argent/device-providers": DEVICE_PROVIDERS_ENTRY,
 };
 
 // Build-time constants for @argent/telemetry: the CLI version stamped into every

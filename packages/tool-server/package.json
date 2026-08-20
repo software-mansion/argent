@@ -15,6 +15,7 @@
   "dependencies": {
     "@argent/archive": "file:../archive",
     "@argent/configuration-core": "file:../configuration-core",
+    "@argent/device-providers": "file:../device-providers",
     "@argent/native-devtools-android": "file:../native-devtools-android",
     "@argent/native-devtools-ios": "file:../native-devtools-ios",
     "@argent/preview-window": "file:../preview-window",

@@ -7,6 +7,7 @@ import {
   type ServiceBlueprint,
   type ServiceEvents,
 } from "@argent/registry";
+import { assertExternalCapability } from "../utils/external-devices";
 import type { ChildProcess } from "child_process";
 import type { CpuSample, UiHang, MemoryLeak, CpuHotspot } from "../utils/ios-profiler/types";
 import { waitForChildExit } from "../utils/profiler-shared/lifecycle";
@@ -202,6 +203,13 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
         }
       );
     }
+
+    /**
+     * Mechanism gate for provider-supplied devices. Covers every native
+     * profiling tool built on this session. A no-op for Argent's own devices.
+     */
+    await assertExternalCapability(NATIVE_PROFILER_SESSION_NAMESPACE, device, "native-profiler");
+
     const state: NativeProfilerSessionApi = {
       deviceId: device.id,
       platform: device.platform,

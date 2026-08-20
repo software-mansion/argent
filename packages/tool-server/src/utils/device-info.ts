@@ -1,4 +1,5 @@
 import type { DeviceInfo, DeviceKind, Platform } from "@argent/registry";
+import { EXTERNAL_PREFIX, externalNativeId } from "./external-devices";
 
 /**
  * iOS simulator UDID format: 8-4-4-4-12 hex with dashes. Chromium devices use the
@@ -46,6 +47,18 @@ export const VEGA_SERIAL_PREFIX = "amazon-";
 
 /** Returns the platform a `udid` belongs to based on its shape. */
 export function classifyDevice(udid: string): Platform {
+  /**
+   * An `ext:<providerId>:<nativeId>` device classifies by its NATIVE id's
+   * shape. The prefix carries no platform information on purpose, so there is
+   * one set of classification rules, not a second for attached devices. A
+   * malformed `ext:` id yields itself back, and falling through rather than
+   * recursing is what stops `"ext:"` looping forever.
+   */
+  if (udid.startsWith(EXTERNAL_PREFIX)) {
+    const nativeId = externalNativeId(udid);
+    if (nativeId !== udid) return classifyDevice(nativeId);
+  }
+
   if (udid.startsWith(REMOTE_PREFIX)) return "ios-remote";
   if (udid.startsWith(VEGA_SERIAL_PREFIX)) return "vega";
   if (udid.startsWith(CHROMIUM_ID_PREFIX)) return "chromium";
@@ -85,13 +98,18 @@ export function isAndroidEmulatorSerial(serial: string): boolean {
  */
 export function resolveDevice(udid: string): DeviceInfo {
   const platform = classifyDevice(udid);
+  /**
+   * Kind derives from the native id too, so a prefixed `emulator-5554` still
+   * reads as an emulator rather than a physical phone. Identity for other ids.
+   */
+  const shapeId = externalNativeId(udid);
   const kind: DeviceKind =
     platform === "ios" || platform === "ios-remote"
       ? "simulator"
       : platform === "vega"
         ? "vvd"
         : platform === "android"
-          ? isAndroidEmulatorSerial(udid)
+          ? isAndroidEmulatorSerial(shapeId)
             ? "emulator"
             : "device"
           : "app";

@@ -27,10 +27,11 @@ import { loadAndroidCombinedData } from "../../../utils/android-profiler/pipelin
 import { buildHotCommitSummaries } from "../../../utils/react-profiler/pipeline/00-hot-commits";
 import { preprocess } from "../../../utils/react-profiler/pipeline/00-preprocess";
 import { readCpuProfile, readCommitTree } from "../../../utils/react-profiler/debug/dump";
+import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port"),
+  port: metroPortField,
   device_id: metroDeviceIdParam("iOS Simulator/device UDID or Android serial"),
 });
 
@@ -161,7 +162,7 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
     }
 
     // Read-only: resolve react paths from cache only — no live CDP connection needed.
-    const sessionPaths = getCachedProfilerPaths(params.port, params.device_id);
+    const sessionPaths = getCachedProfilerPaths(metroPort(params), params.device_id);
     if (!sessionPaths?.commitsPath) {
       throw new FailureError("No React commit data. Run react-profiler-analyze first.", {
         error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,

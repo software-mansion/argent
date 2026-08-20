@@ -25,6 +25,7 @@
  *   argent enable <flag>          Enable a feature flag (global by default)
  *   argent disable <flag>         Disable a feature flag (global by default)
  *   argent flags                  Show current feature-flag state
+ *   argent providers check        Validate external device providers against the contract
  */
 
 import * as fs from "node:fs";
@@ -95,6 +96,7 @@ Commands:
   enable      Enable a feature flag (global by default, --scope project for project)
   disable     Disable a feature flag (global by default, --scope project for project)
   flags       Show current feature-flag state
+  providers   Inspect and manage external device providers (list / check / publish / withdraw / prune)
   config      Manage configuration (list / get / set / unset, project & global)
   secrets     List the secrets a {{secret:NAME}} placeholder can type, and their sources
   telemetry   Manage opt-out telemetry (status / enable / disable)
@@ -136,8 +138,26 @@ async function main(): Promise<void> {
   }
 
   switch (command) {
-    case "mcp":
-      return (await loadMcp()).startMcpServer({ paths: BUNDLED_RUNTIME_PATHS });
+    case "mcp": {
+      const mcp = await loadMcp();
+      /**
+       * Best-effort heal of `~/.argent/cli.json`, off the startup path. A
+       * committed local install (`npm install` only) never runs
+       * `init`/`update` and device providers need the record to find a CLI. The
+       * CLI path comes from `bundlePath` so it stays on the version-stable
+       * package dir.
+       */
+      void loadInstaller()
+        .then(({ healCliRecord }) =>
+          healCliRecord({
+            cli: path.join(path.dirname(BUNDLED_RUNTIME_PATHS.bundlePath), "cli.js"),
+            mode: BUNDLED_RUNTIME_PATHS.installKind ?? "global",
+            version: BUNDLED_RUNTIME_PATHS.version ?? getInstalledVersion(),
+          })
+        )
+        .catch(() => {});
+      return mcp.startMcpServer({ paths: BUNDLED_RUNTIME_PATHS });
+    }
     case "init":
     case "install":
       return (await loadInstaller()).init(rest);
@@ -172,6 +192,8 @@ async function main(): Promise<void> {
       return (await loadCli()).secrets(rest);
     case "telemetry":
       return (await loadCli()).telemetry(rest);
+    case "providers":
+      return (await loadCli()).providers(rest);
     case "--version":
     case "-v":
       console.log(getInstalledVersion() ?? "unknown");

@@ -20,9 +20,10 @@ import {
 } from "../../../utils/react-profiler/scripts";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { canonicalDeviceId } from "../../../utils/debugger/device-alias";
+import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port"),
+  port: metroPortField,
   device_id: z
     .string()
     .describe(
@@ -174,7 +175,7 @@ Fails if no active profiling session exists or the CDP connection was lost durin
     capability: RN_ONLY_TOOL_CAPABILITY,
     services: () => ({}),
     async execute(_services, params) {
-      const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}:${canonicalDeviceId(params.device_id)}`;
+      const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${metroPort(params)}:${canonicalDeviceId(params.device_id)}`;
       const snapshot = registry.getSnapshot();
       const entry = snapshot.services.get(psUrn);
 

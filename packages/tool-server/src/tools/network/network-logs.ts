@@ -11,6 +11,7 @@ import {
   NETWORK_INTERCEPTOR_SCRIPT,
   makeNetworkLogReadScript,
 } from "../../utils/debugger/scripts/network-interceptor";
+import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
 
 const ITEMS_PER_PAGE = 50;
 
@@ -100,10 +101,7 @@ function renderChromiumPage(
 }
 
 const zodSchema = z.object({
-  port: z.coerce
-    .number()
-    .default(8081)
-    .describe("Metro server port (RN only; ignored on Chromium)"),
+  port: metroPortField,
   device_id: z
     .string()
     .describe(
@@ -140,7 +138,9 @@ Fails if the app is not connected (RN) or the device is not reachable (Chromium)
     if (device.platform === "chromium") {
       return { chromium: chromiumCdpRef(device) };
     }
-    return { inspector: `NetworkInspector:${params.port}:${canonicalDeviceId(params.device_id)}` };
+    return {
+      inspector: `NetworkInspector:${metroPort(params)}:${canonicalDeviceId(params.device_id)}`,
+    };
   },
   async execute(services, params) {
     // Chromium: read the server-side CDP Network recording (no in-app injection).

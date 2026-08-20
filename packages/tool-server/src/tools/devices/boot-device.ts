@@ -37,6 +37,8 @@ import { listIosSimulators } from "../../utils/ios-devices";
 import { deviceSetForUdid, simctlPrefix } from "../../utils/ios-device-sets";
 import { androidHeadlessFromEnv, iosHeadlessFromEnv } from "../../utils/no-window-env";
 import { classifyDevice, stripRemotePrefix } from "../../utils/device-info";
+import { isExternalId } from "../../utils/external-devices";
+import { InvalidToolInputError } from "../../utils/capability";
 import {
   simctlBoot as simRemoteBoot,
   simctlBootstatus as simRemoteBootstatus,
@@ -1445,6 +1447,28 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; the 
         );
       }
       if (hasUdid) {
+        /**
+         * Argent attaches to what a provider offers. It does not own the
+         * device's lifecycle. `InvalidToolInputError` maps to a 400, so the
+         * agent gets "ask the provider" rather than a deep `simctl` failure.
+         *
+         * The provider's name and support URL are deliberately absent. The
+         * HTTP dispatch edge appends them to every `ext:` failure, so
+         * repeating them would double the attribution.
+         */
+        if (isExternalId(params.udid!)) {
+          throw new InvalidToolInputError(
+            `'${params.udid}' is supplied by an external provider, which owns its lifecycle — ` +
+              `argent cannot boot, reboot or shut it down. ` +
+              `Start the device from that application, then it will appear in list-devices.`,
+            {
+              error_code: FAILURE_CODES.EXTERNAL_DEVICE_LIFECYCLE_REFUSED,
+              error_kind: "unsupported",
+              failure_area: "tool_server",
+              failure_stage: "boot_device_external_refused",
+            }
+          );
+        }
         if (classifyDevice(params.udid!) === "ios-remote") {
           return bootIosRemote(params.udid!, registry, params.force);
         }

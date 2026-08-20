@@ -26,14 +26,15 @@ hard assertion failed (skips do not fail the run).
 
 ## What it does (phases)
 
-| phase           | needs                                       | covers                                                                                                                            |
-| --------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `install`       | npm + network                               | `npm i -g <tgz>`, bundled binaries, `init` (global + `--local`), `update`, `uninstall`, telemetry, MCP-config generation          |
-| `introspection` | —                                           | `--version/--help`, `tools`, `tools describe` for **all 70** tools, feature flags, `server start/status/logs/stop`, `link/unlink` |
-| `validation`    | —                                           | for every tool: missing-required / bad-enum / bad-type rejection (deterministic, no hardware)                                     |
-| `android`       | Android emulator                            | happy-path of every touch/gesture/screenshot/app-lifecycle tool                                                                   |
-| `chromium`      | Electron (bundled optional dep) + a display | boots a generated Electron app; drives CDP tools (scroll/drag/tabs/cookies/storage)                                               |
-| `rn`            | `~/dev/bluesky` + Android device            | debugger + react/native profiler + network chain against the real Bluesky app                                                     |
+| phase             | needs                                          | covers                                                                                                                                                                                                                                                                                               |
+| ----------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `install`         | npm + network                                  | `npm i -g <tgz>`, bundled binaries, `init` (global + `--local`), `update`, `uninstall`, telemetry, MCP-config generation                                                                                                                                                                             |
+| `introspection`   | —                                              | `--version/--help`, `tools`, `tools describe` for **all 70** tools, feature flags, `server start/status/logs/stop`, `link/unlink`                                                                                                                                                                    |
+| `validation`      | —                                              | for every tool: missing-required / bad-enum / bad-type rejection (deterministic, no hardware)                                                                                                                                                                                                        |
+| `android`         | Android emulator                               | happy-path of every touch/gesture/screenshot/app-lifecycle tool                                                                                                                                                                                                                                      |
+| `chromium`        | Electron (bundled optional dep) + a display    | boots a generated Electron app; drives CDP tools (scroll/drag/tabs/cookies/storage)                                                                                                                                                                                                                  |
+| `rn`              | `~/dev/bluesky` + Android device               | debugger + react/native profiler + network chain against the real Bluesky app                                                                                                                                                                                                                        |
+| `device-provider` | an Android device (or `E2E_PROVIDER_IOS_UDID`) | the external device provider contract: the harness spawns argent's own `argent-simulator-server`, serves a `/devices` document naming it, and drives the resulting `ext:` device — then asserts argent never killed it, refused `boot-device`, honoured capability denial, and reacted to revocation |
 
 Tiers auto-skip (with a recorded reason) when their prerequisites are missing, so
 a partial run still produces a meaningful report. iOS / tvOS / Vega tiers are
@@ -71,7 +72,7 @@ Assumes the Bluesky dev-client is already built and installed on the device
 
 ```
 --tgz PATH             tarball to test (default: newest swmansion-argent-*.tgz at repo root)
---phase a,b,c          subset of: install introspection validation android chromium rn
+--phase a,b,c          subset of: install introspection validation android chromium rn device-provider
 --skip-install         drive the unpacked bundle directly (offline phases only; skips `install`)
 --system               install to the REAL global prefix (dedicated release machine only)
 --android-serial S     use an already-booted Android device

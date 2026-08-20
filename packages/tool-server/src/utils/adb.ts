@@ -11,6 +11,7 @@ import {
 } from "@argent/registry";
 import { resolveAndroidBinary } from "./android-binary";
 import { formatSubprocessFailure } from "./subprocess-error";
+import { assertExternalCapabilitySync, externalNativeId, isExternalId } from "./external-devices";
 
 const execFileAsync = promisify(execFile);
 
@@ -146,6 +147,33 @@ function describeAdbFailure(args: string[], err: unknown): Error {
 }
 
 /**
+ * Substitute an external provider's real adb serial wherever Argent's `ext:`
+ * device id appears in an adb argv.
+ *
+ * Mapping the whole argv covers every `-s <serial>` call site at once, rather
+ * than threading a device-aware helper through dozens of functions. It is safe
+ * because only a device id can carry the prefix.
+ *
+ * This is also the gate for the `adb` capability. The real serial is only
+ * revealed when the provider granted it, which covers every adb call site at
+ * once.
+ *
+ * {@linkcode runAdb} applies it, so anything routed through there is covered.
+ * It is exported for the callers that cannot: a long-running `adb` whose
+ * stdin and stdout are the protocol has to spawn for itself, and must map its
+ * own argv or hand `adb` an `ext:` id it has never heard of.
+ */
+export function adbArgv(args: string[]): string[] {
+  return args.map((argument) => {
+    if (isExternalId(argument)) {
+      assertExternalCapabilitySync("adb", argument, "adb");
+    }
+
+    return externalNativeId(argument);
+  });
+}
+
+/**
  * Run `adb` directly. Callers that target a single device must pass `-s <serial>`
  * themselves via `args` — `runAdb` does not inject it, so a serial-less call
  * will hit whichever device `ANDROID_SERIAL` / the default heuristic picks.
@@ -158,8 +186,14 @@ export async function runAdb(
   options: { timeoutMs?: number } = {}
 ): Promise<AdbRunResult> {
   const adbPath = await resolveAdbOrThrow();
+  /**
+   * Report the argv that actually ran: an error quoting the `ext:` id rather
+   * than the serial adb saw would not be copy-pasteable.
+   */
+  const argv = adbArgv(args);
+
   try {
-    const { stdout, stderr } = await execFileAsync(adbPath, args, {
+    const { stdout, stderr } = await execFileAsync(adbPath, argv, {
       timeout: options.timeoutMs ?? 30_000,
       killSignal: ADB_KILL_SIGNAL,
       maxBuffer: 64 * 1024 * 1024,
@@ -167,7 +201,7 @@ export async function runAdb(
     });
     return { stdout, stderr };
   } catch (err) {
-    throw describeAdbFailure(args, err);
+    throw describeAdbFailure(argv, err);
   }
 }
 
@@ -178,8 +212,10 @@ export async function runAdb(
  */
 async function runAdbBinary(args: string[], options: { timeoutMs?: number } = {}): Promise<Buffer> {
   const adbPath = await resolveAdbOrThrow();
+  const argv = adbArgv(args);
+
   try {
-    const { stdout } = await execFileAsync(adbPath, args, {
+    const { stdout } = await execFileAsync(adbPath, argv, {
       timeout: options.timeoutMs ?? 30_000,
       killSignal: ADB_KILL_SIGNAL,
       maxBuffer: 64 * 1024 * 1024,
@@ -187,7 +223,7 @@ async function runAdbBinary(args: string[], options: { timeoutMs?: number } = {}
     });
     return stdout as unknown as Buffer;
   } catch (err) {
-    throw describeAdbFailure(args, err);
+    throw describeAdbFailure(argv, err);
   }
 }
 

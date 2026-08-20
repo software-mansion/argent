@@ -11,6 +11,7 @@ import {
   precheckNativeDevtools,
   type NativeDevtoolsApi,
 } from "../../../blueprints/native-devtools";
+import { isExternalId } from "../../../utils/external-devices";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
 import type { LaunchAppParams, LaunchAppResult } from "../types";
@@ -27,13 +28,21 @@ export function makeIosImpl(
   return {
     requires: ["xcrun"],
     handler: async (_services, params, device) => {
-      const ndRef = nativeDevtoolsRef(device);
-      const nativeDevtools = await registry.resolveService<NativeDevtoolsApi>(
-        ndRef.urn,
-        ndRef.options
-      );
-      const blocked = await precheckNativeDevtools(nativeDevtools, params.udid);
-      if (blocked) return blocked;
+      /**
+       * native-devtools injection needs a grant most providers withhold, as it
+       * loads Argent's dylib into an app somebody else launched. Resolving
+       * here would fail an otherwise fine launch with capability-denied, so
+       * skip it. Only the native view-hierarchy fallback afterwards is lost.
+       */
+      if (!isExternalId(device.id)) {
+        const ndRef = nativeDevtoolsRef(device);
+        const nativeDevtools = await registry.resolveService<NativeDevtoolsApi>(
+          ndRef.urn,
+          ndRef.options
+        );
+        const blocked = await precheckNativeDevtools(nativeDevtools, params.udid);
+        if (blocked) return blocked;
+      }
       try {
         await execFileAsync(
           "xcrun",

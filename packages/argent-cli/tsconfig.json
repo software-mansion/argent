@@ -13,6 +13,7 @@
   },
   "references": [
     { "path": "../configuration-core" },
+    { "path": "../device-providers" },
     { "path": "../registry" },
     { "path": "../telemetry" },
     { "path": "../argent-tools-client" }

@@ -38,6 +38,20 @@ run_phase() {
     info "killed metro pid $E2E_METRO_PID"
   fi
 
+  # Reap the fake provider from the device-provider tier: its own
+  # simulator-server and its descriptor. Argent
+  # deliberately never deletes another process's descriptor, so the harness —
+  # which IS that process here — has to.
+  for pid in "${E2E_PROVIDER_SIM_PID:-}"; do
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null || true
+      info "killed provider pid $pid"
+    fi
+  done
+  if [ -n "${E2E_PROVIDER_DESCRIPTOR:-}" ] && [ -f "$E2E_PROVIDER_DESCRIPTOR" ]; then
+    rm -f "$E2E_PROVIDER_DESCRIPTOR"
+  fi
+
   # Stop our private tool-server.
   argent_cli server stop >/dev/null 2>&1 && info "stopped private tool-server" || true
 

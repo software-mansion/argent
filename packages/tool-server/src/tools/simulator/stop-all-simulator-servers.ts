@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ServiceState, isLiveServiceState } from "@argent/registry";
 import type { Registry, ToolDefinition } from "@argent/registry";
+import { isExternalDeviceUrn } from "../../utils/external-devices";
 import {
   DEVICE_OWNED_NAMESPACES,
   PORT_KEYED_NAMESPACES,
@@ -128,7 +129,14 @@ Returns { stopped } - the URNs of the services that were actually live and got s
           // was never a running server.
           const wasLive = isLiveServiceState(entry.state);
           await registry.disposeService(urn);
-          if (wasLive) stopped.push(urn);
+          /**
+           * A device from an external provider is disposed (dropping our
+           * cached handle) but never reported as stopped. Its `dispose()` is a
+           * no-op by design, so nothing was actually shut down and claiming
+           * otherwise would tell the agent it had cleaned up a server it does
+           * not own.
+           */
+          if (wasLive && !isExternalDeviceUrn(urn)) stopped.push(urn);
         } else if (
           scoped &&
           isLiveServiceState(entry.state) &&

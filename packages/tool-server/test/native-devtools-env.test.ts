@@ -48,7 +48,7 @@ describe("buildDyldInsertLibraries", () => {
     expect(result).toBe(["@loader_path/Other.dylib", unrelated, currentBootstrap].join(":"));
   });
 
-  it("strips legacy libInjectionBootstrap.dylib paths when merging with the renamed bootstrap", () => {
+  it("strips stale legacy libInjectionBootstrap.dylib paths when merging with the renamed bootstrap", () => {
     const currentBootstrap = makeTempFile("libArgentInjectionBootstrap.dylib");
     const legacyBootstrap = "/tmp/old/libInjectionBootstrap.dylib";
     const thirdParty = makeTempFile("libSimCamLoader.dylib");

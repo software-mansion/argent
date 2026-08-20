@@ -7,6 +7,7 @@ import {
 } from "../../../blueprints/react-profiler-session";
 import { HEARTBEAT_SCRIPT, FIBER_ROOT_TRACKER_SCRIPT } from "../../../utils/react-profiler/scripts";
 import { NO_DEVTOOLS_HOOK_ERROR, NO_RENDERERS_ATTACHED_ERROR } from "./react-profiler-start";
+import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 
 const COLLECT_RENDERS_SCRIPT = `
 (function() {
@@ -97,7 +98,7 @@ function renderMarkdownTable(entries: RenderEntry[]): string {
 }
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port"),
+  port: metroPortField,
   device_id: z
     .string()
     .describe(
@@ -127,7 +128,7 @@ Fails if the React DevTools hook is not present in the runtime or the app is not
   // RN-only: queries the React DevTools backend hook on the live runtime.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
-    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}:${params.device_id}`,
+    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${metroPort(params)}:${params.device_id}`,
   }),
   async execute(services, params) {
     const api = services.profilerSession as ReactProfilerSessionApi;
