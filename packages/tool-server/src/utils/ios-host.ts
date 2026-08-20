@@ -470,7 +470,7 @@ const ACCESSIBILITY_DEFAULT_FLAGS = [
   "ApplicationAccessibilityEnabled",
 ];
 
-const remoteIosHost: IosHost = {
+export const remoteIosHost: IosHost = {
   kind: "remote",
   requiresTcp: true,
   setupNativeDevtoolsEnv: setupNativeDevtoolsEnvRemote,
