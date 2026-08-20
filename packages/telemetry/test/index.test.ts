@@ -16,20 +16,25 @@ import {
   shutdown,
   track,
 } from "../src/index.js";
-import { resetClient } from "../src/posthog.js";
+import { getClient, resetClient } from "../src/otel.js";
 import { _resetIdentityCacheForTest } from "../src/identity.js";
 import { _resetBasePropsCacheForTest } from "../src/base-props.js";
 import { scopeHome, snapshotEnv } from "./helpers.js";
 import { configFilePath } from "../src/paths.js";
 
-const posthogMock = vi.hoisted(() => ({
-  instances: [] as Array<{
-    capture: ReturnType<typeof vi.fn>;
-    flush: ReturnType<typeof vi.fn>;
-    shutdown: ReturnType<typeof vi.fn>;
-    opts: unknown;
-  }>,
-  flushImpl: () => Promise.resolve(),
+// Mock the OpenTelemetry Logs SDK. Each constructed LoggerProvider exposes the
+// logger's `emit` and the provider's `shutdown` as spies so we can observe what
+// track()/shutdown() drive, plus the batch-processor and exporter config — all
+// without any network I/O.
+interface ProviderInstance {
+  config: { resource: unknown; processors: unknown[] };
+  emit: ReturnType<typeof vi.fn>;
+  shutdown: ReturnType<typeof vi.fn>;
+}
+const otelMock = vi.hoisted(() => ({
+  providers: [] as ProviderInstance[],
+  processors: [] as Array<{ opts: Record<string, unknown> }>,
+  exporters: [] as Array<{ opts: Record<string, unknown> }>,
 }));
 
 // Telemetry resolves the host fingerprint internally for every entry point.
@@ -42,27 +47,61 @@ vi.mock("../src/fingerprint.js", () => ({
   resolveHostFingerprintAsync: () => Promise.resolve("f".repeat(64)),
 }));
 
-vi.mock("posthog-node", () => {
-  return {
-    PostHog: vi.fn().mockImplementation(function (_key: string, opts: unknown) {
-      const instance = {
-        capture: vi.fn(),
-        flush: vi.fn(() => posthogMock.flushImpl()),
-        shutdown: vi.fn().mockResolvedValue(undefined),
-        opts,
-      };
-      posthogMock.instances.push(instance);
-      return instance;
-    }),
-  };
+vi.mock("@opentelemetry/api-logs", () => ({ SeverityNumber: { INFO: 9 } }));
+vi.mock("@opentelemetry/resources", () => ({
+  resourceFromAttributes: (attributes: Record<string, unknown>) => ({ attributes }),
+}));
+vi.mock("@opentelemetry/exporter-logs-otlp-http", () => ({
+  OTLPLogExporter: vi.fn().mockImplementation(function (this: { opts: unknown }, opts: unknown) {
+    this.opts = opts;
+    otelMock.exporters.push(this as (typeof otelMock.exporters)[number]);
+  }),
+}));
+vi.mock("@opentelemetry/sdk-logs", () => ({
+  BatchLogRecordProcessor: vi.fn().mockImplementation(function (
+    this: { opts: unknown },
+    opts: unknown
+  ) {
+    this.opts = opts;
+    otelMock.processors.push(this as (typeof otelMock.processors)[number]);
+  }),
+  LoggerProvider: vi.fn().mockImplementation(function (
+    this: ProviderInstance,
+    config: ProviderInstance["config"]
+  ) {
+    const emit = vi.fn();
+    const shutdown = vi.fn().mockResolvedValue(undefined);
+    Object.assign(this, { config, emit, shutdown, getLogger: () => ({ emit }) });
+    otelMock.providers.push(this);
+  }),
+}));
+
+/** The attributes of the Nth emitted log record on a provider. */
+const attrsOf = (provider: ProviderInstance, n: number): Record<string, unknown> =>
+  (provider.emit.mock.calls[n]![0] as { attributes: Record<string, unknown> }).attributes;
+
+// getConsentState honours two env opt-outs ahead of the config file:
+// DO_NOT_TRACK (the consortium standard) and a falsy ARGENT_TELEMETRY. Either
+// one, exported in the developer's shell, disables consent for every describe
+// below, so these tests would assert what that shell says rather than what
+// markEnabled() does.
+const CONSENT_ENV_KEYS = ["DO_NOT_TRACK", "ARGENT_TELEMETRY"];
+let restoreOptOut: () => void;
+beforeEach(() => {
+  restoreOptOut = snapshotEnv(CONSENT_ENV_KEYS);
+  for (const k of CONSENT_ENV_KEYS) delete process.env[k];
+});
+afterEach(() => {
+  restoreOptOut();
 });
 
 describe("telemetry public surface", () => {
   const { tmp } = scopeHome();
 
   beforeEach(() => {
-    posthogMock.instances.length = 0;
-    posthogMock.flushImpl = () => Promise.resolve();
+    otelMock.providers.length = 0;
+    otelMock.processors.length = 0;
+    otelMock.exporters.length = 0;
     resetClient();
     // is_ci and friends are memoized per process; reset so a test that sets CI
     // env vars sees them recomputed rather than a value cached by a prior test.
@@ -70,7 +109,7 @@ describe("telemetry public surface", () => {
     // Isolate the module-level id / fingerprint / consent caches between tests.
     _resetIdentityCacheForTest();
     _resetConsentCacheForTest();
-    (globalThis as Record<string, unknown>).__ARGENT_POSTHOG_KEY_TEST = "phc_real";
+    (globalThis as Record<string, unknown>).__ARGENT_OTEL_TOKEN_TEST = "otel_real";
     init("tool_server");
     markEnabled();
   });
@@ -90,43 +129,40 @@ describe("telemetry public surface", () => {
   };
 
   afterEach(() => {
-    delete (globalThis as Record<string, unknown>).__ARGENT_POSTHOG_KEY_TEST;
+    delete (globalThis as Record<string, unknown>).__ARGENT_OTEL_TOKEN_TEST;
     resetClient();
     vi.restoreAllMocks();
   });
 
   it("markDisabled persists disabled state and drains prior events without emitting an opt-out event", async () => {
     track("toolserver:start", {});
-    const client = posthogMock.instances[0]!;
+    const provider = otelMock.providers[0]!;
 
-    client.shutdown.mockImplementation(async () => {
+    provider.shutdown.mockImplementation(async () => {
       expect(isEnabled()).toBe(false);
     });
 
     await markDisabled();
 
-    expect(posthogMock.instances).toHaveLength(1);
-    expect(client.capture).toHaveBeenCalledTimes(1);
-    expect(client.capture).toHaveBeenCalledWith(
-      expect.objectContaining({ event: "toolserver:start" })
+    expect(otelMock.providers).toHaveLength(1);
+    expect(provider.emit).toHaveBeenCalledTimes(1);
+    expect(provider.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ body: "toolserver:start" })
     );
-    expect(client.capture).not.toHaveBeenCalledWith(
-      expect.objectContaining({ event: "telemetry:opt_out" })
-    );
-    expect(client.flush).not.toHaveBeenCalled();
-    expect(client.shutdown).toHaveBeenCalledTimes(1);
+    // Opting out emits nothing extra — only the one event that was already queued.
+    expect(provider.shutdown).toHaveBeenCalledTimes(1);
     expect(isEnabled()).toBe(false);
   });
 
-  it("does not provision the anon-id file when the PostHog key is unusable", () => {
-    // An intentionally-disabled/empty key means nothing can ever transmit, so
+  it("does not provision the anon-id file when the ingest token is unusable", () => {
+    // An intentionally-disabled/empty token means nothing can ever transmit, so
     // track() must not write a persistent identifier to the user's disk.
-    (globalThis as Record<string, unknown>).__ARGENT_POSTHOG_KEY_TEST = "";
+    (globalThis as Record<string, unknown>).__ARGENT_OTEL_TOKEN_TEST = "";
     resetClient();
 
     track("toolserver:start", {});
 
-    expect(posthogMock.instances).toHaveLength(0);
+    expect(otelMock.providers).toHaveLength(0);
     expect(status().hasAnonIdOnDisk).toBe(false);
   });
 
@@ -138,16 +174,18 @@ describe("telemetry public surface", () => {
       total_tool_calls: 0,
     });
 
-    const client = posthogMock.instances[0]!;
+    const provider = otelMock.providers[0]!;
 
-    expect(posthogMock.instances).toHaveLength(1);
-    expect(client.capture).toHaveBeenCalledTimes(2);
-    expect(client.capture).toHaveBeenCalledWith(
-      expect.objectContaining({ event: "toolserver:stop" })
+    expect(otelMock.providers).toHaveLength(1);
+    expect(provider.emit).toHaveBeenCalledTimes(2);
+    expect(provider.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ body: "toolserver:stop" })
     );
-    expect(client.flush).not.toHaveBeenCalled();
-    expect(client.shutdown).not.toHaveBeenCalled();
-    expect(client.opts).toEqual(expect.objectContaining({ flushAt: 20, flushInterval: 10_000 }));
+    expect(provider.shutdown).not.toHaveBeenCalled();
+    // The batching config lives on the batch log-record processor.
+    expect(otelMock.processors[0]!.opts).toEqual(
+      expect.objectContaining({ maxExportBatchSize: 20, scheduledDelayMillis: 10_000 })
+    );
   });
 
   it("uses the host fingerprint verbatim as the distinctId", () => {
@@ -155,20 +193,16 @@ describe("telemetry public surface", () => {
     // so the id is that fingerprint rather than a random v4.
     track("toolserver:start", {});
 
-    const client = posthogMock.instances[0]!;
-    expect(client.capture).toHaveBeenCalledTimes(1);
-    const { distinctId } = client.capture.mock.calls[0]![0] as { distinctId: string };
+    const provider = otelMock.providers[0]!;
+    expect(provider.emit).toHaveBeenCalledTimes(1);
+    const distinctId = attrsOf(provider, 0).distinct_id;
     // The distinctId is the fingerprint hash itself, not a random v4 UUID.
     expect(distinctId).toBe("f".repeat(64));
     // Persisted to disk as the migrated id.
-    expect(status().anonIdPrefix).toBe(distinctId.slice(0, 8));
-    // Migration is local-only: no alias/$identify event is ever emitted.
-    expect(client.capture).not.toHaveBeenCalledWith(
-      expect.objectContaining({ event: "$identify" })
-    );
-    expect(client.capture).not.toHaveBeenCalledWith(
-      expect.objectContaining({ event: "$create_alias" })
-    );
+    expect(status().anonIdPrefix).toBe("f".repeat(64).slice(0, 8));
+    // Migration is local-only: exactly one record is emitted (the tracked event),
+    // never an extra identity/alias record.
+    expect(provider.emit).toHaveBeenCalledTimes(1);
   });
 
   it("self-heals a fallback id to the fingerprint via the background upgrade wired into track()", async () => {
@@ -184,14 +218,14 @@ describe("telemetry public surface", () => {
     fs.writeFileSync(idFile(), LEGACY, { mode: 0o600 });
 
     track("toolserver:start", {});
-    const client = posthogMock.instances[0]!;
-    expect((client.capture.mock.calls[0]![0] as { distinctId: string }).distinctId).toBe(LEGACY);
+    const provider = otelMock.providers[0]!;
+    expect(attrsOf(provider, 0).distinct_id).toBe(LEGACY);
 
     await flushUpgrade();
     expect(readId()).toBe(FP); // background upgrade migrated the file
 
     track("toolserver:start", {});
-    expect((client.capture.mock.calls[1]![0] as { distinctId: string }).distinctId).toBe(FP);
+    expect(attrsOf(provider, 1).distinct_id).toBe(FP);
   });
 
   it("warmTelemetryIdentity establishes the fingerprint id off the hot path", async () => {
@@ -201,10 +235,8 @@ describe("telemetry public surface", () => {
     expect(readId()).toBe("f".repeat(64));
     // A subsequent event then finds it on disk (no truly-fresh sync resolve).
     track("toolserver:start", {});
-    const client = posthogMock.instances[0]!;
-    expect((client.capture.mock.calls[0]![0] as { distinctId: string }).distinctId).toBe(
-      "f".repeat(64)
-    );
+    const provider = otelMock.providers[0]!;
+    expect(attrsOf(provider, 0).distinct_id).toBe("f".repeat(64));
   });
 
   it("warmTelemetryIdentity mints no identity when telemetry is disabled", async () => {
@@ -217,14 +249,14 @@ describe("telemetry public surface", () => {
     expect(status().hasAnonIdOnDisk).toBe(false);
   });
 
-  it("warmTelemetryIdentity provisions no identity when the PostHog key is unusable", async () => {
-    // Consent-enabled but an unusable key: like track()/buildPayload, warm-up must
+  it("warmTelemetryIdentity provisions no identity when the ingest token is unusable", async () => {
+    // Consent-enabled but an unusable token: like track()/buildPayload, warm-up must
     // resolve the client first and bail before spawning the fingerprint binary or
     // writing a durable per-machine id for events that can never be transmitted.
     // The async resolver is mocked to a fingerprint, so without the getClient()
     // gate warmIdentity would persist "f".repeat(64); asserting no id proves the
     // short-circuit.
-    (globalThis as Record<string, unknown>).__ARGENT_POSTHOG_KEY_TEST = "";
+    (globalThis as Record<string, unknown>).__ARGENT_OTEL_TOKEN_TEST = "";
     resetClient();
     _resetConsentCacheForTest();
     expect(isEnabled()).toBe(true);
@@ -255,8 +287,8 @@ describe("telemetry public surface", () => {
       package_manager: "npm",
       is_non_interactive: false,
     });
-    const client = posthogMock.instances[0]!;
-    expect((client.capture.mock.calls[0]![0] as { distinctId: string }).distinctId).toBe(FP);
+    const provider = otelMock.providers[0]!;
+    expect(attrsOf(provider, 0).distinct_id).toBe(FP);
   });
 
   it("warmTelemetryIdentitySync mints no identity when telemetry is disabled", () => {
@@ -268,8 +300,8 @@ describe("telemetry public surface", () => {
     expect(status().hasAnonIdOnDisk).toBe(false);
   });
 
-  it("warmTelemetryIdentitySync provisions no identity when the PostHog key is unusable", () => {
-    (globalThis as Record<string, unknown>).__ARGENT_POSTHOG_KEY_TEST = "";
+  it("warmTelemetryIdentitySync provisions no identity when the ingest token is unusable", () => {
+    (globalThis as Record<string, unknown>).__ARGENT_OTEL_TOKEN_TEST = "";
     resetClient();
     _resetConsentCacheForTest();
     expect(isEnabled()).toBe(true);
@@ -285,11 +317,11 @@ describe("telemetry public surface", () => {
 
       track("toolserver:start", {});
 
-      const client = posthogMock.instances[0]!;
-      expect(client.capture).toHaveBeenCalledWith(
+      const provider = otelMock.providers[0]!;
+      expect(provider.emit).toHaveBeenCalledWith(
         expect.objectContaining({
-          event: "toolserver:start",
-          properties: expect.objectContaining({ is_ci: true }),
+          body: "toolserver:start",
+          attributes: expect.objectContaining({ is_ci: true }),
         })
       );
     } finally {
@@ -305,12 +337,12 @@ describe("telemetry public surface", () => {
       total_tool_calls: 0,
     });
 
-    const client = posthogMock.instances[0]!;
+    const provider = otelMock.providers[0]!;
 
     await shutdown();
 
-    expect(posthogMock.instances).toHaveLength(1);
-    expect(client.shutdown).toHaveBeenCalledTimes(1);
+    expect(otelMock.providers).toHaveLength(1);
+    expect(provider.shutdown).toHaveBeenCalledTimes(1);
   });
 
   it("resetLocalTelemetryState removes local state without a delete-person event and leaves consent untouched", async () => {
@@ -318,14 +350,13 @@ describe("telemetry public surface", () => {
     expect(status().hasAnonIdOnDisk).toBe(true);
 
     const result = await resetLocalTelemetryState();
-    const client = posthogMock.instances[0]!;
+    const provider = otelMock.providers[0]!;
 
-    expect(posthogMock.instances).toHaveLength(1);
-    expect(client.capture).not.toHaveBeenCalledWith(
-      expect.objectContaining({ event: "$delete_person" })
-    );
-    expect(client.flush).not.toHaveBeenCalled();
-    expect(client.shutdown).not.toHaveBeenCalled();
+    expect(otelMock.providers).toHaveLength(1);
+    // The reset is local-only: it emits nothing beyond the already-tracked event
+    // and never shuts the client down.
+    expect(provider.emit).toHaveBeenCalledTimes(1);
+    expect(provider.shutdown).not.toHaveBeenCalled();
     expect(result.localIdRemoved).toBe(true);
     expect(result.noticeReset).toBe(true);
     expect(status().hasAnonIdOnDisk).toBe(false);
@@ -341,10 +372,9 @@ describe("telemetry public surface", () => {
 
     const result = await resetLocalTelemetryState();
 
-    const client = posthogMock.instances[0]!;
-    expect(client.capture).not.toHaveBeenCalledWith(
-      expect.objectContaining({ event: "$delete_person" })
-    );
+    const provider = otelMock.providers[0]!;
+    // The reset itself emits no erasure record — it is a purely local removal.
+    expect(provider.emit).toHaveBeenCalledTimes(1);
     expect(result.localIdRemoved).toBe(true);
     expect(status().hasAnonIdOnDisk).toBe(false);
     // No config file is created just to clear a marker that was never set.
@@ -387,5 +417,120 @@ describe("telemetry public surface", () => {
 
     expect(result.localIdRemoved).toBe(true);
     expect(status().hasAnonIdOnDisk).toBe(false);
+  });
+});
+
+describe("the log record that goes on the wire", () => {
+  const { tmp: _tmp } = scopeHome();
+
+  beforeEach(() => {
+    otelMock.providers.length = 0;
+    otelMock.processors.length = 0;
+    otelMock.exporters.length = 0;
+    resetClient();
+    _resetBasePropsCacheForTest();
+    _resetIdentityCacheForTest();
+    _resetConsentCacheForTest();
+    (globalThis as Record<string, unknown>).__ARGENT_OTEL_TOKEN_TEST = "otel_real";
+    init("tool_server");
+    markEnabled();
+  });
+
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).__ARGENT_OTEL_TOKEN_TEST;
+    resetClient();
+    vi.restoreAllMocks();
+  });
+
+  it("routes properties through the sanitizer's allowlist", () => {
+    // `toolserver:start` allows no properties at all, so an absolute path handed
+    // to it must not survive. This is what pins track() to sanitize(): read the
+    // caller's props straight onto the record and the path ships verbatim.
+    track("toolserver:start", { cwd: "/Users/someone/private-project" } as never);
+
+    const attributes = attrsOf(otelMock.providers[0]!, 0);
+    expect(attributes).not.toHaveProperty("cwd");
+    expect(Object.values(attributes)).not.toContain("/Users/someone/private-project");
+  });
+
+  it("omits a null-valued property rather than sending an explicit null", () => {
+    // OTel rejects null attribute values, so toAttributes drops those keys.
+    const client = getClient()!;
+    client.emit({
+      distinctId: "d",
+      event: "toolserver:start",
+      properties: { kept: "yes", nulled: null, missing: undefined },
+    });
+
+    const attributes = attrsOf(otelMock.providers[0]!, 0);
+    expect(attributes.kept).toBe("yes");
+    expect("nulled" in attributes).toBe(false);
+    expect("missing" in attributes).toBe(false);
+  });
+
+  it("identifies the record by service.name resource and event.name attribute", () => {
+    track("toolserver:start", {});
+
+    const provider = otelMock.providers[0]!;
+    expect(
+      (provider.config.resource as { attributes: Record<string, unknown> }).attributes
+    ).toEqual({ "service.name": "argent" });
+    expect(attrsOf(provider, 0)["event.name"]).toBe("toolserver:start");
+  });
+});
+
+describe("drain budgets", () => {
+  const { tmp: _t } = scopeHome();
+
+  beforeEach(() => {
+    otelMock.providers.length = 0;
+    otelMock.processors.length = 0;
+    otelMock.exporters.length = 0;
+    resetClient();
+    _resetBasePropsCacheForTest();
+    _resetIdentityCacheForTest();
+    _resetConsentCacheForTest();
+    (globalThis as Record<string, unknown>).__ARGENT_OTEL_TOKEN_TEST = "otel_real";
+    init("tool_server");
+    markEnabled();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    delete (globalThis as Record<string, unknown>).__ARGENT_OTEL_TOKEN_TEST;
+    resetClient();
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * Both drains race the client against a timer. The timer has to sit strictly
+   * later than the exporter's own export deadline (EXPORT_TIMEOUT_MS, equal to
+   * this budget), or it fires at the same instant and the batch is abandoned
+   * rather than given the chance to finish failing.
+   */
+  async function assertRacedWithGrace(drain: () => Promise<unknown>): Promise<void> {
+    vi.useFakeTimers();
+    track("toolserver:start", {});
+    otelMock.providers[0]!.shutdown.mockImplementation(() => new Promise(() => {}));
+
+    let settled = false;
+    const pending = drain().then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(settled, "resolved at the export deadline, leaving no grace").toBe(false);
+
+    await vi.advanceTimersByTimeAsync(250);
+    await pending;
+    expect(settled).toBe(true);
+  }
+
+  it("bounds shutdown() so a wedged exporter cannot stall a command", async () => {
+    await assertRacedWithGrace(() => shutdown());
+  });
+
+  it("bounds markDisabled()'s drain on the same budget as shutdown()", async () => {
+    await assertRacedWithGrace(() => markDisabled());
   });
 });

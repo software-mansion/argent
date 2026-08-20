@@ -40,8 +40,7 @@ export interface BaseProps {
   // only for vendor-hosted/remote runs, not local agent CLI use.
   cloud_agent: CloudAgent | null;
   runtime: Runtime;
-  $session_id: string;
-  $process_person_profile: false;
+  session_id: string;
 }
 
 // Everything here is constant for the process lifetime. Computing it once
@@ -50,10 +49,9 @@ export interface BaseProps {
 // isCi() (which scans ~9 env vars and walks every ci-info vendor definition) and
 // detectCloudAgent() (which scans the agent signal table and may stat the
 // Devin/Jules markers) would otherwise re-run per event. Only `runtime` and
-// `$session_id` are kept
-// dynamic below — the session id reads SESSION_ID live so the test seam can
-// rotate it.
-type InvariantProps = Omit<BaseProps, "runtime" | "$session_id">;
+// `session_id` are kept dynamic below — the session id reads SESSION_ID live so
+// the test seam can rotate it.
+type InvariantProps = Omit<BaseProps, "runtime" | "session_id">;
 let invariantProps: InvariantProps | null = null;
 
 function getInvariantProps(): InvariantProps {
@@ -66,7 +64,6 @@ function getInvariantProps(): InvariantProps {
       is_tty: Boolean(process.stdout.isTTY),
       is_ci: isCi(),
       cloud_agent: detectCloudAgent(),
-      $process_person_profile: false,
     };
   }
   return invariantProps;
@@ -76,7 +73,7 @@ export function getBaseProps(runtime: Runtime): BaseProps {
   return {
     ...getInvariantProps(),
     runtime,
-    $session_id: SESSION_ID,
+    session_id: SESSION_ID,
   };
 }
 

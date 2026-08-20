@@ -72,7 +72,7 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 | Rotation          | `gesture-rotate`    | Two-finger rotation with auto-interpolation                      |
 | Custom gesture    | `gesture-custom`    | Arbitrary touch sequences, optional interpolation                |
 | Hardware key      | `button`            | Home, back, power, volume, appSwitch, actionButton               |
-| Type text         | `keyboard`          | Every platform. Supports Enter, Escape, arrows (not on TV)       |
+| Type text         | `keyboard`          | Every platform. Text or one named key per call, never both       |
 | Rotate device     | `rotate`            | Orientation changes                                              |
 | Shake device      | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu   |
 | Wait for UI       | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text    |
@@ -106,7 +106,7 @@ Read the exact error and choose the action that matches it:
 - `describe` succeeds but is not detailed enough for a React Native app:
   use `debugger-component-tree` next.
 - You need app-scoped inspection with full UIKit properties (`accessibilityIdentifier`, `viewClassName`):
-  use `native-describe-screen` with an explicit `bundleId`. This requires native devtools (dylib) injection — call `restart-app` first if needed.
+  use `native-describe-screen` with an explicit `bundleId`. This requires native devtools (dylib) injection.
 - You already have a candidate point and want to confirm what would actually receive touch:
   use `native-user-interactable-view-at-point`. Use `native-view-at-point` when you want the visually deepest view instead of the hit-test target.
 
@@ -168,15 +168,17 @@ Values: `home`, `back`, `power`, `volumeUp`, `volumeDown`, `appSwitch`, `actionB
 ### keyboard — Type text or press special keys
 
 ```json
-{ "udid": "<UDID>", "text": "search query", "key": "enter" }
+{ "udid": "<UDID>", "text": "search query" }
 ```
+
+One call does one action. `text` and `key` are mutually exclusive, and a call that carries both is rejected with nothing typed. To type and then submit, send two `keyboard` steps in one `run-sequence` (§ 8) — `{ "text": "search query" }`, then `{ "key": "enter" }`. Two separate calls do the same work, but cost an extra round-trip.
 
 Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12`. Optional: `"delayMs": 100` between keystrokes (default 50ms) — applies to the iOS simulator and Chromium; it is ignored on Android phones/tablets (typed via `adb input text`, no per-key cadence), on Vega, and on TV targets.
 
 **Typing secrets.** To enter a credential without its plaintext ever entering your context, transcript, or logs, use a secret placeholder in `text` (works in `keyboard`, `paste`, `run-sequence` keyboard steps, and flow `type` steps):
 
 ```json
-{ "udid": "<UDID>", "text": "{{secret:APP_PASSWORD}}", "key": "enter" }
+{ "udid": "<UDID>", "text": "{{secret:APP_PASSWORD}}" }
 ```
 
 The placeholder is resolved on the machine running the tool-server, from the first of these that defines the name:
@@ -191,7 +193,7 @@ The placeholder is resolved on the machine running the tool-server, from the fir
 Rules:
 
 - The result echoes the placeholder, never the value. An unknown name fails with the list of available secret _names_ and every source it looked in, with paths — read that list before asking the user anything.
-- The auto-screenshot after the call is skipped so the typed value cannot re-enter your context as pixels. Do **not** `describe` or `screenshot` a non-secure field you just filled with a secret — submit or navigate away first, then verify the resulting screen.
+- The auto-screenshot after the call is skipped so the typed value cannot re-enter your context as pixels. Do **not** `describe` or `screenshot` a non-secure field you just filled with a secret — submit or navigate away first, then verify the resulting screen. To submit, put the text step and the Enter step in **one `run-sequence`**. The skip covers a whole batch that contains the placeholder, but a second bare `keyboard` call gets its own screenshot of the filled field.
 - Nothing outside those sources is reachable; never ask the user to paste a secret value into the conversation. Ask them to put it in a secrets file instead — a file edit applies to the next call, while an exported env var only reaches a tool-server started afterwards.
 - The project sources are found by walking up from the tool-server's working directory. If a project file is not being picked up, the failure's source list shows the paths actually consulted; `~/.argent/secrets.env` needs no project and always applies.
 
@@ -316,7 +318,7 @@ Scroll down three times:
 }
 ```
 
-Type into a focused field and submit:
+Type into a focused field and submit. This is the only way to mix text and a key, because one `keyboard` call cannot carry both:
 
 ```json
 {

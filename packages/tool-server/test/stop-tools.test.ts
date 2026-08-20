@@ -1531,10 +1531,13 @@ describe("stop-metro", () => {
   });
 
   it("returns stopped: false when no process on port", async () => {
-    // Use a high port unlikely to have anything listening
-    const result = await stopMetroTool.execute!({}, { port: 59999 });
+    // Port 1 is privileged, so only root can be listening on it — the probe
+    // finds nothing. This runs the real tool, which SIGTERMs every pid it
+    // finds, so an unprivileged port would both fail here and kill whatever
+    // a concurrent run (or the developer) happens to have bound.
+    const result = await stopMetroTool.execute!({}, { port: 1 });
     expect(result.stopped).toBe(false);
-    expect(result.port).toBe(59999);
+    expect(result.port).toBe(1);
     expect(result.pids).toEqual([]);
   });
 });

@@ -72,8 +72,11 @@
         "tree-sitter-typescript",
         // devDependencies
         "@clack/prompts",
+        "@opentelemetry/api-logs",
+        "@opentelemetry/exporter-logs-otlp-http",
+        "@opentelemetry/resources",
+        "@opentelemetry/sdk-logs",
         "picocolors",
-        "posthog-node",
         "semver",
         "smol-toml",
         "yaml",

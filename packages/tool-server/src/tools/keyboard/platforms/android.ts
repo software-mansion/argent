@@ -1,11 +1,7 @@
 import type { DeviceInfo, Registry } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { isAndroidTv } from "../../../utils/adb";
-import {
-  assertTypeableAndroidText,
-  injectAndroidNamedKey,
-  injectAndroidText,
-} from "../../../utils/android-input";
+import { injectAndroidNamedKey, injectAndroidText } from "../../../utils/android-input";
 import type { KeyboardParams, KeyboardResult } from "../types";
 import { typeTv } from "./tv";
 
@@ -20,14 +16,9 @@ async function typeAndroidPhone(
   params: KeyboardParams
 ): Promise<KeyboardResult> {
   let keysPressed = 0;
-  // Validate the text up front (a pure check, re-run harmlessly inside
-  // `injectAndroidText`): a combined key+text request with un-typeable text
-  // must reject with NO on-device side effect, not press the key and then 400.
-  if (params.text) assertTypeableAndroidText(params.text);
-  if (params.key) {
-    await injectAndroidNamedKey(device.id, params.key);
-    keysPressed++;
-  }
+  // The tool rejects a request carrying both `text` and `key` (see ../index.ts),
+  // so at most one of these two branches runs — there is no ordering to get right
+  // here, and no combined request whose halves could disagree.
   if (params.text) {
     await injectAndroidText(device.id, params.text);
     // `injectAndroidText` (via `assertTypeableAndroidText`) has already rejected
@@ -35,6 +26,10 @@ async function typeAndroidPhone(
     // UTF-16 unit — `.length` is the codepoint count (matching the tv /
     // simulator-server backends) without a spread.
     keysPressed += params.text.length;
+  }
+  if (params.key) {
+    await injectAndroidNamedKey(device.id, params.key);
+    keysPressed++;
   }
   return { typed: params.text ?? params.key ?? "", keys: keysPressed };
 }

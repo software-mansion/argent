@@ -35,6 +35,7 @@ import { ensureDep } from "../../utils/check-deps";
 import { linuxBootDiagnostics } from "../../utils/linux-preflight";
 import { listIosSimulators } from "../../utils/ios-devices";
 import { deviceSetForUdid, simctlPrefix } from "../../utils/ios-device-sets";
+import { androidHeadlessFromEnv, iosHeadlessFromEnv } from "../../utils/no-window-env";
 import { classifyDevice, stripRemotePrefix } from "../../utils/device-info";
 import {
   simctlBoot as simRemoteBoot,
@@ -226,29 +227,6 @@ function selectGpuMode(): string {
     return value;
   }
   return process.platform === "linux" ? "swiftshader" : "auto";
-}
-
-// Opt-in `-no-window` for CI/containers/Wayland sessions where the emulator's
-// bundled Qt has no wayland plugin (would SIGABRT). `-no-window` selects
-// qemu-system-x86_64-headless which skips Qt entirely; screencap still works.
-// Accepted truthy values: "1", "true", "yes" (case-insensitive). Anything else
-// — including "false", "no", "0", or empty — is treated as disabled.
-function selectExtraEmulatorArgs(): string[] {
-  const trimmed = (process.env.ARGENT_EMULATOR_NO_WINDOW ?? "").trim().toLowerCase();
-  return ["1", "true", "yes"].includes(trimmed) ? ["-no-window"] : [];
-}
-
-// iOS analog of ARGENT_EMULATOR_NO_WINDOW: force local simulator boots headless
-// (skip the `open -a Simulator.app` GUI attach in bootIos) without the caller
-// having to pass `headless: true` on every boot-device call. Meant for
-// CI/containers and Argent Lens hosts that stream the device via
-// simulator-server and never want the Simulator.app window to pop.
-// `simctl boot` itself is already headless, so this only gates the GUI attach.
-// Accepted truthy values: "1", "true", "yes" (case-insensitive). Anything else
-// — including "false", "no", "0", or empty — is treated as disabled.
-function iosHeadlessFromEnv(): boolean {
-  const trimmed = (process.env.ARGENT_SIMULATOR_NO_WINDOW ?? "").trim().toLowerCase();
-  return ["1", "true", "yes"].includes(trimmed);
 }
 
 // Poll cadences for the boot state machine. These intervals only pace how
@@ -549,9 +527,9 @@ async function bootIos(
     // sticky `envSetup=true` flag from the *previous* boot — so its
     // `ensureEnvReady()` short-circuits and never re-sets the env. The result:
     // launch-app / restart-app produce an uninjected process and
-    // native-devtools-status stays `connected:false` forever, with no recovery
-    // short of a tool-server restart (requiresAppRestart's ensureEnvReady call
-    // can't help — same sticky flag). Dropping the cached service here forces
+    // native-devtools-status stays `connected:false` until something re-applies
+    // the env out of band — `appConnectionState` does, via reverifyEnv, but only
+    // once an app is queried. Dropping the cached service here forces
     // the resolveService below to rebuild it with a fresh `envSetup=false`, so
     // ensureEnv re-applies DYLD on this boot. The DYLD-clear-on-reboot is not
     // strictly tvOS-specific, but we gate this on tvOS to match the validated
@@ -995,7 +973,8 @@ async function bootAndroidImpl(params: {
   // AVD list, emulator spawn) rather than mid-function with a misleading
   // "emulator has been terminated" suffix.
   const gpuMode = selectGpuMode();
-  const extraEmulatorArgs = selectExtraEmulatorArgs();
+  // Opt-in headless mode via ARGENT_EMULATOR_NO_WINDOW (see no-window-env.ts).
+  const extraEmulatorArgs = androidHeadlessFromEnv() ? ["-no-window"] : [];
 
   for (const msg of linuxBootDiagnostics(params.avdName) ?? []) {
     console.warn(`[boot-device:linux] ${msg}`);
@@ -1125,7 +1104,7 @@ async function bootAndroidImpl(params: {
     // the probe resolves a different renderer than the boot and rejects every
     // valid snapshot with "different renderer configured". RENDERER_ARGS
     // keeps the two in lockstep. `-gpu` value and the optional `-no-window`
-    // come from `selectGpuMode` / `selectExtraEmulatorArgs` (resolved upfront).
+    // come from `selectGpuMode` / `androidHeadlessFromEnv` (resolved upfront).
     const RENDERER_ARGS = ["-gpu", gpuMode, ...extraEmulatorArgs];
     const probe = await checkSnapshotLoadable(params.avdName, "default_boot", {
       extraArgs: [...RENDERER_ARGS, ...LAUNCH_HARDENING_ARGS],
