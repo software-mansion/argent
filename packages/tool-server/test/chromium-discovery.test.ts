@@ -4,6 +4,7 @@ import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AddressInfo } from "node:net";
+import { scopeTempHome } from "./helpers/temp-home";
 import {
   discoverChromiumDevices,
   getCandidateChromiumPorts,
@@ -85,6 +86,11 @@ const serversToCleanup: FakeCdpServer[] = [];
 
 // Redirect port persistence to a throwaway file so tests never touch the
 // real ~/.argent/chromium-cdp-ports.json on a developer machine or CI runner.
+// This file drives the real persistPorts, which merges rather than replaces, so
+// a lapsed redirect would leave test ports in that file for list-devices to
+// probe. Scope HOME too: the fallback path then lands somewhere disposable.
+scopeTempHome("argent-chromium-discovery-home-");
+
 const TEST_PORTS_FILE = path.join(os.tmpdir(), `argent-test-chromium-ports-${process.pid}.json`);
 
 beforeAll(() => {

@@ -177,7 +177,8 @@ describe("bootElectronApp — ready-vs-exit confirmation window", () => {
       expect(result.pid).toBe(FAKE_PID);
       expect(trackChromiumPort).toHaveBeenCalledWith(port);
       // ...through the mock, and no further. A mock that calls through still
-      // satisfies the line above while persisting the port for real.
+      // satisfies the line above while really persisting the port, which the
+      // scoped HOME then contains.
       expect(fs.existsSync(path.join(os.homedir(), ".argent", "chromium-cdp-ports.json"))).toBe(
         false
       );
