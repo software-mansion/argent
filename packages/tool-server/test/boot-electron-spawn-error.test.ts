@@ -300,10 +300,11 @@ describe("bootElectronApp — spawn error handling", () => {
       });
 
       // A completed boot persists its port, and nothing here may let that
-      // reach the developer's real ~/.argent/chromium-cdp-ports.json. The
-      // module mock above is what holds it back; assert the absence, so a mock
-      // that stops intercepting fails here rather than silently appending an
-      // ephemeral port on every run.
+      // reach the developer's real ~/.argent/chromium-cdp-ports.json. Two
+      // things hold it back: the module mock above, and the scoped HOME that
+      // keeps this check about this run's writes rather than a file the
+      // developer already had. Assert the absence, so a mock that stops
+      // intercepting fails here instead of silently appending a port per run.
       expect(fs.existsSync(path.join(os.homedir(), ".argent", "chromium-cdp-ports.json"))).toBe(
         false
       );
@@ -364,6 +365,7 @@ describe("bootElectronApp — spawn error handling", () => {
         }).catch((e: unknown) => e)
       );
       expect(signal?.error_code).toBe(FAILURE_CODES.CHROMIUM_ELECTRON_CDP_TIMEOUT);
+      expect(signal?.failure_stage).toBe("electron_cdp_ready");
 
       // Both listeners must be detached in the catch path.
       expect(child.listenerCount("error")).toBe(0);

@@ -13,6 +13,9 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
+import { scopeTempHome } from "./helpers/temp-home";
+
+scopeTempHome("argent-boot-electron-kill-home-");
 
 const spawnMock = vi.fn();
 
@@ -108,6 +111,10 @@ async function bootFakeChild(): Promise<{ child: FakeChild; port: number; close:
   const { port } = srv.address() as { port: number };
 
   await bootElectronApp({ appPath: appDir, port, readyTimeoutMs: 5000 });
+  // The mock above must actually intercept trackChromiumPort. Deleted, or
+  // rewritten to call through, it stays invisible while every boot here
+  // appends a live port to the developer's ~/.argent/chromium-cdp-ports.json.
+  expect(fs.existsSync(path.join(os.homedir(), ".argent", "chromium-cdp-ports.json"))).toBe(false);
   return { child, port, close: () => srv.close() };
 }
 
