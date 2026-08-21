@@ -39,6 +39,7 @@ import {
 } from "./utils.js";
 import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
 import { execShellCommandSync, runTrustingDisk } from "./shell.js";
+import { probeGlobalInstallTarget, unwritableGlobalTargetMessage } from "./global-prefix.js";
 import { reportSkillRefresh } from "./skills.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { resolveInstallableUpdateTarget } from "./update-target.js";
@@ -114,6 +115,13 @@ const UPDATE_PACKAGE_ACTION_FAILED: InstallerFailureSignal = {
   failure_stage: "installer_update_package_action",
   failure_area: "installer",
   error_kind: "subprocess",
+};
+
+const UPDATE_GLOBAL_PREFIX_UNWRITABLE: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.UPDATE_GLOBAL_PREFIX_UNWRITABLE,
+  failure_stage: "installer_update_global_prefix_preflight",
+  failure_area: "installer",
+  error_kind: "validation",
 };
 
 const UPDATE_UNCLASSIFIED_FAILED: InstallerFailureSignal = {
@@ -377,6 +385,23 @@ export async function update(args: string[]): Promise<void> {
     if (needsInstall && target !== null) {
       if (installed) {
         p.log.warn(`Update available: ${pc.yellow(`v${installed}`)} -> ${pc.green(`v${target}`)}`);
+      }
+
+      // An unwritable global directory fails HERE — before the confirm prompt,
+      // and before the tool-server teardown below stops a server for an install
+      // that was never going to be replaced.
+      if (mode === "global") {
+        const globalTarget = probeGlobalInstallTarget(pm, getGloballyInstalledPackageRoot());
+        if (globalTarget?.blocked) {
+          await trackPackageAction(
+            "update_failed",
+            updateStartTime,
+            false,
+            UPDATE_GLOBAL_PREFIX_UNWRITABLE
+          );
+          p.log.error(unwritableGlobalTargetMessage(globalTarget, pm, "update"));
+          return { failed: UPDATE_GLOBAL_PREFIX_UNWRITABLE };
+        }
       }
 
       const cmd =

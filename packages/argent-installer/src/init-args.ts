@@ -37,11 +37,17 @@ export function parseInitArgs(args: string[]): InitArgs {
   };
 }
 
-// Telemetry step labels for a cancelled prompt. "global_install" is absent
-// because there is no such prompt anymore: choosing the global install mode
-// (or --global) IS the consent, so a missing global package installs without
-// a second question. The event schema keeps the label for older clients.
-export type CancelStep = "install_mode" | "editors" | "scope" | "allowlist" | "skills";
+// Telemetry step labels for a cancelled prompt. "global_install" covers only
+// the recovery offered when the global directory cannot be written: choosing
+// the global install mode (or --global) IS the consent, so a missing global
+// package otherwise installs without a second question.
+export type CancelStep =
+  | "install_mode"
+  | "global_install"
+  | "editors"
+  | "scope"
+  | "allowlist"
+  | "skills";
 
 // Thrown by a step module when the user cancels a prompt (Ctrl-C / Esc). The
 // orchestrator catches it, emits `cli_init_cancel { step }`, finalizes

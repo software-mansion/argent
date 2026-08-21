@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { update } from "../src/update.js";
+import { killToolServerForInstallDir } from "@argent/tools-client";
 
 // Declining the update prompt must cancel + exit 0 without the config refresh
 // (entry rewrites, allowlists, stale-config sweep, rules/agents, skills)
@@ -93,6 +94,10 @@ beforeEach(() => {
   savedAgent = process.env.npm_config_user_agent;
   delete process.env.npm_config_user_agent;
   vi.clearAllMocks();
+  // clearAllMocks keeps implementations, and the tests below install their own
+  // on execFileSync — reset it so one test's package-manager stub cannot decide
+  // the next test's outcome.
+  childProcessMock.execFileSync.mockReset();
   topologyState.globalInstalled = true;
   topologyState.globalVersion = "1.0.0";
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-update-decline-"));
@@ -146,7 +151,7 @@ describe("update — interactive decline", () => {
     expect(exitSpy).toHaveBeenCalledWith(0);
     expect(promptsMock.cancel).toHaveBeenCalledWith("Update cancelled.");
     // No install ran, and the decline still completed (not failed) telemetry.
-    expect(childProcessMock.execFileSync).not.toHaveBeenCalled();
+    expect(npmInstallCalls()).toHaveLength(0);
     expect(telemetryMock.track).toHaveBeenCalledWith(
       "installation:cli_update_complete",
       expect.anything()
@@ -156,18 +161,45 @@ describe("update — interactive decline", () => {
     expect(fs.readFileSync(mcpJson, "utf8")).toBe(before);
   });
 
+  // The reported Nix bug: the global directory belongs to the store. Asking
+  // "update?" there only leads to npm's EACCES, and stopping the tool server
+  // for it costs the user a restart for nothing.
+  it("refuses a global update it cannot perform, before asking and before stopping the server", async () => {
+    const globalRoot = path.join(tmpDir, "store", "lib", "node_modules");
+    fs.mkdirSync(globalRoot, { recursive: true });
+    fs.chmodSync(globalRoot, 0o555);
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) =>
+      args[0] === "root" ? `${globalRoot}\n` : undefined) as never);
+
+    await expect(update([])).rejects.toThrow(ExitSentinel);
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(promptsMock.confirm).not.toHaveBeenCalled();
+    expect(killToolServerForInstallDir).not.toHaveBeenCalled();
+    expect(npmInstallCalls()).toHaveLength(0);
+    const errors = promptsMock.log.error.mock.calls.map(([m]) => m as string);
+    expect(errors.some((m) => m.includes("cannot update @swmansion/argent globally"))).toBe(true);
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:package_action",
+      expect.objectContaining({
+        action: "update_failed",
+        error_code: "UPDATE_GLOBAL_PREFIX_UNWRITABLE",
+      })
+    );
+  });
+
   it("accepting the prompt still proceeds to the install", async () => {
     promptsMock.confirm.mockResolvedValueOnce(true);
     // The mocked package-manager run "lands" the target version on disk —
     // success is decided from the disk, never the exit code alone.
-    childProcessMock.execFileSync.mockImplementationOnce((() => {
-      topologyState.globalVersion = "99.0.0";
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+      if (args[0] === "install") topologyState.globalVersion = "99.0.0";
       return undefined;
     }) as never);
 
     await update([]);
 
-    expect(childProcessMock.execFileSync).toHaveBeenCalled();
+    expect(npmInstallCalls()).toHaveLength(1);
     expect(promptsMock.cancel).not.toHaveBeenCalled();
     expect(telemetryMock.track).toHaveBeenCalledWith(
       "installation:cli_update_complete",
@@ -194,12 +226,12 @@ describe("update — interactive decline", () => {
   });
 });
 
-// Package-manager invocations among all mocked execFileSync calls — adapter
-// detection also shells out (e.g. `which opencode`), so tests must not count
-// raw call totals.
-function npmCalls(): Array<[string, string[]]> {
+// Package-manager INSTALL runs among all mocked execFileSync calls — adapter
+// detection (`which opencode`) and the global-prefix preflight (`npm root -g`)
+// also shell out, so tests must not count raw call totals, nor every `npm`.
+function npmInstallCalls(): Array<[string, string[]]> {
   return (childProcessMock.execFileSync.mock.calls as Array<[string, string[]]>).filter(
-    ([bin]) => bin === "npm"
+    ([bin, args]) => bin === "npm" && args[0] === "install"
   );
 }
 
@@ -218,7 +250,7 @@ describe("update — agent-triggered runs never install a missing global", () =>
       else process.env.ARGENT_UPDATE_TRIGGER = savedTrigger;
     }
 
-    expect(npmCalls()).toHaveLength(0);
+    expect(npmInstallCalls()).toHaveLength(0);
     expect(telemetryMock.track).toHaveBeenCalledWith(
       "installation:cli_update_complete",
       expect.anything()
@@ -254,7 +286,7 @@ describe("update — multi-target failure handling", () => {
     await expect(update(["--yes"])).rejects.toThrow(ExitSentinel);
 
     // Both package-manager runs were attempted (no mid-loop exit(1))...
-    const pmCalls = npmCalls();
+    const pmCalls = npmInstallCalls();
     expect(pmCalls).toHaveLength(2);
     expect(pmCalls.some(([, args]) => args.includes("-g"))).toBe(true);
     expect(pmCalls.some(([, args]) => !args.includes("-g"))).toBe(true);
@@ -298,7 +330,7 @@ describe("update — record-only local project stays updatable", () => {
 
     await update(["--yes"]);
 
-    expect(npmCalls().length).toBeGreaterThan(0);
+    expect(npmInstallCalls().length).toBeGreaterThan(0);
     expect(JSON.parse(fs.readFileSync(localPkgJson, "utf8")).version).toBe("99.0.0");
     expect(telemetryMock.track).toHaveBeenCalledWith(
       "installation:cli_update_complete",

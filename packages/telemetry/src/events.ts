@@ -51,8 +51,12 @@ export interface InstallationInstallModeDecisionProps {
 }
 
 export interface InstallationGlobalInstallDecisionProps {
-  /** The developer-only `--from <tarball>` path is not reported. */
-  decision: "install" | "cancel" | "already_installed";
+  /**
+   * The developer-only `--from <tarball>` path is not reported.
+   * `install_local` and `set_prefix` are the recoveries offered when the
+   * package manager's global directory cannot be written.
+   */
+  decision: "install" | "cancel" | "already_installed" | "install_local" | "set_prefix";
 }
 
 export interface InstallationUpdateDecisionProps {
