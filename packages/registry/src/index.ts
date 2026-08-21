@@ -30,6 +30,7 @@ export {
   CLIENT_FILE_MARKER,
   FLOW_NAME_PATTERN,
   FLOW_FILE_NAME_PATTERN,
+  SCRIPT_FILE_NAME_PATTERN,
   isFileInputWire,
   isClientFileDirective,
   interpolateFileInputPath,

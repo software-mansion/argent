@@ -173,6 +173,23 @@ export const FLOW_NAME_PATTERN = new RegExp(`^${FLOW_NAME_CHARSET}$`);
 /** `<flow-name>.yaml` filename check, derived from the same charset. */
 export const FLOW_FILE_NAME_PATTERN = new RegExp(`^${FLOW_NAME_CHARSET}\\.yaml$`);
 
+/**
+ * `<name>.mjs` filename check for a flow `script:` target.
+ *
+ * A script is not a flow, so this is a separate pattern rather than a reuse —
+ * but it is derived from the SAME charset on purpose. The two names are held to
+ * one rule because they are the same kind of name: a path segment an author
+ * writes into a flow file, resolved against that file's own directory, and
+ * checked against the directory listing for its on-disk spelling. Deriving both
+ * from one charset is what keeps a name that is legal in a `run:` target legal
+ * in a `script:` path.
+ *
+ * The extension is `.mjs` and only `.mjs`: it pins the module type against a
+ * project's `package.json` `type` field, so one script file behaves the same
+ * way in every project it is copied into.
+ */
+export const SCRIPT_FILE_NAME_PATTERN = new RegExp(`^${FLOW_NAME_CHARSET}\\.mjs$`);
+
 /** Discriminant key identifying a client-write directive inside a tool result. */
 export const CLIENT_FILE_MARKER = "__argentClientFile" as const;
 

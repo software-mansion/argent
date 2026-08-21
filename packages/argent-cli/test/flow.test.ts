@@ -46,6 +46,9 @@ interface StepFixture {
   flow?: string;
   message?: string;
   snapshotKey?: string;
+  target?: string;
+  scriptLog?: string;
+  scriptLogTruncated?: boolean;
   artifacts?: Record<string, unknown>;
   /** Wire-only tool-step payload; the CLI StepReport type has no such field. */
   result?: unknown;
@@ -350,6 +353,45 @@ describe("argent flow run", () => {
       { onProgress: expect.any(Function) }
     );
     expect(logs.join("\n")).toContain("PASS — 1 passed, 0 failed, 0 errored, 0 skipped");
+  });
+
+  it("prints a script step's log live, under the step line the event produced", async () => {
+    // The live renderer is a second, independent path over the same report: it
+    // prints each step as its event arrives instead of rendering the finished
+    // report, so nothing renderReport covers is covered here by implication.
+    // Driven by invoking the onProgress the CLI hands the client, which is what
+    // a streaming server does.
+    const steps: StepFixture[] = [
+      { index: 0, kind: "echo", status: "pass", message: "seeding" },
+      {
+        index: 1,
+        kind: "script",
+        status: "pass",
+        target: "scripts/seed.mjs",
+        scriptLog: "creating order\norder 4711 created\n",
+        scriptLogTruncated: true,
+      },
+    ];
+    toolsClientMock.callTool.mockImplementation(
+      async (_tool: string, _payload: unknown, opts?: { onProgress?: (e: unknown) => void }) => {
+        for (const step of steps) opts?.onProgress?.(step);
+        return { data: report({ steps, passed: 1 }) };
+      }
+    );
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:0");
+
+    const out = logs.join("\n");
+    expect(out).toContain("✓  1 script scripts/seed.mjs");
+    expect(out).toContain("       │ creating order");
+    expect(out).toContain("       │ order 4711 created");
+    expect(out).toContain("       │ … output truncated (script log limit reached)");
+    // Live mode owns the step lines, so the buffered renderer must not print
+    // the same run a second time underneath them.
+    expect(out.match(/script scripts\/seed\.mjs/g)).toHaveLength(1);
+    // Live mode's summary carries the device, since its header printed before
+    // the runner had resolved one.
+    expect(out).toContain("PASS (started on SIM-1) — 1 passed");
   });
 
   it("exits 2 without calling the tool when --device is missing its value", async () => {

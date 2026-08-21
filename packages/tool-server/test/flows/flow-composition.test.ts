@@ -3161,6 +3161,20 @@ describe("flow validation", () => {
     ).toThrow(/must not declare executionPrerequisite/i);
   });
 
+  it("a leading script does not hide the launch step from the e2e check", () => {
+    // Seeding a backend and then launching the app IS controlling your own
+    // start state — the seed establishes it — so such a flow is e2e and must
+    // not name a prerequisite its own launch would throw away. Read as a
+    // fragment instead, it took the handshake: the caller was asked to
+    // establish state, and the acknowledged run then relaunched over it.
+    expect(() =>
+      parseFlow(
+        "executionPrerequisite: nope\n" +
+          "steps:\n  - script: { path: seed.mjs }\n  - launch: com.acme.app\n"
+      )
+    ).toThrow(/must not declare executionPrerequisite/i);
+  });
+
   it("rejects a path-unsafe snapshot name (no traversal into baseline path)", () => {
     expect(() => parseFlow("steps:\n  - snapshot:\n      name: ../../etc/evil\n")).toThrow(
       /snapshot name/i

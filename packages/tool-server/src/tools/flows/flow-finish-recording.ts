@@ -155,9 +155,11 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
  * missing/`null` `args:` to `{}` on the way through; the recorder
  * (`flow-add-step`) hands over a step it built in memory, whose `args` is
  * `stripDeviceKeys(params.args ? JSON.parse(params.args) : {})` — a fresh
- * spread, so an object either way. It is the `default:` arm of that switch this
- * guards — a step kind added without its own `case` lands there and is rendered
- * as a `tool:` step, with no `args` field to read.
+ * spread, so an object either way. What is left is the hand-edited file: a
+ * cyclic YAML alias under a `tool:` step's `args` reaches the arm below as a
+ * cyclic object. The `default:` arm no longer shares that arm — it binds
+ * `never`, so an unhandled step kind is a build error rather than a `tool:`
+ * rendering of a step that has no `args` to read.
  */
 function renderToolArgs(args: unknown): string {
   try {
@@ -278,8 +280,20 @@ export function summarizeStep(step: FlowStep, n: number): string {
       return `${n}. snapshot: ${step.name}`;
     case "idle":
       return `${n}. await: screen idle`;
+    case "script":
+      // The time limit changes what runs, the same reason `times` and
+      // `duration` are rendered above — a script the host stopped at 5s and one
+      // it let run for 30 are different steps.
+      return `${n}. script: ${step.path}${step.timeout !== undefined ? ` (timeout ${step.timeout}ms)` : ""}`;
     case "tool":
-    default:
       return `${n}. tool: ${step.name} ${renderToolArgs(step.args)}${delayLabel(step)}`;
+    default: {
+      // Declared exhaustive rather than sharing the `tool` arm: that arm reads
+      // `name` and `args`, so a future kind carrying either would be summarized
+      // as somebody else's step instead of failing the build.
+      const unsummarized: never = step;
+      void unsummarized;
+      return `${n}. ${(unsummarized as FlowStep).kind}`;
+    }
   }
 }

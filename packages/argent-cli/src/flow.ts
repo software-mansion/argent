@@ -56,6 +56,19 @@ export interface StepReport {
    * download failed.
    */
   artifacts?: Record<string, unknown>;
+  /**
+   * A `script` step's captured stdout and stderr, in written order, possibly
+   * truncated by the tool server. Not redacted — it arrives as the script wrote
+   * it, credentials included. Printed under the step
+   * line — for a passing script as much as a failing one, since it is the only
+   * record of what the script did.
+   */
+  scriptLog?: string;
+  /**
+   * A log limit dropped some of that output. The text carries no marker of its
+   * own, so without this the log reads as complete.
+   */
+  scriptLogTruncated?: boolean;
 }
 
 export interface FlowReport {
@@ -301,6 +314,31 @@ export function renderUnderStepLine(s: StepReport, n: number, text: string): str
   return `${" ".repeat(5 + Math.max(2, String(n).length))}${stepIndent(s.depth)}${text}`;
 }
 
+/**
+ * A `script` step's captured output, one indented line per line the script
+ * wrote, so it reads as the step's own output rather than as the CLI's.
+ *
+ * Untrusted wire data: the tool server redacts and bounds it, but the value
+ * still arrives over the wire, so a non-string is dropped rather than
+ * interpolated. A trailing newline is not a blank line — scripts end their
+ * output with one — so the split drops exactly one.
+ */
+export function renderScriptLogLines(s: StepReport, n: number): string[] {
+  const log = typeof s.scriptLog === "string" ? s.scriptLog : "";
+  const lines: string[] = [];
+  if (log) {
+    const body = log.endsWith("\n") ? log.slice(0, -1) : log;
+    for (const line of body.split("\n")) lines.push(renderUnderStepLine(s, n, `│ ${line}`));
+  }
+  // Printed even with no text above it: a run-wide budget an earlier step
+  // exhausted can drop a script's output entirely, and silence would read as a
+  // script that printed nothing. `=== true` because the value is wire data.
+  if (s.scriptLogTruncated === true) {
+    lines.push(renderUnderStepLine(s, n, "│ … output truncated (script log limit reached)"));
+  }
+  return lines;
+}
+
 export function renderSummary(report: FlowReport, opts: { withDevice?: boolean } = {}): string {
   const warnings = report.steps.filter((s) => s.warning).length;
   const warningsNote = warnings ? `, ${warnings} warning${warnings === 1 ? "" : "s"}` : "";
@@ -359,6 +397,7 @@ export function renderFailedSteps(report: FlowReport): string[] {
     if (s.status !== "fail" && s.status !== "error" && !s.warning) continue;
     lines.push(renderStepLine(s, n, report.flow));
     if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
+    lines.push(...renderScriptLogLines(s, n));
     if (s.artifacts && typeof s.artifacts === "object") {
       for (const [k, v] of Object.entries(s.artifacts)) {
         if (typeof v === "string") lines.push(renderUnderStepLine(s, n, `${k}: ${v}`));
@@ -814,6 +853,7 @@ export function renderReport(report: FlowReport): string {
     n++;
     lines.push(renderStepLine(s, n, report.flow));
     if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
+    lines.push(...renderScriptLogLines(s, n));
     if (s.artifacts && typeof s.artifacts === "object") {
       for (const [k, v] of Object.entries(s.artifacts)) {
         if (typeof v === "string") lines.push(renderUnderStepLine(s, n, `${k}: ${v}`));
@@ -1489,6 +1529,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     liveIndex++;
     console.log(renderStepLine(s, liveIndex, flowName));
     if (s.warning) console.log(renderUnderStepLine(s, liveIndex, `⚠ ${s.warning}`));
+    for (const line of renderScriptLogLines(s, liveIndex)) console.log(line);
   };
 
   let report: FlowReport;

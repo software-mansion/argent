@@ -225,6 +225,39 @@ describe("flow-execute chromium boot", () => {
     expect(killChromiumByPort).not.toHaveBeenCalled();
   });
 
+  it("boots the leading launch of a flow that seeds a backend before it", async () => {
+    // A `script:` step drives a backend, never the device, so the launch behind
+    // it is still the launch the run BEGINS with and still has to be hoisted.
+    // Read as an ordinary step it stopped the scan: nothing was hoisted, the
+    // run bound to whatever chromium instance auto-detection happened to find,
+    // and the launch step reported a pass for an app it never started.
+    const flowFile = await writeFlow(
+      "steps:\n  - script: { path: ./seed.mjs }\n  - launch: { chromium: ./app }\n"
+    );
+    const flowDir = path.dirname(flowFile);
+    await fs.writeFile(path.join(flowDir, "seed.mjs"), "", "utf8");
+    const registry = makeRegistry();
+
+    const result = await runFlow(registry, {
+      name: "seed-then-launch",
+      project_root: flowDir,
+      flow_file: flowFile,
+    });
+
+    expect(bootElectronApp).toHaveBeenCalledTimes(1);
+    expect(bootElectronApp.mock.calls[0][0].appPath).toBe(path.join(flowDir, "app"));
+    expect(result.device).toBe("chromium-cdp-12345");
+    expect(result.ok).toBe(true);
+    // The reason is the owned-vs-attached signal: the run booted this instance
+    // rather than settling onto a window that was already open.
+    expect(result.steps[1]).toMatchObject({
+      kind: "launch",
+      status: "pass",
+      reason: "booted chromium instance chromium-cdp-12345",
+    });
+    expect(killChromiumByPortAndWait).toHaveBeenCalledWith(12345, 4242);
+  });
+
   it("forwards extra CLI args and boots when --platform chromium disambiguates a multi-platform launch", async () => {
     const flowFile = await writeFlow(
       "steps:\n  - launch: { ios: com.acme.app, chromium: { path: ./app, args: [--e2e] } }\n"
@@ -1775,6 +1808,29 @@ describe("flow-execute prerequisite vs leading launch chain", () => {
         flow_file: fragment,
       })
     ).rejects.toThrow(/must not declare executionPrerequisite/i);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+  });
+
+  it("rejects a prerequisite fragment that seeds a backend before the run: into a launch", async () => {
+    // Same shape as the narrating hop below, with the lead-in that a `script:`
+    // step makes worth writing. The guard has to see through it for the same
+    // reason: e2e-a's launch still lands at the run's first device-touching
+    // step and still wipes the state the handshake asked the caller to set up.
+    const fragment = await writeFlow(
+      'executionPrerequisite: "the counter must already read taps: 1"\n' +
+        "steps:\n  - script: { path: seed.mjs }\n  - run: e2e-a\n"
+    );
+    await writeSiblingFlow(fragment, "e2e-a", "steps:\n  - launch: { chromium: ./app }\n");
+    const registry = makeRegistry();
+
+    await expect(
+      runFlowRaw(registry, {
+        name: "seed-prereq",
+        project_root: PROJECT_ROOT,
+        flow_file: fragment,
+      })
+    ).rejects.toThrow(/must not declare executionPrerequisite/i);
+    // Refused before anything ran: neither the seed nor the boot.
     expect(bootElectronApp).not.toHaveBeenCalled();
   });
 
