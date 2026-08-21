@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { execSync } from "node:child_process";
 import semver from "semver";
 import { PACKAGE_NAME, MCP_BINARY_NAME } from "./constants.js";
+import { detectPackageManager } from "./package-manager.js";
 import { resolvePackageRoot } from "./package-root.js";
 import { isYarnPnp } from "./preflight.js";
 
@@ -82,6 +83,81 @@ export function getGloballyInstalledPackageRoot(): string | null {
     return pkg.name === PACKAGE_NAME ? root : null;
   } catch {
     return null;
+  }
+}
+
+/** Verdict of {@link probeGlobalPackageRemoval}. */
+export type RemovalWritability = "writable" | "blocked" | "unknown";
+
+export interface GlobalRemovalProbe {
+  verdict: RemovalWritability;
+  /** Directory whose permissions decided the verdict; null unless "blocked". */
+  parentDir: string | null;
+}
+
+const UNKNOWN_REMOVAL: GlobalRemovalProbe = { verdict: "unknown", parentDir: null };
+
+/**
+ * Can `npm uninstall -g` actually remove the global package as this user?
+ *
+ * `uninstall` prunes the workspace before it removes the package, so a removal
+ * that dies on permissions leaves the user with no config and a package that is
+ * still installed (issue #622). This answers the question BEFORE anything is
+ * deleted.
+ *
+ * npm does not unlink the package directory — it RENAMES it aside
+ * (`@swmansion/argent` -> `@swmansion/.argent-p3dt2fHx`), so the permission that
+ * decides the outcome belongs to the package's PARENT directory, not the package
+ * itself.
+ *
+ * Every inconclusive case returns "unknown" and callers must treat that exactly
+ * like "writable": a wrong "blocked" would refuse an uninstall that works, which
+ * is worse than the bug being fixed.
+ */
+export function probeGlobalPackageRemoval(): GlobalRemovalProbe {
+  // Windows `access(W_OK)` reflects only the read-only attribute, which is
+  // meaningless on a directory and carries no ACL signal — it would report
+  // "writable" for a directory the user cannot touch. Never guess there.
+  if (process.platform === "win32") return UNKNOWN_REMOVAL;
+
+  // The rename-in-parent mechanic above is npm's. pnpm/yarn/bun globals live in
+  // their own stores and mutate different paths, so a reading taken here would
+  // not describe the command we are about to run. detectPackageManager() is the
+  // same function that BUILDS that command, so probe and command always agree.
+  if (detectPackageManager() !== "npm") return UNKNOWN_REMOVAL;
+
+  if (process.getuid?.() === 0) return { verdict: "writable", parentDir: null };
+
+  const binaryPath = getGlobalBinaryPath();
+  if (!binaryPath) return UNKNOWN_REMOVAL;
+
+  // Deliberately NOT getGloballyInstalledPackageRoot(): that realpaths the bin,
+  // so under `npm link` it resolves to the source checkout and we would end up
+  // probing the checkout's parent — a directory npm never renames. That reads
+  // "blocked" whenever the checkout happens to be read-only, refusing an
+  // uninstall that would have succeeded. Derive the LOGICAL install path from
+  // the prefix instead, and bail on the symlink that marks a linked install.
+  const logicalPkgDir = path.join(
+    path.dirname(binaryPath),
+    "..",
+    "lib",
+    "node_modules",
+    PACKAGE_NAME
+  );
+  const stat = fs.lstatSync(logicalPkgDir, { throwIfNoEntry: false });
+  if (!stat || stat.isSymbolicLink()) return UNKNOWN_REMOVAL;
+
+  const parentDir = path.dirname(logicalPkgDir);
+  try {
+    fs.accessSync(parentDir, fs.constants.W_OK);
+    return { verdict: "writable", parentDir };
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    // Only a permission error is evidence. ENOENT and friends mean the layout
+    // is not what we assumed, which is a reason to stay quiet, not to block.
+    return code === "EACCES" || code === "EPERM"
+      ? { verdict: "blocked", parentDir }
+      : UNKNOWN_REMOVAL;
   }
 }
 
