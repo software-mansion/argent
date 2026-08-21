@@ -1,6 +1,6 @@
-import { resolve as resolvePath } from "node:path";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlInstall, simctlUninstall } from "../../../utils/sim-remote";
+import { assertInstallableArtifact } from "../validate-artifact";
 import type { ReinstallAppParams, ReinstallAppResult, ReinstallAppServices } from "../types";
 
 /**
@@ -17,7 +17,9 @@ export const iosRemoteImpl: PlatformImpl<
   requires: ["sim-remote"],
   handler: async (_services, params) => {
     const { udid, bundleId, appPath } = params;
-    const absolute = resolvePath(appPath);
+    // No container check here: the simulator lives on the remote host, so the
+    // local CoreSimulator layout says nothing about it.
+    const absolute = await assertInstallableArtifact(appPath, "ios");
     try {
       await simctlUninstall(udid, bundleId);
     } catch {

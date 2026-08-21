@@ -1,7 +1,7 @@
-import { resolve as resolvePath } from "node:path";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { runAdb } from "../../../utils/adb";
+import { assertInstallableArtifact } from "../validate-artifact";
 import type { ReinstallAppParams, ReinstallAppResult, ReinstallAppServices } from "../types";
 
 export const androidImpl: PlatformImpl<
@@ -12,7 +12,10 @@ export const androidImpl: PlatformImpl<
   requires: ["adb"],
   handler: async (_services, params) => {
     const { udid, bundleId, appPath } = params;
-    const absolute = resolvePath(appPath);
+    // Validate BEFORE the uninstall: it is irreversible and takes the app's
+    // data with it, so an artifact that was never going to install must be
+    // rejected while the current installation is still on the device.
+    const absolute = await assertInstallableArtifact(appPath, "android");
 
     // Match iOS semantics: uninstall first so the reinstall is a clean wipe.
     // `pm uninstall` is non-fatal if the package isn't installed (returns
