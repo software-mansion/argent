@@ -29,8 +29,7 @@ import { adaptNativeDescribeToDescribeResult } from "./ios-native-adapter";
 const DEGRADED_BLIND_HINT =
   "The accessibility read returned no elements, and this simulator was not booted through argent, " +
   "so the pre-boot accessibility settings were never applied. Unless the screen is genuinely blank, " +
-  "call boot-device with force=true to reboot it with those settings — this restarts the simulator " +
-  "and ends anything running on it.";
+  "call boot-device with force=true to reboot it with those settings — this restarts the simulator";
 
 // Emitted once per device per server lifetime by `withBootCaveatOncePerDevice`:
 // it holds for every describe against this simulator until the sim is booted
