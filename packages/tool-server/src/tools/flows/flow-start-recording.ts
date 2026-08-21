@@ -2,8 +2,10 @@ import { z } from "zod";
 import type { FileInputSpec, ToolDefinition } from "@argent/registry";
 import {
   countStepsOnDisk,
+  describeRequires,
   getFlowPath,
   getRecordingSession,
+  requiresOnDisk,
   startRecordingSession,
   withFlowFileLock,
   writeNewFlowFile,
@@ -80,7 +82,7 @@ export const flowStartRecordingTool: ToolDefinition<
     failedMsg: ({ params, failureSignal }) =>
       `Failed to start recording of flow ${params.name}: ${failureSignal.error_code}`,
   },
-  description: `Start recording a new flow, resetting .argent/flows/<name>.yaml to an empty flow and replacing any existing one.
+  description: `Start recording a new flow, resetting .argent/flows/<name>.yaml to an empty flow and replacing any existing one (an existing \`requires:\` block survives the reset only when the flow file is on this host and parses: against a remote tool-server this host never reads that file, and an unparseable one carries nothing - in both cases the block is lost, the message says so, and re-adding it by hand is the only way back).
 Use when you want to capture a reusable sequence of device interactions for later replay.
 Returns { message, flowFile, savedTo } and optionally { restarted, discardedSteps } if a live recording of the same flow was discarded.
 Whether this server writes that file depends on where your project is: co-located, it creates it and fails if the .argent/flows/ directory cannot be created or the file cannot be written; against a remote tool-server it writes nothing and \`savedTo\` is a directive your client applies (a null \`savedTo\` back means it did not).
@@ -106,15 +108,6 @@ write serializes it over your edit.`,
   services: () => ({}),
   async execute(_services, params, ctx) {
     const filePath = getFlowPath(params.project_root, params.name);
-    // A recording's type emerges from its steps: recording a `restart-app`
-    // first makes it an e2e flow (captured as a leading `launch` step by
-    // flow-add-step); declaring an executionPrerequisite documents a fragment.
-    const flow: FlowFile = {
-      executionPrerequisite: params.executionPrerequisite ?? "",
-      steps: [],
-    };
-    validateFlow(flow);
-    const flowFile = serializeFlow(flow);
 
     // No probe (older client, direct invocation) means the caller shares this
     // filesystem — the pre-boundary assumption — so host persistence stands.
@@ -125,10 +118,8 @@ write serializes it over your edit.`,
     // lock, so a step from the take being discarded can neither slip into the
     // file between the reset and the swap, nor be written after both: it finds
     // its session superseded and fails instead.
-    const { savedTo, replaced, discardedSteps } = await withFlowFileLock(
-      params.project_root,
-      params.name,
-      async () => {
+    const { savedTo, replaced, discardedSteps, flowFile, carried, requiresUnknown } =
+      await withFlowFileLock(params.project_root, params.name, async () => {
         // Read the take being discarded ONCE, here, and drive both the
         // `restarted` flag and its step count off that single read. Count it
         // BEFORE the truncate destroys it, and where it actually lives: on disk
@@ -153,6 +144,32 @@ write serializes it over your edit.`,
               ? await countStepsOnDisk(replaced.filePath)
               : replaced.flow.steps.length;
 
+        // `requires` is the one FlowFile field no tool can write back, so the
+        // reset carries it forward instead of silently unfencing the flow. Host
+        // only: the source is the file about to be truncated, and client mode
+        // has no second source - a session's in-memory `requires` comes from
+        // this very expression, so by induction it is undefined in every
+        // client-mode session and the message below says the block is gone.
+        const onDisk = persist === "host" ? await requiresOnDisk(filePath) : undefined;
+        const carried = onDisk?.requires;
+        // A file that would not parse carries nothing AND is about to be
+        // truncated, so whether it was fenced is now unknowable - reported
+        // rather than passed off as an unfenced flow.
+        const requiresUnknown = persist === "host" && onDisk === undefined;
+
+        // A recording's type emerges from its steps: recording a `restart-app`
+        // first makes it an e2e flow (captured as a leading `launch` step by
+        // flow-add-step); declaring an executionPrerequisite documents a fragment.
+        const flow: FlowFile = {
+          executionPrerequisite: params.executionPrerequisite ?? "",
+          ...(carried ? { requires: carried } : {}),
+          steps: [],
+        };
+        // skipRequires: the carried block is preserved verbatim, not judged -
+        // flow-finish-recording and the run path are the gates.
+        validateFlow(flow, { skipRequires: true });
+        const flowFile = serializeFlow(flow);
+
         let savedTo: FlowSavedTo;
         if (persist === "host") {
           await writeNewFlowFile(filePath, flowFile);
@@ -167,9 +184,18 @@ write serializes it over your edit.`,
           filePath,
           flow,
         });
-        return { savedTo, replaced, discardedSteps };
-      }
-    );
+        return { savedTo, replaced, discardedSteps, flowFile, carried, requiresUnknown };
+      });
+
+    // The reset result otherwise reads as a fully empty flow, so say what became
+    // of the block - and that hand-editing the YAML is the only way to set one.
+    const requiresNote = carried
+      ? ` Kept the existing requires block (${describeRequires(carried)}) - edit the YAML to change it.`
+      : requiresUnknown
+        ? " The previous file did not parse, so any requires block it held was dropped - re-add it by hand if the flow was fenced."
+        : persist === "client"
+          ? " This host cannot read the client-side flow file, so any requires block it held is gone - re-add it by hand if the flow was fenced."
+          : "";
 
     // Only a same-key restart replaces anything — the documented "re-record it
     // to fix it" workflow. Recordings are keyed per flow file, so starting a
@@ -193,7 +219,10 @@ write serializes it over your edit.`,
           ? "the previous take"
           : `the previous take (${discardedSteps} step${discardedSteps === 1 ? "" : "s"})`;
       return {
-        message: `Restarted recording "${params.name}" — ${lost} was discarded and ` + reset,
+        message:
+          `Restarted recording "${params.name}" — ${lost} was discarded and ` +
+          reset +
+          requiresNote,
         restarted: true,
         ...(discardedSteps === undefined ? {} : { discardedSteps }),
         flowFile,
@@ -202,7 +231,9 @@ write serializes it over your edit.`,
     }
 
     return {
-      message: `Started recording "${params.name}" flow`,
+      message: requiresNote
+        ? `Started recording "${params.name}" flow.${requiresNote}`
+        : `Started recording "${params.name}" flow`,
       flowFile,
       savedTo,
     };

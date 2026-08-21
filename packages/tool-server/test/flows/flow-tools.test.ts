@@ -3,7 +3,12 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Registry, ToolContext } from "@argent/registry";
-import { ArtifactStore, zodObjectToJsonSchema } from "@argent/registry";
+import {
+  ArtifactStore,
+  FAILURE_CODES,
+  getFailureSignal,
+  zodObjectToJsonSchema,
+} from "@argent/registry";
 
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
@@ -25,6 +30,7 @@ import {
   getRecordingSession,
   parseFlow,
   serializeFlow,
+  type FlowFile,
   type FlowStep,
 } from "../../src/tools/flows/flow-utils";
 
@@ -72,6 +78,19 @@ function createMockRegistry(
 
 async function readFlowFile(name: string, projectRoot: string = tmpDir): Promise<string> {
   return fs.readFile(path.join(projectRoot, ".argent", "flows", `${name}.yaml`), "utf8");
+}
+
+/**
+ * Replace the active recording's file on disk. Host-mode recording re-reads the
+ * file on every append and on finish (so a manual edit mid-recording survives),
+ * which is the same door an author uses to hand-write a `requires:` block.
+ */
+async function overwriteFlowFile(name: string, flow: FlowFile): Promise<void> {
+  await fs.writeFile(
+    path.join(tmpDir, ".argent", "flows", `${name}.yaml`),
+    serializeFlow(flow),
+    "utf8"
+  );
 }
 
 const PREREQ = "App on home screen";
@@ -267,6 +286,166 @@ describe("flow-start-recording edge cases", () => {
 
     expect(result.restarted).toBeUndefined();
     expect(result.discardedSteps).toBeUndefined();
+  });
+
+  it("carries the on-disk requires block through the reset and says so", async () => {
+    // The re-record repair path: a fenced flow sits on disk with NO live
+    // session. `requires` has no tool that writes it back, so the reset must
+    // not silently turn the flow into a run-anywhere one.
+    const requires = { platform: ["ios" as const], runtimeKind: "tv" as const };
+    await fs.mkdir(flowsDirFor(tmpDir), { recursive: true });
+    await overwriteFlowFile("fenced", {
+      executionPrerequisite: "",
+      requires,
+      steps: [{ kind: "echo", message: "old take" }],
+    });
+
+    const result = await flowStartRecordingTool.execute(
+      {},
+      { name: "fenced", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const flow = parseFlow(result.flowFile);
+    expect(flow.steps).toEqual([]);
+    expect(flow.requires).toEqual(requires);
+    expect(parseFlow(await readFlowFile("fenced")).requires).toEqual(requires);
+    expect(result.message).toContain(
+      "requires block (platform: [ios], runtimeKind: tv) - edit the YAML to change it"
+    );
+    expect(result.message).not.toContain("did not parse");
+  });
+
+  it("carries a coverage-violating block and counts the file when a live take is restarted", async () => {
+    // Host mode WITH a live session: the carried block and the discarded count
+    // are two reads of the same file, and both must skip requires validation.
+    // The block below is one `validateRequires` refuses (the launch declares no
+    // android id), which is exactly the file a re-record exists to repair - so
+    // reading it strictly would report "did not parse" and drop the fence.
+    // The session's in-memory copy is left deliberately behind the file, so a
+    // count taken from the session would report 1 rather than 3.
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "fenced-live", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    await flowInsertEchoTool.execute(
+      {},
+      { name: "fenced-live", project_root: tmpDir, message: "in memory" }
+    );
+    // Hand-written: serializeFlow would refuse to emit this file.
+    const violating = [
+      "requires: { platform: [ios, android] }",
+      "steps:",
+      "  - launch: { ios: com.a }",
+      "  - echo: hand-edited two",
+      "  - echo: hand-edited three",
+      "",
+    ].join("\n");
+    expect(() => parseFlow(violating)).toThrow(/declares no app id for android/);
+    await fs.writeFile(path.join(flowsDirFor(tmpDir), "fenced-live.yaml"), violating, "utf8");
+
+    const result = await flowStartRecordingTool.execute(
+      {},
+      { name: "fenced-live", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    const requires = { platform: ["ios" as const, "android" as const] };
+    expect(result.restarted).toBe(true);
+    expect(result.discardedSteps).toBe(3);
+    expect(result.message).toContain("the previous take (3 steps) was discarded");
+    expect(result.message).toContain(
+      "Kept the existing requires block (platform: [ios, android]) - edit the YAML to change it"
+    );
+    expect(result.message).not.toContain("did not parse");
+    expect(parseFlow(result.flowFile).requires).toEqual(requires);
+    expect(parseFlow(await readFlowFile("fenced-live")).requires).toEqual(requires);
+  });
+
+  it("mentions no requires block when the replaced file had none", async () => {
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "unfenced", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    await flowInsertEchoTool.execute(
+      {},
+      { name: "unfenced", project_root: tmpDir, message: "old take" }
+    );
+
+    const result = await flowStartRecordingTool.execute(
+      {},
+      { name: "unfenced", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    expect(result.message).not.toContain("requires");
+    expect(parseFlow(result.flowFile).requires).toBeUndefined();
+  });
+
+  it("says nothing about requires when there is no file yet", async () => {
+    const result = await flowStartRecordingTool.execute(
+      {},
+      { name: "first-take", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    // A missing file declares no block and drops nothing, so it is an answer,
+    // not a gap — the unknown-block clause must not fire on every fresh start.
+    expect(result.message).not.toContain("requires");
+    expect(parseFlow(result.flowFile).requires).toBeUndefined();
+  });
+
+  // Each of these declares a `requires:` block and fails to parse for a reason
+  // `skipRequires` does NOT bypass — a step body, a key inside the block, a
+  // top-level key, a platform spelling the block rejects, plain broken YAML.
+  // The reset truncates all of them, so the block's fate is unknown and
+  // reporting "no block" would discard a fence in silence.
+  const unparseableFenced: Array<[label: string, yaml: string]> = [
+    [
+      "a step that does not parse",
+      'requires:\n  platform: [ios]\nsteps:\n  - bogusstep: { message: "nope" }\n',
+    ],
+    ["a typo inside the block", "requires:\n  runtimeKind: tv\n  platfrom: [ios]\nsteps: []\n"],
+    ["an unknown top-level key", "requires:\n  platform: [ios]\nnotes: hello\nsteps: []\n"],
+    ["a platform the block rejects", "requires:\n  platform: [ios-remote]\nsteps: []\n"],
+    ["unterminated YAML", "requires:\n  platform: [ios]\nsteps: [unclosed\n"],
+  ];
+
+  it.each(unparseableFenced)(
+    "reports the dropped requires block when the file has %s",
+    async (_label, yaml) => {
+      await fs.mkdir(flowsDirFor(tmpDir), { recursive: true });
+      await fs.writeFile(path.join(flowsDirFor(tmpDir), "broken.yaml"), yaml, "utf8");
+
+      const result = await flowStartRecordingTool.execute(
+        {},
+        { name: "broken", project_root: tmpDir, executionPrerequisite: PREREQ }
+      );
+
+      expect(parseFlow(result.flowFile).requires).toBeUndefined();
+      expect(result.message).toContain(
+        "The previous file did not parse, so any requires block it held was dropped"
+      );
+    }
+  );
+
+  it("reports the dropped requires block alongside the discarded take", async () => {
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "drop", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    await fs.writeFile(
+      path.join(flowsDirFor(tmpDir), "drop.yaml"),
+      "requires:\n  platform: [ios]\nnotes: hello\nsteps: []\n",
+      "utf8"
+    );
+
+    const result = await flowStartRecordingTool.execute(
+      {},
+      { name: "drop", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+
+    expect(result.restarted).toBe(true);
+    expect(result.message).toContain("reset to an empty flow.");
+    expect(result.message).toContain(
+      "The previous file did not parse, so any requires block it held was dropped"
+    );
   });
 });
 
@@ -1694,6 +1873,271 @@ describe("flow-finish-recording", () => {
     ).rejects.toThrow("No active recording");
   });
 
+  it("asks about a requires block, since a flow without one runs against every target", async () => {
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "unrestricted", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    await flowInsertEchoTool.execute(
+      {},
+      { name: "unrestricted", project_root: tmpDir, message: "Step 1" }
+    );
+
+    const result = await flowFinishRecordingTool.execute(
+      {},
+      { name: "unrestricted", project_root: tmpDir }
+    );
+
+    expect(result.requiresPrompt).toContain("declares no `requires:` block");
+    expect(result.requiresPrompt).toContain("Ask the user");
+    // Nothing to suggest: a launch-free flow says nothing about its platforms.
+    expect(result.requiresPrompt).not.toContain("likely answer");
+  });
+
+  it("suggests the platforms the recorded launch already limits the flow to", async () => {
+    await flowStartRecordingTool.execute({}, { name: "ios-launch", project_root: tmpDir });
+    await overwriteFlowFile("ios-launch", {
+      executionPrerequisite: "",
+      steps: [{ kind: "launch", app: { ios: "com.example.app" } }],
+    });
+
+    const result = await flowFinishRecordingTool.execute(
+      {},
+      { name: "ios-launch", project_root: tmpDir }
+    );
+
+    expect(result.requiresPrompt).toContain("`requires: { platform: [ios] }` is the likely answer");
+  });
+
+  it("suggests both platforms when launches are split across platform guards", async () => {
+    // The ios half must not shadow the android half: suggesting [ios] alone
+    // would validate and then skip every android run of a live branch.
+    await flowStartRecordingTool.execute({}, { name: "split-launch", project_root: tmpDir });
+    await overwriteFlowFile("split-launch", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "ios" },
+          steps: [{ kind: "launch", app: { ios: "com.example.app" } }],
+        },
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "android" },
+          steps: [{ kind: "launch", app: { android: "com.example.app" } }],
+        },
+      ],
+    });
+
+    const result = await flowFinishRecordingTool.execute(
+      {},
+      { name: "split-launch", project_root: tmpDir }
+    );
+
+    expect(result.requiresPrompt).toContain(
+      "`requires: { platform: [ios, android] }` is the likely answer"
+    );
+  });
+
+  it("excludes a platform an unguarded launch cannot serve", async () => {
+    // For ios the android-guarded block is out of scope, so the ios-only launch
+    // suffices; for android that same unguarded launch is in scope with no
+    // android id, so android is not suggestible despite its guarded launch.
+    await flowStartRecordingTool.execute({}, { name: "unguarded-ios", project_root: tmpDir });
+    await overwriteFlowFile("unguarded-ios", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: { ios: "com.example.app" } },
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "android" },
+          steps: [{ kind: "launch", app: { android: "com.example.app" } }],
+        },
+      ],
+    });
+
+    const result = await flowFinishRecordingTool.execute(
+      {},
+      { name: "unguarded-ios", project_root: tmpDir }
+    );
+
+    expect(result.requiresPrompt).toContain("`requires: { platform: [ios] }` is the likely answer");
+  });
+
+  it("suggests nothing when only a UI-guarded launch fails to serve a platform", async () => {
+    // ios is excluded solely because the guarded helper launch names no ios id —
+    // a launch that never runs while the modal stays shut, so ios passes today
+    // and [android] would validate and then skip it for good.
+    await flowStartRecordingTool.execute({}, { name: "guarded-helper", project_root: tmpDir });
+    await overwriteFlowFile("guarded-helper", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: { ios: "com.example.app", android: "com.example.app" } },
+        {
+          kind: "when",
+          condition: { kind: "ui", condition: "visible", selector: { identifier: "modal" } },
+          steps: [{ kind: "launch", app: { android: "com.example.helper" } }],
+        },
+        { kind: "echo", message: "done" },
+      ],
+    });
+
+    const result = await flowFinishRecordingTool.execute(
+      {},
+      { name: "guarded-helper", project_root: tmpDir }
+    );
+
+    expect(result.requiresPrompt).toContain("declares no `requires:` block");
+    expect(result.requiresPrompt).not.toContain("likely answer");
+  });
+
+  it("suggests nothing when an excluded platform runs steps but never launches", async () => {
+    // ios reaches no launch at all here, so it passes today: suggesting [android]
+    // would validate and then skip the whole ios branch.
+    await flowStartRecordingTool.execute({}, { name: "ios-branch", project_root: tmpDir });
+    await overwriteFlowFile("ios-branch", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "android" },
+          steps: [{ kind: "launch", app: { android: "com.example.app" } }],
+        },
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "ios" },
+          steps: [{ kind: "echo", message: "ios-only narration" }],
+        },
+      ],
+    });
+
+    const result = await flowFinishRecordingTool.execute(
+      {},
+      { name: "ios-branch", project_root: tmpDir }
+    );
+
+    expect(result.requiresPrompt).toContain("declares no `requires:` block");
+    expect(result.requiresPrompt).not.toContain("likely answer");
+  });
+
+  it("still suggests past a live branch an unguarded launch cannot serve", async () => {
+    // Not the same shape as the case above: the unguarded launch is in ios scope
+    // with no ios id, so an ios run fails at step 1 whatever the branch below
+    // would have done, and the block only turns that failure into a skip.
+    await flowStartRecordingTool.execute({}, { name: "unguarded-android", project_root: tmpDir });
+    await overwriteFlowFile("unguarded-android", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: { android: "com.example.app" } },
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "ios" },
+          steps: [{ kind: "echo", message: "ios-only narration" }],
+        },
+      ],
+    });
+
+    const result = await flowFinishRecordingTool.execute(
+      {},
+      { name: "unguarded-android", project_root: tmpDir }
+    );
+
+    expect(result.requiresPrompt).toContain(
+      "`requires: { platform: [android] }` is the likely answer"
+    );
+  });
+
+  it("still suggests when every platform-guarded branch launches", async () => {
+    // Control for the suppression above: same shape, but the ios branch launches
+    // too, so the platforms left out (chromium, vega) run no steps at all.
+    await flowStartRecordingTool.execute({}, { name: "both-branches", project_root: tmpDir });
+    await overwriteFlowFile("both-branches", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "android" },
+          steps: [{ kind: "launch", app: { android: "com.example.app" } }],
+        },
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "ios" },
+          steps: [
+            { kind: "launch", app: { ios: "com.example.app" } },
+            { kind: "echo", message: "ios-only narration" },
+          ],
+        },
+      ],
+    });
+
+    const result = await flowFinishRecordingTool.execute(
+      {},
+      { name: "both-branches", project_root: tmpDir }
+    );
+
+    expect(result.requiresPrompt).toContain(
+      "`requires: { platform: [ios, android] }` is the likely answer"
+    );
+  });
+
+  it("states the block's own parse rules, so the template is not merged blindly", async () => {
+    await flowStartRecordingTool.execute({}, { name: "prompt-rules", project_root: tmpDir });
+    await overwriteFlowFile("prompt-rules", {
+      executionPrerequisite: "",
+      steps: [{ kind: "launch", app: { chromium: "/tmp/app" } }],
+    });
+
+    const result = await flowFinishRecordingTool.execute(
+      {},
+      { name: "prompt-rules", project_root: tmpDir }
+    );
+
+    // `requires: {}` is rejected, so "optional" cannot be left to mean "omit both".
+    expect(result.requiresPrompt).toContain("each key is optional on its own");
+    expect(result.requiresPrompt).toContain("must declare at least one of them");
+    expect(result.requiresPrompt).toContain("a repeated platform");
+    expect(result.requiresPrompt).toContain("an unknown key inside the block");
+    // The hint's block replaces the template's platform line: pasting both would
+    // pair [chromium] with runtimeKind tv, which validation rejects.
+    expect(result.requiresPrompt).toContain(
+      "`requires: { platform: [chromium] }` is the likely answer"
+    );
+    expect(result.requiresPrompt).toContain("Use it in place of the template's `platform:` line");
+  });
+
+  it("suggests nothing when the launch names every platform", async () => {
+    // A bare app id runs anywhere, so it narrows nothing and must not be
+    // dressed up as a recommendation.
+    await flowStartRecordingTool.execute({}, { name: "any-launch", project_root: tmpDir });
+    await overwriteFlowFile("any-launch", {
+      executionPrerequisite: "",
+      steps: [{ kind: "launch", app: "com.example.app" }],
+    });
+
+    const result = await flowFinishRecordingTool.execute(
+      {},
+      { name: "any-launch", project_root: tmpDir }
+    );
+
+    expect(result.requiresPrompt).not.toContain("likely answer");
+  });
+
+  it("does not ask once the flow already declares one", async () => {
+    await flowStartRecordingTool.execute({}, { name: "restricted", project_root: tmpDir });
+    await overwriteFlowFile("restricted", {
+      executionPrerequisite: "",
+      requires: { platform: ["ios"] },
+      steps: [{ kind: "echo", message: "hi" }],
+    });
+
+    const result = await flowFinishRecordingTool.execute(
+      {},
+      { name: "restricted", project_root: tmpDir }
+    );
+
+    expect(result.requiresPrompt).toBeUndefined();
+  });
+
   it("handles empty flow", async () => {
     await flowStartRecordingTool.execute(
       {},
@@ -1893,6 +2337,69 @@ describe("flow-finish-recording", () => {
       '2. when: text {"id":"status"} == "Ready" (1 step)',
       '3. when: text {"id":"total"} matches /^Total: \\$\\d+\\.\\d{2}$/ (2 steps)',
     ]);
+  });
+});
+
+// ── A requires block hand-written mid-take ───────────────────────────
+
+describe("a requires block hand-written mid-take", () => {
+  // Hand-editing the .yaml mid-recording is the documented way to write a
+  // `requires:` block, so the file can legitimately claim platforms its
+  // recorded launches do not cover yet. That intermediate state must stay
+  // appendable — flow-finish-recording is the gate that judges the whole flow.
+
+  /** requires claims android too, but the only launch carries an ios id. */
+  const MID_TAKE: FlowFile = {
+    executionPrerequisite: "",
+    requires: { platform: ["ios", "android"] },
+    steps: [{ kind: "launch", app: { ios: "com.example.app" } }],
+  };
+
+  it("keeps recording steps onto the not-yet-covered take", async () => {
+    const registry = createMockRegistry({ tap: { result: { ok: true } } });
+    const addStep = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "mid-take", project_root: tmpDir });
+    await overwriteFlowFile("mid-take", MID_TAKE);
+
+    await addStep.execute(
+      {},
+      { name: "mid-take", project_root: tmpDir, command: "tap", args: '{"x":0.5}' }
+    );
+
+    expect(parseFlow(await readFlowFile("mid-take"), { skipRequires: true }).steps).toEqual([
+      ...MID_TAKE.steps,
+      { kind: "tool", name: "tap", args: { x: 0.5 } },
+    ]);
+  });
+
+  it("fails the finish while the block is uncovered, recoverably", async () => {
+    await flowStartRecordingTool.execute({}, { name: "mid-take-finish", project_root: tmpDir });
+    await overwriteFlowFile("mid-take-finish", MID_TAKE);
+    const session = await getRecordingSession(tmpDir, "mid-take-finish");
+
+    const err = await flowFinishRecordingTool
+      .execute({}, { name: "mid-take-finish", project_root: tmpDir })
+      .then(
+        () => undefined,
+        (e: unknown) => e
+      );
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIRES_UNSATISFIABLE);
+    expect((err as Error).message).toContain("declares no app id for android");
+
+    // The session survived the failed finish, so a repair (the missing android
+    // id) followed by a retried finish succeeds.
+    expect(await getRecordingSession(tmpDir, "mid-take-finish")).toBe(session);
+    await overwriteFlowFile("mid-take-finish", {
+      ...MID_TAKE,
+      steps: [{ kind: "launch", app: { ios: "com.example.app", android: "com.example.app" } }],
+    });
+    const finished = await flowFinishRecordingTool.execute(
+      {},
+      { name: "mid-take-finish", project_root: tmpDir }
+    );
+    expect(finished.steps).toBe(1);
+    expect(await getRecordingSession(tmpDir, "mid-take-finish")).toBeUndefined();
   });
 });
 
@@ -2595,6 +3102,114 @@ describe("flow-read-prerequisite", () => {
 
     expect(result.flow).toBe("empty-prereq");
     expect(result.executionPrerequisite).toBe("");
+  });
+
+  it("reports the requires block in its YAML spelling", async () => {
+    // The other half of the start contract: a run on a target this block
+    // excludes is refused, so a pre-flight that reported only the
+    // prerequisite would let the agent satisfy state for a run that never
+    // starts.
+    const dir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "tv-only.yaml"),
+      serializeFlow({
+        executionPrerequisite: "App on home screen",
+        requires: { platform: ["ios", "android"], runtimeKind: "tv" },
+        steps: [{ kind: "echo", message: "Step 1" }],
+      })
+    );
+
+    const result = await flowReadPrerequisiteTool.execute(
+      {},
+      { name: "tv-only", project_root: tmpDir }
+    );
+
+    expect(result.executionPrerequisite).toBe("App on home screen");
+    expect(result.requires).toBe("platform: [ios, android], runtimeKind: tv");
+  });
+
+  it("reports an empty requires when the flow runs anywhere", async () => {
+    // Same convention as executionPrerequisite: "" is "no contract", so one
+    // absent-value rule covers both halves of the result.
+    const dir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "anywhere.yaml"),
+      serializeFlow({ executionPrerequisite: "", steps: [{ kind: "echo", message: "Hello" }] })
+    );
+
+    const result = await flowReadPrerequisiteTool.execute(
+      {},
+      { name: "anywhere", project_root: tmpDir }
+    );
+
+    expect(result.requires).toBe("");
+  });
+
+  it("reports the block folded across the leading run: chain, not the file's own", async () => {
+    // The root declares nothing, so its own block is "runs anywhere" — but the
+    // fragment its first step enters is certain to execute, and the runner
+    // folds that fragment's block into what it judges the run by. Reporting
+    // the file's own block here would answer "runs anywhere" for a run the
+    // runner refuses on every non-ios target.
+    const dir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "ios-fragment.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        requires: { platform: ["ios"] },
+        steps: [{ kind: "echo", message: "from the fragment" }],
+      })
+    );
+    await fs.writeFile(
+      path.join(dir, "composed-root.yaml"),
+      serializeFlow({
+        executionPrerequisite: "App on home screen",
+        steps: [{ kind: "run", flow: "ios-fragment.yaml" }],
+      })
+    );
+
+    const result = await flowReadPrerequisiteTool.execute(
+      {},
+      { name: "composed-root", project_root: tmpDir }
+    );
+
+    expect(result.requires).toBe("platform: [ios]");
+  });
+
+  it("anchors a symlinked root's chain at the real file, as the runner does", async () => {
+    // The fragment sits beside the REAL file, so only a canonicalized anchor
+    // reaches it. Without one this answers "runs anywhere" for a run the
+    // runner still refuses - the exact divergence the field exists to close.
+    const dir = path.join(tmpDir, ".argent", "flows");
+    const vault = path.join(tmpDir, "vault");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.mkdir(vault, { recursive: true });
+    await fs.writeFile(
+      path.join(vault, "frag.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        requires: { platform: ["ios"] },
+        steps: [{ kind: "echo", message: "from the vault" }],
+      })
+    );
+    await fs.writeFile(
+      path.join(vault, "real-root.yaml"),
+      serializeFlow({
+        executionPrerequisite: "App on home screen",
+        steps: [{ kind: "run", flow: "frag.yaml" }],
+      })
+    );
+    await fs.symlink(path.join(vault, "real-root.yaml"), path.join(dir, "sym-root.yaml"));
+
+    const result = await flowReadPrerequisiteTool.execute(
+      {},
+      { name: "sym-root", project_root: tmpDir }
+    );
+
+    expect(result.requires).toBe("platform: [ios]");
   });
 
   it("throws when the flow file does not exist", async () => {

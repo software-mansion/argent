@@ -294,6 +294,20 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
   /** Per-platform support declaration. Cross-platform tools assert against this before dispatching. */
   capability?: ToolCapability;
   /**
+   * Declares a tool that drives a device its input schema never names — today
+   * only `flow-add-step`, whose target rides inside the opaque `args` JSON it
+   * forwards to another tool. The flow runner decides whether a run needs a
+   * device from the declared arg names (`udid`/`device_id`/`device`), so such a
+   * tool reads device-free without this: the run resolves nothing and the
+   * flow's `requires` block is never judged (#751).
+   *
+   * Not for a tool that merely NARROWS to devices —
+   * `stop-all-simulator-servers` omitting its `devices` scope is a complete
+   * machine-wide sweep, and marking it would make a cleanup flow demand a
+   * device it has no use for.
+   */
+  opaqueDeviceTarget?: boolean;
+  /**
    * Host binaries that must be on PATH for *every* invocation of this tool.
    * Probed by the HTTP dispatcher before `execute` runs; rejects with 424.
    * For cross-platform tools whose binary requirements differ per branch

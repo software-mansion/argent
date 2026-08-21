@@ -991,6 +991,9 @@ describe("concurrent recordings against a remote client", () => {
     // The reset is the client's to perform, so the message must not assert it
     // as done here — nothing on this host was touched.
     expect((restarted as { message: string }).message).toContain("once your client applies");
+    // Client mode never reads a file here, so "could not parse it" is not an
+    // outcome it can report — an unknowable requires block is a host-only case.
+    expect((restarted as { message: string }).message).not.toContain("did not parse");
 
     // The new take is empty and usable; the discarded take's content is gone.
     const after = await flowInsertEchoTool.execute(
@@ -1003,6 +1006,39 @@ describe("concurrent recordings against a remote client", () => {
     expect(flow.steps[0]).toMatchObject({ kind: "echo", message: "second take" });
 
     // Still nothing on this host: the client's root was never created here.
+    await expect(fs.stat(CLIENT_ROOT)).rejects.toThrow();
+  });
+
+  it("tells the client to re-add the requires block, since no client-mode start can carry one", async () => {
+    // Client mode has no source for the block: this host never reads the file,
+    // and a session's in-memory `requires` is itself whatever a start carried,
+    // so it is undefined for every session here. Both the first start and the
+    // restart must say the block is gone rather than claim one was kept.
+    const started = await flowStartRecordingTool.execute(
+      {},
+      { name: "remote-flow", project_root: CLIENT_ROOT },
+      remoteCtx()
+    );
+    expect(started.message).toContain(
+      "This host cannot read the client-side flow file, so any requires block it held is gone - re-add it by hand"
+    );
+    await flowInsertEchoTool.execute(
+      {},
+      { name: "remote-flow", project_root: CLIENT_ROOT, message: "first take" }
+    );
+
+    const restarted = await flowStartRecordingTool.execute(
+      {},
+      { name: "remote-flow", project_root: CLIENT_ROOT },
+      remoteCtx()
+    );
+
+    const directive = restarted.savedTo as { content: string };
+    expect(parseFlow(directive.content).requires).toBeUndefined();
+    expect(restarted.message).not.toContain("Kept the existing requires block");
+    expect(restarted.message).toContain(
+      "This host cannot read the client-side flow file, so any requires block it held is gone - re-add it by hand"
+    );
     await expect(fs.stat(CLIENT_ROOT)).rejects.toThrow();
   });
 

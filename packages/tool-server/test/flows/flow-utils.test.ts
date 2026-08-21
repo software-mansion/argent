@@ -1110,6 +1110,17 @@ describe("native launch shorthand", () => {
     expect(appIdForPlatform(app, "android")).toBe("com.acme.app.debug");
   });
 
+  it("appIdForPlatform serves a remote simulator from the ios entry", async () => {
+    // The parser rejects an `ios-remote` launch key, so folding to `ios` is
+    // the only way a map entry can serve a remote sim…
+    expect(appIdForPlatform({ ios: "com.acme.app" }, "ios-remote")).toBe("com.acme.app");
+    // …and the specific key beats native after folding, where the unfolded
+    // lookup would fall through to the native bundle.
+    expect(appIdForPlatform({ ios: "com.acme.app", native: "com.acme.other" }, "ios-remote")).toBe(
+      "com.acme.app"
+    );
+  });
+
   it("native never applies to chromium (chromium takes a path, not an id)", async () => {
     expect(appIdForPlatform({ native: "com.acme.app" }, "chromium")).toBeNull();
     expect(chromiumLaunchSpec({ native: "com.acme.app" })).toBeNull();
@@ -1910,6 +1921,23 @@ describe("countStepsOnDisk", () => {
     // flow with no error is the reason 0 cannot double as "unknown".
     const file = await write("steps: [ this: is: not: a: flow\n");
     expect(await countStepsOnDisk(file)).toBeUndefined();
+  });
+
+  it("counts a take whose requires block is coverage-violating", async () => {
+    // The case the count parses with `skipRequires`: the block fences a platform
+    // the launch step has no id for yet, and those steps are still countable, so
+    // judging the block here would report a real loss as unknown.
+    const yaml = [
+      "requires: { platform: [ios, android] }",
+      "steps:",
+      "  - launch: { ios: com.a }",
+      "  - echo: mid-take",
+      "",
+    ].join("\n");
+    const file = await write(yaml);
+    // The fixture only bites while the block is genuinely refused.
+    expect(() => parseFlow(yaml)).toThrow(/declares no app id for android/);
+    expect(await countStepsOnDisk(file)).toBe(2);
   });
 
   it("returns undefined for a directory in the file's place", async () => {
