@@ -1,20 +1,17 @@
-// Typed telemetry event names and property shapes. sanitize.ts enforces the
-// same surface at runtime.
+// sanitize.ts enforces this same event surface at runtime.
 
 import type { FailureSignal } from "@argent/registry";
 import type { AiTelemetryProps } from "./ai-identity.js";
 
-// Single source of truth for the telemetry device-platform enum: the TS union
-// below and sanitize.ts's runtime allowlist both derive from this tuple, so
-// adding a platform can't silently drift the two apart.
+// Single source of truth for the telemetry device-platform enum: sanitize.ts's
+// runtime allowlist derives from this tuple too, so the two can't drift.
 //
-// This is the *telemetry* platform, deliberately a superset of the tool-server's
-// device `Platform` (@argent/registry): `tvos` and `android-tv` have no
-// standalone device platform there — a TV is a `runtimeKind` ("tv") layered on
-// an `ios`/`android` device, not its own platform, so capability gating and
-// dispatch stay TV-agnostic. Telemetry splits them out only for reporting: the
-// inference in tool-server/http.ts maps `ios`->`tvos` / `android`->`android-tv`
-// when a device's cached runtime kind is "tv".
+// Deliberately a superset of the tool-server's device `Platform`
+// (@argent/registry): a TV is a `runtimeKind` ("tv") layered on an `ios` /
+// `android` device, not a platform of its own, so capability gating and dispatch
+// stay TV-agnostic. `tvos` / `android-tv` exist for reporting only —
+// tool-server/src/utils/telemetry-platform.ts refines them from the cached
+// runtime kind.
 export const PLATFORMS = [
   "ios",
   "ios-remote",
@@ -25,8 +22,6 @@ export const PLATFORMS = [
   "android-tv",
 ] as const;
 export type Platform = (typeof PLATFORMS)[number];
-
-// Installation events
 
 export type FailureTelemetryProps = Partial<FailureSignal>;
 
@@ -62,7 +57,6 @@ export interface InstallationUpdateDecisionProps {
 }
 
 export interface InstallationEditorsSelectProps {
-  /** Bounded list of adapter names — sanitizer caps to 16 elements. */
   editors: string[];
   detected_editor_count: number;
   scope: "local" | "global" | "custom";
@@ -73,8 +67,8 @@ export interface InstallationAllowlistDecisionProps {
   is_enabled: boolean;
 }
 
-// Stale argent config (entries in other scopes that would shadow or block the
-// one just written) removed or flagged by the post-write sweep in init/update.
+// Post-write sweep in init/update: argent config in other scopes that would
+// shadow or block the entry just written.
 export interface InstallationStaleConfigCleanupProps {
   removed_count: number;
   warned_count: number;
@@ -113,10 +107,9 @@ export interface InstallationPackageActionProps extends FailureTelemetryProps {
   action: InstallationPackageAction;
   is_success: boolean;
   duration_ms: number;
-  // Local-install retry visibility: how many times the retry-once fired (0/1)
-  // and the duration of the final attempt alone — duration_ms spans ALL
-  // attempts, which would otherwise wash out the fast-fail duration signature
-  // used to spot deterministic failure clusters.
+  // Local installs retry once (0 or 1). duration_ms spans ALL attempts, so the
+  // final attempt is timed separately — otherwise the fast-fail duration
+  // signature used to spot deterministic failure clusters washes out.
   retry_count?: number;
   last_attempt_duration_ms?: number;
 }
@@ -141,8 +134,6 @@ export interface InstallationCliUninstallCompleteProps extends FailureTelemetryP
   install_mode?: "global" | "local";
 }
 
-// Tool usage events
-
 export interface ToolInvokeProps extends AiTelemetryProps {
   tool: string;
   tool_invocation_id: string;
@@ -162,21 +153,16 @@ export interface ToolFailProps extends FailureTelemetryProps, AiTelemetryProps {
   platform?: Platform;
   duration_ms: number;
   /**
-   * Schema-declared parameter names that failed zod validation on an HTTP tool
-   * call (plus the literal token "unrecognized_keys" for strict-object
-   * violations). Names come from Argent's own tool schemas only — never values
-   * and never user-typed keys.
+   * Parameter names that failed zod validation on an HTTP tool call, plus the
+   * literal "unrecognized_keys" for strict-object violations. Declared names
+   * from Argent's own schemas only — never values, never user-typed keys.
    */
   invalid_params?: string[];
 }
 
-// Debugger connectivity outcome event
-
 /**
- * Reasons debugger-status / debugger-log-registry report a structured
- * "not connected" result instead of failing. The outcome enum below must stay a
- * superset of this list — both are consumed by sanitize.ts, so deriving one
- * from the other keeps them from drifting.
+ * Reasons debugger-status / debugger-log-registry return a structured
+ * "not connected" result instead of failing.
  */
 export const DEBUGGER_NOT_CONNECTED_REASONS = [
   "metro_not_running",
@@ -193,13 +179,11 @@ export const DEBUGGER_TOOL_OUTCOMES = ["connected", ...DEBUGGER_NOT_CONNECTED_RE
 export type DebuggerToolOutcome = (typeof DEBUGGER_TOOL_OUTCOMES)[number];
 
 /**
- * Emitted by debugger-status / debugger-log-registry: exactly once whenever the
- * tool returns a result, never on a thrown failure (unclassified faults, zod
- * rejects, and capability gates still emit tool:fail only). Not-connected
- * preconditions emit no tool:fail — this event is where they are counted:
- * outcome carries the coded reason (never error text), and tool_invocation_id
- * joins 1:1 against the tool:invoke / tool:complete pair (which carry
- * ai_client and duration).
+ * Emitted once per returned result of debugger-status / debugger-log-registry,
+ * never on a thrown failure (unclassified faults, zod rejects and capability
+ * gates emit tool:fail only). Not-connected preconditions raise no tool:fail —
+ * this event is where they are counted; tool_invocation_id joins the
+ * tool:invoke / tool:complete pair 1:1.
  */
 export interface DebuggerToolOutcomeProps {
   tool: "debugger-status" | "debugger-log-registry";
@@ -208,27 +192,22 @@ export interface DebuggerToolOutcomeProps {
   tool_invocation_id?: string;
 }
 
-// CLI command events
-
 export interface CliRunFailProps extends FailureTelemetryProps {
   tool: string;
   duration_ms: number;
 }
 
-// Lifecycle events
-
 export type ToolserverStartProps = Record<string, never>;
 
 export interface ToolserverStopProps extends FailureTelemetryProps {
-  // "deferred": a redundant instance lost the port bind (EADDRINUSE) to a
-  // healthy argent peer and exited cleanly in its favor — kept distinct from
-  // "signal" so a supervisor relaunch loop over deferrals stays identifiable.
+  // "deferred": lost the port bind (EADDRINUSE) to a healthy argent peer and
+  // exited cleanly in its favor — kept distinct from "signal" so a supervisor
+  // relaunch loop over deferrals stays identifiable.
   reason: "idle" | "signal" | "crash" | "deferred";
   uptime_ms: number;
   total_tool_calls: number;
-  // Crash-only diagnostics (see crash-diagnostics.ts). All anonymous: a coded
-  // class name, a coded syscall, and a hash — never the message or a raw stack.
-  // Absent on clean (idle/signal) stops.
+  // Crash-only (see crash-diagnostics.ts), absent on clean idle/signal stops.
+  // Coded values only — never the message or a raw stack.
   /** Error class name, e.g. "TypeError". */
   error_name?: string;
   /** Node system-error code, e.g. "EADDRINUSE". */
@@ -239,25 +218,20 @@ export interface ToolserverStopProps extends FailureTelemetryProps {
   crash_phase?: "startup" | "serving";
 }
 
-// Lens (variant-proposal) events
-//
-// The agent CALLS `propose_variant` / `await_user_selection`, which the generic
-// tool:invoke/complete/fail path already counts — but those calls only prove the
-// AGENT acted. They can't tell us whether a HUMAN opened the preview or what they
-// decided. These events capture the human side of the funnel: preview loaded →
-// round decided OR abandoned. All carry only privacy-safe aggregate counts /
-// booleans / durations plus the device `platform` enum — never element names,
-// comment text, variant code, file paths, or raw device identifiers.
+// Lens (variant-proposal) funnel. The generic tool:* path counts the agent's
+// `propose_variant` / `await_user_selection` calls, which only prove the AGENT
+// acted; these events capture the human side — preview loaded → round decided
+// OR abandoned. Aggregate counts, booleans, durations and the device `platform`
+// enum only: never element names, comment text, variant code, file paths or raw
+// device identifiers.
 
-// Emitted when a HUMAN renders a proposal round in a VISIBLE preview window,
-// driven by an explicit client signal (`POST /preview/opened`) rather than
-// inferred from a page load or poll. Fires once per round across all surfaces
-// (MCP respawn, reused CLI window, multiple tabs) via a server-side per-round
-// dedup, and never from a backgrounded tab (the client gates on
-// `document.visibilityState`). The counts are sampled server-side at the moment
+// Emitted when a HUMAN renders a proposal round in a VISIBLE preview window, on
+// an explicit client signal (`POST /preview/opened`; the client gates on
+// `document.visibilityState`) rather than inferred from a page load or poll. A
+// server-side per-round dedup keeps it to once per round across MCP respawn,
+// reused CLI window and multiple tabs. The counts are sampled server-side when
 // the client reports the round, so they reflect what was staged when the human
-// first saw it — consistent across MCP and CLI (both go through the same client
-// signal), not a fresh-load vs poll-tick mix.
+// first saw it.
 export interface LensPreviewOpenedProps {
   /** Proposal round the human rendered in the preview. */
   round: number;
@@ -268,11 +242,11 @@ export interface LensPreviewOpenedProps {
   /** Whether an `argent lens` CLI session owns the window (vs the MCP path). */
   is_cli_session: boolean;
   /**
-   * Device platform the variants target. Omitted whenever the round staged no
-   * proposals (`element_count === 0`) — including a CLI up-front open — so the
-   * store's device (which deliberately survives `reset()`) can't attribute a
-   * zero-count open to a prior flow's device. A TV target is reported as
-   * `tvos` / `android-tv` once the runtime-kind cache is warm (as with `tool:*`).
+   * Device platform the variants target. Omitted when the round staged no
+   * proposals (`element_count === 0`, e.g. a CLI up-front open) so the store's
+   * device — which deliberately survives `reset()` — can't attribute a
+   * zero-count open to a prior flow's device. TV targets report `tvos` /
+   * `android-tv` once the runtime-kind cache is warm, as with `tool:*`.
    */
   platform?: Platform;
 }
@@ -287,21 +261,17 @@ export interface LensRoundCompletedProps {
   annotation_count: number;
   /** Proposed elements the user attached a per-element comment to (chosen or skipped). */
   element_comment_count: number;
-  /** Skipped elements the user left a per-element comment on (a "needs changes" signal; chosen-with-comment = element_comment_count - skipped_comment_count). */
+  /** Skipped elements the user commented on — a "needs changes" signal (chosen-with-comment = element_comment_count - skipped_comment_count). */
   skipped_comment_count: number;
   /** Whether the user left a round-wide comment. */
   has_global_comment: boolean;
   /**
-   * Whether the human opened the element-comment "inspector" (the "Add comment"
-   * spotlight) at least once during this round — an adoption signal for the
-   * inspector button that `annotation_count` (a comment-volume proxy) can't
-   * give: this registers an open even when it produced no saved comment.
+   * Whether the human opened the element-comment inspector (the "Add comment"
+   * spotlight) at least once this round — registers an open even when it
+   * produced no saved comment, which `annotation_count` cannot show.
    */
   inspector_used: boolean;
-  /**
-   * Whether the human clicked "Show them" (or its collapsed pill) to reveal
-   * off-screen variant choices at least once during this round.
-   */
+  /** Whether the human clicked "Show them" (or its collapsed pill) to reveal off-screen variant choices. */
   offscreen_revealed: boolean;
   /** Whether an `argent lens` CLI session owns the window (vs the MCP path). */
   is_cli_session: boolean;
@@ -313,11 +283,10 @@ export interface LensRoundCompletedProps {
   platform?: Platform;
 }
 
-// The other end of the funnel: a round that had staged proposals but was
-// discarded before the human submitted (window closed, `argent lens` exited
-// mid-review, or the round was superseded). Fires at most once per abandoned
-// round, from the store's single reset() choke point. Drop-off is the metric
-// `preview_opened`/`round_completed` alone can't give — this supplies the loss.
+// The other end of the funnel: a round with staged proposals discarded before
+// the human submitted (window closed, `argent lens` exited mid-review, round
+// superseded). Fires at most once per round, from the store's single reset()
+// choke point — the drop-off `preview_opened`/`round_completed` can't show.
 export interface LensRoundAbandonedProps {
   round: number;
   /** Elements that had staged proposals when the round was discarded. */
@@ -332,28 +301,21 @@ export interface LensRoundAbandonedProps {
   platform?: Platform;
 }
 
-// Fired ONCE per `argent lens` CLI invocation, on the session begin. The generic
-// tool:* path counts the agent's propose_variant/await_user_selection calls
-// (which fire many times per session), and lens:preview_opened fires once PER
-// ROUND — so neither can count how many times a human ran `argent lens`. This is
-// the per-invocation marker: a plain count of these events is the invocation
-// total, and distinct telemetry ids over them are the unique-user population for
-// the tool. Privacy-safe: only an aggregate count, no PII.
+// Fired ONCE per `argent lens` CLI invocation, at session begin: the tool:* path
+// counts the agent's calls and lens:preview_opened fires once PER ROUND, so
+// neither can count how many times a human ran `argent lens`. Counting these
+// events gives invocations; distinct telemetry ids over them give unique users.
 export interface LensCliSessionStartedProps {
   /**
-   * Coding-agent choices offered in the window's picker. In practice `argent lens`
-   * sends only two values: 0 when no picker is shown (an `--agent` override, a
-   * remembered-and-still-installed choice, or a single installed agent — the CLI
-   * resolves the agent itself and posts an empty list), and >= 2 when it forwards
-   * a real choice for the human to pick. 1 is unreachable from `argent lens` (a
-   * lone installed agent is auto-selected, not offered), so a 1 in the data
-   * indicates a hand-crafted POST, not the single-installed-agent case. A
-   * privacy-safe count, never the agent names.
+   * Coding-agent choices offered in the window's picker. `argent lens` sends 0
+   * when no picker is shown (an `--agent` override, a remembered-and-still-
+   * installed choice, or a single installed agent — the CLI resolves the agent
+   * itself and posts an empty list) and >= 2 when it forwards a real choice. 1
+   * is unreachable from `argent lens`, so a 1 means a hand-crafted POST. A
+   * count, never the agent names.
    */
   agent_choice_count: number;
 }
-
-// Discriminated union for typed-track()
 
 export interface EventPropertyMap {
   "installation:cli_init_start": InstallationCliInitStartProps;
@@ -388,7 +350,6 @@ export interface EventPropertyMap {
 
 export type EventName = keyof EventPropertyMap;
 
-/** Static list consumed by sanitize.ts and coverage tests. */
 export const EVENT_NAMES: readonly EventName[] = [
   "installation:cli_init_start",
   "installation:cli_init_complete",
