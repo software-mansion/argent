@@ -338,8 +338,8 @@ async function waitForNativeDevtools(
     const ref = nativeDevtoolsRef(device);
     api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
   } catch (err) {
-    // Withheld for the same reason as the timeout below: an app that may never
-    // load the dylib was never going to be served by this service.
+    // Withheld for the same reason as the timeout below: an app argent refuses
+    // to target was never going to get a tree out of this service.
     if (!isInjectableBundleId(bundleId)) return null;
     return `the native-devtools service is unavailable for ${bundleId} (${errMsg(err)})`;
   }
@@ -350,16 +350,18 @@ async function waitForNativeDevtools(
     if (Date.now() >= deadline) break;
     if (!(await sleepOrAbort(NATIVE_READY_POLL_MS, signal))) return null;
   }
-  // Timed out with no connection. An app that may never load the dylib has no
-  // hierarchy to wait for, so that is its expected outcome rather than a launch
-  // failure; the impossibility bites only where a selector needs the hierarchy,
-  // and `fetchFlowTree` reports it there.
+  // Timed out with no connection. An app argent refuses to target gets no flow
+  // tree whether or not it connects, so that is its expected outcome rather than
+  // a launch failure; the refusal bites only where a selector needs the
+  // hierarchy, and `fetchFlowTree` reports it there.
   //
-  // The wait itself still runs, deliberately: whether the dylib loads into a
-  // simulator system app is unsettled (#453 saw `connected: false` for
-  // com.apple.Preferences on iOS 26.5, an E2E run `connected: true` on 18.5).
-  // Only the VERDICT is withheld — before a measurement no arm below would
-  // consult for such an app, costing several uninterruptible simctl round-trips.
+  // The wait itself still runs, deliberately: nothing special-cases a refused
+  // id out of the poll, and a system app that does connect (#453 saw
+  // `connected: false` for com.apple.Preferences on iOS 26.5, an E2E run
+  // `connected: true` on 18.5) leaves at the first poll that sees it. Where
+  // none arrives it spends the full budget on a verdict already fixed. Only the
+  // VERDICT is withheld — before a measurement no arm below would consult for
+  // such an app, costing several uninterruptible simctl round-trips.
   if (!isInjectableBundleId(bundleId)) return null;
   // Measure why — the state may have flipped to connected since the last poll.
   // The loop's abort check covers every exit but this one (`break` follows it
@@ -489,7 +491,7 @@ async function androidDevtoolsReady(registry: Registry, device: DeviceInfo): Pro
  * surface a raw tree-source error.
  *
  * Returns null when ready, when the platform needs no gate, when the run was
- * aborted, and for an iOS app whose hierarchy may never be servable at all (see
+ * aborted, and for an iOS app argent refuses a flow tree (see
  * {@link waitForNativeDevtools}) — there the launch is not what failed.
  * Otherwise the reason to report.
  */

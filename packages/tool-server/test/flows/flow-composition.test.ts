@@ -85,13 +85,13 @@ function mockRegistry(props?: Record<string, unknown>): Registry {
     }),
     getTool: vi.fn(() => (props ? { inputSchema: { properties: props } } : undefined)),
     // iOS launch steps gate on a native-devtools connection: report connected
-    // so the run proceeds. No selector directives run in these tests, so the
-    // flow tree is never fetched.
+    // so the run proceeds. The selector directives that do run here read a
+    // com.apple.* target, so they are refused before the stubs below matter.
     resolveService: vi.fn(async () => ({
       isConnected: () => true,
       listConnectedBundleIds: () => [],
-      // A system app serves no window to read, which is what the tree source
-      // refuses on: the read never degrades to an empty tree.
+      // No windows, so any read that does reach the tree source fails there
+      // rather than degrading to an empty tree.
       queryViewHierarchy: async () => ({ windows: [] }),
       // A pinned read probes the launched app alone before reading it.
       getAppState: async (bundleId: string) => ({
@@ -2404,11 +2404,10 @@ describe("flow composition (run:)", () => {
     expect(result.ok).toBe(false);
   });
 
-  // An Apple system app may never load the dylib (a platform binary with
-  // library validation), so its hierarchy may never become readable — which is
-  // not a reason to fail the LAUNCH. The step started the app, and a flow that
-  // taps by coordinate needs nothing else; the impossibility belongs where a
-  // selector actually needs the hierarchy.
+  // Argent refuses an Apple system app a flow tree by policy, so its hierarchy
+  // never becomes readable - which is not a reason to fail the LAUNCH. The step
+  // started the app, and a flow that taps by coordinate needs nothing else; the
+  // refusal belongs where a selector actually needs the hierarchy.
   it("lets a system-app launch through so a coordinate-driven flow still runs", async () => {
     await writeFlow("main", {
       executionPrerequisite: "",
