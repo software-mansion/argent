@@ -78,17 +78,6 @@ const config = {
         },
         items: [
           {
-            to: "docs/fundamentals/getting-started",
-            activeBasePath: "docs",
-            label: "Docs",
-            position: "left",
-          },
-          {
-            href: "https://argent.swmansion.com",
-            label: "Website",
-            position: "left",
-          },
-          {
             "href": "https://github.com/software-mansion/argent",
             "position": "right",
             "className": "header-github",

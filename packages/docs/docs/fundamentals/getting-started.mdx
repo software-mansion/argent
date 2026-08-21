@@ -10,19 +10,13 @@ Argent is an agentic toolkit that gives your AI assistant direct access to iOS s
 
 ## Install
 
-From your project root:
+Run the installation wizard from your project root:
 
 ```bash
 npx @swmansion/argent@latest init
 ```
 
-In a pnpm project, where npm's `devEngines` check may refuse to run `npx`:
-
-```bash
-pnpm dlx @swmansion/argent@latest init
-```
-
-The wizard installs `@swmansion/argent`, detects your editor and registers the MCP server, then copies skills, rules and agent definitions into your workspace. See [Installation](/docs/fundamentals/installation) for prerequisites, manual installs and the committable team setup.
+The wizard registers the Argent MCP server in your editor. See [Installation](/docs/fundamentals/installation) for the prerequisites, the pnpm command, the manual install and the team setup.
 
 ## Try it out
 
@@ -47,6 +41,5 @@ Your assistant will walk you through every capability available in your workspac
 
 ## Where to go next
 
-- [Installation](/docs/fundamentals/installation) covers prerequisites and install modes.
 - [Supported platforms](/docs/fundamentals/supported-platforms) lists every target and its interaction model.
-- [Interacting with apps](/docs/guides/interacting-with-apps) explains how the agent discovers and drives UI.
+- [Interacting with apps](/docs/features/interacting-with-apps) explains how the agent discovers and drives UI.

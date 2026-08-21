@@ -1,5 +1,5 @@
 ---
-sidebar_position: 2
+sidebar_position: 7
 sidebar_label: Record and replay flows
 title: Record and replay flows
 sidebar_custom_props:
@@ -71,4 +71,4 @@ A flow also runs without an agent. The `argent flow run` command replays a flow 
 - The agent records a launch step for iOS, Android and Vega apps. For a Chromium or Electron app, add the launch step to the file by hand.
 - A replay needs the same connected instrumentation as the recording. When the agent cannot read the UI tree, Argent sends a tap to the coordinates and adds a warning to the step.
 
-Argent does this with the `flow-start-recording`, `flow-add-step`, `flow-add-echo`, `flow-finish-recording`, `flow-read-prerequisite` and `flow-execute` tools, and with the `argent flow` command. The [tools reference](/docs/reference/tools) contains all tools.
+Argent does this with the `flow-start-recording`, `flow-add-step`, `flow-add-echo`, `flow-finish-recording`, `flow-read-prerequisite` and `flow-execute` tools, and with the `argent flow` command. The [tools reference](/docs/reference/tools) contains all tools. The [Flow YAML reference](/docs/reference/flow-yaml) contains the file format and the command options.

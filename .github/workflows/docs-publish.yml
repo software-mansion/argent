@@ -1,0 +1,50 @@
+name: Docs publish
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "packages/docs/**"
+      - ".github/workflows/docs-publish.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: docs-publish
+  cancel-in-progress: true
+
+jobs:
+  docs-publish:
+    name: Publish to GitHub Pages
+    if: github.repository == 'software-mansion/argent'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/docs
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: packages/docs/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish generated content to GitHub Pages
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: packages/docs/build
+          branch: gh-pages
+          token: ${{ secrets.GITHUB_TOKEN }}

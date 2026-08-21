@@ -7,10 +7,16 @@ import {
   Images,
   Layers,
   MousePointerClick,
+  Network,
   Repeat2,
   Rocket,
+  ScrollText,
+  Settings2,
   ShieldCheck,
+  SwatchBook,
   Terminal,
+  Video,
+  Wrench,
   type LucideIcon,
 } from "lucide-react";
 
@@ -29,10 +35,16 @@ const ICONS: Record<string, LucideIcon> = {
   images: Images,
   layers: Layers,
   "mouse-pointer-click": MousePointerClick,
+  network: Network,
   "repeat-2": Repeat2,
   rocket: Rocket,
+  "scroll-text": ScrollText,
+  "settings-2": Settings2,
   "shield-check": ShieldCheck,
+  "swatch-book": SwatchBook,
   terminal: Terminal,
+  video: Video,
+  wrench: Wrench,
 };
 
 type Props = {
