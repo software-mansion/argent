@@ -109,23 +109,35 @@ export function resolveSecretPlaceholders(
 }
 
 /**
+ * Replace every occurrence of each resolved secret value in `text` with its
+ * `{{secret:NAME}}` placeholder. Zero-length values are skipped: replacing an
+ * empty string would corrupt the text rather than redact anything.
+ *
+ * Deliberately not exported. It suits an error, which quotes the command line
+ * verbatim and is already unreadable prose, but it is destructive on curated
+ * text: it replaces the value wherever it appears, so a two-character secret
+ * rewrites ordinary words and a numeric one swallows a character count. Anything
+ * a tool composes for the agent to read should be written value-free instead.
+ */
+function redactSecrets(text: string, secrets: Array<{ name: string; value: string }>): string {
+  return secrets.reduce(
+    (acc, { name, value }) =>
+      value ? acc.split(value).join(`${SECRET_PLACEHOLDER_MARKER}${name}}}`) : acc,
+    text
+  );
+}
+
+/**
  * Scrub resolved secret values from an error before it propagates — a backend
  * failure can echo its input (e.g. Android typing surfaces the device-side
  * `input text` command line). Mutates message/stack in place so the error's
  * class, and with it the HTTP status and telemetry mapping, is preserved.
- * Zero-length values are skipped: replacing an empty string would corrupt the
- * message rather than redact anything.
  */
 export function redactSecretsFromError(
   err: unknown,
   secrets: Array<{ name: string; value: string }>
 ): unknown {
-  const scrub = (s: string) =>
-    secrets.reduce(
-      (acc, { name, value }) =>
-        value ? acc.split(value).join(`${SECRET_PLACEHOLDER_MARKER}${name}}}`) : acc,
-      s
-    );
+  const scrub = (s: string) => redactSecrets(s, secrets);
   if (err instanceof Error) {
     err.message = scrub(err.message);
     if (err.stack) err.stack = scrub(err.stack);

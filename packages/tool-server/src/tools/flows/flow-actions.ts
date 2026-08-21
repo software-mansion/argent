@@ -1310,7 +1310,19 @@ async function runType(
   // its own), so a cancelled run can never type into, or submit, whatever the
   // app has focused after the caller gave up.
   if (env.signal?.aborted) return ABORTED_OUTCOME;
-  await invokeOnDevice(env, "keyboard", { text: step.text });
+  const typed = await invokeOnDevice(env, "keyboard", { text: step.text });
+  // On Android phones/tablets the keyboard tool reads the field back and reports
+  // `verified: false` when the text demonstrably did not land (see
+  // keyboard/platforms/android-verify.ts). The step fails on that, because
+  // `input text` exits 0 having dropped characters: whether the tool returned
+  // says nothing about what reached the field, so only the read-back can gate a
+  // step that types. An ABSENT `verified` is not evidence of failure — it means the field
+  // could not be read (another platform, no helper, a password field) — so only
+  // an explicit `false` fails, carrying the tool's own note as the reason.
+  const verification = typed as { verified?: boolean; note?: string } | undefined;
+  if (verification?.verified === false) {
+    return { ok: false, reason: verification.note ?? "the typed text did not land in the field" };
+  }
   if (step.submit !== false) {
     if (env.signal?.aborted) return ABORTED_OUTCOME;
     // Enter goes in its own keyboard call because the tool rejects a combined

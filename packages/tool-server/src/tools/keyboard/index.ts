@@ -121,12 +121,21 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
         if (params.key === undefined) return "Entering text";
         return "Entering text and pressing a key";
       },
-      completedMsg: ({ params }) => (params.text === undefined ? "Pressed a key" : "Entered text"),
+      // The read-back's verdict belongs here too. This line is where a user
+      // watches the run, and reporting "Entered text" over a `verified: false`
+      // reproduces in the log exactly the silent success the read-back exists to
+      // catch. An absent `verified` stays quiet: it means not checked, and the
+      // `note` carries the reason.
+      completedMsg: ({ params, result }) =>
+        params.text === undefined
+          ? "Pressed a key"
+          : `Entered text${result.verified === false ? " (text did not land)" : ""}`,
       failedMsg: ({ failureSignal }) => `Failed to use keyboard: ${failureSignal.error_code}`,
     },
     description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
 Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; use keyboard to type into a focused text field (e.g. a search or login box).
-Returns { typed: string, keys: number }. Fails if text and key are both given in one call (rejected before anything is typed), if an unsupported key name is provided, or if the device's input backend is not reachable.
+Returns { typed: string, keys: number, verified?: boolean, note?: string }. On an Android phone or tablet the typed text is read back off the screen, because \`adb input text\` injects it as one key-event burst that a field re-rendering per keystroke silently drops part of. verified=true means the focused field really holds the text. verified=false means it does not, and note reports how many characters were typed and how many the field now holds in total (that total includes anything the field already showed, so it is not a loss count); before reporting that, the tool retries ONCE where it can prove which characters are its own — it backspaces that many and retypes them in smaller chunks, so a \`keyboard\` call may modify the field beyond appending — and it leaves the field untouched where it cannot prove it, including when the field was empty and its hint overlaps the typed text. verified is absent whenever the check could not conclude — no editable field held focus, focus moved to another field mid-typing, the focused field is a password field (deliberately not read back), the read failed or was truncated, the reading is equally consistent with success and failure, or the android-devtools helper is unavailable — with note giving the reason. It is also absent on every other platform, including Android TV, which shares this transport but is not checked: absent always means "not checked", never "checked and fine". note is absent when there is nothing to caveat.
+Fails if text and key are both given in one call (rejected before anything is typed), if an unsupported key name is provided, or if the device's input backend is not reachable. A read-back that cannot run never fails the call: the text is typed either way.
 A failure is not rolled back. An unsupported key name is always rejected before anything is sent. Un-typeable text is not: the iOS simulator and Chromium reject it mid-string and leave the characters before it in the field (Android, Vega and TV targets check the whole string up front). A transport failure partway also leaves the text already sent. On a retry, read the field's actual contents — do not assume it is unchanged.
 - text: types a string (supports uppercase, digits, common punctuation). To type a credential, use \`{{secret:<NAME>}}\` — resolved server-side from the \`ARGENT_SECRET_<NAME>\` env var or an argent secrets file (\`.argent/secrets.env\` in the project, \`~/.argent/secrets.env\`, or an \`ARGENT_SECRET_\`-prefixed key in the project's \`.env\`/\`.env.local\`), so the plaintext never enters agent context; the result echoes the placeholder, not the value, and the after-typing auto-screenshot is skipped. To submit after typing a secret, put both steps in ONE \`run-sequence\` — that keeps the skip covering the Enter, which a second bare \`keyboard\` call would not.
 - key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1–f12) — NOT supported on TV targets; move focus with \`tv-remote\` instead.
@@ -229,8 +238,24 @@ One call does one action: pass text OR key, never both. To type and then press a
       if (secrets.length === 0) return dispatch(services, params, options);
       try {
         const result = await dispatch(services, { ...params, text }, options);
-        // Echo the placeholder form, never the resolved value.
-        return { ...result, typed: params.text };
+        return {
+          ...result,
+          // Echo the placeholder form, never the resolved value.
+          typed: params.text,
+          // The note is NOT scrubbed, deliberately. The Android backend reads the
+          // field back off the screen, so on this path it has held the plaintext,
+          // and every note it writes is value-free by construction — counts and
+          // structural facts, never the text — which `keyboard-secrets.test.ts`
+          // pins directly. Running the substitution over that prose would buy
+          // nothing and cost correctness: it replaces bare occurrences of the
+          // value anywhere, so a two-character secret rewrites ordinary words
+          // ("uiautomator" → "uiautomat{{secret:W}}") and a numeric one swallows
+          // the character count the note exists to report, on notes a perfectly
+          // successful call returns. It could not save a leak either — it matches
+          // whole values only, and a dropped-character read-back holds a PARTIAL
+          // secret, which no substitution catches. Errors are different and are
+          // still scrubbed below: they quote the `input text` argv verbatim.
+        };
       } catch (err) {
         // A backend error can quote its input (e.g. the Android `input text`
         // command line) — scrub the resolved values before it propagates.
