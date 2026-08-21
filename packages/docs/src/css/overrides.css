@@ -274,3 +274,65 @@ table tr:nth-child(2n) td code {
 table tr:nth-child(2n + 1) td code {
   background-color: var(--swm-off-background);
 }
+
+/*
+ * "Copy page" button - the LLMButton from the shared theme ships with square
+ * corners, a hard ink outline, a browser-default font and a shadowed dropdown.
+ * It sits next to the page title, so it takes the same shape language as the
+ * rest of the site: a pill on the page background, the secondary surface on
+ * hover, and a flat rounded panel for the menu. The `article` prefix wins over
+ * the theme's own class rules, which load after this file.
+ */
+article [class*="llmButtonBar"] {
+  margin-top: 4px;
+}
+
+article button[class*="llmButton_"] {
+  gap: 8px;
+  padding: 8px 14px;
+  font-family: var(--swm-body-font);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--ifm-font-color-base);
+  background-color: var(--swm-background);
+  border: 1px solid var(--swm-border);
+  border-radius: var(--swm-radius);
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+article button[class*="llmButton_"]:hover,
+article button[class*="llmButton_"][class*="active"] {
+  background-color: var(--swm-off-background);
+  border-color: var(--swm-border);
+}
+
+article button[class*="llmButton_"] svg {
+  flex-shrink: 0;
+}
+
+article [class*="llmDropdown_"] {
+  top: calc(100% + 8px);
+  min-width: 200px;
+  padding: 8px;
+  background-color: var(--swm-background);
+  border: 1px solid var(--swm-border);
+  border-radius: var(--swm-radius);
+  box-shadow: none;
+}
+
+article [class*="llmDropdownItem"] {
+  gap: 10px;
+  padding: 10px 12px;
+  font-family: var(--swm-body-font);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ifm-font-color-base);
+  background-color: transparent;
+  border-radius: var(--swm-radius-small);
+}
+
+article [class*="llmDropdownItem"]:hover {
+  color: var(--ifm-font-color-base);
+  background-color: var(--swm-off-background);
+}
