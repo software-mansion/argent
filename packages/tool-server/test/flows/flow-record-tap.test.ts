@@ -260,6 +260,48 @@ describe("flow-add-step tap selector capture", () => {
     expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.2, y: 0.52 }]);
   });
 
+  it("flags a role-only selector rather than recording the downgrade silently", async () => {
+    // The raised iOS flow tree depth cap now keeps unlabeled icons. One is the
+    // smallest frame under the tap, so `nodeAtPoint` picks it and
+    // `deriveSelector` falls back to its role. Replay then depends on that icon
+    // ranking first for the role.
+    setTree([
+      n({
+        identifier: "product-card",
+        frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 },
+        children: [n({ role: "AXImage", frame: { x: 0.48, y: 0.48, width: 0.04, height: 0.04 } })],
+      }),
+    ]);
+
+    const result = await recordTap({ x: 0.5, y: 0.5 });
+
+    expect(result.message).toContain("matches by role alone");
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { role: "AXImage" } }]);
+  });
+
+  // `roleOnlySelectorWarning` withholds the warning under separate guards for an
+  // identifier and for visible text, so both need a case. Each node also carries
+  // a role, so the withholding follows from the stable field, not a missing role.
+  it.each([
+    {
+      carries: "an id",
+      node: { identifier: "add-to-cart" },
+      selector: { identifier: "add-to-cart" },
+    },
+    { carries: "text", node: { label: "Add to cart" }, selector: { text: "Add to cart" } },
+  ])("does not flag a selector that carries $carries", async ({ node, selector }) => {
+    setTree([
+      n({ ...node, role: "AXButton", frame: { x: 0.3, y: 0.5, width: 0.4, height: 0.06 } }),
+    ]);
+
+    const result = await recordTap({ x: 0.5, y: 0.52 });
+
+    // Assert the step too. A coordinate fallback also carries no role-only
+    // warning, so the negative check alone proves nothing.
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector }]);
+    expect(result.message).not.toContain("matches by role alone");
+  });
+
   it("records the selector with a caveat when captured from the fallback tree source", async () => {
     setTree(
       [n({ label: "Settings", frame: { x: 0.3, y: 0.5, width: 0.4, height: 0.06 } })],
@@ -270,6 +312,30 @@ describe("flow-add-step tap selector capture", () => {
 
     expect(result.message).toContain("fallback ax-service tree");
     expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Settings" } }]);
+  });
+
+  it("reports both caveats when a role-only selector comes off the fallback tree", async () => {
+    // The two warnings are independent and can fire on one capture. A
+    // fallback-source read is the most likely to return an unlabeled node. Other
+    // tests cover each warning alone, so only this test holds the pair.
+    setTree(
+      [
+        n({
+          identifier: "product-card",
+          frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 },
+          children: [
+            n({ role: "AXImage", frame: { x: 0.48, y: 0.48, width: 0.04, height: 0.04 } }),
+          ],
+        }),
+      ],
+      "ax-service"
+    );
+
+    const result = await recordTap({ x: 0.5, y: 0.5 });
+
+    expect(result.message).toContain("matches by role alone");
+    expect(result.message).toContain("fallback ax-service tree");
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { role: "AXImage" } }]);
   });
 
   it("keeps coordinates with a warning when the tree fetch fails", async () => {

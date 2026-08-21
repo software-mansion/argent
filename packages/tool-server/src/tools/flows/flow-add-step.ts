@@ -166,6 +166,10 @@ function retargetRemedy(idKind: string, condition: WaitCondition): string {
  * the create-flow workflow this divergence comes out of gates on visible text
  * precisely because the trimmed tree hides the id, so sending the author back
  * to the recorder asks for a step the skill just said cannot be recorded.
+ *
+ * On iOS the near miss is also SHALLOWER: `native-full-hierarchy` defaults to
+ * `maxDepth: 8` where the runner's read asks for 100, so absent from it does
+ * not mean absent from the runner's tree until the depth is raised.
  */
 function runnerSideReadClause(udid: unknown, condition: WaitCondition): string {
   const platform = platformOf(udid);
@@ -693,6 +697,27 @@ async function probeAgainstRunnerTree(
 }
 
 /**
+ * `deriveSelector`'s last resort: the tapped node has no identifier and no
+ * visible text, so the step replays on role alone. It holds only while that
+ * element keeps winning `selectorToFrame`'s ranking. The re-resolve guard below
+ * proves that for the recording screen, never for the screen replay meets, so
+ * the warning says so instead of leaving it silent.
+ *
+ * The raised iOS depth cap makes this more common. An unlabeled icon that the
+ * device used to truncate away, which left `nodeAtPoint` to pick its `testID`
+ * container, is now present and is the smaller frame under the tap.
+ */
+function roleOnlySelectorWarning(selector: Selector): string | undefined {
+  if (selector.role === undefined || selector.identifier !== undefined) return undefined;
+  if (selector.text !== undefined || selector.textMatches !== undefined) return undefined;
+  return (
+    `selector ${describeSelector(selector)} matches by role alone (the tapped element has no id ` +
+    `or visible text) — replay takes whichever element of that role ranks first, so re-record ` +
+    `against a labelled element if that is not reliably this one`
+  );
+}
+
+/**
  * For a recorded `gesture-tap`, look up the element under the tapped point and
  * record a portable `tap: { selector }` step instead of raw coordinates.
  * Returns the selector (possibly with a caveat warning), or a warning
@@ -750,7 +775,11 @@ async function captureTapSelector(
         warning: `selector ${describeSelector(selector)} resolves to a different element on this screen; kept coordinates (brittle)`,
       };
     }
-    return { selector, warning: fallbackSourceWarning(source, device.platform) };
+    const warnings = [
+      roleOnlySelectorWarning(selector),
+      fallbackSourceWarning(source, device.platform),
+    ].filter((w) => w !== undefined);
+    return { selector, ...(warnings.length > 0 ? { warning: warnings.join("; ") } : {}) };
   } catch (err) {
     return {
       warning: `selector capture failed (${err instanceof Error ? err.message : String(err)}); kept coordinates`,

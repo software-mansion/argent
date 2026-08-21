@@ -610,6 +610,13 @@ async function androidDevtoolsReady(registry: Registry, device: DeviceInfo): Pro
  * aborted, and for an iOS app whose hierarchy may never be servable at all (see
  * {@link waitForNativeDevtools}) — there the launch is not what failed, and the
  * first selector read reports the impossibility. Otherwise the reason to report.
+ *
+ * The iOS wait is per bundle, and it does more than confirm readiness. A later
+ * selector step calls `resolveNativeTargetApp(api, undefined)`, which
+ * auto-targets whatever is connected and frontmost, and never checks that
+ * against the bundle this step launched. This wait is the only thing that
+ * couples the two, so a launch that skips it can hand the next selector step
+ * another app's view hierarchy and still report the run green.
  */
 async function treeSourceGate(
   registry: Registry,
@@ -1181,8 +1188,9 @@ export function createRunFlowTool(
         `Failed to run flow ${displayFlowName(params)}: ${failureSignal.error_code}`,
     },
     description: `Run a saved flow from the .argent/flows/ directory, or an explicit boundary-managed flow_path.
-Steps run in order: \`launch\` starts an app from scratch (terminate + relaunch) and waits until it is
-ready; \`tool\` calls dispatch through the registry; \`tap\`/\`long-press\`/\`type\` resolve a selector to an
+Steps run in order: \`launch\` starts an app from scratch (terminate + relaunch) and waits until that
+app's selector tree source is ready; \`tool\` calls dispatch through the registry;
+\`tap\`/\`long-press\`/\`type\` resolve a selector to an
 element and act on it (\`tap: { on, times: 2 }\` double-taps; \`long-press: { on, duration }\` presses and
 holds; \`tap\`/\`long-press\` alternatively take a raw normalized point — bare \`{ x, y }\` or \`on: { x, y }\`;
 any selector may scope its matches geometrically, the CSS combinators read off frames: \`within: <selector>\`

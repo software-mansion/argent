@@ -62,7 +62,6 @@ function api(overrides: Partial<Record<keyof NativeDevtoolsApi, unknown>>): Nati
   return {
     listConnectedBundleIds: () => [APP],
     getAppState: async (id: string) => activeState(id),
-    requiresAppRestart: async () => false,
     queryViewHierarchy: async (bundleId: string) => ({
       windows: [windowSpanning()],
       queried: bundleId,

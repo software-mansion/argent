@@ -1,4 +1,10 @@
-import { FAILURE_CODES, getFailureSignal, type DeviceInfo, type Registry } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  getFailureSignal,
+  type DeviceInfo,
+  type Registry,
+} from "@argent/registry";
 import {
   buildAppStateMessage,
   isInjectableBundleId,
@@ -6,6 +12,7 @@ import {
   type NativeDevtoolsApi,
 } from "../../blueprints/native-devtools";
 import { resolveNativeTargetApp } from "../../utils/native-target-app";
+import { deviceSetForUdid, simctlPrefix } from "../../utils/ios-device-sets";
 import { flattenHoisting, type FlatNode } from "./flow-tree-flatten";
 import {
   type DescribeFrame,
@@ -268,6 +275,35 @@ const FULL_HIERARCHY_FIELDS = [
 ];
 
 /**
+ * Depth ceiling for the flow selector tree. It counts raw UIView nesting, and
+ * React Native wrappers alone (nested RNSScreenStackView/RNSScreenView plus a
+ * root or drawer wrapper) run 40 to 60 levels deep. Under the old cap of 40, the
+ * device truncated visible elements of a production app at depths 41 to 62, so
+ * `id:` and `text:` selectors did not resolve and only coordinate taps worked.
+ * Truncation is silent, so this cap keeps headroom.
+ *
+ * A deeper tree also moves `text` verdicts. A `text` check on an identified
+ * container reads that container's hoisted `subtreeText`, and deeper descendants
+ * now hoist into it. `contains` still passes, but `equals` can flip to a
+ * failure: the fallback in `evaluateCondition` (`ui-tree-match.ts`) also tries
+ * the node's own `label`/`value`, which a testID'd wrapper does not have. Move
+ * such a check to the leaf that holds the text, or relax it to `contains`.
+ *
+ * The cap also makes failure reasons longer. The tree itself never reaches a
+ * tool result, but text derived from it does: `assertReason`
+ * (`flow-actions.ts`) quotes the matched node's hoisted `subtreeText` verbatim,
+ * and nothing truncates it. On a testID'd collection view of 60 rows, a failing
+ * `assert { text }` grew from 87 to 466 characters. `compatibilityMissNote`
+ * quotes that same string again, so a near-miss grew from 1520 to 2210. Its
+ * `exists`/`visible` arm reads `label` and `value` only, and does not grow.
+ *
+ * The last cost is the getFullHierarchy payload, which is field-limited
+ * (`FULL_HIERARCHY_FIELDS`): about 11KB at depth 40 and 15KB at depth 48. Past
+ * the real depth of the tree, a higher cap costs nothing.
+ */
+const FLOW_TREE_MAX_DEPTH = 100;
+
+/**
  * Why the app a flow launched serves no view hierarchy, for the case where
  * nothing at all is connected.
  *
@@ -338,9 +374,9 @@ export async function queryFullHierarchyTree(
     const ndRef = nativeDevtoolsRef(device);
     nativeApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
   } catch (err) {
-    throw new Error(
+    throw wrapPreservingFailure(
       `native devtools is unavailable (${errMsg(err)}) — flows resolve selectors against the full view hierarchy it serves`,
-      { cause: err }
+      err
     );
   }
   // Auto-targeting draws its candidates from `listConnectedBundleIds`, the same
@@ -356,32 +392,120 @@ export async function queryFullHierarchyTree(
   if (launchedNativeApp !== undefined && nativeApi.listConnectedBundleIds().length === 0) {
     throw new Error(await unreadableHierarchyReason(nativeApi, launchedNativeApp));
   }
-  // resolveNativeTargetApp's remaining errors already carry the actionable next
-  // step, so they propagate unwrapped — with one exception. Auto-resolution's
-  // `Application.getState` probe hops onto the app's MAIN thread; an app whose
-  // main thread is momentarily pinned (heavy cold start: first Hermes parse,
-  // Lottie decode) times that probe out even though it is exactly the app the
-  // flow launched and is about to read. When that happens — and ONLY on the
-  // timeout failure — fall back to the app this run's `launch:` started,
-  // provided its devtools connection is still up. A resolution that ANSWERS
-  // (including the deliberate "single app but backgrounded" error) is always
-  // preferred: the arbiter never overrides a guard that fired, it only rides out
-  // a probe the stall made unanswerable.
+  // resolveNativeTargetApp asks the caller to provide a bundleId, which a flow
+  // selector step cannot do: this call hardcodes auto-targeting. Each branch
+  // below replaces that advice with a remedy for its own failure. If apps are
+  // connected but none is uniquely frontmost, the remedy is to foreground the
+  // intended one, not to relaunch instrumentation it already has. Only "no
+  // connected app" means the target started outside Argent (Metro/Expo, Xcode,
+  // or its home-screen icon) and needs an Argent relaunch.
   let target: { bundleId: string };
   try {
     target = await resolveNativeTargetApp(nativeApi, undefined);
   } catch (err) {
-    const timedOut =
-      getFailureSignal(err)?.error_code === FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT;
+    const failureCode = getFailureSignal(err)?.error_code;
+    // The `launch:` hint arbitrates a timeout only. The `Application.getState`
+    // probe runs on the app's main thread, so a stall (first Hermes parse,
+    // Lottie decode) times it out even for the app the flow just launched. Any
+    // resolution that answers wins, including the deliberate "single app but
+    // backgrounded" error, so the hint never bypasses a guard that fired.
     if (
-      timedOut &&
+      failureCode === FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT &&
       launchedNativeApp !== undefined &&
       nativeApi.listConnectedBundleIds().includes(launchedNativeApp)
     ) {
       target = { bundleId: launchedNativeApp };
     } else {
-      throw err;
+      const terminate = await terminateCommand(device);
+      if (failureCode === FAILURE_CODES.NATIVE_TARGET_MULTIPLE_APPS_AMBIGUOUS) {
+        // The reason does not offer to background the other apps. They stay
+        // connected, so the set stays ambiguous, and iOS then suspends one until
+        // it no longer answers the state probe. That turns this failure into the
+        // harder indeterminate one below.
+        throw wrapPreservingFailure(
+          // Short header: the embedded diagnostic already says the set is
+          // ambiguous, and the per-app entries need those 90 characters.
+          `could not target an app to read the view hierarchy from:\n` +
+            `${cappedAppDiagnostic(withoutExplicitBundleIdAdvice(errMsg(err)))}\n` +
+            `Flow selectors auto-target and cannot name a bundleId. Foreground the intended app with ` +
+            `launch-app (it does not terminate), then retry; clear the others with ` +
+            `\`${terminate}\` (argent has no terminate tool, and ` +
+            `restart-app would just bring that app back to the front).`,
+          err
+        );
+      }
+      if (failureCode === FAILURE_CODES.NATIVE_TARGET_SINGLE_APP_NOT_FOREGROUND) {
+        // The one connected app answered the state probe, so it is instrumented
+        // and not suspended. It is either just backgrounded, or it keeps running
+        // in the background (audio, location, VoIP). A permission dialog does not
+        // land here: the app keeps a foreground-inactive scene and resolves
+        // normally. Foregrounding fixes the read, so the relaunch advice below
+        // would misdiagnose this state. Keep resolveNativeTargetApp's per-app
+        // applicationState diagnostic.
+        throw wrapPreservingFailure(
+          `the only native-devtools-connected app is not foreground, so it cannot be auto-targeted:\n` +
+            `${withoutExplicitBundleIdAdvice(errMsg(err))}\n` +
+            `Flow selector steps auto-target and cannot provide a bundleId. Bring that app to the ` +
+            `foreground with launch-app (it does not terminate — the app is already instrumented, ` +
+            `just not frontmost), then retry.`,
+          err
+        );
+      }
+      // No verdict at all: resolveNativeTargetApp probes applicationState for
+      // every connected app in one Promise.all, so one stale connection rejects
+      // the whole read. iOS suspends a backgrounded app after about a second,
+      // and a suspended app stops answering. The connections are still live, so
+      // the relaunch advice below does not apply: a relaunch discards the state
+      // the flow built up, and cannot help when another app is the stale one.
+      const stillConnected = nativeApi.listConnectedBundleIds();
+      if (stillConnected.length > 0) {
+        throw wrapPreservingFailure(
+          `could not read the state of the native-devtools-connected apps, so none could be ` +
+            `auto-targeted (${firstClause(err)}). Connected: ${cappedList(stillConnected)}. ` +
+            `They are instrumented — do not relaunch. A suspended app stops answering: foreground ` +
+            `the app the flow drives with launch-app (it does not terminate), then retry.` +
+            // Say this only when another connection exists to clear, and name a
+            // command that exists: argent has no terminate tool, and restart-app
+            // would bring the other app to the front.
+            (stillConnected.length > 1
+              ? ` To clear the others use \`${terminate}\` — argent ` +
+                `exposes no terminate tool, and restart-app would bring that app to the front instead.`
+              : ``),
+          err
+        );
+      }
+      // Kept short: every failed selector read repeats this reason verbatim, and
+      // the recorder repeats it once per captured tap.
+      throw wrapPreservingFailure(
+        `no app is connected to native devtools, so flow selectors have no instrumented process to ` +
+          `read the view hierarchy from (${firstClause(err)}). Relaunch with restart-app (or a flow ` +
+          `\`launch\` step): launch-app does not terminate, so on an app already running from ` +
+          `Metro/Expo, Xcode, or its icon it only foregrounds that uninstrumented process. ` +
+          // "feature tools", not "the native-* tools": only the six that run the
+          // throwing 3-arg precheck refuse a com.apple.* bundle.
+          // native-devtools-status runs the 2-arg form and reports
+          // injectable:false, and the native-profiler-* tools do not precheck.
+          // The broader claim would hide the one tool that confirms this state.
+          `Argent treats an Apple system app (com.apple.*) as non-injectable — the native-devtools ` +
+          `feature tools refuse it too — so if one never connects, drive it with raw point taps ` +
+          `and tool: await-ui-element steps.`,
+        err
+      );
     }
+  }
+
+  // Only a disconnect race reaches this. `resolveNativeTargetApp(api,
+  // undefined)` returns ids from `listConnectedBundleIds()`, so an id missing
+  // from that same live map means the socket dropped after the resolve. The app
+  // was instrumented, so the "launched before argent's instrumentation loaded"
+  // diagnosis of an explicitly-named bundle is wrong here.
+  if (!nativeApi.listConnectedBundleIds().includes(target.bundleId)) {
+    throw new Error(
+      `${target.bundleId} answered the target probe and then dropped its native-devtools ` +
+        `connection before the view hierarchy could be read. It was instrumented, so a retry may ` +
+        `ride this out; if the connection does not come back, relaunch with restart-app (or a ` +
+        `flow \`launch\` step) — launch-app would only foreground the process that just lost it.`
+    );
   }
 
   const rawResult = (await nativeApi.queryViewHierarchy(
@@ -389,7 +513,7 @@ export async function queryFullHierarchyTree(
     "ViewHierarchy.getFullHierarchy",
     {
       fields: FULL_HIERARCHY_FIELDS,
-      maxDepth: 40,
+      maxDepth: FLOW_TREE_MAX_DEPTH,
     }
   )) as { windows?: unknown[]; error?: string };
 
@@ -416,4 +540,109 @@ export async function queryFullHierarchyTree(
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * The `xcrun simctl terminate` command an agent can run against this device. Two
+ * targeting reasons offer it to clear a competing connected app, because argent
+ * has no terminate tool.
+ *
+ * simctl scopes each operation to one device set, so a UDID from a configured
+ * `ios.additionalDeviceSets` set (Radon IDE's, for example) needs `--set` to
+ * resolve. See `simctlArgsForUdid`, which argent's own call sites use. Only the
+ * prefix is resolved. The udid and bundleId stay placeholders, because the agent
+ * knows its device and picks the app to clear. A default-set device gets the
+ * plain command, so its reason keeps the same size budget (see
+ * {@link MAX_TARGETING_REASON_CHARS}).
+ */
+async function terminateCommand(device: DeviceInfo): Promise<string> {
+  const prefix = simctlPrefix(await deviceSetForUdid(device.id));
+  return `xcrun ${prefix.join(" ")} terminate <udid> <bundleId>`;
+}
+
+// The first sentence of a diagnostic's first line: what went wrong, without the
+// remedy each source appends for its own callers. A sentence ends at a period
+// plus whitespace or the end of the line. Messages that reach here carry dotted
+// identifiers (`Application.getState`), which a bare period cuts in half. A line
+// with no sentence break is already the clause.
+function firstClause(err: unknown): string {
+  const firstLine = errMsg(err).split("\n", 1)[0];
+  const sentenceEnd = /\.(?=\s|$)/.exec(firstLine);
+  return sentenceEnd === null ? firstLine : firstLine.slice(0, sentenceEnd.index + 1);
+}
+
+/**
+ * How many connected apps a targeting reason may list.
+ *
+ * The ambiguous and indeterminate branches both embed a per-app list, so without
+ * a cap the reason grows with the connected-app count: 778 characters for 2
+ * apps, 1000 for 4 and 1444 for 8. That cost is paid per step, because
+ * `captureTapSelector` embeds the reason in the warning of every recorded tap
+ * and a failing `await:` repeats it once per poll. Two entries are enough to act
+ * on: the remedy is to foreground the app you want and clear the rest. The
+ * dropped count is still reported.
+ */
+export const MAX_LISTED_APPS = 2;
+
+/**
+ * Ceiling every reason thrown from {@link queryFullHierarchyTree} must fit,
+ * enforced by `keeps every targeting reason short enough to repeat per step`.
+ *
+ * Measured on the raw message, before the prefix a caller adds, and without the
+ * `--set <dir>` that an `ios.additionalDeviceSets` device adds to its terminate
+ * command (see {@link terminateCommand}).
+ *
+ * The guard covers {@link unreadableHierarchyReason} too, which the recorder
+ * repeats once per captured tap and which sets the ceiling: 775 characters for
+ * `unregistered` against a 37-character bundle id, in wording shared with
+ * `native-devtools-status` and iOS `describe`. The ambiguous branch is next at
+ * 702, because it carries the two per-app `applicationState` diagnostics an
+ * agent needs to pick the app to clear. Neither figure grows with the
+ * connected-app count; see {@link MAX_LISTED_APPS}.
+ */
+export const MAX_TARGETING_REASON_CHARS = 800;
+
+/** Keep the first {@link MAX_LISTED_APPS} entries, and say how many were not shown. */
+function cappedList(bundleIds: readonly string[]): string {
+  if (bundleIds.length <= MAX_LISTED_APPS) return bundleIds.join(", ");
+  const dropped = bundleIds.length - MAX_LISTED_APPS;
+  return `${bundleIds.slice(0, MAX_LISTED_APPS).join(", ")} (+${dropped} more)`;
+}
+
+/**
+ * Cap the per-app lines of an embedded `resolveNativeTargetApp` diagnostic and
+ * keep its leading summary line. The entries are its `- <bundleId>
+ * (applicationState=…)` lines. Every other line passes through, so a reworded
+ * source loses the cap instead of getting a mangled message.
+ */
+function cappedAppDiagnostic(message: string): string {
+  const lines = message.split("\n");
+  const isEntry = (line: string): boolean => line.startsWith("- ");
+  const firstEntry = lines.findIndex(isEntry);
+  if (firstEntry === -1) return message;
+  const entries = lines.filter(isEntry);
+  if (entries.length <= MAX_LISTED_APPS) return message;
+  const kept = entries.slice(0, MAX_LISTED_APPS);
+  const dropped = entries.length - MAX_LISTED_APPS;
+  return [
+    ...lines.slice(0, firstEntry),
+    ...kept,
+    `- (+${dropped} more connected app${dropped === 1 ? "" : "s"})`,
+    ...lines.slice(firstEntry + entries.length).filter((line) => !isEntry(line)),
+  ].join("\n");
+}
+
+// Strip resolveNativeTargetApp's trailing "Provide bundleId explicitly…" line:
+// a flow selector step hardcodes auto-targeting and cannot act on it. Match the
+// whole line, not the bare sentence, because the ambiguous and single-app cases
+// end that line differently.
+function withoutExplicitBundleIdAdvice(message: string): string {
+  return message.replace(/\nProvide bundleId explicitly[^\n]*$/, "");
+}
+
+/** Add actionable flow-specific context without stripping FailureError data. */
+function wrapPreservingFailure(message: string, err: unknown): Error {
+  const cause = err instanceof Error ? err : new Error(String(err));
+  const signal = getFailureSignal(err);
+  return signal ? new FailureError(message, signal, { cause }) : new Error(message, { cause });
 }
