@@ -115,7 +115,7 @@ Before tapping, determine the correct coordinates by using discovery tools — p
       const chromium = services.chromium as ChromiumCdpApi;
       // Mouse dispatches wait on compositor hit-testing, which a hidden
       // window services at ~5s per event — refuse up front like gesture-scroll.
-      await assertChromiumWindowVisible(chromium, "tap", "chromium_tap_window_hidden");
+      await assertChromiumWindowVisible(chromium, "tap");
       await tapChromium(chromium, params.x, params.y, clickCount);
       return { tapped: true, timestampMs };
     }
