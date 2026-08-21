@@ -16,10 +16,11 @@
   // The ceiling is one total across those classes rather than one per class, so
   // paying off a parked export licences a new one elsewhere in the same PR.
   //
-  // Count it the way CI does, against a tree with no build output: whether a
+  // Count it the way CI does, against a tree with no compiled output: whether a
   // workspace resolves `main`/`types` to a file that exists moves the total by
-  // itself, so a run after a local `tsc --build` carries phantom headroom and is
-  // no evidence the job will pass.
+  // itself, so a run after a local `npm run build` carries phantom headroom and
+  // is no evidence the job will pass. `npx tsc --build --clean` is what clears
+  // it again; see CONTRIBUTING.md.
   "$schema": "https://unpkg.com/knip@5/schema.json",
 
   // Makes a stale exemption here fail the job instead of printing a hint below
@@ -92,6 +93,16 @@
     // file here passes too — so the list holds only packages this workspace
     // genuinely cannot declare.
     "packages/tool-server": {
+      // Process and thread entry points, not imports: the flow script executor
+      // puts the runner in front of the script as an `--import` preload, by
+      // path, and the runner starts each watchdog with `new Worker(url)`.
+      // Nothing names them statically, and they import nothing from this
+      // package, so knip sees three unreachable files.
+      "entry": [
+        "src/tools/flows/script/flow-script-runner.mjs",
+        "src/tools/flows/script/flow-script-watchdog-lifeline.mjs",
+        "src/tools/flows/script/flow-script-watchdog-deadline.mjs",
+      ],
       "ignoreDependencies": [
         // --- Declared in package.json, loaded too dynamically to detect.
         //     Without these: "unused dependencies". ---

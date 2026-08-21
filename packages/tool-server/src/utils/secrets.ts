@@ -109,23 +109,49 @@ export function resolveSecretPlaceholders(
 }
 
 /**
+ * Replace every resolved secret value in `text` with its `{{secret:NAME}}`
+ * placeholder — the one implementation of the substitution, shared by the
+ * error-shaped wrapper below and by the flow script executor's log capture.
+ * Zero-length values are skipped: replacing an empty string would corrupt the
+ * text rather than redact anything.
+ *
+ * Callers that scrub a *stream* must scrub before any truncation and must hold
+ * back a chunk tail across chunk boundaries, since a whole-value match sees
+ * neither half of a value split across two writes. See
+ * `flow-script-executor.ts`, which does both.
+ */
+export function scrubSecretValues(
+  text: string,
+  secrets: ReadonlyArray<{ name: string; value: string }>
+): string {
+  // Longest value first. One value can contain another — a host inside a URL
+  // that is itself a secret — and replacing the shorter one first rewrites the
+  // middle of the longer one, leaving its tail in the text:
+  // `using {{secret:HOST}}9d3f0a1b2c`. Length is what decides, so two values of
+  // the *same* length that overlap still resolve in collection order:
+  // `[A="abcd", B="cdef"]` over `"abcdef"` gives `"{{secret:A}}ef"` and the
+  // reverse order gives `"ab{{secret:B}}"`. Neither leaks a value; which one is
+  // named differs.
+  return [...secrets]
+    .sort((a, b) => b.value.length - a.value.length)
+    .reduce(
+      (acc, { name, value }) =>
+        value ? acc.split(value).join(`${SECRET_PLACEHOLDER_MARKER}${name}}}`) : acc,
+      text
+    );
+}
+
+/**
  * Scrub resolved secret values from an error before it propagates — a backend
  * failure can echo its input (e.g. Android typing surfaces the device-side
  * `input text` command line). Mutates message/stack in place so the error's
  * class, and with it the HTTP status and telemetry mapping, is preserved.
- * Zero-length values are skipped: replacing an empty string would corrupt the
- * message rather than redact anything.
  */
 export function redactSecretsFromError(
   err: unknown,
-  secrets: Array<{ name: string; value: string }>
+  secrets: ReadonlyArray<{ name: string; value: string }>
 ): unknown {
-  const scrub = (s: string) =>
-    secrets.reduce(
-      (acc, { name, value }) =>
-        value ? acc.split(value).join(`${SECRET_PLACEHOLDER_MARKER}${name}}}`) : acc,
-      s
-    );
+  const scrub = (s: string) => scrubSecretValues(s, secrets);
   if (err instanceof Error) {
     err.message = scrub(err.message);
     if (err.stack) err.stack = scrub(err.stack);

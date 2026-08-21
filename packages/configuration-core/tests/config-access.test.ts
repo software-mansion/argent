@@ -20,6 +20,8 @@ import {
 import {
   CONFIG_SCHEMA,
   describeExpectedValue,
+  getConfigDefinition,
+  MIN_SCRIPT_HEAP_LIMIT_MB,
   type ConfigDefinition,
 } from "../src/config-schema.js";
 
@@ -380,4 +382,38 @@ describe("deleteAtPath prunes only what it emptied", () => {
     expect(deleteAtPath(obj, "nope.missing")).toBe(false);
     expect(obj).toEqual({ ios: { deviceSet: "x" } });
   });
+});
+
+describe("flow script host bounds", () => {
+  it("refuses a heap limit too small for a Node process to start", () => {
+    // The likely way in is a unit slip — `heapLimitMb: 2` meaning 2 GB. Under
+    // about 5 MiB the script process dies inside V8's own startup, and the step
+    // failed with a message that named neither this key nor the value. The
+    // floor sits well above that, at 32 MiB, because a value between the two
+    // starts a process that cannot import a real npm dependency — a failure
+    // just as confusing and one the message would not explain either.
+    expect(() => setConfigValue("scripts.heapLimitMb", 2, "global", opts())).toThrow(
+      ConfigValidationError
+    );
+    expect(() => setConfigValue("scripts.heapLimitMb", 16, "global", opts())).toThrow(
+      ConfigValidationError
+    );
+    expect(setConfigValue("scripts.heapLimitMb", MIN_SCRIPT_HEAP_LIMIT_MB, "global", opts())).toBe(
+      MIN_SCRIPT_HEAP_LIMIT_MB
+    );
+  });
+
+  it("says what it wants when it refuses one", () => {
+    const def = getConfigDefinition("scripts.heapLimitMb")!;
+    expect(describeExpectedValue(def)).toContain(`at least ${MIN_SCRIPT_HEAP_LIMIT_MB}`);
+  });
+
+  it.each(["scripts.maxTimeoutMs", "scripts.heapLimitMb"])(
+    "keeps %s out of project scope, so repository content cannot raise its own ceiling",
+    (key) => {
+      const def = getConfigDefinition(key)!;
+      expect(def.scopes).toEqual(["global"]);
+      expect(() => setConfigValue(key, 60_000, "project", opts())).toThrow();
+    }
+  );
 });

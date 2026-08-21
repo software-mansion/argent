@@ -20,6 +20,11 @@
     "scripts/**/*.cjs",
     "scripts/**/*.mjs",
     "packages/argent/scripts/**/*.cjs",
+    "packages/tool-server/scripts/**/*.mjs",
+    // The flow `script` runner and its watchdogs: over a thousand lines of
+    // shipped runtime code that `tsc --build` never sees, because the
+    // tool-server package does not set `allowJs`.
+    "packages/tool-server/src/tools/flows/script/**/*.mjs",
     "packages/skills/scripts/**/*.js"
   ]
 }

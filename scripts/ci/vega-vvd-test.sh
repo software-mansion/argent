@@ -18,8 +18,13 @@
 # so the arch/glibc question it raised is moot. `tv-remote` working here proves the
 # adb/inputd-cli replacement drives the device.
 #
-# Prereq: the workspace is already built (`npm ci` + `tsc --build` on the runner,
-# bind-mounted in at /workspace), so `packages/tool-server/dist/index.js` exists.
+# Prereq: the workspace is already built (`npm ci` + `npm run build` on the
+# runner, bind-mounted in at /workspace), so `packages/tool-server/dist/index.js`
+# exists. `npm run build`, not a bare `tsc --build`: only the build script copies
+# the files tsc never sees, and the dist booted below is meant to be the shipped
+# one. Of those files the flow `script` runner and its two watchdogs are the ones
+# a Linux container could reach; the Instruments template is iOS-only and no job
+# here looks for it.
 #
 # NOT `set -e`: gated checks are captured for a per-tool summary, then we exit
 # non-zero if any failed.

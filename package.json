@@ -5,7 +5,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build && node packages/tool-server/scripts/copy-build-assets.mjs",
     "start": "npm run build -w @argent/registry && npm run dev -w @argent/tool-server",
     "start:tool-server": "npm run build -w @argent/registry && npm run dev -w @argent/tool-server",
     "download:simulator-server": "bash scripts/download-simulator-server.sh",

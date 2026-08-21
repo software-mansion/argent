@@ -161,7 +161,7 @@ jobs:
         run: |
           npm ci
           npm install @rollup/rollup-linux-x64-gnu --no-save
-          npx tsc --build
+          npm run build
 
       - name: Download signed simulator-server binary
         # The screenshot/gesture-tap tools spawn the simulator-server out
