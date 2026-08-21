@@ -3,6 +3,7 @@ import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry"
 import { gestureTapTool } from "../src/tools/gesture-tap";
 import { gestureDragTool } from "../src/tools/gesture-drag";
 import { gestureScrollTool } from "../src/tools/gesture-scroll";
+import { makeChromiumImpl as makeKeyboardChromiumImpl } from "../src/tools/keyboard/platforms/chromium";
 
 // The hidden-window guard: a minimized / fully occluded Chromium window
 // throttles compositor hit-testing, so every MOUSE dispatch stalls ~5s
@@ -104,5 +105,33 @@ describe("hidden-window guard on chromium mouse tools", () => {
     )) as { tapped: boolean };
     expect(result.tapped).toBe(true);
     expect(api.dispatchMouseEvent).toHaveBeenCalled();
+  });
+
+  it("keyboard types on a hidden window — the guard's absence there is deliberate", async () => {
+    // Key events skip compositor hit-testing: measured on a genuinely
+    // minimized Electron window, Input.dispatchKeyEvent returns in 1-14ms
+    // while mouse dispatches stall ~5s each. Adding the guard to keyboard
+    // would refuse input that demonstrably works, so this test pins the
+    // exemption: an api whose visibility probe WOULD report "hidden" must
+    // still type, and the probe must never even be consulted. (button has no
+    // chromium branch at all, so keyboard is the only tool to pin.)
+    const api = fakeChromiumApi("hidden") as ReturnType<typeof fakeChromiumApi> & {
+      dispatchKeyEvent: ReturnType<typeof vi.fn>;
+    };
+    api.dispatchKeyEvent = vi.fn().mockResolvedValue(undefined);
+    const registry = { resolveService: vi.fn(async () => api) };
+
+    const result = await makeKeyboardChromiumImpl(registry as never).handler(
+      {},
+      { udid: "chromium-cdp-19222", text: "hi", delayMs: 0 },
+      { id: "chromium-cdp-19222", platform: "chromium", kind: "app" } as never
+    );
+
+    expect(result.typed).toBe("hi");
+    expect(api.dispatchKeyEvent).toHaveBeenCalled();
+    expect(api.cdp.send).not.toHaveBeenCalledWith(
+      "Runtime.evaluate",
+      expect.objectContaining({ expression: "document.visibilityState" })
+    );
   });
 });
