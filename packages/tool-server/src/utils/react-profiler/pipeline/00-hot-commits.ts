@@ -67,11 +67,21 @@ export function buildHotCommitSummaries(
 
     // Group by component name within this commit, accumulate self-duration
     // Include ALL entries (re-renders + first mounts) so navigation mount cost is visible
+    //
+    // `selfDuration` is exclusive, so summing it across instances is correct.
+    // `actualDuration` is INCLUSIVE (self + the whole subtree), so it must NOT be
+    // summed: same-named instances are routinely nested (a `View` inside a `View`),
+    // and each ancestor's figure already contains its descendants'. Summing made
+    // grouped rows exceed the commit they belong to — e.g. `View ×30` reporting
+    // 189ms of "w/children" inside a 21.82ms commit, which reads as though one
+    // component outweighed the entire commit. Keep the largest single instance
+    // instead: that is a real subtree cost, and no fiber's inclusive time can
+    // exceed the commit's own duration.
     const componentMap = new Map<
       string,
       {
         totalSelf: number;
-        totalActual: number;
+        maxActual: number;
         count: number;
         firstEntry: DevToolsFiberCommit;
         isFirstMount: boolean;
@@ -83,14 +93,14 @@ export function buildHotCommitSummaries(
       const existing = componentMap.get(e.componentName);
       if (existing) {
         existing.totalSelf += e.selfDuration ?? 0;
-        existing.totalActual += e.actualDuration ?? 0;
+        existing.maxActual = Math.max(existing.maxActual, e.actualDuration ?? 0);
         existing.count++;
         // If any instance is a re-render, mark as not first-mount
         if (!isFirstMount) existing.isFirstMount = false;
       } else {
         componentMap.set(e.componentName, {
           totalSelf: e.selfDuration ?? 0,
-          totalActual: e.actualDuration ?? 0,
+          maxActual: e.actualDuration ?? 0,
           count: 1,
           firstEntry: e,
           isFirstMount,
@@ -104,7 +114,7 @@ export function buildHotCommitSummaries(
     const componentEntries: HotCommitComponentEntry[] = Array.from(componentMap.entries())
       .sort((a, b) => b[1].totalSelf - a[1].totalSelf)
       .slice(0, MAX_COMPONENT_ENTRIES)
-      .map(([name, { totalSelf, totalActual, count, firstEntry, isFirstMount }]) => {
+      .map(([name, { totalSelf, maxActual, count, firstEntry, isFirstMount }]) => {
         const cd = firstEntry.changeDescription;
         const reason = !isFirstMount && cd ? deriveReason(cd, firstEntry.hookTypes) : undefined;
 
@@ -126,7 +136,7 @@ export function buildHotCommitSummaries(
         const entry: HotCommitComponentEntry = {
           name,
           selfDurationMs: Math.round(totalSelf * 100) / 100,
-          actualDurationMs: Math.round(totalActual * 100) / 100,
+          actualDurationMs: Math.round(maxActual * 100) / 100,
           count,
           ...(isFirstMount && { isFirstMount: true }),
           ...(reason !== undefined && { reason }),

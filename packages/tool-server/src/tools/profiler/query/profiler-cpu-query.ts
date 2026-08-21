@@ -391,18 +391,47 @@ function renderComponentCpu(
 
   for (const window of commitWindows.values()) {
     const { hotspots } = queryCpuWindow(index, window.start, window.end, 50);
+    // Fold each window down to one row per function BEFORE adding it to the
+    // running totals, because the two axes this loop walks need opposite
+    // treatment.
+    //
+    // Within a window, `queryCpuWindow` emits one row per call-tree NODE, so a
+    // function reached at several depths arrives several times and a recursive
+    // frame's `totalMs` already contains its own inner frame's. Those cannot be
+    // added; keep the largest, which is a real call's subtree.
+    const perWindow = new Map<
+      string,
+      { selfMs: number; totalMs: number; url?: string; lineNumber?: number }
+    >();
     for (const hs of hotspots) {
-      const existing = aggregated.get(hs.name);
-      if (existing) {
-        existing.selfMs += hs.selfMs;
-        existing.totalMs += hs.totalMs;
+      const seen = perWindow.get(hs.name);
+      if (seen) {
+        seen.selfMs += hs.selfMs;
+        seen.totalMs = Math.max(seen.totalMs, hs.totalMs);
       } else {
-        aggregated.set(hs.name, {
+        perWindow.set(hs.name, {
           selfMs: hs.selfMs,
           totalMs: hs.totalMs,
           url: hs.url,
           lineNumber: hs.lineNumber,
         });
+      }
+    }
+    // Across windows both columns add. Commit windows are disjoint stretches of
+    // wall clock, so a function's inclusive time in one cannot overlap its time
+    // in another — the nesting that makes inclusive times unaddable does not
+    // reach across them. Adding also keeps the two columns on one footing: an
+    // exclusive column summed against an inclusive column maxed produces rows
+    // whose `self` exceeds their own inclusive time, which is impossible for a
+    // single frame and reads as broken output. It stays bounded by the commit
+    // total printed above, since no single frame outlasts the window it is in.
+    for (const [name, win] of perWindow) {
+      const existing = aggregated.get(name);
+      if (existing) {
+        existing.selfMs += win.selfMs;
+        existing.totalMs += win.totalMs;
+      } else {
+        aggregated.set(name, { ...win });
       }
     }
   }
@@ -439,6 +468,9 @@ function shortenUrl(url: string): string {
   const parts = url.replace(/\\/g, "/").split("/");
   return parts.slice(-2).join("/");
 }
+
+/** Exposed for tests: the aggregation whose inclusive-duration handling is load-bearing. */
+export const __testables = { renderComponentCpu };
 
 export const profilerCpuQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "profiler-cpu-query",

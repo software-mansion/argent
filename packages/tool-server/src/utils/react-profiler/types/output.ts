@@ -10,8 +10,15 @@ export type ReRenderReason =
 export interface HotCommitComponentEntry {
   name: string;
   selfDurationMs: number; // total across all instances in this commit
-  // Inclusive render time: self + entire subtree owned by this component.
-  // Do NOT sum this column across siblings — parent time already includes children.
+  /**
+   * Inclusive render time: self + the entire subtree the component owns.
+   *
+   * With `count > 1` this is the LARGEST single instance's subtree, not a total
+   * across them — inclusive times cannot be added across instances, because
+   * same-named instances are routinely nested inside one another and the outer
+   * one's figure already contains the inner one's. Do not sum this across rows
+   * either, for the same reason.
+   */
   actualDurationMs: number;
   count: number; // number of fiber instances (>1 = list items etc.)
   isFirstMount?: boolean; // true = initial render (mount), not a re-render

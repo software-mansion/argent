@@ -25,8 +25,8 @@ export interface RootCauseVote {
 export interface ComponentAccumulator {
   name: string;
   n: number; // re-render count (first mounts stripped)
-  sum: number; // sum of actualDuration
-  sumSq: number; // sum of actualDuration^2
+  sum: number; // sum of selfDuration
+  sumSq: number; // sum of selfDuration^2
   min: number;
   max: number;
   reasonHistogram: Record<ReRenderReason, number>;
