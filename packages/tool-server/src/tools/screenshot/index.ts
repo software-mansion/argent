@@ -7,6 +7,12 @@ import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry"
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
+import {
+  RESULT_NOTE_KEY,
+  requestedGeometry,
+  chromiumDropNote,
+  unsupportedDropNote,
+} from "./dropped-geometry";
 import { getScreenshotScale } from "../../utils/simulator-client";
 import { captureScreenshotUpright } from "../../utils/rotation-aware-capture";
 import { androidDevtoolsRotationPeek } from "../../utils/android-devtools-rotation-peek";
@@ -31,7 +37,9 @@ const zodSchema = z.object({
         "current rotation, so it is upright without this. Setting it replaces that with a fixed " +
         "rotation, which on a rotated device produces an image whose geometry no longer matches " +
         "`describe` frames or gesture coordinates. On Chromium it rotates the captured image after " +
-        "Page.captureScreenshot."
+        "Page.captureScreenshot, which requires the optional `sharp` dependency. Apple TV and Vega " +
+        "captures cannot be rotated at all. When a rotation is requested but not applied, the " +
+        "response carries a note saying so — the image is returned unrotated either way."
     ),
   scale: z
     .number()
@@ -60,6 +68,13 @@ const zodSchema = z.object({
 type Params = z.infer<typeof zodSchema>;
 
 interface Result {
+  /**
+   * Set only when the caller asked for geometry the backend could not apply.
+   * `http.ts` hoists this reserved key into the response envelope's `note`,
+   * which every client already renders — the result body itself is discarded
+   * for image-output tools.
+   */
+  [RESULT_NOTE_KEY]?: string;
   /**
    * The captured PNG as an artifact handle. The MCP client materializes it to
    * a local file and renders it inline — no second fetch of the simulator
@@ -156,13 +171,20 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
       if (device.platform === "chromium") {
         const ref = chromiumCdpRef(device);
         const chromium = (await registry.resolveService(ref.urn, ref.options)) as ChromiumCdpApi;
-        const { path: capturedPath } = await chromium.captureScreenshot({
+        const captured = await chromium.captureScreenshot({
           rotation: params.rotation,
           scale: params.scale,
           downscaler: params.downscaler,
         });
-        const image = await requireArtifacts(ctx).register(capturedPath, { mimeType: "image/png" });
-        return { image };
+        const image = await requireArtifacts(ctx).register(captured.path, {
+          mimeType: "image/png",
+        });
+        // Only report what the caller asked for AND the backend dropped: a
+        // visual snapshot passes scale 1, which is a no-op, not a loss.
+        const requested = requestedGeometry(params);
+        const dropped = (captured.droppedFeatures ?? []).filter((f) => requested.includes(f));
+        const note = chromiumDropNote(dropped);
+        return { image, ...(note ? { [RESULT_NOTE_KEY]: note } : {}) };
       }
 
       // Distinguish tvOS from iOS by simulator runtime — shape alone can't.
@@ -170,7 +192,13 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
       if (device.platform === "ios" && (await isTvOsSimulator(params.udid))) {
         const pngPath = await tvScreenshot(params.udid, scale, signal);
         const image = await requireArtifacts(ctx).register(pngPath, { mimeType: "image/png" });
-        return { image };
+        // tvScreenshot has no rotation step at all, so an explicit rotation is
+        // dropped before any capture happens.
+        const note = unsupportedDropNote(
+          requestedGeometry(params).filter((f) => f === "rotation"),
+          "Apple TV"
+        );
+        return { image, ...(note ? { [RESULT_NOTE_KEY]: note } : {}) };
       }
 
       // Vega captures host-side via the Android emulator console (`adb emu`) and
@@ -179,7 +207,11 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
       if (device.platform === "vega") {
         const pngPath = await captureVegaScreenshotPng({ scale: params.scale });
         const image = await requireArtifacts(ctx).register(pngPath, { mimeType: "image/png" });
-        return { image };
+        const note = unsupportedDropNote(
+          requestedGeometry(params).filter((f) => f === "rotation"),
+          "Vega (Fire TV)"
+        );
+        return { image, ...(note ? { [RESULT_NOTE_KEY]: note } : {}) };
       }
 
       const ref = simulatorServerRef(device);

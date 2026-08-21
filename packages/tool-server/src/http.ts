@@ -50,6 +50,7 @@ import {
   createChromiumServerRouter,
 } from "./chromium-server/http-api";
 import { resolveDevice as resolveDeviceForWs } from "./utils/device-info";
+import { RESULT_NOTE_KEY } from "./tools/screenshot/dropped-geometry";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -334,6 +335,20 @@ const UPLOAD_TTL_MS = 15 * 60 * 1000; // 15 minutes
 const MAX_UPLOAD_STREAM_BYTES = 2 * 1024 * 1024 * 1024; // 2 GiB
 // Bounds the total of unconsumed uploads, so many small ones can't do the same.
 const MAX_PENDING_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024; // 8 GiB
+
+/**
+ * Pull a tool's per-call note off its result so it can ride the response
+ * envelope. Mutates `data` so the reserved key never reaches the client, where
+ * it would otherwise surface in `--json` output and in non-image results.
+ */
+function takeToolNote(data: unknown): string | undefined {
+  if (typeof data !== "object" || data === null) return undefined;
+  const bag = data as Record<string, unknown>;
+  const note = bag[RESULT_NOTE_KEY];
+  if (typeof note !== "string" || note.length === 0) return undefined;
+  delete bag[RESULT_NOTE_KEY];
+  return note;
+}
 
 export function createHttpApp(registry: Registry, options?: HttpAppOptions): HttpAppHandle {
   const app = express();
@@ -884,6 +899,12 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         if (activeRecordings.length > 0) {
           notes.push(buildScreenRecordingNote(activeRecordings, Date.now()));
         }
+        // A tool can raise a per-call note by returning this reserved key. It
+        // rides the envelope rather than the result body because clients render
+        // image results as image blocks plus a "Saved:" line and drop every
+        // other field — a note inside `data` would never be seen.
+        const toolNote = takeToolNote(data);
+        if (toolNote) notes.push(toolNote);
         const notePayload = notes.length > 0 ? { note: notes.join("\n\n") } : {};
         if (wantsStream) {
           writeLine({ event: "result", data, ...notePayload });
