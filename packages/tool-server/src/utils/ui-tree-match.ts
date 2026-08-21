@@ -774,7 +774,7 @@ export function matchNode(node: DescribeNode, selector: Selector): boolean {
 const WITHIN_EPS = 0.005;
 
 /** Is `inner` contained in `outer`, within {@link WITHIN_EPS} per edge? */
-function frameWithin(inner: DescribeFrame, outer: DescribeFrame): boolean {
+export function frameWithin(inner: DescribeFrame, outer: DescribeFrame): boolean {
   return (
     inner.x >= outer.x - WITHIN_EPS &&
     inner.y >= outer.y - WITHIN_EPS &&
@@ -1324,7 +1324,7 @@ export function selectorToFrame(root: DescribeNode, selector: Selector): Describ
  * then text; falls back to a specific (non-generic) role. Returns null when the
  * node has nothing stable to match on — the caller then keeps coordinates.
  */
-const GENERIC_ROLES = new Set([
+export const GENERIC_ROLES = new Set([
   "axgroup",
   "group",
   "view",
@@ -1336,8 +1336,27 @@ const GENERIC_ROLES = new Set([
   "android.view.viewgroup",
 ]);
 
+/**
+ * A POSITIONAL id — `profilePager-selector-2`, `tab-selector-0`. The number is
+ * the element's index among its siblings, so the id names a slot rather than a
+ * thing: it survives no re-order and silently addresses a different control
+ * once one is inserted before it. Recording one only ever produced a fragile
+ * step that looked strict — one an author has to notice and replace by hand.
+ *
+ * It matters most where the recorder is least reliable. The flow tree is
+ * flattened and carries no z-order, so a tap inside a full-screen modal can
+ * resolve against a view BEHIND it; observed on Bluesky's edit-profile sheet,
+ * where a tap on the display-name field derived the profile pager's "Media"
+ * tab. An ambiguous or oversized background match is already caught and warned
+ * about, but a positional id on a background node passes every one of those
+ * checks and records silently. Refusing it turns that case back into the
+ * kept-coordinate warning the author is told to act on.
+ */
+const POSITIONAL_ID = /-selector-\d+$/i;
+
 export function deriveSelector(node: DescribeNode): Selector | null {
-  if (node.identifier && node.identifier.trim()) return { identifier: node.identifier };
+  const id = node.identifier?.trim();
+  if (id && !POSITIONAL_ID.test(id)) return { identifier: node.identifier! };
   // Derive text from label OR value individually — never nodeText's joined
   // form: matchNode compares a text selector against label and value
   // separately, so a joined "Volume 50%" would match nothing, not even the
