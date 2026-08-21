@@ -10,14 +10,14 @@ import { adbServerShell } from "./adb-server";
  * are 180° inverted from the physical result, so nothing here may be derived
  * from what the words mean.
  */
-export type OrientationName =
+type OrientationName =
   | "Portrait"
   | "LandscapeLeft"
   | "LandscapeRight"
   | "PortraitUpsideDown";
 
 /** Android's surface rotation, as reported by the platform (`Surface.ROTATION_*`). */
-export type SurfaceRotation = 0 | 1 | 2 | 3;
+type SurfaceRotation = 0 | 1 | 2 | 3;
 
 /**
  * Surface rotation → the name that makes simulator-server hand back an upright
