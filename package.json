@@ -32,10 +32,10 @@
     "eslint": "^10.5.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.7.0",
-    "knip": "^5.88.1",
+    "knip": "^6.32.2",
     "prettier": "^3.8.5",
     "semver": "^7.8.5",
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.2",
     "typescript-eslint": "^8.62.0"
   }
 }
