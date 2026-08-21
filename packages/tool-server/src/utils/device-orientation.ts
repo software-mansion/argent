@@ -10,11 +10,7 @@ import { adbServerShell } from "./adb-server";
  * are 180° inverted from the physical result, so nothing here may be derived
  * from what the words mean.
  */
-type OrientationName =
-  | "Portrait"
-  | "LandscapeLeft"
-  | "LandscapeRight"
-  | "PortraitUpsideDown";
+type OrientationName = "Portrait" | "LandscapeLeft" | "LandscapeRight" | "PortraitUpsideDown";
 
 /** Android's surface rotation, as reported by the platform (`Surface.ROTATION_*`). */
 type SurfaceRotation = 0 | 1 | 2 | 3;
