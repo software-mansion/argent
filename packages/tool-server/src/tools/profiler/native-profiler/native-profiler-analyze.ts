@@ -19,8 +19,13 @@ const zodSchema = z.object({
   ),
 });
 
+// A trace can never exist for physical iOS: the capture half
+// (native-profiler-start) has no hardware path and rejects at the gate. Reject
+// here too, so a physical UDID gets that reason rather than the "No exported
+// trace data found. Call native-profiler-stop first." dead-end it would
+// otherwise always hit — pointing at a tool that rejects it as well.
 const capability = {
-  apple: { simulator: true, device: true },
+  apple: { simulator: true, device: false },
   android: { emulator: true, device: true, unknown: true },
 } as const;
 

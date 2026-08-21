@@ -66,7 +66,12 @@ export const nativeUserInteractableViewAtPointTool: ToolDefinition<Params, Resul
     failedMsg: ({ params, failureSignal }) =>
       `Failed to find interactive view at (${params.x}, ${params.y}): ${failureSignal.error_code}`,
   },
-  capability: { apple: { simulator: true, device: true }, appleRemote: { simulator: true } },
+  // `apple.device: false`: native-devtools injects its dylib with DYLD via
+  // `simctl spawn`, which is simulator-only — a signed app on a physical iPhone
+  // cannot load it, so the blueprint refuses `kind: "device"` outright. Gate here
+  // too so a physical udid is rejected by the capability check with a clear
+  // message instead of reaching the blueprint's throw.
+  capability: { apple: { simulator: true, device: false }, appleRemote: { simulator: true } },
   description: `Inspect the deepest UIView at a raw native window point that would actually receive touch input.
 
 Unlike native-view-at-point, this respects userInteractionEnabled and is closer to

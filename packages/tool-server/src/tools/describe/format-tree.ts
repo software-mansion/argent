@@ -188,13 +188,25 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
       ? "nested"
       : "flat";
   const isVega = opts.source === "vega-automation";
+  // A physical iPhone's audit payload carries no geometry at all, so every frame
+  // in this tree is synthesised from list position. Saying "tap the centre of
+  // the frame" here would contradict the tool's own hint and send taps to
+  // positions no element occupies.
+  const isApproximateGeometry = opts.source === "coredevice-ax";
   const header: string[] = [];
   header.push(`Source: ${opts.source}`);
   header.push(`Mode: ${mode}`);
   header.push(
     "Coordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels."
   );
-  if (isVega) {
+  if (isApproximateGeometry) {
+    header.push(
+      "FRAMES ARE PLACEHOLDERS, not measurements: this backend reports no geometry, so each frame " +
+        "is a full-width row synthesised from the element's position in the list. Use them only to " +
+        "read order — never as tap coordinates. Locate anything you intend to tap with `screenshot` " +
+        "first, then pass those coordinates to gesture-tap / gesture-swipe."
+    );
+  } else if (isVega) {
     header.push(
       "Vega is remote-driven, not touch — there is no tap. Use the frames as spatial hints to plan " +
         "D-pad moves with the `tv-remote` tool: compare the target's frame to the cursor's — the " +

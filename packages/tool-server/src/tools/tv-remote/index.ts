@@ -66,7 +66,11 @@ const zodSchema = z.object({
 type Params = z.infer<typeof zodSchema>;
 
 const capability: ToolCapability = {
-  apple: { simulator: true, device: true },
+  // Apple TV ships only as a simulator target here; the one physical Apple
+  // device argent drives is an iPhone, which is touch- not focus-driven. Without
+  // `device: false` a physical-iPhone udid passes the gate and is only rejected
+  // deep inside the TvControl factory, as a 500.
+  apple: { simulator: true, device: false },
   android: { emulator: true, device: true, unknown: true },
   vega: { vvd: true },
 };

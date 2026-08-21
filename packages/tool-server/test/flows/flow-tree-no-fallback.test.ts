@@ -12,7 +12,8 @@ import type { DescribeTreeData } from "../../src/tools/describe/contract";
 const describeIos = vi.fn(async (): Promise<DescribeTreeData> => {
   throw new Error("describeIos must not be reached by a flow tree fetch");
 });
-vi.mock("../../src/tools/describe/platforms/ios", () => ({
+vi.mock("../../src/tools/describe/platforms/ios", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
   describeIos: (...args: unknown[]) => describeIos(...(args as [])),
 }));
 

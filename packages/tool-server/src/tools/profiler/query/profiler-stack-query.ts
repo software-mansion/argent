@@ -446,9 +446,12 @@ Fails if native-profiler-analyze has not been run or no parsed trace data is in 
   zodSchema,
   // iOS: reads xctrace output. Android: queries the Perfetto .pftrace via the
   // in-process trace-processor engine (see executeAndroid). Chromium has no
-  // native trace capture.
+  // native trace capture. A physical iPhone has no capture half either
+  // (`native-profiler-start` is simulator-only), so a trace can never exist for
+  // one — reject at the gate rather than at the "run native-profiler-stop →
+  // native-profiler-analyze first" dead-end, since both of those reject it too.
   capability: {
-    apple: { simulator: true, device: true },
+    apple: { simulator: true, device: false },
     android: { emulator: true, device: true, unknown: true },
   },
   services: (params) => ({

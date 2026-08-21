@@ -45,9 +45,11 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Optional app bundle ID. Used as a target hint on iOS when the AX-service returns no elements " +
-        "and the describe tool falls back to native-devtools inspection. " +
-        "If omitted, the fallback auto-detects the frontmost connected app. Ignored on Android / Chromium."
+      "Optional app bundle ID. Used as a target hint on an iOS simulator when the AX-service returns " +
+        "no elements and the describe tool falls back to native-devtools inspection. " +
+        "If omitted, the fallback auto-detects the frontmost connected app. Ignored on a physical " +
+        "iPhone (whose read is the CoreDevice audit of whatever is frontmost, with no per-app " +
+        "scoping) and on Android / Chromium."
     ),
 });
 
@@ -155,8 +157,8 @@ export function createDescribeTool(registry: Registry): ToolDefinition<Params, D
       failedMsg: ({ failureSignal }) => `Failed to read screen: ${failureSignal.error_code}`,
     },
     description: `Get the accessibility / DOM element tree for the current screen.
-On iOS, uses the AXRuntime accessibility service to inspect whatever is currently visible — including
-system dialogs, permission prompts, and any foreground app content. On Android, runs \`uiautomator dump\`.
+On an iOS simulator, uses the AXRuntime accessibility service to inspect whatever is currently visible —
+including system dialogs, permission prompts, and any foreground app content. On Android, runs \`uiautomator dump\`.
 On Chromium, walks the renderer's DOM via Chrome DevTools Protocol — every visible element with its ARIA
 role, accessible name, and bounding rect (normalized to 0–1).
 On Vega (Fire TV), reads the on-device automation toolkit (\`getPageSource\`); each element carries
@@ -175,6 +177,12 @@ gesture-tap / gesture-swipe / gesture-pinch.
 To tap an element use the centre of its frame: \`tap_x = frame.x + frame.width / 2\`,
 \`tap_y = frame.y + frame.height / 2\`. The same formula appears in the response header so it
 can be applied to a line in isolation.
+
+On a PHYSICAL iPhone this reads the device's accessibility tree over CoreDevice, which reports no
+geometry: the labels, values and roles are real, but every frame is a placeholder synthesised from
+the element's position in the list, and the list order rotates between calls. Use it to learn what is
+on screen, and \`screenshot\` to decide where to tap. Element order there is also not a change signal —
+two describes of an unchanged screen differ.
 
 For app-scoped inspection with full UIKit properties (accessibilityIdentifier, viewClassName),
 use native-describe-screen with an explicit bundleId instead (iOS only).

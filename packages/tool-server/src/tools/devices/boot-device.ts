@@ -36,7 +36,8 @@ import { linuxBootDiagnostics } from "../../utils/linux-preflight";
 import { listIosSimulators } from "../../utils/ios-devices";
 import { deviceSetForUdid, simctlPrefix } from "../../utils/ios-device-sets";
 import { androidHeadlessFromEnv, iosHeadlessFromEnv } from "../../utils/no-window-env";
-import { classifyDevice, stripRemotePrefix } from "../../utils/device-info";
+import { isPhysicalIosUdid, classifyDevice, stripRemotePrefix } from "../../utils/device-info";
+import { simulatorServerRef } from "../../blueprints/simulator-server";
 import {
   simctlBoot as simRemoteBoot,
   simctlBootstatus as simRemoteBootstatus,
@@ -63,7 +64,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "iOS: simulator UDID to boot (from `list-devices`). Provide exactly one of `udid`, `avdName`, `vvdImage`, or `electronAppPath`."
+      "iOS: simulator UDID to boot, or a connected physical iPhone's UDID to prepare its session (from `list-devices`). Provide exactly one of `udid`, `avdName`, `vvdImage`, or `electronAppPath`."
     ),
   avdName: z
     .string()
@@ -463,6 +464,36 @@ async function bootIos(
       }
     );
   }
+
+  // A physical iPhone is already powered on — there is nothing to "boot". It is
+  // driven through the radon simulator-server's `ios_device` controller, which
+  // brings up its own USB CoreDevice tunnel (root-free) on the first command.
+  // Treat boot as the explicit "prepare" step: resolve (spawn) the sim-server
+  // now, so the opt-in flag gate and a missing/unauthorized device surface here
+  // rather than on the first screenshot/tap. The registry caches the instance,
+  // so the subsequent tool calls reuse this same session.
+  if (isPhysicalIosUdid(udid)) {
+    const ref = simulatorServerRef({ id: udid, platform: "ios", kind: "device" });
+    // `force` means "recycle the session" here, the same way it means "reboot"
+    // for a simulator. Without the dispose, `resolveService` hands back the
+    // cached instance and the call reports `booted: true` having done nothing —
+    // leaving a session whose CoreDevice tunnel died (device unplugged and
+    // replugged, phone rebooted) with no in-band recovery. Disposal is
+    // best-effort: ServiceNotFoundError just means nothing was cached.
+    if (force) {
+      await registry.disposeService(ref.urn).catch((err: unknown) => {
+        if (err instanceof ServiceNotFoundError) return;
+        process.stderr.write(
+          `[boot-device ${udid.slice(0, 8)}] failed to recycle the CoreDevice session (${
+            err instanceof Error ? err.message : String(err)
+          }); stop-simulator-server then retry if interactions still fail.\n`
+        );
+      });
+    }
+    await registry.resolveService(ref.urn, ref.options);
+    return { platform: "ios", udid, booted: true };
+  }
+
   await ensureDep("xcrun");
 
   const simMatch = await listIosSimulators()
@@ -1417,10 +1448,11 @@ export function createBootDeviceTool(
         `Failed to start ${bootTarget(params)}: ${failureSignal.error_code}`,
     },
     description: `Start an iOS simulator, launch an Android emulator, start a Vega (Fire TV) Virtual Device, or spawn an Electron app and wait until it is ready to accept interactions.
-Pick the platform by which argument you pass: 'udid' for an iOS simulator from list-devices, 'avdName' for an Android AVD (a serial is assigned automatically), 'vvdImage' for a Vega VVD (the 'vvdImage' of a vega device from list-devices, e.g. 'tv'), or 'electronAppPath' for an Electron app (a CDP remote-debugging port is picked automatically, or pass 'electronPort' to fix one).
+Pick the platform by which argument you pass: 'udid' for an iOS simulator (or a connected physical iPhone) from list-devices, 'avdName' for an Android AVD (a serial is assigned automatically), 'vvdImage' for a Vega VVD (the 'vvdImage' of a vega device from list-devices, e.g. 'tv'), or 'electronAppPath' for an Electron app (a CDP remote-debugging port is picked automatically, or pass 'electronPort' to fix one).
 Use at the start of a session once you have picked a target.
 Returns a tagged payload: { platform: 'ios', udid, booted } or { platform: 'android', serial, avdName, booted } or { platform: 'vega', serial, vvdImage, booted } or { platform: 'chromium', id, port, pid, booted } (an Electron app boots as a Chromium/CDP device).
-Android boots take 2–10 minutes depending on machine and cold/warm state; the tool transparently hot-boots from the AVD's default_boot snapshot when usable and falls back to cold boot otherwise. Vega starts the single SDK-managed VVD via the vega CLI (~10s) and returns once it reports running. If an Android/Electron boot stage fails, the tool terminates the device it spawned so the next retry starts clean.`,
+Android boots take 2–10 minutes depending on machine and cold/warm state; the tool transparently hot-boots from the AVD's default_boot snapshot when usable and falls back to cold boot otherwise. Vega starts the single SDK-managed VVD via the vega CLI (~10s) and returns once it reports running. If an Android/Electron boot stage fails, the tool terminates the device it spawned so the next retry starts clean.
+A physical iPhone is already powered on, so there is nothing to boot: the call prepares its CoreDevice session instead, which is where a device that is locked, untrusted or missing Developer Mode reports the problem rather than on the first tap. Pass force:true to discard that session and build a fresh one.`,
     alwaysLoad: true,
     searchHint:
       "boot start launch simulator emulator avd device session ios android vega vvd firetv cold hot",

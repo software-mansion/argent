@@ -26,7 +26,7 @@ const zodSchema = z.object({
   appPath: z
     .string()
     .describe(
-      "Path to the app bundle. iOS: `.app` directory (e.g. ./build/.../MyApp.app). Android: `.apk` file (e.g. android/app/build/outputs/apk/debug/app-debug.apk). Vega: `.vpkg` file. Relative paths are resolved from the current working directory."
+      "Path to the app bundle. iOS: `.app` directory (e.g. ./build/.../MyApp.app); a physical iPhone needs one built for iOS and signed with a provisioning profile that lists the device. Android: `.apk` file (e.g. android/app/build/outputs/apk/debug/app-debug.apk). Vega: `.vpkg` file. Relative paths are resolved from the current working directory."
     ),
 });
 

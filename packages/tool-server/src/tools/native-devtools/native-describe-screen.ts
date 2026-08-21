@@ -44,7 +44,12 @@ export const nativeDescribeScreenTool: ToolDefinition<Params, Result> = {
     failedMsg: ({ params, failureSignal }) =>
       `Failed to read native screen for ${params.bundleId}: ${failureSignal.error_code}`,
   },
-  capability: { apple: { simulator: true, device: true }, appleRemote: { simulator: true } },
+  // `apple.device: false`: native-devtools injects its dylib with DYLD via
+  // `simctl spawn`, which is simulator-only — a signed app on a physical iPhone
+  // cannot load it, so the blueprint refuses `kind: "device"` outright. Gate here
+  // too so a physical udid is rejected by the capability check with a clear
+  // message instead of reaching the blueprint's throw.
+  capability: { apple: { simulator: true, device: false }, appleRemote: { simulator: true } },
   description: `Read the running app's native accessibility screen description via injected native devtools.
 
 Returns a flat list of accessibility leaf elements with:

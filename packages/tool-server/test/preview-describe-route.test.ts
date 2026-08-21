@@ -9,7 +9,10 @@ import type { Registry } from "@argent/registry";
 // so the test exercises the route's own logic — platform dispatch, the
 // structured-tree passthrough, the no-store header, and the 500 error shape —
 // without any device / adb / ax-service I/O.
-vi.mock("../src/tools/describe/platforms/ios", () => ({ describeIos: vi.fn() }));
+vi.mock("../src/tools/describe/platforms/ios", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  describeIos: vi.fn(),
+}));
 vi.mock("../src/tools/describe/platforms/android", () => ({ describeAndroid: vi.fn() }));
 
 import { createPreviewRouter } from "../src/preview";

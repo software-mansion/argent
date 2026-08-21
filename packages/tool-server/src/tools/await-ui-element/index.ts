@@ -8,14 +8,14 @@ import type {
   ToolDefinition,
 } from "@argent/registry";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
-import { resolveDevice } from "../../utils/device-info";
+import { isPhysicalIos, resolveDevice } from "../../utils/device-info";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isAndroidTv } from "../../utils/adb";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
 import { pollDescribeTree } from "../../utils/poll-describe-tree";
 import type { DescribeNode, DescribeTreeData } from "../describe/contract";
-import { describeIos, iosRequires } from "../describe/platforms/ios";
+import { describeIos, iosRequires, PHYSICAL_IOS_AX_LIMIT } from "../describe/platforms/ios";
 import { describeAndroid, androidRequires } from "../describe/platforms/android";
 import { describeChromium } from "../describe/platforms/chromium";
 import { describeVega, vegaRequires } from "../describe/platforms/vega";
@@ -50,7 +50,44 @@ export function isUnmetUiWaitResult(tool: string, result: unknown): boolean {
 }
 
 const DEFAULT_TIMEOUT_MS = 5000;
+// A physical iPhone's accessibility read is a round trip over the CoreDevice
+// tunnel and costs ~2s, against the few milliseconds a simulator or emulator
+// needs, so the 5s default fits barely two polls and times out on an element
+// that simply took a moment to appear. Same measurement and same remedy as
+// `await-screen-idle`'s device default. An explicit `timeoutMs` still wins.
+const DEFAULT_DEVICE_TIMEOUT_MS = 15000;
 const DEFAULT_POLL_INTERVAL_MS = 400;
+
+// What the three frame- and order-sensitive conditions actually mean on a
+// physical iPhone. The CoreDevice read carries no geometry (every frame is
+// synthesised from list position, so nothing is ever zero-area) and starts from
+// the device's VoiceOver cursor (so consecutive reads return the same elements
+// rotated by one). `exists` is unaffected — it asks only whether the selector
+// matched. The README says the same; this puts it in the answer, where the
+// caller reading the verdict will see it.
+const ROTATING_READ_NOTE =
+  "read from a physical iPhone over CoreDevice, which reports no element geometry and " +
+  "returns the elements rotated by one on each call: `visible`/`hidden` decide from " +
+  "synthesised frames (never zero-area, so they answer the same as `exists`), and `text` " +
+  "may inspect a different match than the previous poll did. Use `exists` for a reliable " +
+  "wait, and `screenshot` to confirm what is on screen.";
+
+/** Conditions whose meaning the rotating, geometry-free read changes. */
+const ROTATION_SENSITIVE = new Set(["visible", "hidden", "text"]);
+
+// A CoreDevice read returns at most PHYSICAL_IOS_AX_LIMIT elements, starting one
+// element further along the VoiceOver walk each time. `hidden` is the one
+// condition a *zero-match* read satisfies, so on a full read it would report the
+// element gone when it is merely outside the current window — success for
+// something that did not happen, and the worst answer this tool can give, since
+// the caller acts on the element being gone. `describeIos` says as much on its
+// own truncated reads ("a 'not found' here is not proof of absence"). The
+// positive conditions are unaffected: a truncated read can only delay a match,
+// never invent one.
+const TRUNCATED_HIDDEN_NOTE =
+  `the screen has at least ${PHYSICAL_IOS_AX_LIMIT} accessibility elements, which is the most one ` +
+  `CoreDevice read returns, so an element outside the current window reads as absent; ` +
+  `"not found" is not proof of absence here. Use screenshot to check whether it is gone.`;
 
 const zodSchema = z
   .object({
@@ -94,7 +131,7 @@ const zodSchema = z
       .max(120_000)
       .optional()
       .describe(
-        `Max time to wait for the condition before giving up (default ${DEFAULT_TIMEOUT_MS}).`
+        `Max time to wait for the condition before giving up (default ${DEFAULT_TIMEOUT_MS}, or ${DEFAULT_DEVICE_TIMEOUT_MS} on a physical iPhone, whose reads are far slower).`
       ),
     pollIntervalMs: z
       .number()
@@ -273,8 +310,14 @@ The selector is { text?, identifier?, role? }; every provided field must match. 
 case-insensitive substrings of the element's label/value and role; identifier matches exactly (case-insensitive),
 also accepting the unqualified Android resource-id name ('submit' matches 'com.example.app:id/submit').
 It polls the same accessibility / DOM tree as \`describe\`
-(iOS AXRuntime, Android uiautomator, Chromium CDP, Vega automation toolkit) every pollIntervalMs
-(default ${DEFAULT_POLL_INTERVAL_MS}ms) until timeoutMs (default ${DEFAULT_TIMEOUT_MS}ms).
+(iOS simulator AXRuntime, physical iPhone CoreDevice audit, Android uiautomator, Chromium CDP, Vega
+automation toolkit) every pollIntervalMs (default ${DEFAULT_POLL_INTERVAL_MS}ms) until timeoutMs
+(default ${DEFAULT_TIMEOUT_MS}ms, or ${DEFAULT_DEVICE_TIMEOUT_MS}ms on a physical iPhone, whose reads are far slower).
+
+On a physical iPhone the tree carries no element geometry and comes back rotated by one on each read,
+so only \`exists\` means there what it means elsewhere: \`visible\`/\`hidden\` answer from synthesised
+frames that are never zero-area, and \`text\` may inspect a different match than the previous poll. The
+result \`note\` says so on every such wait.
 
 Returns { success: boolean, elapsed: number } — success=false means the condition never held before the
 timeout (a \`note\` then explains what was seen). Use this after a tap/navigation to wait for the next screen,
@@ -317,7 +360,24 @@ or before tapping an element that appears asynchronously.`,
         note: "wait was cancelled before the condition was met",
       });
 
-      const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      const rotatingReadDevice = isPhysicalIos(device);
+      const rotatingRead = rotatingReadDevice && ROTATION_SENSITIVE.has(params.condition);
+      /**
+       * Append the physical-iPhone caveat to whatever note the verdict already
+       * carries. On the timeout path that note has folded in the last read's
+       * `describe` hint, which overlaps this on the rotation — kept anyway,
+       * because the two answer different questions (what the read is, versus
+       * what the condition means on it) and the condition half is the part a
+       * `visible` / `text` verdict is read against.
+       */
+      const annotate = (r: WaitResult): WaitResult =>
+        rotatingRead
+          ? { ...r, note: r.note ? `${r.note} (${ROTATING_READ_NOTE})` : ROTATING_READ_NOTE }
+          : r;
+
+      const timeoutMs =
+        params.timeoutMs ??
+        (isPhysicalIos(device) ? DEFAULT_DEVICE_TIMEOUT_MS : DEFAULT_TIMEOUT_MS);
       const pollIntervalMs = params.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
       const selector = params.selector;
 
@@ -325,6 +385,9 @@ or before tapping an element that appears asynchronously.`,
       // "the element was there and disappeared" from "the selector never matched
       // at all" — otherwise a typo'd selector is an instant false-positive.
       let everMatched = false;
+      // Whether any read came back at the CoreDevice ceiling — see
+      // TRUNCATED_HIDDEN_NOTE.
+      let sawFullRead = false;
 
       const poll = await pollDescribeTree<WaitResult>({
         fetchTree: () => fetchTree(device, params, services, isTvOs, androidIsTv),
@@ -334,6 +397,13 @@ or before tapping an element that appears asynchronously.`,
         onSample: (data) => {
           const matches = findAll(data.tree, selector);
           if (matches.length > 0) everMatched = true;
+          if (rotatingReadDevice && data.tree.children.length >= PHYSICAL_IOS_AX_LIMIT) {
+            sawFullRead = true;
+            // A no-match on a truncated read is not absence, so it may not
+            // satisfy `hidden`. Keep polling: the window advances, and a later
+            // read may cover the element.
+            if (params.condition === "hidden" && matches.length === 0) return { done: false };
+          }
           // Compute `blind` after `everMatched` so an empty tree that follows an
           // earlier match counts as a transient blank, not a confirmed read.
           const blind = isBlindRead(data, everMatched);
@@ -344,7 +414,7 @@ or before tapping an element that appears asynchronously.`,
                 "condition met immediately — the selector never matched any element, " +
                 "so it may have already been hidden before the wait, or the selector is wrong";
             }
-            return { done: true, result };
+            return { done: true, result: annotate(result) };
           }
           return { done: false };
         },
@@ -353,11 +423,20 @@ or before tapping an element that appears asynchronously.`,
       if (poll.aborted) return cancelled();
       if (poll.result) return poll.result;
 
-      return {
+      const timedOut = timeoutNote(
+        params,
+        poll.lastData?.tree ?? null,
+        poll.lastError,
+        poll.lastData
+      );
+      return annotate({
         success: false,
         elapsed: Date.now() - start,
-        note: timeoutNote(params, poll.lastData?.tree ?? null, poll.lastError, poll.lastData),
-      };
+        note:
+          sawFullRead && params.condition === "hidden"
+            ? `${timedOut} (${TRUNCATED_HIDDEN_NOTE})`
+            : timedOut,
+      });
     },
   };
 }

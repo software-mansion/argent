@@ -131,7 +131,7 @@ export function createScreenshotTool(registry: Registry): ToolDefinition<Params,
       completedMsg: ({ result }) => `Captured screenshot ${result.image.filename}`,
       failedMsg: ({ failureSignal }) => `Failed to capture screenshot: ${failureSignal.error_code}`,
     },
-    description: `Capture a screenshot of the device screen (iOS simulator, Android emulator, Apple TV simulator, Vega, or Chromium app). Returns { image }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
+    description: `Capture a screenshot of the device screen (iOS simulator, physical iPhone, Android emulator, Apple TV simulator, Vega, or Chromium app). Returns { image }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
 Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.
 Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.`,
     alwaysLoad: true,
@@ -163,6 +163,8 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
 
       // Distinguish tvOS from iOS by simulator runtime — shape alone can't.
       // tvOS has no simulator-server backend, so capture via xcrun instead.
+      // A physical iPhone answers false without a probe (see isTvOsSimulator)
+      // and captures over the sim-server `ios_device` subcommand below.
       if (device.platform === "ios" && (await isTvOsSimulator(params.udid))) {
         const pngPath = await tvScreenshot(params.udid, scale, signal);
         const image = await requireArtifacts(ctx).register(pngPath, { mimeType: "image/png" });

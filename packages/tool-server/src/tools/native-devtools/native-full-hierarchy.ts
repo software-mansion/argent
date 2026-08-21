@@ -61,7 +61,12 @@ export const nativeFullHierarchyTool: ToolDefinition<Params, Result> = {
     failedMsg: ({ params, failureSignal }) =>
       `Failed to read native view hierarchy for ${params.bundleId}: ${failureSignal.error_code}`,
   },
-  capability: { apple: { simulator: true, device: true }, appleRemote: { simulator: true } },
+  // `apple.device: false`: native-devtools injects its dylib with DYLD via
+  // `simctl spawn`, which is simulator-only — a signed app on a physical iPhone
+  // cannot load it, so the blueprint refuses `kind: "device"` outright. Gate here
+  // too so a physical udid is rejected by the capability check with a clear
+  // message instead of reaching the blueprint's throw.
+  capability: { apple: { simulator: true, device: false }, appleRemote: { simulator: true } },
   description: `Get the complete UIKit view tree for the running app.
 WARNING: Output can be extremely large (100KB–500KB+) for complex apps, especially those built with SwiftUI. Prefer native-find-views for targeted queries.
 Use skipClasses / skipClassPrefixes to prune SwiftUI internal subtrees and reduce output size. Use the fields param to request only the properties you need.

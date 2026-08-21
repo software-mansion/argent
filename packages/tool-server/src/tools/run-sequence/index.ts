@@ -157,14 +157,16 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
     zodSchema,
     capability,
     // No eagerly-declared service: each step resolves its own services through
-    // `invokeSubTool` below (simulator-server for iOS/Android, CDP for
-    // Chromium), so run-sequence itself needs none. An eager resolver can't be
-    // used here because a tvOS udid shape-classifies as `ios` (there is no
-    // `tvos` platform) — declaring simulator-server for it would spawn a
-    // controller it can't drive and hang on the ready timeout before any tv-*
-    // step could run. The sub-tool invocations still pay only their own
-    // first-step spawn cost, and `ctx` is threaded through so nested steps keep
-    // the outer request's telemetry attribution.
+    // `invokeSubTool` below (simulator-server for iOS simulators, physical
+    // iPhones and Android, CDP for Chromium), so run-sequence itself needs
+    // none. An eager resolver can't be used here because a tvOS udid
+    // shape-classifies as `ios` (there is no `tvos` platform) — declaring
+    // simulator-server for it would spawn a controller it can't drive and hang
+    // on the ready timeout before any tv-* step could run. Keeping it lazy also
+    // means a physical-iOS sequence made only of unsupported steps never brings
+    // up a CoreDevice session just to reject them. The sub-tool invocations
+    // still pay only their own first-step spawn cost, and `ctx` is threaded
+    // through so nested steps keep the outer request's telemetry attribution.
     services: () => ({}),
     async execute(_services, params, ctx?: ToolContext) {
       const { udid, steps } = params;

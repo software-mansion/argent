@@ -9,6 +9,15 @@ import { androidImpl } from "./platforms/android";
 import { iosRemoteImpl } from "./platforms/ios-remote";
 import { chromiumImpl, type OpenUrlChromiumServices } from "./platforms/chromium";
 
+// RFC 3986 scheme grammar: ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) ":".
+// Requiring it rejects the schemeless input every backend would have failed on
+// anyway, and — like launch-app's BUNDLE_ID_PATTERN — stops a value beginning
+// with `-` from reaching a subprocess as a flag. That is not hypothetical: the
+// physical-iOS path passes the url as the last argv element of `xcrun devicectl
+// device process openURL`, and `--help` there exits 0 without opening anything,
+// so the tool would report `opened: true` for a URL it never opened.
+const URL_SCHEME_PATTERN = /^[A-Za-z][A-Za-z0-9+.-]*:/;
+
 const zodSchema = z.object({
   udid: z
     .string()
@@ -16,8 +25,9 @@ const zodSchema = z.object({
     .describe("Target device id from `list-devices` (iOS UDID, Android serial, or Chromium id)."),
   url: z
     .string()
+    .regex(URL_SCHEME_PATTERN, "url must start with a scheme, e.g. https:, tel:, myapp:")
     .describe(
-      "URL or scheme to open (e.g. https://example.com, messages://, tel:555, geo:37.0,-122.0). For Chromium this navigates the renderer."
+      "URL or scheme to open (e.g. https://example.com, messages://, tel:555, geo:37.0,-122.0). Must include a scheme. For Chromium this navigates the renderer."
     ),
 });
 

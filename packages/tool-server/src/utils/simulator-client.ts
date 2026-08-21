@@ -1,4 +1,5 @@
 import WebSocket from "ws";
+import { z } from "zod";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { SimulatorServerApi } from "../blueprints/simulator-server";
 import { toSimulatorNetworkError } from "./format-error";
@@ -196,6 +197,131 @@ async function simulatorPost<T>(
   return { res, body };
 }
 
+export interface CoreDeviceAxElement {
+  /** VoiceOver caption: label + value + traits, e.g. "Wi-Fi, 1, Button, Toggle". */
+  caption: string;
+  /** Per-element identifier (hex) — stable within a single snapshot. */
+  id: string;
+  /**
+   * On-screen rect "{{x, y}, {w, h}}" in points. Reserved by the wire contract
+   * but never sent today — the inspector the read goes through publishes no
+   * frame attribute, so the adapter interpolates every frame. See the adapter
+   * docs.
+   */
+  rect?: string;
+}
+
+export interface CoreDeviceAxTree {
+  elements: CoreDeviceAxElement[];
+  /** Screen size in points, for normalizing rects to 0..1. Never sent today — see `rect`. */
+  screen?: { w?: number; h?: number };
+}
+
+/**
+ * Shape of the axAudit payload, checked before the adapter touches it.
+ *
+ * The adapter indexes into `elements` and calls string methods on `caption`,
+ * so a wire response that disagrees with the contract crashes it with a bare
+ * `TypeError` — a 500 with no `error_code`, which reads as an argent bug rather
+ * than a device talking out of contract. `?? []` guards only null/undefined,
+ * not a wrong type. `describe`'s other adapter validates its raw payload the
+ * same way (`parseNativeDescribeScreenResult`); passthrough so a sim-server
+ * that adds fields keeps working.
+ */
+const coreDeviceAxTreeSchema = z
+  .object({
+    elements: z
+      .array(
+        z
+          .object({
+            caption: z.string().optional(),
+            id: z.string().optional(),
+            rect: z.string().optional(),
+          })
+          .passthrough()
+      )
+      .optional(),
+    // `z.number()` already rejects NaN and both infinities, so a screen
+    // dimension that would divide every normalized frame into 0 or NaN is
+    // caught here without a `.finite()` refinement on top.
+    screen: z
+      .object({ w: z.number().optional(), h: z.number().optional() })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough();
+
+/**
+ * Read a physical iPhone's on-screen accessibility tree (`describe`) via the
+ * simulator-server's CoreDevice axAudit endpoint. The response shape matches the
+ * describe adapter's input: elements in reading order, and geometry if a future
+ * sim-server ever reports any.
+ */
+export async function httpAxTree(
+  api: SimulatorServerApi,
+  limit?: number,
+  signal?: AbortSignal
+): Promise<CoreDeviceAxTree> {
+  const reqBody: Record<string, unknown> = {};
+  if (limit !== undefined) reqBody.limit = limit;
+
+  const { res, body } = await simulatorPost<CoreDeviceAxTree & { error?: string }>(
+    "Describe",
+    api,
+    "/api/ax-tree",
+    reqBody,
+    signal
+  );
+
+  // `res.json()` yields whatever the server sent, and a bare `null` is a valid
+  // JSON document — reading `.error` off it is itself the bare TypeError the
+  // schema below exists to prevent, and it fires on the error statuses where a
+  // server that cannot answer is likeliest to send something minimal. Narrow to
+  // an object first; a non-object body carries no in-band error and falls
+  // through to the shape check, which names it.
+  const serverError =
+    typeof body === "object" && body !== null ? (body as { error?: string }).error : undefined;
+
+  if (!res.ok || serverError) {
+    throw new FailureError(
+      `describe failed: ${serverError ?? `HTTP ${res.status}`}. ` +
+        `Ensure the device is awake and the simulator-server is running.`,
+      {
+        error_code: FAILURE_CODES.SIMULATOR_HTTP_ERROR_RESPONSE,
+        failure_stage: "simulator_axtree_http_response",
+        failure_area: "tool_server",
+        error_kind: "network",
+        network_failure: "invalid_response",
+      }
+    );
+  }
+
+  const parsed = coreDeviceAxTreeSchema.safeParse(body);
+  if (!parsed.success) {
+    throw new FailureError(
+      `describe failed: the simulator-server returned an accessibility tree that does not match ` +
+        `the expected shape (${parsed.error.issues[0]?.path.join(".") || "root"}: ${
+          parsed.error.issues[0]?.message ?? "invalid"
+        }). This usually means the bundled simulator-server is a different version than this argent.`,
+      {
+        error_code: FAILURE_CODES.SIMULATOR_HTTP_ERROR_RESPONSE,
+        failure_stage: "simulator_axtree_http_response",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+
+  return {
+    elements: (parsed.data.elements ?? []).map((e) => ({
+      caption: e.caption ?? "",
+      id: e.id ?? "",
+      ...(e.rect !== undefined ? { rect: e.rect } : {}),
+    })),
+    screen: parsed.data.screen,
+  };
+}
+
 export function getScreenshotScale(): number {
   const v = process.env.ARGENT_SCREENSHOT_SCALE;
   if (v) {
@@ -238,8 +364,16 @@ export async function httpScreenshot(
       error?: string;
     }>("Screenshot", api, "/api/screenshot", body, signal);
 
+    // `res.json()` yields whatever the server sent, and a bare `null` is a valid
+    // JSON document — reading a field off it is an unclassified TypeError rather
+    // than the capture failure it stands for. Narrow once here; a non-object
+    // body then carries no url/path and no in-band error, so it lands on the
+    // "missing url or path" branch at the end, which is what it is.
+    const shot: { url?: string; path?: string; error?: string } =
+      typeof resBody === "object" && resBody !== null ? resBody : {};
+
     if (!res.ok) {
-      const serverMsg = resBody.error ?? `HTTP ${res.status}`;
+      const serverMsg = shot.error ?? `HTTP ${res.status}`;
       throw new FailureError(
         `Screenshot failed: ${serverMsg}. ` +
           `Ensure the simulator is booted and the simulator-server is running.`,
@@ -252,16 +386,16 @@ export async function httpScreenshot(
         }
       );
     }
-    if (resBody.url != null && resBody.path != null) {
-      return { url: resBody.url, path: resBody.path };
+    if (shot.url != null && shot.path != null) {
+      return { url: shot.url, path: shot.path };
     }
 
     // HTTP 200 with no url/path. A "no image to export" means the frame stream
     // hasn't produced its first frame yet; poll until it does (or the deadline
     // passes) rather than failing a freshly-spawned or backgrounded simulator.
     if (
-      resBody.error &&
-      NO_IMAGE_ERROR.test(resBody.error) &&
+      shot.error &&
+      NO_IMAGE_ERROR.test(shot.error) &&
       !signal?.aborted &&
       Date.now() + FIRST_FRAME_POLL_MS < deadline
     ) {
@@ -275,11 +409,11 @@ export async function httpScreenshot(
     // Y"). Surface that message instead of the misleading generic hint so the
     // real cause is visible rather than sending callers to restart a perfectly
     // healthy server.
-    if (resBody.error) {
+    if (shot.error) {
       // HTTP 200 with an in-band `error` field: the server was reachable and
       // answered, so this is a server-reported capture failure, not a transport
       // problem — classify it as such rather than as a network error.
-      throw new FailureError(`Screenshot failed: ${resBody.error}.`, {
+      throw new FailureError(`Screenshot failed: ${shot.error}.`, {
         error_code: FAILURE_CODES.SIMULATOR_SCREENSHOT_FAILED,
         failure_stage: "simulator_screenshot_error_field",
         failure_area: "tool_server",

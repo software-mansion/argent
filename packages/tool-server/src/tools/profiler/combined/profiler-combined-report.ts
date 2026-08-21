@@ -63,8 +63,11 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
   // Combines React (Hermes) + native traces. iOS reads xctrace output;
   // Android re-queries the Perfetto .pftrace via loadAndroidCombinedData. The
   // capture half exists on neither platform's Chromium.
+  // `apple.device: false` for the same reason as native-profiler-* : a physical
+  // iPhone has no native capture path, so the native half of the report can
+  // never exist for one.
   capability: {
-    apple: { simulator: true, device: true },
+    apple: { simulator: true, device: false },
     android: { emulator: true, device: true, unknown: true },
   },
   services: (params) => ({

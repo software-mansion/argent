@@ -123,3 +123,24 @@ describe("cacheSimulatorRuntimeKind — warm from an out-of-band verdict", () =>
     expect(getCachedSimulatorRuntimeKind(TV_UDID)).toBeUndefined();
   });
 });
+
+describe("getSimulatorRuntimeKind — physical iPhones never reach simctl", () => {
+  const PHYSICAL_UDID = "00008120-000E6D0C0ABBA01E";
+
+  it("answers undefined for a hardware UDID without probing", async () => {
+    mockSimctl();
+    // Not a cost-only shortcut: the memo stores successful lookups only, so a
+    // hardware UDID — which `simctl list devices` can never contain — would
+    // re-spawn the probe on every describe / screenshot / await-* call for the
+    // life of the server, and still end at undefined. Twin of the Android
+    // form-factor probe, which likewise skips a non-emulator serial.
+    await expect(getSimulatorRuntimeKind(PHYSICAL_UDID)).resolves.toBeUndefined();
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("still probes for a simulator UUID, so the short-circuit is UDID-shaped", async () => {
+    mockSimctl();
+    await expect(getSimulatorRuntimeKind(TV_UDID)).resolves.toBe("tv");
+    expect(execFileMock).toHaveBeenCalled();
+  });
+});

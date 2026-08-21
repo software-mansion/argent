@@ -49,8 +49,12 @@ const zodSchema = z.object({
     ),
 });
 
+// `apple.device: false`: the iOS capture path shells `simctl spawn` and
+// `simctl listapps` to resolve the target process and bundle, both
+// simulator-only, so there is no way to start a native trace on a physical
+// iPhone. Its analyze/stop/query siblings gate for the same reason.
 const capability = {
-  apple: { simulator: true, device: true },
+  apple: { simulator: true, device: false },
   android: { emulator: true, device: true, unknown: true },
 } as const;
 

@@ -50,7 +50,12 @@ export const nativeFindViewsTool: ToolDefinition<Params, Result> = {
     failedMsg: ({ params, failureSignal }) =>
       `Failed to search native views in ${params.bundleId}: ${failureSignal.error_code}`,
   },
-  capability: { apple: { simulator: true, device: true }, appleRemote: { simulator: true } },
+  // `apple.device: false`: native-devtools injects its dylib with DYLD via
+  // `simctl spawn`, which is simulator-only — a signed app on a physical iPhone
+  // cannot load it, so the blueprint refuses `kind: "device"` outright. Gate here
+  // too so a physical udid is rejected by the capability check with a clear
+  // message instead of reaching the blueprint's throw.
+  capability: { apple: { simulator: true, device: false }, appleRemote: { simulator: true } },
   description: `Search for specific UIViews in the running app by class name, accessibility identifier, label, tag, or React Native nativeID.
 Use when you need to locate a specific view by its properties without dumping the entire hierarchy.
 Returns { status: "ok", matches } with matching views including their frames, properties, optional ancestors, and optional children. Much more targeted than native-full-hierarchy.

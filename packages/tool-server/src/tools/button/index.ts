@@ -1,11 +1,23 @@
 import { z } from "zod";
 import type { Platform, ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
-import { resolveDevice } from "../../utils/device-info";
+import { resolveDevice, isPhysicalIos } from "../../utils/device-info";
 import { UnsupportedOperationError } from "../../utils/capability";
 import { sendCommand } from "../../utils/simulator-client";
 import { ANDROID_BUTTON_KEYCODES, injectAndroidKeycode } from "../../utils/android-input";
 import { ensureDep } from "../../utils/check-deps";
+
+// Hardware buttons a physical iPhone can be driven for over CoreDevice (the
+// sim-server `ios_device` controller sends Consumer-page HID usages). appSwitch
+// (a SpringBoard gesture) and the iPhone 15 Pro action button have no HID
+// equivalent, so they are rejected here with a clear error rather than sent and
+// silently dropped on the device.
+const PHYSICAL_IOS_BUTTONS: ReadonlySet<Params["button"]> = new Set([
+  "home",
+  "power",
+  "volumeUp",
+  "volumeDown",
+]);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -64,6 +76,7 @@ export const buttonTool: ToolDefinition<Params, Result> = {
 Supported buttons depend on the platform: home, back, power, volumeUp, volumeDown, appSwitch, actionButton — buttons not present on the target platform (e.g. 'back' on iOS, 'actionButton' on Android) are rejected with a clear error.
 Use when you need to trigger hardware button events.
 Returns { pressed: buttonName }.
+On a physical iPhone, only home, power, volumeUp and volumeDown are available (appSwitch and actionButton have no hardware-HID equivalent).
 Fails if the device backend is not reachable — the simulator-server for iOS, or \`adb\` for Android (Android presses are injected with \`adb shell input keyevent\`).`,
   zodSchema,
   capability,
@@ -75,6 +88,11 @@ Fails if the device backend is not reachable — the simulator-server for iOS, o
   // actually consumes it (mirrors the sibling `keyboard` tool's lazy services).
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);
+    if (isPhysicalIos(device) && !PHYSICAL_IOS_BUTTONS.has(params.button)) {
+      // appSwitch/actionButton have no physical-iOS HID equivalent and are
+      // rejected by execute() below — don't spawn a sim-server just to reject.
+      return {};
+    }
     return device.platform === "android" ? {} : { simulatorServer: simulatorServerRef(device) };
   },
   async execute(services, params) {
@@ -84,6 +102,13 @@ Fails if the device backend is not reachable — the simulator-server for iOS, o
         "button",
         device,
         `button '${params.button}' is not available on ${device.platform}`
+      );
+    }
+    if (isPhysicalIos(device) && !PHYSICAL_IOS_BUTTONS.has(params.button)) {
+      throw new UnsupportedOperationError(
+        "button",
+        device,
+        `button '${params.button}' is not available on physical iOS (home, power, volumeUp, volumeDown only)`
       );
     }
     if (device.platform === "android") {

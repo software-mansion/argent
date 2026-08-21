@@ -28,8 +28,15 @@ interface Result {
 // Capability gate (HTTP layer + dispatchByPlatform-style consumers) rejects
 // Android serials with "Tool 'paste' is not supported on android". The handler
 // itself is iOS-only — no platforms/ split needed.
+//
+// `apple.device: false`: this sends the sim-server's `paste` command, and the
+// `ios_device` controller's clipboard-write arm sits behind a cargo feature the
+// shipped simulator-server binary is not built with. `sendCommand` is
+// fire-and-forget — the same property the tvOS guard in the simulator-server
+// blueprint exists for — so without this gate the tool would report
+// `pasted: true` for text that never reached the phone.
 const capability: ToolCapability = {
-  apple: { simulator: true, device: true },
+  apple: { simulator: true, device: false },
   appleRemote: { simulator: true },
 };
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { DeviceInfo } from "@argent/registry";
+import { FAILURE_CODES, getFailureSignal, type DeviceInfo } from "@argent/registry";
 import { axServiceBlueprint } from "../../src/blueprints/ax-service";
 
 // Regression: same crash class as simulator-server. A missing udid would
@@ -18,6 +18,34 @@ describe("ax-service blueprint — input validation", () => {
     await expect(
       axServiceBlueprint.factory({}, "ignored" as unknown as DeviceInfo, { device })
     ).rejects.toThrow(/iOS-only/);
+  });
+
+  it("rejects a physical iPhone before it can spawn simctl inside a hardware udid", async () => {
+    // The capability gate covers the tools; this covers direct resolution of
+    // the service itself, which no tool capability sits in front of. Without
+    // it, `simctl spawn <ECID-udid>` runs and the caller gets a deep 500
+    // instead of a pointer to describe, which reads a physical iPhone's tree
+    // over CoreDevice.
+    const device: DeviceInfo = { id: "00008120-000E6D0C0ABBA01E", platform: "ios", kind: "device" };
+    const err = await axServiceBlueprint
+      .factory({}, "ignored" as unknown as DeviceInfo, { device })
+      .catch((e: unknown) => e);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AX_PHYSICAL_DEVICE_UNSUPPORTED);
+    expect((err as Error).message).toMatch(/use describe/);
+  });
+
+  it("still builds for a simulator, so the physical guard is kind-shaped", async () => {
+    const device: DeviceInfo = {
+      id: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
+      platform: "ios",
+      kind: "simulator",
+    };
+    const err = await axServiceBlueprint
+      .factory({}, "ignored" as unknown as DeviceInfo, { device })
+      .catch((e: unknown) => e);
+    expect(getFailureSignal(err)?.error_code).not.toBe(
+      FAILURE_CODES.AX_PHYSICAL_DEVICE_UNSUPPORTED
+    );
   });
 
   it("rejects when device.id is undefined", async () => {

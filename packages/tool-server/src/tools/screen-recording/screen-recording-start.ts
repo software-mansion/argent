@@ -23,7 +23,9 @@ const POINTER_REQUEST_TIMEOUT_MS = 2_000;
 const zodSchema = z.object({
   udid: z
     .string()
-    .describe("Target device id from `list-devices` (iOS Simulator UDID or Android serial)."),
+    .describe(
+      "Target device id from `list-devices` (iOS UDID, simulator or physical iPhone, or Android serial)."
+    ),
   timeLimitSeconds: z
     .number()
     .int()
@@ -54,8 +56,12 @@ const zodSchema = z.object({
     ),
 });
 
+// Physical iPhones included: recording reads simulator-server's frame stream,
+// and the `ios_device` controller publishes into that same stream (a live HEVC
+// display stream, falling back to a screenshot poll), so the encoder, the
+// trimmer and the touch overlay all work unchanged.
 const capability = {
-  apple: { simulator: true },
+  apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
 } as const;
 
@@ -94,6 +100,9 @@ Fails if a recording is already running on the device, the device is not booted,
 
       // Distinguish tvOS from iOS by runtime — shape alone can't. tvOS has no
       // simulator-server backend, so say so here instead of failing deeper in.
+      // A physical iPhone answers false without a probe (see isTvOsSimulator,
+      // which short-circuits a hardware UDID), so no extra narrowing is needed
+      // here — same as the screenshot and await-screen-idle call sites.
       if (device.platform === "ios" && (await isTvOsSimulator(params.udid))) {
         throw new FailureError(
           `Screen recording is not supported on tvOS simulators (device ${params.udid}).`,

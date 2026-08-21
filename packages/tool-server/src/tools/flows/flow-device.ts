@@ -1,6 +1,7 @@
 import type { DeviceInfo, Registry, ToolContext } from "@argent/registry";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
-import { resolveDevice } from "../../utils/device-info";
+import { isPhysicalIos, resolveDevice } from "../../utils/device-info";
+import { UnsupportedOperationError } from "../../utils/capability";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { blockSteps, type FlowStep, type WhenPlatform } from "./flow-utils";
 
@@ -79,6 +80,13 @@ interface RawDevice {
   udid?: string;
   serial?: string;
   id?: string;
+  /** iOS: "simulator" | "device"; Android: "emulator" | "device". */
+  kind?: string;
+}
+
+/** A `list-devices` entry for a physical iPhone — ready, listed, undriveable by a flow. */
+function isPhysicalIosEntry(d: RawDevice): boolean {
+  return d.platform === "ios" && d.kind === "device";
 }
 
 function deviceEntryId(d: RawDevice): string | undefined {
@@ -90,7 +98,12 @@ function deviceEntryId(d: RawDevice): string | undefined {
 function isBooted(d: RawDevice): boolean {
   switch (d.platform) {
     case "ios":
-      return d.state === "Booted";
+      // "Booted" is a simulator; a connected physical iPhone reports
+      // "connected", the same way `list-devices` ranks both as ready. Readiness
+      // is not driveability — `resolveFlowDevice` drops a physical iPhone from
+      // the candidates below — but reporting one as not-ready would put "no
+      // booted device found" next to a list that plainly contains one.
+      return d.state === "Booted" || d.state === "connected";
     case "android":
       return d.state === "device";
     case "vega":
@@ -117,6 +130,35 @@ function deviceResolutionError(message: string, all: RawDevice[]): FailureError 
 }
 
 /**
+ * Reject a target the flow runner cannot resolve selectors against.
+ *
+ * A physical iPhone is listed and reachable, but `fetchFlowTree` sends every
+ * iOS device to the native view hierarchy, which is served by a dylib injected
+ * with `simctl spawn` — no physical-device equivalent, and `nativeDevtoolsBlueprint`
+ * refuses `kind: "device"` outright. The CoreDevice accessibility tree is not a
+ * substitute: it carries no testIDs, no geometry, and an order that rotates
+ * between reads, so selector matching and `visible`/`hidden` would answer from
+ * placeholders (the same reason `flow-tree.ts` allows no fallback to a trimmed
+ * tree). Say that once, here, instead of letting every selector step fail with a
+ * devtools error and a "restart the argent server" hint that cannot help.
+ */
+function assertFlowCapableDevice(device: DeviceInfo): DeviceInfo {
+  if (isPhysicalIos(device)) {
+    // `UnsupportedOperationError`, like every other physical-iOS refusal (the
+    // capability gate, gesture-custom's second touch, profiler-load's native
+    // mode): the HTTP layer maps it to a 400. A bare `FailureError` falls
+    // through to 500, which tells a client the server faulted and the call is
+    // worth retrying — and no retry can make this one succeed.
+    throw new UnsupportedOperationError(
+      "flow-execute",
+      device,
+      "selectors resolve against the native view hierarchy, which needs argent's devtools dylib injected into the app, and there is no physical-device equivalent; drive it with describe + gesture-tap / gesture-swipe, or run the flow on a simulator"
+    );
+  }
+  return device;
+}
+
+/**
  * Resolve the device a flow runs against. Order: explicit `device` id → the
  * single booted device of `platform` → the single booted device overall →
  * throw, enumerating what is available.
@@ -126,27 +168,39 @@ export async function resolveFlowDevice(
   ctx: ToolContext | undefined,
   opts: { device?: string; platform?: FlowPlatform }
 ): Promise<DeviceInfo> {
-  if (opts.device) return resolveDevice(opts.device);
+  if (opts.device) return assertFlowCapableDevice(resolveDevice(opts.device));
 
   const { devices } = (await invokeSubTool(registry, ctx, "list-devices", {})) as {
     devices: RawDevice[];
   };
   const booted = devices.filter(isBooted);
   const scoped = opts.platform ? booted.filter((d) => d.platform === opts.platform) : booted;
+  // Auto-detection ignores a physical iPhone: it can never be the answer (see
+  // `assertFlowCapableDevice`), so counting it would make a plugged-in phone
+  // force `--device` on a machine whose one simulator is otherwise unambiguous.
+  // Naming one explicitly still gets the specific reason, not silence.
+  const candidates = scoped.filter((d) => !isPhysicalIosEntry(d));
 
-  if (scoped.length === 1) {
-    const id = deviceEntryId(scoped[0]);
-    if (id) return resolveDevice(id);
+  if (candidates.length === 1) {
+    const id = deviceEntryId(candidates[0]);
+    if (id) return assertFlowCapableDevice(resolveDevice(id));
   }
-  if (scoped.length === 0) {
+  if (candidates.length === 0) {
+    // Distinguish "nothing is ready" from "the only ready thing is a phone
+    // flows cannot drive" — otherwise the second reads as the first, beside a
+    // list that shows the phone.
+    const dropped = scoped.filter(isPhysicalIosEntry);
+    if (dropped.length > 0) {
+      return assertFlowCapableDevice(resolveDevice(deviceEntryId(dropped[0]) ?? ""));
+    }
     const what = opts.platform
       ? `No booted ${opts.platform} device found.`
       : "No booted device found.";
     throw deviceResolutionError(`${what} Pass a device id or platform explicitly.`, devices);
   }
   throw deviceResolutionError(
-    `${scoped.length} booted devices matched — pass --device or --platform to disambiguate.`,
-    scoped
+    `${candidates.length} booted devices matched — pass --device or --platform to disambiguate.`,
+    candidates
   );
 }
 
