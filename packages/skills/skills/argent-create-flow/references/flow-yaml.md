@@ -59,12 +59,13 @@ Use single quotes for anchored, case-sensitive regexes:
 
 Flow selectors and live discovery use different screen projections:
 
-| Platform | Runner tree                                               | `describe` / `await-ui-element` | Important difference                                                  |
-| -------- | --------------------------------------------------------- | ------------------------------- | --------------------------------------------------------------------- |
-| iOS      | native UIView hierarchy                                   | accessibility tree              | Each contains elements the other lacks; roles are derived differently |
-| Android  | full accessibility hierarchy                              | trimmed interactables           | Discovery can omit testID-only containers or merge nodes              |
-| Chromium | filtered DOM nodes with id, label, value, click, or focus | full DOM walk                   | The runner tree is a strict subset                                    |
-| Vega     | toolkit page source                                       | same source                     | Same elements, different shape                                        |
+| Platform  | Runner tree                                               | `describe` / `await-ui-element` | Important difference                                                  |
+| --------- | --------------------------------------------------------- | ------------------------------- | --------------------------------------------------------------------- |
+| iOS       | native UIView hierarchy                                   | accessibility tree              | Each contains elements the other lacks; roles are derived differently |
+| Android   | full accessibility hierarchy                              | trimmed interactables           | Discovery can omit testID-only containers or merge nodes              |
+| Chromium  | filtered DOM nodes with id, label, value, click, or focus | full DOM walk                   | The runner tree is a strict subset                                    |
+| Vega      | toolkit page source                                       | same source                     | Same elements, different shape                                        |
+| HarmonyOS | none                                                      | `uitest` layout dump            | The runner has no tree at all, so no selector resolves                |
 
 On iOS and Android, an id absent from `describe` can still resolve in a flow. Prefer the stable id and verify it in a scratch fragment. On Chromium, an element absent from `describe` cannot resolve. Add a test id instead.
 
@@ -189,6 +190,7 @@ A `run:` target is a YAML path resolved against the directory of the flow file c
 - iOS and Android can run fragments or e2e flows inline. A nested e2e launch restarts its app.
 - Chromium boots one instance per launch **step**, not one per run. The leading launch — the flow's own, or the one its leading `run:` chain reaches — boots before step 1, unless you pinned the run with an explicit `device`, where it only attaches. Every later launch boots a fresh instance, moves the run onto it, and tears down the instance the run already owned for that app path. Nesting a Chromium e2e flow with its own launch is therefore the supported way to give a sub-scenario its own restart. Chromium rejects `pinch` and `rotate`. Use the app's own zoom or rotate controls.
 - Vega uses `tool: tv-remote` and raw `tool: keyboard`. The touch directives (`tap`, `long-press`, `type`, `scroll-to`, `pinch`, `rotate`) are unsupported. Gate focus and navigation results with `await`.
+- HarmonyOS has no runner tree, so every selector directive errors with `ui-tree matching is not supported on platform "harmony"` — `type:` included, since it is selector-only. `long-press:`, `pinch:` and `rotate:` are refused up front whether or not they carry a selector: `uitest uiInput` sends one whole gesture per call, one contact at a time, with no hold duration. What runs is a coordinate `tap:`, `snapshot:`, and raw `tool:` steps for the tools that declare HarmonyOS support. Name the device as `--device harmony-<connectKey>`: there is no `--platform harmony`, and a HarmonyOS device is never auto-resolved.
 
 ## Snapshots and standalone runs
 

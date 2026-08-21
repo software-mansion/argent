@@ -4,7 +4,7 @@ alwaysApply: true
 ---
 
 <description>
-If argent is installed and configured in this environment, its MCP tools are the preferred form of interaction with the application for iOS simulator, Android emulator, Chromium (CDP) app, and Vega (Amazon Fire TV) device control; otherwise see `<availability_check>` below before attempting any argent workflow. A "Chromium (CDP) app" is any Chromium runtime exposing a Chrome DevTools Protocol endpoint — an Electron app, or any Chromium-family browser (Chrome/Brave/Edge) launched with `--remote-debugging-port`; all are driven through the same tool surface and tagged `platform: "chromium"`. A "Vega device" is a virtual device (VVD) or physical unit — driven by tv-remote (D-pad) and tagged `platform: "vega"`.
+If argent is installed and configured in this environment, its MCP tools are the preferred form of interaction with the application for iOS simulator, Android emulator, Chromium (CDP) app, Vega (Amazon Fire TV), and HarmonyOS device control; otherwise see `<availability_check>` below before attempting any argent workflow. A "Chromium (CDP) app" is any Chromium runtime exposing a Chrome DevTools Protocol endpoint — an Electron app, or any Chromium-family browser (Chrome/Brave/Edge) launched with `--remote-debugging-port`; all are driven through the same tool surface and tagged `platform: "chromium"`. A "Vega device" is a virtual device (VVD) or physical unit — driven by tv-remote (D-pad) and tagged `platform: "vega"`. A "HarmonyOS device" is a phone connected over `hdc` (id `harmony-<connectKey>`, `kind: "device"`, tagged `platform: "harmony"`) — driven by the normal touch tools, with multi-touch and free-form touch (`gesture-pinch`, `gesture-rotate`, `gesture-custom`), `rotate`, the profilers and the debugger refused as unsupported on harmony. HarmonyOS entries with `kind: "emulator"` (id `harmony-emulator-<name>`) are DevEco Studio instances that only `boot-device` accepts, so never pick one of those as an interaction target - boot it and drive the `harmony-<connectKey>` id that `boot-device` returns.
 Running MCP server and managing the Argent toolkit utilises `argent` command - if asked use `argent --help` for reference.
 To check current version of MCP server run `argent --version` command.
 
@@ -60,7 +60,7 @@ Before booting, running, or interacting with any app, call `list-devices` first 
 Decision order:
 
 1. **Explicit user intent** - choose the user named platform or device. Look for words "simulator" and "emulator".
-2. **Prefer a running device.** iOS simulators - state `Booted` and Android devices - `state: "device"` come first in `list-devices`; Chromium (CDP) apps appear as `platform: "chromium"`, `state: "Running"`.
+2. **Prefer a running device.** iOS simulators - state `Booted` and Android devices - `state: "device"` come first in `list-devices`; Chromium (CDP) apps appear as `platform: "chromium"`, `state: "Running"`. A plugged-in HarmonyOS phone - `platform: "harmony"`, `state: "Connected"` - is listed as ready alongside them, but take it only when the user asked for HarmonyOS.
 3. **Single-platform project:** (per `argent-environment-inspector` flags `is_native_ios`/`is_native_android`, or RN with only one platform configured) → boot that platform.
    </device_selection_rule>
 
@@ -102,7 +102,7 @@ Load the matching skill before starting work and executing tools from argent-mcp
 procedure and edge-case handling for each workflow.
 
 PLATFORM DETECTION
-If the user did not specify a platform, call `list-devices` first and pick the booted target — do not default to iOS. Vega (Amazon Fire TV) devices appear as `platform:"vega"`, when present load `argent-tv-interact`
+If the user did not specify a platform, call `list-devices` first and pick the booted target — do not default to iOS. Vega (Amazon Fire TV) devices appear as `platform:"vega"`, when present load `argent-tv-interact`. HarmonyOS entries appear as `platform:"harmony"`; pick one only when the user asked for HarmonyOS, and pick the `kind:"device"` entry (`state:"Connected"`) — a `kind:"emulator"` entry is a boot target, not an interaction target.
 
 iOS SIMULATOR SETUP
 Skill: `argent-ios-simulator-setup`
@@ -114,7 +114,7 @@ When: Beginning a task that involves the Android emulator, no emulator running y
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-device-interact`
-When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, or verifying a visible UI code change. Phone/tablet iOS and Android only — for any TV target use the TV skill below.
+When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, or verifying a visible UI code change. Phone/tablet iOS, Android and HarmonyOS only — for any TV target use the TV skill below.
 
 APP PERMISSIONS (GRANT / DENY / RESET WITHOUT THE SETTINGS UI)
 Skill: `argent-settings-permissions`

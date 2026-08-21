@@ -74,7 +74,8 @@ const DEVICE_BIND_LIST_KEYS = ["devices"] as const;
 const DEVICE_ARG_KEYS = DEVICE_BIND_KEYS;
 
 interface RawDevice {
-  platform: FlowPlatform;
+  /** `list-devices` lists every platform it knows, not only the ones flows run on. */
+  platform: FlowPlatform | "ios-remote" | "harmony";
   state?: string;
   udid?: string;
   serial?: string;
@@ -82,7 +83,18 @@ interface RawDevice {
 }
 
 function deviceEntryId(d: RawDevice): string | undefined {
-  if (d.platform === "ios") return d.udid;
+  // `ios-remote` and `harmony` key their entries by `udid` as iOS does. Neither
+  // is AUTO-resolvable — `isBooted` has no arm for either — but both are
+  // legitimate to name explicitly, which is why the id has to reach the caller
+  // through the "available devices" line. `fetchFlowTree` has an arm for neither,
+  // so a run on either degrades per step rather than dead-ending: coordinate steps
+  // work and `snapshot` captures (measured on harmony 6.1.1 — a `tap` passes, a
+  // `snapshot` keys a baseline), while a selector step errors with "ui-tree
+  // matching is not supported on platform <p>". That is more use to a caller than
+  // a blanket refusal.
+  if (d.platform === "ios" || d.platform === "ios-remote" || d.platform === "harmony") {
+    return d.udid;
+  }
   if (d.platform === "chromium") return d.id;
   return d.serial; // android, vega
 }

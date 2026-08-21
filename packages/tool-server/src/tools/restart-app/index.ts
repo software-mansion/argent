@@ -3,11 +3,17 @@ import type { Registry, ServiceRef, ToolCapability, ToolDefinition } from "@arge
 import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import type { RestartAppResult, RestartAppVegaServices, RestartAppIosServices } from "./types";
+import type {
+  RestartAppResult,
+  RestartAppVegaServices,
+  RestartAppIosServices,
+  RestartAppHarmonyServices,
+} from "./types";
 import { makeIosImpl } from "./platforms/ios";
 import { iosRemoteImpl } from "./platforms/ios-remote";
 import { androidImpl } from "./platforms/android";
 import { vegaImpl } from "./platforms/vega";
+import { harmonyImpl } from "./platforms/harmony";
 
 // Bundle id / package name. Head must be letter or underscore so a bundleId
 // like `--user` can't masquerade as a flag inside `am force-stop …`.
@@ -21,18 +27,18 @@ const zodSchema = z.object({
   udid: z
     .string()
     .min(1)
-    .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+    .describe("Target device id from `list-devices` (iOS UDID, Android serial, or HarmonyOS id)."),
   bundleId: z
     .string()
     .min(1)
     .regex(BUNDLE_ID_PATTERN, "bundleId may only contain letters, digits, '.', '_' and '-'")
-    .describe("App identifier. iOS: bundle id. Android: package name."),
+    .describe("App identifier. iOS: bundle id. Android: package name. HarmonyOS: bundle name."),
   activity: z
     .string()
     .regex(ACTIVITY_PATTERN, "activity may only contain letters, digits, '.', '_', '-' and '/'")
     .optional()
     .describe(
-      "Android-only: relaunch a non-launcher Activity (e.g. `.SettingsActivity` or `com.example/com.example.SettingsActivity`). If omitted, the app's default launcher activity is used. Ignored on iOS."
+      "Android-only: relaunch a non-launcher Activity (e.g. `.SettingsActivity` or `com.example/com.example.SettingsActivity`). If omitted, the app's default launcher activity is used. Ignored on iOS / HarmonyOS."
     ),
 });
 
@@ -43,6 +49,7 @@ const capability: ToolCapability = {
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   vega: { vvd: true },
+  harmony: { device: true },
 };
 
 // `restart-app` resolves native-devtools through `registry` inside the iOS
@@ -68,7 +75,7 @@ Use when you need a clean in-memory state without a full reinstall. Also refresh
 Returns { restarted, bundleId }. Fails if the app is not installed.`,
     alwaysLoad: true,
     searchHint:
-      "terminate relaunch restart reset app bundle id package simulator emulator vega tvos fire tv",
+      "terminate relaunch restart reset app bundle id package simulator emulator vega tvos fire tv harmony harmonyos",
     zodSchema,
     capability,
     // ios-remote declares an eager native-devtools service (its handler shares
@@ -89,7 +96,8 @@ Returns { restarted, bundleId }. Fails if the app is not installed.`,
       // No chromium branch — falls back to the ChromiumServices default.
       Record<string, unknown>,
       RestartAppVegaServices,
-      RestartAppIosServices
+      RestartAppIosServices,
+      RestartAppHarmonyServices
     >({
       toolId: "restart-app",
       capability,
@@ -97,6 +105,7 @@ Returns { restarted, bundleId }. Fails if the app is not installed.`,
       iosRemote: iosRemoteImpl,
       android: androidImpl,
       vega: vegaImpl,
+      harmony: harmonyImpl,
     }),
   };
 }

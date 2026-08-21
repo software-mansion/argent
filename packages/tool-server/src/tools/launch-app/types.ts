@@ -22,3 +22,4 @@ export interface LaunchAppIosServices {
 }
 export type LaunchAppAndroidServices = Record<string, never>;
 export type LaunchAppVegaServices = Record<string, never>;
+export type LaunchAppHarmonyServices = Record<string, never>;

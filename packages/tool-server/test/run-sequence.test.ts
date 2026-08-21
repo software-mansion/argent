@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
 import type { Registry, ToolContext } from "@argent/registry";
 import { createRunSequenceTool } from "../src/tools/run-sequence";
+import { gestureTapTool } from "../src/tools/gesture-tap";
+import { gesturePinchTool } from "../src/tools/gesture-pinch";
+import { assertSupported } from "../src/utils/capability";
+import { resolveDevice } from "../src/utils/device-info";
 
 // A minimal registry stub: records every invokeTool call and returns a marker.
 function makeMockRegistry() {
@@ -30,6 +34,7 @@ const TVOS_UDID = "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD";
 // iOS-shaped udid so `resolveDevice` classifies it as an iOS simulator without
 // touching a real device (classification is purely shape-based).
 const IOS = "11111111-1111-1111-1111-111111111111";
+const HARMONY = "harmony-025DEK236V035771";
 
 describe("run-sequence", () => {
   it("allows TV steps and dispatches them in order with the shared udid injected", async () => {
@@ -56,6 +61,46 @@ describe("run-sequence", () => {
       expect(c.args.udid).toBe(TVOS_UDID);
     }
     expect(calls[0]!.args).toMatchObject({ button: "right", udid: TVOS_UDID });
+  });
+
+  it("accepts a HarmonyOS device, and stops at the first step that platform cannot run", async () => {
+    const { registry, calls } = makeMockRegistry();
+    const tool = createRunSequenceTool(registry);
+    // The outer gate runs in the HTTP layer, not in execute(), so assert it
+    // directly: without `harmony` on run-sequence's own capability every step
+    // below is unreachable no matter what the step tools support.
+    expect(() =>
+      assertSupported("run-sequence", tool.capability, resolveDevice(HARMONY))
+    ).not.toThrow();
+
+    // Real capabilities: gesture-tap supports HarmonyOS, gesture-pinch does not
+    // (`uitest uiInput` has no multi-touch verb).
+    registry.getTool = vi.fn((id: string) =>
+      id === "gesture-tap" ? gestureTapTool : gesturePinchTool
+    );
+
+    const result = await tool.execute!(
+      {},
+      {
+        udid: HARMONY,
+        steps: [
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.5 } },
+          {
+            tool: "gesture-pinch",
+            args: { centerX: 0.5, centerY: 0.5, startDistance: 0.1, endDistance: 0.3 },
+          },
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.6 } },
+        ],
+      }
+    );
+
+    expect(result.completed).toBe(1);
+    expect(calls.map((c) => c.tool)).toEqual(["gesture-tap"]);
+    expect(calls[0]!.args.udid).toBe(HARMONY);
+    const blocked = result.steps[1];
+    expect(blocked && "error" in blocked && blocked.error).toContain(
+      "is not supported on harmony device"
+    );
   });
 
   it("rejects a tool that isn't in the allow-list and stops the sequence", async () => {

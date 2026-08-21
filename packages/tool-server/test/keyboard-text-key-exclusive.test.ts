@@ -36,7 +36,18 @@ vi.mock("../src/utils/vega-input", async (importOriginal) => ({
   injectVegaNamedKey: vi.fn(async () => {}),
 }));
 
+// HarmonyOS reaches the device over `hdc`; stub the transport and report an
+// awake panel, so what is pinned here is the exclusivity rule rather than the
+// display guard `keyboard-harmony.test.ts` covers.
+vi.mock("../src/utils/harmony-uitest", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/harmony-uitest")>()),
+  harmonyTypeText: vi.fn(async () => {}),
+  harmonyKeyEvent: vi.fn(async () => {}),
+  harmonyDisplay: vi.fn(async () => ({ width: 1216, height: 2688, screenOn: true })),
+}));
+
 import { injectVegaNamedKey, injectVegaText } from "../src/utils/vega-input";
+import { harmonyKeyEvent, harmonyTypeText } from "../src/utils/harmony-uitest";
 import { createKeyboardTool } from "../src/tools/keyboard";
 import { NAMED_KEYS } from "../src/tools/keyboard/key-codes";
 
@@ -86,6 +97,15 @@ const BACKENDS = [
       vi.mocked(injectVegaText).mock.calls.length + vi.mocked(injectVegaNamedKey).mock.calls.length,
     pressedBackspace: () =>
       vi.mocked(injectVegaNamedKey).mock.calls.some((c) => c[0] === "backspace"),
+  },
+  {
+    platform: "harmony",
+    udid: "harmony-025DEK236V035771",
+    injections: () =>
+      vi.mocked(harmonyTypeText).mock.calls.length + vi.mocked(harmonyKeyEvent).mock.calls.length,
+    // `uitest uiInput keyEvent` takes a raw keyID, so the name never leaves the
+    // host: 2055 is backspace (keyboard/platforms/harmony.ts HARMONY_KEYCODES).
+    pressedBackspace: () => vi.mocked(harmonyKeyEvent).mock.calls.some((c) => c[1] === "2055"),
   },
 ];
 
@@ -145,15 +165,15 @@ describe("keyboard — `text` and `key` are mutually exclusive", () => {
         createKeyboardTool(r).execute({}, { udid, text: "hi", key: "enter", delayMs: 0 })
       );
       // Rejected before the dispatch, so the backend is never reached: no keys
-      // injected on any of the four.
+      // injected on any of them.
       expect(injections()).toBe(0);
       // Adds signal on ios and chromium only — those resolve a service (and
       // would spawn one) on a call that gets through. Android injects through
-      // `adbShell` directly and the vega branch never references the registry,
-      // so a SUCCESSFUL call resolves nothing there either and this line cannot
-      // fail on those two iterations. Kept because it holds for all four and
-      // guards the two that can regress; `injections()` above is what carries
-      // the android and vega rows.
+      // `adbShell` directly, and neither the vega nor the harmony branch
+      // references the registry, so a SUCCESSFUL call resolves nothing there
+      // either and this line cannot fail on those iterations. Kept because it
+      // holds for every backend and guards the two that can regress;
+      // `injections()` above is what carries the other rows.
       expect(r.resolveService).not.toHaveBeenCalled();
     });
 

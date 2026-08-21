@@ -244,14 +244,21 @@ export function platformFromArgs(data: unknown): TelemetryPlatform | null {
   // AVD to `android-tv` — from the call after describe/launch has warmed the cache,
   // not the first (see `refineTvPlatform`).
   if (typeof (data as Record<string, unknown>).avdName === "string") return "android";
+  // Its HarmonyOS twin: an instance is named, not addressed, until `hdc`
+  // reports the connect key it registered as. The other spelling of a harmony
+  // boot — the `harmony-emulator-<name>` id `list-devices` reports — is a
+  // `udid`, and classifies by shape above. `harmony` has no runtime kinds to
+  // refine into, so this is the whole answer rather than a coarse one.
+  if (typeof (data as Record<string, unknown>).harmonyInstance === "string") return "harmony";
   return null;
 }
 
 /**
  * Attribution for a sub-tool an orchestrator dispatches: the outer request's AI
  * client is inherited unchanged, but the platform is re-derived from the child's
- * OWN device arg — `udid` / `device_id` / `devices` / `avdName`, whichever it
- * spells. Orchestrators like flow-execute carry no platform (and a flow can span
+ * OWN device arg — `udid` / `device_id` / `devices` / `avdName` /
+ * `harmonyInstance`, whichever it spells. Orchestrators like flow-execute carry
+ * no platform (and a flow can span
  * several devices), so the child's device arg is the only correct source; the
  * parent's platform is the fallback when the child has none. A replayed
  * `stop-all-simulator-servers` step is the `devices` case, and it resolves here

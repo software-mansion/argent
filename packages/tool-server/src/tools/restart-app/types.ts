@@ -21,3 +21,4 @@ export interface RestartAppIosServices {
 }
 export type RestartAppAndroidServices = Record<string, never>;
 export type RestartAppVegaServices = Record<string, never>;
+export type RestartAppHarmonyServices = Record<string, never>;

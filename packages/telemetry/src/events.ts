@@ -21,6 +21,7 @@ export const PLATFORMS = [
   "android",
   "chromium",
   "vega",
+  "harmony",
   "tvos",
   "android-tv",
 ] as const;

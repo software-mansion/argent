@@ -109,6 +109,55 @@ export function resolveSecretPlaceholders(
 }
 
 /**
+ * The shortest piece of a secret worth searching an error message for.
+ *
+ * A backend that types a value one word at a time yields pieces as short as a
+ * single character, and blanking every `a` in a diagnostic destroys the message
+ * the agent has to act on. Three characters of a credential is not a disclosure
+ * worth that.
+ */
+const MIN_REDACTED_PIECE = 4;
+
+/** `%`-delimited segments, each keeping its trailing `%`. */
+function percentSegments(text: string): string[] {
+  return text.match(/[^%]*%|[^%]+/g) ?? [];
+}
+
+/**
+ * Every spelling of a secret that can reach an error message.
+ *
+ * Two things stand between the resolved value and the message, and both fail
+ * silently — a secret with neither an apostrophe nor a split redacts correctly,
+ * so the gap stays invisible until the one that has them leaks:
+ *
+ * - The backends that echo their input echo a SHELL LINE (`adb shell input text
+ *   'x'`, `hdc shell uitest uiInput text 'x'`), and `shellQuote` rewrites each
+ *   `'` as `'\''`, so an apostrophe breaks the value into non-contiguous text.
+ * - A backend need not send the value in one piece. `injectAndroidText` starts a
+ *   new `adb shell input text` at every `%` so the device never sees a format
+ *   specifier, and the Android TV remote types a word per space keyevent — so
+ *   the call that fails quotes back a PIECE, not the whole.
+ *
+ * The pieces are the ones those splits really produce, not every substring:
+ * searching for arbitrary runs blanks the ordinary words of a diagnostic
+ * whenever a secret happens to contain one.
+ */
+function secretSpellings(value: string): string[] {
+  const pieces = new Set<string>([value, ...percentSegments(value)]);
+  for (const word of value.split(" ")) {
+    pieces.add(word);
+    for (const segment of percentSegments(word)) pieces.add(segment);
+  }
+  const spellings = new Set<string>();
+  for (const piece of pieces) {
+    if (piece !== value && piece.length < MIN_REDACTED_PIECE) continue;
+    spellings.add(piece);
+    spellings.add(piece.replaceAll("'", `'\\''`));
+  }
+  return [...spellings];
+}
+
+/**
  * Scrub resolved secret values from an error before it propagates — a backend
  * failure can echo its input (e.g. Android typing surfaces the device-side
  * `input text` command line). Mutates message/stack in place so the error's
@@ -120,12 +169,50 @@ export function redactSecretsFromError(
   err: unknown,
   secrets: Array<{ name: string; value: string }>
 ): unknown {
-  const scrub = (s: string) =>
-    secrets.reduce(
-      (acc, { name, value }) =>
-        value ? acc.split(value).join(`${SECRET_PLACEHOLDER_MARKER}${name}}}`) : acc,
-      s
-    );
+  const marked = new Map<string, string>();
+  for (const { name, value } of secrets) {
+    if (!value) continue;
+    for (const spelling of secretSpellings(value)) {
+      if (!marked.has(spelling)) marked.set(spelling, `${SECRET_PLACEHOLDER_MARKER}${name}}}`);
+    }
+  }
+  if (marked.size === 0) return err;
+  // Bucketed by first character, longest first inside each bucket. Longest wins
+  // at a position, or the whole value loses to a piece of itself and the rest of
+  // it is left standing beside the marker.
+  //
+  // Matched by hand rather than by an alternation `RegExp`, which a secret can
+  // be too long to compile into: from 32768 characters V8 refuses the pattern
+  // with a `SyntaxError` QUOTING IT, so the one call that exists to keep the
+  // credential out of the message would hand over the whole of it. A PEM bundle
+  // or a base64 keystore reaches that size, and `paste` invites exactly those.
+  // The throw comes at the first match attempt, not from the constructor —
+  // compilation is lazy — so guarding `new RegExp` would not have caught it.
+  const byFirstChar = new Map<string, string[]>();
+  for (const spelling of [...marked.keys()].sort((a, b) => b.length - a.length)) {
+    const bucket = byFirstChar.get(spelling[0]!);
+    if (bucket) bucket.push(spelling);
+    else byFirstChar.set(spelling[0]!, [spelling]);
+  }
+  // One pass over the original, copying in runs: `cursor` trails the last thing
+  // written out, so what the scrub substitutes in is never itself scanned — a
+  // marker cannot be redacted again into a nest of markers, which is what a
+  // secret sharing any text with `{{secret:` or with its own name would do.
+  const scrub = (s: string) => {
+    let out = "";
+    let cursor = 0;
+    for (let at = 0; at < s.length; ) {
+      const hit = byFirstChar.get(s[at]!)?.find((spelling) => s.startsWith(spelling, at));
+      if (hit === undefined) {
+        at += 1;
+        continue;
+      }
+      out += s.slice(cursor, at) + marked.get(hit);
+      at += hit.length;
+      cursor = at;
+    }
+    return cursor === 0 ? s : out + s.slice(cursor);
+  };
   if (err instanceof Error) {
     err.message = scrub(err.message);
     if (err.stack) err.stack = scrub(err.stack);

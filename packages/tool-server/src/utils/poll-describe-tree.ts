@@ -22,8 +22,15 @@ import { settleWithin, sleepOrAbort } from "./timing";
 export type PollVerdict<R> = { done: true; result: R } | { done: false };
 
 export interface PollDescribeTreeArgs<R> {
-  /** Read the current tree. Called once per poll; must be read-only. */
-  fetchTree: () => Promise<DescribeTreeData>;
+  /**
+   * Read the current tree. Called once per poll; must be read-only.
+   *
+   * `budgetMs` is what is left before the wait's deadline. This loop abandons a
+   * read that overruns it but cannot cancel one, so a backend whose read holds
+   * a device-side resource has to bound itself with this to keep the abandoned
+   * read from charging the caller's next call for it.
+   */
+  fetchTree: (budgetMs: number) => Promise<DescribeTreeData>;
   timeoutMs: number;
   pollIntervalMs: number;
   signal?: AbortSignal;
@@ -48,6 +55,26 @@ export interface PollDescribeTreeResult<R> {
   lastData: DescribeTreeData | null;
   /** Most recent fetch error / timeout message, if the last fetch failed. */
   lastError?: string;
+}
+
+/**
+ * What the last read said about itself, as clauses for a wait's timeout note:
+ * a tree the adapter flagged as degraded or partial, and an app whose native
+ * inspection needs a restart before it can be seen at all. A wait that ends
+ * without its condition met ends on one of these far more often than on a
+ * screen that genuinely kept moving, and neither wait tool can tell them apart
+ * from the tree alone.
+ */
+export function readCaveats(lastData: DescribeTreeData | null): string[] {
+  if (!lastData) return [];
+  const caveats: string[] = [];
+  if (lastData.should_restart) {
+    caveats.push(
+      "the foreground app may need a restart for native inspection — call restart-app and retry"
+    );
+  }
+  if (lastData.hint) caveats.push(lastData.hint);
+  return caveats;
 }
 
 export async function pollDescribeTree<R>(
@@ -75,7 +102,13 @@ export async function pollDescribeTree<R>(
 
     // Bound each fetch to the time left before the deadline.
     const remaining = Math.max(0, deadline - Date.now());
-    const settled = await settleWithin(fetchTree(), remaining, signal);
+    // The final poll runs AT the deadline (see the sleep clamp below), so it is
+    // handed nothing. A backend that refuses an empty budget outright then fails
+    // for a reason of the loop's own making, which must not displace what the
+    // polls that had time actually found — the same reason the timeout branch
+    // below only speaks up when no tree was ever read.
+    const unbudgeted = remaining === 0;
+    const settled = await settleWithin(fetchTree(remaining), remaining, signal);
     polls += 1;
 
     if (settled.type === "aborted") return outcome(undefined, true);
@@ -89,7 +122,7 @@ export async function pollDescribeTree<R>(
       break;
     }
     if (settled.type === "error") {
-      lastError = settled.error;
+      if (!unbudgeted || (lastError === undefined && lastData === null)) lastError = settled.error;
     } else {
       lastData = settled.value;
       lastError = undefined;

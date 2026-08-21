@@ -1,3 +1,4 @@
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { DeviceInfo, DeviceKind, Platform } from "@argent/registry";
 
 /**
@@ -44,11 +45,87 @@ export const CHROMIUM_ID_PREFIX = "chromium-cdp-";
  */
 export const VEGA_SERIAL_PREFIX = "amazon-";
 
+/**
+ * HarmonyOS device-id prefix. Every HarmonyOS id carries it, so the platform is
+ * decided by shape like the others — argent mints these ids rather than
+ * receiving them, the same way `chromium-cdp-<port>` is argent's own.
+ */
+export const HARMONY_ID_PREFIX = "harmony-";
+
+/**
+ * Marks the ids that name an emulator *instance* rather than a connected target.
+ *
+ * The two are different things addressed by different CLIs: an instance is a
+ * config directory that `Emulator -start` boots, a connected target is an `hdc`
+ * connect key that `uitest` drives. They cannot be told apart by shape — an
+ * instance name is user-chosen and could be spelled exactly like a hardware
+ * serial — so the distinction is carried in the id itself, mirroring how a local
+ * Android AVD is identifiable from its `emulator-<port>` serial.
+ *
+ * A running emulator therefore appears twice in `list-devices`: once as its
+ * instance (bootable, stoppable) and once as whatever connect key it registered
+ * with `hdc` (drivable). This is exactly what Android does with `avds` vs
+ * `adb devices`, and for the same reason.
+ */
+export const HARMONY_EMULATOR_ID_PREFIX = "harmony-emulator-";
+
+/** Build the `list-devices` id for an emulator instance. */
+export function harmonyEmulatorId(instanceName: string): string {
+  return `${HARMONY_EMULATOR_ID_PREFIX}${instanceName}`;
+}
+
+/** Build the `list-devices` id for a target `hdc` is connected to. */
+export function harmonyDeviceId(connectKey: string): string {
+  return `${HARMONY_ID_PREFIX}${connectKey}`;
+}
+
+/**
+ * The emulator instance name behind a `harmony-emulator-<name>` id.
+ *
+ * Exactly one prefix is stripped, so an instance genuinely named `emulator-x`
+ * round-trips through `harmonyEmulatorId` unharmed. A connect-key id keeps its
+ * `harmony-` prefix rather than being read as an instance name, so handing a
+ * phone's id to `boot-device` fails on an instance that does not exist instead
+ * of silently starting whichever one happens to be named after a serial.
+ */
+export function harmonyInstanceName(udid: string): string {
+  return udid.startsWith(HARMONY_EMULATOR_ID_PREFIX)
+    ? udid.slice(HARMONY_EMULATOR_ID_PREFIX.length)
+    : udid;
+}
+
+/**
+ * The `hdc` connect key behind a `harmony-<connectKey>` id.
+ *
+ * An instance id is refused rather than stripped: `harmony-emulator-<name>`
+ * carries the `harmony-` prefix too, so slicing it yields `emulator-<name>` — a
+ * key no target holds, which `hdc` answers with `[Fail]Not match target` naming
+ * a device the caller never asked for. The capability gate turns an instance id
+ * away at the HTTP edge, but a flow step reaches `execute` through the registry,
+ * which does not gate it.
+ */
+export function harmonyConnectKey(udid: string): string {
+  if (udid.startsWith(HARMONY_EMULATOR_ID_PREFIX)) {
+    throw new FailureError(
+      `"${udid}" names a HarmonyOS emulator instance, not a device to drive. Start it with ` +
+        "boot-device and drive the `harmony-<connectKey>` id that returns.",
+      {
+        error_code: FAILURE_CODES.HARMONY_DEVICE_ID_INVALID,
+        failure_stage: "harmony_connect_key",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+  return udid.startsWith(HARMONY_ID_PREFIX) ? udid.slice(HARMONY_ID_PREFIX.length) : udid;
+}
+
 /** Returns the platform a `udid` belongs to based on its shape. */
 export function classifyDevice(udid: string): Platform {
   if (udid.startsWith(REMOTE_PREFIX)) return "ios-remote";
   if (udid.startsWith(VEGA_SERIAL_PREFIX)) return "vega";
   if (udid.startsWith(CHROMIUM_ID_PREFIX)) return "chromium";
+  if (udid.startsWith(HARMONY_ID_PREFIX)) return "harmony";
   return IOS_UDID_SHAPE.test(udid) ? "ios" : "android";
 }
 
@@ -73,8 +150,9 @@ export function isAndroidEmulatorSerial(serial: string): boolean {
 /**
  * Build a `DeviceInfo` from a raw udid, by shape. Kind defaults per platform:
  * 'simulator' for iOS / ios-remote, 'vvd' for Vega, 'emulator'/'device' for
- * Android by serial shape, 'app' for Chromium — platform impls can enrich with
- * name/state/sdkLevel via simctl/adb/sim-remote if needed.
+ * Android by serial shape and for HarmonyOS by id prefix, 'app' for Chromium —
+ * platform impls can enrich with name/state/sdkLevel via simctl/adb/sim-remote
+ * if needed.
  *
  * Vega is VVD-only in v1: the tool-server does not connect to or detect physical
  * Fire TV hardware, so every `amazon-` serial resolves to kind `vvd` by shape. A
@@ -90,11 +168,15 @@ export function resolveDevice(udid: string): DeviceInfo {
       ? "simulator"
       : platform === "vega"
         ? "vvd"
-        : platform === "android"
-          ? isAndroidEmulatorSerial(udid)
+        : platform === "harmony"
+          ? udid.startsWith(HARMONY_EMULATOR_ID_PREFIX)
             ? "emulator"
             : "device"
-          : "app";
+          : platform === "android"
+            ? isAndroidEmulatorSerial(udid)
+              ? "emulator"
+              : "device"
+            : "app";
   return { id: udid, platform, kind };
 }
 

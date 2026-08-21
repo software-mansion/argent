@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { formatDescribeTree } from "../src/tools/describe/format-tree";
-import type { DescribeNode } from "../src/tools/describe/contract";
+import type { DescribeNode, DescribeSource } from "../src/tools/describe/contract";
 
 function leaf(
   partial: Partial<DescribeNode> & { role: string; frame: DescribeNode["frame"] }
@@ -277,8 +277,8 @@ describe("formatDescribeTree", () => {
   });
 
   // The header text is part of the agent-visible response, so it must keep
-  // pointing at gesture-tap / gesture-swipe / gesture-pinch and the centre
-  // formula. If this drifts again the runtime help is silently misleading.
+  // pointing at the gesture tools the source's platform actually has, plus the
+  // centre formula. If this drifts the runtime help is silently misleading.
   it("renders the coordinate-space + tap-formula header on every call", () => {
     const empty: DescribeNode = {
       role: "AXGroup",
@@ -290,6 +290,25 @@ describe("formatDescribeTree", () => {
     expect(out).toContain("gesture-tap");
     expect(out).toContain("tap_x = frame.x + frame.width / 2");
     expect(out).toContain("tap_y = frame.y + frame.height / 2");
+  });
+
+  it("names only the gesture tools the source's own platform supports", () => {
+    // Every tool named here is one the agent is invited to call next, and each
+    // platform's capability gate refuses the ones it has no backend for — so a
+    // fixed list spends a round trip on a 400 the header could have avoided.
+    // Chromium is the sharp case: it has neither swipe nor pinch, and the two
+    // tools it does have (scroll, drag) went unmentioned.
+    const empty: DescribeNode = {
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [],
+    };
+    const header = (source: DescribeSource) => formatDescribeTree(empty, { source }).split("\n")[3];
+
+    expect(header("cdp-dom")).toContain("gesture-tap / gesture-scroll / gesture-drag");
+    expect(header("harmony-uitest")).toContain("gesture-tap / gesture-swipe,");
+    expect(header("ax-service")).toContain("gesture-tap / gesture-swipe / gesture-pinch");
+    expect(header("uiautomator")).toContain("gesture-tap / gesture-swipe / gesture-pinch");
   });
 
   // Bluesky-style names mix emoji, ZWJ sequences, and bidirectional isolate
@@ -340,6 +359,20 @@ describe("formatDescribeTree", () => {
     const out = formatDescribeTree(root, { source: "uiautomator" });
     expect(out).toMatch(/\[clickable,long-clickable,checked,disabled\]/);
     expect(out).toMatch(/\[scrollHidden=7\]/);
+
+    // Same node from HarmonyOS keeps every flag but that one. `uitest` reports
+    // `longClickable=true` on real screens (11 of the 86 nodes on the 6.1.1
+    // launcher), and nothing on the platform can perform the press — no verb is
+    // wired and `gesture-custom` declares no harmony capability — so printing it
+    // sends the agent after a tool that does not exist. Same reasoning as the
+    // per-source gesture-tool line in the header.
+    const harmony = formatDescribeTree(root, { source: "harmony-uitest" });
+    expect(harmony).toMatch(/\[clickable,checked,disabled\]/);
+    expect(harmony).not.toContain("long-clickable");
+    // Suppressed at the RENDER, not by dropping the node: 7 of those 11 nodes
+    // carry no other flag, and losing them from the tree costs the agent the
+    // element rather than one word about it.
+    expect(harmony).toMatch(/\[scrollHidden=7\]/);
   });
 
   // scrollHidden=0 is the "no clipped children" signal from the Android

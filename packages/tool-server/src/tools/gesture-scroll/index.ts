@@ -72,7 +72,7 @@ export const gestureScrollTool: ToolDefinition<Params, Result> = {
     failedMsg: ({ failureSignal }) => `Failed to scroll: ${failureSignal.error_code}`,
   },
   description: `Scroll content in a Chromium app by dispatching mouse-wheel events at a point. Anchor x/y are normalized 0.0–1.0 (fractions of the window, not pixels), same coordinate space as gesture-tap and describe. Deltas are fractions of the window too: deltaY 0.5 scrolls down half a window; negative scrolls back up.
-Use when content is below/above the fold (describe shows off-screen elements with zero height) or a list needs scrolling. Chromium only — on iOS/Android use gesture-swipe.
+Use when content is below/above the fold (describe shows off-screen elements with zero height) or a list needs scrolling. Chromium only — on iOS, Android and HarmonyOS use gesture-swipe.
 Returns { scrolled: true, timestampMs }. Fails if the Chromium CDP session is not reachable for the given device.`,
   alwaysLoad: true,
   searchHint: "scroll wheel list page chromium mouse down up content fold",

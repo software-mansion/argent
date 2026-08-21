@@ -127,6 +127,8 @@ function platformMatrix(
       return capability.chromium;
     case "vega":
       return capability.vega;
+    case "harmony":
+      return capability.harmony;
   }
 }
 

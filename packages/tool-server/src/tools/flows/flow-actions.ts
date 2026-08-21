@@ -879,6 +879,25 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
           : "rotate is unsupported on chromium — desktop apps have no rotate-gesture idiom; drive the app's rotate controls with tap/keyboard instead",
     };
   }
+  // HarmonyOS: `tap` has a backend (`gesture-tap`), the holds and the
+  // multi-contact gestures do not. Without this arm they resolve their point and
+  // dispatch `gesture-custom` / `gesture-pinch` / `gesture-rotate`, none of which
+  // declares harmony support — and a flow step goes through `invokeTool`, which
+  // does not run the capability gate, so the run stops on the service
+  // blueprint's "does not support platform" line instead of anything an author
+  // can act on.
+  if (
+    env.device.platform === "harmony" &&
+    (step.kind === "long-press" || step.kind === "pinch" || step.kind === "rotate")
+  ) {
+    return {
+      ok: false,
+      reason:
+        step.kind === "long-press"
+          ? "long-press is unsupported on HarmonyOS — `uitest uiInput` has a `longClick` verb, but it takes no hold duration and argent drives holds through `gesture-custom`, which has no HarmonyOS backend; use `tap`"
+          : `${step.kind} is unsupported on HarmonyOS — \`uitest uiInput\` injects one contact at a time and \`/dev/input\` is closed to \`hdc\`'s uid, so there is no multi-touch to build it from; drive the app's own zoom/rotate controls with \`tap\``,
+    };
+  }
   switch (step.kind) {
     case "tap":
       return runTap(env, step);

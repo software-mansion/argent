@@ -8,17 +8,19 @@ import type {
   ToolDefinition,
 } from "@argent/registry";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
-import { resolveDevice } from "../../utils/device-info";
+import { resolveDevice, harmonyConnectKey } from "../../utils/device-info";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isAndroidTv } from "../../utils/adb";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
-import { pollDescribeTree } from "../../utils/poll-describe-tree";
+import { pollDescribeTree, readCaveats } from "../../utils/poll-describe-tree";
+import { READ_CAVEAT_SOURCES } from "../describe/contract";
 import type { DescribeNode, DescribeTreeData } from "../describe/contract";
 import { describeIos, iosRequires } from "../describe/platforms/ios";
 import { describeAndroid, androidRequires } from "../describe/platforms/android";
 import { describeChromium } from "../describe/platforms/chromium";
 import { describeVega, vegaRequires } from "../describe/platforms/vega";
+import { describeHarmony, harmonyRequires } from "../describe/platforms/harmony";
 import {
   selectorSchema,
   nodeText,
@@ -57,7 +59,9 @@ const zodSchema = z
     udid: z
       .string()
       .min(1)
-      .describe("Target device id from `list-devices` (iOS UDID, Android serial, or Chromium id)."),
+      .describe(
+        "Target device id from `list-devices` (iOS UDID, Android serial, HarmonyOS id, or Chromium id)."
+      ),
     condition: z
       .enum(["exists", "visible", "hidden", "text"])
       .describe(
@@ -85,7 +89,7 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        "Optional iOS app bundle id, passed to the describe fallback (see `describe`). Ignored on Android / Chromium."
+        "Optional iOS app bundle id, passed to the describe fallback (see `describe`). Ignored on every other platform."
       ),
     timeoutMs: z
       .number()
@@ -136,6 +140,7 @@ const capability: ToolCapability = {
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
   vega: { vvd: true },
+  harmony: { device: true },
 };
 
 // ── Tree matching ────────────────────────────────────────────────────────
@@ -156,15 +161,19 @@ export function evaluateMatches(params: Params, matches: DescribeNode[]): boolea
 //     pending, or a native hierarchy that could not be read at all (nothing
 //     connected to auto-target, the service down, the query failing) →
 //     `describeIos` returns an empty tree plus a hint / should_restart instead
-//     of throwing. Android / Chromium never set these flags.
+//     of throwing, and HarmonyOS hints a dump that listed no windows. Android
+//     sets a hint only on a TV (leanback) target, where it rides every read and
+//     so reaches this arm as well; a phone or tablet sets neither. Chromium's
+//     one hint marks a TRUNCATED tree, which has children by definition, and an
+//     empty one throws — so it never arrives here.
 //   - the selector matched on an EARLIER poll (`everMatched`) yet the whole tree
 //     is now empty. A genuinely-hidden element leaves the rest of the screen
 //     behind; a wholly empty tree after we'd already read content is a transient
 //     blank frame mid-navigation, not the element being hidden. This is the only
-//     guard that fires on Android / Chromium, where an empty tree is otherwise
-//     taken at face value — without it an `everMatched` `hidden` wait would
-//     falsely resolve on a one-frame blink and release a gated tap against a
-//     screen that only briefly went blank.
+//     guard that fires on an Android phone or tablet, and on Chromium, where an
+//     empty tree is otherwise taken at face value — without it an `everMatched`
+//     `hidden` wait would falsely resolve on a one-frame blink and release a
+//     gated tap against a screen that only briefly went blank.
 function isBlindRead(data: DescribeTreeData, everMatched: boolean): boolean {
   if (data.tree.children.length > 0) return false;
   return Boolean(data.hint || data.should_restart || everMatched);
@@ -174,14 +183,7 @@ function isBlindRead(data: DescribeTreeData, everMatched: boolean): boolean {
 // learns the real cause (degraded AX, native injection pending) rather than a
 // bare "no element matched".
 function appendDiagnostics(base: string, lastData: DescribeTreeData | null): string {
-  if (!lastData) return base;
-  const extras: string[] = [];
-  if (lastData.should_restart) {
-    extras.push(
-      "the foreground app may need a restart for native inspection — call restart-app and retry"
-    );
-  }
-  if (lastData.hint) extras.push(lastData.hint);
+  const extras = readCaveats(lastData);
   return extras.length === 0 ? base : `${base} (${extras.join("; ")})`;
 }
 
@@ -234,7 +236,8 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
     params: Params,
     services: Record<string, unknown>,
     isTvOs: boolean,
-    androidIsTv: boolean
+    androidIsTv: boolean,
+    budgetMs: number
   ): Promise<DescribeTreeData> {
     if (device.platform === "ios") {
       return describeIos(registry, device, { bundleId: params.bundleId }, { isTvOs });
@@ -244,6 +247,9 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
     }
     if (device.platform === "vega") {
       return describeVega(device.id);
+    }
+    if (device.platform === "harmony") {
+      return describeHarmony(harmonyConnectKey(device.id), budgetMs);
     }
     return describeChromium(services.chromium as ChromiumCdpApi);
   }
@@ -273,12 +279,17 @@ The selector is { text?, identifier?, role? }; every provided field must match. 
 case-insensitive substrings of the element's label/value and role; identifier matches exactly (case-insensitive),
 also accepting the unqualified Android resource-id name ('submit' matches 'com.example.app:id/submit').
 It polls the same accessibility / DOM tree as \`describe\`
-(iOS AXRuntime, Android uiautomator, Chromium CDP, Vega automation toolkit) every pollIntervalMs
+(iOS AXRuntime, Android uiautomator, Chromium CDP, Vega automation toolkit, HarmonyOS \`uitest
+dumpLayout\`) every pollIntervalMs
 (default ${DEFAULT_POLL_INTERVAL_MS}ms) until timeoutMs (default ${DEFAULT_TIMEOUT_MS}ms).
 
-Returns { success: boolean, elapsed: number } — success=false means the condition never held before the
-timeout (a \`note\` then explains what was seen). Use this after a tap/navigation to wait for the next screen,
-or before tapping an element that appears asynchronously.`,
+Returns { success: boolean, elapsed: number }, plus a \`note\` whenever there is something to say about the
+read — on success=false it explains what was seen before the timeout, and on success=true it says why the
+pass is weaker than it looks: either \`hidden\` was satisfied by a selector that never matched anything (so the
+element may have been gone all along, or the selector is wrong — treat that as a failed check and fix the
+selector), or the tree it matched is not the whole live screen (a suspended HarmonyOS panel still serving its
+last frame, a Chromium page truncated at the walker's node budget). Read it either way. Use this after
+a tap/navigation to wait for the next screen, or before tapping an element that appears asynchronously.`,
     alwaysLoad: true,
     searchHint:
       "wait await poll until visible hidden exists text appears disappears timeout element condition settle",
@@ -300,6 +311,7 @@ or before tapping an element that appears asynchronously.`,
       if (device.platform === "ios") await ensureDeps(iosRequires);
       else if (device.platform === "android") await ensureDeps(androidRequires);
       else if (device.platform === "vega") await ensureDeps(vegaRequires);
+      else if (device.platform === "harmony") await ensureDeps(harmonyRequires);
 
       // Resolve once, outside the poll loop — re-probing `xcrun` per fetch would
       // blow the per-fetch budget for a fake UDID that never caches. Same for
@@ -327,7 +339,7 @@ or before tapping an element that appears asynchronously.`,
       let everMatched = false;
 
       const poll = await pollDescribeTree<WaitResult>({
-        fetchTree: () => fetchTree(device, params, services, isTvOs, androidIsTv),
+        fetchTree: (budgetMs) => fetchTree(device, params, services, isTvOs, androidIsTv, budgetMs),
         timeoutMs,
         pollIntervalMs,
         signal,
@@ -339,11 +351,21 @@ or before tapping an element that appears asynchronously.`,
           const blind = isBlindRead(data, everMatched);
           if (!blind && evaluateMatches(params, matches)) {
             const result: WaitResult = { success: true, elapsed: Date.now() - start };
-            if (params.condition === "hidden" && !everMatched) {
-              result.note =
-                "condition met immediately — the selector never matched any element, " +
-                "so it may have already been hidden before the wait, or the selector is wrong";
-            }
+            // Both, not the first that applies: a `hidden` that met its
+            // condition on sight is exactly the wait a suspended panel resolves
+            // — the selector matches nothing in a frame composited before the
+            // screen went dark — and the caveat is what stops the tap that
+            // follows from landing nowhere.
+            const notes = [
+              params.condition === "hidden" && !everMatched
+                ? "condition met immediately — the selector never matched any element, " +
+                  "so it may have already been hidden before the wait, or the selector is wrong"
+                : null,
+              // A success read off a tree that may not be the live screen still
+              // owes the agent that caveat.
+              data.hint && READ_CAVEAT_SOURCES.has(data.source) ? data.hint : null,
+            ].filter((n): n is string => n !== null);
+            if (notes.length > 0) result.note = notes.join(" ");
             return { done: true, result };
           }
           return { done: false };
