@@ -48,8 +48,8 @@ const UPGRADE_MAX_ATTEMPTS = 3;
  * Resolve the telemetry id.
  *
  * When a host fingerprint is available, the id IS that fingerprint — the 64-hex
- * one-way hash emitted by `simulator-server fingerprint`, used verbatim so
- * PostHog's native unique users == unique machines, stable across reinstalls.
+ * one-way hash emitted by `simulator-server fingerprint`, used verbatim so the
+ * distinct id counts unique machines, stable across reinstalls.
  *
  * Blocking is confined to ONE path: the truly-fresh machine (nothing valid on
  * disk yet), where the fingerprint is resolved SYNCHRONOUSLY so the very first
@@ -142,7 +142,7 @@ export function readOrCreateAnonId(resolveFingerprint?: () => string | null): st
  * tool-server that started before the binary was warm — eventually converges on
  * the deterministic fingerprint WITHOUT ever blocking the event loop. On success
  * it migrates the on-disk id and updates the cache, so subsequent events use the
- * fingerprint; **local only**, no PostHog alias/$identify is emitted.
+ * fingerprint; **local only**, no remote identity/alias event is emitted.
  *
  * Directly fixes the divergence where a stuck long-lived process kept emitting a
  * fallback while short-lived processes migrated the on-disk id to the

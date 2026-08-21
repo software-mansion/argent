@@ -62,7 +62,15 @@ import {
   type ActionEnv,
   type DirectiveOutcome,
 } from "./flow-actions";
-import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
+import {
+  buildAppStateMessage,
+  isInjectableBundleId,
+  isNativeDevtoolsBlockResult,
+  nativeDevtoolsRef,
+  NATIVE_DEVTOOLS_CONNECT_BUDGET_MS,
+  type NativeDevtoolsApi,
+  type NativeDevtoolsAppState,
+} from "../../blueprints/native-devtools";
 import { androidDevtoolsRef, type AndroidDevtoolsApi } from "../../blueprints/android-devtools";
 import {
   chromiumCdpRef,
@@ -288,14 +296,28 @@ const POST_LAUNCH_SETTLE_MS = 1500;
  * missing connection as a hard per-read error (it never degrades to the
  * collapsing AX tree — see flow-tree.ts), so without this gate a slow cold
  * start would fail the first directive with a raw tree-source error; gating
- * the launch step reports the problem where it belongs, with a relaunch hint.
+ * the launch step reports the problem where it belongs, with the measured
+ * reason the connection never came up.
+ *
+ * The same budget the measurement allows a dial, and deliberately the same
+ * constant: a gate that waited longer than the state machine's window would
+ * time out onto `unregistered`, whose remedy is a tool-server restart, for an
+ * app it had itself decided was still worth waiting for.
+ *
+ * Exported so the gate's reason text can be pinned against it rather than a
+ * drifting literal.
  */
-// 15s (was 8s): the injected dylib's connect is gated on the app's main
-// thread, and a heavy first-ever cold start (Hermes first parse, asset
-// decode on a loaded host) can pin it past 8s. Matches the 15s
-// getFullHierarchy RPC tier — both wait out the same class of stall.
-const NATIVE_READY_TIMEOUT_MS = 15000;
+export const NATIVE_READY_TIMEOUT_MS = NATIVE_DEVTOOLS_CONNECT_BUDGET_MS;
 const NATIVE_READY_POLL_MS = 250;
+
+/**
+ * How long the launch step has spent on the app by the time the gate takes its
+ * verdict: the post-launch settle plus the whole connect wait. The gate's own
+ * timeout is only the second half, so quoting it alone understates the age of a
+ * process the step launched — the fact the remedies below rest on. Exported so
+ * they can be pinned against it rather than a drifting literal.
+ */
+export const LAUNCH_TO_VERDICT_MS = POST_LAUNCH_SETTLE_MS + NATIVE_READY_TIMEOUT_MS;
 
 /**
  * `tool:` steps that can change or relaunch the foreground app — running one
@@ -303,6 +325,10 @@ const NATIVE_READY_POLL_MS = 250;
  * {@link ActionEnv.treeOutage}. `button` is included for its `home` case;
  * distinguishing button kinds here would couple this list to that tool's arg
  * schema for little gain.
+ *
+ * `launch-app` and `restart-app` re-set the id from their own `bundleId` once
+ * they return — they name the app they switched to, where the rest leave it
+ * unknown.
  */
 const FOREGROUND_CHANGING_TOOLS = new Set([
   "launch-app",
@@ -313,29 +339,133 @@ const FOREGROUND_CHANGING_TOOLS = new Set([
 ]);
 
 /**
- * Poll until native-devtools is connected for `bundleId`. Returns true once
- * connected, false on timeout / abort / the service being unavailable. The
- * caller decides how to treat false (iOS flows fail; see treeSourceGate).
+ * Poll until native-devtools is connected for `bundleId`. Returns null once
+ * connected, on abort (the caller reports the cancellation itself), and for an
+ * app whose hierarchy this gate cannot wait for at all. Otherwise the reason the
+ * connection never came up: the resolution error when the service is
+ * unreachable, else the state measured off the running process, rewritten for
+ * the one thing that distinguishes this caller — it has just launched the app.
+ *
+ * Measured rather than guessed: this gate is reached right after a launch, so
+ * "re-run to relaunch" would be the same restart loop `appConnectionState`
+ * exists to break, one level up.
  */
 async function waitForNativeDevtools(
   registry: Registry,
   device: DeviceInfo,
   bundleId: string,
   signal?: AbortSignal
-): Promise<boolean> {
+): Promise<string | null> {
   let api: NativeDevtoolsApi;
   try {
     const ref = nativeDevtoolsRef(device);
     api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
-  } catch {
-    return false; // native-devtools service unavailable
+  } catch (err) {
+    // Withheld for the same reason as the timeout below: an app that may never
+    // load the dylib was never going to be served by this service, so its
+    // failure is not what stops the launch.
+    if (!isInjectableBundleId(bundleId)) return null;
+    return `the native-devtools service is unavailable for ${bundleId} (${errMsg(err)})`;
   }
   const deadline = Date.now() + NATIVE_READY_TIMEOUT_MS;
   for (;;) {
-    if (signal?.aborted) return false;
-    if (api.isConnected(bundleId)) return true;
-    if (Date.now() >= deadline) return false;
-    if (!(await sleepOrAbort(NATIVE_READY_POLL_MS, signal))) return false;
+    if (signal?.aborted) return null;
+    if (api.isConnected(bundleId)) return null;
+    if (Date.now() >= deadline) break;
+    if (!(await sleepOrAbort(NATIVE_READY_POLL_MS, signal))) return null;
+  }
+  // Timed out with no connection. An app that may never load the dylib has no
+  // hierarchy to wait for, so that is its expected outcome rather than a launch
+  // failure: the step started the app, and a coordinate-driven flow needs
+  // nothing more. The impossibility bites only where a selector needs the
+  // hierarchy, and `fetchFlowTree` reports it there.
+  //
+  // The wait itself still runs, deliberately: whether the dylib loads into a
+  // simulator system app is unsettled (#453 saw `connected: false` for
+  // com.apple.Preferences on iOS 26.5, an E2E run `connected: true` on 18.5),
+  // and skipping it would bake that contested claim into behaviour. Only the
+  // VERDICT is withheld — before the measurement, which no arm below would
+  // consult for such an app and which costs several simctl round-trips the
+  // caller cannot interrupt.
+  if (!isInjectableBundleId(bundleId)) return null;
+  // Measure why — the state may have flipped to connected since the last poll.
+  // The loop's abort check covers every exit but this one (`break` follows it
+  // synchronously); an abort landing during the measurement's uninterruptible
+  // simctl work is caught by the caller, which drops the reason.
+  const state = await api.appConnectionState(bundleId).catch(() => "indeterminate" as const);
+  if (state === "connected") return null;
+  return flowLaunchGateReason(bundleId, state);
+}
+
+/**
+ * The measured diagnosis, rewritten for the one fact that separates this caller
+ * from every other consumer of {@link buildAppStateMessage}: it has just run
+ * `restart-app` on this bundle id and spent {@link LAUNCH_TO_VERDICT_MS} on it.
+ *
+ * Those messages are written for a reader who has not launched anything, so
+ * "launch it" / "restart it" is the missing step. Emitted verbatim here they
+ * hand back the action this step just took, and an author who obeys re-runs the
+ * flow into the identical state. Each state gets the sentence that is true
+ * *after* a launch instead; the switch is exhaustive so a state added later
+ * cannot inherit a remedy written for a reader who never launched.
+ */
+export function flowLaunchGateReason(
+  bundleId: string,
+  state: Exclude<NativeDevtoolsAppState, "connected">
+): string {
+  const measured = buildAppStateMessage(bundleId, state);
+  switch (state) {
+    case "not_running":
+      // The step launched it and it is gone — the one state a relaunch provably
+      // reproduces, since a relaunch is what produced it. The measured remedy is
+      // the step's own action, so it reads as advice to change nothing.
+      return (
+        `${bundleId} was relaunched by this step and is no longer running ${LAUNCH_TO_VERDICT_MS} ms later, ` +
+        `so it exited after launch rather than failing to connect. Re-running the flow repeats the same launch: ` +
+        `start it by hand (launch-app, then describe or screenshot) to see the crash or early exit first.`
+      );
+    case "stale_process":
+      // The first sentence must not pick between the state's two producers: a
+      // process carrying no argent injection at all, or one carrying THIS
+      // endpoint and merely older than the listener. Blaming the launchd
+      // environment would be false for the second — and the measured text names
+      // both. The environment IS right on a SECOND landing: a re-run's process
+      // is younger than any long-up listener, which rules that second producer
+      // out (it needs `processAge + grace >= listenerAge`).
+      return (
+        `${measured} This step already relaunched it, so the process it measured predates whatever the ` +
+        `relaunch would have given it — re-run the flow to launch again. If it lands here twice, the ` +
+        `simulator's launchd environment is not holding argent's instrumentation: re-boot the device ` +
+        `(boot-device with force) before re-running.`
+      );
+    case "unregistered":
+      // Everywhere else the window this verdict reads is the app's whole
+      // lifetime; here it is only this step's launch plus its wait, which a cold
+      // start (an RN build fetching its bundle) can outlast — so the measured
+      // remedy would have the author restart a healthy tool-server. The figure
+      // is the whole spend: the poll checks the live map once before its first
+      // sleep, so a dial during the post-launch settle counts too.
+      return (
+        `${measured} A cold start slower than the ${LAUNCH_TO_VERDICT_MS} ms this step waited reads the ` +
+        `same way — if that is likely, re-run the flow to relaunch and wait again before restarting anything.`
+      );
+    case "connecting":
+      // A process seconds old, though this step launched the app
+      // LAUNCH_TO_VERDICT_MS ago — so something relaunched it in between, and
+      // the handshake being waited on belongs to that later process. "Wait" is
+      // still right; crediting this step with that launch is not.
+      return (
+        `${measured} This step launched it ${LAUNCH_TO_VERDICT_MS} ms before that reading, so the process ` +
+        `being measured started after the step's own launch — something relaunched it in between. Re-run ` +
+        `the flow once the app is settled.`
+      );
+    case "indeterminate":
+      // The measured text opens with "Call restart-app then retry", which this
+      // step already did once. What survives is the part that terminates.
+      return (
+        `${measured} This step already performed that one restart, so re-run the flow at most once more ` +
+        `before restarting the tool-server rather than the app.`
+      );
   }
 }
 
@@ -389,9 +519,12 @@ async function androidDevtoolsReady(registry: Registry, device: DeviceInfo): Pro
  * it never comes up, every selector read would fail — `fetchFlowTree` refuses
  * to degrade to the trimmed AX tree (see flow-tree.ts) — so the launch step
  * fails outright with an actionable, platform-specific reason instead of
- * letting the first directive surface a raw tree-source error. Returns null
- * when ready (or the platform needs no gate / the run was aborted), else the
- * reason to report.
+ * letting the first directive surface a raw tree-source error.
+ *
+ * Returns null when ready, when the platform needs no gate, when the run was
+ * aborted, and for an iOS app whose hierarchy may never be servable at all (see
+ * {@link waitForNativeDevtools}) — there the launch is not what failed, and the
+ * first selector read reports the impossibility. Otherwise the reason to report.
  */
 async function treeSourceGate(
   registry: Registry,
@@ -400,12 +533,11 @@ async function treeSourceGate(
   signal?: AbortSignal
 ): Promise<string | null> {
   if (device.platform === "ios" && !signal?.aborted) {
-    const connected = await waitForNativeDevtools(registry, device, bundleId, signal);
-    if (!connected && !signal?.aborted) {
-      return (
-        `could not connect to native devtools for ${bundleId}. Re-run to relaunch the app and retry. ` +
-        `If it keeps failing, a stale or duplicate argent server may be holding the devtools connection — restart the argent server and try again.`
-      );
+    const reason = await waitForNativeDevtools(registry, device, bundleId, signal);
+    if (reason !== null && !signal?.aborted) {
+      // Every reason names the bundle id, so the prefix must not: doubled, it
+      // reads as two separate failures reported back to back.
+      return `could not connect to native devtools. ${reason}`;
     }
   }
   if (device.platform === "android" && !signal?.aborted) {
@@ -462,13 +594,23 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
       reason: `no app id declared for platform "${device.platform}" — add a launch entry for it`,
     };
   }
+  let restart: unknown;
   try {
-    await invokeOnDevice(env, "restart-app", { bundleId });
+    restart = await invokeOnDevice(env, "restart-app", { bundleId });
   } catch (err) {
     // A cancellation makes the sub-tool itself reject; that rejection is the
     // abort, not an app failure, so it must not be attributed to restart-app.
     if (signal?.aborted) return ABORTED_OUTCOME;
     return { ok: false, reason: `restart-app failed: ${errMsg(err)}` };
+  }
+  // A blocked precheck is RESOLVED rather than thrown, and returns before the
+  // terminate and the launch — so the app was never started. Every remedy below
+  // is written for one this step did launch: unread, the gate measures an app
+  // that never ran and `not_running` becomes "it exited after launch", sending
+  // the author after a crash that did not happen while the message naming the
+  // real cause is dropped.
+  if (isNativeDevtoolsBlockResult("restart-app", restart)) {
+    return { ok: false, reason: `restart-app did not start ${bundleId}: ${restart.message}` };
   }
   if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
   const gate = await treeSourceGate(registry, device, bundleId, signal);
@@ -478,8 +620,8 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   if (gate) return { ok: false, reason: gate };
   // Remember the launched app for the rest of the RUN (nested `run:` flows
   // share this state, so a nested launch retargets the whole run — see
-  // ActionEnv.launchedNativeApp). iOS tree reads use it only when target
-  // auto-resolution times out mid-stall.
+  // ActionEnv.launchedNativeApp). iOS tree reads use it to explain a read they
+  // could not take, and to arbitrate a target auto-resolution stalled out on.
   state.launchedNativeApp = bundleId;
   return { ok: true };
 }
@@ -2360,6 +2502,34 @@ async function execLeafStep(
             outputHint,
             args,
           };
+        }
+        // Same hazard as the two above, on the native-devtools precheck: it
+        // RESOLVES its block rather than throwing, so a step that never reached
+        // the tool's work read as green — and a saved regression flow reported
+        // `ok: true` for a native read that returned nothing. `launch:` already
+        // guards its own `restart-app` (see runLaunch); this is the `tool:`
+        // spelling of the same sub-tools, plus the six feature tools it never
+        // covered.
+        if (isNativeDevtoolsBlockResult(step.name, result)) {
+          return {
+            ...base,
+            status: "fail",
+            tool: step.name,
+            reason: `${step.name} did not run (${result.status}): ${result.message}`,
+            result,
+            outputHint,
+            args,
+          };
+        }
+        // The launch-derived hint the clear above spent, restored for the two
+        // tools whose args name the app they just started: they change WHICH
+        // app is in front, not whether the run has one, so discarding the id
+        // drops the iOS tree source back to auto-targeting's "Launch or restart
+        // the app first" — the very advice the measured diagnosis replaces.
+        // After the invoke, like `runLaunch`: a tool that threw started nothing.
+        if (step.name === "launch-app" || step.name === "restart-app") {
+          const launched = (args as { bundleId?: unknown }).bundleId;
+          if (typeof launched === "string") state.launchedNativeApp = launched;
         }
         return { ...base, status: "pass", tool: step.name, result, outputHint, args };
       } catch (err) {

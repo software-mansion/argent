@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AXServiceApi, AXDescribeResponse } from "../src/blueprints/ax-service";
-import type { NativeDevtoolsApi } from "../src/blueprints/native-devtools";
+import type { NativeDevtoolsApi, NativeDevtoolsAppState } from "../src/blueprints/native-devtools";
 import { NON_INJECTABLE_NATIVE_WARNING } from "../src/blueprints/native-devtools";
 import { createDescribeTool } from "../src/tools/describe";
+import { describeIos, __resetBootCaveatStateForTests } from "../src/tools/describe/platforms/ios";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import { isTvOsSimulator } from "../src/utils/ios-devices";
 
@@ -38,6 +39,7 @@ function makeAXServiceApi(
 function makeNativeDevtoolsApi(options: {
   connectedBundleIds?: string[];
   requiresRestart?: boolean;
+  state?: NativeDevtoolsAppState;
   describeScreenResult?: unknown;
 }): NativeDevtoolsApi {
   const connected = new Set(options.connectedBundleIds ?? []);
@@ -50,7 +52,8 @@ function makeNativeDevtoolsApi(options: {
     isConnected: (bundleId) => connected.has(bundleId),
     isAppRunning: async () => true,
     listConnectedBundleIds: () => [...connected],
-    requiresAppRestart: async () => options.requiresRestart ?? false,
+    appConnectionState: async () =>
+      options.state ?? (options.requiresRestart ? "stale_process" : "connected"),
     activateNetworkInspection: () => {},
     getNetworkLog: () => [],
     clearNetworkLog: () => {},
@@ -100,6 +103,10 @@ describe("describe tool", () => {
     __resetDepCacheForTests();
     __primeDepCacheForTests(["xcrun", "adb"]);
     mockIsTvOsSimulator.mockResolvedValue(false);
+    // The externally-booted caveat is emitted once per device per server
+    // lifetime, so the "already told" set survives between tests that share a
+    // udid unless it is cleared here.
+    __resetBootCaveatStateForTests();
   });
 
   it("returns elements from ax-service daemon", async () => {
@@ -257,14 +264,261 @@ describe("describe tool", () => {
     expect(result.source).toBe("ax-service");
     expect(result.should_restart).toBe(true);
     expect(elementLineCount(result.description)).toBe(0);
+    // The boolean alone is an undocumented JSON field; the reason the relaunch
+    // is warranted has to travel with it.
+    expect(result.hint).toContain("restart-app");
+  });
+
+  it("carries the loop escape for a process it could not inspect", async () => {
+    // `indeterminate` is the only unconnected state a *running* app reaches on
+    // ios-remote, whose app processes cannot be inspected. describe sets
+    // should_restart there and await-ui-element renders it as "call restart-app
+    // and retry", so without the diagnosis riding along the agent restarts
+    // forever with nothing ever naming the tool-server.
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
+    const nativeApi = makeNativeDevtoolsApi({
+      connectedBundleIds: [],
+      state: "indeterminate",
+    });
+    const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" }
+    );
+    expect(result.source).toBe("ax-service");
+    expect(result.should_restart).toBe(true);
+    expect(result.hint).toContain("do not keep restarting the app");
+    expect(result.hint).toContain("argent server stop && argent server start --detach");
+  });
+
+  it("names the stopped app rather than only flagging a restart", async () => {
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
+    const nativeApi = makeNativeDevtoolsApi({
+      connectedBundleIds: [],
+      state: "not_running",
+    });
+    const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" }
+    );
+    expect(result.should_restart).toBe(true);
+    expect(result.hint).toContain("com.example.app");
+    expect(result.hint).toContain("launch-app");
+  });
+
+  it("keeps the AX-degraded hint alongside the connection diagnosis", async () => {
+    // The two hints answer different questions — how to fix the sim boot, and
+    // why the native fallback is silent — so neither may displace the other.
+    // Both arms of the should_restart split build the hint separately, so
+    // covering one leaves the other free to drop it.
+    const remedies: Record<string, string> = {
+      stale_process: "restart-app",
+      unregistered: "argent server stop && argent server start --detach",
+    };
+    for (const [state, remedy] of Object.entries(remedies)) {
+      const axApi = makeAXServiceApi({ alertVisible: false, elements: [] }, { degraded: true });
+      const nativeApi = makeNativeDevtoolsApi({
+        connectedBundleIds: [],
+        state: state as "stale_process" | "unregistered",
+      });
+      const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
+      const tool = createDescribeTool(registry);
+
+      const result = await tool.execute(
+        {},
+        { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" }
+      );
+      expect(result.hint, `${state} must keep the boot guidance`).toContain("boot-device");
+      expect(result.hint, `${state} must keep its own remedy`).toContain(remedy);
+    }
+  });
+
+  // `appConnectionState` re-applies the launchd env before it can answer, so it
+  // rejects on a sim that went away mid-call. An empty tree returned bare there
+  // reads as "nothing on screen" rather than "could not be read".
+  it("still explains itself when the connection probe throws", async () => {
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
+    const nativeApi = makeNativeDevtoolsApi({ connectedBundleIds: [], state: "stale_process" });
+    nativeApi.appConnectionState = async () => {
+      throw new Error("Invalid device: AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA");
+    };
+    const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" }
+    );
+    expect(result.hint).toBeDefined();
+    expect(result.hint).toContain("do not keep restarting the app");
+  });
+
+  // Without `bundleId`, `resolveNativeTargetApp` draws its candidates from the
+  // connected list — so every state the diagnosis explains throws out of the
+  // resolution, before anything is measured. This is the DEFAULT form of the
+  // call, so the two forms would otherwise answer differently for one device
+  // state.
+  it("explains an unreadable empty screen even with no bundleId to measure", async () => {
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
+    const nativeApi = makeNativeDevtoolsApi({ connectedBundleIds: [], state: "unregistered" });
+    const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
+
+    expect(result.hint).toBeDefined();
+    expect(result.hint).toMatch(/not evidence that nothing is on screen/);
+    // No app was resolved, so no state was measured and no relaunch may be
+    // prescribed — the empty read is marked untrustworthy, nothing more.
+    expect(result.should_restart).toBeUndefined();
+  });
+
+  // The blueprint is registered unconditionally, so on an iOS target a failed
+  // resolution never means "no such service" — it means the service did not come
+  // up (commonly a socket bind losing to a concurrent same-udid server). A
+  // failed attempt at corroboration, so the empty read is still unexplained.
+  it("explains the read when the native-devtools service fails to come up", async () => {
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
+    const registry = makeMockRegistry({ axService: axApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
+
+    expect(result.hint).toMatch(/not evidence that nothing is on screen/);
+    expect(result.should_restart).toBeUndefined();
+  });
+
+  // All three sites that emit this hint are reachable with an explicit
+  // bundleId, so "pass bundleId" would name the step the caller already took.
+  it("does not tell a caller that passed bundleId to pass bundleId", async () => {
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
+    const nativeApi = makeNativeDevtoolsApi({ connectedBundleIds: ["com.example.app"] });
+    nativeApi.queryViewHierarchy = async () => {
+      throw new Error("inspector timeout after 5000ms");
+    };
+    const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" }
+    );
+
+    expect(result.hint).toMatch(/not evidence that nothing is on screen/);
+    expect(result.hint).not.toMatch(/Pass `bundleId`/);
+    // Dropping the bundleId half must not drop `screenshot` with it — the only
+    // action left when the hierarchy cannot be read.
+    expect(result.hint).toMatch(/screenshot/);
+  });
+
+  // An agent reads both forms, so both have to parse as English: the
+  // conditional clause and the action it leads into are one sentence, and
+  // joining them wrongly yields "measured, or Take a `screenshot`".
+  it.each([
+    ["with bundleId", "com.example.app", /on screen\. Take a `screenshot` to see what is there\.$/],
+    [
+      "without bundleId",
+      undefined,
+      /on screen\. Pass `bundleId` to have the connection state measured, or take a `screenshot` to see what is there\.$/,
+    ],
+  ] as const)("reads as one grammatical sentence %s", async (_label, bundleId, expected) => {
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
+    const registry = makeMockRegistry({ axService: axApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", ...(bundleId ? { bundleId } : {}) }
+    );
+
+    expect(result.hint).toMatch(expected);
+  });
+
+  // The ax-service's own hint is the simulator's state and carries the only
+  // corrective action for it; the read-level note must not displace it.
+  it("keeps the ax-degraded boot guidance ahead of the unreadable-hierarchy note", async () => {
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] }, { degraded: true });
+    const registry = makeMockRegistry({ axService: axApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
+
+    expect(result.hint).toContain("boot-device");
+    expect(result.hint).toMatch(/not evidence that nothing is on screen/);
+    // "ahead of" is the point: a reader who stops at the first sentence must
+    // reach the sim-level corrective action, not the note about one read.
+    // Presence alone passes with the two swapped.
+    expect(result.hint!.indexOf("boot-device")).toBeLessThan(
+      result.hint!.indexOf("not evidence that nothing is on screen")
+    );
+  });
+
+  it("does NOT return should_restart while the app is still connecting", async () => {
+    // await-ui-element renders `should_restart` as "call restart-app and retry",
+    // and exec is what starts the dial — so obeying it mid-handshake discards the
+    // connection being waited on and resets the age the verdict reads.
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
+    const nativeApi = makeNativeDevtoolsApi({
+      connectedBundleIds: [],
+      state: "connecting",
+    });
+    const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" }
+    );
+    expect(result.source).toBe("ax-service");
+    expect(result.should_restart).toBeUndefined();
+    expect(result.hint).toContain("Wait a few seconds");
+    // The prohibition, not just the absence of the hyphenated tool name — the
+    // hint is describe's only prose channel, and "then relaunch the app" would
+    // satisfy every other assertion here. With its colon, so that a qualified
+    // "…more than once" cannot pass off one relaunch as permitted: here the
+    // first one is already the one that discards the handshake.
+    expect(result.hint).toContain("Do NOT restart the app:");
+    expect(result.hint).not.toMatch(/restart-app/);
+  });
+
+  it("does NOT return should_restart when the app is injected but unregistered", async () => {
+    // The process here already launched with this service's injection in place,
+    // so a relaunch reproduces it and `should_restart` would rebuild the
+    // restart-app → describe loop. The diagnosis travels as a hint instead,
+    // which still marks the empty read untrustworthy for await-ui-element.
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
+    const nativeApi = makeNativeDevtoolsApi({
+      connectedBundleIds: [],
+      state: "unregistered",
+    });
+    const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" }
+    );
+    expect(result.source).toBe("ax-service");
+    expect(result.should_restart).toBeUndefined();
+    expect(result.hint).toContain("argent server stop && argent server start --detach");
+    expect(result.hint).not.toMatch(/restart-app/);
   });
 
   it("does NOT return should_restart for a non-injectable Apple system app (no restart loop)", async () => {
-    // com.apple.* apps can never load the injected dylib, so requiresAppRestart
-    // is always true for them in an unmocked run. Without an injectability gate,
-    // describe returns should_restart:true → the agent restarts the system app →
-    // AX is still empty → describe again → unbounded loop. The fallback must
-    // instead return the (empty) AX result with a screenshot hint.
+    // A com.apple.* app cannot be relied on to load the dylib, so it may never
+    // connect — yet the simulator's launchd env is applied process-wide, so its
+    // process carries the injection tokens and the measurement judges it on age.
+    // Older than this tool-server's listener (the usual case: system apps are
+    // already running when the server starts) reads `stale_process`, whose
+    // remedy is restart-app. Without an injectability gate that is
+    // should_restart:true → restart → AX still empty → describe → unbounded
+    // loop. The fallback must return the (empty) AX result with a screenshot
+    // hint instead.
     const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
     const nativeApi = makeNativeDevtoolsApi({
       connectedBundleIds: [],
@@ -287,6 +541,13 @@ describe("describe tool", () => {
     // and the native-devtools-status description.
     expect(result.hint).toMatch(/`screenshot`/);
     expect(result.hint).toContain(NON_INJECTABLE_NATIVE_WARNING);
+    // One of the agent-facing surfaces that must agree with the rest on HOW
+    // certain the injectability claim is (see the cross-surface check in
+    // native-devtools-status.test.ts): #453 saw the dylib fail to load on iOS
+    // 26.5, an E2E run saw it succeed on 18.5, so no surface may claim
+    // impossibility while all keep the terminal do-not-retry instruction.
+    expect(result.hint).not.toMatch(/can never (be injected|load|inject)/);
+    expect(result.hint).toMatch(/will NOT\s+help|cannot be relied on/);
   });
 
   it("keeps the degraded re-boot hint for a com.apple.* app when the ax-service is degraded", async () => {
@@ -494,6 +755,217 @@ describe("describe tool", () => {
     expect(result.hint).toMatch(/system dialogs/i);
   });
 
+  // ── Externally-booted caveat: wording and repetition ─────────────────────
+  // A sim booted by the developer (`xcrun simctl boot`, Xcode, `expo run:ios`)
+  // never gets the pre-boot AX prefs, so `degraded` stays true for its whole
+  // life. Verified on an externally-booted iOS 18.6 sim: describe returns the
+  // full tree — the Maps location prompt included, all three buttons tappable —
+  // so the caveat must neither order a reboot that would kill the developer's
+  // Metro session nor repeat itself on every call.
+
+  it("states the limitation without ordering a reboot when the degraded read returned a tree", async () => {
+    const axApi = makeAXServiceApi(
+      {
+        alertVisible: false,
+        screenFrame: { width: 440, height: 956 },
+        elements: [
+          {
+            label: "General",
+            frame: { x: 0.045, y: 0.337, width: 0.9, height: 0.046 },
+            traits: [],
+          },
+        ],
+      },
+      { degraded: true }
+    );
+    const tool = createDescribeTool(makeMockRegistry({ axService: axApi }));
+
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
+
+    // The tree read fine, so the caveat is a statement, not an instruction:
+    // no MUST, and no "do it now / before continuing" urgency for an agent to
+    // obey literally.
+    expect(result.hint).not.toMatch(/MUST/);
+    expect(result.hint).not.toMatch(/\bnow\b/i);
+    expect(result.hint).not.toMatch(/before continuing/i);
+    // It still names the remedy and what the remedy costs.
+    expect(result.hint).toMatch(/boot-device/);
+    expect(result.hint).toMatch(/restart/i);
+  });
+
+  it("emits the degraded caveat once per device, not on every describe", async () => {
+    const axApi = makeAXServiceApi(
+      {
+        alertVisible: false,
+        screenFrame: { width: 440, height: 956 },
+        elements: [
+          {
+            label: "General",
+            frame: { x: 0.045, y: 0.337, width: 0.9, height: 0.046 },
+            traits: [],
+          },
+        ],
+      },
+      { degraded: true }
+    );
+    const tool = createDescribeTool(makeMockRegistry({ axService: axApi }));
+    const udid = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
+
+    const first = await tool.execute({}, { udid });
+    const second = await tool.execute({}, { udid });
+    const third = await tool.execute({}, { udid });
+
+    expect(first.hint).toMatch(/booted through argent/);
+    expect(second.hint).toBeUndefined();
+    expect(third.hint).toBeUndefined();
+    // Suppressing the caveat must not cost the caller the tree itself.
+    expect(elementLineCount(second.description)).toBe(1);
+  });
+
+  it("tells the caveat again after the device has read healthy in between", async () => {
+    // A udid can leave the state the caveat describes and come back to it: boot
+    // through argent (or hand the udid to a fresh sim), then boot externally
+    // again. That second external boot has never been told, so keying "already
+    // told" to the tool-server's lifetime silences it for good after one cycle.
+    const elements = [
+      { label: "General", frame: { x: 0.045, y: 0.337, width: 0.9, height: 0.046 }, traits: [] },
+    ];
+    const response = { alertVisible: false, screenFrame: { width: 440, height: 956 }, elements };
+    const udid = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
+    const degradedTool = () =>
+      createDescribeTool(
+        makeMockRegistry({ axService: makeAXServiceApi(response, { degraded: true }) })
+      );
+    const healthyTool = createDescribeTool(
+      makeMockRegistry({ axService: makeAXServiceApi(response, { degraded: false }) })
+    );
+
+    expect((await degradedTool().execute({}, { udid })).hint).toMatch(/booted through argent/);
+    expect((await degradedTool().execute({}, { udid })).hint).toBeUndefined();
+    // Rebooted through argent: no caveat, and the device is no longer one the
+    // caveat has been told about.
+    expect((await healthyTool.execute({}, { udid })).hint).toBeUndefined();
+    // Booted externally again — a state this session has not reported yet.
+    expect((await degradedTool().execute({}, { udid })).hint).toMatch(/booted through argent/);
+  });
+
+  it("tells each degraded device its own caveat", async () => {
+    const axApi = makeAXServiceApi(
+      {
+        alertVisible: false,
+        screenFrame: { width: 440, height: 956 },
+        elements: [
+          {
+            label: "General",
+            frame: { x: 0.045, y: 0.337, width: 0.9, height: 0.046 },
+            traits: [],
+          },
+        ],
+      },
+      { degraded: true }
+    );
+    const tool = createDescribeTool(makeMockRegistry({ axService: axApi }));
+
+    const first = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
+    const other = await tool.execute({}, { udid: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB" });
+
+    expect(first.hint).toMatch(/booted through argent/);
+    expect(other.hint).toMatch(/booted through argent/);
+  });
+
+  it("repeats the blind-read caveat every call instead of deduping it", async () => {
+    // An empty tree from a degraded sim is the one case where the reboot earns
+    // its cost, and `isBlindRead` (await-ui-element / flows) reads a present
+    // `hint` on an empty tree as "this emptiness is untrustworthy". Deduping
+    // here would let a later `hidden` wait resolve true off a blind read.
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] }, { degraded: true });
+    const tool = createDescribeTool(makeMockRegistry({ axService: axApi }));
+    const udid = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
+
+    const first = await tool.execute({}, { udid });
+    const second = await tool.execute({}, { udid });
+
+    expect(first.hint).toMatch(/boot-device/);
+    expect(second.hint).toEqual(first.hint);
+    expect(first.hint).toMatch(/no elements/i);
+  });
+
+  it("keeps the blind-read caveat when native-devtools fills the tree the AX read left empty", async () => {
+    // Reproduced on a fresh iOS 18.6 sim whose AX read went blind for the whole
+    // boot: with the location prompt on screen, native-devtools returned the
+    // injected app's own 20 elements and the dialog was not among them. That
+    // tree is populated but carries no SpringBoard chrome and no system dialog
+    // at all, so it is no evidence the AX subsystem works — reading it as such
+    // downgrades the caveat to the standing note, which the per-device gate
+    // then deletes, leaving the agent a tree silently missing a modal that is
+    // blocking the screen.
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] }, { degraded: true });
+    const nativeApi = makeNativeDevtoolsApi({
+      connectedBundleIds: ["com.example.settings"],
+      describeScreenResult: {
+        screenFrame: { x: 0, y: 0, width: 440, height: 956 },
+        elements: [
+          {
+            frame: { x: 20, y: 150, width: 400, height: 44 },
+            tapPoint: { x: 220, y: 172 },
+            normalizedFrame: { x: 0.045, y: 0.157, width: 0.909, height: 0.046 },
+            normalizedTapPoint: { x: 0.5, y: 0.18 },
+            traits: ["button"],
+            label: "General",
+          },
+        ],
+      },
+    });
+    const tool = createDescribeTool(
+      makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi })
+    );
+    const udid = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
+
+    const first = await tool.execute({}, { udid, bundleId: "com.example.settings" });
+    const second = await tool.execute({}, { udid, bundleId: "com.example.settings" });
+
+    expect(first.source).toBe("native-devtools");
+    expect(first.description).toMatch(/AXButton\s+"General"/);
+    // The reboot is what recovers the AX read, so it stays named…
+    expect(first.hint).toMatch(/no elements/i);
+    expect(first.hint).toMatch(/boot-device/);
+    // …and repeats, because the per-device gate only ever drops the standing
+    // note, which this path must not be producing.
+    expect(second.hint).toEqual(first.hint);
+  });
+
+  it("keeps the caveat on every internal describeIos read, which the tool alone dedupes", async () => {
+    // await-ui-element / flows / await-screen-idle poll describeIos directly and
+    // fold the last read's hint into one terminal note. The per-device gate
+    // lives at the tool boundary, so their diagnostics stay intact.
+    const axApi = makeAXServiceApi(
+      {
+        alertVisible: false,
+        screenFrame: { width: 440, height: 956 },
+        elements: [
+          {
+            label: "General",
+            frame: { x: 0.045, y: 0.337, width: 0.9, height: 0.046 },
+            traits: [],
+          },
+        ],
+      },
+      { degraded: true }
+    );
+    const registry = makeMockRegistry({ axService: axApi });
+    const device = {
+      id: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
+      platform: "ios" as const,
+      kind: "simulator" as const,
+    };
+
+    const first = await describeIos(registry, device, {}, { isTvOs: false });
+    const second = await describeIos(registry, device, {}, { isTvOs: false });
+
+    expect(first.hint).toMatch(/booted through argent/);
+    expect(second.hint).toEqual(first.hint);
+  });
+
   it("omits hint when ax-service is not degraded", async () => {
     const axApi = makeAXServiceApi({
       alertVisible: false,
@@ -534,6 +1006,16 @@ describe("describe tool", () => {
     );
     expect(result.source).toBe("ax-service");
     expect(elementLineCount(result.description)).toBe(0);
+    // The third site that returns an empty tree after a failed corroboration —
+    // its two siblings (the resolve catch and the outer catch) are both pinned,
+    // and this one answered with an in-band error rather than throwing. Returned
+    // bare, the empty tree reads as a blank screen, and `await-ui-element`'s
+    // blind-read guard keys off exactly `hint` / `should_restart`: with neither
+    // set, a `hidden` wait resolves against an element still on screen.
+    expect(result.hint).toMatch(/not evidence that nothing is on screen/);
+    expect(result.hint).toContain("view hierarchy unavailable");
+    // Nothing was measured about the app, so no relaunch may be prescribed.
+    expect(result.should_restart).toBeUndefined();
   });
 
   it("routes a tvOS target to the focus-driven view instead of the iOS ax-service", async () => {

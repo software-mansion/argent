@@ -4,6 +4,12 @@ import * as http from "node:http";
 import { Registry } from "@argent/registry";
 import { jsRuntimeDebuggerBlueprint } from "../../src/blueprints/js-runtime-debugger";
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
+import { scopeTempHome } from "../helpers/temp-home";
+
+// The JS-runtime-debugger / network blueprints build a real LogFileWriter,
+// whose constructor mkdir -p's os.homedir()/.argent/tmp. Keep that out of the
+// developer's real home.
+scopeTempHome("argent-vega-routing-home-");
 
 /**
  * Vega's Metro is the *legacy* inspector-proxy, whose /json/list entries carry

@@ -111,7 +111,7 @@ Never tap the on-screen keyboard through the recorder. Some platforms expose it 
 
 ### Typing
 
-Record the focus tap, then record `keyboard`. Verify the complete value with `describe` or an app validation marker.
+Record the focus tap, then record `keyboard` with `text`. A `keyboard` call carries `text` or `key`, never both. To submit, record a second `keyboard` step with `key: "enter"`. Verify the complete value with `describe` or an app validation marker.
 
 **Never `describe` or `screenshot` a non-secure field you just filled from `{{secret:…}}`.** Only a password field is redacted; a plain text input hands the resolved value back into your context, and an API key or token typed into one is the ordinary case. Submit or navigate away first, then verify the resulting screen.
 
@@ -144,16 +144,16 @@ Stop immediately. Restore the last valid screen with direct MCP calls, not `flow
 
 Call `flow-finish-recording`, then read the saved YAML. Apply only meaning-preserving conversions:
 
-| Recorded form                | Finished form                                                      |
-| ---------------------------- | ------------------------------------------------------------------ |
-| focus tap + `tool: keyboard` | `type:`                                                            |
-| keyboard ending in Enter     | submitted `type:` without Enter in its text                        |
-| `tool: await-ui-element`     | `await:` or `assert:`                                              |
-| element-seeking movement     | `scroll-to:`                                                       |
-| coordinate tap or long-press | strict selector after the fallback gate                            |
-| `tool: gesture-pinch`        | selector-based `pinch:` with `scale = endDistance / startDistance` |
-| `tool: gesture-rotate`       | selector-based `rotate:` with `by = endAngle - startAngle`         |
-| sibling `tool: flow-execute` | recorder-captured `run:`                                           |
+| Recorded form                             | Finished form                                                      |
+| ----------------------------------------- | ------------------------------------------------------------------ |
+| focus tap + `tool: keyboard`              | `type:`                                                            |
+| text `keyboard` + `key: enter` `keyboard` | submitted `type:` without Enter in its text                        |
+| `tool: await-ui-element`                  | `await:` or `assert:`                                              |
+| element-seeking movement                  | `scroll-to:`                                                       |
+| coordinate tap or long-press              | strict selector after the fallback gate                            |
+| `tool: gesture-pinch`                     | selector-based `pinch:` with `scale = endDistance / startDistance` |
+| `tool: gesture-rotate`                    | selector-based `rotate:` with `by = endAngle - startAngle`         |
+| sibling `tool: flow-execute`              | recorder-captured `run:`                                           |
 
 Only these unrecorded insertions are allowed, at states observed live:
 

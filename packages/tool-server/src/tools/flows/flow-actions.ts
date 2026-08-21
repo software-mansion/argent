@@ -67,11 +67,16 @@ export interface ActionEnv {
    * Bundle id of the last successful native `launch:` in this RUN — nested
    * `run:` flows share it (ExecState is per-run, so a nested launch updates
    * the whole run's hint, matching "a nested e2e launch restarts its app").
-   * Cleared by `tool:` steps that can change the foreground app (launch-app,
-   * restart-app, open-url, button, reinstall-app). iOS tree reads use it ONLY
-   * as an arbiter when target auto-resolution itself times out — see
-   * `queryFullHierarchyTree` — so foreground-likeness guards keep firing
-   * whenever the app answers at all.
+   * Undefined until a launch runs, so a fragment brought to its entry state out
+   * of band has none. Cleared by `tool:` steps that can change the foreground
+   * app (launch-app, restart-app, open-url, button, reinstall-app).
+   *
+   * iOS tree reads use it for the two things auto-targeting cannot do, both
+   * following from it resolving only out of the connected list: as an arbiter
+   * when auto-resolution itself times out, and to name the app whose
+   * disconnection needs explaining when that list is empty — see
+   * `queryFullHierarchyTree`. Never to override a resolution that answered, so
+   * foreground-likeness guards keep firing whenever the app answers at all.
    */
   launchedNativeApp?: string;
   /**
@@ -1308,8 +1313,13 @@ async function runType(
   await invokeOnDevice(env, "keyboard", { text: step.text });
   if (step.submit !== false) {
     if (env.signal?.aborted) return ABORTED_OUTCOME;
-    // Press Enter as a separate keyboard call — the tool dispatches `key`
-    // before `text`, so a combined `{ text, key }` would submit before typing.
+    // Enter goes in its own keyboard call because the tool rejects a combined
+    // `{ text, key }` outright (see ../keyboard/index.ts) — two calls are the
+    // only way to express "type, then submit". On an Android TV target this call
+    // is also the one that fails: `typeTv` rejects `key` unconditionally, so the
+    // text lands and the submit errors. (Android TV is the TV kind that reaches
+    // here at all — an Apple TV stops at the focus tap above, whose `gesture-tap`
+    // resolves simulator-server and rejects a tvOS UDID.)
     await invokeOnDevice(env, "keyboard", { key: "enter" });
   }
   return { ok: true };
