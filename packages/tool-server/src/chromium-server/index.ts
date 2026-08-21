@@ -46,21 +46,13 @@ export type {
 export { sendCharInsert } from "./input";
 
 export interface CreateChromiumServerOpts {
-  /** Argent device id, used for screenshot filename prefix + diagnostics. */
+  /** Argent device id; screenshot filename prefix. */
   deviceId: string;
-  /** CDP port the Chromium process exposed via --remote-debugging-port. */
+  /** CDP port from the Chromium process's --remote-debugging-port. */
   port: number;
 }
 
-/**
- * Compose the per-device ChromiumServer. Connects CDP, primes core domains,
- * reads the initial viewport, and wires every subsystem (input, screenshot,
- * screencast, fps, clipboard, navigation, events) onto one CDP session.
- *
- * The returned `dispose()` tears down screencast first, then disconnects CDP —
- * leaving an active screencast running would emit phantom frame events after
- * the consumer dropped its ref.
- */
+/** Compose the per-device ChromiumServer; every subsystem shares one CDP session. */
 export async function createChromiumServer(
   opts: CreateChromiumServerOpts
 ): Promise<ChromiumServer> {
@@ -77,15 +69,11 @@ export async function createChromiumServer(
     events.emit("terminated", err ?? new Error(`Chromium CDP on port ${opts.port} disconnected`));
   });
 
-  // Network recording + request routing (Network/Fetch domains). Created before
-  // `tabs` so a tab switch can re-attach it to the new page.
+  // Declared before `tabs` so a tab switch can re-attach it to the new page.
   const network = createNetworkManager({ cdp });
 
-  // Multi-tab: the manager re-points `cdp` in place when the active tab
-  // changes, so every page-scoped subsystem below (which captured `cdp`)
-  // automatically follows. After a switch we re-prime the page's core domains,
-  // refresh the cached viewport, and re-attach network recording/routes to the
-  // new document.
+  // The manager re-points `cdp` in place on a tab switch, so every subsystem
+  // that captured `cdp` follows the new page automatically.
   const tabs = createTabsManager({
     cdp,
     port: opts.port,
@@ -97,7 +85,7 @@ export async function createChromiumServer(
     },
   });
 
-  // Start passive request recording on the active page (capped ring buffer).
+  // Also the initial attach: starts recording on the active page.
   await network.reattach();
 
   const server: ChromiumServer = {
@@ -121,9 +109,7 @@ export async function createChromiumServer(
     sendRotate: (direction: Rotation) => sendRotate(cdp, viewport, direction),
     sendWheel: (point: Point, dx: number, dy: number) => sendWheel(cdp, viewport, point, dx, dy),
     setClipboardSync: async (enabled: boolean) => {
-      // No native bridge today; record intent so a future Chromium-side helper
-      // can wire it up. We still resolve so callers don't have to special-case
-      // the not-yet-implemented path.
+      // No native bridge yet; the intent is only recorded.
       clipboardSync.set(enabled);
     },
     setClipboardText: (text: string) => setClipboardText(cdp, text),
@@ -132,8 +118,7 @@ export async function createChromiumServer(
     getLastFrame: (): ScreencastFrame | null => screencast.getLastFrame(),
     navigate: async (url: string) => {
       await navigate(cdp, url);
-      // Refresh the cached viewport — a route swap can change layout dimensions
-      // (responsive UIs, full-screen modal pages).
+      // A route swap can change layout dimensions.
       try {
         viewport = await readViewport(cdp);
       } catch {
@@ -182,16 +167,13 @@ export async function createChromiumServer(
   return server;
 }
 
-// Re-exported for use from the blueprint when we need a low-level CDP handle.
+// Consumed by the chromium-cdp blueprint.
 export { ensureCdpReachable, discoverPrimaryPage } from "./cdp-session";
 export type { TabInfo, TabsManager } from "./tabs";
 export type { NetworkManager, NetworkRequestRecord } from "./network";
 export type { Cookie, SetCookieParams, DeleteCookieParams, StorageType } from "./storage";
 
-// Re-exported so the http-api / blueprint can call them directly without
-// pulling them out of a ChromiumServer instance.
 export { setClipboardText } from "./clipboard";
 
-// Internal re-export so tests can stub these without going through the full factory.
 export type { CDPClient };
 export { sendCharInsert as __sendCharInsert };

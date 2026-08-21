@@ -18,7 +18,7 @@ export interface CdpVersionInfo {
   "Protocol-Version"?: string;
 }
 
-/** GET `/json/version` — used by discovery to confirm CDP is alive. */
+/** Liveness probe for a CDP endpoint (`/json/version`). */
 export async function ensureCdpReachable(
   port: number,
   signal?: AbortSignal
@@ -27,10 +27,9 @@ export async function ensureCdpReachable(
 }
 
 /**
- * List the drivable "page" targets a CDP endpoint exposes — one per
- * BrowserWindow / browser tab — excluding `devtools://` inspector pages and any
- * target without a WebSocket URL (service/shared workers, etc.). Order matches
- * Chromium's `/json/list`, which is roughly most-recently-focused first.
+ * The drivable "page" targets — one per BrowserWindow / browser tab — minus
+ * `devtools://` inspector pages. Order follows Chromium's `/json/list`, which
+ * is roughly most-recently-focused first.
  */
 export async function listPageTargets(port: number, signal?: AbortSignal): Promise<CdpTarget[]> {
   const targets = await fetchJson<CdpTarget[]>(`http://127.0.0.1:${port}/json/list`, signal);
@@ -40,17 +39,15 @@ export async function listPageTargets(port: number, signal?: AbortSignal): Promi
 }
 
 /**
- * Probe a CDP endpoint for the renderer page we should drive. Chromium
- * typically exposes one "page" target per BrowserWindow plus a few
- * service_worker / shared_worker entries we don't care about.
+ * The renderer page we should drive on `port`.
  *
- * Throws loudly when the only pages are devtools:// URLs — driving input into
- * the inspector instead of the real window is a hard-to-debug failure mode.
+ * Throws when the only pages are `devtools://` — driving input into the
+ * inspector instead of the real window is a hard-to-debug failure mode.
  */
 export async function discoverPrimaryPage(port: number, signal?: AbortSignal): Promise<CdpTarget> {
   const pages = await listPageTargets(port, signal);
   if (pages.length === 0) {
-    // Distinguish "no pages at all" from "only devtools://" for a clearer hint.
+    // Re-fetch unfiltered to tell "no pages" from "only devtools://".
     const all = await fetchJson<CdpTarget[]>(`http://127.0.0.1:${port}/json/list`, signal);
     if (all.some((t) => t.type === "page")) {
       throw new FailureError(
@@ -80,9 +77,8 @@ export async function discoverPrimaryPage(port: number, signal?: AbortSignal): P
 }
 
 /**
- * The browser-level CDP WebSocket URL (from `/json/version`). Used for
- * `Target.createTarget` / `Target.closeTarget`, which operate on the browser
- * rather than a single page.
+ * Browser-level CDP WebSocket URL, needed for browser-scoped commands like
+ * `Target.createTarget` / `Target.closeTarget`.
  */
 export async function browserWebSocketUrl(port: number, signal?: AbortSignal): Promise<string> {
   const version = await ensureCdpReachable(port, signal);
@@ -91,9 +87,8 @@ export async function browserWebSocketUrl(port: number, signal?: AbortSignal): P
     throw new FailureError(
       `Chromium CDP on port ${port} did not report a browser webSocketDebuggerUrl in /json/version.`,
       {
-        // The endpoint responded but its payload was incomplete — a malformed
-        // response, not an unreachable port. Distinct code so telemetry doesn't
-        // conflate "reached but malformed" with a genuinely down debug port.
+        // Reached but malformed — telemetry must not conflate this with a
+        // genuinely down debug port.
         error_code: FAILURE_CODES.CHROMIUM_CDP_INVALID_RESPONSE,
         failure_stage: "chromium_cdp_browser_ws",
         failure_area: "tool_server",
@@ -111,16 +106,11 @@ async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   try {
     res = await fetch(url, { signal });
   } catch (err) {
-    // A caller-driven abort is expected control flow, not a reachability
-    // failure — let it surface untouched.
+    // A caller-driven abort is expected control flow, not a reachability failure.
     if (err instanceof Error && err.name === "AbortError") throw err;
-    // The common case: nothing is listening on the debug port (the app isn't
-    // running, or was started without --remote-debugging-port). `fetch` rejects
-    // before we ever get a response, so classify it here rather than letting a
-    // raw system error bubble up unclassified. undici wraps the OS error: the
-    // ECONN* code lives on err.cause, not err itself — check both and map the
-    // well-known socket codes precisely (mirrors the Vega toolkit path) rather
-    // than always reporting connection_refused.
+    // undici wraps the OS error: the ECONN* code lives on err.cause, not on
+    // err itself — check both, so the class is precise instead of always
+    // connection_refused.
     const code =
       (err as NodeJS.ErrnoException).code ?? (err as { cause?: NodeJS.ErrnoException }).cause?.code;
     const network_failure =
@@ -146,10 +136,7 @@ async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
     );
   }
   if (!res.ok) {
-    // The endpoint was reachable and answered — it just returned a non-2xx
-    // status. That is a malformed/erroring response, not a down debug port, so
-    // it gets INVALID_RESPONSE (matching browserWebSocketUrl above) rather than
-    // UNREACHABLE — telemetry must not conflate the two.
+    // Reachable but non-2xx: "reached but malformed", not a down debug port.
     throw new FailureError(`Chromium CDP discovery: GET ${url} failed (HTTP ${res.status})`, {
       error_code: FAILURE_CODES.CHROMIUM_CDP_INVALID_RESPONSE,
       failure_stage: "chromium_cdp_discovery_fetch",
@@ -162,14 +149,10 @@ async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   try {
     return (await res.json()) as T;
   } catch (err) {
-    // A caller-driven abort while the body is still streaming is expected
-    // control flow — surface it untouched, like the fetch() catch above.
+    // An abort mid-body is expected control flow, like the fetch() catch above.
     if (err instanceof Error && err.name === "AbortError") throw err;
-    // The port answered 200 but its body isn't valid JSON — a non-CDP service
-    // squatting the debug port, or a truncated/reset body. `res.json()` rejects
-    // with a raw SyntaxError that would otherwise escape unclassified; this is
-    // the same "reached but malformed" class as the !res.ok branch above, so it
-    // gets INVALID_RESPONSE rather than falling through to the generic bucket.
+    // 200 with a non-JSON body — a non-CDP service squatting the debug port,
+    // or a truncated one. Same "reached but malformed" class as !res.ok above.
     throw new FailureError(
       `Chromium CDP discovery: GET ${url} returned a body that is not valid JSON`,
       {
@@ -186,9 +169,9 @@ async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
 }
 
 /**
- * Open a CDP client against the primary page target on `port`. Suppresses the
- * Origin header (Chromium's devtools-target rejects WS upgrades that carry
- * one — it's meant for IDE clients, not browser pages).
+ * Open a CDP client against the primary page target on `port`. The Origin
+ * header is suppressed because Chromium's devtools-target rejects WS upgrades
+ * that carry one.
  */
 export async function connectCdp(port: number): Promise<{
   cdp: CDPClient;
@@ -204,23 +187,17 @@ export async function connectCdp(port: number): Promise<{
 }
 
 /**
- * Best-effort priming of a freshly (re)connected page session: domain enables
- * plus focus emulation. Failure of any step is non-fatal — most CDP commands
- * work without the corresponding domain enabled, but Page.navigate / Input.*
- * return more useful errors when their domains are primed.
+ * Best-effort priming of a (re)connected page session: domain enables plus
+ * focus emulation. Every step is non-fatal — most CDP commands work without
+ * the domain enabled, but Page.navigate / Input.* report better errors when
+ * theirs is.
  *
- * Focus emulation makes the page believe it is focused even when the OS
- * window is not (`document.hasFocus()` → true, focus/blur events behave as if
- * foregrounded), so focus-gated app logic works while an agent drives an
- * unfocused window. In current Chromium/Electron it goes further (A/B-verified
- * live): it also pins the renderer's reported `document.visibilityState` to
- * "visible" and keeps the input pipeline unthrottled even while the window is
- * genuinely minimized. Session-scoped: it dies with the CDP session and must
- * be re-applied after every reconnect — which happens automatically because
- * the tab manager's onActivated calls this function again. Trade-off (same
- * one Playwright accepts by enabling it unconditionally): while a session is
- * attached the app can never observe a real blur or a real hidden state, so
- * pause-on-hidden behavior (video, analytics) is unobservable during a test.
+ * Focus emulation makes the page believe it is focused even when the OS window
+ * is not (`document.hasFocus()` → true, `document.visibilityState` pinned to
+ * "visible", input unthrottled while the window is minimized). It dies with the
+ * CDP session, so the tab manager's onActivated re-applies it after every
+ * reconnect. Trade-off: while a session is attached the app can never observe a
+ * real blur or hidden state.
  */
 export async function primePageSession(cdp: CDPClient): Promise<void> {
   for (const domain of ["Page", "DOM", "Runtime", "Accessibility"]) {
@@ -233,11 +210,11 @@ export async function primePageSession(cdp: CDPClient): Promise<void> {
   try {
     await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
   } catch {
-    /* pre-79 runtimes lack the command; input still works, just unfocused */
+    /* unsupported runtime: input still works, just unfocused */
   }
 }
 
-/** Working directory for screenshots / video / clipboard staging. */
+/** Staging directory for screenshot files. */
 export function mediaDir(): string {
   const dir = path.join(os.tmpdir(), "argent-chromium-media");
   fs.mkdirSync(dir, { recursive: true });
