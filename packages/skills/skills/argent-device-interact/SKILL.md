@@ -1,6 +1,6 @@
 ---
 name: argent-device-interact
-description: Interact with an iOS simulator, Android emulator, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, or checking visible app state after interactions.
+description: Interact with an iOS simulator, Android emulator, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, changing a device-wide display, accessibility or radio setting (dark mode, text size, reduce motion, airplane mode, wifi, location), or checking visible app state after interactions.
 ---
 
 ## Unified tool surface
@@ -75,6 +75,7 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 | Type text         | `keyboard`          | Every platform. Text or one named key per call, never both       |
 | Rotate device     | `rotate`            | Orientation changes                                              |
 | Shake device      | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu   |
+| Device setting    | `system-settings`   | Dark mode, text size, a11y toggles; Android radios/location      |
 | Wait for UI       | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text    |
 | Wait for idle     | `await-screen-idle` | Block until a non-empty screen tree stops changing               |
 
@@ -204,6 +205,23 @@ Rules:
 ```
 
 Values: `Portrait`, `LandscapeLeft`, `LandscapeRight`, `PortraitUpsideDown`
+
+### system-settings — Device-wide display, accessibility and radio settings
+
+Puts the **device** into a state during setup, without walking the system Settings app: dark mode, a larger text size, airplane mode, location off. Not per-app — there is no `bundleId`.
+
+```json
+{ "udid": "<UDID>", "setting": "appearance", "value": "dark" }
+```
+
+- Both platforms: `appearance` (`light`/`dark`), `text-size` (the 12 Dynamic Type categories, `extra-small` … `accessibility-extra-extra-extra-large`, default `large`), `increase-contrast`, `reduce-motion`, `invert-colors`.
+- Android only: `wifi`, `cellular`, `airplane-mode`, `location`, `auto-rotate`. Asking for one of these on an iOS simulator is rejected with the list of what iOS supports.
+- Every setting except `appearance` and `text-size` takes `on` | `off`, where `on` turns the named setting on (`reduce-motion` on reduces motion).
+- Returns `{ setting, value, applied }` — `applied` names the concrete platform change (`night_mode=yes`, `font_scale=1.94`, `ReduceMotionEnabled=YES`).
+
+A `screenshot` is the wrong way to confirm `invert-colors`: the capture path skips the display-level color transform on both platforms, so the image comes back in the original colors while the device is genuinely inverted. Some apps also only re-read a display/accessibility setting on launch, so `restart-app` if the change doesn't appear live.
+
+For an app **permission** (camera, location, notifications, …) this is the wrong tool — use the `argent-settings-permissions` skill.
 
 ### await-ui-element — Block until a UI element reaches a state
 
