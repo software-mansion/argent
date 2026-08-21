@@ -1,25 +1,105 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import { adbShell, shellQuote, isAndroidTv } from "../../../utils/adb";
+import { adbShell, shellQuote, isAndroidTv, isPackageProcessRunning } from "../../../utils/adb";
 import type { LaunchAppParams, LaunchAppResult } from "../types";
 
-// `am start -W` always prints a `Status:` banner. A positive-match check on
-// `Status: ok` is more robust than scanning for keywords like "Error": the old
-// /Error|Exception/ matcher false-failed on benign class names such as
-// `com.example.ErrorReportingActivity` in the "Activity:" line, and
-// false-succeeded on `Status: null` when the activity failed in onCreate.
-export function assertAmStartOk(out: string): void {
-  if (!/Status:\s*ok/i.test(out)) {
-    throw new FailureError(`am start failed: ${out.trim()}`, {
+/**
+ * Did `am start -W` actually launch something?
+ *
+ * The banner is matched positively, against a closed set. A previous
+ * `/Error|Exception/` scan false-failed on benign class names like
+ * `com.example.ErrorReportingActivity` appearing in the `Activity:` line, so
+ * keyword scanning must not come back. Anything unrecognised is rejected, which
+ * covers every `Error:` shape for free — those print *instead of* the `Status:`
+ * banner rather than alongside it.
+ *
+ * `Status:` is rendered from a boolean, so upstream Android can only ever emit
+ * `ok` or `timeout`. (A `Status: null` shape is mentioned in this file's history
+ * but has never been reproduced and is not reachable from that ternary; it is
+ * rejected here simply by not being in the set.)
+ *
+ * Worth being accurate about what this does NOT catch: an activity destroyed
+ * while the launch is still being waited on reports `timeout=false`, i.e.
+ * `Status: ok`. So an app that crashes during startup is accepted today and
+ * remains accepted — this check has never been the thing that caught it.
+ */
+export function classifyAmStartStatus(out: string): "ok" | "timeout" | "rejected" {
+  // Line-anchored and `\w+`: an activity name containing "Status:" must not
+  // match, and a CRLF stream must not smuggle a `\r` into the token.
+  const status = /^\s*Status:\s*(\w+)/im.exec(out)?.[1]?.toLowerCase();
+  if (status === "ok") return "ok";
+  if (status === "timeout") return "timeout";
+  return "rejected";
+}
+
+/**
+ * `Status: timeout` is a latency verdict, not a failure one.
+ *
+ * It is set by a single path in the framework: the activity was resolved,
+ * started and resumed, and then failed to report idle before the launch wait
+ * window elapsed. It cannot be produced by an intent that failed to resolve or
+ * was refused — those return before any waiting happens. A cold React Native
+ * start routinely overruns that window while launching perfectly well, and
+ * treating it as a failure made agents retry or "fix" a launch that had already
+ * succeeded (#615).
+ *
+ * The `Activity:` line is not evidence to lean on here: both call sites launch
+ * an explicit component, and on this path the framework fills that field from
+ * the record being waited on — so it is close to our own input echoed back.
+ * Whether the app is actually alive is asked directly instead, and only on this
+ * branch, which by definition has already spent longer than the wait window.
+ *
+ * Returns a note when the launch was confirmed the slow way, so the caller knows
+ * the app is up but may not be interactive yet.
+ */
+export async function assertAmStartLaunched(
+  udid: string,
+  component: string,
+  out: string
+): Promise<string | undefined> {
+  const status = classifyAmStartStatus(out);
+  if (status === "ok") return undefined;
+
+  const fail = (message: string): never => {
+    throw new FailureError(message, {
       error_code: FAILURE_CODES.ANDROID_LAUNCH_AM_START_FAILED,
       failure_stage: "android_launch_am_start",
       failure_area: "tool_server",
       error_kind: "subprocess",
     });
+  };
+
+  if (status === "rejected") fail(`am start failed: ${out.trim()}`);
+
+  // Probe the package that was actually launched. `activity` may name a
+  // different package than `bundleId` (the `pkg/Class` form is documented and
+  // accepted), and asking about the wrong one could both miss a real launch and
+  // accept a stale process from an earlier session.
+  const launchedPkg = component.split("/")[0] ?? "";
+  let running: boolean;
+  try {
+    running = await isPackageProcessRunning(udid, launchedPkg);
+  } catch (err) {
+    // An unanswerable probe is not evidence of a crash — say only what is known.
+    return fail(
+      `am start could not be confirmed: the launch wait window elapsed and checking whether ` +
+        `${launchedPkg} is running failed (${err instanceof Error ? err.message : String(err)}). ` +
+        `Output: ${out.trim()}`
+    );
   }
-  // "Warning: Activity not started, its current task has been brought to the
-  // front" also comes with Status: ok and means the app is foregrounded.
-  // That's the behavior callers want from launch-app, so we don't reject it.
+
+  if (!running) {
+    return fail(
+      `am start failed: the launch wait window elapsed and no ${launchedPkg} process is running, ` +
+        `so the app did not stay up. Output: ${out.trim()}`
+    );
+  }
+
+  return (
+    "The app took longer than Android's launch wait window to settle, so the launch was confirmed " +
+    "by checking that the app's process is running. It is up but may still be on a splash or " +
+    "loading screen — wait for the expected UI or take a screenshot before interacting."
+  );
 }
 
 // Normalize a user-supplied `activity` into a concrete `pkg/Activity` component
@@ -142,7 +222,7 @@ export const androidImpl: PlatformImpl<
     const out = await adbShell(params.udid, `am start -W -n ${shellQuote(component)}`, {
       timeoutMs: 30_000,
     });
-    assertAmStartOk(out);
-    return { launched: true, bundleId: params.bundleId };
+    const note = await assertAmStartLaunched(params.udid, component, out);
+    return { launched: true, bundleId: params.bundleId, ...(note ? { note } : {}) };
   },
 };

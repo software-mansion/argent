@@ -10,7 +10,16 @@ export interface RestartAppParams {
 }
 
 export type RestartAppResult =
-  | { restarted: boolean; bundleId: string }
+  | {
+      restarted: boolean;
+      bundleId: string;
+      /**
+       * Android only: set when the launch overran Android's wait window and was
+       * confirmed by checking the app's process instead. The app is up but may not
+       * be interactive yet.
+       */
+      note?: string;
+    }
   | NativeDevtoolsInitFailedResult;
 
 // iOS gets the native-devtools service so restart-app can refresh the DYLD env
