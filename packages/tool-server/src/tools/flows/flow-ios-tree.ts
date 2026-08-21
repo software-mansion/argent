@@ -258,12 +258,12 @@ const FULL_HIERARCHY_FIELDS = [
  * Why the app a flow launched serves no view hierarchy, for the case where
  * nothing at all is connected.
  *
- * An app the dylib cannot be relied on to load into is terminal for a selector,
+ * A `com.apple.*` app is refused by policy, which is terminal for a selector,
  * yet the state measurement cannot see that: the launchd env carrying the
  * bootstrap dylib is simulator-wide, so such a process inherits the injection
  * tokens the measurement reads and can score as merely `unregistered`. The
  * launch gate lets these apps through so a coordinate-driven flow still runs, so
- * selector resolution is where the impossibility bites and where the flow-level
+ * selector resolution is where the refusal bites and where the flow-level
  * remedy is named. Everything else is measured off the running process, whose
  * rejection degrades to `indeterminate`.
  */
@@ -273,11 +273,11 @@ async function unreadableHierarchyReason(
 ): Promise<string> {
   if (!isInjectableBundleId(bundleId)) {
     return (
-      `${bundleId} is an Apple system app: it is a platform binary with library validation, so ` +
-      `argent's native devtools cannot be relied on to inject into it, and without them a flow has ` +
-      `no view hierarchy to resolve selectors against. Replace the selector steps with coordinate ` +
-      `ones — \`tap: { x: 0.5, y: 0.35 }\` takes a point directly and reads no tree — or target an app ` +
-      `argent installs.`
+      `${bundleId} is an Apple system app (com.apple.*) - never a valid target for a flow tree: ` +
+      `it is not the app under test, and argent's native devtools refuse to read one, so a flow ` +
+      `has no view hierarchy to resolve selectors against and no relaunch changes that verdict. ` +
+      `Replace the selector steps with coordinate ones - \`tap: { x: 0.5, y: 0.35 }\` takes a point ` +
+      `directly and reads no tree - or target an app argent installs.`
     );
   }
   const state = await nativeApi.appConnectionState(bundleId).catch(() => "indeterminate" as const);

@@ -184,10 +184,10 @@ describe("queryFullHierarchyTree surfaces the measured diagnosis", () => {
   });
 
   it("gives a system app the terminal reason instead of a measured remedy", async () => {
-    // The launch gate lets a non-injectable app through so a coordinate-driven
-    // flow still runs; selector resolution is where the missing hierarchy bites,
-    // so this is where it is said — and said terminally, since every measured
-    // state's remedy is a retry of something.
+    // The launch gate lets a refused app through so a coordinate-driven flow
+    // still runs; selector resolution is where that refusal bites, so this is
+    // where it is said - and said terminally, since every measured state's
+    // remedy is a retry of something.
     const registry = registryWith([]);
 
     await expect(
