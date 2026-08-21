@@ -2718,6 +2718,93 @@ describe("installer preserves foreign MCP config", () => {
 // "the editor is installed" on later runs (self-fulfilling detection), while
 // anything the user/editor itself put there still must.
 
+describe("update's entry rewrite keeps entry-scoped opt-ins", () => {
+  // `update` runs adapter.write() on every invocation and then
+  // addAllowlist({ refresh: true }), which only re-reads the opt-in. For the
+  // adapters whose opt-in lives INSIDE the argent entry, a wholesale replace
+  // in write() would drop it and the guard would then decline to restore it —
+  // auto-approval silently gone after every update. write() must carry those
+  // keys (and any other user key in the entry) over while still repairing
+  // command/args.
+  const rewritten = { command: "node", args: ["node_modules/@swmansion/argent/dist/x.js", "mcp"] };
+
+  it("Gemini: trust and a user timeout survive the rewrite", () => {
+    const adapter = ALL_ADAPTERS.find((a) => a.name === "Gemini")!;
+    const configPath = path.join(tmpDir, ".gemini", "settings.json");
+    adapter.write(configPath, getMcpEntry());
+    adapter.addAllowlist!(tmpDir, "local");
+    editJsoncFile(configPath, ["mcpServers", "argent", "timeout"], 5000);
+
+    adapter.write(configPath, rewritten);
+
+    const argent = (readJsonFile(configPath).mcpServers as Record<string, Record<string, unknown>>)
+      .argent;
+    expect(argent.command).toBe("node");
+    expect(argent.args).toEqual(rewritten.args);
+    expect(argent.trust).toBe(true);
+    expect(argent.timeout).toBe(5000);
+    expect(adapter.addAllowlist!(tmpDir, "local", { refresh: true })).toBeUndefined();
+  });
+
+  it("Kiro: autoApprove survives the rewrite", () => {
+    const adapter = ALL_ADAPTERS.find((a) => a.name === "Kiro")!;
+    const configPath = path.join(tmpDir, ".kiro", "settings", "mcp.json");
+    adapter.write(configPath, getMcpEntry());
+    adapter.addAllowlist!(tmpDir, "local");
+
+    adapter.write(configPath, rewritten);
+
+    const argent = (readJsonFile(configPath).mcpServers as Record<string, Record<string, unknown>>)
+      .argent;
+    expect(argent.command).toBe("node");
+    expect(argent.autoApprove).toEqual(["*"]);
+    expect(adapter.addAllowlist!(tmpDir, "local", { refresh: true })).toBeUndefined();
+  });
+
+  it("Windsurf: alwaysAllow survives the rewrite", () => {
+    const adapter = ALL_ADAPTERS.find((a) => a.name === "Windsurf")!;
+    homedirOverride = path.join(tmpDir, "home");
+    const configPath = path.join(homedirOverride, ".codeium", "windsurf", "mcp_config.json");
+    adapter.write(configPath, getMcpEntry());
+    adapter.addAllowlist!(tmpDir, "global");
+
+    adapter.write(configPath, rewritten);
+
+    const argent = (readJsonFile(configPath).mcpServers as Record<string, Record<string, unknown>>)
+      .argent;
+    expect(argent.command).toBe("node");
+    expect(argent.alwaysAllow).toEqual(["*"]);
+    expect(adapter.addAllowlist!(tmpDir, "global", { refresh: true })).toBeUndefined();
+  });
+
+  it("Codex: the tools table, a restricted entry and a user key survive the rewrite", () => {
+    const adapter = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
+    const configPath = path.join(tmpDir, ".codex", "config.toml");
+    adapter.write(configPath, getMcpEntry());
+    adapter.addAllowlist!(tmpDir, "local");
+    let content = fs.readFileSync(configPath, "utf8");
+    content = content.replace(
+      '[mcp_servers.argent.tools.tool-b]\napproval_mode = "approve"',
+      '[mcp_servers.argent.tools.tool-b]\napproval_mode = "prompt"'
+    );
+    content = content.replace(
+      "[mcp_servers.argent]\n",
+      "[mcp_servers.argent]\nstartup_timeout_sec = 30\n"
+    );
+    fs.writeFileSync(configPath, content);
+
+    adapter.write(configPath, rewritten);
+
+    const after = fs.readFileSync(configPath, "utf8");
+    expect(after).toContain('command = "node"');
+    expect(after).toContain("startup_timeout_sec = 30");
+    expect(after).toContain('[mcp_servers.argent.tools.tool-a]\napproval_mode = "approve"');
+    expect(after).toContain('[mcp_servers.argent.tools.tool-b]\napproval_mode = "prompt"');
+    expect(after).toContain('[mcp_servers.argent.tools.tool-c]\napproval_mode = "approve"');
+    expect(adapter.addAllowlist!(tmpDir, "local", { refresh: true })).toBeUndefined();
+  });
+});
+
 describe("detection evidence", () => {
   const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
   const codex = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
