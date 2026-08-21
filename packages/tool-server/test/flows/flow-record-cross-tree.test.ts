@@ -404,17 +404,18 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
       { registry: registryWhereWaitTimesOut() }
     );
 
-    const warning = warningOf(result, "unmet");
-    expect(warning).toContain("the wait itself never held");
-    expect(warning).toContain("stops the run there");
-    expect(warning).not.toContain("replays fine");
-    // Nothing was compared, so nothing may blame a tree divergence.
-    expect(warning).not.toContain("neither contains the other");
-    expect(warning).not.toContain("present in both");
-    // "Delete it from the .yaml" holds in host mode only.
-    expect(warning).toContain("after `flow-finish-recording`");
+    // A wait that never held is a check that cannot pass, so it is refused
+    // outright rather than recorded with a caveat.
+    expect(result.message).toContain("condition not met");
+    expect(result.message).toContain("step NOT recorded");
+    expect(result.message).not.toContain("replays fine");
+    // Nothing was compared, so nothing may blame a tree divergence or send the
+    // author to re-record against "a selector present in both".
+    expect(result.message).not.toContain("neither contains the other");
+    expect(result.message).not.toContain("present in both");
+    // The probe never ran, so the runner's tree was never read.
     expect(fetchCount).toBe(0);
-    expect(await recordedSteps("unmet")).toHaveLength(1);
+    expect(await recordedSteps("unmet")).toHaveLength(0);
   });
 
   // `success: false` also reports that the tool never saw the screen: the tree
@@ -428,20 +429,24 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
       { registry: registryWhereWaitFails("last tree fetch failed: CDP not connected") }
     );
 
-    const warning = warningOf(result, "blind");
-    expect(warning).toContain("without a trustworthy read of the UI tree");
-    expect(warning).toContain("UNKNOWN, not known-bad");
-    // The note carries an error only where a fetch threw. An empty tree gives none.
-    expect(warning).toContain("names the tree-source error where a fetch threw");
-    expect(warning).not.toContain("read `toolResult.note` for the tree-source error");
-    // A window that goes dark only at the end classifies here, and it did compare.
-    expect(warning).not.toContain("nothing was ever compared");
-    expect(warning).not.toContain("the wait itself never held");
-    expect(warning).not.toContain("re-record it once the condition can actually hold");
-    expect(warning).not.toContain("delete the step from the .yaml");
-    expect(warning).not.toContain("present in both");
+    // Refused like any other unpassed wait, but NOT with the unmet wording.
+    const message = result.message;
+    expect(message).toContain("step NOT recorded");
+    expect(message).toContain("without a trustworthy read of the UI tree");
+    expect(message).toContain("UNKNOWN, not known-bad");
+    // The note carries an error only where a fetch threw; an empty or degraded
+    // tree produces none, and the message must not send the author looking for
+    // one that is not there.
+    expect(message).toContain("names the tree-source error where a fetch threw");
+    expect(message).not.toContain("read `toolResult.note` for the tree-source error");
+    // The claims the unmet text makes, and this one must not: nothing observed
+    // the condition, so the selector and the timeout are not implicated.
+    expect(message).not.toContain("condition not met");
+    expect(message).not.toContain("Fix the wait");
+    // Nor may it blame a tree divergence: nothing was compared on either side.
+    expect(message).not.toContain("present in both");
     expect(fetchCount).toBe(0);
-    expect(await recordedSteps("blind")).toHaveLength(1);
+    expect(await recordedSteps("blind")).toHaveLength(0);
   });
 
   it("reads the cause off the RESULT, not off a note that reads like a miss", async () => {
@@ -462,25 +467,26 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
       }
     );
 
-    const warning = warningOf(result, "carried");
-    expect(warning).toContain("without a trustworthy read of the UI tree");
-    expect(warning).toContain("UNKNOWN, not known-bad");
-    expect(warning).not.toContain("the wait itself never held");
-    // The control: the same note with no cause leaves `unmet` the only answer.
+    expect(result.message).toContain("without a trustworthy read of the UI tree");
+    expect(result.message).toContain("UNKNOWN, not known-bad");
+    expect(result.message).not.toContain("condition not met");
+    // The control: the SAME note with no cause is the legacy shape, and there
+    // `unmet` is the only answer available.
     await startRecording("bare");
     const bare = await recordWait(
       "bare",
       { condition: "visible", selector: { text: "Continue" } },
       { registry: registryWhereWaitFails("no element matched the selector before timeout") }
     );
-    expect(warningOf(bare, "bare")).toContain("the wait itself never held");
+    expect(bare.message).toContain("condition not met");
   });
 
-  // The unmet warning tells the author to delete the failed step, and must say
-  // WHEN: after the finish, in both persistence modes. Against a remote client
-  // the in-memory copy is authoritative and the next append writes the step
-  // back; in host mode the re-read renumbers the steps the verdicts anchor to.
-  it("records against a remote client, and defers the delete to the finish", async () => {
+  // The refusal has to hold in BOTH persistence modes. Against a remote client
+  // the in-memory flow is authoritative and the host writes no file, so a
+  // refusal that only skipped the file write would still leave the step in the
+  // take. Every other test here records in host mode, so the remote arm never
+  // ran.
+  it("refuses an unpassed wait against a remote client too", async () => {
     await startRemoteRecording("remoteunmet");
 
     const result = await recordWait(
@@ -489,12 +495,13 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
       { registry: registryWhereWaitTimesOut() }
     );
 
-    const warning = warningOf(result, "remoteunmet");
-    expect(warning).toContain("the wait itself never held");
-    expect(warning).toContain("after `flow-finish-recording` rather than mid-recording");
-    // The advice the create-flow skill forbids; it renumbers the steps.
-    expect(warning).not.toContain("in host (local) mode, where the recorder re-reads");
-    // The host wrote no file, so the step and its verdict live in memory.
+    expect(result.message).toContain("condition not met");
+    expect(result.message).toContain("step NOT recorded");
+    // Nothing was written, so nothing has to be deleted afterwards — the advice
+    // that used to ride on this warning must not survive the refusal.
+    expect(result.message).not.toContain("delete");
+    // The in-memory take is what counts here, and it stayed empty.
+    expect(result.stepCount).toBe(0);
     expect(result.savedTo).not.toBe(null);
   });
 
@@ -550,9 +557,9 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
       }
     );
 
-    const warning = warningOf(result, "blindhidden");
-    expect(warning).toContain("UNKNOWN, not known-bad");
-    expect(warning).not.toContain("the wait itself never held");
+    expect(result.message).toContain("step NOT recorded");
+    expect(result.message).toContain("UNKNOWN, not known-bad");
+    expect(result.message).not.toContain("condition not met");
   });
 
   it("does not call a cancelled wait a condition that never held", async () => {
@@ -564,10 +571,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
       { registry: registryWhereWaitFails("wait was cancelled before the condition was met") }
     );
 
-    const warning = warningOf(result, "cancelledwait");
-    expect(warning).toContain("cancelled before its deadline");
-    expect(warning).toContain("UNKNOWN, not known-bad");
-    expect(warning).not.toContain("the wait itself never held");
+    expect(result.message).toContain("step NOT recorded");
+    expect(result.message).toContain("cancelled before its deadline");
+    expect(result.message).toContain("UNKNOWN, not known-bad");
+    expect(result.message).not.toContain("condition not met");
     expect(fetchCount).toBe(0);
   });
 
@@ -1680,9 +1687,14 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(finished.summary[0]).not.toContain("warning:");
   });
 
-  it("does not headline a wait that never held as a conversion warning", async () => {
-    // The re-probe is skipped on any `success: false`; this step failed LIVE.
+  it("leaves no step and no headline behind for a wait that never held", async () => {
+    // The re-probe is skipped on any `success: false`, and so is the recording:
+    // the step is refused on the call itself. So it reaches the finish as
+    // nothing at all — not as a step, and not as a warning. A caller that reads
+    // only `message` must not be told the summary holds news it does not.
+    serveTree(iosRunnerTree([iosLabel("Continue")]));
     await startRecording("neverheld");
+    await recordWait("neverheld", { condition: "visible", selector: { text: "Continue" } });
     await recordWait(
       "neverheld",
       { condition: "visible", selector: { text: "NoSuchThing" } },
@@ -1694,13 +1706,16 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
       { name: "neverheld", project_root: tmpDir }
     );
 
-    expect(verdictsIn(finished.summary).get(1)).toContain("the wait itself never held");
-    expect(finished.message).toContain("1 step recorded a wait that did not pass");
-    expect(finished.message).not.toContain("cross-tree warning");
+    // Only the wait that held is in the flow, and it agreed with the runner's
+    // tree, so there is no warning clause at all.
+    expect(finished.message).toBe('Finished recording "neverheld" flow (1 steps)');
+    expect(verdictsIn(finished.summary).size).toBe(0);
   });
 
-  it("pluralizes both counts, and joins them", async () => {
-    // The wait arm's plural was unpinned. Two of each also pins the join.
+  it("pluralizes the conversion count, and refused waits add nothing to it", async () => {
+    // Two diverging waits pin the plural. The two refused ones are the control:
+    // they never become steps, so neither the step count nor the headline may
+    // move for them.
     await startRecording("plural");
     serveTree(iosRunnerTree([iosLabel("Proceed")]));
     await recordWait("plural", { condition: "visible", selector: { text: "Continue" } });
@@ -1719,13 +1734,12 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     );
 
     expect(finished.message).toBe(
-      'Finished recording "plural" flow (4 steps) — 2 steps carry a cross-tree warning about ' +
-        "converting a recorded wait, and 2 steps recorded a wait that did not pass; read " +
-        "`summary` before converting or replaying"
+      'Finished recording "plural" flow (2 steps) — 2 steps carry a cross-tree warning about ' +
+        "converting a recorded wait; read `summary` before converting or replaying"
     );
   });
 
-  it("counts a probed verdict and an unpassed wait separately", async () => {
+  it("counts only the probed verdict when an unpassed wait was refused", async () => {
     await startRecording("mixed");
     serveTree(iosRunnerTree([iosLabel("Proceed")]));
     await recordWait("mixed", { condition: "visible", selector: { text: "Continue" } });
@@ -1741,9 +1755,8 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     );
 
     expect(finished.message).toBe(
-      'Finished recording "mixed" flow (2 steps) — 1 step carries a cross-tree warning about ' +
-        "converting a recorded wait, and 1 step recorded a wait that did not pass; read " +
-        "`summary` before converting or replaying"
+      'Finished recording "mixed" flow (1 steps) — 1 step carries a cross-tree warning about ' +
+        "converting a recorded wait; read `summary` before converting or replaying"
     );
   });
 

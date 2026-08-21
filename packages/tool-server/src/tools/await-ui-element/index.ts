@@ -53,6 +53,97 @@ export function isUnmetUiWaitResult(tool: string, result: unknown): boolean {
   );
 }
 
+// Marker on the note of a `hidden` wait that passed WITHOUT the selector ever
+// matching. Kept as a constant rather than re-matched from the prose so the
+// recorder's refusal (flow-add-step) cannot drift from the message below.
+export const VACUOUS_HIDDEN_MARKER = "the selector never matched any element";
+
+/** The marker test alone, with no opinion about which tool produced `result`. */
+function resultIsVacuousHidden(result: unknown): boolean {
+  if (typeof result !== "object" || result === null) return false;
+  const r = result as { success?: unknown; note?: unknown };
+  return r.success === true && typeof r.note === "string" && r.note.includes(VACUOUS_HIDDEN_MARKER);
+}
+
+/** A `success: true` wait, of any condition — proof its selector was present. */
+function resultSucceeded(result: unknown): boolean {
+  return (
+    typeof result === "object" &&
+    result !== null &&
+    (result as { success?: unknown }).success === true
+  );
+}
+
+// The id/text a selector pins, lowercased. Mirrors flow-selector-evidence's
+// `selectorIdentityTerms`; inlined here to keep this module free of the flows
+// dependency (flow-selector-evidence imports AWAIT_UI_ELEMENT_TOOL_ID from
+// here, so importing back would form a cycle). `role` is deliberately not
+// identity — "some button existed earlier" says nothing about THIS element.
+function selectorIdentity(selector: unknown): string[] {
+  if (typeof selector !== "object" || selector === null) return [];
+  const s = selector as { identifier?: unknown; text?: unknown };
+  const terms: string[] = [];
+  if (typeof s.identifier === "string" && s.identifier !== "") {
+    terms.push(`id:${s.identifier.toLowerCase()}`);
+  }
+  if (typeof s.text === "string" && s.text !== "") terms.push(`text:${s.text.toLowerCase()}`);
+  return terms;
+}
+
+/**
+ * Every selector this result proves NOTHING about — the selectors of the
+ * `hidden` waits inside it that passed without ever matching.
+ *
+ * Covers the wait called directly AND the ones nested in a `run-sequence`,
+ * because the gate is only worth having if it cannot be stepped around:
+ * wrapping the identical wait in a one-step sequence used to buy a
+ * permanently-green check that the recorder refuses to write directly and the
+ * runner marks with ⚠. Nested selectors are read from the REQUEST args by
+ * index — a run-sequence step result carries its tool and result but not the
+ * arguments it was called with.
+ *
+ * Evidence established EARLIER IN THE SAME SEQUENCE counts: a nested `hidden`
+ * whose selector an earlier successful non-hidden wait proved present is
+ * falsifiable — the sequence itself is the proof of visible→gone. Without this
+ * a self-contained `[visible X, act, hidden X]` sequence would be condemned for
+ * proving nothing when it plainly proves X left.
+ */
+export function vacuousHiddenSelectors(tool: string, result: unknown, args: unknown): unknown[] {
+  const argRecord =
+    typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {};
+  if (tool === AWAIT_UI_ELEMENT_TOOL_ID) {
+    return resultIsVacuousHidden(result) ? [argRecord.selector] : [];
+  }
+  if (tool !== "run-sequence") return [];
+  const steps = (result as { steps?: unknown })?.steps;
+  const requested = argRecord.steps;
+  if (!Array.isArray(steps) || !Array.isArray(requested)) return [];
+  const out: unknown[] = [];
+  const establishedInSequence = new Set<string>();
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i] as { tool?: unknown; result?: unknown } | null;
+    if (step?.tool !== AWAIT_UI_ELEMENT_TOOL_ID) continue;
+    const nestedArgs = (requested[i] as { args?: unknown } | undefined)?.args;
+    const nested =
+      typeof nestedArgs === "object" && nestedArgs !== null
+        ? (nestedArgs as Record<string, unknown>)
+        : undefined;
+    const selector = nested?.selector;
+    if (resultIsVacuousHidden(step.result)) {
+      if (!selectorIdentity(selector).some((term) => establishedInSequence.has(term))) {
+        out.push(selector);
+      }
+      continue;
+    }
+    // A non-hidden wait that genuinely succeeded proved its selector present,
+    // so it can license a later nested `hidden` on the same selector.
+    if (nested?.condition !== "hidden" && resultSucceeded(step.result)) {
+      for (const term of selectorIdentity(selector)) establishedInSequence.add(term);
+    }
+  }
+  return out;
+}
+
 // The `success: false` notes that are NOT a verdict on the condition. Named
 // here and reused where the notes are built, so a reader can tell them apart
 // from a genuine miss without re-typing the prose.
@@ -519,7 +610,7 @@ tap/navigation to wait for the next screen, or before tapping an element that ap
             const result: WaitResult = { success: true, elapsed: Date.now() - start };
             if (params.condition === "hidden" && !everMatched) {
               result.note =
-                "condition met immediately — the selector never matched any element, " +
+                `condition met immediately — ${VACUOUS_HIDDEN_MARKER}, ` +
                 "so it may have already been hidden before the wait, or the selector is wrong";
             }
             return { done: true, result };

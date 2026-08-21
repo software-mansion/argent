@@ -99,10 +99,10 @@ function attachStepWarnings(
  * What `message` says about the warnings the summary carries, by KIND — and
  * about the ones it does NOT carry.
  *
- * Only one kind is about conversion. A wait that came back `success: false` was
- * never probed; it failed live, which at replay stops the run rather than
- * raising a polish-time question. Counting it as a conversion warning states
- * the opposite of the actionable fact.
+ * Every warning carried here is the cross-tree re-probe's verdict, so the
+ * headline names that one question. A wait that came back `success: false` is
+ * not among them: the recorder refuses the step, so there is no step to judge
+ * and nothing to count.
  *
  * `discarded` is what {@link anchoredWarnings} and its append-time counterpart
  * threw away. Dropping is right — a verdict on the wrong step is worse than
@@ -110,18 +110,12 @@ function attachStepWarnings(
  * where every wait diverged returns a payload identical to a clean one.
  */
 function warningHeadline(warnings: Map<number, RecordedStepWarning>, discarded: number): string {
-  const counts = { conversion: 0, wait: 0 };
-  for (const { kind } of warnings.values()) counts[kind] += 1;
+  const conversion = warnings.size;
   const clauses: string[] = [];
-  if (counts.conversion > 0) {
+  if (conversion > 0) {
     clauses.push(
-      `${counts.conversion} ${counts.conversion === 1 ? "step carries" : "steps carry"} a ` +
+      `${conversion} ${conversion === 1 ? "step carries" : "steps carry"} a ` +
         `cross-tree warning about converting a recorded wait`
-    );
-  }
-  if (counts.wait > 0) {
-    clauses.push(
-      `${counts.wait} ${counts.wait === 1 ? "step" : "steps"} recorded a wait that did not pass`
     );
   }
   const carried =
@@ -204,7 +198,7 @@ export const flowFinishRecordingTool: ToolDefinition<
       `Failed to finish recording of flow ${params.name}: ${failureSignal.error_code}`,
   },
   description: `Finish recording the flow named by \`name\` + \`project_root\`, leaving recordings under any other key untouched. Returns { message, path, executionPrerequisite, steps, summary, flowFile, savedTo } - a summary of all recorded steps plus the final YAML. Use when you have added all desired steps and want to finalize the flow file. Fails if that flow has no recording in progress.
-A warning flow-add-step raised on a recorded \`await-ui-element\` is repeated in \`summary\` as a \`warning:\` line of its own, right below the step it judges, and \`message\` counts them by kind. A warning is repeated only while the step it judges is still identifiable by its number: hand-editing the .yaml during the recording moves the steps, so those warnings are DROPPED rather than pinned on whichever step inherited the number, and \`message\` says how many were dropped. A step that carries a cross-tree warning was re-probed against the runner's tree: read it before converting that wait to \`await:\`/\`assert:\`, which is what the verdict is about and what this moment is for. A step that recorded a wait which did not pass was never probed at all, and its own warning names the CAUSE, because only one of them judges the condition: an unmet wait was read and found false, and it stops the run at replay; a wait whose tree source could not be read, or one that was cancelled, observed nothing and leaves the condition UNKNOWN rather than known-bad. Read those before replaying.
+A warning flow-add-step raised on a recorded \`await-ui-element\` is repeated in \`summary\` as a \`warning:\` line of its own, right below the step it judges, and \`message\` counts them by kind. A warning is repeated only while the step it judges is still identifiable by its number: hand-editing the .yaml during the recording moves the steps, so those warnings are DROPPED rather than pinned on whichever step inherited the number, and \`message\` says how many were dropped. A step that carries a cross-tree warning was re-probed against the runner's tree: read it before converting that wait to \`await:\`/\`assert:\`, which is what the verdict is about and what this moment is for. A wait that did not pass is never among them — \`flow-add-step\` refuses to record one at all, naming the cause on the call itself — so every warning here is a question about converting, not about replaying.
 You can still edit the .yaml file directly afterwards to remove or reorder steps.`,
   zodSchema,
   services: () => ({}),
