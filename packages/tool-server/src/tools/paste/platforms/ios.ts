@@ -46,6 +46,11 @@ async function pasteSimulator(api: SimulatorServerApi, text: string): Promise<Pa
   api.pressKey("Up", V_KEYCODE);
   await sleep(CHORD_STEP_MS);
   api.pressKey("Up", LEFT_GUI_KEYCODE);
+  // `pressKey` is fire-and-forget (a line on the server's stdin). Give the
+  // final Up the same gap as the other events before reporting success, so the
+  // caller's next action — or the MCP auto-screenshot — never precedes the
+  // completed chord.
+  await sleep(CHORD_STEP_MS);
   return { pasted: true };
 }
 
