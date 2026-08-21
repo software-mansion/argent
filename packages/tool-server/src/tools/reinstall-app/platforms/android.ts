@@ -1,7 +1,7 @@
 import { resolve as resolvePath } from "node:path";
-import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { runAdb } from "../../../utils/adb";
+import { installAndroidPackage, INSTALL_FAILURE_CODES } from "../../../utils/app-install";
 import type { ReinstallAppParams, ReinstallAppResult, ReinstallAppServices } from "../types";
 
 export const androidImpl: PlatformImpl<
@@ -10,7 +10,7 @@ export const androidImpl: PlatformImpl<
   ReinstallAppResult
 > = {
   requires: ["adb"],
-  handler: async (_services, params) => {
+  handler: async (_services, params, _device, options) => {
     const { udid, bundleId, appPath } = params;
     const absolute = resolvePath(appPath);
 
@@ -18,7 +18,10 @@ export const androidImpl: PlatformImpl<
     // `pm uninstall` is non-fatal if the package isn't installed (returns
     // "Failure [DELETE_FAILED_INTERNAL_ERROR]" or similar); swallow that case.
     try {
-      await runAdb(["-s", udid, "uninstall", bundleId], { timeoutMs: 30_000 });
+      await runAdb(["-s", udid, "uninstall", bundleId], {
+        timeoutMs: 30_000,
+        signal: options?.signal,
+      });
     } catch {
       // App may not be installed — continue to install
     }
@@ -26,17 +29,11 @@ export const androidImpl: PlatformImpl<
     // -r - Allow app overwriting (no-op after uninstall, but harmless)
     // -d - Allow installations with lower versions
     // -g - Prevent permissions popup
-    const args = ["-s", udid, "install", "-r", "-d", "-g", absolute];
-    const { stdout, stderr } = await runAdb(args, { timeoutMs: 180_000 });
-    const output = `${stdout}\n${stderr}`;
-    if (!/Success/i.test(output)) {
-      throw new FailureError(`adb install failed: ${output.trim()}`, {
-        error_code: FAILURE_CODES.ANDROID_REINSTALL_INSTALL_FAILED,
-        failure_stage: "android_reinstall_adb_install",
-        failure_area: "tool_server",
-        error_kind: "subprocess",
-      });
-    }
+    await installAndroidPackage(udid, absolute, {
+      errorCode: INSTALL_FAILURE_CODES.androidReinstall,
+      failureStage: "android_reinstall_adb_install",
+      signal: options?.signal,
+    });
     return { reinstalled: true, bundleId };
   },
 };

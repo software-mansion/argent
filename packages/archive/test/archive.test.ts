@@ -4,10 +4,67 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { ArchiveError, createTarGzArgs, createTarGzFile, safeExtractTarGz } from "../src/index.js";
+import { deflateRawSync, gzipSync } from "node:zlib";
+import {
+  ArchiveError,
+  createTarGzArgs,
+  createTarGzFile,
+  extractZipArchive,
+  safeExtractTarGz,
+  safeExtractTarGzArchive,
+} from "../src/index.js";
 
 const execFileAsync = promisify(execFile);
 let tmpDir: string;
+
+interface TestZipEntry {
+  name: string;
+  data: Buffer;
+  mode?: number;
+  declaredSize?: number;
+}
+
+function makeTestZip(entries: TestZipEntry[]): Buffer {
+  const localRecords: Buffer[] = [];
+  const centralRecords: Buffer[] = [];
+  let localOffset = 0;
+  for (const entry of entries) {
+    const name = Buffer.from(entry.name, "utf8");
+    const compressed = deflateRawSync(entry.data);
+    const declaredSize = entry.declaredSize ?? entry.data.length;
+
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(8, 8);
+    local.writeUInt32LE(compressed.length, 18);
+    local.writeUInt32LE(declaredSize, 22);
+    local.writeUInt16LE(name.length, 26);
+    localRecords.push(local, name, compressed);
+
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(0x0314, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(8, 10);
+    central.writeUInt32LE(compressed.length, 20);
+    central.writeUInt32LE(declaredSize, 24);
+    central.writeUInt16LE(name.length, 28);
+    central.writeUInt32LE(((entry.mode ?? 0o100644) * 0x10000) >>> 0, 38);
+    central.writeUInt32LE(localOffset, 42);
+    centralRecords.push(central, name);
+    localOffset += local.length + name.length + compressed.length;
+  }
+
+  const centralDirectory = Buffer.concat(centralRecords);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(entries.length, 8);
+  eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(centralDirectory.length, 12);
+  eocd.writeUInt32LE(localOffset, 16);
+  return Buffer.concat([...localRecords, centralDirectory, eocd]);
+}
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "archive-test-"));
@@ -68,6 +125,17 @@ describe("createTarGzFile + safeExtractTarGz round-trip", () => {
 });
 
 describe("safeExtractTarGz hardening", () => {
+  it("rejects the actual gzip output when it exceeds the configured limit", async () => {
+    const tarPath = path.join(tmpDir, "bomb.tar.gz");
+    await fs.writeFile(tarPath, gzipSync(Buffer.alloc(8 * 1024)));
+    const dest = path.join(tmpDir, "dest-bomb");
+    await fs.mkdir(dest);
+
+    await expect(
+      safeExtractTarGzArchive(tarPath, dest, { maxUncompressedBytes: 1024 })
+    ).rejects.toThrow(/safety limit/i);
+  });
+
   it("rejects an archive with an escaping (absolute) member path", async () => {
     const abs = path.join(tmpDir, "innocent.txt");
     await fs.writeFile(abs, "x");
@@ -157,5 +225,50 @@ describe("safeExtractTarGz hardening", () => {
     await expect(safeExtractTarGz(tarPath, dest, "expected.app")).rejects.toBeInstanceOf(
       ArchiveError
     );
+  });
+
+  it("can safely extract a multi-entry archive without selecting one member", async () => {
+    await fs.writeFile(path.join(tmpDir, "app.apk"), "apk");
+    await fs.writeFile(path.join(tmpDir, "output-metadata.json"), "{}");
+    const tarPath = path.join(tmpDir, "gradle.tar.gz");
+    await execFileAsync("tar", ["-czf", tarPath, "-C", tmpDir, "app.apk", "output-metadata.json"]);
+    const dest = path.join(tmpDir, "dest-gradle");
+    await fs.mkdir(dest);
+
+    await safeExtractTarGzArchive(tarPath, dest, { maxUncompressedBytes: 1024 * 1024 });
+    await expect(fs.readFile(path.join(dest, "app.apk"), "utf8")).resolves.toBe("apk");
+    await expect(fs.readFile(path.join(dest, "output-metadata.json"), "utf8")).resolves.toBe("{}");
+  });
+});
+
+describe("safe ZIP extraction", () => {
+  it("bounds inflateRaw using the declared entry size", async () => {
+    const zipPath = path.join(tmpDir, "lying-size.zip");
+    await fs.writeFile(
+      zipPath,
+      makeTestZip([{ name: "payload.bin", data: Buffer.alloc(1024 * 1024), declaredSize: 1 }])
+    );
+    const dest = path.join(tmpDir, "dest-zip-bomb");
+    await fs.mkdir(dest);
+
+    await expect(extractZipArchive(zipPath, dest)).rejects.toBeInstanceOf(ArchiveError);
+  });
+
+  it("rejects entries nested below another archive-controlled symlink", async () => {
+    const zipPath = path.join(tmpDir, "symlink-chain.zip");
+    await fs.writeFile(
+      zipPath,
+      makeTestZip([
+        // If `link -> .` is created first, writing `link/child` actually writes
+        // at the extraction root. Its `../outside` target then escapes even
+        // though a lexical check against `<root>/link/child` appears contained.
+        { name: "link", data: Buffer.from("."), mode: 0o120777 },
+        { name: "link/child", data: Buffer.from("../outside"), mode: 0o120777 },
+      ])
+    );
+    const dest = path.join(tmpDir, "dest-symlink-chain");
+    await fs.mkdir(dest);
+
+    await expect(extractZipArchive(zipPath, dest)).rejects.toThrow(/nested below/i);
   });
 });

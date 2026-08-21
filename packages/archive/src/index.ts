@@ -1,29 +1,82 @@
 /**
- * Shared `tar.gz` helpers for the file boundary — the one place that knows how
- * argent packs a bundle and how it *safely* unpacks one. Both directions move a
- * bundle (an iOS `.app` directory, an `.apk`/`.vpkg` file, a `.trace`) between
- * the client and the tool-server as a gzipped tar via the system `tar` (present
- * on macOS/Linux and Windows 10+):
+ * Shared archive helpers — the one place that knows how Argent safely handles
+ * ZIP and `tar.gz` boundaries. The client/server file boundary moves a bundle
+ * (an iOS `.app` directory, an `.apk`/`.vpkg` file, a `.trace`) as a gzipped tar
+ * via the system `tar` (present on macOS/Linux and Windows 10+):
  *
  * - server → client: an artifact is streamed out and unpacked on the client.
  * - client → server: an upload is streamed in and unpacked on the server.
  *
- * The archive always carries the source's basename as its single top-level
- * member, so extraction recreates `<destDir>/<basename>`. Extraction is
- * tar-slip hardened regardless of direction — a hostile tar can arrive either
- * way (a compromised client uploading, or a compromised tool-server serving an
- * artifact).
+ * Those internal transfers carry one top-level member, so extraction recreates
+ * `<destDir>/<basename>`. External build artifacts may contain multiple
+ * top-level entries and use the generic safe extractor below. All paths are
+ * traversal/link hardened and decompression is bounded because either side —
+ * or a remote artifact URL — may be hostile.
  */
 
 import { execFile } from "node:child_process";
+import { createReadStream } from "node:fs";
 import { rm, readdir } from "node:fs/promises";
 import { basename, dirname, join, posix, resolve, sep } from "node:path";
+import { Writable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
+import { createGunzip } from "node:zlib";
+import { ArchiveError } from "./errors.js";
+
+export { ArchiveError } from "./errors.js";
+export { extractZipArchive, looksLikeZip, readZipEntry } from "./zip.js";
 
 const execFileAsync = promisify(execFile);
+const DEFAULT_MAX_TAR_BYTES = 4 * 1024 * 1024 * 1024;
+const TAR_TIMEOUT_MS = 5 * 60_000;
 
-/** Thrown when an archive is empty or holds an unsafe (tar-slip / bad-type) member. */
-export class ArchiveError extends Error {}
+export interface TarExtractionOptions {
+  maxUncompressedBytes?: number;
+  signal?: AbortSignal;
+}
+
+function tarExecOptions(signal?: AbortSignal) {
+  return {
+    encoding: "utf8" as const,
+    maxBuffer: 64 * 1024 * 1024,
+    timeout: TAR_TIMEOUT_MS,
+    killSignal: "SIGKILL" as const,
+    signal,
+  };
+}
+
+async function assertBoundedGzipOutput(
+  tarPath: string,
+  maxUncompressedBytes: number,
+  signal?: AbortSignal
+): Promise<void> {
+  if (!Number.isSafeInteger(maxUncompressedBytes) || maxUncompressedBytes <= 0) {
+    throw new ArchiveError("Archive extraction limit must be a positive safe integer.");
+  }
+  let uncompressedBytes = 0;
+  const counter = new Writable({
+    write(chunk: Buffer, _encoding, callback) {
+      uncompressedBytes += chunk.byteLength;
+      callback(
+        uncompressedBytes > maxUncompressedBytes
+          ? new ArchiveError(
+              `Archive expands beyond the ${maxUncompressedBytes}-byte safety limit.`
+            )
+          : undefined
+      );
+    },
+  });
+  try {
+    await pipeline(createReadStream(tarPath), createGunzip(), counter, { signal });
+  } catch (error) {
+    if (error instanceof ArchiveError || signal?.aborted) throw error;
+    throw new ArchiveError(
+      `Could not decompress archive safely: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error instanceof Error ? error : undefined }
+    );
+  }
+}
 
 /**
  * `tar` argv that gzips `sourcePath`'s basename as the archive's single
@@ -66,8 +119,8 @@ function isSafeTarMember(memberPath: string, destDir: string): boolean {
 }
 
 /** List an archive's members without extracting, so they can be vetted first. */
-async function listTarMembers(tarPath: string): Promise<string[]> {
-  const { stdout } = await execFileAsync("tar", ["-tzf", tarPath]);
+async function listTarMembers(tarPath: string, signal?: AbortSignal): Promise<string[]> {
+  const { stdout } = await execFileAsync("tar", ["-tzf", tarPath], tarExecOptions(signal));
   return stdout
     .split("\n")
     .map((line) => line.trim())
@@ -89,8 +142,8 @@ function isEscapingLinkTarget(target: string): boolean {
  * type char and ` -> <target>` the symlink target across tar variants, so we
  * read only those two, never the fragile column-formatted name.
  */
-async function assertSafeMemberTypes(tarPath: string): Promise<void> {
-  const { stdout } = await execFileAsync("tar", ["-tzvf", tarPath]);
+async function assertSafeMemberTypes(tarPath: string, signal?: AbortSignal): Promise<void> {
+  const { stdout } = await execFileAsync("tar", ["-tzvf", tarPath], tarExecOptions(signal));
   for (const line of stdout.split("\n")) {
     if (!line.trim()) continue;
     const type = line[0];
@@ -117,10 +170,14 @@ async function assertSafeMemberTypes(tarPath: string): Promise<void> {
 }
 
 /** Throw {@link ArchiveError} unless every member is safe to extract into `destDir`. */
-async function assertSafeArchive(tarPath: string, destDir: string): Promise<void> {
+async function assertSafeArchive(
+  tarPath: string,
+  destDir: string,
+  signal?: AbortSignal
+): Promise<void> {
   let members: string[];
   try {
-    members = await listTarMembers(tarPath);
+    members = await listTarMembers(tarPath, signal);
   } catch (err) {
     throw new ArchiveError(
       `Could not read archive: ${err instanceof Error ? err.message : String(err)}`
@@ -134,7 +191,7 @@ async function assertSafeArchive(tarPath: string, destDir: string): Promise<void
       throw new ArchiveError(`Archive contains an unsafe path "${member}" — refusing extraction.`);
     }
   }
-  await assertSafeMemberTypes(tarPath);
+  await assertSafeMemberTypes(tarPath, signal);
 }
 
 /**
@@ -169,9 +226,27 @@ async function resolveMember(destDir: string, expectedName: string): Promise<str
 export async function safeExtractTarGz(
   tarPath: string,
   destDir: string,
-  expectedName: string
+  expectedName: string,
+  options: TarExtractionOptions = {}
 ): Promise<string> {
-  await assertSafeArchive(tarPath, destDir);
-  await execFileAsync("tar", ["-xzf", tarPath, "-C", destDir]);
+  await safeExtractTarGzArchive(tarPath, destDir, options);
   return resolveMember(destDir, expectedName);
+}
+
+/**
+ * Safely extract every member of a gzipped tar archive. Unlike
+ * {@link safeExtractTarGz}, this deliberately does not select a single
+ * top-level member, so CI artifacts may carry an app plus metadata or dSYMs.
+ */
+export async function safeExtractTarGzArchive(
+  tarPath: string,
+  destDir: string,
+  options: TarExtractionOptions = {}
+): Promise<void> {
+  const maxUncompressedBytes = options.maxUncompressedBytes ?? DEFAULT_MAX_TAR_BYTES;
+  // Gzip's four-byte ISIZE trailer is attacker controlled and wraps at 4 GiB.
+  // Count the actual decompressor output before tar is allowed to write files.
+  await assertBoundedGzipOutput(tarPath, maxUncompressedBytes, options.signal);
+  await assertSafeArchive(tarPath, destDir, options.signal);
+  await execFileAsync("tar", ["-xzf", tarPath, "-C", destDir], tarExecOptions(options.signal));
 }

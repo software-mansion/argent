@@ -155,7 +155,7 @@ function describeAdbFailure(args: string[], err: unknown): Error {
  */
 export async function runAdb(
   args: string[],
-  options: { timeoutMs?: number } = {}
+  options: { timeoutMs?: number; signal?: AbortSignal } = {}
 ): Promise<AdbRunResult> {
   const adbPath = await resolveAdbOrThrow();
   try {
@@ -164,6 +164,7 @@ export async function runAdb(
       killSignal: ADB_KILL_SIGNAL,
       maxBuffer: 64 * 1024 * 1024,
       encoding: "utf-8",
+      signal: options.signal,
     });
     return { stdout, stderr };
   } catch (err) {
