@@ -17,7 +17,7 @@ _android_present() { # serial
 _shot_ok() { # phase udid case
   local phase="$1" udid="$2" case="$3"
   if capture_screenshot "$udid" "$E2E_WORK/android-$case.png"; then
-    pass "$phase" screenshot "$case (${SHOT_SIZE}B)"; return 0
+    pass "$phase" screenshot "$case" "${SHOT_SIZE}B"; return 0
   else
     fail "$phase" screenshot "$case" "size=${SHOT_SIZE:-0} rc=${SHOT_RC:-?} (blank framebuffer?)"; return 1
   fi
@@ -27,24 +27,35 @@ run_phase() {
   local P=android
   ensure_server || { skip "$P" tier all "tool-server unavailable"; return 0; }
 
-  local DEV=""
+  local DEV="" BOOTED_HERE=0
   if [ -n "${E2E_ANDROID_SERIAL:-}" ]; then
     DEV="$E2E_ANDROID_SERIAL"
     if _android_present "$DEV"; then
-      pass "$P" list-devices "injected serial $DEV present"
+      pass "$P" list-devices present "injected serial $DEV"
     else
-      # not yet visible — try a boot-device against it in case the sim-server
-      # needs to attach; otherwise skip.
       skip "$P" tier all "injected serial $DEV not visible to tool-server"; return 0
     fi
   elif [ -n "${E2E_ANDROID_AVD:-}" ]; then
     log "booting AVD $E2E_ANDROID_AVD"
-    run_tool boot-device "{\"avdName\":\"$E2E_ANDROID_AVD\",\"bootTimeoutMs\":840000}"
+    # boot-device is given 840s to bring an AVD up, but run_tool wraps every
+    # call in `timeout $TOOL_TIMEOUT` (120s by default) — which would kill the
+    # CLI at 2 minutes while the tool-server kept booting the emulator
+    # unattended, so this documented flag could never succeed. Give the call a
+    # margin over the budget the tool itself was handed.
+    local BOOT_MS=840000 prev_timeout="$TOOL_TIMEOUT"
+    TOOL_TIMEOUT=$(( BOOT_MS / 1000 + 60 ))
+    run_tool boot-device "{\"avdName\":\"$E2E_ANDROID_AVD\",\"bootTimeoutMs\":$BOOT_MS}"
+    TOOL_TIMEOUT="$prev_timeout"
     if [ "$RT_RC" -eq 0 ] && printf '%s' "$RT_JSON" | jq -e '.booted==true' >/dev/null 2>&1; then
       DEV="$(printf '%s' "$RT_JSON" | jq -r '.serial // .udid // empty')"
-      pass "$P" boot-device "booted $DEV"
+      BOOTED_HERE=1
+      # Publish it: the RN tier resolves its device from E2E_ANDROID_SERIAL, so
+      # without this `--android-avd` drives this tier fully and then blanket-skips
+      # all 24 debugger/profiler tools for want of a device that is right there.
+      export E2E_ANDROID_SERIAL="$DEV"
+      pass "$P" boot-device boot "booted $DEV"
     else
-      fail "$P" boot-device "$(printf '%s' "$RT_OUT" | tr '\n' ' ' | cut -c1-160)"; return 0
+      fail "$P" boot-device boot "$(rt_detail 160)"; return 0
     fi
   else
     skip "$P" tier all "no Android device (set E2E_ANDROID_SERIAL or E2E_ANDROID_AVD)"; return 0
@@ -89,13 +100,15 @@ run_phase() {
   assert_true "$P" open-url url "{\"udid\":\"$DEV\",\"url\":\"https://example.com\"}" '.opened'
 
   # --- screenshot-diff (two live captures) ----------------------------------
-  local b c
+  # Each capture writes its own file, so the pair can be handed to the tool as
+  # they are. Both are declared empty first: a failed capture leaves its
+  # variable unassigned, and under `set -u` reading one would abort the tier.
+  local b="" c=""
   _shot_ok "$P" "$DEV" diff-baseline && b="$SHOT_PATH"
-  cp "$b" "$E2E_WORK/diff-base.png" 2>/dev/null || true
   run_tool button "{\"udid\":\"$DEV\",\"button\":\"home\"}" >/dev/null 2>&1
   _shot_ok "$P" "$DEV" diff-current && c="$SHOT_PATH"
-  if [ -n "${b:-}" ] && [ -n "${c:-}" ]; then
-    assert_ok "$P" screenshot-diff diff "{\"udid\":\"$DEV\",\"baselinePath\":\"$E2E_WORK/diff-base.png\",\"currentPath\":\"$c\"}"
+  if [ -n "$b" ] && [ -n "$c" ]; then
+    assert_ok "$P" screenshot-diff diff "{\"udid\":\"$DEV\",\"baselinePath\":\"$b\",\"currentPath\":\"$c\"}"
   else
     skip "$P" screenshot-diff diff "could not capture two screenshots"
   fi
@@ -119,12 +132,16 @@ run_phase() {
   skip "$P" reinstall-app happy-path "covered in RN tier with the Bluesky apk"
 
   # --- teardown for this device --------------------------------------------
-  # Only stop the sim-server if we booted the AVD ourselves; a device injected
-  # by the allocator is released by the caller.
-  if [ -z "${E2E_ANDROID_SERIAL:-}" ]; then
-    assert_ok "$P" stop-simulator-server stop "$U"
+  # Nothing is reaped here, on either branch. An injected device is the caller's
+  # (on a shared machine, the allocator's). One this phase booted is still in
+  # use: the RN tier drives the same serial straight after this, so both the
+  # per-device service and the emulator have to outlive this phase. 90-cleanup
+  # owns that reap, and it runs from run-e2e.sh's EXIT trap, so an aborted run
+  # reaps the AVD too — which ending the phase here would not.
+  if [ "$BOOTED_HERE" -eq 1 ]; then
+    export E2E_ANDROID_REAP_SERIAL="$DEV"
+    skip "$P" stop-simulator-server stop "$DEV still in use by later phases; reaped in cleanup"
   else
-    run_tool stop-simulator-server "$U" >/dev/null 2>&1 || true
-    skip "$P" stop-simulator-server stop "injected device released by caller"
+    skip "$P" stop-simulator-server stop "injected device left running for the caller"
   fi
 }

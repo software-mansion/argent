@@ -38,7 +38,7 @@ with open(model) as fh:
         name, kind, req, enums = (line.split("\t") + ["", "", "", ""])[:4]
         if req != "1":
             continue
-        if kind == "number":
+        if kind in ("number", "integer"):
             obj[name] = 1
         elif kind == "boolean":
             obj[name] = True
@@ -57,7 +57,16 @@ PY
 
 run_phase() {
   local P=validation
-  ensure_server || warn "no private server; validation still runs (client-side schema)"
+  # Every verdict here comes from the server's schema: `argent run` does no
+  # client-side validation, it posts the payload. With no server every call
+  # fails with a transport error, which is indistinguishable from a rejection
+  # unless something looks at why — so this tier scores exactly the same green
+  # against a dead server as against a live one. Refuse to run rather than
+  # report a result that cannot mean anything.
+  if ! ensure_server; then
+    fail "$P" harness tool-server "no tool-server: a rejection cannot be told from a transport error"
+    return 0
+  fi
 
   local names t model
   names="$(list_tool_names)"
@@ -67,13 +76,29 @@ run_phase() {
     model="$(parse_tool_model "$t")"
     [ -s "$model" ] || { skip "$P" "$t" schema "no flags to validate"; continue; }
 
+    # run_tool addresses fields through the CLI's whole-payload `--args` escape
+    # hatch. A tool that declares its own `args` property takes that flag as
+    # that field's value instead (argent-cli/src/flag-parser.ts), so its other
+    # fields never arrive and every case below would be judged on a payload the
+    # tool did not receive — the rejection is real but always names the missing
+    # required field rather than the one under test.
+    if awk -F'\t' '$1=="args"{found=1} END{exit !found}' "$model"; then
+      skip "$P" "$t" schema "declares its own 'args' field; not reachable through run_tool's --args payload"
+      continue
+    fi
+
     local reqs; reqs="$(model_required_flags "$model")"
 
     # --- missing-required ---------------------------------------------------
     if [ -n "$reqs" ]; then
       local first_req; first_req="$(printf '%s\n' "$reqs" | head -1)"
-      # omit everything -> the first required flag must be flagged undefined
-      assert_reject "$P" "$t" missing-required '{}' "$first_req" "invalid_type"
+      # omit everything -> the first required flag must be flagged undefined.
+      # An omitted enum is reported as invalid_value rather than invalid_type,
+      # because zod checks the value against the member list before it reports a
+      # type mismatch.
+      local first_code="invalid_type"
+      [ "$(model_flag_kind "$model" "$first_req")" = "enum" ] && first_code="invalid_value"
+      assert_reject "$P" "$t" missing-required '{}' "$first_req" "$first_code"
     else
       case " $_VAL_EXCLUDE_MISSING " in
         *" $t "*) : ;;  # device/stateful no-arg tool: covered elsewhere
