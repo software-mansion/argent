@@ -3,7 +3,24 @@ import os from "os";
 import path from "path";
 import { PNG } from "pngjs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { screenshotDiffTool } from "../src/tools/screenshot-diff";
 import { diffPngFiles, type Rgb } from "../src/tools/screenshot-diff/screenshot-diff";
+import { linesClaimingSize, readAgentDocs } from "./helpers/size-claims";
+
+// The two bullets under `size_normalized`, pinned whole. Constraints to keep
+// when editing them: the caveat cuts both ways, because a downscale erases fine
+// differences as readily as it invents them; and the remedy prescribes no scale,
+// because the formatter is handed only sizes — it never learns which side was
+// captured live, or whether either was.
+const RESIZE_CAVEAT =
+  "  - the inputs share an aspect ratio but not a resolution, so the larger was downscaled before comparing; the differences below may include resampling artifacts, and differences finer than the downscale — hairlines, subpixel text — can be erased by it, so a clean result here is weaker evidence than an unnormalized one; the diff image is at compared_at rather than full size";
+const RESIZE_REMEDY =
+  "  - to compare without resampling, both sides have to come out the same size — `screenshot` takes a `scale`, a fraction of the device's own resolution rather than a target size, and its own description covers which scale a diff baseline needs on which device";
+// Which artifact is which size. The sizes themselves are asserted elsewhere, so
+// what is left to drift is the pairing — and a swapped pair reads as fluently
+// as a correct one.
+const DIFF_IMAGES =
+  "- diff_images: diffPath is at the compared size, contextDiffPath is downscaled for display";
 
 const analyzeScreenshotTextChangesMock = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -97,6 +114,11 @@ describe("diffPngFiles", () => {
 
     const result = await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
 
+    // Nothing was resampled and the aspect ratios differ, so there is no size
+    // to re-capture toward — the resize remedy must not appear here, and this
+    // summary may claim a size nowhere at all.
+    expect(result.summary).not.toContain("`scale`");
+    expect(linesClaimingSize(result.summary)).toEqual([]);
     expect(result).toMatchObject({
       totalPixels: 2,
       differentPixels: 0,
@@ -160,6 +182,18 @@ describe("diffPngFiles", () => {
     expect(result.summary).toContain(
       "- size_normalized: baseline=20x40 current=10x20 compared_at=10x20"
     );
+    const lines = result.summary.split("\n");
+    expect(lines).toContain(RESIZE_CAVEAT);
+    expect(lines).toContain(RESIZE_REMEDY);
+    expect(lines).toContain(DIFF_IMAGES);
+    // The caveat's own denial is the only line here allowed to reach for that
+    // vocabulary at all: a second one is a label on an artifact that is not at
+    // that size — the shape the diff_images line invites.
+    expect(linesClaimingSize(result.summary)).toEqual([RESIZE_CAVEAT]);
+    // Exactly one line may reach for the knob, because a prescription creeps
+    // back as a second bullet beside the pinned one rather than as an edit to
+    // it. The caveat names no knob, so this counts remedies.
+    expect(lines.filter((line) => line.includes("`scale`"))).toHaveLength(1);
   });
 
   it("still reports a real difference as `changed` when sizes were normalized", async () => {
@@ -180,6 +214,18 @@ describe("diffPngFiles", () => {
     expect(result.summary).toContain("- status: changed");
     // …and the rescale is still disclosed, so the figures can be read correctly.
     expect(result.summary).toContain("- size_normalized:");
+    // The remedy belongs here most of all: these pixel differences may be the
+    // resampling artifacts, so the reader needs the way to rule that out.
+    const changedLines = result.summary.split("\n");
+    expect(changedLines).toContain(RESIZE_CAVEAT);
+    expect(changedLines).toContain(RESIZE_REMEDY);
+    expect(changedLines.filter((line) => line.includes("`scale`"))).toHaveLength(1);
+    expect(linesClaimingSize(result.summary)).toEqual([RESIZE_CAVEAT]);
+
+    // The tool description tells the caller what size diffPath comes out at, and
+    // this is the case where that is not the input size.
+    const diff = PNG.sync.read(await fs.readFile(result.diffPath!));
+    expect({ width: diff.width, height: diff.height }).toEqual({ width: 10, height: 20 });
   });
 
   it("says nothing about normalization when the sizes already matched", async () => {
@@ -194,6 +240,69 @@ describe("diffPngFiles", () => {
     expect(result.sizeNormalization).toBeUndefined();
     expect(result.summary).not.toContain("size_normalized");
     expect(result.summary).toContain("- status: unchanged");
+    // The resize remedy rides with that block. Nothing was resampled here, so
+    // telling the reader to re-capture a side would send them after a no-op.
+    expect(result.summary).not.toContain("`scale`");
+    // The caveat that denies the size is on the other path, so this one may
+    // claim it nowhere at all. This is the common path — a claim added here
+    // reaches every caller whose sizes already agreed.
+    expect(linesClaimingSize(result.summary)).toEqual([]);
+  });
+
+  it("names the size outcomes the summary actually emits in the pre-flight description", async () => {
+    // A caller gates on these literals before it ever sees a summary, and prose
+    // quotes them: this description, and two skills for `resized_no_change`.
+    // Renaming one in screenshotDiffStatus reaches none of them, so read the
+    // words back out of real summaries instead of restating them here.
+    const dir = await makeTempDir();
+    const summaryOf = async (
+      baseline: [number, number],
+      current: [number, number]
+    ): Promise<string> => {
+      const baselinePath = path.join(dir, `b-${baseline.join("x")}.png`);
+      const currentPath = path.join(dir, `c-${current.join("x")}.png`);
+      await writePng(baselinePath, baseline[0], baseline[1], { r: 30, g: 60, b: 90 });
+      await writePng(currentPath, current[0], current[1], { r: 30, g: 60, b: 90 });
+      return (await diffPngFiles({ baselinePath, currentPath, outputDir: dir })).summary;
+    };
+
+    const normalized = await summaryOf([20, 40], [10, 20]);
+    const aspectMismatch = await summaryOf([20, 40], [20, 20]);
+    const statusIn = (summary: string): string => /^- status: (\S+)$/m.exec(summary)![1]!;
+
+    const emitted = [
+      statusIn(normalized),
+      statusIn(aspectMismatch),
+      /^- (\w+): baseline=/m.exec(normalized)![1]!,
+    ];
+    // Whole words: a rename to a prefix of the old name (resized_no_change ->
+    // resized) leaves every stale quote satisfying a substring check, which is
+    // the one direction a rename is actually likely to take.
+    const names = (word: string): RegExp => new RegExp(`\\b${word}\\b`);
+    expect(new Set(emitted).size).toBe(emitted.length);
+    for (const word of emitted) {
+      expect(screenshotDiffTool.description).toMatch(names(word));
+    }
+    // Presence alone is too weak for the refusal: `dimension_mismatch` is named
+    // twice, so dropping the clause that says which inputs cause it leaves the
+    // word behind in the Returns line and the check still green.
+    expect(screenshotDiffTool.description).toMatch(
+      new RegExp(`aspect ratios differ[^.]*${statusIn(aspectMismatch)}`)
+    );
+
+    // The skills are the third surface, and the one a rename reaches last: a
+    // maintainer who renames the status in the formatter and the description has
+    // made a consistent-looking change, while the caveat telling an agent that
+    // this status is not a plain pass goes quietly inert. Selected by what the
+    // caveat says rather than by the word under test, so the check cannot pass
+    // by matching itself — and floored, so a reword cannot empty it silently.
+    const caveats = (await readAgentDocs()).filter(({ text }) =>
+      text.includes("downscale can erase")
+    );
+    expect(caveats.length).toBeGreaterThanOrEqual(2);
+    for (const { name, text } of caveats) {
+      expect(text, name).toMatch(names(statusIn(normalized)));
+    }
   });
 
   it("hard-fails same-aspect resolution differences when normalizeSizes is false", async () => {

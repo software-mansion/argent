@@ -202,7 +202,7 @@ export function getScreenshotScale(): number {
     const n = parseFloat(v);
     if (!Number.isNaN(n) && n > 0 && n <= 1) return n;
   }
-  return DEFAULT_SCREENSHOT_SCALE; // default: halve the resolution
+  return DEFAULT_SCREENSHOT_SCALE;
 }
 
 /**

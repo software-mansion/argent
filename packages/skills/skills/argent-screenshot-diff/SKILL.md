@@ -21,11 +21,13 @@ Use `screenshot-diff` when pixel comparison can answer the verification question
 
 ## 3. Capture Rules
 
-Use normal downscaled `screenshot` calls for UI context and state checks. Use full-resolution screenshots only when saving baseline/current PNG files for visual regression comparison. Suppress the image block so the full-size PNG is not loaded into context:
+Use normal downscaled `screenshot` calls for UI context and state checks. Use full-resolution screenshots only when saving baseline/current PNG files for visual regression comparison. Suppress the image block on those baseline captures, whatever scale they end up at, so the PNG is saved without being loaded into context:
 
 ```json
 { "udid": "<UDID>", "scale": 1.0, "includeImageInContext": false }
 ```
+
+Some Android emulators cannot stream a full-resolution frame and reject `scale: 1.0` with a `wrong data size` error. Omit `scale` on those devices: `screenshot-diff` falls back to that same scale whenever its own full-resolution capture fails, so the two sides usually match and nothing is resampled. Both lose that fallback when `ARGENT_SCREENSHOT_SCALE` is 1.0, where an omitted `scale` is the rejected request again: save both sides with `screenshot` at the same explicit scale and pass the paths, rather than capturing live. They can still differ — the fallback fires on any capture failure, not only this one, and the tool-server's screenshot scale may change between the two captures — which the summary discloses as `size_normalized`. Treat a `resized_no_change` result as weaker evidence than an unnormalized one: the downscale can erase a difference as well as invent one.
 
 Capture the stable baseline before the relevant interaction or before editing whenever feasible. Compare it to the post-change or post-interaction screen after the app reloads, rebuilds, or reaches the state under test.
 
@@ -41,7 +43,7 @@ Provide `udid` and exactly one input for the baseline side and exactly one input
 ## 5. Deterministic Flow
 
 1. Navigate to the known-good state.
-2. Capture a baseline PNG with `screenshot` using `scale: 1.0` and `includeImageInContext: false`; keep the returned `path`.
+2. Capture a baseline PNG with `screenshot` per the capture rules above and `includeImageInContext: false`; keep the returned `path`.
 3. Perform the interaction, apply the code change and navigate to the state under test.
 4. Call `screenshot-diff` with the saved `baselinePath`, `captureCurrent: true`, `udid`, and `outputDir`.
 5. Inspect the summary and artifact paths, then combine the diff with normal visual inspection and any structural/runtime evidence needed for the assertion.

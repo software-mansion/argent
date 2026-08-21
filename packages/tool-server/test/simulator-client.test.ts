@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { httpScreenshot } from "../src/utils/simulator-client";
+import { getScreenshotScale, httpScreenshot } from "../src/utils/simulator-client";
 
 function fakeFetch(status: number, json: unknown) {
   return vi.fn(
@@ -102,5 +102,28 @@ describe("httpScreenshot", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("getScreenshotScale", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  // The range `screenshot`'s `scale` description names. Every other stub of this
+  // env var in the repo is "", "0.6" or "1.0", so widening the guard puts a
+  // scale of 5 on the wire with the rest of the suite still green.
+  it.each([
+    { env: "", resolved: 0.3 },
+    { env: "abc", resolved: 0.3 },
+    { env: "0", resolved: 0.3 },
+    { env: "-0.5", resolved: 0.3 },
+    { env: "2", resolved: 0.3 },
+    { env: "Infinity", resolved: 0.3 },
+    { env: "1", resolved: 1 },
+    { env: "0.6", resolved: 0.6 },
+  ])("resolves $env to $resolved", ({ env, resolved }) => {
+    vi.stubEnv("ARGENT_SCREENSHOT_SCALE", env);
+    expect(getScreenshotScale()).toBe(resolved);
   });
 });

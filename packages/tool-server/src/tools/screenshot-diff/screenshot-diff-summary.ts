@@ -41,15 +41,11 @@ export function formatScreenshotDiffSummary(result: ScreenshotDiffSummaryInput):
   lines.push(`- status: ${status}`);
 
   if (result.sizeNormalization) {
-    // Placed directly under the status so it frames every figure below it, and
-    // worded to stay true on both paths: when nothing differed there are no
-    // pixel or text differences to caveat, and when something did they may be
-    // resampling artifacts rather than real changes.
     const { baseline, current, comparedAt } = result.sizeNormalization;
     lines.push(
       `- size_normalized: baseline=${formatSize(baseline)} current=${formatSize(current)} compared_at=${formatSize(comparedAt)}`,
-      "  - the inputs share an aspect ratio but not a resolution, so the larger was downscaled before comparing; any pixel or text differences below may include resampling artifacts, and the diff images are at compared_at rather than full size",
-      "  - re-capture the baseline at the same scale as the current image (screenshot with scale: 1.0) to compare without resampling"
+      "  - the inputs share an aspect ratio but not a resolution, so the larger was downscaled before comparing; the differences below may include resampling artifacts, and differences finer than the downscale — hairlines, subpixel text — can be erased by it, so a clean result here is weaker evidence than an unnormalized one; the diff image is at compared_at rather than full size",
+      "  - to compare without resampling, both sides have to come out the same size — `screenshot` takes a `scale`, a fraction of the device's own resolution rather than a target size, and its own description covers which scale a diff baseline needs on which device"
     );
   }
 
@@ -68,10 +64,15 @@ export function formatScreenshotDiffSummary(result: ScreenshotDiffSummaryInput):
   );
 
   if (result.diffPath || result.contextDiffPath) {
-    // Reference the result fields instead of embedding the paths: the client
-    // rewrites `diffPath`/`contextDiffPath` to paths on ITS machine, and a raw
-    // server path inlined here would dangle when the tool-server runs remotely.
-    lines.push(`- diff_images: see diffPath (full size) and contextDiffPath in this result`);
+    // Name the result fields rather than embedding paths: the client rewrites
+    // `diffPath`/`contextDiffPath` to paths on ITS machine, and a raw server
+    // path inlined here would dangle when the tool-server runs remotely. Says
+    // what each artifact is rather than telling the reader to go find it — over
+    // MCP this text arrives beside the context image alone, with no field of
+    // either name to look up (#826).
+    lines.push(
+      `- diff_images: diffPath is at the compared size, contextDiffPath is downscaled for display`
+    );
     lines.push(
       `  - legend: green=pixel brighter in current, red=pixel darker in current, yellow rectangles outline changed regions`
     );

@@ -318,9 +318,9 @@ export async function runSnapshot(
       };
     }
 
-    // Scratch directory for the differ's full-res diff and downscaled context
-    // diff. Nothing in it may outlive this call except a file registered as an
-    // artifact below (its host path is materialized later) — the finally sweeps
+    // Scratch directory for the differ's compared-size diff and downscaled
+    // context diff. Nothing in it may outlive this call except a file registered
+    // as an artifact below (its host path is materialized later) — the finally sweeps
     // the rest, or a long-lived tool-server running snapshot flows would accrete
     // argent-flow-diff-* directories forever.
     const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-flow-diff-"));
