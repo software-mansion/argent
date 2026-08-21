@@ -20,6 +20,12 @@ const packagesDir = join(repoRoot, "packages");
 const argentManifestPath = join(packagesDir, "argent", "package.json");
 const serverJsonPath = join(repoRoot, "server.json");
 
+// Directories under packages/ that are not workspace members and so are not
+// part of the lockstep versioning. The docs site is excluded from the root
+// `workspaces` glob (it keeps its own lockfile) and carries a standalone
+// version that must not be read as drift.
+const NON_WORKSPACE_DIRS = new Set(["docs"]);
+
 /**
  * Everything server.json has to keep in step with the npm package it points at,
  * as one human-readable line per problem. Pure, separated from the fs reads so
@@ -149,6 +155,7 @@ function main() {
   );
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
+    if (NON_WORKSPACE_DIRS.has(entry.name)) continue;
     let manifest;
     try {
       manifest = JSON.parse(readFileSync(join(packagesDir, entry.name, "package.json"), "utf8"));

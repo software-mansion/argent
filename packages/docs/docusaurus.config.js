@@ -51,7 +51,7 @@ const config = {
           breadcrumbs: false,
           sidebarPath: require.resolve("./sidebars.js"),
           sidebarCollapsible: false,
-          editUrl: "https://github.com/software-mansion/argent/edit/main/docs",
+          editUrl: "https://github.com/software-mansion/argent/edit/main/packages/docs",
         },
         theme: {
           customCss: require.resolve("./src/css/index.css"),

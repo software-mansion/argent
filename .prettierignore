@@ -10,8 +10,8 @@ package-lock.json
 pnpm-lock.yaml
 
 # Docusaurus site output.
-docs/build/
-docs/.docusaurus/
+packages/docs/build/
+packages/docs/.docusaurus/
 
 # Generated.
 **/tsconfig.tsbuildinfo

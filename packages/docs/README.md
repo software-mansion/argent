@@ -8,13 +8,13 @@ The site has no landing page of its own. That is [argent.swmansion.com](https://
 
 ## Development
 
-This site is a standalone npm project, deliberately outside the root `packages/*` workspace so its dependencies stay out of the toolkit's lockfile.
+This site lives at `packages/docs` but is a standalone npm project with its own lockfile, excluded from the root `packages/*` workspace glob so its dependencies stay out of the toolkit's lockfile.
 
 ```bash
-cd docs
+cd packages/docs
 npm install
 npm start        # dev server on http://localhost:3000/argent/
-npm run build    # production build into docs/build
+npm run build    # production build into packages/docs/build
 npm run serve    # serve the production build
 ```
 
