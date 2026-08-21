@@ -4,7 +4,6 @@ import {
   buildAppStateMessage,
   isInjectableBundleId,
   nativeDevtoolsRef,
-  NON_INJECTABLE_NATIVE_WARNING,
   type NativeAppState,
   type NativeDevtoolsApi,
 } from "../../blueprints/native-devtools";
@@ -361,8 +360,7 @@ export async function queryFullHierarchyTree(
     // getFullHierarchy timeout to arrive at "RPC timed out".
     if (!isInjectableBundleId(bundleId)) {
       throw new FailureError(
-        `${bundleId} is an Apple system app (com.apple.*) - never a valid flow target: it is not the app under test, and argent's native devtools refuse to read one (a system process either never services the read, or describes offscreen UI as if it were the launched app). Point this flow's \`launch\` step at the app under test; no relaunch or retry changes this verdict. ` +
-          NON_INJECTABLE_NATIVE_WARNING,
+        `${bundleId} is an Apple system app (com.apple.*) - never a valid flow target: it is not the app under test, and argent's native devtools refuse to read one (a system process either never services the read, or describes offscreen UI as if it were the launched app), so this flow has no view hierarchy to resolve selectors against and no relaunch or retry changes this verdict. Replace the selector steps with coordinate ones - \`tap: { x: 0.5, y: 0.35 }\` takes a point directly and reads no tree - or point this flow's \`launch\` step at the app under test.`,
         {
           error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE,
           failure_stage: "flow_tree_pinned_target",

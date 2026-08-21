@@ -2659,6 +2659,11 @@ describe("flow composition (run:)", () => {
     const reason = result.steps[1].reason ?? "";
     expect(reason).toMatch(/Apple system app/);
     expect(reason).toMatch(/com\.apple\.Preferences/);
+    // Terminal is only half of it - the reason must also name the coordinate
+    // remedy this launch was let through for.
+    expect(reason).toContain("`tap: { x: 0.5, y: 0.35 }` takes a point directly and reads no tree");
+    // Not the native-* dead-end warning: none of those tools is a flow step.
+    expect(reason).not.toMatch(/native-describe-screen|native-find-views/);
     // The auto-target text is what auto-resolution alone can produce here, and
     // its remedy is the loop.
     expect(reason).not.toMatch(/auto-targeting/);

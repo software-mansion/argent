@@ -427,7 +427,15 @@ describe("queryFullHierarchyTree - pinned target vs poisoned auto-resolve", () =
     const message = (err as Error).message;
     expect(message).toContain(`${POISONER} is an Apple system app`);
     expect(message).toContain("never a valid flow target");
-    expect(message).toContain(NON_INJECTABLE_NATIVE_WARNING);
+    // Refusing here instead of at `launch` only helps if the message carries
+    // the coordinate remedy the flow can still act on.
+    expect(message).toContain(
+      "`tap: { x: 0.5, y: 0.35 }` takes a point directly and reads no tree"
+    );
+    // The native-* dead-end warning addresses a native-* tool caller; this
+    // reader is writing flow YAML, where none of those tools is a step.
+    expect(message).not.toContain(NON_INJECTABLE_NATIVE_WARNING);
+    expect(message).not.toMatch(/native-describe-screen|native-find-views/);
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE);
     expect(getFailureSignal(err)?.failure_stage).toBe("flow_tree_pinned_target");
     // The substance of the refusal: no RPC was touched at all.
