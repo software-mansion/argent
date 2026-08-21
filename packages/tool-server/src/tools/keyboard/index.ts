@@ -58,15 +58,84 @@ const zodSchema = z.object({
     .describe(
       "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1–f12. Cannot be combined with `text` in one call — one call per action; to type and then press a key, put two `keyboard` steps in one `run-sequence`. Not supported on TV targets — move focus with `tv-remote` (up/down/left/right) instead."
     ),
-  delayMs: z
-    .number()
+  clear: z
+    .boolean()
     .optional()
     .describe(
-      "Delay in ms between key presses (default 50). Ignored on Android phones/tablets (typed via `adb input text`, which has no per-key cadence), on Vega (text/keys injected in a single shot), and on TV targets (Apple TV / Android TV type the whole string at the daemon's own cadence)."
+      "Empty the focused text field before typing. Use this whenever a field may already hold a value — typing alone APPENDS, it does not replace. " +
+        '`{ clear: true, text: "new@example.com" }` replaces a field\'s contents in one call; `{ clear: true }` alone just empties it. ' +
+        "Does not count towards `keys`, which reports only what you asked to be entered; `cleared` reports that the clear was carried out, which is not the same as the field having been observed empty — see the tool description. " +
+        'Supported on iOS, Android and Chromium; not supported on Vega or TV targets — empty a field there with the app\'s own clear affordance, or on Vega with repeated `key: "backspace"` presses. ' +
+        "What each backend can leave behind, since only Chromium reads the field back: on iOS and Android a widget that swallows the select-all leaves the following delete acting as a plain backspace, so the field ends up ONE CHARACTER SHORTER rather than unchanged, and a combined `text` then appends to that. " +
+        "On Android levels older than `input keycombination` the clear deletes backwards from end-of-LINE, so a multi-line field keeps what sits below the caret, and a field over 150 characters is refused rather than partly deleted; a length that cannot be read at all (a password field, or a screen the device would not capture) falls back to a fixed 158 backspaces — more than every length that path accepts, so a field only keeps its head past 158 characters."
+    ),
+  delayMs: z
+    .number()
+    // Bounded because iOS typing is serialized per device: the backend holds a
+    // modifier down across awaits, so a second call arriving inside that window
+    // would have its keystroke delivered as part of the chord, and the fix is a
+    // FIFO chain. An unbounded cadence therefore no longer costs only its own
+    // call — it holds that device's keyboard, and everything queued behind it.
+    //
+    // The bound caps ONE keypress, not the hold: that is ~`2 × delayMs ×
+    // text.length`, so `{ text: <120 chars>, delayMs: 5000 }` is schema-valid at
+    // ~20 minutes. What actually bounds the hold is the abort signal the iOS
+    // backend honours (`simulator-server-keys.ts`) — a client that hangs up
+    // releases the chain within about one keypress. 5s per keypress is still far
+    // past any real cadence, which is what makes it a sane ceiling.
+    //
+    // A bare `.max()`, deliberately NOT the bound `await-ui-element` puts on
+    // `pollIntervalMs` (`.int().min(50).max(5000)`): a cadence has no floor worth
+    // enforcing — 0 means "as fast as the transport goes", which is what this
+    // PR's own Chromium tests pass — and a fractional or negative value is
+    // harmless to `setTimeout`. Verified: `delayMs: -1000` and `delayMs: 2.5` are
+    // both accepted, only `5001` is rejected.
+    //
+    // The number itself is pinned AT the boundary (`keyboard-clear.test.ts`
+    // probes `5001`), because `5000`-accepted and `600000`-rejected left it free:
+    // raising this to `.max(10000)` kept the whole keyboard suite green, which is
+    // how a ceiling whose reason is written above it gets relaxed unnoticed.
+    .max(5000)
+    .optional()
+    .describe(
+      "Delay in ms between key presses (default 50, max 5000). Ignored on Android phones/tablets (typed via `adb input text`, which has no per-key cadence), on Vega (text/keys injected in a single shot), and on TV targets (Apple TV / Android TV type the whole string at the daemon's own cadence). On Chromium it ALSO floors how long a `clear` waits before reading the field back (the wait is the larger of this and 50ms), so a slow cadence adds that wait once per clear."
     ),
 });
 
 type Params = z.infer<typeof zodSchema>;
+
+/**
+ * The `[started, completed]` phrasings for one keyboard request.
+ *
+ * Kept as one function so the two tenses cannot drift apart, and so every arm of
+ * the request shape is named exactly once. A request with none of the three is
+ * still possible (`{ udid }` alone types nothing) and reads as a key press,
+ * which is what it did before `clear` existed.
+ *
+ * The text-AND-key arm is asymmetric on purpose. `execute` rejects that shape,
+ * but `startedMsg` renders BEFORE it does, so the started phrasing is the one an
+ * event log really shows for a request that is about to 400 — and it has to name
+ * both halves, or the log reads as a plain typing call. The completed phrasing
+ * of the same arm is unreachable, and stays here only so the two tenses are
+ * written in one place rather than diverging when the rule next changes.
+ */
+function keyboardAction(params: Pick<Params, "text" | "key" | "clear">): [string, string] {
+  const text = params.text !== undefined;
+  const key = params.key !== undefined;
+  const [started, completed] =
+    text && key
+      ? ["entering text and pressing a key", "entered text and pressed a key"]
+      : text
+        ? ["entering text", "entered text"]
+        : ["pressing a key", "pressed a key"];
+  if (!params.clear) return [capitalize(started), capitalize(completed)];
+  // A clear-only call carries neither `text` nor `key`, so it has nothing else
+  // to report and must not be phrased as the key press it never makes.
+  if (!text && !key) return ["Clearing a field", "Cleared a field"];
+  return [`Clearing a field and ${started}`, `Cleared a field and ${completed}`];
+}
+
+const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
@@ -110,32 +179,44 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
       // this boundary, so a value must not reach the event log before execution
       // validates whether it is a supported named key.
       //
-      // `startedMsg` still words a text+key request because it renders BEFORE
-      // `execute` rejects the combination — and likewise words `{ key: "" }` as
-      // a key press, which `execute` also rejects. `completedMsg` runs only
-      // after a call that succeeded, so it sees neither. Each formatter
-      // therefore has to word a different set of shapes, and the empty
-      // request — neither parameter, a documented no-op — reaches both.
-      startedMsg: ({ params }) => {
-        if (params.text === undefined) return "Pressing a key";
-        if (params.key === undefined) return "Entering text";
-        return "Entering text and pressing a key";
-      },
-      completedMsg: ({ params }) => (params.text === undefined ? "Pressed a key" : "Entered text"),
+      // `clear` gets its own arm rather than riding the text/key split: a
+      // clear-only call carries neither, so without one it announces a key press
+      // that never happens, and a `{ clear, text }` call is logged as plain
+      // typing with the destructive half unmentioned.
+      //
+      // Both formatters word a shape by presence, so `startedMsg` announces a
+      // combined text+key request, and a `{ key: "" }` one, as though they will
+      // happen — it renders BEFORE `execute` rejects either. `completedMsg` runs
+      // only after a call that succeeded, so it sees neither.
+      startedMsg: ({ params }) => keyboardAction(params)[0],
+      completedMsg: ({ params }) => keyboardAction(params)[1],
       failedMsg: ({ failureSignal }) => `Failed to use keyboard: ${failureSignal.error_code}`,
     },
     description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
 Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; use keyboard to type into a focused text field (e.g. a search or login box).
-Returns { typed: string, keys: number }. Fails if text and key are both given in one call (rejected before anything is typed), if an unsupported key name is provided, or if the device's input backend is not reachable.
-A failure is not rolled back. An unsupported key name is always rejected before anything is sent. Un-typeable text is not: the iOS simulator and Chromium reject it mid-string and leave the characters before it in the field (Android, Vega and TV targets check the whole string up front). A transport failure partway also leaves the text already sent. On a retry, read the field's actual contents — do not assume it is unchanged.
-- text: types a string (supports uppercase, digits, common punctuation). To type a credential, use \`{{secret:<NAME>}}\` — resolved server-side from the \`ARGENT_SECRET_<NAME>\` env var or an argent secrets file (\`.argent/secrets.env\` in the project, \`~/.argent/secrets.env\`, or an \`ARGENT_SECRET_\`-prefixed key in the project's \`.env\`/\`.env.local\`), so the plaintext never enters agent context; the result echoes the placeholder, not the value, and the after-typing auto-screenshot is skipped. To submit after typing a secret, put both steps in ONE \`run-sequence\` — that keeps the skip covering the Enter, which a second bare \`keyboard\` call would not.
+Returns { typed: string, keys: number, cleared?: boolean }. Fails if text and key are both given in one call (rejected before anything is typed), if an unsupported key name is provided, if \`clear\` is used on a platform that cannot do it, or if the device's input backend is not reachable.
+A rejected request never changes the field. An unsupported key name, un-typeable text, and a \`clear\` on a platform that cannot do it are all decided before anything is sent, on every backend; the Android over-length refusal is decided from a READ of the field, so a support probe and a screen dump go to the device first — neither of which changes it. Either way a 400 leaves the field exactly as it was, neither emptied nor half-typed. What is NOT rolled back is a transport failure partway through: the characters already sent stay in the field. On a retry after one of those, read the field's actual contents — do not assume it is unchanged.
+- text: types a string (supports uppercase, digits, common punctuation). For a credential, write a \`{{secret:<NAME>}}\` placeholder — the \`text\` parameter documents where it resolves from. Two consequences here: the result echoes the placeholder rather than the value, and the after-typing auto-screenshot is skipped. To press a key after a secret, put both steps in ONE \`run-sequence\` — that keeps the skip covering the key press, which a second bare call would not.
 - key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1–f12) — NOT supported on TV targets; move focus with \`tv-remote\` instead.
+- clear: empties the focused field first, because typing alone APPENDS — against a field that already holds a value (a remembered login, a restored draft, a re-run step) the old text stays and the new text lands after it. \`{ clear: true, text: "…" }\` replaces a value; \`{ clear: true }\` alone just empties it. iOS, Android and Chromium; rejected on Vega and TV targets. Focus a text field first. \`cleared: true\` reports that the emptying ran, NOT that the field was seen empty — only Chromium reads it back, and even it degrades to best-effort on a page it cannot read, so assert the value whenever the result matters. What each backend can leave behind — a swallowed select-all, an older Android level's line-scoped delete — is on the \`clear\` parameter.
 On a TV target (runtimeKind 'tv') only \`text\` applies — focus a text field first (with \`tv-remote\`), then type into it (injected HID keyboard on Apple TV, \`adb input text\` on Android TV).
-One call does one action: pass text OR key, never both. To type and then press a key, send two \`keyboard\` steps in one \`run-sequence\` — { text: "hello" } then { key: "enter" } — which also keeps it to a single round-trip.`,
+One call does one typing action: pass text OR key, never both. \`clear\` rides along with either, and the order within a call is always clear → text, or clear → key. To type and then press a key, send two \`keyboard\` steps in one \`run-sequence\` — { clear: true, text: "hello" } then { key: "enter" } — which also keeps it to a single round-trip.`,
     zodSchema,
     capability,
+    // One request can run a clear AND one injection — `text` or `key`, never
+    // both — and the two are budgeted separately: on Android the clear is capped
+    // at 26s (ANDROID_CLEAR_BUDGET_MS, which derives as ADB_INPUT_TIMEOUT_MS +
+    // DELETE_RUN_RESERVE_MS) and the injection that follows keeps its own 15s
+    // cap, so a `{ clear, text }` worst case of ~41s still sums past the MCP
+    // adapter's 30s per-request fetch timeout. Sizing the legs against 30s
+    // instead would mean threading one deadline through the text/key injectors
+    // the Android-TV blueprint shares; declaring the tool for what it is costs
+    // nothing and stops the client abandoning a request while adb is still
+    // typing on the device.
+    longRunning: true,
     searchHint:
-      "type text keyboard input named key enter escape arrow tv vega fire tv search field hid leanback",
+      "type text keyboard input named key enter escape arrow tv vega fire tv search field hid leanback " +
+      "clear erase empty field reset delete contents replace value select all backspace",
     // No eager service: each branch resolves its backend lazily (TV control,
     // simulator-server, CDP, or Vega adb), since distinguishing a TV target is
     // async and a tvOS udid must never resolve simulator-server.
@@ -228,7 +309,10 @@ One call does one action: pass text OR key, never both. To type and then press a
       const { text, secrets } = resolveSecretPlaceholders(params.text);
       if (secrets.length === 0) return dispatch(services, params, options);
       try {
-        const result = await dispatch(services, { ...params, text }, options);
+        // `secretText` travels with the resolved value so a backend can keep the
+        // credential's LENGTH out of its failure messages too — `redactSecrets-
+        // FromError` substitutes the value string and cannot redact a count.
+        const result = await dispatch(services, { ...params, text, secretText: true }, options);
         // Echo the placeholder form, never the resolved value.
         return { ...result, typed: params.text };
       } catch (err) {

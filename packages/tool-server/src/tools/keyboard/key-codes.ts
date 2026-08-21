@@ -3,6 +3,12 @@
 
 export const SHIFT_KEYCODE = 225;
 
+/** Left GUI (Command on macOS / iOS). Held with `A` to select-all before a clear. */
+export const LEFT_GUI_KEYCODE = 227;
+
+/** `A` — the select-all key, pressed while LEFT_GUI is held. */
+export const A_KEYCODE = 4;
+
 const SYMBOL_KEYCODES: Record<string, number> = {
   "\n": 40,
   "\r": 40,

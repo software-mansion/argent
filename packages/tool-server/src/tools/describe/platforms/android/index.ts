@@ -1,7 +1,8 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { Registry, ToolDependency } from "@argent/registry";
 import type { DescribeTreeData } from "../../contract";
-import { adbExecOutBinary, isAndroidTv } from "../../../../utils/adb";
+import { isAndroidTv } from "../../../../utils/adb";
+import { dumpAndroidUiXml } from "../../../../utils/android-ui-dump";
 import { resolveDevice } from "../../../../utils/device-info";
 import { getAndroidScreenSize } from "../../../../utils/android-screen";
 import { parseUiAutomatorDump } from "./uiautomator-parser";
@@ -72,39 +73,34 @@ export async function describeAndroid(
   }
 
   // ── Legacy uiautomator dump fallback ───────────────────────────────────
-  // Per-call dump path so concurrent describes on the same serial don't race
-  // on /sdcard/window_dump.xml (one call's cat would read the other's dump
-  // mid-write). `uiautomator` rejects unwritable paths, so we target
-  // /data/local/tmp/ which is world-writable on every Android we support.
-  const randomSuffix = `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
-  const dumpPath = `/data/local/tmp/argent-ui-dump-${randomSuffix}.xml`;
-  // `--compressed` strips nodes that `isImportantForAccessibility()` would skip
-  // (decorative wrappers, RN SVG sub-paths, bounds-less Compose group containers)
-  // while preserving every text label, content-desc, clickable, and resource-id
-  // an accessibility service would surface — i.e. exactly what the agent contract
-  // already cares about. Empirically cuts a Bluesky thread dump from 65 KB → 23 KB
-  // and 181 → 64 nodes with zero loss of useful info.
-  // Trailing `; rm -f` (not `&& rm -f`) so the cleanup fires even when `dump`
-  // or `cat` fails — keyguard/MFA flaps used to leak a dump file per attempt.
-  const [size, rawBuf] = await Promise.all([
-    getAndroidScreenSize(serial),
-    adbExecOutBinary(
-      serial,
-      `uiautomator dump --compressed ${dumpPath} >/dev/null && cat ${dumpPath}; rm -f ${dumpPath}`,
-      { timeoutMs: 20_000 }
-    ),
-  ]);
-  const raw = rawBuf.toString("utf-8");
+  // Transport and dump-path handling live in `utils/android-ui-dump` so every
+  // reader of the hierarchy shares one (exec-out) implementation — see there
+  // for why `adb shell` cannot be used for this.
+  const [size, raw] = await Promise.all([getAndroidScreenSize(serial), dumpAndroidUiXml(serial)]);
   const trimmed = raw.trim();
-  if (/^ERROR:/i.test(trimmed) || (!trimmed.includes("<hierarchy") && /error/i.test(trimmed))) {
+  // No `<hierarchy>` means the capture did not happen, whatever the device said
+  // about it. `ERROR: …` is the usual wording, but not the only one: a dump that
+  // loses the race for the device's single UiAutomation connection comes back as
+  // a bare `Killed` (adb still exits 0) — measured by running three concurrent
+  // dumps, and now reachable more often because the keyboard clear is a third
+  // caller. Testing for the hierarchy instead of for error wording covers both,
+  // and keeps this from falling through to the parser, which would report the
+  // far less actionable "failed to parse" for what is really "try again".
+  if (!trimmed.includes("<hierarchy")) {
     throw new FailureError(
-      `uiautomator could not capture the screen: ${trimmed}. ` +
-        `Common causes: device locked / keyguard, DRM or secure overlay, Play Integrity screen. ` +
-        `Unlock the device or take a screenshot as a fallback.`,
+      // Capped: the device's own bytes are interpolated into an agent-facing
+      // message, and a refused screen's output is neither bounded nor ours. Same
+      // 200 the TV blueprint applies to this same dump.
+      `uiautomator could not capture the screen: ${trimmed.slice(0, 200) || "(no output)"}. ` +
+        `Common causes: device locked / keyguard, DRM or secure overlay, Play Integrity screen, ` +
+        `or another uiautomator dump holding the device. ` +
+        `Retry once — a lost race clears once the holder finishes — then unlock the device or ` +
+        `take a screenshot as a fallback.`,
       {
-        // The adb wrapper exits 0, but the uiautomator tool it ran reported an
-        // in-band `ERROR:` line — a functional failure of the uiautomator
-        // subprocess. Classified `subprocess` to match the sibling
+        // The adb wrapper exits 0 while the uiautomator tool it ran produced no
+        // hierarchy: an in-band `ERROR:` line, or the bare `Killed` of a lost
+        // UiAutomation race. Either is a functional failure of the uiautomator
+        // subprocess, so `subprocess` matches the sibling
         // ANDROID_UIAUTOMATOR_PARSE_FAILED (also adb-exit-0, unusable output).
         error_code: FAILURE_CODES.ANDROID_UIAUTOMATOR_CAPTURE_FAILED,
         failure_stage: "android_uiautomator_capture",

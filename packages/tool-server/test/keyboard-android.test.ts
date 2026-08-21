@@ -441,6 +441,54 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
       impl.handler({}, { udid: SERIAL, text: "hi" } as KeyboardParams, phone)
     ).rejects.toThrow(/device offline/);
   });
+
+  it("chains two overlapping calls on one device rather than interleaving their adb writes", async () => {
+    // The clear holds a SELECTION across awaits: the modern path sends the
+    // select-all and the delete as two separate `adb` invocations, so between
+    // them the field is fully selected, and the text is a third. A concurrent
+    // call landing in there types over that selection and destroys the value —
+    // while BOTH calls return 200 with their own text as `typed`.
+    //
+    // Measured on API 36 before the chain covered this backend, `{clear,
+    // text:"AAAA"}` against `{clear, text:"BBBB"}` at 10/20/30/50ms: 4 of 4
+    // corrupt — ABABABAB, AABABBB, AAABABBB, AAAABBBB, where the only clean
+    // outcomes are AAAA and BBBB.
+    adbShell.mockClear();
+
+    const [a, b] = [
+      impl.handler({}, { udid: SERIAL, clear: true, text: "AAAA" } as KeyboardParams, phone),
+      impl.handler({}, { udid: SERIAL, clear: true, text: "BBBB" } as KeyboardParams, phone),
+    ];
+    await Promise.all([a, b]);
+
+    // The exact ordered stream, not a grouping predicate: each run is
+    // select-all, delete, text, and the second run's first write must come
+    // after the first run's last. Unchained, the two runs suspend on alternate
+    // `adbShell` awaits and this comes back interleaved
+    // (keycombination, keycombination, keyevent, keyevent, text, text).
+    expect(adbShell.mock.calls.map((c) => c[1])).toEqual([
+      "input keycombination 113 29 2>&1",
+      "input keyevent 67",
+      "input text 'AAAA'",
+      "input keycombination 113 29 2>&1",
+      "input keyevent 67",
+      "input text 'BBBB'",
+    ]);
+  });
+
+  it("leaves the chain immediately for a call whose client has hung up", async () => {
+    // `adb shell input` is not cancellable, so this is the only point a hang-up
+    // can be honoured — and without it a queue of abandoned calls still types
+    // every one of them out in full, at a device nobody is reading any more.
+    adbShell.mockClear();
+
+    await expect(
+      impl.handler({}, { udid: SERIAL, text: "hi" } as KeyboardParams, phone, {
+        signal: AbortSignal.abort(),
+      })
+    ).rejects.toThrow();
+    expect(adbShell).not.toHaveBeenCalled();
+  });
 });
 
 // The routing/injection tests above call `makeAndroidImpl().handler` directly,

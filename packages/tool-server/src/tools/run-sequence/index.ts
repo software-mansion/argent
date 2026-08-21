@@ -115,8 +115,10 @@ Allowed tools and their args (udid is auto-injected, do NOT include it in args):
   gesture-pinch:  { centerX: number, centerY: number, startDistance: number, endDistance: number, endCenterX?: number, endCenterY?: number, angle?: number, durationMs?: number }  [ios/android]
   gesture-rotate: { centerX: number, centerY: number, radius?: number, radiusX?: number, radiusY?: number, startAngle: number, endAngle: number, durationMs?: number }  [ios/android]
   button:         { button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton" }                  [ios/android]
-  keyboard:       { text?: string, key?: string, delayMs?: number }  (text OR key per step, never both; TV: text only)  [ios/android/chromium/vega/tv]
-                  text supports {{secret:<NAME>}} placeholders, resolved server-side from ARGENT_SECRET_<NAME> env vars or an argent secrets file — credentials never enter agent context
+  keyboard:       { text?: string, key?: string, clear?: boolean, delayMs?: number }  (clear + text OR key, never both; TV: text only)  [ios/android/chromium/vega/tv]
+                  text takes {{secret:...}} placeholders — see the keyboard tool for where they resolve
+                  clear empties the field before the step types into it (typing alone appends); iOS/Android/Chromium only, rejected on Vega and TV.
+                  Only Chromium verifies it emptied — elsewhere cleared means the clear was dispatched, so assert the value if the step depends on it
   rotate:         { orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown" }                     [ios/android]
   shake:          { count?: number }                                                                                    [ios sim/android emu]
   tv-remote:      { button: <remote button | array of them>, repeat?: number }                                          [apple tv/android tv/vega]
@@ -130,7 +132,7 @@ Example — scroll down three times (use gesture-scroll with positive deltaY on 
     { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } }
   ]}
 
-Example — type text and submit (two keyboard steps; one call cannot carry both):
+Example — type text then press Enter (two keyboard steps; one call cannot carry both):
   { "udid": "<UDID>", "steps": [
     { "tool": "keyboard", "args": { "text": "hello world" } },
     { "tool": "keyboard", "args": { "key": "enter" } }

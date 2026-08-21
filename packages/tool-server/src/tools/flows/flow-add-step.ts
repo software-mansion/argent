@@ -486,6 +486,21 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
 Returns { message, toolResult, stepCount, recorded, savedTo } on success. If it fails an error is returned and nothing is recorded.
 If a step was recorded by mistake, edit the .yaml to remove it — against a remote client, only after \`flow-finish-recording\`: the in-memory copy is authoritative there, and every write serializes it over your edit.`,
     zodSchema,
+    // Inherited from the step: this dispatches an arbitrary tool by name, so its
+    // worst case is the worst case of whatever it wraps — and several of those
+    // are `longRunning` themselves. `keyboard` alone budgets ~41s for a
+    // `{ clear, text }` (26s + 15s) and declares the flag for exactly that
+    // reason; `await-ui-element` takes a `timeoutMs` with no ceiling below it. Without the flag here the MCP adapter applies its 30s FETCH_TIMEOUT_MS
+    // to the RECORDING of such a step and, on abort, re-POSTs the identical body
+    // up to MAX_RETRIES more times.
+    //
+    // The work is not cancellable, so each retry is a fresh device action AND a
+    // fresh appended step. Measured against this server through the real MCP
+    // adapter, recording one `await-ui-element` with `timeoutMs: 40000`: the
+    // call took 153s, returned "This operation was aborted" — so the agent
+    // concludes nothing was recorded — and left FIVE identical steps in the
+    // YAML, which the replay then performs five times.
+    longRunning: true,
     services: () => ({}),
     async execute(_services, params, ctx) {
       const session = await requireRecordingSession(params.project_root, params.name);

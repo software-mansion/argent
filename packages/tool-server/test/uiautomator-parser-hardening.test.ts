@@ -155,6 +155,36 @@ describe("parseUiAutomatorXml — tolerates raw `>` inside attribute values", ()
   });
 });
 
+describe("parseUiAutomatorXml — reads single-quoted attribute values", () => {
+  // XML §3.1 lets either quote delimit an AttValue, and only the delimiter in
+  // use has to be escaped — so uiautomator switches an attribute to single
+  // quotes when its value contains a double quote. Verified on a live emulator:
+  // a field holding `a<b>c&d"e'f` dumps as
+  //   text='a&lt;b&gt;c&amp;d"e&apos;f'
+  // A double-quote-only attribute matcher skips that attribute entirely. The
+  // node keeps its other attributes, so nothing looks broken — the text just
+  // silently disappears from the describe tree, and the keyboard clear's delete
+  // count then reads the field as UNMEASURABLE rather than as empty: it floors a
+  // focused editable carrying no `text` to BLIND_DELETE_COUNT, so an
+  // eight-character field draws the full blind run and anything longer than that
+  // count keeps its head.
+  it("keeps the text of a node whose value contains a double quote", () => {
+    const xml = `<?xml version='1.0' ?>
+<hierarchy rotation="0">
+  <node class="android.widget.EditText" bounds="[0,0][100,50]"
+        text='say &quot;hi&quot; to A&apos;s &amp; B&apos;s' content-desc="" resource-id="" package="com.x" />
+</hierarchy>`;
+    const tree = parseUiAutomatorDump(xml, 1000, 1000);
+    expect(tree.children).toHaveLength(1);
+    expect(tree.children[0]!.label).toBe(`say "hi" to A's & B's`);
+  });
+
+  it("parses both quote styles in one tag", () => {
+    const parsed = parseUiAutomatorXml(`<node a='x"y' b="p'q" c='r' d="s" />`);
+    expect(parsed!.attrs).toMatchObject({ a: 'x"y', b: "p'q", c: "r", d: "s" });
+  });
+});
+
 describe("parseUiAutomatorXml — robust against malformed structure", () => {
   it("ignores a stray closing tag without dropping subsequent siblings", () => {
     // A leftover `</node>` with no matching opener used to pop a real parent

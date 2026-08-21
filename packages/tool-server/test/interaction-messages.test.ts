@@ -76,6 +76,42 @@ describe("tool interaction messages", () => {
       "Pressed a key"
     );
 
+    // `clear` carries neither `text` nor `key`, so without an arm of its own a
+    // clear-only call is announced and logged as a key press that never happens,
+    // and a `{ clear, text }` call hides the destructive half entirely.
+    expect(keyboard.startedMsg!({ params: { udid: "device-1", clear: true } })).toBe(
+      "Clearing a field"
+    );
+    expect(keyboard.completedMsg!({ params: { udid: "device-1", clear: true }, result: {} })).toBe(
+      "Cleared a field"
+    );
+    expect(keyboard.startedMsg!({ params: { udid: "device-1", clear: true, text: "hi" } })).toBe(
+      "Clearing a field and entering text"
+    );
+    expect(
+      keyboard.completedMsg!({ params: { udid: "device-1", clear: true, text: "hi" }, result: {} })
+    ).toBe("Cleared a field and entered text");
+    expect(keyboard.startedMsg!({ params: { udid: "device-1", clear: true, key: "enter" } })).toBe(
+      "Clearing a field and pressing a key"
+    );
+    // The completed tense of that arm was unpinned, so the two tenses could
+    // drift apart on `{ clear, key }` — the largest shape a single call can
+    // still carry, now that text and key cannot be combined.
+    expect(
+      keyboard.completedMsg!({
+        params: { udid: "device-1", clear: true, key: "enter" },
+        result: {},
+      })
+    ).toBe("Cleared a field and pressed a key");
+    // The rejected shape, on `startedMsg` only. It renders before `execute`
+    // throws, so this IS what an event log shows for a request about to 400 —
+    // and a formatter that dropped the text+key arm would log it as a plain
+    // clear-and-type. `completedMsg` never sees it, which is why there is no
+    // twin assertion here.
+    expect(
+      keyboard.startedMsg!({ params: { udid: "device-1", clear: true, text: "hi", key: "enter" } })
+    ).toBe("Clearing a field and entering text and pressing a key");
+
     expect(
       definitions.get("screenshot")!.interaction!.completedMsg!({
         params: { udid: "device-1" },

@@ -18,6 +18,8 @@ interface FakeCdp {
   close: () => Promise<void>;
   /** All CDP method names the fake server has received. */
   recordedMethods: string[];
+  /** Full method + params for each received message (params-level assertions). */
+  recordedCalls: Array<{ method: string; params: Record<string, unknown> }>;
   /** Inject custom replies for specific methods (otherwise default replies are used). */
   setReply: (
     method: string,
@@ -27,6 +29,7 @@ interface FakeCdp {
 
 async function startFakeCdp(): Promise<FakeCdp> {
   const recordedMethods: string[] = [];
+  const recordedCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
   const customReplies = new Map<
     string,
     Record<string, unknown> | ((id: number) => Record<string, unknown>)
@@ -74,6 +77,10 @@ async function startFakeCdp(): Promise<FakeCdp> {
           params?: unknown;
         };
         recordedMethods.push(msg.method);
+        recordedCalls.push({
+          method: msg.method,
+          params: (msg.params as Record<string, unknown>) ?? {},
+        });
         let result: unknown;
         const custom = customReplies.get(msg.method);
         if (custom !== undefined) {
@@ -125,6 +132,7 @@ async function startFakeCdp(): Promise<FakeCdp> {
     http: httpSrv,
     ws: wss,
     recordedMethods,
+    recordedCalls,
     setReply: (method, payload) => customReplies.set(method, payload),
     close: () =>
       new Promise<void>((resolve) => {
@@ -193,6 +201,61 @@ describe("chromiumCdpBlueprint (smoke)", () => {
       expect(shot.path).toMatch(/argent-chromium-media/);
       expect(shot.path).toMatch(/argent-screenshot-/);
       expect(shot.url).toMatch(/^file:\/\//);
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  // `commands` names the editing action outright, which is what makes it work
+  // across Chromium builds — whether a `modifiers` chord reaches the editing
+  // layer is build-dependent (on a macOS Chrome 150 neither Ctrl+A nor Cmd+A
+  // selects anything, so a following delete removes ONE character while the
+  // call still reports success). The keyboard tool's `clear` depends
+  // on this field surviving the payload builder; if it is silently dropped
+  // here, `clear` degrades into a single-character backspace with no error.
+  it("forwards `commands` on a key event to Input.dispatchKeyEvent", async () => {
+    const s = await startFakeCdp();
+    servers.push(s);
+    const device = resolveDevice(`chromium-cdp-${s.port}`);
+    const instance = await chromiumCdpBlueprint.factory({}, device, { device });
+
+    try {
+      await instance.api.dispatchKeyEvent({
+        type: "rawKeyDown",
+        key: "a",
+        code: "KeyA",
+        windowsVirtualKeyCode: 65,
+        commands: ["selectAll", "deleteBackward"],
+      });
+
+      const call = s.recordedCalls.find((c) => c.method === "Input.dispatchKeyEvent");
+      expect(call?.params.commands).toEqual(["selectAll", "deleteBackward"]);
+      expect(call?.params.type).toBe("rawKeyDown");
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  // What this pins is the WIRE SHAPE — a plain key event carries no `commands` —
+  // and not the `if (event.commands !== undefined)` guard that builds it. It
+  // cannot pin that guard, and no test at this layer can: the payload is sent
+  // through `JSON.stringify`, which drops an `undefined`-valued key, so
+  // `payload.commands = undefined` and "no key at all" are byte-identical to the
+  // fake server below (verified in Node). The same is true of every sibling guard
+  // in that builder. Deleting one is caught by review or by the CDP receiver, not
+  // from here.
+  it("sends no `commands` on the wire when the caller does not set it", async () => {
+    const s = await startFakeCdp();
+    servers.push(s);
+    const device = resolveDevice(`chromium-cdp-${s.port}`);
+    const instance = await chromiumCdpBlueprint.factory({}, device, { device });
+
+    try {
+      await instance.api.dispatchKeyEvent({ type: "keyDown", key: "a", code: "KeyA" });
+
+      const call = s.recordedCalls.find((c) => c.method === "Input.dispatchKeyEvent");
+      expect(call).toBeDefined();
+      expect(call?.params).not.toHaveProperty("commands");
     } finally {
       await instance.dispose();
     }

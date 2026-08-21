@@ -58,6 +58,10 @@ function stubRegistry(): Registry {
           description: "Deferred but hinted",
           inputSchema: { type: "object", properties: {} },
           searchHint: "profiling hotspots cpu",
+          // Declared here as well, because this flag is what the MCP adapter
+          // reads to decide NOT to apply its 30s fetch timeout — and not to
+          // re-send a timed-out, non-idempotent POST up to five times.
+          longRunning: true,
           services: () => ({}),
           execute: async () => ({}),
         };
@@ -124,10 +128,14 @@ describe("GET /tools progressive-loading metadata", () => {
     });
     expect(byName.get("hinted-tool")).toMatchObject({
       searchHint: "profiling hotspots cpu",
+      longRunning: true,
     });
     expect(byName.get("hinted-tool")).not.toHaveProperty("alwaysLoad");
     expect(byName.get("plain-tool")).not.toHaveProperty("alwaysLoad");
     expect(byName.get("plain-tool")).not.toHaveProperty("searchHint");
+    // Absent, not `false`: the adapter keys on the property being there, and
+    // `keyboard`'s whole no-timeout mechanism rides on this one line.
+    expect(byName.get("plain-tool")).not.toHaveProperty("longRunning");
   });
 
   it("does not pass bundleId into telemetry invocation metadata", async () => {

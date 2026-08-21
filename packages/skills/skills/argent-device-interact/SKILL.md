@@ -56,27 +56,27 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 
 ## 4. Choosing the Right Tool
 
-| Action            | Tool                | Notes                                                            |
-| ----------------- | ------------------- | ---------------------------------------------------------------- |
-| Multiple actions  | `run-sequence`      | Batch steps in one call (no intermediate screenshots)            |
-| Open an app       | `launch-app`        | **Always — never tap home-screen icons**                         |
-| Restart an app    | `restart-app`       | Terminate and relaunch by bundle ID                              |
-| Open URL/scheme   | `open-url`          | Web pages, deep links, URL schemes                               |
-| Single tap        | `gesture-tap`       | Buttons, links, checkboxes                                       |
-| Scroll/swipe      | `gesture-swipe`     | Straight-line scroll or swipe                                    |
-| Scroll (Chromium) | `gesture-scroll`    | Wheel-based; deltas are window fractions, positive deltaY = down |
-| Drag (Chromium)   | `gesture-drag`      | Sliders, drag-and-drop, text selection                           |
-| Long press        | `gesture-custom`    | Context menus, drag start                                        |
-| Drag & drop       | `gesture-custom`    | Complex drag interactions                                        |
-| Pinch/zoom        | `gesture-pinch`     | Two-finger pinch with auto-interpolation                         |
-| Rotation          | `gesture-rotate`    | Two-finger rotation with auto-interpolation                      |
-| Custom gesture    | `gesture-custom`    | Arbitrary touch sequences, optional interpolation                |
-| Hardware key      | `button`            | Home, back, power, volume, appSwitch, actionButton               |
-| Type text         | `keyboard`          | Every platform. Text or one named key per call, never both       |
-| Rotate device     | `rotate`            | Orientation changes                                              |
-| Shake device      | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu   |
-| Wait for UI       | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text    |
-| Wait for idle     | `await-screen-idle` | Block until a non-empty screen tree stops changing               |
+| Action            | Tool                | Notes                                                                                                                                                                     |
+| ----------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Multiple actions  | `run-sequence`      | Batch steps in one call (no intermediate screenshots)                                                                                                                     |
+| Open an app       | `launch-app`        | **Always — never tap home-screen icons**                                                                                                                                  |
+| Restart an app    | `restart-app`       | Terminate and relaunch by bundle ID                                                                                                                                       |
+| Open URL/scheme   | `open-url`          | Web pages, deep links, URL schemes                                                                                                                                        |
+| Single tap        | `gesture-tap`       | Buttons, links, checkboxes                                                                                                                                                |
+| Scroll/swipe      | `gesture-swipe`     | Straight-line scroll or swipe                                                                                                                                             |
+| Scroll (Chromium) | `gesture-scroll`    | Wheel-based; deltas are window fractions, positive deltaY = down                                                                                                          |
+| Drag (Chromium)   | `gesture-drag`      | Sliders, drag-and-drop, text selection                                                                                                                                    |
+| Long press        | `gesture-custom`    | Context menus, drag start                                                                                                                                                 |
+| Drag & drop       | `gesture-custom`    | Complex drag interactions                                                                                                                                                 |
+| Pinch/zoom        | `gesture-pinch`     | Two-finger pinch with auto-interpolation                                                                                                                                  |
+| Rotation          | `gesture-rotate`    | Two-finger rotation with auto-interpolation                                                                                                                               |
+| Custom gesture    | `gesture-custom`    | Arbitrary touch sequences, optional interpolation                                                                                                                         |
+| Hardware key      | `button`            | Home, back, power, volume, appSwitch, actionButton                                                                                                                        |
+| Type text         | `keyboard`          | Every platform. Text or one named key per call, never both. Enter, Escape, arrows — not on TV. `clear: true` empties the field first (typing appends) — not on TV or Vega |
+| Rotate device     | `rotate`            | Orientation changes                                                                                                                                                       |
+| Shake device      | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu                                                                                                            |
+| Wait for UI       | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text                                                                                                             |
+| Wait for idle     | `await-screen-idle` | Block until a non-empty screen tree stops changing                                                                                                                        |
 
 ## 5. Finding Tap Targets
 
@@ -171,9 +171,19 @@ Values: `home`, `back`, `power`, `volumeUp`, `volumeDown`, `appSwitch`, `actionB
 { "udid": "<UDID>", "text": "search query" }
 ```
 
-One call does one action. `text` and `key` are mutually exclusive, and a call that carries both is rejected with nothing typed. To type and then submit, send two `keyboard` steps in one `run-sequence` (§ 8) — `{ "text": "search query" }`, then `{ "key": "enter" }`. Two separate calls do the same work, but cost an extra round-trip.
+One call does one action. `text` and `key` are mutually exclusive, and a call that carries both is rejected with nothing typed. To type and then press a key, send two `keyboard` steps in one `run-sequence` (§ 8) — `{ "text": "search query" }`, then `{ "key": "enter" }`. Two separate calls do the same work, but cost an extra round-trip. A `key` press is only a key press: whether Enter submits the form is the app's decision, so verify the result.
 
-Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12`. Optional: `"delayMs": 100` between keystrokes (default 50ms) — applies to the iOS simulator and Chromium; it is ignored on Android phones/tablets (typed via `adb input text`, no per-key cadence), on Vega, and on TV targets.
+Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12`. Optional: `"delayMs": 100` between keystrokes (default 50ms, max 5000ms). It applies only to iOS and Chromium.
+
+Typing appends to the focused field. Use `"clear": true` to replace its value:
+
+```json
+{ "udid": "<UDID>", "clear": true, "text": "new@example.com" }
+```
+
+`clear` combines with `text` or with `key`, never with both. The tool runs the clear first. Omit `text` to clear without typing. To clear, type, and then press Enter, use one `run-sequence` (§ 8) of two steps: `{ "clear": true, "text": "…" }`, then `{ "key": "enter" }`.
+
+Clearing supports iOS, Android, and Chromium. It does not support Vega or TV targets. Focus an editable field first. A `"cleared": true` result does not prove the field is empty. Verify the value or an app marker when the result matters.
 
 **Typing secrets.** To enter a credential without its plaintext ever entering your context, transcript, or logs, use a secret placeholder in `text` (works in `keyboard`, `paste`, `run-sequence` keyboard steps, and flow `type` steps):
 
@@ -291,7 +301,7 @@ Use the sequencing when:
 
 - Knowing that some action needs multiple steps without necessarily immediate insight of screenshot
 - "scroll to bottom", "scroll to top", "scroll to do X" -> sequence scroll 3-5 times
-- form interactions, "clear and retype field" -> you may use triple-tap to select all, type new value
+- "clear and retype field" -> one `keyboard` step with `{ "clear": true, "text": "…" }`; do not triple-tap
 - "submit form" → fill all fields in sequence, tap submit
 - "go back to X" → defined tap sequence for the navigation
 

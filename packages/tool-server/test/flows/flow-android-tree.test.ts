@@ -60,6 +60,29 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
     expect(frame!.width).toBeCloseTo(1000 / 1080, 5);
   });
 
+  it("reads a single-quoted attribute, which changes a saved flow's verdict", () => {
+    // uiautomator switches delimiter per attribute: a value containing a double
+    // quote is emitted SINGLE-quoted (XML §3.1 lets either delimit an AttValue).
+    // A double-quote-only matcher skipped such an attribute entirely, so the node
+    // kept its other attributes and silently lost its text — and flows share this
+    // parser, so a saved `assert` / `await` step that depended on the field
+    // reading blank flips the other way once it is read correctly. That direction
+    // was untested, and it is the one that changes an existing flow's outcome.
+    const xml =
+      `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>\n<hierarchy rotation="0">` +
+      `<node index="0" class="android.widget.EditText" resource-id="note" package="com.acme.app" ` +
+      `text='say "hi" &amp; bye' bounds="[40,400][1040,480]" /></hierarchy>`;
+
+    const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+
+    // The value is there, entities decoded, both quote styles intact.
+    expect(JSON.stringify(tree)).toContain('say \\"hi\\" & bye');
+    // …and a flow `assert` / `await` on it now passes where it used to see a
+    // blank field and had to be written against that.
+    const note = findAll(tree, { identifier: "note" });
+    expect(evaluateCondition("text", 'say "hi" & bye', note, "equals")).toBe(true);
+  });
+
   it("drops system chrome", () => {
     const tree = adaptFullAndroidHierarchyToDescribeResult(RN_XML, SCREEN_W, SCREEN_H);
     expect(ids(tree)).not.toContain("com.android.systemui:id/status_bar");

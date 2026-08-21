@@ -31,11 +31,33 @@ function registryWith(api: unknown) {
 
 function recordingCdpApi() {
   const chars: string[] = [];
+  let cleared = false;
+  let probes = 0;
   return {
     chars,
     api: {
-      dispatchKeyEvent: async (event: { type: string; text?: string }) => {
+      dispatchKeyEvent: async (event: { type: string; text?: string; commands?: string[] }) => {
+        if (event.commands) cleared = true;
         if (event.type === "char" && event.text) chars.push(event.text);
+      },
+      // Only the FIRST probe resolves-and-parks the focused editable; every
+      // later one re-reads that parked element. A `{ clear, text }` call issues
+      // three of them (resolve, read-back, post-typing release), so alternating
+      // the two payload shapes would hand the third the `FocusedEditable` shape:
+      // it carries no `tracked`, and the focus-split check that reads it would
+      // fall through untested — the one path that quotes a page-supplied label
+      // back alongside a resolved secret. A stub answering only the first probe
+      // sends every clear down the best-effort branch instead of the one
+      // production takes against a page it can read. Report a field that is
+      // populated until the clear runs, and that keeps focus afterwards (the
+      // ordinary shape — a field that blurs on empty refuses the typing).
+      evaluate: async () => {
+        probes++;
+        return JSON.stringify(
+          probes === 1
+            ? { verdict: "editable", label: "INPUT#pw", length: 8, mac: true, parked: true }
+            : { tracked: true, focused: true, length: cleared ? 0 : 8 }
+        );
       },
     },
   };
@@ -299,6 +321,234 @@ describe("keyboard tool with secret placeholders", () => {
       tool.execute({}, { udid: CHROMIUM_UDID, text: "{{secret:MISSING}}", delayMs: 0 })
     ).rejects.toThrow(/Unknown secret "MISSING"/);
     expect(dispatchKeyEvent).not.toHaveBeenCalled();
+  });
+
+  it("clears then types the secret, echoing the placeholder and keeping `cleared`", async () => {
+    // `execute` re-wraps the backend result to swap the resolved value back out
+    // for the placeholder (`{ ...result, typed: params.text }`). That spread has
+    // to carry `cleared` through — losing it would report a replace-a-field call
+    // as a plain append.
+    vi.stubEnv("ARGENT_SECRET_APP_PASSWORD", "hunter2");
+    const { api, chars } = recordingCdpApi();
+    const tool = createKeyboardTool(registryWith(api));
+
+    const result = await tool.execute(
+      {},
+      { udid: CHROMIUM_UDID, clear: true, text: "{{secret:APP_PASSWORD}}", delayMs: 0 }
+    );
+
+    expect(chars.join("")).toBe("hunter2");
+    expect(result.typed).toBe("{{secret:APP_PASSWORD}}");
+    expect(result.cleared).toBe(true);
+    expect(JSON.stringify(result)).not.toContain("hunter2");
+  });
+
+  it("says nothing about the secret's length when the page split it across fields", async () => {
+    // The one clear-path failure that quotes a page-supplied field label back
+    // into the agent's context, and the one that would otherwise quote how many
+    // characters landed — which for a password is credential material.
+    vi.stubEnv("ARGENT_SECRET_APP_PASSWORD", "hunter2");
+    let probes = 0;
+    const api = {
+      dispatchKeyEvent: async () => {},
+      evaluate: async () => {
+        probes++;
+        if (probes === 1) {
+          return JSON.stringify({
+            verdict: "editable",
+            label: "INPUT#pw",
+            length: 8,
+            mac: true,
+            parked: true,
+            secret: true,
+          });
+        }
+        // Probe 2 is the clear's read-back (empty, focus held); probe 3 is the
+        // post-typing release, by which point the page has moved focus and only
+        // part of the value is in the field.
+        return JSON.stringify(
+          probes === 2
+            ? { tracked: true, length: 0, focused: true, secret: true }
+            : { tracked: true, length: 1, focused: false, secret: true }
+        );
+      },
+    };
+    const tool = createKeyboardTool(registryWith(api));
+
+    let caught: Error | undefined;
+    try {
+      await tool.execute(
+        {},
+        { udid: CHROMIUM_UDID, clear: true, text: "{{secret:APP_PASSWORD}}", delayMs: 0 }
+      );
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught).toBeDefined();
+    expect(caught!.message).toMatch(/not all of the text reached/);
+    expect(caught!.message).not.toContain("hunter2");
+    expect(caught!.message).not.toMatch(/\b7 of\b/);
+  });
+
+  it("says nothing about its length when the field itself is not a password", async () => {
+    // The page-side `secret` flag is `type === "password"` alone, so it is false
+    // for every other box a credential is typed into: an API-key field, a TOTP
+    // input, a password field a show/hide control has switched to `type="text"`.
+    // The REQUEST is what makes the count sensitive here, and `redactSecrets-
+    // FromError` substitutes the value string — it cannot redact a number.
+    vi.stubEnv("ARGENT_SECRET_APP_PASSWORD", "hunter2");
+    let probes = 0;
+    const api = {
+      dispatchKeyEvent: async () => {},
+      evaluate: async () => {
+        probes++;
+        if (probes === 1) {
+          return JSON.stringify({
+            verdict: "editable",
+            label: "INPUT#apiKey",
+            length: 8,
+            mac: true,
+            parked: true,
+          });
+        }
+        return JSON.stringify(
+          probes === 2
+            ? { tracked: true, length: 0, focused: true }
+            : { tracked: true, length: 1, focused: false }
+        );
+      },
+    };
+    const tool = createKeyboardTool(registryWith(api));
+
+    let caught: Error | undefined;
+    try {
+      await tool.execute(
+        {},
+        { udid: CHROMIUM_UDID, clear: true, text: "{{secret:APP_PASSWORD}}", delayMs: 0 }
+      );
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught).toBeDefined();
+    expect(caught!.message).toMatch(/not all of the text reached/);
+    expect(caught!.message).not.toMatch(/\b7 character/);
+  });
+
+  it("says nothing about the residue's length when the clear was refused", async () => {
+    // The sibling of the split message, on the other failure the clear can
+    // report. The residue counted here is the field's OWN surviving value, and
+    // the box a credential is typed into is usually the box that already holds
+    // one — so with a `{{secret:…}}` in the request the count is the previous
+    // credential's exact length, in the agent's context, transcript and logs.
+    vi.stubEnv("ARGENT_SECRET_APP_PASSWORD", "hunter2");
+    let probes = 0;
+    const api = {
+      dispatchKeyEvent: async () => {},
+      evaluate: async () => {
+        probes++;
+        // A plain `type="text"` API-key box, so the page-side `secret` flag is
+        // false and only the REQUEST makes the count sensitive. Probe 2 is the
+        // read-back: the page cancelled the chord, so the value survived.
+        return JSON.stringify(
+          probes === 1
+            ? { verdict: "editable", label: "INPUT#apiKey", mac: true, parked: true }
+            : { tracked: true, length: 39, focused: true }
+        );
+      },
+    };
+    const tool = createKeyboardTool(registryWith(api));
+
+    let caught: Error | undefined;
+    try {
+      await tool.execute(
+        {},
+        { udid: CHROMIUM_UDID, clear: true, text: "{{secret:APP_PASSWORD}}", delayMs: 0 }
+      );
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught).toBeDefined();
+    expect(caught!.message).toMatch(/still holds its contents/);
+    expect(caught!.message).not.toMatch(/\b39 character/);
+  });
+
+  it("still counts the residue of an ordinary clear the page refused", async () => {
+    // The other half, again: with no secret in the request the count is what
+    // makes the message actionable.
+    let probes = 0;
+    const api = {
+      dispatchKeyEvent: async () => {},
+      evaluate: async () => {
+        probes++;
+        return JSON.stringify(
+          probes === 1
+            ? { verdict: "editable", label: "INPUT#q", mac: true, parked: true }
+            : { tracked: true, length: 39, focused: true }
+        );
+      },
+    };
+    const tool = createKeyboardTool(registryWith(api));
+
+    await expect(
+      tool.execute({}, { udid: CHROMIUM_UDID, clear: true, text: "plain", delayMs: 0 })
+    ).rejects.toThrow(/still holds 39 character\(s\)/);
+  });
+
+  it("still counts the characters of ordinary text the page split", async () => {
+    // The other half: with no secret in the request the counts are what make the
+    // message actionable, so suppressing them everywhere would cost more than it
+    // protects.
+    let probes = 0;
+    const api = {
+      dispatchKeyEvent: async () => {},
+      evaluate: async () => {
+        probes++;
+        if (probes === 1) {
+          return JSON.stringify({
+            verdict: "editable",
+            label: "INPUT#apiKey",
+            length: 8,
+            mac: true,
+            parked: true,
+          });
+        }
+        return JSON.stringify(
+          probes === 2
+            ? { tracked: true, length: 0, focused: true }
+            : { tracked: true, length: 1, focused: false }
+        );
+      },
+    };
+    const tool = createKeyboardTool(registryWith(api));
+
+    await expect(
+      tool.execute({}, { udid: CHROMIUM_UDID, clear: true, text: "hunter2", delayMs: 0 })
+    ).rejects.toThrow(/only 1 of the 7 character\(s\)/);
+  });
+
+  it("scrubs the resolved value from errors thrown on the clear path", async () => {
+    vi.stubEnv("ARGENT_SECRET_APP_PASSWORD", "hunter2");
+    const api = {
+      // Fail on the clear's very first dispatch, before any character is typed.
+      dispatchKeyEvent: async () => {
+        throw new Error("CDP rejected clear while typing hunter2");
+      },
+    };
+    const tool = createKeyboardTool(registryWith(api));
+
+    let caught: Error | undefined;
+    try {
+      await tool.execute(
+        {},
+        { udid: CHROMIUM_UDID, clear: true, text: "{{secret:APP_PASSWORD}}", delayMs: 0 }
+      );
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught).toBeDefined();
+    expect(caught!.message).toContain("{{secret:APP_PASSWORD}}");
+    expect(caught!.message).not.toContain("hunter2");
+    expect(caught!.stack ?? "").not.toContain("hunter2");
   });
 
   it("scrubs the resolved value from backend errors", async () => {

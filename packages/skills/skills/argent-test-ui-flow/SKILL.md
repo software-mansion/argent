@@ -58,9 +58,9 @@ Steps:
 ```
 1. screenshot → see login screen
 2. gesture-tap { x: 0.5, y: 0.4 }  → tap email field
-3. keyboard { text: "user@example.com" }
+3. keyboard { clear: true, text: "user@example.com" }
 4. gesture-tap { x: 0.5, y: 0.55 } → tap password field
-5. keyboard { text: "{{secret:APP_PASSWORD}}" }
+5. keyboard { clear: true, text: "{{secret:APP_PASSWORD}}" }
 6. gesture-tap { x: 0.5, y: 0.7 }  → tap Login button
 7. screenshot → verify home screen appeared
 ```

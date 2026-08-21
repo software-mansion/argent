@@ -113,6 +113,36 @@ describe("run-sequence", () => {
     expect(registry.invokeTool).toHaveBeenNthCalledWith(2, "keyboard", { text: "hi", udid: IOS });
   });
 
+  it("carries a keyboard `clear` through, which its own copy advertises", async () => {
+    // The tool description lists `clear` in the keyboard step's arg shape and
+    // spells out the clear-first order, but nothing pinned that the
+    // parameter survives the step's arg forwarding. The flow path got a
+    // dedicated suite; this one had none, and a step whose `clear` was dropped
+    // still reports `completed` while APPENDING to the field it was meant to
+    // replace.
+    const registry = mockRegistry();
+    const tool = createRunSequenceTool(registry);
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          { tool: "keyboard", args: { clear: true, text: "new@example.com" }, delayMs: 0 },
+          { tool: "keyboard", args: { clear: true }, delayMs: 0 },
+        ],
+      }
+    );
+
+    expect(result).toMatchObject({ completed: 2, total: 2 });
+    expect(registry.invokeTool).toHaveBeenNthCalledWith(1, "keyboard", {
+      clear: true,
+      text: "new@example.com",
+      udid: IOS,
+    });
+    expect(registry.invokeTool).toHaveBeenNthCalledWith(2, "keyboard", { clear: true, udid: IOS });
+  });
+
   it("stops at an unrecognized tool without invoking it", async () => {
     const registry = mockRegistry();
     const tool = createRunSequenceTool(registry);

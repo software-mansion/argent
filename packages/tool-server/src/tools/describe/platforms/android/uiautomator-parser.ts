@@ -57,12 +57,23 @@ export function parseUiAutomatorXml(xml: string): ParsedXmlNode | null {
   return root;
 }
 
+// Both quote styles, because uiautomator switches delimiter per attribute: a
+// value containing a double quote is emitted single-quoted, since XML §3.1 lets
+// either delimit an AttValue and only the delimiter in use has to be escaped.
+// Verified on a live emulator — a field holding `a<b>c&d"e'f` dumps as
+//   text='a&lt;b&gt;c&amp;d"e&apos;f'
+// A double-quote-only matcher skips that attribute entirely, so the node keeps
+// its other attributes but silently loses its text: the describe tree shows the
+// field as blank, and the keyboard clear's length measurement — which floors a
+// focused editable carrying no readable `text` to BLIND_DELETE_COUNT rather than
+// to zero — runs that fixed blind count against it, truncating anything longer.
 function parseAttributes(raw: string): Record<string, string> {
   const attrs: Record<string, string> = {};
-  const re = /([A-Za-z_][\w.-]*)\s*=\s*"([^"]*)"/g;
+  const re = /([A-Za-z_][\w.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(raw)) !== null) {
-    attrs[m[1]!] = decodeXmlEntities(m[2]!);
+    // Exactly one of the two value groups participates per match.
+    attrs[m[1]!] = decodeXmlEntities(m[2] ?? m[3]!);
   }
   return attrs;
 }
