@@ -135,7 +135,12 @@ function defaultAndroidRoots(): string[] {
     // System-wide locations (Linux package managers, Homebrew on macOS).
     "/opt/android-sdk",
     "/usr/lib/android-sdk", // Debian/Ubuntu `android-sdk` apt package
-    "/usr/local/share/android-sdk", // Homebrew cask
+    "/usr/local/share/android-sdk", // Homebrew cask (Intel prefix)
+    // Where `brew install --cask android-commandlinetools` roots the SDK, so an
+    // `sdkmanager`-installed platform-tools is found without setting ANDROID_HOME
+    // — otherwise following the missing-adb hint still leaves the tool failing.
+    "/opt/homebrew/share/android-commandlinetools",
+    "/usr/local/share/android-commandlinetools",
   ];
   // Windows Android Studio default: %LOCALAPPDATA%\Android\Sdk. LOCALAPPDATA
   // is set on every interactive Windows session, but fall back to the
