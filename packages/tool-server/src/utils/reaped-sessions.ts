@@ -34,9 +34,10 @@ export interface ReapedSession {
   /** When the teardown ran, for "…N seconds ago" phrasing. */
   atMs: number;
   /**
-   * What survived, as a ready-to-read clause (e.g. naming a salvaged file), or
-   * undefined when nothing did. Built by the disposer, which is the only place
-   * that still knows.
+   * What became of the data, as a ready-to-read clause — naming a salvaged
+   * file, or saying that the path the caller is holding was never written — or
+   * undefined when there is nothing to add. Built by the disposer, which is the
+   * only place that still knows.
    */
   salvage?: string;
 }
@@ -78,7 +79,7 @@ export function takeReapedSession(
 /**
  * The sentence a tool shows in place of "no active session". Names what
  * happened, says it is not necessarily this agent's own doing (one tool-server
- * serves every agent), and points at whatever survived.
+ * serves every agent), and adds what became of the data.
  *
  * The disposer that leaves a breadcrumb cannot see who triggered it — a
  * blueprint's `dispose()` is called by `Registry._teardown`, with no caller — so

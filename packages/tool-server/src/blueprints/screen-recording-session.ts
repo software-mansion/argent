@@ -12,11 +12,13 @@ import { promises as fs } from "fs";
 import { waitForChildExit } from "../utils/profiler-shared/lifecycle";
 import { clearActiveScreenRecording } from "../utils/screen-recording-reminder";
 import { recordReapedSession } from "../utils/reaped-sessions";
+import type { ServerRecordingResult } from "../utils/simulator-client";
 
-// Session for the `screen-recording-*` tools. One shape for every platform:
-// frames come from simulator-server's MJPEG stream and are paced into an ffmpeg
-// child that writes the mp4 host-side, so there is nothing device-side to clean
-// up. Mirrors the native-profiler session shape.
+// Session for the `screen-recording-*` tools. One shape for every platform and
+// for both capture paths: simulator-server records and muxes the video itself
+// where its build supports it, otherwise its MJPEG stream is paced into a host
+// ffmpeg child. Either way the video is host-side, so there is nothing
+// device-side to clean up. Mirrors the native-profiler session shape.
 export const SCREEN_RECORDING_SESSION_NAMESPACE = "ScreenRecordingSession";
 
 type ScreenRecordingSessionFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
@@ -66,8 +68,15 @@ export interface ScreenRecordingSessionApi {
    * that is mid-startup at shutdown — `captureProcess` is success-only.
    */
   pendingChild: ChildProcess | null;
-  /** Host path ffmpeg is writing the video to. */
+  /** Host path the finished video lands at. */
   outputFile: string | null;
+  /**
+   * Finalizes a recording simulator-server is running and hands back the muxed
+   * video. Set only while a server-side capture is live, so it doubles as the
+   * marker for which side owns the recording: with it set there is no capture
+   * child, no frame stream and no pump, and stop goes to the server.
+   */
+  serverStop: (() => Promise<ServerRecordingResult>) | null;
   /** Temp copy of the watermark logo ffmpeg reads; removed when the capture ends. */
   logoFile: string | null;
   /** Why the watermark was requested but not drawn; surfaced by stop's warning. */
@@ -122,6 +131,7 @@ function clearLiveState(state: ScreenRecordingSessionApi): void {
   state.pendingRetrieval = false;
   state.captureProcess = null;
   state.pendingChild = null;
+  state.serverStop = null;
   state.frameStream = null;
   state.lastFrameStreamError = null;
   state.pointerDisable = null;
@@ -177,6 +187,7 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       pendingRetrieval: false,
       captureProcess: null,
       pendingChild: null,
+      serverStop: null,
       outputFile: null,
       logoFile: null,
       watermarkSkipped: null,
@@ -213,6 +224,9 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
         const hadUnretrievedCapture =
           state.recordingActive || state.startPending || state.pendingRetrieval;
         const abandonedOutput = state.outputFile;
+        // Which side held the video, read before the teardown below hands
+        // `serverStop` over — the two paths owe the caller opposite stories.
+        const serverCapture = state.serverStop !== null;
         if (state.recordingTimeout) {
           clearTimeout(state.recordingTimeout);
           state.recordingTimeout = null;
@@ -231,6 +245,15 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
           const disable = state.pointerDisable;
           state.pointerDisable = null;
           await disable().catch(() => {});
+        }
+
+        // A recording running inside simulator-server outlives this process, and
+        // it accumulates frames until something stops it — so end it here even
+        // though the video is being abandoned.
+        if (state.serverStop) {
+          const stop = state.serverStop;
+          state.serverStop = null;
+          await stop().catch(() => {});
         }
 
         // A start still mid-readiness at shutdown has a live child that
@@ -271,20 +294,28 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
           // The reminder must not outlive the process that owns the capture.
           clearActiveScreenRecording(state.deviceId);
           // Leave a breadcrumb so the owner's `screen-recording-stop` reports
-          // the teardown instead of "you never started a recording". The stdin
-          // close above is ffmpeg's normal finalize path, so the file usually
-          // is playable — but nothing else would ever say it exists, and the
-          // next resolve builds a session that has never heard of it.
+          // the teardown instead of "you never started a recording": nothing
+          // else would ever say the capture existed, and the next resolve
+          // builds a session that has never heard of it.
           if (hadUnretrievedCapture) {
-            recordReapedSession(
-              "screen-recording",
-              state.deviceId,
-              abandonedOutput
-                ? `ffmpeg was given a moment to finalize the container first, so the video ` +
-                    `captured up to that point is usually playable at ${abandonedOutput} — ` +
-                    `check it before re-recording.`
-                : undefined
-            );
+            // Where that leaves the video depends on the path. ffmpeg has been
+            // writing the host file all along and the stdin close above
+            // finalizes it; a server-side recording is muxed inside
+            // simulator-server and only `screen-recording-stop` ever copies it
+            // out, so the path start handed the caller was never written — and
+            // the stop above ended the recording that was the only way to
+            // reach it.
+            let salvage: string | undefined;
+            if (abandonedOutput) {
+              salvage = serverCapture
+                ? `The video was inside simulator-server and went with the recording this ` +
+                  `teardown ended, so nothing was written to ${abandonedOutput} — re-record ` +
+                  `rather than looking for it.`
+                : `ffmpeg was given a moment to finalize the container first, so the video ` +
+                  `captured up to that point is usually playable at ${abandonedOutput} — ` +
+                  `check it before re-recording.`;
+            }
+            recordReapedSession("screen-recording", state.deviceId, salvage);
           }
         }
       },
