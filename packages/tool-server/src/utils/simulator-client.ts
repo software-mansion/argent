@@ -20,7 +20,10 @@ import * as os from "node:os";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
-const DEFAULT_SCREENSHOT_SCALE = 0.3;
+// Context cost is pixel area, so this constant is the whole lever. 0.25 is the
+// lowest scale where Opus 5 and Haiku 4.5 both still read every label, count and
+// selected-tab underline; below it they misread adjacent rows as each other.
+const DEFAULT_SCREENSHOT_SCALE = 0.25;
 
 // A simulator-server captures screenshots from its live frame stream, so the
 // first frame must have arrived before a capture can succeed. Right after the
@@ -202,7 +205,7 @@ export function getScreenshotScale(): number {
     const n = parseFloat(v);
     if (!Number.isNaN(n) && n > 0 && n <= 1) return n;
   }
-  return DEFAULT_SCREENSHOT_SCALE; // default: halve the resolution
+  return DEFAULT_SCREENSHOT_SCALE;
 }
 
 /**

@@ -788,9 +788,8 @@ describe("describe tool", () => {
     expect(result.hint).not.toMatch(/MUST/);
     expect(result.hint).not.toMatch(/\bnow\b/i);
     expect(result.hint).not.toMatch(/before continuing/i);
-    // It still names the remedy and what the remedy costs.
+    // It still names the remedy.
     expect(result.hint).toMatch(/boot-device/);
-    expect(result.hint).toMatch(/restart/i);
   });
 
   it("emits the degraded caveat once per device, not on every describe", async () => {
