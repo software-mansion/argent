@@ -13,6 +13,7 @@ import {
   tcpInjectionDylibs,
 } from "@argent/native-devtools-ios";
 import { SIMCTL_KILL_SIGNAL, SIMCTL_SPAWN_TIMEOUT_MS } from "./simctl-config";
+import { PS_BIN } from "./vega-process";
 import {
   cachedDeviceSetForUdid,
   deviceSetForUdid,
@@ -52,6 +53,12 @@ export interface IosHost {
   // ── native-devtools steps ──
   setupNativeDevtoolsEnv(udid: string, endpoint: IosEndpoint): Promise<void>;
   listRunningBundleIds(udid: string): Promise<Set<string>>;
+  /**
+   * Whether `bundleId` is running and, where this host can reach the process,
+   * how it was launched. Lets callers tell an app that predates injection —
+   * which a relaunch fixes — from one already launched with it.
+   */
+  inspectRunningApp(udid: string, bundleId: string): Promise<RunningAppInspection>;
 
   // ── ax-service steps ──
   /** Local probes via `defaults read`; remote assumes the orchestrator handled it. */
@@ -74,6 +81,65 @@ const ARGENT_BOOTSTRAP_DYLIB_BASENAMES = new Set([
   "libArgentInjectionBootstrap.dylib",
   "libInjectionBootstrap.dylib",
 ]);
+
+/** How the process currently backing a bundle id was launched. */
+export interface RunningAppProcess {
+  pid: number;
+  /** Time since exec. `ps -o etime` has whole-second resolution. */
+  ageMs: number;
+  /**
+   * The launch environment as `ps` renders it: space-joined `KEY=VALUE` tokens
+   * appended to the argv. Callers pick tokens out of the blob rather than
+   * parsing it into pairs — a value containing a space is indistinguishable
+   * from the next token, and nothing we look for holds one.
+   */
+  env: string;
+}
+
+export interface RunningAppInspection {
+  running: boolean;
+  /**
+   * Null when there is no process to inspect: the app is not running, or this
+   * host cannot reach its app processes (ios-remote runs them on the
+   * orchestrator, out of reach of the local process table).
+   */
+  process: RunningAppProcess | null;
+}
+
+/**
+ * Whether a process was launched with a given devtools endpoint's injection in
+ * place: the Argent bootstrap dylib inserted, pointed at that exact endpoint.
+ *
+ * A process carrying a *different* endpoint (an ephemeral TCP port from an
+ * earlier tool-server run) is not injected for this one; relaunching it into
+ * the current launchd env re-points it.
+ */
+export function processCarriesInjection(env: string, endpoint: IosEndpoint): boolean {
+  const inserted = [...ARGENT_BOOTSTRAP_DYLIB_BASENAMES].some((name) => env.includes(name));
+  if (!inserted) return false;
+  const expected =
+    endpoint.transport === "tcp"
+      ? `NATIVE_DEVTOOLS_IOS_CDP_PORT=${endpoint.port}`
+      : `NATIVE_DEVTOOLS_IOS_CDP_SOCKET=${endpoint.socketPath}`;
+  return env.split(/\s+/).includes(expected);
+}
+
+/**
+ * Cap for the single-pid `ps` probe. Its own budget rather than the simctl one:
+ * this reads the local process table with no simulator round-trip, and the
+ * probe is advisory — a slow answer is worth less than a fast "no evidence".
+ */
+const PS_PROBE_TIMEOUT_MS = 5_000;
+
+/** Parse `ps -o etime` (`[[dd-]hh:]mm:ss`) into seconds. */
+export function parsePsElapsedSeconds(etime: string): number | null {
+  const match = etime.trim().match(/^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/);
+  if (!match) return null;
+  const [, days, hours, minutes, seconds] = match;
+  return (
+    Number(days ?? 0) * 86400 + Number(hours ?? 0) * 3600 + Number(minutes) * 60 + Number(seconds)
+  );
+}
 
 function splitDyldInsertLibraries(value: string): string[] {
   return value
@@ -226,19 +292,32 @@ async function setupNativeDevtoolsEnvRemote(udid: string, endpoint: IosEndpoint)
   await simRemoteSetSimulatorEnv(udid, "NATIVE_DEVTOOLS_IOS_CDP_PORT", String(endpoint.port));
 }
 
-/** Parse `launchctl list` output for `UIKitApplication:<bundle-id>` matches. */
-function parseUIKitApplicationBundleIds(stdout: string): Set<string> {
-  const bundleIds = new Set<string>();
+/**
+ * Parse `launchctl list` output into `UIKitApplication:<bundle-id>` → pid.
+ *
+ * Rows are `<pid>\t<status>\t<label>`. A null pid means the column did not
+ * parse, not that the job has no process: launchd prints `-` there for a
+ * registered job that is not running, but measured on iOS 18.6 a
+ * `UIKitApplication` row is removed outright when the app exits. Callers treat
+ * a null pid as no evidence.
+ */
+function parseUIKitApplicationJobs(stdout: string): Map<string, number | null> {
+  const jobs = new Map<string, number | null>();
   for (const line of stdout.split("\n")) {
     const match = line.match(/UIKitApplication:([^[]+)/);
-    if (match) {
-      bundleIds.add(match[1].trim());
-    }
+    if (!match) continue;
+    const pid = line.match(/^(\d+)\s/);
+    jobs.set(match[1].trim(), pid ? Number(pid[1]) : null);
   }
-  return bundleIds;
+  return jobs;
 }
 
-async function listRunningUIKitApplicationBundleIds(udid: string): Promise<Set<string>> {
+/** Parse `launchctl list` output for `UIKitApplication:<bundle-id>` matches. */
+function parseUIKitApplicationBundleIds(stdout: string): Set<string> {
+  return new Set(parseUIKitApplicationJobs(stdout).keys());
+}
+
+async function listRunningApps(udid: string): Promise<string> {
   const { stdout } = await execFileAsync(
     "xcrun",
     await simctlArgsForUdid(udid, ["spawn", udid, "launchctl", "list"]),
@@ -248,7 +327,75 @@ async function listRunningUIKitApplicationBundleIds(udid: string): Promise<Set<s
       killSignal: SIMCTL_KILL_SIGNAL,
     }
   );
-  return parseUIKitApplicationBundleIds(stdout);
+  return stdout;
+}
+
+async function listRunningUIKitApplicationBundleIds(udid: string): Promise<Set<string>> {
+  return parseUIKitApplicationBundleIds(await listRunningApps(udid));
+}
+
+/**
+ * Read a process's age and launch environment out of the host process table.
+ *
+ * Simulator apps are ordinary host processes owned by the same user, so BSD
+ * `ps e` renders the environment they were exec'd with — including the
+ * `DYLD_INSERT_LIBRARIES` and endpoint variables that decide whether Argent's
+ * dylib loaded. Returns null when the process is gone or `ps` output doesn't
+ * parse; callers treat that as "no evidence", never as "not injected".
+ *
+ * That guarantee covers an unreadable *line*, not a suppressed environment:
+ * `ps` hides the env of a SIP-protected binary while still printing a
+ * well-formed argv, which would read as uninjected rather than unknown. Every
+ * pid reaching here comes from a simulator's `launchctl list`, and simulator
+ * apps are not SIP-protected — measured on iOS 18.6, third-party and
+ * `com.apple.*` bundles alike render their full environment.
+ */
+async function readProcessLaunchState(pid: number): Promise<RunningAppProcess | null> {
+  let stdout: string;
+  try {
+    ({ stdout } = await execFileAsync(PS_BIN, ["eww", "-p", String(pid), "-o", "etime=,command="], {
+      encoding: "utf8",
+      timeout: PS_PROBE_TIMEOUT_MS,
+      // Matches the other `ps` probes (vega-process.ts). An environment can run
+      // to `kern.argmax` (1 MiB), exactly Node's default cap, so the default
+      // would ENOBUFS on a maximal one instead of reading it.
+      maxBuffer: 16 * 1024 * 1024,
+    }));
+  } catch (err) {
+    // Logged, like the sibling probe in vega-process.ts: a broken probe (bad
+    // `ps` flags, a host without it) degrades *every* app to "indeterminate",
+    // indistinguishable at the tool surface from a genuinely uninspectable one.
+    // A process that simply exited also lands here, so this is a note, not a
+    // failure.
+    process.stderr.write(`[ios-host] ps probe failed for pid ${pid}: ${String(err)}\n`);
+    return null;
+  }
+  const trimmed = stdout.trim();
+  const boundary = trimmed.search(/\s/);
+  if (boundary === -1) return null;
+  const ageSeconds = parsePsElapsedSeconds(trimmed.slice(0, boundary));
+  if (ageSeconds === null) return null;
+  return { pid, ageMs: ageSeconds * 1000, env: trimmed.slice(boundary + 1) };
+}
+
+async function inspectRunningAppLocal(
+  udid: string,
+  bundleId: string
+): Promise<RunningAppInspection> {
+  const jobs = parseUIKitApplicationJobs(await listRunningApps(udid));
+  if (!jobs.has(bundleId)) return { running: false, process: null };
+  const pid = jobs.get(bundleId) ?? null;
+  const process = pid === null ? null : await readProcessLaunchState(pid);
+  if (process !== null) return { running: true, process };
+  // No process behind a job the table had just listed. An app that exited in
+  // the round-trip between the two reads produces exactly this, and
+  // `{running: true, process: null}` is what `appConnectionState` maps to
+  // `indeterminate` — the one unconnected state whose remedy escalates to
+  // restarting the tool-server, where the truth is `not_running` and the app
+  // only needs launching. Re-read the table to tell the two apart: gone means
+  // it exited, still listed means the probe itself is what failed.
+  const stillListed = parseUIKitApplicationJobs(await listRunningApps(udid)).has(bundleId);
+  return { running: stillListed, process: null };
 }
 
 function spawnAxDaemonLocal(udid: string, endpoint: IosEndpoint): ChildProcess {
@@ -321,6 +468,7 @@ export const localIosHost: IosHost = {
   requiresTcp: false,
   setupNativeDevtoolsEnv: setupNativeDevtoolsEnvLocal,
   listRunningBundleIds: listRunningUIKitApplicationBundleIds,
+  inspectRunningApp: inspectRunningAppLocal,
   async bootstrapAx(udid) {
     await ensureAutomationEnabled(udid);
     return { entitlementBypassActive: await isEntitlementBypassActive(udid) };
@@ -344,6 +492,13 @@ export const remoteIosHost: IosHost = {
   async listRunningBundleIds(udid) {
     const { stdout } = await simRemoteSpawn(udid, { args: ["launchctl", "list"] });
     return parseUIKitApplicationBundleIds(stdout);
+  },
+  // App processes live on the orchestrator, so the local process table says
+  // nothing about how they were launched. Only running-ness is answerable; the
+  // null process keeps callers on their no-evidence path.
+  async inspectRunningApp(udid, bundleId) {
+    const { stdout } = await simRemoteSpawn(udid, { args: ["launchctl", "list"] });
+    return { running: parseUIKitApplicationJobs(stdout).has(bundleId), process: null };
   },
   // Apply the accessibility defaults the tool-server needs (the local host does
   // this via `defaults write`; here we run the same writes through the remote

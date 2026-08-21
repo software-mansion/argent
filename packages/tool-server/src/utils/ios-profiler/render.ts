@@ -25,6 +25,13 @@ interface RenderInput {
   /** Optional markdown warning shown in the header when the trace is stale. */
   freshnessNote?: string;
   /**
+   * Optional markdown warning about the CPU data itself — e.g. samples were
+   * captured but carry no call stacks. Rendered alongside freshnessNote rather
+   * than in exportErrors, because nothing errored and the all-clear banner
+   * counts exportErrors entries as failed queries.
+   */
+  cpuDiagnostic?: string;
+  /**
    * Whether the capture cold-launched the app with MallocStackLogging=1
    * (native-profiler-start's malloc_stack_logging flag). Null/undefined when
    * unknown — a session restored from disk has no capture-mode sidecar — in
@@ -47,7 +54,7 @@ interface InlineCap {
 export async function renderNativeProfilerReport(
   input: RenderInput
 ): Promise<NativeProfilerAnalyzeResult> {
-  const { payload, traceFile, freshnessNote, mallocStackLogging } = input;
+  const { payload, traceFile, freshnessNote, cpuDiagnostic, mallocStackLogging } = input;
   const exportErrors = input.exportErrors ?? {};
   const bottlenecksTotal = payload.bottlenecks.length;
   const status: "ok" | "analysis_failed" =
@@ -58,7 +65,7 @@ export async function renderNativeProfilerReport(
 
   const fullReport =
     bottlenecksTotal === 0
-      ? renderAllClear(payload, exportErrors, freshnessNote)
+      ? renderAllClear(payload, exportErrors, freshnessNote, cpuDiagnostic)
       : renderFullReport(
           payload,
           exportErrors,
@@ -67,7 +74,8 @@ export async function renderNativeProfilerReport(
             hangLimit: Infinity,
           },
           freshnessNote,
-          mallocStackLogging
+          mallocStackLogging,
+          cpuDiagnostic
         );
 
   const reportFile = traceFile ? deriveReportPath(traceFile) : null;
@@ -75,7 +83,7 @@ export async function renderNativeProfilerReport(
 
   const inlineReport =
     bottlenecksTotal === 0
-      ? renderAllClear(payload, exportErrors, freshnessNote)
+      ? renderAllClear(payload, exportErrors, freshnessNote, cpuDiagnostic)
       : renderFullReport(
           payload,
           exportErrors,
@@ -84,18 +92,28 @@ export async function renderNativeProfilerReport(
             hangLimit: MAX_INLINE_HANGS,
           },
           freshnessNote,
-          mallocStackLogging
+          mallocStackLogging,
+          cpuDiagnostic
         );
 
   const shownHotspots = Math.min(MAX_INLINE_HOTSPOTS, cpuHotspotsCount);
   const shownHangs = Math.min(MAX_INLINE_HANGS, uiHangsCount);
+  // Name only the categories that are actually shown — "top 0 CPU hotspots" /
+  // "top 0 hangs" read as report artifacts. Both can be 0 at once (e.g. an
+  // RSS-growth-only trace still has bottlenecks), hence the fallback.
+  const shownParts = [
+    ...(shownHotspots > 0 ? [`top ${shownHotspots} CPU hotspots`] : []),
+    ...(shownHangs > 0 ? [`top ${shownHangs} hangs`] : []),
+  ];
+  const shownSummary =
+    shownParts.length > 0 ? `showing ${shownParts.join(" and ")} inline` : `summary inline`;
   // Reference the result field rather than embedding the host path: the
   // client materializes `reportFile` to a path on ITS machine, and the raw
   // server path would dangle when the tool-server runs remotely.
   const report =
     wroteFile && reportFile
       ? inlineReport +
-        `\n\n> Full report saved — ${bottlenecksTotal} bottleneck(s) total, showing top ${shownHotspots} CPU hotspots and top ${shownHangs} hangs inline. Use the Read tool on the \`reportFile\` path in this result to view all details.`
+        `\n\n> Full report saved — ${bottlenecksTotal} bottleneck(s) total, ${shownSummary}. Use the Read tool on the \`reportFile\` path in this result to view all details.`
       : inlineReport;
 
   return {
@@ -163,7 +181,8 @@ function reportTitle(payload: ProfilerPayload): string {
 function renderAllClear(
   payload: ProfilerPayload,
   exportErrors?: Record<string, string>,
-  freshnessNote?: string
+  freshnessNote?: string,
+  cpuDiagnostic?: string
 ): string {
   const traceName = payload.metadata.traceFile
     ? `\`${path.basename(payload.metadata.traceFile)}\``
@@ -176,6 +195,7 @@ function renderAllClear(
   ];
 
   if (freshnessNote) lines.push(freshnessNote, ``);
+  if (cpuDiagnostic) lines.push(`> ⚠️ **CPU sampling:** ${cpuDiagnostic}`, ``);
 
   const errorLines = renderExportErrors(exportErrors);
   if (errorLines.length > 0) {
@@ -209,7 +229,8 @@ function renderFullReport(
   exportErrors?: Record<string, string>,
   cap: InlineCap = { hotspotLimit: Infinity, hangLimit: Infinity },
   freshnessNote?: string,
-  mallocStackLogging?: boolean | null
+  mallocStackLogging?: boolean | null,
+  cpuDiagnostic?: string
 ): string {
   const traceName = payload.metadata.traceFile
     ? `\`${path.basename(payload.metadata.traceFile)}\``
@@ -230,6 +251,7 @@ function renderFullReport(
   ];
 
   if (freshnessNote) lines.push(freshnessNote, ``);
+  if (cpuDiagnostic) lines.push(`> ⚠️ **CPU sampling:** ${cpuDiagnostic}`, ``);
 
   const errorLines = renderExportErrors(exportErrors);
   if (errorLines.length > 0) {

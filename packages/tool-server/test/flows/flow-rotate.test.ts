@@ -11,7 +11,8 @@ import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/co
 // optional pixel dimensions the rotate directive's physical-circle math reads.
 let currentTree: () => DescribeNode;
 let currentScreen: () => { width: number; height: number } | undefined;
-vi.mock("../../src/tools/flows/flow-tree", () => ({
+vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/tools/flows/flow-tree")>()),
   fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => {
     const screen = currentScreen();
     return { tree: currentTree(), source: "native-devtools", ...(screen ? { screen } : {}) };
@@ -269,7 +270,9 @@ describe("rotate: execution", () => {
     const args = result.calls[0]!.args;
     expect(args.radius).toBeGreaterThan(0);
     expect(args.durationMs).toBe(300); // max(1, 45/90) floors at one 90° unit
-  });
+    // Generous budget: this is the run's first settle, so it pays the whole
+    // window before giving up and dispatching anyway.
+  }, 15_000);
 
   it("fails only when no on-screen orbit radius exists — and never blames target size", async () => {
     // Target centered inside the 2% screen inset: no circle fits around it.
@@ -338,12 +341,15 @@ describe("rotate: gating", () => {
 });
 
 describe("rotate: abort", () => {
-  it("aborts before dispatch: aborted outcome, no gesture", async () => {
+  it("aborts inside the pre-gesture settle: aborted outcome, no gesture", async () => {
     const controller = new AbortController();
-    // Cancel the run during the aspect read — after the step has started but
-    // before the gesture dispatch, which must then be suppressed.
+    // Cancel on read 2, the settle's second read (identical trees converge
+    // there). Read 1 is ambiguous - without the settle it is the aspect read,
+    // which aborts just as cleanly; only read 2 exists when the settle does.
+    let reads = 0;
     currentTree = () => {
-      controller.abort();
+      reads += 1;
+      if (reads >= 2) controller.abort();
       return screen([]);
     };
     const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
@@ -361,6 +367,39 @@ describe("rotate: abort", () => {
       )
     );
 
+    expect(reads).toBe(2);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["rotate:skip"]);
+    expect(result.steps[0].reason).toBe("run aborted");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("aborts during the aspect read: aborted outcome, no gesture", async () => {
+    const controller = new AbortController();
+    // Reads 1 and 2 are the settle (identical trees converge immediately);
+    // read 3 is the aspect read. Cancelling there covers the window between
+    // the settle and the dispatch, which the settle's own abort cannot reach.
+    let reads = 0;
+    currentTree = () => {
+      reads += 1;
+      if (reads >= 3) controller.abort();
+      return screen([]);
+    };
+    const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+
+    await writeFlow("rotate-abort-aspect", {
+      executionPrerequisite: "",
+      steps: [{ kind: "rotate", by: 720 }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry(calls)).execute(
+        {},
+        { name: "rotate-abort-aspect", project_root: tmpDir, device: DEVICE },
+        { signal: controller.signal } as never
+      )
+    );
+
+    expect(reads).toBe(3);
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["rotate:skip"]);
     expect(result.steps[0].reason).toBe("run aborted");
     expect(calls).toHaveLength(0);

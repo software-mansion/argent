@@ -37,32 +37,8 @@ export async function typeSimulatorServer(
     keysPressed++;
   };
 
-  // Resolve the named key before typing anything so an unknown name fails
-  // fast instead of after the text has already been typed.
-  let namedKeyCode: number | undefined;
-  if (params.key) {
-    const lower = params.key.toLowerCase();
-    // Own-property check: a prototype key like "constructor" would otherwise
-    // pass the nullish guard with a garbage value (Object.prototype.constructor)
-    // and go over the wire as a broken key press instead of rejecting.
-    namedKeyCode = Object.hasOwn(NAMED_KEYS, lower) ? NAMED_KEYS[lower] : undefined;
-    if (namedKeyCode == null) {
-      // Well-typed but unusable input (the schema's `key` is a free string) — a
-      // caller mistake, so InvalidToolInputError → HTTP 400, matching the Android
-      // path and uniform across keyboard backends. The KEYBOARD_KEY_UNSUPPORTED
-      // telemetry signal from #420 is preserved: the 400 mapping keys off the
-      // error class, not the code.
-      throw new InvalidToolInputError(
-        `Unknown key "${params.key}". Supported: ${Object.keys(NAMED_KEYS).join(", ")}`,
-        {
-          error_code: FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED,
-          failure_stage: "keyboard_named_key_simulator",
-          error_kind: "unsupported",
-        }
-      );
-    }
-  }
-
+  // The tool rejects a request carrying both `text` and `key` (see ./index.ts),
+  // so at most one of the two blocks below runs.
   if (params.text) {
     for (const char of params.text) {
       const press = charToKeyPress(char);
@@ -80,11 +56,27 @@ export async function typeSimulatorServer(
     }
   }
 
-  // Key after text: a combined call means "type, then submit" (text +
-  // key:"enter"). Pressing the key first fires enter into the still-empty
-  // field, which can blur it and leak the text to app-level key commands
-  // (e.g. "d" toggles the React Native dev menu when nothing is focused).
-  if (namedKeyCode != null) {
+  if (params.key) {
+    const lower = params.key.toLowerCase();
+    // Own-property check: a prototype key like "constructor" would otherwise
+    // pass the nullish guard with a garbage value (Object.prototype.constructor)
+    // and go over the wire as a broken key press instead of rejecting.
+    const namedKeyCode = Object.hasOwn(NAMED_KEYS, lower) ? NAMED_KEYS[lower] : undefined;
+    if (namedKeyCode == null) {
+      // Well-typed but unusable input (the schema's `key` is a free string) — a
+      // caller mistake, so InvalidToolInputError → HTTP 400, matching the Android
+      // path and uniform across keyboard backends. The KEYBOARD_KEY_UNSUPPORTED
+      // telemetry signal from #420 is preserved: the 400 mapping keys off the
+      // error class, not the code.
+      throw new InvalidToolInputError(
+        `Unknown key "${params.key}". Supported: ${Object.keys(NAMED_KEYS).join(", ")}`,
+        {
+          error_code: FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED,
+          failure_stage: "keyboard_named_key_simulator",
+          error_kind: "unsupported",
+        }
+      );
+    }
     await pressKeyCode(namedKeyCode);
   }
 

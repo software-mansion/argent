@@ -78,11 +78,14 @@ export function serverJsonMismatches(publishedVersion, argentPkg, server) {
   }
 
   for (const [i, pkg] of packages.entries()) {
-    // Same reason as the array check above: an entry that is not an object has
-    // no coordinates to read, and reading through it would throw out of the loop.
-    if (typeof pkg !== "object" || pkg === null) {
+    // Same reason as the array check above: an entry that is not an object has no
+    // coordinates to read. `null` would throw out of the loop; a scalar or an
+    // array reads as undefined on every field and would otherwise be reported as
+    // a pile of missing values rather than the wrong shape it is.
+    if (pkg === null || typeof pkg !== "object" || Array.isArray(pkg)) {
+      const shape = pkg === null ? "null" : Array.isArray(pkg) ? "an array" : typeof pkg;
       mismatches.push(
-        `server.json packages[${i}] is ${pkg === null ? "null" : typeof pkg}, not an object naming a registry and identifier`
+        `server.json packages[${i}] is ${shape}, not an object naming a registry and identifier`
       );
       continue;
     }
@@ -149,16 +152,39 @@ function main() {
   );
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
+    const manifestPath = join(packagesDir, entry.name, "package.json");
     let manifest;
     try {
-      manifest = JSON.parse(readFileSync(join(packagesDir, entry.name, "package.json"), "utf8"));
-    } catch {
-      continue; // directory without a package.json
+      manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    } catch (error) {
+      // No package.json at all means the directory is not a workspace package —
+      // a submodule that was never checked out, a stray build directory. A
+      // manifest that is there but unusable is different: skipping it would drop
+      // a real package out of the comparison and pass a workspace that drifted.
+      if (error.code === "ENOENT") continue;
+      console.error(`Cannot read packages/${entry.name}/package.json: ${error.message}`);
+      console.error(
+        `\nIt is tracked in git — restore it with \`git checkout -- ${relative(repoRoot, manifestPath)}\`.`
+      );
+      process.exit(1);
     }
-    // `?.` because JSON.parse succeeds on a file holding `null`, which the catch
-    // above never sees — the same shape readTrackedJson rejects for the two
-    // manifests it reads.
-    if (!manifest?.version) continue;
+    // `?.` would mask a manifest that parses to a non-object: JSON.parse
+    // succeeds on a file holding `null`, a bare scalar or an array, none of
+    // which reach the catch above — and each of those is a manifest that is
+    // *there but unusable*, the same class the readTrackedJson shape check
+    // rejects for server.json and packages/argent. Dropping one would take a
+    // real package out of the lockstep comparison and pass a workspace that
+    // drifted, so reject it on-message like every other unreadable manifest.
+    if (manifest === null || typeof manifest !== "object" || Array.isArray(manifest)) {
+      const shape =
+        manifest === null ? "null" : Array.isArray(manifest) ? "an array" : typeof manifest;
+      console.error(`packages/${entry.name}/package.json is ${shape}, not a JSON object`);
+      console.error(
+        `\nIt is tracked in git — restore it with \`git checkout -- ${relative(repoRoot, manifestPath)}\`.`
+      );
+      process.exit(1);
+    }
+    if (!manifest.version) continue;
     const names = byVersion.get(manifest.version) ?? [];
     names.push(manifest.name ?? entry.name);
     byVersion.set(manifest.version, names);
@@ -191,8 +217,8 @@ function main() {
     console.error("server.json is out of sync with packages/argent/package.json:");
     for (const line of mismatches) console.error(`  ${line}`);
     console.error(
-      "\nserver.json is not under packages/*, so a workspace bump leaves it behind — edit it\n" +
-        "by hand to match packages/argent/package.json."
+      "\nEvery line above starts with the file to edit. server.json is usually the one:\n" +
+        "it is not under packages/*, so a workspace bump sweeps past and leaves it behind."
     );
     failed = true;
   }

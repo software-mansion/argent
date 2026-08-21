@@ -31,11 +31,11 @@ export async function runPipeline(
     input.sessionMeta.unattributedByCommit
   );
 
-  // Stage 00-cpu-correlate: Map Hermes CPU samples to hot commit time windows
-  const firstCommitTs = preprocessed.length > 0 ? preprocessed[0]!.timestamp : null;
-  const cpuSampleIndex = input.flamegraph
-    ? buildCpuSampleIndex(input.flamegraph, firstCommitTs)
-    : null;
+  // Stage 00-cpu-correlate: Map Hermes CPU samples to hot commit time windows.
+  // Both sides count ms from the start of profiling, so no correlation input is
+  // needed — the index used to take the first commit's timestamp and align the
+  // samples to it, which displaced every one of them by that value (#619).
+  const cpuSampleIndex = input.flamegraph ? buildCpuSampleIndex(input.flamegraph) : null;
   const hotCommitSummaries = correlateCpuWithCommits(rawHotCommitSummaries, cpuSampleIndex);
 
   // Stage 1: Reduce — O(n) over React commits

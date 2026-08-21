@@ -229,7 +229,7 @@ export type FlowStepResult = {
   /** Human-readable step target (selector / snapshot name), set by the runner. */
   target?: string;
   /**
-   * Nesting depth: absent/0 at top level, +1 inside each block directive
+   * Nesting depth: absent/0 at top level, +1 inside each nesting step
    * (`when:` guarded steps, `run:` fragment steps). The label is indented by
    * it; a pre-depth tool-server sends none and the report renders flat.
    */

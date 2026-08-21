@@ -4,7 +4,7 @@ import { createProposeVariantTool } from "../../src/tools/variants/propose-varia
 import { awaitUserSelectionTool } from "../../src/tools/variants/await-user-selection";
 
 /** Every tool argent can serve. Bump deliberately when a tool is added or removed. */
-export const EXPECTED_TOOL_COUNT = 76;
+export const EXPECTED_TOOL_COUNT = 77;
 
 /**
  * The full catalog, keyed by id. Two groups never reach `registry.registerTool`

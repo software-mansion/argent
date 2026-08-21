@@ -172,6 +172,9 @@ test("a packages[] entry that is not an object is caught", () => {
   for (const [entry, shown] of [
     [null, "null"],
     ["@swmansion/argent", "string"],
+    // typeof [] === "object", so an array only fails the shape check if it is
+    // tested for separately.
+    [["@swmansion/argent", VERSION], "an array"],
   ]) {
     const problems = serverJsonMismatches(
       VERSION,
@@ -234,16 +237,24 @@ const SCRIPT_PATH = fileURLToPath(new URL("./check-workspace-versions.mjs", impo
  * symlink test then reintroduces deliberately.
  * @param {import("node:test").TestContext} t
  * @param {{ argentVersion?: string | null, otherVersion?: string, serverJson?: unknown,
- *   extraPackages?: Record<string, unknown> }} [options]
+ *   argentManifest?: unknown, extraPackages?: Record<string, unknown> }} [options]
  *   serverJson: an object to write as JSON, a string to write verbatim, or null
  *   to leave the file out entirely. argentVersion: null omits the version key.
+ *   argentManifest: replaces packages/argent/package.json wholesale, same
+ *   object/string/null convention, and overrides argentVersion.
  *   extraPackages: further packages/<dir> entries, a null value creating the
  *   directory with no package.json in it.
  * @returns {string} the repo root
  */
 function fixtureRepo(
   t,
-  { argentVersion = VERSION, otherVersion = VERSION, serverJson, extraPackages = {} } = {}
+  {
+    argentVersion = VERSION,
+    otherVersion = VERSION,
+    serverJson,
+    argentManifest,
+    extraPackages = {},
+  } = {}
 ) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "check-workspace-versions-")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -256,10 +267,14 @@ function fixtureRepo(
   const write = (/** @type {string} */ path, /** @type {unknown} */ value) =>
     writeFileSync(path, typeof value === "string" ? value : JSON.stringify(value, null, 2));
 
-  write(join(root, "packages", "argent", "package.json"), {
-    ...ARGENT_PKG,
-    ...(argentVersion === null ? {} : { version: argentVersion }),
-  });
+  if (argentManifest === undefined) {
+    write(join(root, "packages", "argent", "package.json"), {
+      ...ARGENT_PKG,
+      ...(argentVersion === null ? {} : { version: argentVersion }),
+    });
+  } else if (argentManifest !== null) {
+    write(join(root, "packages", "argent", "package.json"), argentManifest);
+  }
   write(join(root, "packages", "registry", "package.json"), {
     name: "@argent/registry",
     version: otherVersion,
@@ -303,19 +318,58 @@ test("[script] server.json drift alone exits 1", (t) => {
   assert.equal(result.status, 1, `expected a failure, got:\n${result.stdout}${result.stderr}`);
   assert.match(result.stderr, /server\.json version is 0\.17\.0/);
   assert.match(result.stderr, /server\.json packages\[0\]\.version is 0\.17\.0/);
+  assert.match(result.stderr, /Every line above starts with the file to edit\./);
 });
 
-// The check the script existed for before this PR. Every other failing [script]
-// test here reaches its exit 1 through a server.json problem, so this is the only
-// one that pins the exit code to workspace drift on its own.
+// The check the script existed for before this PR. The fixture leaves server.json
+// agreeing with packages/argent, so workspace drift is the only thing that can
+// produce the exit code — that is what makes it pin this branch rather than the
+// server.json one every other failing [script] test also trips.
 test("[script] packages/* drift alone exits 1", (t) => {
   const root = fixtureRepo(t, { otherVersion: "0.17.0" });
   const result = runScript(root);
   assert.equal(result.status, 1, `expected a failure, got:\n${result.stdout}${result.stderr}`);
   assert.match(result.stderr, /Workspace package versions are out of sync/);
   assert.match(result.stderr, /0\.17\.0: @argent\/registry/);
+  assert.match(result.stderr, /Bump the outliers to match\./);
   // server.json agrees with packages/argent, so nothing else could have failed it.
   assert.doesNotMatch(result.stderr, /server\.json is out of sync/);
+});
+
+// The manifest is what names a package in the report; the directory name is only
+// the fallback for one that does not name itself.
+test("[script] a versioned manifest with no name is reported by its directory", (t) => {
+  const root = fixtureRepo(t, {
+    otherVersion: "0.17.0",
+    extraPackages: { unnamed: { version: "0.16.0" } },
+  });
+  const result = runScript(root);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /0\.16\.0: unnamed/);
+});
+
+// A manifest with no version is not a workspace package for lockstep purposes, so
+// it must stay out of the version map entirely rather than joining it as
+// `undefined` and making every repo look drifted.
+test("[script] a version-less manifest is excluded, not counted as its own version", (t) => {
+  const root = fixtureRepo(t, { extraPackages: { noversion: { name: "@argent/noversion" } } });
+  const result = runScript(root);
+  assert.equal(result.status, 0, `expected a clean repo, got:\n${result.stdout}${result.stderr}`);
+  assert.equal(result.stderr, "");
+});
+
+// A manifest that exists but cannot be parsed is not the same as a directory with
+// no manifest: dropping it silently would take a real package out of the lockstep
+// comparison and pass a workspace that had drifted.
+test("[script] an unparseable packages/* manifest fails instead of being skipped", (t) => {
+  const root = fixtureRepo(t, {
+    extraPackages: { broken: '{ "name": "@argent/broken", "version": "9.9.9",, }' },
+  });
+  const result = runScript(root);
+  assert.equal(result.status, 1, `expected a failure, got:\n${result.stdout}${result.stderr}`);
+  assert.match(result.stderr, /Cannot read packages\/broken\/package\.json: /);
+  assert.match(result.stderr, /git checkout -- packages\/broken\/package\.json/);
+  assertNoStackTrace(result.stderr);
 });
 
 // packages/argent-private is exactly this in the real repo: a submodule directory
@@ -331,29 +385,49 @@ test("[script] an unusable packages/* directory does not stop the scan", (t) => 
   assert.match(result.stderr, /0\.17\.0: @argent\/registry/);
 });
 
-// JSON.parse succeeds on a file holding `null`, so the scan's try/catch never
-// sees it and the version read below is what would throw.
-test("[script] a packages/* manifest holding null does not crash the scan", (t) => {
-  const root = fixtureRepo(t, {
-    otherVersion: "0.17.0",
-    extraPackages: { corrupt: "null" },
-  });
-  const result = runScript(root);
-  assert.equal(result.status, 1, `expected a failure, got:\n${result.stdout}${result.stderr}`);
-  assert.match(result.stderr, /0\.17\.0: @argent\/registry/);
-  assertNoStackTrace(result.stderr);
+// JSON.parse succeeds on a file holding `null`, a bare scalar or an array, so
+// none of them reach the scan's try/catch — yet each is a manifest that is
+// *there but unusable*, and skipping one would drop a real package out of the
+// lockstep comparison and pass a workspace that had drifted. Same shape the
+// readTrackedJson guard rejects for server.json and packages/argent; all three
+// forms are asserted here so the scalar arm is pinned like the other two sites.
+test("[script] a packages/* manifest that is not an object fails on-message, not silently skipped", (t) => {
+  for (const [content, shape] of [
+    ["null", "null"],
+    ['"0.18.0"', "string"],
+    ['["@swmansion/argent", "0.18.0"]', "an array"],
+  ]) {
+    const root = fixtureRepo(t, {
+      otherVersion: "0.17.0",
+      extraPackages: { corrupt: content },
+    });
+    const result = runScript(root);
+    assert.equal(
+      result.status,
+      1,
+      `expected a failure for ${content}, got:\n${result.stdout}${result.stderr}`
+    );
+    assert.equal(
+      result.stderr.split("\n")[0],
+      `packages/corrupt/package.json is ${shape}, not a JSON object`
+    );
+    assert.match(result.stderr, /git checkout -- packages\/corrupt\/package\.json/);
+    assertNoStackTrace(result.stderr);
+  }
 });
 
-// The report groups every package sharing a version onto one line, which is what
-// makes a drift report readable at 17 packages.
-test("[script] the drift report lists every package sharing a version", (t) => {
+// The report groups every package sharing a version onto one alphabetised line,
+// which is what makes a drift report readable at 17 packages. Directory `aaa`
+// holds a package named `@zzz/...`, so the scan reaches it first and the names
+// come out in the opposite order to the one asserted unless they are sorted.
+test("[script] the drift report lists every package sharing a version, sorted", (t) => {
   const root = fixtureRepo(t, {
     otherVersion: "0.17.0",
-    extraPackages: { alpha: { name: "@argent/alpha", version: VERSION } },
+    extraPackages: { aaa: { name: "@zzz/scanned-first", version: VERSION } },
   });
   const result = runScript(root);
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /0\.18\.0: @argent\/alpha, @swmansion\/argent\n/);
+  assert.match(result.stderr, /0\.18\.0: @swmansion\/argent, @zzz\/scanned-first\n/);
 });
 
 // The one shape where every comparison the script makes is vacuously satisfied:
@@ -439,6 +513,28 @@ test("[script] a server.json that parses but is not an object fails on-message",
     const result = runScript(fixtureRepo(t, { serverJson: content }));
     assert.equal(result.status, 1, `expected a failure for ${content}, got:\n${result.stdout}`);
     assert.equal(result.stderr.split("\n")[0], `server.json is ${shape}, not a JSON object`);
+    assert.match(result.stderr, /git checkout -- server\.json/);
     assertNoStackTrace(result.stderr);
   }
+});
+
+// readTrackedJson has two call sites and every test above drives only the
+// server.json one, so nothing observed that packages/argent/package.json is read
+// the same hardened way rather than by a bare JSON.parse. (Its malformed-JSON arm
+// is unreachable from this side — the scan reads the same file first and stops
+// there — so these two cover the arms that are.)
+test("[script] a missing packages/argent/package.json fails on-message", (t) => {
+  const result = runScript(fixtureRepo(t, { argentManifest: null }));
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Cannot read packages\/argent\/package\.json: /);
+  assert.match(result.stderr, /git checkout -- packages\/argent\/package\.json/);
+  assertNoStackTrace(result.stderr);
+});
+
+test("[script] a packages/argent/package.json that is not an object fails on-message", (t) => {
+  const result = runScript(fixtureRepo(t, { argentManifest: "null" }));
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /packages\/argent\/package\.json is null, not a JSON object/);
+  assert.match(result.stderr, /git checkout -- packages\/argent\/package\.json/);
+  assertNoStackTrace(result.stderr);
 });

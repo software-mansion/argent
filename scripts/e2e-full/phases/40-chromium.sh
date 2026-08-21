@@ -63,9 +63,30 @@ run_phase() {
   local P=chromium
   ensure_server || { skip "$P" tier all "tool-server unavailable"; return 0; }
 
-  # Display gate (Linux). macOS always has one.
-  if [ "$E2E_OS" = "linux" ] && [ -z "${DISPLAY:-}" ] && ! command -v xvfb-run >/dev/null 2>&1; then
-    skip "$P" tier all "no DISPLAY and no xvfb-run on Linux"; return 0
+  # Display gate (Linux). macOS always has one. An installed xvfb-run is not
+  # accepted as a substitute: nothing here or in argent wraps the Electron spawn
+  # in it, so a headless box that merely has it would clear this gate and then
+  # fail boot-device on a missing X server — turning the release gate red for
+  # exactly the environment this check exists to skip. Run the whole harness
+  # under `xvfb-run` instead; that supplies a real DISPLAY.
+  #
+  # A set-but-unusable DISPLAY costs the same red gate and is not rare: a
+  # display-manager session switch leaves $DISPLAY pointing at a server this
+  # process has no cookie for, and Electron then binds its CDP port and never
+  # answers on it, so the failure surfaces as an opaque readiness timeout rather
+  # than as "no display". Probe it when a probe tool exists; when none does, say
+  # so in the skip rather than implying the display was checked.
+  if [ "$E2E_OS" = "linux" ]; then
+    if [ -z "${DISPLAY:-}" ]; then
+      skip "$P" tier all "no DISPLAY on Linux (re-run the harness under xvfb-run)"; return 0
+    fi
+    if command -v xdpyinfo >/dev/null 2>&1; then
+      xdpyinfo >/dev/null 2>&1 || { skip "$P" tier all "DISPLAY=$DISPLAY set but not reachable (xdpyinfo failed)"; return 0; }
+    elif command -v xset >/dev/null 2>&1; then
+      xset -q >/dev/null 2>&1 || { skip "$P" tier all "DISPLAY=$DISPLAY set but not reachable (xset failed)"; return 0; }
+    else
+      info "no xdpyinfo/xset: DISPLAY=$DISPLAY assumed usable, unverified"
+    fi
   fi
 
   local ebin; ebin="$(_find_electron)"
@@ -85,21 +106,21 @@ run_phase() {
   # setups; disable-gpu keeps rendering deterministic.
   run_tool boot-device "{\"electronAppPath\":\"$appdir\",\"electronPort\":$port,\"electronArgs\":[\"--no-sandbox\",\"--disable-gpu\"]}"
   if [ "$RT_RC" -ne 0 ] || ! printf '%s' "$RT_JSON" | jq -e '.booted==true' >/dev/null 2>&1; then
-    fail "$P" boot-device "$(printf '%s' "$RT_OUT" | tr '\n' ' ' | cut -c1-180)"
+    fail "$P" boot-device boot "$(rt_detail 180)"
     skip "$P" tier remaining "electron did not boot"; return 0
   fi
   local DEV; DEV="$(printf '%s' "$RT_JSON" | jq -r '.id // .udid // .serial // empty')"
   [ -z "$DEV" ] && DEV="chromium-cdp-$port"
   export E2E_ELECTRON_PID="$(printf '%s' "$RT_JSON" | jq -r '.pid // empty')"
   export E2E_ELECTRON_PORT="$port"
-  pass "$P" boot-device "electron $DEV (port $port)"
+  pass "$P" boot-device boot "electron $DEV (port $port)"
 
   # --- discovery ------------------------------------------------------------
   assert_true "$P" list-devices present "{}" "(any(.devices[]?; (.id//.udid//.serial)==\"$DEV\"))"
   if capture_screenshot "$DEV" "$E2E_WORK/chromium-shot.png"; then
-    pass "$P" screenshot "shot (${SHOT_SIZE}B)"
+    pass "$P" screenshot shot "${SHOT_SIZE}B"
   else
-    fail "$P" screenshot "size=${SHOT_SIZE:-0} rc=${SHOT_RC:-?}"
+    fail "$P" screenshot shot "size=${SHOT_SIZE:-0} rc=${SHOT_RC:-?} (blank framebuffer?)"
   fi
   assert_field "$P" describe describe "{\"udid\":\"$DEV\"}" '(.description|length>0)' 'true'
 
@@ -124,11 +145,14 @@ run_phase() {
   else
     case "$RT_OUT" in
       *"Not supported"*|*"not supported"*)
-        skip "$P" chromium-tabs new "single-window Electron: tab creation not supported"
-        skip "$P" chromium-tabs select "no extra tab to select"
-        skip "$P" chromium-tabs close "no extra tab to close" ;;
-      *) fail "$P" chromium-tabs new "$(printf '%s' "$RT_OUT"|tr '\n' ' '|cut -c1-140)" ;;
+        skip "$P" chromium-tabs new "single-window Electron: tab creation not supported" ;;
+      *) fail "$P" chromium-tabs new "$(rt_detail 140)" ;;
     esac
+    # Whatever the reason `new` gave, there is no second tab, so select/close
+    # were not exercised. Record that on both arms or the report counts
+    # chromium-tabs as covered off the `list` case alone.
+    skip "$P" chromium-tabs select "no extra tab to select"
+    skip "$P" chromium-tabs close "no extra tab to close"
   fi
 
   # --- cookies --------------------------------------------------------------
@@ -150,14 +174,42 @@ run_phase() {
   if [ -n "${E2E_ELECTRON_PID:-}" ] && kill -0 "$E2E_ELECTRON_PID" 2>/dev/null; then
     kill "$E2E_ELECTRON_PID" 2>/dev/null || true
   else
-    # fall back: kill whatever holds the CDP port
-    local pid; pid="$(python3 -c "import subprocess,sys
+    # fall back: kill whatever holds the CDP port. The port is compared as the
+    # whole last field of the local address and the pid is read from that same
+    # line — a substring match on ":$port" also hits ":${port}9", and a pid
+    # picked from anywhere in the output belongs to whichever listener happened
+    # to sort first. On a shared machine that is someone else's process.
+    local pid; pid="$(python3 -c "
+import re, subprocess
+port = '$port'
+pid = ''
 try:
-    out=subprocess.check_output(['bash','-lc','ss -ltnp 2>/dev/null | grep :$port || true']).decode()
-    import re; m=re.search(r'pid=(\d+)', out); print(m.group(1) if m else '')
-except Exception: print('')" 2>/dev/null)"
+    out = subprocess.run(['ss', '-ltnp'], capture_output=True, text=True).stdout
+    for line in out.splitlines():
+        f = line.split()
+        if len(f) < 5 or f[3].rsplit(':', 1)[-1] != port:
+            continue
+        m = re.search(r'pid=(\\d+)', line)
+        if m:
+            pid = m.group(1)
+            break
+except Exception:
+    pass
+print(pid)" 2>/dev/null)"
     [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
   fi
   [ -n "${E2E_HTTP_PID:-}" ] && kill "$E2E_HTTP_PID" 2>/dev/null || true
-  pass "$P" teardown electron-stopped
+  # Confirm the process is actually gone. Electron takes a moment to go down
+  # after SIGTERM, and this case is the run's only record that the tier left
+  # nothing behind, so it has to look rather than assert.
+  local waited=0
+  while [ -n "${E2E_ELECTRON_PID:-}" ] && kill -0 "$E2E_ELECTRON_PID" 2>/dev/null && [ "$waited" -lt 5 ]; do
+    sleep 1; waited=$((waited + 1))
+  done
+  if [ -n "${E2E_ELECTRON_PID:-}" ] && kill -0 "$E2E_ELECTRON_PID" 2>/dev/null; then
+    kill -9 "$E2E_ELECTRON_PID" 2>/dev/null || true
+    fail "$P" teardown electron-stopped "pid $E2E_ELECTRON_PID survived SIGTERM for ${waited}s"
+  else
+    pass "$P" teardown electron-stopped
+  fi
 }

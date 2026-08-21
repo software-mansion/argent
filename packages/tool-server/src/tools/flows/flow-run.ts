@@ -22,13 +22,16 @@ import {
   appIdForPlatform,
   assertSafeFlowName,
   assertValidProjectRoot,
+  blockSteps,
   chromiumLaunchSpec,
   classifyOnDiskSpelling,
   describeSelector,
   describeTextExpectation,
   getFlowPath,
+  isBlockStep,
   parseFlow,
   runTargetName,
+  type BlockStep,
   type FlowFile,
   type FlowSelector,
   type FlowStep,
@@ -50,7 +53,7 @@ import {
   stepRequiresDevice,
   type FlowPlatform,
 } from "./flow-device";
-import { nestedOrchestratorOutcome } from "./flow-nested-outcome";
+import { isNestedOrchestratorTool, nestedOrchestratorOutcome } from "./flow-nested-outcome";
 import {
   runDirective,
   invokeOnDevice,
@@ -59,7 +62,15 @@ import {
   type ActionEnv,
   type DirectiveOutcome,
 } from "./flow-actions";
-import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
+import {
+  buildAppStateMessage,
+  isInjectableBundleId,
+  isNativeDevtoolsBlockResult,
+  nativeDevtoolsRef,
+  NATIVE_DEVTOOLS_CONNECT_BUDGET_MS,
+  type NativeDevtoolsApi,
+  type NativeDevtoolsAppState,
+} from "../../blueprints/native-devtools";
 import { androidDevtoolsRef, type AndroidDevtoolsApi } from "../../blueprints/android-devtools";
 import {
   chromiumCdpRef,
@@ -187,7 +198,11 @@ export interface StepReport {
    * looks like; it rendered no content to settle; too few reads came back with
    * content for it to judge anything; or its captures never produced a
    * comparable pair, leaving stillness proved on the UI tree alone without the
-   * presentation-layer motion the pixel half exists to catch.
+   * presentation-layer motion the pixel half exists to catch. Raised too by a
+   * selector-less gesture (coordinate `tap`/`long-press`, centre-anchored
+   * `pinch`/`rotate`) that a tree-source outage left unsettled: it is dispatched
+   * regardless, and the warning is the only thing separating it from one that
+   * waited.
    */
   warning?: string;
   /** Underlying tool id for `tool` steps. */
@@ -227,8 +242,8 @@ export interface StepReport {
   /** Snapshot-step artifacts (baseline/current/diff) as materializable handles. */
   artifacts?: SnapshotArtifacts;
   /**
-   * Nesting depth for display: omitted at top level, +1 inside each block
-   * directive's expanded steps (a `when:` block's guarded steps, a `run:`
+   * Nesting depth for display: omitted at top level, +1 inside each nesting
+   * step's expanded steps (a `when:` block's guarded steps, a `run:`
    * fragment's steps). Renderers indent by it without knowing which directives
    * nest — the report is a flat list with no block-end marker, so depth cannot
    * be reconstructed downstream.
@@ -281,20 +296,39 @@ const POST_LAUNCH_SETTLE_MS = 1500;
  * missing connection as a hard per-read error (it never degrades to the
  * collapsing AX tree — see flow-tree.ts), so without this gate a slow cold
  * start would fail the first directive with a raw tree-source error; gating
- * the launch step reports the problem where it belongs, with a relaunch hint.
+ * the launch step reports the problem where it belongs, with the measured
+ * reason the connection never came up.
+ *
+ * The same budget the measurement allows a dial, and deliberately the same
+ * constant: a gate that waited longer than the state machine's window would
+ * time out onto `unregistered`, whose remedy is a tool-server restart, for an
+ * app it had itself decided was still worth waiting for.
+ *
+ * Exported so the gate's reason text can be pinned against it rather than a
+ * drifting literal.
  */
-// 15s (was 8s): the injected dylib's connect is gated on the app's main
-// thread, and a heavy first-ever cold start (Hermes first parse, asset
-// decode on a loaded host) can pin it past 8s. Matches the 15s
-// getFullHierarchy RPC tier — both wait out the same class of stall.
-const NATIVE_READY_TIMEOUT_MS = 15000;
+export const NATIVE_READY_TIMEOUT_MS = NATIVE_DEVTOOLS_CONNECT_BUDGET_MS;
 const NATIVE_READY_POLL_MS = 250;
 
 /**
+ * How long the launch step has spent on the app by the time the gate takes its
+ * verdict: the post-launch settle plus the whole connect wait. The gate's own
+ * timeout is only the second half, so quoting it alone understates the age of a
+ * process the step launched — the fact the remedies below rest on. Exported so
+ * they can be pinned against it rather than a drifting literal.
+ */
+export const LAUNCH_TO_VERDICT_MS = POST_LAUNCH_SETTLE_MS + NATIVE_READY_TIMEOUT_MS;
+
+/**
  * `tool:` steps that can change or relaunch the foreground app — running one
- * invalidates {@link ActionEnv.launchedNativeApp}. `button` is included for
- * its `home` case; distinguishing button kinds here would couple this list to
- * that tool's arg schema for little gain.
+ * invalidates {@link ActionEnv.launchedNativeApp} and spends
+ * {@link ActionEnv.treeOutage}. `button` is included for its `home` case;
+ * distinguishing button kinds here would couple this list to that tool's arg
+ * schema for little gain.
+ *
+ * `launch-app` and `restart-app` re-set the id from their own `bundleId` once
+ * they return — they name the app they switched to, where the rest leave it
+ * unknown.
  */
 const FOREGROUND_CHANGING_TOOLS = new Set([
   "launch-app",
@@ -305,29 +339,133 @@ const FOREGROUND_CHANGING_TOOLS = new Set([
 ]);
 
 /**
- * Poll until native-devtools is connected for `bundleId`. Returns true once
- * connected, false on timeout / abort / the service being unavailable. The
- * caller decides how to treat false (iOS flows fail; see treeSourceGate).
+ * Poll until native-devtools is connected for `bundleId`. Returns null once
+ * connected, on abort (the caller reports the cancellation itself), and for an
+ * app whose hierarchy this gate cannot wait for at all. Otherwise the reason the
+ * connection never came up: the resolution error when the service is
+ * unreachable, else the state measured off the running process, rewritten for
+ * the one thing that distinguishes this caller — it has just launched the app.
+ *
+ * Measured rather than guessed: this gate is reached right after a launch, so
+ * "re-run to relaunch" would be the same restart loop `appConnectionState`
+ * exists to break, one level up.
  */
 async function waitForNativeDevtools(
   registry: Registry,
   device: DeviceInfo,
   bundleId: string,
   signal?: AbortSignal
-): Promise<boolean> {
+): Promise<string | null> {
   let api: NativeDevtoolsApi;
   try {
     const ref = nativeDevtoolsRef(device);
     api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
-  } catch {
-    return false; // native-devtools service unavailable
+  } catch (err) {
+    // Withheld for the same reason as the timeout below: an app that may never
+    // load the dylib was never going to be served by this service, so its
+    // failure is not what stops the launch.
+    if (!isInjectableBundleId(bundleId)) return null;
+    return `the native-devtools service is unavailable for ${bundleId} (${errMsg(err)})`;
   }
   const deadline = Date.now() + NATIVE_READY_TIMEOUT_MS;
   for (;;) {
-    if (signal?.aborted) return false;
-    if (api.isConnected(bundleId)) return true;
-    if (Date.now() >= deadline) return false;
-    if (!(await sleepOrAbort(NATIVE_READY_POLL_MS, signal))) return false;
+    if (signal?.aborted) return null;
+    if (api.isConnected(bundleId)) return null;
+    if (Date.now() >= deadline) break;
+    if (!(await sleepOrAbort(NATIVE_READY_POLL_MS, signal))) return null;
+  }
+  // Timed out with no connection. An app that may never load the dylib has no
+  // hierarchy to wait for, so that is its expected outcome rather than a launch
+  // failure: the step started the app, and a coordinate-driven flow needs
+  // nothing more. The impossibility bites only where a selector needs the
+  // hierarchy, and `fetchFlowTree` reports it there.
+  //
+  // The wait itself still runs, deliberately: whether the dylib loads into a
+  // simulator system app is unsettled (#453 saw `connected: false` for
+  // com.apple.Preferences on iOS 26.5, an E2E run `connected: true` on 18.5),
+  // and skipping it would bake that contested claim into behaviour. Only the
+  // VERDICT is withheld — before the measurement, which no arm below would
+  // consult for such an app and which costs several simctl round-trips the
+  // caller cannot interrupt.
+  if (!isInjectableBundleId(bundleId)) return null;
+  // Measure why — the state may have flipped to connected since the last poll.
+  // The loop's abort check covers every exit but this one (`break` follows it
+  // synchronously); an abort landing during the measurement's uninterruptible
+  // simctl work is caught by the caller, which drops the reason.
+  const state = await api.appConnectionState(bundleId).catch(() => "indeterminate" as const);
+  if (state === "connected") return null;
+  return flowLaunchGateReason(bundleId, state);
+}
+
+/**
+ * The measured diagnosis, rewritten for the one fact that separates this caller
+ * from every other consumer of {@link buildAppStateMessage}: it has just run
+ * `restart-app` on this bundle id and spent {@link LAUNCH_TO_VERDICT_MS} on it.
+ *
+ * Those messages are written for a reader who has not launched anything, so
+ * "launch it" / "restart it" is the missing step. Emitted verbatim here they
+ * hand back the action this step just took, and an author who obeys re-runs the
+ * flow into the identical state. Each state gets the sentence that is true
+ * *after* a launch instead; the switch is exhaustive so a state added later
+ * cannot inherit a remedy written for a reader who never launched.
+ */
+export function flowLaunchGateReason(
+  bundleId: string,
+  state: Exclude<NativeDevtoolsAppState, "connected">
+): string {
+  const measured = buildAppStateMessage(bundleId, state);
+  switch (state) {
+    case "not_running":
+      // The step launched it and it is gone — the one state a relaunch provably
+      // reproduces, since a relaunch is what produced it. The measured remedy is
+      // the step's own action, so it reads as advice to change nothing.
+      return (
+        `${bundleId} was relaunched by this step and is no longer running ${LAUNCH_TO_VERDICT_MS} ms later, ` +
+        `so it exited after launch rather than failing to connect. Re-running the flow repeats the same launch: ` +
+        `start it by hand (launch-app, then describe or screenshot) to see the crash or early exit first.`
+      );
+    case "stale_process":
+      // The first sentence must not pick between the state's two producers: a
+      // process carrying no argent injection at all, or one carrying THIS
+      // endpoint and merely older than the listener. Blaming the launchd
+      // environment would be false for the second — and the measured text names
+      // both. The environment IS right on a SECOND landing: a re-run's process
+      // is younger than any long-up listener, which rules that second producer
+      // out (it needs `processAge + grace >= listenerAge`).
+      return (
+        `${measured} This step already relaunched it, so the process it measured predates whatever the ` +
+        `relaunch would have given it — re-run the flow to launch again. If it lands here twice, the ` +
+        `simulator's launchd environment is not holding argent's instrumentation: re-boot the device ` +
+        `(boot-device with force) before re-running.`
+      );
+    case "unregistered":
+      // Everywhere else the window this verdict reads is the app's whole
+      // lifetime; here it is only this step's launch plus its wait, which a cold
+      // start (an RN build fetching its bundle) can outlast — so the measured
+      // remedy would have the author restart a healthy tool-server. The figure
+      // is the whole spend: the poll checks the live map once before its first
+      // sleep, so a dial during the post-launch settle counts too.
+      return (
+        `${measured} A cold start slower than the ${LAUNCH_TO_VERDICT_MS} ms this step waited reads the ` +
+        `same way — if that is likely, re-run the flow to relaunch and wait again before restarting anything.`
+      );
+    case "connecting":
+      // A process seconds old, though this step launched the app
+      // LAUNCH_TO_VERDICT_MS ago — so something relaunched it in between, and
+      // the handshake being waited on belongs to that later process. "Wait" is
+      // still right; crediting this step with that launch is not.
+      return (
+        `${measured} This step launched it ${LAUNCH_TO_VERDICT_MS} ms before that reading, so the process ` +
+        `being measured started after the step's own launch — something relaunched it in between. Re-run ` +
+        `the flow once the app is settled.`
+      );
+    case "indeterminate":
+      // The measured text opens with "Call restart-app then retry", which this
+      // step already did once. What survives is the part that terminates.
+      return (
+        `${measured} This step already performed that one restart, so re-run the flow at most once more ` +
+        `before restarting the tool-server rather than the app.`
+      );
   }
 }
 
@@ -381,9 +519,12 @@ async function androidDevtoolsReady(registry: Registry, device: DeviceInfo): Pro
  * it never comes up, every selector read would fail — `fetchFlowTree` refuses
  * to degrade to the trimmed AX tree (see flow-tree.ts) — so the launch step
  * fails outright with an actionable, platform-specific reason instead of
- * letting the first directive surface a raw tree-source error. Returns null
- * when ready (or the platform needs no gate / the run was aborted), else the
- * reason to report.
+ * letting the first directive surface a raw tree-source error.
+ *
+ * Returns null when ready, when the platform needs no gate, when the run was
+ * aborted, and for an iOS app whose hierarchy may never be servable at all (see
+ * {@link waitForNativeDevtools}) — there the launch is not what failed, and the
+ * first selector read reports the impossibility. Otherwise the reason to report.
  */
 async function treeSourceGate(
   registry: Registry,
@@ -392,12 +533,11 @@ async function treeSourceGate(
   signal?: AbortSignal
 ): Promise<string | null> {
   if (device.platform === "ios" && !signal?.aborted) {
-    const connected = await waitForNativeDevtools(registry, device, bundleId, signal);
-    if (!connected && !signal?.aborted) {
-      return (
-        `could not connect to native devtools for ${bundleId}. Re-run to relaunch the app and retry. ` +
-        `If it keeps failing, a stale or duplicate argent server may be holding the devtools connection — restart the argent server and try again.`
-      );
+    const reason = await waitForNativeDevtools(registry, device, bundleId, signal);
+    if (reason !== null && !signal?.aborted) {
+      // Every reason names the bundle id, so the prefix must not: doubled, it
+      // reads as two separate failures reported back to back.
+      return `could not connect to native devtools. ${reason}`;
     }
   }
   if (device.platform === "android" && !signal?.aborted) {
@@ -438,6 +578,13 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   const env = deviceEnv(state);
   const { registry, device, signal } = env;
 
+  // Relaunching is the repair the tree source asks for by name when it refuses
+  // an app that loaded no instrumentation, so a verdict recorded before it is
+  // spent. Cleared up front rather than on success: nothing after this point
+  // leaves the source in the state the memo describes, and a gesture can follow
+  // a launch with no read in between to clear it (see ActionEnv.treeOutage).
+  if (state.treeOutage) state.treeOutage.proven = undefined;
+
   if (device.platform === "chromium") return runChromiumLaunch(state, app);
 
   const bundleId = appIdForPlatform(app, device.platform);
@@ -447,13 +594,23 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
       reason: `no app id declared for platform "${device.platform}" — add a launch entry for it`,
     };
   }
+  let restart: unknown;
   try {
-    await invokeOnDevice(env, "restart-app", { bundleId });
+    restart = await invokeOnDevice(env, "restart-app", { bundleId });
   } catch (err) {
     // A cancellation makes the sub-tool itself reject; that rejection is the
     // abort, not an app failure, so it must not be attributed to restart-app.
     if (signal?.aborted) return ABORTED_OUTCOME;
     return { ok: false, reason: `restart-app failed: ${errMsg(err)}` };
+  }
+  // A blocked precheck is RESOLVED rather than thrown, and returns before the
+  // terminate and the launch — so the app was never started. Every remedy below
+  // is written for one this step did launch: unread, the gate measures an app
+  // that never ran and `not_running` becomes "it exited after launch", sending
+  // the author after a crash that did not happen while the message naming the
+  // real cause is dropped.
+  if (isNativeDevtoolsBlockResult("restart-app", restart)) {
+    return { ok: false, reason: `restart-app did not start ${bundleId}: ${restart.message}` };
   }
   if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
   const gate = await treeSourceGate(registry, device, bundleId, signal);
@@ -463,8 +620,8 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   if (gate) return { ok: false, reason: gate };
   // Remember the launched app for the rest of the RUN (nested `run:` flows
   // share this state, so a nested launch retargets the whole run — see
-  // ActionEnv.launchedNativeApp). iOS tree reads use it only when target
-  // auto-resolution times out mid-stall.
+  // ActionEnv.launchedNativeApp). iOS tree reads use it to explain a read they
+  // could not take, and to arbitrate a target auto-resolution stalled out on.
   state.launchedNativeApp = bundleId;
   return { ok: true };
 }
@@ -863,23 +1020,30 @@ function displayFlowName(params: { name?: string; flow_path?: string }): string 
   return params.name || stem || params.flow_path || "(unspecified)";
 }
 
-/** Yield every parsed step, recursing into `when:` blocks (the parser's only nesting). */
+/**
+ * Yield every parsed step, recursing into a block directive's children through
+ * {@link blockSteps} rather than testing one kind: this is the sole feeder of
+ * {@link assertUploadSelfContained}, so a block absent from the recursion would
+ * carry an uploaded flow's nested `run:`/`snapshot` past the preflight and let
+ * an unrunnable flow report green.
+ */
 function* walkSteps(steps: FlowStep[]): Generator<FlowStep> {
   for (const step of steps) {
     yield step;
-    if (step.kind === "when") yield* walkSteps(step.steps);
+    const inner = blockSteps(step);
+    if (inner) yield* walkSteps(inner);
   }
 }
 
 /**
  * Reject an uploaded root flow that is not self-contained — one with a `run:`
- * or `snapshot` step (even inside a `when:` block) — before anything executes:
- * a mid-run or guard-gated error could execute half the flow first, or first
- * surface in CI. Both step kinds anchor at the flow file's real directory,
- * which an uploaded flow does not have: a run: step's referenced files stayed
- * on the client, and snapshot baselines live beside the flow's file — against
- * a per-call temp materialization a plain snapshot can only fail (no baseline)
- * and updateBaselines writes PNGs no later run can find.
+ * or `snapshot` step (at any depth inside a block directive) — before anything
+ * executes: a mid-run or guard-gated error could execute half the flow first,
+ * or first surface in CI. Both step kinds anchor at the flow file's real
+ * directory, which an uploaded flow does not have: a run: step's referenced
+ * files stayed on the client, and snapshot baselines live beside the flow's
+ * file — against a per-call temp materialization a plain snapshot can only fail
+ * (no baseline) and updateBaselines writes PNGs no later run can find.
  */
 function assertUploadSelfContained(flow: FlowFile): void {
   for (const step of walkSteps(flow.steps)) {
@@ -943,8 +1107,8 @@ when \`on\` is omitted; distinct from the \`rotate\` tool, which changes device 
 for a UI condition, and additionally takes the one condition that has no selector: \`idle: true\` waits
 until the screen has content and stops moving in BOTH the UI tree and the rendered pixels (it never
 fails a run — a screen that never settles passes carrying a \`warning\`, which is what makes it safe to
-persist; the one outcome that does stop the run is an \`error\` for a tree source that could not be read
-at all — a broken window rather than a verdict about the app, which leaves the run not-ok and skips
+persist; the one idle outcome that does stop the run is an \`error\` for a tree source THIS step could not
+read at all — a broken window rather than a verdict about the app, which leaves the run not-ok and skips
 every later step; it says nothing about WHICH screen settled — a dropped tap leaves the source screen
 perfectly idle — so pair it with the element check that names the destination); \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
 diffs a screenshot — or, with \`cropOn: <selector>\`, one element's cropped region — against a stored
@@ -952,6 +1116,14 @@ baseline (a missing baseline fails the step — set updateBaselines to adopt the
 cropped element whose size drifted fails on dimensions); \`echo\` annotates; \`run\` executes another flow
 inline — a YAML path resolved against the directory of the flow file that references it (co-located
 runs only).
+A selector-less gesture — a coordinate \`tap\`/\`long-press\`, or a \`pinch\`/\`rotate\` with no \`on\` — resolves
+no frame out of the tree, so an unreadable tree source does NOT stop it the way it stops \`idle\`: it
+settles best-effort, dispatches anyway, and the step PASSES carrying a \`warning\` that quotes the source's
+own error. That green says the gesture was SENT, not that it landed. Restore the tree source (usually
+relaunch the app so the instrumentation loads), or accept the warning where the app can serve no tree;
+the first such gesture proves the outage and later ones spend that verdict without paying the settle
+window again. A tree read that comes back, or a relaunch, retires that verdict — which only makes the
+next gesture pay a fresh window, and it warns again if the source is still down.
 A \`when:\` block (condition + \`steps:\`, no else) runs its steps only if the condition holds —
 checked once with the short assert grace — for one-sided divergences like interstitials and coach
 marks; a skipped block reports distinctly and failures inside an entered block are real failures.
@@ -1096,6 +1268,12 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
         device,
         deviceIsExplicit: Boolean(params.device),
         signal,
+        // One holder per ExecState, shared by nested `run:` flows: `deviceEnv`
+        // spreads the reference, so what one step's settle learns about the
+        // tree source the next one already has. A `tool: flow-execute` builds
+        // its own instead, which is why that step spends this verdict rather
+        // than inheriting whatever the sub-run proved.
+        treeOutage: {},
         flowsDir,
         viaUpload,
         baselineKey: baselineKeyFor(canonicalPath, flowName),
@@ -1606,8 +1784,22 @@ function stepTarget(step: FlowStep): string | undefined {
       // The as-written path, so a report line shows exactly what the flow
       // references (`run ../shared/login.yaml`), not just the attribution stem.
       return step.flow;
-    default:
+    case "echo":
+    case "tool":
+      // Each carries its subject in a report field of its own (`message`,
+      // `tool`) that renderers print in the target's place.
       return undefined;
+    case "launch":
+      // A launch's app id may be per-platform (`appIdForPlatform`), and a step
+      // alone does not know the run device.
+      return undefined;
+    case "wait":
+      return undefined;
+    default: {
+      const unclassified: never = step;
+      void unclassified;
+      return undefined;
+    }
   }
 }
 
@@ -1690,7 +1882,7 @@ function scopeFlowDir(scope: StepScope): string {
   return path.dirname(scope.runStack[scope.runStack.length - 1]!.canonical);
 }
 
-/** The scope a block directive's children execute in — one level deeper. */
+/** The scope a nesting step's children execute in — one level deeper. */
 function childScope(
   scope: StepScope,
   overrides: Partial<Omit<StepScope, "depth">> = {}
@@ -1699,8 +1891,8 @@ function childScope(
 }
 
 /**
- * The depth stamp for a report — omitted at top level, so a flow with no block
- * directives produces a report byte-identical to the pre-depth shape.
+ * The depth stamp for a report — omitted at top level, so a flow with no
+ * nesting steps produces a report byte-identical to the pre-depth shape.
  */
 function depthOf(scope: StepScope): Pick<StepReport, "depth"> {
   return scope.depth ? { depth: scope.depth } : {};
@@ -1723,14 +1915,20 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
         // line rather than vanishing — matching reportBlockSkipped.
         ...(step.kind === "echo" ? { message: step.message } : {}),
       });
-      // A when block's literal steps are known — expand them so the report
+      // A block directive's literal steps are known — expand them so the report
       // keeps one line per authored step no matter where the stop landed.
-      if (step.kind === "when") reportBlockSkipped(state, step.steps, childScope(scope));
+      const inner = blockSteps(step);
+      if (inner) reportBlockSkipped(state, inner, childScope(scope));
       continue;
     }
     // The flow was resolved as needing no device, yet a step that acts on one
     // reached execution — the two decisions disagree. Report it as this step's
     // error and stop, rather than letting it fail obscurely further in.
+    // They cannot disagree today, nor for a future block directive whichever way
+    // stepRequiresDevice classifies it — flowRequiresDevice recurses through
+    // blockSteps, so no nesting hides a step: under `true` a device is resolved
+    // and `!state.device` is false; under `false` this guard's own
+    // stepRequiresDevice conjunct fails. The expansion below stays regardless.
     if (!state.device && stepRequiresDevice(state.registry, step)) {
       state.stopped = true;
       pushReport(state, {
@@ -1742,7 +1940,8 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
         ...depthOf(scope),
         reason: `step needs a device but the flow was resolved as device-free — pass an explicit device`,
       });
-      if (step.kind === "when") reportBlockSkipped(state, step.steps, childScope(scope));
+      const inner = blockSteps(step);
+      if (inner) reportBlockSkipped(state, inner, childScope(scope));
       continue;
     }
     if (state.signal?.aborted) {
@@ -1757,9 +1956,8 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
         ...depthOf(scope),
         ...(step.kind === "echo" ? { message: step.message } : {}),
       });
-      if (step.kind === "when") {
-        reportBlockSkipped(state, step.steps, childScope(scope), "run aborted");
-      }
+      const inner = blockSteps(step);
+      if (inner) reportBlockSkipped(state, inner, childScope(scope), "run aborted");
       continue;
     }
 
@@ -1767,8 +1965,8 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
       await execRunStep(state, step, scope);
       continue;
     }
-    if (step.kind === "when") {
-      await execWhenStep(state, step, scope);
+    if (isBlockStep(step)) {
+      await execBlockStep(state, step, scope);
       continue;
     }
 
@@ -1785,12 +1983,12 @@ function describeWhenCondition(cond: WhenCondition): string {
 }
 
 /**
- * Report every step of a `when:` block that will not run as skipped — so a
- * run where the block was skipped (unmet guard, errored guard, hard stop, or
- * cancellation) produces the same report shape (one line per authored step,
- * at the same depth) as a run where it entered, and reports stay comparable
- * run-to-run. Nested when blocks expand (their literal steps are known); a
- * `run:` composition stays one line, matching how post-hard-stop skips report
+ * Report every step of a block directive that will not run as skipped — so a
+ * run where the block was skipped (a `when:` guard unmet or errored, a hard
+ * stop, a cancellation) produces the same report shape (one line per authored
+ * step, at the same depth) as a run where it entered, and reports stay
+ * comparable run-to-run. Nested blocks expand (their literal steps are known);
+ * a `run:` composition stays one line, matching how post-hard-stop skips report
  * a fragment that was never loaded. `scope` is the scope the steps would have
  * executed in — already the block's child scope, not the marker's.
  */
@@ -1811,7 +2009,29 @@ function reportBlockSkipped(
       ...depthOf(scope),
       ...(step.kind === "echo" ? { message: step.message } : {}),
     });
-    if (step.kind === "when") reportBlockSkipped(state, step.steps, childScope(scope), reason);
+    const inner = blockSteps(step);
+    if (inner) reportBlockSkipped(state, inner, childScope(scope), reason);
+  }
+}
+
+/**
+ * Dispatch a block directive to its executor. The `never` default arm is the
+ * run-time site a kind registered in BLOCK_DIRECTIVE_KEYS cannot miss: an
+ * unhandled registered kind fails tsc here instead of returning silently and
+ * leaving the block out of the report entirely, not even its own marker.
+ * Preventing execLeafStep's "unsupported step kind" error is the isBlockStep
+ * gate's doing, not this arm's - a registered kind never reaches the leaf
+ * switch. Binds `step.kind` rather than `step` - while the registry has one
+ * entry BlockStep is not a union, so only the discriminant narrows to `never`.
+ */
+async function execBlockStep(state: ExecState, step: BlockStep, scope: StepScope): Promise<void> {
+  switch (step.kind) {
+    case "when":
+      return execWhenStep(state, step, scope);
+    default: {
+      const unhandled: never = step.kind;
+      void unhandled;
+    }
   }
 }
 
@@ -2223,12 +2443,23 @@ async function execLeafStep(
       }
       try {
         // These sub-tools can change (or relaunch) the foreground app, so the
-        // `launch:`-derived hint no longer names what is on screen. Cleared
+        // `launch:`-derived hint no longer names what is on screen, and a
+        // relaunch is the repair a proven tree outage asks for by name - the
+        // same clear `runLaunch` makes for the directive spelling. Cleared
         // BEFORE invoking: a tool that throws mid-way may still have switched
-        // apps, and a stale hint is worse than no hint (tree reads fall back
-        // to plain auto-resolution, today's behavior).
+        // apps, and a stale hint is worse than no hint (tree reads fall back to
+        // plain auto-resolution, today's behavior).
         if (FOREGROUND_CHANGING_TOOLS.has(step.name)) {
           state.launchedNativeApp = undefined;
+          if (state.treeOutage) state.treeOutage.proven = undefined;
+        }
+        // A nested orchestrator runs its tools outside this run's holder -
+        // `flow-execute` on an ExecState of its own, `run-sequence` on none -
+        // so a tree read or relaunch inside it retires nothing here. Cleared
+        // before the invoke for the same reason as above, and over-clearing
+        // only costs a later gesture a window it would have skipped.
+        if (isNestedOrchestratorTool(step.name) && state.treeOutage) {
+          state.treeOutage.proven = undefined;
         }
         const result = await invokeSubTool(registry, ctx, step.name, args);
         if (isUnmetUiWaitResult(step.name, result)) {
@@ -2271,6 +2502,34 @@ async function execLeafStep(
             outputHint,
             args,
           };
+        }
+        // Same hazard as the two above, on the native-devtools precheck: it
+        // RESOLVES its block rather than throwing, so a step that never reached
+        // the tool's work read as green — and a saved regression flow reported
+        // `ok: true` for a native read that returned nothing. `launch:` already
+        // guards its own `restart-app` (see runLaunch); this is the `tool:`
+        // spelling of the same sub-tools, plus the six feature tools it never
+        // covered.
+        if (isNativeDevtoolsBlockResult(step.name, result)) {
+          return {
+            ...base,
+            status: "fail",
+            tool: step.name,
+            reason: `${step.name} did not run (${result.status}): ${result.message}`,
+            result,
+            outputHint,
+            args,
+          };
+        }
+        // The launch-derived hint the clear above spent, restored for the two
+        // tools whose args name the app they just started: they change WHICH
+        // app is in front, not whether the run has one, so discarding the id
+        // drops the iOS tree source back to auto-targeting's "Launch or restart
+        // the app first" — the very advice the measured diagnosis replaces.
+        // After the invoke, like `runLaunch`: a tool that threw started nothing.
+        if (step.name === "launch-app" || step.name === "restart-app") {
+          const launched = (args as { bundleId?: unknown }).bundleId;
+          if (typeof launched === "string") state.launchedNativeApp = launched;
         }
         return { ...base, status: "pass", tool: step.name, result, outputHint, args };
       } catch (err) {

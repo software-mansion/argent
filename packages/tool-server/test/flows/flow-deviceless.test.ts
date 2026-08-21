@@ -6,7 +6,11 @@ import type { Registry } from "@argent/registry";
 import { zodObjectToJsonSchema } from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow, type FlowStep } from "../../src/tools/flows/flow-utils";
-import { stepRequiresDevice } from "../../src/tools/flows/flow-device";
+import {
+  flowRequiresDevice,
+  flowScopesDevice,
+  stepRequiresDevice,
+} from "../../src/tools/flows/flow-device";
 import { createStopAllSimulatorServersTool } from "../../src/tools/simulator/stop-all-simulator-servers";
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab";
@@ -324,6 +328,117 @@ describe("stepRequiresDevice", () => {
       stepRequiresDevice(registry, { kind: "tool", name: "stop-all-simulator-servers", args: {} })
     ).toBe(false);
     expect(stepRequiresDevice(registry, { kind: "tool", name: "tap", args: {} })).toBe(true);
+  });
+});
+
+describe("flowRequiresDevice", () => {
+  // These pin the function's ANSWERS. With `when` the only block kind, its
+  // header decides every case - no FlowStep value can exercise the child walk.
+  const whenOver = (steps: FlowStep[]): FlowStep => ({
+    kind: "when",
+    condition: { kind: "platform", platform: "ios" },
+    steps,
+  });
+
+  it("answers false for an empty flow", () => {
+    const { registry } = mockRegistry();
+    expect(flowRequiresDevice(registry, [])).toBe(false);
+  });
+
+  it("answers false for narration and waits alone", () => {
+    const { registry } = mockRegistry();
+    expect(
+      flowRequiresDevice(registry, [
+        { kind: "echo", message: "hi" },
+        { kind: "wait", ms: 1 },
+      ])
+    ).toBe(false);
+  });
+
+  it("answers false for a tool step whose tool takes no device", () => {
+    const { registry } = mockRegistry();
+    expect(
+      flowRequiresDevice(registry, [{ kind: "tool", name: "stop-metro", args: { port: 8081 } }])
+    ).toBe(false);
+  });
+
+  it("answers true for a tool step whose tool declares a device argument", () => {
+    const { registry } = mockRegistry();
+    expect(flowRequiresDevice(registry, [{ kind: "tool", name: "tap", args: {} }])).toBe(true);
+  });
+
+  it("answers true for a when over a device-free body - the guard reads the device", () => {
+    const { registry } = mockRegistry();
+    expect(flowRequiresDevice(registry, [whenOver([{ kind: "echo", message: "quiet" }])])).toBe(
+      true
+    );
+  });
+
+  it("answers true for a when nested three deep", () => {
+    const { registry } = mockRegistry();
+    expect(flowRequiresDevice(registry, [whenOver([whenOver([whenOver([])])])])).toBe(true);
+  });
+
+  it("answers true when only a later step in a mixed list needs a device", () => {
+    const { registry } = mockRegistry();
+    expect(
+      flowRequiresDevice(registry, [
+        { kind: "echo", message: "about to tap" },
+        { kind: "tool", name: "stop-metro", args: { port: 8081 } },
+        { kind: "tap", x: 0.5, y: 0.5 },
+      ])
+    ).toBe(true);
+  });
+});
+
+describe("flowScopesDevice", () => {
+  // These pin the function's ANSWERS. The child walk shows in them - unlike
+  // `flowRequiresDevice`, a `when` header scopes nothing itself - but only
+  // under a direct call: a run reaches this question only once
+  // `flowRequiresDevice` said no, and `when`, the only block kind, answers that
+  // one yes for any flow holding a block.
+  const whenOver = (steps: FlowStep[]): FlowStep => ({
+    kind: "when",
+    condition: { kind: "platform", platform: "ios" },
+    steps,
+  });
+  const teardown: FlowStep = { kind: "tool", name: "stop-all-simulator-servers", args: {} };
+
+  it("answers false for an empty flow", () => {
+    const { registry } = mockRegistry();
+    expect(flowScopesDevice(registry, [])).toBe(false);
+  });
+
+  it("answers false for a tool step whose tool declares no device scope", () => {
+    const { registry } = mockRegistry();
+    expect(
+      flowScopesDevice(registry, [
+        { kind: "echo", message: "hi" },
+        { kind: "tool", name: "stop-metro", args: { port: 8081 } },
+      ])
+    ).toBe(false);
+  });
+
+  it("answers false for a device TARGET argument - a target is not a scope", () => {
+    const { registry } = mockRegistry();
+    expect(flowScopesDevice(registry, [{ kind: "tool", name: "tap", args: {} }])).toBe(false);
+  });
+
+  it("answers true for a tool step whose tool declares a device LIST scope", () => {
+    const { registry } = mockRegistry();
+    expect(flowScopesDevice(registry, [teardown])).toBe(true);
+  });
+
+  it("answers false for a when over a body that scopes nothing", () => {
+    const { registry } = mockRegistry();
+    expect(flowScopesDevice(registry, [whenOver([{ kind: "echo", message: "quiet" }])])).toBe(
+      false
+    );
+  });
+
+  it("answers true for a scope inside a when, nested three deep", () => {
+    const { registry } = mockRegistry();
+    expect(flowScopesDevice(registry, [whenOver([whenOver([whenOver([teardown])])])])).toBe(true);
   });
 });
 

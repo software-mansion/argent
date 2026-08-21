@@ -9,7 +9,8 @@ import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/co
 // full-hierarchy source and hard-fail rather than degrade to the AX tree, so
 // these unit tests stub the tree fetch itself.
 let currentTree: () => DescribeNode;
-vi.mock("../../src/tools/flows/flow-tree", () => ({
+vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/tools/flows/flow-tree")>()),
   fetchFlowTree: vi.fn(
     async (): Promise<DescribeTreeData> => ({
       tree: currentTree(),
@@ -182,10 +183,13 @@ describe("pinch: execution", () => {
     expect(args).not.toHaveProperty("endCenterY");
   });
 
-  it("defaults to the screen center when no selector is given (no tree read)", async () => {
-    currentTree = () => {
-      throw new Error("must not read the tree for a selector-less pinch");
-    };
+  it("defaults to the screen center and span when no selector is given, not to a node on screen", async () => {
+    // Non-empty on purpose: against an empty tree a pinch that wrongly resolved
+    // a frame would find none and fall back to the center anyway, so nothing
+    // told the two apart. This node would give centerX 0.2, centerY 0.75 and a
+    // 0.24 start span instead.
+    currentTree = () =>
+      screen([n({ label: "Panel", frame: { x: 0.05, y: 0.7, width: 0.3, height: 0.1 } })]);
     await writeFlow("pinch-center", {
       executionPrerequisite: "",
       steps: [{ kind: "pinch", scale: 0.5 }],

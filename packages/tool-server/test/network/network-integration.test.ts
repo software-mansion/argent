@@ -6,6 +6,12 @@ import { jsRuntimeDebuggerBlueprint } from "../../src/blueprints/js-runtime-debu
 import { networkInspectorBlueprint } from "../../src/blueprints/network-inspector";
 import { networkLogsTool } from "../../src/tools/network/network-logs";
 import { networkRequestTool } from "../../src/tools/network/network-request";
+import { scopeTempHome } from "../helpers/temp-home";
+
+// The JS-runtime-debugger / network blueprints build a real LogFileWriter,
+// whose constructor mkdir -p's os.homedir()/.argent/tmp. Keep that out of the
+// developer's real home.
+scopeTempHome("argent-network-integration-home-");
 
 /**
  * Integration test using a mock Metro HTTP + CDP WebSocket server.

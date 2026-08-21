@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -9,12 +9,26 @@ import {
   readCpuProfile,
   readCommitTree,
 } from "../../src/utils/react-profiler/debug/dump";
+import { redirectTmpdir } from "../helpers/tmpdir-env";
 
-const DEBUG_DIR = join(tmpdir(), "argent-profiler-cwd");
+// getDebugDir() resolves join(os.tmpdir(), "argent-profiler-cwd"). Point the
+// tmpdir at a scratch dir per test so the fixed dump filenames below
+// (test-dump.json, cpu-profile.json, …) land somewhere this run owns: against
+// the machine-wide /tmp/argent-profiler-cwd a concurrent run writes and unlinks
+// those very names underneath us.
+const debugDir = () => join(tmpdir(), "argent-profiler-cwd");
+
+let restoreTmpdir: () => void;
+let scratch: string;
+
+beforeEach(async () => {
+  scratch = await fs.mkdtemp(join(tmpdir(), "argent-profiler-dump-test-"));
+  restoreTmpdir = redirectTmpdir(scratch);
+});
 
 afterEach(async () => {
-  // Clean up any files written during tests, but leave the directory itself
-  // (it may already exist on the system — don't remove it wholesale).
+  restoreTmpdir();
+  await fs.rm(scratch, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
 
@@ -30,7 +44,7 @@ describe("getDebugDir", () => {
 
   it("returns a path inside os.tmpdir()", async () => {
     const dir = await getDebugDir();
-    expect(dir).toBe(join(tmpdir(), "argent-profiler-cwd"));
+    expect(dir).toBe(debugDir());
   });
 
   it("creates the directory on disk", async () => {
@@ -42,7 +56,7 @@ describe("getDebugDir", () => {
   it("is idempotent — succeeds even if directory already exists", async () => {
     await getDebugDir();
     // Second call must not throw.
-    await expect(getDebugDir()).resolves.toBe(DEBUG_DIR);
+    await expect(getDebugDir()).resolves.toBe(debugDir());
   });
 
   it("never writes inside the current working directory", async () => {
