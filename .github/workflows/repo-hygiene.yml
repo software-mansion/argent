@@ -38,5 +38,16 @@ jobs:
             exit 1
           fi
 
+      - name: No no-break spaces
+        # U+00A0 looks like a space but is not one: a reader who copies
+        # `argent init` out of the docs gets "argent init: command not found".
+        # Spelled as bytes rather than `grep -P '\x{00a0}'` so the check does
+        # not depend on git being built with PCRE.
+        run: |
+          if git grep -nIF "$(printf '\302\240')"; then
+            echo "::error::No-break space (U+00A0) found in tracked files — use a plain space."
+            exit 1
+          fi
+
       - name: Workspace versions in sync
         run: node scripts/check-workspace-versions.mjs

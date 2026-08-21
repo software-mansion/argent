@@ -197,4 +197,20 @@ describe("ensureToolsServer", () => {
     expect(handle.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     expect(await launcher.isToolsServerHealthy(fresh!.port, "127.0.0.1")).toBe(true);
   });
+
+  it("binds the child to 127.0.0.1 even when ARGENT_HOST names another address", async () => {
+    // ::1 is IPv6-loopback only, so a child that took the export would not
+    // answer on the 127.0.0.1 the handle and the state file both promise.
+    process.env.ARGENT_HOST = "::1";
+    try {
+      const handle = await launcher.ensureToolsServer(fakePaths());
+      const state = await launcher.readToolsServerState(FAKE_BUNDLE);
+      spawnedPids.push(state!.pid);
+
+      expect(handle.url).toBe(`http://127.0.0.1:${state!.port}`);
+      expect(await launcher.isToolsServerHealthy(state!.port, "127.0.0.1")).toBe(true);
+    } finally {
+      delete process.env.ARGENT_HOST;
+    }
+  });
 });

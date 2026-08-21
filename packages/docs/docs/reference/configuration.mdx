@@ -173,15 +173,15 @@ An environment variable changes the behavior of the process that reads it. Expor
 
 ### Tool-server
 
-| Variable                      | Default                              | Description                                                                                         |
-| ----------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------- |
-| `ARGENT_PORT`                 | `3001`                               | The port the tool-server listens on                                                                 |
-| `ARGENT_HOST`                 | `127.0.0.1`                          | The address the tool-server binds to                                                                |
-| `ARGENT_IDLE_TIMEOUT_MINUTES` | `0`                                  | Minutes without a request after which the tool-server exits. `0` disables the timeout               |
-| `ARGENT_EVENT_LOG`            | `~/.argent/tool-server-events.jsonl` | Path of the event log that the `tool-server-event-log` flag writes                                  |
-| `ARGENT_SCREENSHOT_SCALE`     | `0.3`                                | Scale factor of a captured screenshot, between `0` and `1`. A smaller value returns a smaller image |
-| `ARGENT_CHROMIUM_PORTS`       | empty                                | Comma-separated CDP ports that Argent probes for Chromium apps, in addition to `9222`               |
-| `ARGENT_CHROMIUM_PORTS_FILE`  | `~/.argent/chromium-cdp-ports.json`  | Path of the file that remembers the CDP ports of apps that Argent started                           |
+| Variable                      | Default                              | Description                                                                                                                                                                                                           |
+| ----------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ARGENT_PORT`                 | `3001`                               | The port the tool-server listens on. Set it with `argent server start --port`; a tool-server that Argent starts on demand takes a free port                                                                           |
+| `ARGENT_HOST`                 | `127.0.0.1`                          | The address the tool-server binds to. Set it with `argent server start --host`; a tool-server that Argent starts on demand always binds `127.0.0.1`                                                                   |
+| `ARGENT_IDLE_TIMEOUT_MINUTES` | `0`                                  | Minutes without a request after which the tool-server exits. Set it with `argent server start --idle-timeout`, where `0` disables the timeout; a tool-server that Argent starts on demand exits after 30 idle minutes |
+| `ARGENT_EVENT_LOG`            | `~/.argent/tool-server-events.jsonl` | Path of the event log that the `tool-server-event-log` flag writes                                                                                                                                                    |
+| `ARGENT_SCREENSHOT_SCALE`     | `0.3`                                | Scale factor of a captured screenshot, between `0` and `1`. A smaller value returns a smaller image                                                                                                                   |
+| `ARGENT_CHROMIUM_PORTS`       | empty                                | Comma-separated CDP ports that Argent probes for Chromium apps, in addition to `9222`                                                                                                                                 |
+| `ARGENT_CHROMIUM_PORTS_FILE`  | `~/.argent/chromium-cdp-ports.json`  | Path of the file that remembers the CDP ports of apps that Argent started                                                                                                                                             |
 
 ### Devices
 

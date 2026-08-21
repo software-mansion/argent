@@ -26,6 +26,12 @@ export const AUTH_TOKEN_ENV = "ARGENT_AUTH_TOKEN";
 // timeout.
 const AUTOSPAWN_IDLE_TIMEOUT_MINUTES = 30;
 
+// Bind address for auto-spawned servers. Passed to the child explicitly, not
+// left to the tool-server's own default: the child inherits this process's
+// environment, so an exported ARGENT_HOST would otherwise bind it away from
+// the url and state file recorded here.
+const AUTOSPAWN_HOST = "127.0.0.1";
+
 /**
  * Filesystem locations the launcher needs to spawn tool-server. Provided by
  * the consuming package (typically the published `@swmansion/argent`), since
@@ -62,7 +68,10 @@ export interface ToolsServerPaths {
 }
 
 export interface BuildToolsServerEnvOptions {
-  /** Bind host. Omit to inherit the tool-server default (127.0.0.1). */
+  /**
+   * Bind host, exported as `ARGENT_HOST`. Omitting it leaves the key at
+   * whatever `baseEnv` carries — for `process.env`, the developer's own export.
+   */
   host?: string;
   /** Idle-timeout minutes (0 disables). Omit to inherit the tool-server default. */
   idleTimeoutMinutes?: number;
@@ -957,6 +966,7 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsS
     const port = await findFreePort();
     const { port: actualPort, pid } = await spawnToolsServer(paths, port, {
       token,
+      host: AUTOSPAWN_HOST,
       idleTimeoutMinutes: AUTOSPAWN_IDLE_TIMEOUT_MINUTES,
     });
 
@@ -966,12 +976,12 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsS
       startedAt: new Date().toISOString(),
       bundlePath: paths.bundlePath,
       version: diskVersion,
-      host: "127.0.0.1",
+      host: AUTOSPAWN_HOST,
       token,
       managed: "autospawn",
     });
 
-    return { url: formatUrl("127.0.0.1", actualPort), token };
+    return { url: formatUrl(AUTOSPAWN_HOST, actualPort), token };
   } finally {
     lock?.release();
   }

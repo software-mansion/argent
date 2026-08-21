@@ -6,6 +6,21 @@ const path = require("path");
 const lightCodeTheme = require("prism-react-renderer").themes.github;
 const darkCodeTheme = require("prism-react-renderer").themes.vsDark;
 
+// DocSearch credentials. Argent has no Algolia application of its own yet, so
+// an ordinary build has none and the block is left out of themeConfig
+// altogether: the classic preset loads the search theme only when it is there,
+// and a search UI without credentials answers every query with "no results".
+const algolia =
+  process.env.ALGOLIA_APP_ID && process.env.ALGOLIA_API_KEY
+    ? {
+        appId: process.env.ALGOLIA_APP_ID,
+        apiKey: process.env.ALGOLIA_API_KEY,
+        indexName: process.env.ALGOLIA_INDEX_NAME ?? "argent",
+        // The site is unversioned, so there are no version facets to filter by.
+        contextualSearch: false,
+      }
+    : undefined;
+
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   title: "Argent",
@@ -90,18 +105,7 @@ const config = {
         links: [],
         copyright: "All trademarks and copyrights belong to their respective owners.",
       },
-      // @swmansion/t-rex-ui always renders a DocSearch bar, so an Algolia block has
-      // to be present (the classic preset pulls in the search theme from it).
-      // Credentials come from the environment until Argent has its own DocSearch
-      // application; the bar stays hidden while they are unset, see the
-      // navbarSearchWrapper rule in src/css/overrides.css.
-      algolia: {
-        appId: process.env.ALGOLIA_APP_ID ?? "ARGENT_DOCSEARCH_APP_ID",
-        apiKey: process.env.ALGOLIA_API_KEY ?? "ARGENT_DOCSEARCH_API_KEY",
-        indexName: process.env.ALGOLIA_INDEX_NAME ?? "argent",
-        // The site is unversioned, so there are no version facets to filter by.
-        contextualSearch: false,
-      },
+      ...(algolia ? { algolia } : {}),
       prism: {
         additionalLanguages: ["bash", "diff", "json", "toml", "yaml"],
         theme: lightCodeTheme,
@@ -110,6 +114,9 @@ const config = {
     }),
   plugins: [
     process.env.NODE_ENV !== "production" && "@docusaurus/plugin-debug",
+    // Supplies @theme/SearchTranslations, which the search theme owns and the
+    // shared theme's navbar pulls into the bundle either way.
+    !algolia && require.resolve("./plugins/search-translations-fallback"),
     // Renders one Open Graph card per page after the build and rewrites the
     // social image tags of every built HTML file to point at it.
     require.resolve("./plugins/og-image"),
