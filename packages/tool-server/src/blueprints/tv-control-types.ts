@@ -16,6 +16,16 @@ export interface TvElement {
   traits?: string[];
   value?: string;
   isFocused?: boolean;
+  /**
+   * Normalized 0..1 rect. The tvOS daemon has always reported this (and a
+   * `tapPoint`) — the field simply went undeclared, while `describe`'s focus
+   * rendering drops it because a TV is navigated with the D-pad rather than by
+   * coordinate. Declared now because the wait tools adapt this element into a
+   * describe tree, where the frame drives visibility and reading order.
+   * Absent on backends that report no bounds (Android TV's focus view) and for
+   * zero-size elements, so every consumer must tolerate it missing.
+   */
+  frame?: { x: number; y: number; width: number; height: number };
 }
 
 export interface TvDescribeResponse {
