@@ -8,9 +8,7 @@ export interface AllowlistResult {
   lines: string[];
 }
 
-// Tool auto-approval step. Returns whether allowlisting was enabled (so the
-// orchestrator can emit allowlist_decision) and the per-adapter summary lines.
-// Throws InitCancelled("allowlist") on cancel.
+// `enabled` is returned so the caller can emit the allowlist_decision telemetry event.
 export async function configureAllowlist(args: {
   adapters: McpConfigAdapter[];
   effectiveRoot: string;

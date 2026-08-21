@@ -12,17 +12,9 @@ import {
   TELEMETRY_DETAILS_URL,
 } from "@argent/telemetry";
 
-/** The command users run to turn telemetry back on after disabling it. */
 const TELEMETRY_OPT_IN_COMMAND = "argent telemetry enable";
 
-/**
- * Print the telemetry notice, once per installation. Shared by
- * `argent update` and the non-interactive `argent init` path so both surfaces
- * render the same informational message; the marker is cleared on uninstall so
- * reinstalls show it again. The opt-out command is highlighted in cyan to match
- * how commands are styled elsewhere in the flow. No-op when telemetry is
- * disabled or already shown this installation.
- */
+/** Print the telemetry notice, once per installation. */
 export function printFirstRunNotice(): void {
   if (!shouldShowFirstRunNotice()) return;
   p.log.info(
@@ -44,32 +36,27 @@ export type TelemetryConsentOutcome =
   | { kind: "cancelled" };
 
 /**
- * Resolve telemetry consent for `argent init`, BEFORE the first track() call so
- * the user's choice governs whether this session's installation events are
- * collected at all.
+ * Resolve telemetry consent before the first track() call, so the choice
+ * governs whether this session's events are collected at all.
  *
  * Precedence:
  *  1. `--no-telemetry` — always disables, prompt or not.
- *  2. Non-interactive (`--yes`) — keep the default-on (opt-out) model and just
- *     surface the informational notice; there is no TTY to prompt on.
+ *  2. Non-interactive (`--yes`) — no TTY to prompt on; keep the default-on
+ *     model and just surface the notice.
  *  3. An env override (DO_NOT_TRACK / ARGENT_TELEMETRY) already owns the
- *     decision and config can't override it, so don't prompt.
- *  4. Already decided on a previous install — honor it, don't re-ask.
+ *     decision and config can't override it.
+ *  4. Already decided on a previous install — honor it.
  *  5. Interactive first run — ask, defaulting the selection to Enabled.
  *
- * An interactive choice (case 5) takes effect for THIS session immediately via
- * an in-process override, but is only persisted — and the notice only marked
- * shown — when the caller invokes the returned `commit()`. init defers that to
- * a completed install, so a user who picks a value then aborts setup is
- * re-prompted next run instead of silently inheriting the abandoned choice. The
- * `--no-telemetry` flag (case 1) is an explicit, durable opt-out and persists
- * right away.
+ * A choice from case 5 takes effect for THIS session immediately, but is only
+ * persisted — and the notice only marked shown — when the caller invokes the
+ * returned `commit()`. Case 1 persists right away.
  */
 export async function resolveTelemetryConsent(opts: {
   nonInteractive: boolean;
   disableFlag: boolean;
 }): Promise<TelemetryConsentOutcome> {
-  // 1. Explicit --no-telemetry wins in every mode.
+  // 1. --no-telemetry wins in every mode.
   if (opts.disableFlag) {
     writeConsentFlag(false);
     markFirstRunNoticeShown();
@@ -83,15 +70,14 @@ export async function resolveTelemetryConsent(opts: {
     return { kind: "skipped" };
   }
 
-  // 3/4. Don't prompt when an env override owns the decision, or when the user
-  // already chose on a previous install.
+  // 3/4. An env override owns the decision, or the user already chose.
   const source = getConsentState().source.source;
   const envOwnsDecision = source === "env_do_not_track" || source === "env_argent_telemetry";
   if (envOwnsDecision || hasShownFirstRunNotice()) {
     return { kind: "skipped" };
   }
 
-  // 5. Interactive first run: explain what we collect, then ask.
+  // 5. Interactive first run.
   p.log.info(
     [
       pc.bold("Telemetry"),
@@ -111,14 +97,13 @@ export async function resolveTelemetryConsent(opts: {
   });
 
   if (p.isCancel(choice)) {
-    // Caller cancels init without tracking — the user agreed to nothing.
+    // Caller cancels without tracking — the user agreed to nothing.
     return { kind: "cancelled" };
   }
 
   const enabled = choice === "enabled";
-  // Make the pick effective for this session right away, but defer the durable
-  // write: committing only on a completed install means an aborted init re-asks
-  // next run rather than remembering a choice the user backed out of.
+  // Effective this session right away; the durable write is deferred to
+  // commit() so an aborted init re-asks next run.
   setSessionConsentOverride(enabled);
   const commit = (): void => {
     writeConsentFlag(enabled);

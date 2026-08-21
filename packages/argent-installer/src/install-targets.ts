@@ -3,13 +3,7 @@ import { PACKAGE_NAME } from "./constants.js";
 import type { InstallMode } from "./install-record.js";
 
 // `update` and `uninstall` act on an install "target": the global PATH binary,
-// the project's local devDependency, or both. Shared selection rules:
-//   1. Explicit --global / --local flags win and are additive.
-//   2. Only one install present: act on it, no prompt.
-//   3. Both coexist: prompt interactively (see promptInstallTargets); when
-//      non-interactive, fall back to a caller-chosen default so agent-triggered
-//      runs never block on a prompt.
-// Single-install behavior is unchanged; only the ambiguous coexist case is new.
+// the project's local devDependency, or both.
 
 export type TargetFlags = { global: boolean; local: boolean };
 
@@ -20,21 +14,21 @@ export function parseTargetFlags(args: string[]): TargetFlags {
 export interface DecideTargetsContext {
   /** A global install exists on PATH. */
   globalPresent: boolean;
-  /** A local install is present for this project (declared devDep / installed). */
+  /** The project's devDependency is both declared and installed. */
   localPresent: boolean;
   /**
-   * Target when only one selection is unambiguous: local if materialized, else
-   * global if on PATH, else the project's recorded mode (so guidance paths
-   * still run when nothing is installed).
+   * Target when the choice is unambiguous. Callers pass the install that is
+   * actually PRESENT, falling back to the recorded mode so guidance paths still
+   * run when nothing is installed.
    */
   defaultTarget: InstallMode;
   flags: TargetFlags;
   nonInteractive: boolean;
   /**
    * Targets when both installs coexist and no prompt is possible. `update`
-   * passes ["global", "local"] (updating both is safe); `uninstall` passes
-   * ["local"] — removal is destructive and the global install is shared with
-   * other projects, so `-y` never removes it without an explicit --global.
+   * passes both (updating both is safe); `uninstall` passes ["local"] — the
+   * global install is shared with other projects, so `-y` never removes it
+   * without an explicit --global.
    */
   nonInteractiveBothDefault: InstallMode[];
 }
@@ -43,14 +37,13 @@ export type TargetDecision =
   | { kind: "targets"; targets: InstallMode[]; reason: "flags" | "single" | "noninteractive-both" }
   | { kind: "prompt" };
 
-// Pure target resolver — no I/O, so the whole selection matrix is unit-testable.
+// No I/O, so the whole selection matrix is unit-testable.
 export function decideInstallTargets(ctx: DecideTargetsContext): TargetDecision {
   const { flags } = ctx;
 
-  // Explicit flags win and are additive. A flag naming an absent install is
-  // deliberately NOT an error — the per-command handler resolves it: `update`
-  // installs a missing global (a missing local points at `argent init`),
-  // `uninstall` reports there was nothing to remove.
+  // A flag naming an absent install is deliberately NOT an error — the
+  // per-command handler resolves it: `update` offers to install a missing
+  // global, `uninstall` reports there was nothing to remove.
   if (flags.global || flags.local) {
     const targets: InstallMode[] = [];
     if (flags.global) targets.push("global");
@@ -59,7 +52,7 @@ export function decideInstallTargets(ctx: DecideTargetsContext): TargetDecision 
   }
 
   // The only ambiguous case: a global install AND a project-local install both
-  // exist. Everything else keeps the historical single-install default.
+  // exist.
   if (ctx.globalPresent && ctx.localPresent) {
     if (ctx.nonInteractive) {
       return {
@@ -74,12 +67,10 @@ export function decideInstallTargets(ctx: DecideTargetsContext): TargetDecision 
   return { kind: "targets", targets: [ctx.defaultTarget], reason: "single" };
 }
 
-// Interactive multiselect for the coexist case. `verb` shapes the wording AND
-// the preselection, which mirrors the command's non-interactive default so
-// Enter-through-defaults and --yes agree: `update` preselects both; `remove`
-// preselects only the local devDependency — the global install is shared with
-// every other project, so removing it must stay an explicit selection, never
-// the default. Returns "cancel" on Ctrl-C / Esc.
+// Preselection mirrors the command's non-interactive default so
+// Enter-through-defaults and --yes agree: `remove` preselects only the local
+// devDependency — the global install is shared with every other project, so
+// removing it must stay an explicit selection. Returns "cancel" on Ctrl-C / Esc.
 export async function promptInstallTargets(
   verb: "update" | "remove"
 ): Promise<InstallMode[] | "cancel"> {
