@@ -9,9 +9,11 @@ packages/argent-private/
 package-lock.json
 pnpm-lock.yaml
 
-# Docs site — formatted by its own `npm run format` in packages/docs, which
-# shares this repo's .prettierrc.
-packages/docs/
+# Docs site — Docusaurus output and generated files.
+packages/docs/build/
+packages/docs/.docusaurus/
+packages/docs/skills-lock.json
+packages/docs/static/
 
 # Generated.
 **/tsconfig.tsbuildinfo

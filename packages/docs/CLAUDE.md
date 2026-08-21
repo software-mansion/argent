@@ -53,13 +53,13 @@ Run `npx docusaurus build` after editing docs. It fails on broken internal links
 the main thing to catch after moving or renaming a page (also update any `/docs/...` links
 that pointed at the old path).
 
-Run `npm run format` after editing docs, and `npm run lint` from the repo root after editing
-`src/`. Prettier reads the `.prettierrc` at the repo root, so this site and the packages share
-one style. ESLint uses the root `eslint.config.mjs`, which lints `packages/docs/` with the
-same type-aware rules as the packages plus the React hooks rules for `src/`. The root lint
+Run `npm run format` and `npm run lint` from the repo root after editing docs or `src/`.
+Prettier and ESLint both run from the root. The root `.prettierrc` and `.prettierignore` cover
+this site together with the packages. The root `eslint.config.mjs` lints `packages/docs/` with
+the same type-aware rules as the packages plus the React hooks rules for `src/`. The root lint
 needs the dependencies of this package installed (`npm install` in this directory) because
 `tsconfig.json` extends `@docusaurus/tsconfig`.
 
-The `Docs build` workflow runs `format:check`, `typecheck` and `build` on every pull request
-that touches `packages/docs/`. The `Lint` workflow runs the root ESLint, which includes this
-package.
+The `Docs build` workflow runs `typecheck` and `build` on every pull request that touches
+`packages/docs/`. The `Format` and `Lint` workflows run the root Prettier and ESLint, which
+include this package.

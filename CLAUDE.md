@@ -15,4 +15,5 @@ Update the docs in the same pull request as the change:
 
 If no docs update is needed, say so in the pull request description.
 
-After editing docs, run `npx docusaurus build` and `npm run format` in `packages/docs/`.
+After editing docs, run `npx docusaurus build` in `packages/docs/` and `npm run format` from the
+repo root.
