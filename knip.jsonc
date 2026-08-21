@@ -35,11 +35,6 @@
   // puts a package.json where the root `packages/*` glob matches it.
   "ignoreWorkspaces": ["packages/argent-private"],
 
-  // packages/docs, the standalone Docusaurus site, needs no entry here: it keeps
-  // its own package.json and lockfile and is negated out of the root
-  // `packages/*` glob, so knip never resolves it as a workspace and never reads
-  // the pages, components and theme overrides Docusaurus wires up by convention.
-
   "workspaces": {
     // Knip finds the root scripts on its own — via package.json `scripts`, the
     // scripts/*.test.mjs files those run, and `run:` steps in .github/workflows.
