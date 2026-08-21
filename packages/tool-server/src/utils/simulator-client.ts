@@ -20,11 +20,9 @@ import * as os from "node:os";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
-// Screenshots are billed to the agent's context by pixel area, so this is the
-// single biggest lever on what a capture costs. 0.25 is the smallest scale at
-// which both Opus 5 and Haiku 4.5 still read every label, handle, count and
-// selected-tab underline on a real app; at 0.15 Haiku starts misreading
-// adjacent rows as each other, confidently and silently.
+// Context cost is pixel area, so this constant is the whole lever. 0.25 is the
+// lowest scale where Opus 5 and Haiku 4.5 both still read every label, count and
+// selected-tab underline; below it they misread adjacent rows as each other.
 const DEFAULT_SCREENSHOT_SCALE = 0.25;
 
 // A simulator-server captures screenshots from its live frame stream, so the
