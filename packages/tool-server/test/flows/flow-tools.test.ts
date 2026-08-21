@@ -545,7 +545,9 @@ describe("flow-add-step", () => {
       "1. tool: screenshot {} (after 250ms)",
       "2. tap: (0.5, 0.3) ×2",
     ]);
-    // The finished summary and each step's `recorded` line are the same spelling.
+    // The finished summary and each step's `recorded` line are the same
+    // spelling. This whole-array compare works only because neither step is an
+    // `await-ui-element`, which adds a `warning:` line with no counterpart.
     expect(finished.summary).toEqual([delayed.recorded, doubled.recorded]);
   });
 
@@ -2783,6 +2785,19 @@ describe("summarizeStep rendering", () => {
     );
   });
 
+  it("renders a multi-field selector independently of its key order", () => {
+    // This render is also the step anchor. The anchor compares an in-memory
+    // selector, whose key order comes from the source object, with one from
+    // `parseSelector`, whose key order comes from the zod schema. If the two
+    // spellings render differently, the recording loses every verdict, and
+    // nothing in the payload shows it. Today `deriveSelector` returns one field
+    // on every branch, so nothing else pins this.
+    const a = summarizeStep({ kind: "tap", selector: { identifier: "b", text: "Go" } }, 1);
+    const b = summarizeStep({ kind: "tap", selector: { text: "Go", identifier: "b" } }, 1);
+    expect(a).toBe(b);
+    expect(a).toBe('1. tap: {"id":"b","text":"Go"}');
+  });
+
   it("renders a long-press hold duration", () => {
     expect(
       summarizeStep({ kind: "long-press", selector: { text: "Row" }, duration: 1200 }, 3)
@@ -2847,7 +2862,7 @@ describe("summarizeStep rendering", () => {
   });
 
   it("renders the delay a quoted number really sleeps", () => {
-    // A quoted numeric is an ordinary slip in the hand-edit workflow, and it is
+    // A quoted numeric is an ordinary slip in the post-finish hand edit, and it is
     // not inert: the runner's gate is truthiness, and setTimeout coerces the
     // string, so this waits two real seconds on every replay. A `typeof` check
     // rendered nothing at all for it.

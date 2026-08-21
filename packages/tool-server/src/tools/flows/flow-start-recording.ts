@@ -91,16 +91,24 @@ land in another's file. Steps still run LIVE, so give each concurrent recording
 its own device and pick a name unique to your task.
 
 After starting, use flow-add-step to append tool calls — each step is executed
-LIVE so you can verify it works before it gets recorded. For a self-contained
+LIVE so you can verify it works before it gets recorded. Read each step's
+\`message\`: an await-ui-element whose condition never held is still recorded (it
+returns success:false rather than failing), and a check that passes live can
+still fail once polished into an \`await:\`/\`assert:\` directive, which resolves
+against a different tree. flow-add-step warns about both when you record the
+wait DIRECTLY. A wait nested inside a recorded run-sequence gets neither warning
+— that tool reports its own shape — so for those, read \`toolResult\`. For a self-contained
 e2e flow, record a restart-app of the app under test as the FIRST step (captured
 as the flow's \`launch\` step); for a reusable fragment, skip that and pass
 executionPrerequisite instead. Use flow-add-echo to add labels. Call
 flow-finish-recording when done.
 
-If a recorded step turns out to be wrong, you can edit the .yaml file directly
-to remove or reorder steps. Against a remote client, only after
-flow-finish-recording: the in-memory copy is authoritative there, and every
-write serializes it over your edit.`,
+If a recorded step turns out to be wrong, edit the .yaml file directly to
+remove or reorder steps - after flow-finish-recording, not during the
+recording. Against a remote client the in-memory copy is authoritative and
+every write serializes it over your edit; in host mode the recorder re-reads
+the file before each append, so a mid-recording edit renumbers the steps and
+costs the finish the cross-tree verdicts anchored to them.`,
   zodSchema,
   fileInputs,
   services: () => ({}),
