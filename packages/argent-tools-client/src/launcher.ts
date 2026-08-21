@@ -8,28 +8,24 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdir, writeFile, readFile, readdir, unlink, rename, chmod } from "node:fs/promises";
 
 const STATE_DIR = path.join(homedir(), ".argent");
-// Legacy single-slot state file. Read (and cleared when it records the
-// caller's own bundle) for older-argent compat, but never written — each
-// install now has its own per-bundle file (see stateFileForBundle).
+// Legacy single-slot state file: read (and cleared) for older-argent compat,
+// never written — each install now has its own file (see stateFileForBundle).
 const STATE_FILE = path.join(STATE_DIR, "tool-server.json");
 const LOG_FILE = path.join(STATE_DIR, "tool-server.log");
-// Cross-process mutex guarding the "decide whether to spawn, then spawn" critical
-// section of ensureToolsServer (see acquireSpawnLock). Lives next to the state
-// file so it shares the state dir's lifecycle.
+// Cross-process mutex guarding ensureToolsServer's "decide whether to spawn,
+// then spawn" critical section (see acquireSpawnLock).
 const LOCK_FILE = path.join(STATE_DIR, "tool-server.lock");
 
 const AUTH_TOKEN_BYTES = 32;
 export const AUTH_TOKEN_ENV = "ARGENT_AUTH_TOKEN";
 
-// Idle-shutdown policy for auto-spawned servers (MCP / `argent run` path). The
-// CLI's `argent server start` overrides this; manual launches default to no
-// timeout.
+// Idle shutdown for auto-spawned servers only; `argent server start` passes its
+// own (0 = never).
 const AUTOSPAWN_IDLE_TIMEOUT_MINUTES = 30;
 
 /**
- * Filesystem locations the launcher needs to spawn tool-server. Provided by
- * the consuming package (typically the published `@swmansion/argent`), since
- * only that layer knows where its bundled artifacts live.
+ * Filesystem locations needed to spawn tool-server. Provided by the consuming
+ * package (`@swmansion/argent`), which knows where its bundle lives.
  */
 export interface ToolsServerPaths {
   /** Path to the bundled tool-server.cjs */
@@ -39,24 +35,21 @@ export interface ToolsServerPaths {
   /** Directory containing the native devtools dylibs */
   nativeDevtoolsDir: string;
   /**
-   * Installed package version AT MODULE IMPORT. Optional. The version gate
-   * reads the bundle's package.json fresh on every call (see reusableHandle);
-   * this frozen value is only the fallback when that disk read fails.
+   * Package version frozen at module import. Only a fallback: the version gate
+   * re-reads the bundle's package.json on every call (see reusableHandle).
    */
   version?: string;
   /**
-   * Install topology: project-local devDependency or global PATH install.
-   * Optional. Classified by the consuming package AT SPAWN TIME — while its
-   * cwd is still meaningful — and exported as ARGENT_INSTALL_KIND, so tools
-   * like update-argent don't re-infer it from a cwd an editor may have set to
-   * `/` or `$HOME`.
+   * Project-local devDependency vs global PATH install, classified by the
+   * consuming package while its cwd is still meaningful and exported as
+   * ARGENT_INSTALL_KIND, so update-argent need not re-infer it from the
+   * tool-server's editor-chosen cwd (often `/` or `$HOME`).
    */
   installKind?: "global" | "local";
   /**
-   * For a local install, the project root whose node_modules holds the
-   * package. Classified alongside `installKind` and exported as
-   * ARGENT_PROJECT_ROOT, so `argent update --local` can pin the updater's cwd
-   * to the right project instead of the tool-server's editor-chosen cwd.
+   * For a local install, the project root holding the package. Exported as
+   * ARGENT_PROJECT_ROOT so `argent update --local` pins the right project
+   * instead of the tool-server's editor-chosen cwd.
    */
   installProjectRoot?: string;
 }
@@ -67,10 +60,9 @@ export interface BuildToolsServerEnvOptions {
   /** Idle-timeout minutes (0 disables). Omit to inherit the tool-server default. */
   idleTimeoutMinutes?: number;
   /**
-   * Per-process auth token. When set, exported as `ARGENT_AUTH_TOKEN` so the
-   * tool-server enforces `Authorization: Bearer <token>`. Omit (or pass empty)
-   * to run the server with authentication disabled — used by the manual
-   * `argent server start` path, which prints its own no-auth warning.
+   * Auth token, exported as `ARGENT_AUTH_TOKEN` so the tool-server enforces
+   * `Authorization: Bearer <token>`. Omit (or pass empty) to run it
+   * unauthenticated (`argent server start --no-auth`).
    */
   token?: string;
 }
@@ -103,27 +95,23 @@ export interface ToolsServerState {
   startedAt: string;
   bundlePath: string;
   /**
-   * Version of the package that spawned this server. Optional for backward-compat
-   * with state files written by older versions (treated as "unknown" — reused
-   * rather than forcing a respawn). See reusableHandle.
+   * Version of the package that spawned this server. Absent in state files from
+   * older versions, which reusableHandle reuses rather than forcing a respawn.
    */
   version?: string;
-  /** Bind host. Optional for backward-compat with state files written by older versions. */
+  /** Bind host. Absent in state files written by older versions. */
   host?: string;
   /**
-   * Per-process random token. When present, required as
-   * `Authorization: Bearer <token>` on every tool-server request. Persisted
-   * with mode 0600 so other users on the host can't read it. Optional:
-   * `argent server start` writes tokenless (auth-disabled) state.
+   * Random token required as `Authorization: Bearer <token>` on every request.
+   * Persisted 0600 so other users on the host can't read it. Absent when the
+   * server runs unauthenticated (`argent server start --no-auth`).
    */
   token?: string;
   /**
-   * Who owns this server's lifecycle. `autospawn` — spawned on demand by the
-   * MCP / `argent run` path (ensureToolsServer), safe for that path to replace.
-   * `cli` — a long-lived server the user started explicitly with
-   * `argent server start` (possibly under a process supervisor); the auto-spawn
-   * path must NOT terminate it. Absent on legacy state files, which are treated
-   * conservatively as "not ours to kill".
+   * Lifecycle owner. `autospawn` — spawned on demand by ensureToolsServer, safe
+   * for that path to replace. `cli` — started by `argent server start`, possibly
+   * supervisor-managed; the auto-spawn path must NOT terminate it. Absent on
+   * legacy state files, which are treated as "not ours to kill".
    */
   managed?: "autospawn" | "cli";
 }
@@ -138,10 +126,7 @@ function generateToken(): string {
   return randomBytes(AUTH_TOKEN_BYTES).toString("hex");
 }
 
-/**
- * Mint a fresh tool-server auth token. Exposed so `argent server start` can
- * issue one for a long-lived / remote server.
- */
+/** Mint a tool-server auth token. Exposed for `argent server start`. */
 export function generateAuthToken(): string {
   return generateToken();
 }
@@ -166,14 +151,14 @@ export function findFreePort(): Promise<number> {
 }
 
 /**
- * True iff semver `a` is strictly newer than `b`, INCLUDING prerelease
- * precedence — truncating the tag would compare 0.14.0-rc.1 and 0.14.0-rc.2
- * equal and keep reusing a stale server. Anything unparseable compares as
- * "not newer" so the caller reuses rather than kills.
+ * True iff semver `a` is strictly newer than `b`, prereleases included —
+ * truncating the tag would rank 0.14.0-rc.1 and 0.14.0-rc.2 equal and keep
+ * reusing a stale server. Unparseable compares as "not newer", so the caller
+ * reuses rather than kills.
  */
 export function isVersionNewer(a: string, b: string): boolean {
   const parse = (v: string): { nums: number[]; pre: string[] } | null => {
-    // Strip build metadata; split "1.2.3-rc.2" into numeric core + prerelease ids.
+    // Strip build metadata; split into numeric core + prerelease ids.
     const [core = "", ...preParts] = v.split("+")[0]!.split("-");
     const nums = core.split(".").map((n) => Number.parseInt(n, 10));
     if (nums.length === 0 || nums.some((n) => Number.isNaN(n))) return null;
@@ -187,9 +172,8 @@ export function isVersionNewer(a: string, b: string): boolean {
     const y = pb.nums[i] ?? 0;
     if (x !== y) return x > y;
   }
-  // Equal numeric core: per semver, a release outranks its prereleases, and
-  // prerelease identifiers compare field-by-field (numeric < alphanumeric,
-  // numerics numerically, alphanumerics lexically; more fields wins a prefix).
+  // Equal core: per semver a release outranks its prereleases, and prerelease
+  // ids compare field-by-field (numeric < alphanumeric; more fields wins a prefix).
   if (pa.pre.length === 0 && pb.pre.length === 0) return false;
   if (pa.pre.length === 0) return true;
   if (pb.pre.length === 0) return false;
@@ -210,10 +194,9 @@ export function isVersionNewer(a: string, b: string): boolean {
 }
 
 /**
- * The CURRENT on-disk version of the bundle's install, read fresh from the
- * package.json one level above its dist/ dir. Never cached: `paths.version`
- * is frozen at module import, which would leave a long-lived MCP process
- * blind to in-place bumps or downgrades.
+ * On-disk version of the bundle's install, from the package.json one level
+ * above its dist/ dir. Never cached: `paths.version` is frozen at import, which
+ * would leave a long-lived MCP process blind to in-place bumps or downgrades.
  */
 function readBundlePackageVersion(bundlePath: string): string | undefined {
   try {
@@ -239,11 +222,7 @@ export function isToolsServerProcessAlive(pid: number): boolean {
   return isProcessAlive(pid);
 }
 
-/**
- * The wildcard hosts (`0.0.0.0`, `::`) accept connections on every interface
- * including loopback, but you cannot _connect_ to them — for the health check
- * we have to use a routable address.
- */
+/** Wildcard bind hosts (`0.0.0.0`, `::`) cannot be connected to; use loopback. */
 function healthCheckHost(host: string): string {
   if (host === "0.0.0.0" || host === "") return "127.0.0.1";
   if (host === "::" || host === "::0") return "::1";
@@ -273,12 +252,9 @@ export async function isToolsServerHealthy(
       signal: controller.signal,
       headers: authHeaders(token),
     });
-    // Release the response body before returning. /tools is a large (~100KB+)
-    // payload and we only need the status; an unread body keeps undici's
-    // keep-alive socket *ref'd* until the server's idle keepAliveTimeout (~5s)
-    // closes it, which makes every natural-exit CLI command (`argent run …`,
-    // `argent tools`) hang ~6s after it has already printed its result. Cancelling
-    // frees the socket immediately so the event loop can drain and the process exit.
+    // Only the status matters, and an unread body keeps undici's keep-alive
+    // socket ref'd until the server closes it, hanging a natural-exit CLI
+    // command (`argent run …`, `argent tools`) seconds after it printed.
     await res.body?.cancel().catch(() => {});
     return res.ok;
   } catch {
@@ -290,9 +266,9 @@ export async function isToolsServerHealthy(
 
 export interface SpawnToolsServerOptions extends BuildToolsServerEnvOptions {
   /**
-   * Readiness timeout in ms (how long to wait for the "listening" banner before
-   * giving up). Defaults to {@link SPAWN_READY_TIMEOUT_MS}. Exposed for tests so
-   * the kill-on-timeout path can be exercised without a 15s wait.
+   * Ms to wait for the "listening" banner. Defaults to
+   * {@link SPAWN_READY_TIMEOUT_MS}; exposed so tests can exercise the
+   * kill-on-timeout path without a 15s wait.
    */
   readyTimeoutMs?: number;
 }
@@ -300,10 +276,9 @@ export interface SpawnToolsServerOptions extends BuildToolsServerEnvOptions {
 const SPAWN_READY_TIMEOUT_MS = 15_000;
 
 /**
- * SIGKILL the spawned child's whole process group. The child is started
- * `detached`, so it is its own group leader (setsid) and `kill(-pid)` reaps it
- * plus anything it spawned. Best-effort: by the time this runs the child may
- * already be gone.
+ * SIGKILL the child's whole process group: it is spawned `detached`, so it
+ * leads its own group and `kill(-pid)` reaps anything it spawned too.
+ * Best-effort — the child may already be gone.
  */
 function killSpawnedChild(child: ReturnType<typeof spawn>, pid: number): void {
   try {
@@ -352,9 +327,8 @@ export function spawnToolsServer(
       fn();
     };
 
-    // Reject AND reap: the child is detached + unref'd, so a bare reject would
-    // leave it to bind its port seconds later as an untracked orphan (the very
-    // "two servers alive" failure this module guards against). Kill it first.
+    // Reject AND reap: the child is detached + unref'd, so a bare reject leaves
+    // it to bind its port seconds later as an untracked orphan.
     const rejectAndKill = (err: Error) =>
       settle(() => {
         killSpawnedChild(child, pid);
@@ -364,25 +338,20 @@ export function spawnToolsServer(
     const rl = readline.createInterface({ input: child.stdout! });
 
     rl.on("line", (line) => {
-      // Match: "Tools server listening on http://<host>:<port>"
-      // Greedy `.+` then `:digits` backtracks to the trailing port, so this
-      // works for hostnames, IPv4 (`127.0.0.1`), and bracketed IPv6 (`[::1]`).
+      // Greedy `.+` backtracks to the trailing `:port`, so hostnames, IPv4 and
+      // bracketed IPv6 (`[::1]`) all match.
       const match = line.match(/Tools server listening on http:\/\/.+:(\d+)/);
       if (match) {
         const actualPort = parseInt(match[1]!, 10);
         rl.close();
-        // Resume stdout so the pipe keeps draining and the child's console.log
-        // calls don't back up once the readline interface stops consuming it.
+        // Keep the pipe draining so the child's writes don't back up once
+        // readline stops consuming it.
         child.stdout?.resume();
-        // ...but unref the pipe socket so it does NOT keep OUR event loop alive.
-        // `child.unref()` only detaches the process handle; the stdout pipe is a
-        // separate ref'd handle. Without this, a short-lived caller like
-        // `argent run <tool>` would print its result and then hang forever
-        // waiting on the drained-but-open pipe. A long-lived caller (the MCP
-        // launcher) keeps its loop alive by other means, so it still drains
-        // normally; and the tool-server tolerates the eventual EPIPE when we exit.
-        // (stdio "pipe" makes this a net.Socket at runtime, which has unref();
-        // the ChildProcess type widens it to Readable, so narrow before calling.)
+        // ...but unref the pipe: `child.unref()` detaches only the process
+        // handle, and the still-ref'd stdout pipe would hang a short-lived
+        // caller like `argent run <tool>` forever on a drained-but-open pipe.
+        // At runtime it is a net.Socket with unref(); the ChildProcess type
+        // widens it to Readable, hence the narrowing.
         (child.stdout as { unref?: () => void } | null)?.unref?.();
         settle(() => resolve({ port: actualPort, pid }));
       }
@@ -391,7 +360,7 @@ export function spawnToolsServer(
     child.on("error", (err) => {
       rl.close();
       // A spawn-level error (ENOENT/EACCES) usually means no child exists; the
-      // kill is a harmless no-op in that case but reaps a half-started one.
+      // kill is a no-op then, but reaps a half-started one.
       rejectAndKill(err);
     });
 
@@ -411,10 +380,9 @@ export function spawnToolsServer(
 }
 
 /**
- * Per-bundle state file for a tool-server bundle. Each argent install has a
- * distinct bundlePath and therefore its own slot, so one install spawning its
- * server never clobbers another's record and orphans that server (the
- * single-slot failure mode).
+ * Per-bundle state file: each install has a distinct bundlePath and so its own
+ * slot, so spawning one install's server never clobbers another's record and
+ * orphans that server.
  */
 export function stateFileForBundle(bundlePath: string): string {
   const key = createHash("sha256").update(bundlePath).digest("hex").slice(0, 12);
@@ -431,10 +399,9 @@ async function readStateFile(file: string): Promise<ToolsServerState | null> {
 }
 
 /**
- * Read the tracked tool-server state. With `bundlePath`, resolve THAT
- * install's record: per-bundle file first, then the legacy single-slot file
- * when it records the same bundle. Without, read the legacy file only
- * (backward-compat shape).
+ * With `bundlePath`, THAT install's record: per-bundle file first, then the
+ * legacy single-slot file when it records the same bundle. Without, the legacy
+ * file only.
  */
 export async function readToolsServerState(bundlePath?: string): Promise<ToolsServerState | null> {
   if (bundlePath === undefined) return readStateFile(STATE_FILE);
@@ -447,12 +414,9 @@ export async function readToolsServerState(bundlePath?: string): Promise<ToolsSe
 export async function writeToolsServerState(state: ToolsServerState): Promise<void> {
   const target = stateFileForBundle(state.bundlePath);
   await mkdir(STATE_DIR, { recursive: true });
-  // Atomic publish: write a per-process temp file, force 0600 (writeFile's
-  // `mode` only applies on create, so chmod also covers a stale temp), then
-  // rename over the state file. rename(2) within the same dir is atomic, so a
-  // concurrent reader (another launcher, `argent server status`, the running
-  // global MCP) never observes a missing / half-written / looser-perm state
-  // file, and the auth token is never published at a world-readable mode.
+  // Atomic publish via per-process temp + rename(2), so a concurrent reader
+  // never observes a missing / half-written / looser-perm file holding the auth
+  // token. chmod as well as `mode`, which only applies when writeFile creates.
   const tmp = `${target}.${process.pid}.tmp`;
   try {
     await writeFile(tmp, JSON.stringify(state, null, 2) + "\n", {
@@ -468,11 +432,9 @@ export async function writeToolsServerState(state: ToolsServerState): Promise<vo
 }
 
 /**
- * Sync counterpart of {@link writeToolsServerState}. The CLI's foreground
- * `server start` path uses this to land the state file before any async
- * `child.on("exit")` event can fire, which would otherwise race the write
- * and leave a stale file pointing at a dead pid. Written 0600 to match the
- * async path (the state file may hold an auth token).
+ * Sync counterpart of {@link writeToolsServerState}, for the CLI's foreground
+ * `server start`: a fast child exit must not race the write and leave a stale
+ * file pointing at a dead pid. 0600 — the state may hold an auth token.
  */
 export function writeToolsServerStateSync(state: ToolsServerState): void {
   const target = stateFileForBundle(state.bundlePath);
@@ -485,9 +447,8 @@ export function writeToolsServerStateSync(state: ToolsServerState): void {
 }
 
 /**
- * Remove the tracked state. With `bundlePath`, remove that install's per-bundle
- * file plus the legacy file when it records the same bundle; without, remove
- * the legacy file only.
+ * With `bundlePath`, remove that install's per-bundle file plus the legacy file
+ * when it records the same bundle; without, the legacy file only.
  */
 export async function clearToolsServerState(bundlePath?: string): Promise<void> {
   const files = [STATE_FILE];
@@ -508,9 +469,8 @@ export async function clearToolsServerState(bundlePath?: string): Promise<void> 
 const STATE_FILE_RE = /^tool-server(-[0-9a-f]{12})?\.json$/;
 
 /**
- * Every tracked tool-server record: the legacy single-slot file plus all
- * per-bundle files. Dead-pid records are included — callers decide what a
- * stale entry means for them.
+ * Every tracked record: the legacy single-slot file plus all per-bundle files.
+ * Dead-pid records included — callers decide what a stale entry means.
  */
 export async function readAllToolsServerStates(): Promise<
   Array<{ file: string; state: ToolsServerState }>
@@ -531,22 +491,17 @@ export async function readAllToolsServerStates(): Promise<
   return out;
 }
 
-// Per-bundle files for installs that no longer run anything are junk left on
-// disk (bundle paths change across versions under pnpm's store layout), and a
-// LIVE server whose recorded bundle is GONE from disk can never serve current
-// code again (pnpm and yarn keep installs in version-pinned dirs, so an
-// upgrade replaces the whole dir and strands the old install's server at a
-// dead path). Both are swept opportunistically from ensureToolsServer's slow
-// path. Retiring the live orphan used to be the npm postinstall's job — it
-// lives here so installs that never run install scripts (pnpm's build gate,
-// --ignore-scripts, Yarn PnP) get the same hygiene.
+// Swept opportunistically from ensureToolsServer's slow path: records for
+// installs that no longer run anything are junk (bundle paths change across
+// versions), and a LIVE server whose recorded bundle is GONE from disk can
+// never serve current code again (version-pinned install dirs are replaced
+// wholesale on upgrade, stranding that server at a dead path).
 export async function sweepDeadStateFiles(): Promise<void> {
   for (const { file } of await readAllToolsServerStates()) {
     if (file === STATE_FILE) continue; // legacy slot is handled by its owners
-    // Re-read before acting: `argent server start --detach` writes without
-    // the spawn lock, so a fresh LIVE record may have been rename()'d over
-    // this slot since the snapshot. Deleting that would orphan a running
-    // server — decide on the current contents.
+    // Re-read before acting: `argent server start --detach` writes without the
+    // spawn lock, so a fresh LIVE record may have been rename()'d over this slot
+    // since the snapshot, and deleting it would orphan a running server.
     const fresh = await readStateFile(file);
     if (!fresh) continue;
     if (!isProcessAlive(fresh.pid)) {
@@ -555,22 +510,18 @@ export async function sweepDeadStateFiles(): Promise<void> {
     }
     if (fs.existsSync(fresh.bundlePath)) continue;
     // Same identity guard as killToolServerForInstallDir: never signal a
-    // recycled pid, and keep an unidentifiable-but-live record so `server
-    // stop`/status can still reach it (it is swept once its pid dies). On
-    // Windows `ps` is unavailable and the check always fails, so the kill
-    // stays unguarded there rather than never retiring dead-bundle servers.
+    // recycled pid, and keep an unidentifiable-but-live record reachable by
+    // `server stop`/status (swept once its pid dies). On Windows `ps` is
+    // unavailable and the check always fails, so the kill stays unguarded there
+    // rather than never retiring dead-bundle servers.
     const guarded = process.platform !== "win32";
     if (guarded && !processCommandMatches(fresh.pid, fresh.bundlePath)) continue;
-    // Unlink first, then terminate WITHOUT awaiting the grace window: the
-    // sweep runs on ensureToolsServer's slow path under the spawn lock, right
-    // when a session is waiting for tools to come up — a wedged orphan must
-    // not add its multi-second SIGTERM grace to that wait. terminatePid
-    // delivers the guarded SIGTERM synchronously before its first await and
-    // never rejects; only the SIGKILL escalation outlives this call (the
-    // pending poll keeps a short-lived CLI process alive until the orphan is
-    // confirmed dead, so the escalation actually lands). Losing the record
-    // for a server we're actively killing is fine — the same code was
-    // unreachable via `server stop` under the old postinstall too.
+    // Unlink first, then terminate WITHOUT awaiting the grace window: the sweep
+    // runs under the spawn lock while a session waits for tools, so a wedged
+    // orphan must not add its multi-second SIGTERM grace to that wait.
+    // terminatePid delivers the guarded SIGTERM synchronously before its first
+    // await and never rejects; only the SIGKILL escalation outlives this call,
+    // and its pending poll keeps a short-lived process alive until it lands.
     await unlink(file).catch(() => {});
     void terminatePid(
       fresh.pid,
@@ -582,10 +533,9 @@ export async function sweepDeadStateFiles(): Promise<void> {
 const readState = readToolsServerState;
 const writeState = writeToolsServerState;
 
-// SIGTERM grace matches tool-server's own PROCESS_TIMEOUT_MS (5 s) plus a small
-// buffer so we let the server's graceful shutdown (HTTP drain + registry
-// dispose) finish before escalating. Without this wait, a fast restart can
-// race the OS releasing the listening port and the next spawn hits EADDRINUSE.
+// Matches tool-server's own PROCESS_TIMEOUT_MS (5 s) plus a buffer, so its
+// graceful shutdown finishes before we escalate; otherwise a fast restart races
+// the OS releasing the listening port and the next spawn hits EADDRINUSE.
 const SIGTERM_GRACE_MS = 6_000;
 const SIGKILL_GRACE_MS = 1_000;
 const KILL_POLL_MS = 100;
@@ -600,15 +550,12 @@ async function waitForExit(pid: number, timeoutMs: number): Promise<boolean> {
 }
 
 /**
- * Stop a process: SIGTERM, wait out the graceful-shutdown window, then SIGKILL
- * if it's still up. No-op when the pid is already gone. Shared by
- * {@link killToolServer} and ensureToolsServer's kill-before-respawn so both
- * escalate identically.
+ * SIGTERM, wait out the graceful-shutdown window, then SIGKILL if still up.
+ * No-op when the pid is already gone.
  *
- * `stillOurs`, when provided, re-confirms the pid's identity immediately before
- * each signal. kill-before-respawn passes it so that if the pid is recycled onto
- * an unrelated process between the gate check and a signal (notably across the
- * multi-second SIGTERM grace window), we abort instead of killing a bystander.
+ * `stillOurs` re-confirms the pid's identity immediately before each signal, so
+ * a pid recycled onto an unrelated process (notably across the multi-second
+ * SIGTERM grace window) aborts the kill instead of hitting a bystander.
  */
 async function terminatePid(pid: number, stillOurs?: () => boolean): Promise<void> {
   if (!isProcessAlive(pid)) return;
@@ -620,8 +567,8 @@ async function terminatePid(pid: number, stillOurs?: () => boolean): Promise<voi
     return;
   }
   if (await waitForExit(pid, SIGTERM_GRACE_MS)) return;
-  // SIGTERM ignored or shutdown hung. Re-confirm identity (the pid could have
-  // been recycled during the grace window) before the unconditional hard kill.
+  // SIGTERM ignored or shutdown hung. Re-confirm identity: the pid could have
+  // been recycled during the grace window.
   if (stillOurs && !(isProcessAlive(pid) && stillOurs())) return;
   try {
     process.kill(pid, "SIGKILL");
@@ -633,8 +580,7 @@ async function terminatePid(pid: number, stillOurs?: () => boolean): Promise<voi
 
 /**
  * Terminate the tracked tool-server and drop its record. With `bundlePath`,
- * scoped to THAT install's server; without, operates on the legacy
- * single-slot record only (backward-compat shape).
+ * THAT install's server; without, the legacy single-slot record only.
  */
 export async function killToolServer(bundlePath?: string): Promise<void> {
   const state = await readState(bundlePath);
@@ -657,13 +603,12 @@ function tryRealpath(p: string): string {
 }
 
 /**
- * Terminate every tracked tool-server whose bundle lives inside `packageDir`,
- * and drop their records. Teardown for `argent update` / `argent uninstall`:
- * they replace ONE install's files, so only that install's servers may be
- * killed — a different install's server may be serving another editor session.
- * Symlinked layouts (pnpm store, npm global prefix) are compared via realpath.
- * Returns the number of matching records cleaned up (servers terminated when
- * the pid still verifiably belongs to that install's tool-server).
+ * Terminate every tracked tool-server whose bundle lives inside `packageDir`
+ * and drop their records. Teardown for `argent update` / `argent uninstall`,
+ * scoped to the one install they replace — a different install's server may be
+ * serving another editor session. Symlinked layouts are compared via realpath.
+ * Returns the number of records cleaned up (killed only when the pid still
+ * verifiably belongs to that install's tool-server).
  */
 export async function killToolServerForInstallDir(packageDir: string): Promise<number> {
   const parents = new Set([path.resolve(packageDir), tryRealpath(packageDir)]);
@@ -673,22 +618,20 @@ export async function killToolServerForInstallDir(packageDir: string): Promise<n
     const matches = [...bundles].some((b) => [...parents].some((p) => isPathWithin(b, p)));
     if (!matches) continue;
     // The snapshot may be stale (another launcher can have republished this
-    // slot since the read) — decide on the file's current contents so we never
-    // kill/unlink a record we didn't match. Same reasoning as sweepDeadStateFiles.
+    // slot), so decide on the file's current contents and never kill/unlink a
+    // record we didn't match. Same reasoning as sweepDeadStateFiles.
     const fresh = await readStateFile(file);
     if (!fresh || fresh.pid !== state.pid || fresh.bundlePath !== state.bundlePath) continue;
-    // Identity check before signalling: a long-lived record's pid may have
-    // been recycled onto an unrelated process — same guard as the
-    // wedged-server kill in ensureToolsServer. On Windows `ps` is unavailable
-    // and the check always fails, so we keep the unguarded kill there rather
-    // than silently never stopping servers during update/uninstall.
+    // A long-lived record's pid may have been recycled onto an unrelated
+    // process. On Windows `ps` is unavailable and the check always fails, so we
+    // keep the unguarded kill there rather than silently never stopping servers
+    // during update/uninstall.
     const alive = isProcessAlive(fresh.pid);
     const guarded = process.platform !== "win32";
     if (alive && guarded && !processCommandMatches(fresh.pid, fresh.bundlePath)) {
-      // Live pid we can't positively identify as this install's server: kill
-      // nothing and KEEP the record — unlinking a merely-unparseable live
-      // server would orphan it for `server stop`/status. A truly stale record
-      // is swept once its pid dies.
+      // Unidentifiable live pid: keep the record, since unlinking a live
+      // server orphans it for `server stop`/status. A truly stale record is
+      // swept once its pid dies.
       continue;
     }
     if (alive) {
@@ -704,12 +647,10 @@ export async function killToolServerForInstallDir(packageDir: string): Promise<n
 }
 
 /**
- * Best-effort check that `pid` is one of OUR tool-server processes, by matching
- * its command line against `marker` (the bundle path recorded in state when we
- * spawned it). This guards kill-before-respawn against PID reuse: by the time
- * we respawn, the OS may have recycled a dead server's pid for an unrelated
- * process, which we must never signal. Returns false when the command line
- * can't be read (ps missing / unsupported platform) — fail safe, don't kill.
+ * Best-effort check that `pid` is one of OUR tool-servers, matching its command
+ * line against `marker` (the bundle path recorded when we spawned it). Guards
+ * kills against PID reuse. Returns false when the command line can't be read
+ * (ps missing / unsupported platform) — fail safe, don't kill.
  */
 function processCommandMatches(pid: number, marker: string | undefined): boolean {
   if (!marker) return false;
@@ -720,11 +661,10 @@ function processCommandMatches(pid: number, marker: string | undefined): boolean
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
     if (!cmd) return false;
-    // Structural match: our servers run `node <bundlePath> start`. Require the
-    // bundle path at an argument boundary followed by `start` — not a bare
-    // substring — so an unrelated process merely mentioning the path never
-    // matches. Matched on the raw command string, not whitespace-split argv,
-    // so a bundle path containing spaces still matches its own ps output.
+    // Our servers run `node <bundlePath> start`. Requiring the path at an
+    // argument boundary followed by `start` keeps an unrelated process that
+    // merely mentions it from matching; matching the raw command string rather
+    // than split argv keeps bundle paths containing spaces working.
     const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     return new RegExp(`(?:^|\\s)${escaped} start(?:\\s|$)`).test(cmd);
   } catch {
@@ -732,19 +672,15 @@ function processCommandMatches(pid: number, marker: string | undefined): boolean
   }
 }
 
-// ── Cross-process spawn lock ──────────────────────────────────────────────
-// ensureToolsServer's "is there a healthy server? no → spawn one" sequence is a
-// read-modify-write across independent processes. Without serialization, two
-// launchers (classically: an nvm node-version switch relaunches `argent mcp`
-// under a new node while the previous MCP's health monitor reconnects) both
-// observe "no server", both spawn a detached tool-server on its own free port,
-// and the last writer to the state file orphans the rest. A simple O_EXCL lock
-// file lets the kernel arbitrate so exactly one launcher spawns.
-// Sized above the worst-case legitimate hold of the critical section, so a
-// waiter never gives up (and proceeds unlocked) while a peer is still doing a
-// real respawn: ~2s health + ~2s ps + 6s SIGTERM grace + 1s SIGKILL grace + 15s
-// spawn ≈ 26s. STALE must exceed WAIT so a live-but-slow holder is never judged
-// stale and stolen from underneath.
+// ensureToolsServer's "is there a healthy server? no → spawn one" is a
+// read-modify-write across independent processes. Without serialization two
+// launchers both observe "no server", both spawn a detached tool-server on its
+// own free port, and the last writer to the state file orphans the rest. An
+// O_EXCL lock file lets the kernel arbitrate so exactly one launcher spawns.
+// Sized above the worst-case legitimate hold of the critical section (~2s health
+// + ~2s ps + 6s SIGTERM grace + 1s SIGKILL grace + 15s spawn ≈ 26s), so a waiter
+// never proceeds unlocked while a peer is mid-respawn. STALE must exceed WAIT so
+// a live-but-slow holder is never judged stale and stolen from underneath.
 const LOCK_WAIT_TIMEOUT_MS = 30_000;
 const LOCK_STALE_MS = 45_000;
 const LOCK_POLL_MS = 100;
@@ -773,11 +709,9 @@ function spawnLockIsStale(): boolean {
 }
 
 /**
- * Acquire the cross-process spawn lock. Returns a handle whose release() removes
- * the lock, or null when it can't be taken (unexpected FS error, or a peer held
- * it past LOCK_WAIT_TIMEOUT_MS). A null result means "proceed without the lock":
- * best-effort, so a missed lock at worst degrades to the pre-lock behavior and
- * never deadlocks ensureToolsServer.
+ * Acquire the spawn lock. Null when it can't be taken (FS error, or a peer held
+ * it past LOCK_WAIT_TIMEOUT_MS) and the caller should proceed WITHOUT it: the
+ * lock is best-effort and must never deadlock ensureToolsServer.
  */
 async function acquireSpawnLock(): Promise<SpawnLock | null> {
   try {
@@ -785,8 +719,8 @@ async function acquireSpawnLock(): Promise<SpawnLock | null> {
   } catch {
     return null;
   }
-  // Per-acquisition nonce so release() can prove the on-disk lock is still the
-  // one we wrote (and not a peer's, after a stale-steal under suspend/clock skew).
+  // Per-acquisition nonce so release() can tell our lock from a peer's, after a
+  // stale-steal under suspend / clock skew.
   const nonce = randomBytes(8).toString("hex");
   const deadline = Date.now() + LOCK_WAIT_TIMEOUT_MS;
   for (;;) {
@@ -803,9 +737,8 @@ async function acquireSpawnLock(): Promise<SpawnLock | null> {
         release: () => {
           if (released) return;
           released = true;
-          // Only remove the lock if it is still OURS. A stale-steal by a peer
-          // could have replaced it; deleting that would free a lock we no longer
-          // hold and let a third contender spawn concurrently.
+          // Only remove the lock if it is still OURS: after a peer's
+          // stale-steal, deleting it would let a third contender spawn too.
           try {
             const cur = JSON.parse(fs.readFileSync(LOCK_FILE, "utf8")) as {
               pid?: number;
@@ -826,9 +759,8 @@ async function acquireSpawnLock(): Promise<SpawnLock | null> {
         } catch {
           /* couldn't remove (perms / immutable / a peer beat us to it) */
         }
-        // Reclaimed (file gone) → loop immediately to (re)create it. Still
-        // present → we could NOT reclaim it; fall through to the bounded wait
-        // below so a persistently-unremovable lock can never busy-spin the CPU.
+        // Reclaimed → loop and recreate it. Still present → fall through to the
+        // bounded wait below, so an unremovable lock can't busy-spin the CPU.
         if (!fs.existsSync(LOCK_FILE)) continue;
       }
       if (Date.now() >= deadline) return null;
@@ -838,15 +770,15 @@ async function acquireSpawnLock(): Promise<SpawnLock | null> {
 }
 
 /**
- * Resolve a usable handle for the server described by `state`, or null when it
- * is absent, dead, or fails its health check. Side-effect free so both the
- * lock-free fast path and the double-check inside the lock can reuse it.
+ * Handle for the server described by `state`, or null when it is absent, dead,
+ * or fails its health check. Side-effect free, so both the lock-free fast path
+ * and the double-check inside the lock can use it.
  *
- * When `wantBundlePath` is given, only a server running that SAME bundle is
- * reused — a different bundlePath is a different argent install, and reusing
- * it would silently run the wrong version. We return null so the caller spawns
- * its own; the other server is left running (another session may depend on it,
- * and the tools-client does not recover from a killed server).
+ * With `wantBundlePath`, only a server running that SAME bundle is reused — a
+ * different bundlePath is a different install, and reusing it would silently
+ * run the wrong version. The caller spawns its own and leaves that server up:
+ * another session may depend on it, and the tools-client does not recover from
+ * a killed server.
  */
 async function reusableHandle(
   state: ToolsServerState | null,
@@ -855,16 +787,14 @@ async function reusableHandle(
 ): Promise<ToolsServerHandle | null> {
   if (!state || !isProcessAlive(state.pid)) return null;
   if (wantBundlePath !== undefined && state.bundlePath !== wantBundlePath) return null;
-  // Same path, different version → the bundle was rewritten in place. The
-  // authority is the DISK, read fresh: a server whose recorded version no
-  // longer matches the on-disk package is running code that no longer exists
-  // and must be retired, in BOTH directions (upgrade-only would keep a stale
-  // server after a downgrade). Comparing disk-vs-state (not caller-vs-state)
-  // also stops two long-lived sessions with different frozen versions from
-  // ping-ponging SIGTERMs — both read the same disk. Only when the disk is
-  // unreadable do we fall back to the caller's frozen version, and then only
-  // in the caller-newer direction (self-heal without the ping-pong). A legacy
-  // server with no recorded version is reused.
+  // Same path, different version → the bundle was rewritten in place, so the
+  // server runs code that no longer exists and must be retired in BOTH
+  // directions (upgrade-only would keep a stale server after a downgrade).
+  // Comparing disk-vs-state rather than caller-vs-state also stops two
+  // long-lived sessions with different frozen versions from ping-ponging
+  // SIGTERMs. Only when the disk is unreadable do we fall back to the caller's
+  // frozen version, and then only when it is newer. A server with no recorded
+  // version is reused.
   if (wantBundlePath !== undefined && state.version !== undefined) {
     const diskVersion = readBundlePackageVersion(wantBundlePath);
     if (diskVersion !== undefined) {
@@ -884,10 +814,9 @@ async function reusableHandle(
 }
 
 export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsServerHandle> {
-  // Fast path (the overwhelmingly common case): a healthy server running OUR
-  // bundle is already tracked — reuse it without paying for the spawn lock.
-  // Records are per bundle, so another install's server is neither considered
-  // nor disturbed (see stateFileForBundle, reusableHandle).
+  // Fast path: a healthy server running OUR bundle is already tracked — reuse
+  // it without paying for the spawn lock. Records are per bundle, so another
+  // install's server is neither considered nor disturbed.
   const fast = await reusableHandle(
     await readState(paths.bundlePath),
     paths.bundlePath,
@@ -895,27 +824,25 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsS
   );
   if (fast) return fast;
 
-  // Slow path: a spawn is likely needed. Serialize it across processes so the
-  // churn from an nvm node-version switch can't let two launchers each spawn
-  // their own detached tool-server and orphan all but the last.
+  // Slow path: a spawn is likely needed. Serialize it across processes so two
+  // launchers can't each spawn their own detached tool-server and orphan all
+  // but the last.
   const lock = await acquireSpawnLock();
   try {
-    // Double-checked: a peer may have spawned a healthy server (of our bundle)
-    // while we waited for the lock. Reuse it rather than spawning a second one.
+    // A peer may have spawned a healthy server of our bundle while we waited.
     const state = await readState(paths.bundlePath);
     const reuse = await reusableHandle(state, paths.bundlePath, paths.version);
     if (reuse) return reuse;
 
-    // No usable server. If the tracked pid is a wedged/unhealthy server WE
-    // auto-spawned FROM OUR OWN BUNDLE, terminate it BEFORE spawning the
-    // replacement so it is never left running, untracked, on a leaked port. Four
-    // guards keep this from signalling the wrong process:
-    //   • managed === "autospawn" — never touch a `argent server start` (cli)
-    //     server, which may be supervisor-managed and is just slow to start;
-    //   • bundlePath === ours — never kill a *different* argent version's server
-    //     (it may be healthy and serving another project's session);
-    //   • a command-line identity match against the recorded bundle path;
-    //   • terminatePid re-confirms that identity right before each signal.
+    // Kill a wedged server WE auto-spawned from OUR OWN bundle before spawning
+    // its replacement, so it is never left running, untracked, on a leaked port.
+    // Guards against signalling the wrong process:
+    //   • managed === "autospawn" — never a `argent server start` (cli) server,
+    //     which may be supervisor-managed and is just slow to start;
+    //   • bundlePath === ours — never a different version's server, which may be
+    //     healthy and serving another project's session;
+    //   • a command-line identity match, re-confirmed by terminatePid right
+    //     before each signal.
     if (
       state &&
       state.managed === "autospawn" &&
@@ -925,17 +852,15 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsS
     ) {
       await terminatePid(state.pid, () => processCommandMatches(state.pid, state.bundlePath));
     }
-    // Retire only OUR OWN record — another install's must survive so its
-    // server stays reachable by its owner. Also sweep per-bundle files whose
-    // pid is gone or whose bundle was deleted from disk, so retired installs
-    // don't accumulate junk in ~/.argent or strand servers running dead code.
+    // Retire only OUR OWN record — another install's must survive so its server
+    // stays reachable by its owner. The sweep then clears per-bundle files whose
+    // pid is gone or whose bundle was deleted from disk.
     await clearToolsServerState(paths.bundlePath);
     await sweepDeadStateFiles();
 
-    // A bundle that no longer exists cannot be spawned: the install serving
-    // this session was replaced by a layout that changes dirs across versions
-    // (pnpm store prune) or removed outright. Fail with guidance instead of a
-    // cryptic "exited before becoming ready" timeout.
+    // A missing bundle means the install serving this session was replaced (a
+    // layout that changes dirs across versions) or removed outright. Fail with
+    // guidance instead of a cryptic "exited before becoming ready" timeout.
     if (!fs.existsSync(paths.bundlePath)) {
       throw new Error(
         `The argent install serving this session is gone from disk (${paths.bundlePath}) — ` +
@@ -943,15 +868,14 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsS
       );
     }
 
-    // Spawn a new server with a fresh token. Auto-spawned servers always
-    // authenticate (the token is local to this user and persisted 0600).
+    // Auto-spawned servers always authenticate; the token is local to this user
+    // and persisted 0600.
     //
-    // Record the disk version, not the caller's import-time one (a stale
-    // caller recording its own version would make the next disk-vs-state
-    // comparison kill the server it just spawned). Reading BEFORE the spawn
-    // keeps a mid-spawn in-place bump safe: the record carries the pre-bump
-    // version, so the next call retires the old-code server — one redundant
-    // respawn at worst, never a stale reuse.
+    // Record the DISK version, not the caller's import-time one, or a stale
+    // caller would make the next disk-vs-state comparison kill the server it
+    // just spawned. Reading BEFORE the spawn keeps a mid-spawn in-place bump
+    // safe: the record carries the pre-bump version, so the next call retires
+    // the old-code server — one redundant respawn at worst, never a stale reuse.
     const diskVersion = readBundlePackageVersion(paths.bundlePath) ?? paths.version;
     const token = generateToken();
     const port = await findFreePort();
