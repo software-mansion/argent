@@ -109,9 +109,10 @@ const config = {
       },
     }),
   plugins: [
-    process.env.NODE_ENV === "production" && "@docusaurus/plugin-debug",
+    process.env.NODE_ENV !== "production" && "@docusaurus/plugin-debug",
     // Parts of the shared theme ship as untranspiled JSX, so they need the same
     // JS loader Docusaurus applies to the site's own sources.
+    /** @type {() => import('@docusaurus/types').Plugin} */
     function tRexUiJsxPlugin() {
       return {
         name: "argent/t-rex-ui-jsx",

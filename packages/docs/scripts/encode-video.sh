@@ -74,7 +74,7 @@ for input in "$@"; do
   if [ -z "$poster_at" ]; then
     duration="$(ffprobe -v error -show_entries format=duration \
       -of default=noprint_wrappers=1:nokey=1 "$video")"
-    poster_at="$(awk -v d="$duration" 'BEGIN { printf "%.2f", d / 4 }')"
+    poster_at="$(LC_NUMERIC=C awk -v d="$duration" 'BEGIN { printf "%.2f", d / 4 }')"
   fi
 
   ffmpeg -y -loglevel error -ss "$poster_at" -i "$video" -frames:v 1 -q:v 4 "$poster"

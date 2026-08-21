@@ -358,6 +358,19 @@ test("[script] a version-less manifest is excluded, not counted as its own versi
   assert.equal(result.stderr, "");
 });
 
+// packages/docs carries its own standalone version (0.0.0 in the real repo) and
+// is excluded from lockstep by NON_WORKSPACE_DIRS. Deleting that skip would
+// otherwise read it as drift on every release, since it never matches the rest
+// of the workspace.
+test("[script] packages/docs is excluded from lockstep, not read as drift", (t) => {
+  const root = fixtureRepo(t, {
+    extraPackages: { docs: { name: "@argent/docs", version: "0.0.0" } },
+  });
+  const result = runScript(root);
+  assert.equal(result.status, 0, `expected a clean repo, got:\n${result.stdout}${result.stderr}`);
+  assert.equal(result.stderr, "");
+});
+
 // A manifest that exists but cannot be parsed is not the same as a directory with
 // no manifest: dropping it silently would take a real package out of the lockstep
 // comparison and pass a workspace that had drifted.

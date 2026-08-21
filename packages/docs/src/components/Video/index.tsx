@@ -28,7 +28,7 @@ type Props = {
  * "none" until then. Once loaded, playback follows visibility so off-screen
  * loops stop burning CPU.
  */
-function useNearViewport<T extends Element>(): [React.RefObject<T>, boolean, boolean] {
+function useNearViewport<T extends Element>(): [React.RefObject<T | null>, boolean, boolean] {
   const ref = React.useRef<T>(null);
   const [shouldLoad, setShouldLoad] = React.useState(false);
   const [isVisible, setIsVisible] = React.useState(false);
@@ -135,7 +135,7 @@ export default function Video({
       <video
         ref={ref}
         src={shouldLoad ? resolvedSrc : undefined}
-        poster={resolvedPoster}
+        poster={shouldLoad ? resolvedPoster : undefined}
         width={width}
         height={height}
         autoPlay={autoPlay}

@@ -38,7 +38,7 @@ Argent removes the status bar from the comparison. Thus the clock and the batter
 
 ## Baselines in flows
 
-A [flow](/docs/features/flows) can contain a snapshot step. The first run of the flow stores a baseline of the screen. Each later run compares the screen to the stored baseline. The step fails when the difference is above a tolerance. A snapshot step can also compare one element only instead of the full screen.
+A [flow](/docs/features/flows) can contain a snapshot step. The step fails when no baseline exists yet. Run the flow with `--update-baselines` to adopt the current screen as the baseline. Each later run compares the screen to the stored baseline, and the step fails when the difference is above a tolerance. A snapshot step can also compare one element only instead of the full screen.
 
 Thus you can keep visual checks in the repository and run them in CI.
 
@@ -55,5 +55,6 @@ Thus you can keep visual checks in the repository and run them in CI.
 - The comparison does not replace a check of the accessibility tree, the logs or the network record. The agent uses these sources together with the comparison.
 - The two screenshots must come from the same device class and the same orientation. When the resolution differs, Argent scales one screenshot down, and small differences can come from the scaling.
 - The agent does not use the comparison to find the position of an element for a tap. The agent uses the screen description for that.
+- The comparison works on an iOS simulator or device, or an Android emulator or device. It does not work on Chromium, Apple TV or Vega apps.
 
 Argent does this with the `screenshot` and `screenshot-diff` tools. The [tools reference](/docs/reference/tools) contains all tools.

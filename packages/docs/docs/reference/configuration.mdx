@@ -40,9 +40,9 @@ argent config get ios.additionalDeviceSets
 | `ios.additionalDeviceSets` | project, global | union            | Additional CoreSimulator device-set directories. Argent lists the simulators in these sets next to the default set. An array of paths |
 | `recordings.directory`     | project, global | project wins     | The directory where Argent saves a finished screen recording. Default `.argent/recordings` under the project root                     |
 
-A path value is absolute, starts with `~`, or is relative. Argent resolves a relative path in the project file against the project root, and a relative path in the global file against the home directory.
+A path value is absolute, starts with `~`, or is relative. For `ios.additionalDeviceSets`, Argent resolves a relative entry against the scope that set it: the project root for the project file, the home directory for the global file.
 
-Argent resolves `recordings.directory` on the client host, the machine that receives the mp4.
+Argent resolves `recordings.directory` on the client host, the machine that receives the mp4. A relative value always resolves against the project root, or the home directory when there is no project, regardless of which file set the value.
 
 ### Storage
 
@@ -93,6 +93,7 @@ argent enable argent-lens --scope project    # this project only
 | `disable-auto-screenshot` | Off     | Stop the automatic screenshot that Argent captures after each interaction tool                                                |
 | `artifacts-list-endpoint` | Off     | Expose the `GET /artifacts` endpoint of the tool-server for remote artifact consumers                                         |
 | `tool-server-event-log`   | Off     | Write the lifecycle events of the tool-server to a JSONL file                                                                 |
+| `microinteractions`       | Off     | Animate the host window to match device actions. Cosmetic only, macOS only                                                    |
 | `video-watermark`         | On      | Put the Argent watermark in the corner of a recorded screen video                                                             |
 
 The tool-server writes the event log to `~/.argent/tool-server-events.jsonl`. Set the `ARGENT_EVENT_LOG` environment variable to select a different path.
@@ -193,12 +194,12 @@ An environment variable changes the behavior of the process that reads it. Expor
 
 ### MCP server
 
-| Variable                                  | Default                    | Description                                                                                                   |
-| ----------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `ARGENT_TOOLS_URL`                        | unset                      | URL of the tool-server that the MCP server and the CLI use. Takes precedence over `argent link`               |
-| `ARGENT_MCP_LOG`                          | `~/.argent/mcp-calls.log`  | Path of the log of tool calls that the MCP server writes                                                      |
-| `ARGENT_AUTO_SCREENSHOT_DELAY_MS`         | per tool, `1400` otherwise | Milliseconds between an interaction tool and its automatic screenshot. See the `disable-auto-screenshot` flag |
-| `ARGENT_TOOL_SERVER_SHUTDOWN_ON_MCP_EXIT` | unset                      | Set `1` to stop the tool-server when the editor closes the MCP server                                         |
+| Variable                                  | Default                    | Description                                                                                                                                                            |
+| ----------------------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ARGENT_TOOLS_URL`                        | unset                      | URL of the tool-server that the MCP server and the CLI use. Takes precedence over `argent link`                                                                        |
+| `ARGENT_MCP_LOG`                          | `~/.argent/mcp-calls.log`  | Path of the log of tool calls that the MCP server writes                                                                                                               |
+| `ARGENT_AUTO_SCREENSHOT_DELAY_MS`         | per tool, `1400` otherwise | Minimum milliseconds between an interaction tool and its automatic screenshot. Raises the per-tool default; it cannot lower it. See the `disable-auto-screenshot` flag |
+| `ARGENT_TOOL_SERVER_SHUTDOWN_ON_MCP_EXIT` | unset                      | Set `1` to stop the tool-server when the editor closes the MCP server                                                                                                  |
 
 ### Telemetry
 

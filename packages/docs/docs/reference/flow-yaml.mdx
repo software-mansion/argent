@@ -33,10 +33,12 @@ The file has two top-level keys:
 
 A flow has one of two shapes:
 
-| Shape           | First step     | Start state                                         |
-| --------------- | -------------- | --------------------------------------------------- |
-| End-to-end flow | `launch:`      | Argent starts the app from scratch                  |
-| Fragment        | Any other step | The app is already in the state that the flow needs |
+| Shape           | First non-echo step | Start state                                         |
+| --------------- | ------------------- | --------------------------------------------------- |
+| End-to-end flow | `launch:`           | Argent starts the app from scratch                  |
+| Fragment        | Any other step      | The app is already in the state that the flow needs |
+
+Argent skips leading `echo` steps when it classifies a flow. A flow that opens with an `echo` step and then a `launch:` step is still end-to-end. Put the named start state of an end-to-end flow in a leading `echo` step.
 
 A file does not store a device id. The runner selects the device. A `launch:` restarts the process but does not clear the app data, the account or the backend data.
 
@@ -54,13 +56,14 @@ A selector finds an element on the screen. Write a selector as an explicit map:
 { text: { matches: '^Order #\d+$' } }
 ```
 
-| Field  | Match                                                    |
-| ------ | -------------------------------------------------------- |
-| `id`   | Exact, case-insensitive. The test id or accessibility id |
-| `text` | Case-insensitive substring, or `{ matches: <regex> }`    |
-| `role` | Case-insensitive substring of the element role           |
+| Field  | Match                                                           |
+| ------ | --------------------------------------------------------------- |
+| `id`   | Exact, case-insensitive. The test id or accessibility id        |
+| `text` | Case-insensitive substring, or `{ matches: <regex> }`           |
+| `role` | Case-insensitive substring of the element role                  |
+| `any`  | Any element. Takes only `true`. Pair it with a relational scope |
 
-All fields in a selector must match. An unqualified Android id also matches its qualified resource id. `identifier` is an alias of `id`. Use single quotes for a regex with a backslash.
+All fields in a selector must match. An unqualified Android id also matches its qualified resource id. `identifier` is an alias of `id`. Use single quotes for a regex with a backslash. `any: true` is the only selector without its own `id`, `text` or `role`, so it needs a relational scope, for example `{ any: true, after: { text: Danger zone } }`.
 
 A bare string, for example `tap: Save`, is a loose selector. It tries `id` first, then `text`. Prefer the map form.
 
@@ -269,7 +272,7 @@ Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--p
 
 ## Remote runs
 
-The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. `run:` targets and baselines resolve on the file system of the tool-server. When the tool-server runs on a different machine, a `name` run sends only that one file. Thus a `run:` step fails as a missing fragment and a `snapshot` fails for a missing baseline. `flow_path` is refused when the agent and the tool-server do not share a file system.
+The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. `run:` targets and baselines resolve on the file system of the tool-server. When the tool-server runs on a different machine, a `name` run sends only that one file. Argent checks the whole flow before it runs any step, and rejects a `run:` or `snapshot` step at any depth with an error about the missing co-location, not about a missing fragment or baseline. `flow_path` is refused when the agent and the tool-server do not share a file system.
 
 ## YAML safety
 

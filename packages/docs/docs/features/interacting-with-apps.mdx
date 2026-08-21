@@ -27,7 +27,7 @@ The agent does not read coordinates from a screenshot. Before each tap, the agen
 - the React component tree in React Native apps,
 - the DOM in Chromium and Electron apps.
 
-After a screen change, the agent reads the screen again. Each action returns a screenshot, so the agent sees the result without an extra call.
+After a screen change, the agent reads the screen again. Most actions return a screenshot, so the agent sees the result without an extra call.
 
 ## Launching apps
 
@@ -41,7 +41,7 @@ To type a credential, the agent uses a secret placeholder. Argent fills the valu
 
 ## Permissions
 
-The agent grants, denies or resets a runtime permission such as location, camera or notifications. The agent does not navigate the Settings app. Then the agent launches the app again and sees the permission prompt. Thus a first-run permission flow is repeatable.
+The agent grants, denies or resets a runtime permission such as location, camera or contacts. The agent does not navigate the Settings app. Then the agent launches the app again and sees the permission prompt. Thus a first-run permission flow is repeatable.
 
 <Video
   src="/video/permissions.mp4"
@@ -82,4 +82,4 @@ If the agent knows several actions before the start, and there is nothing to exa
 - Shake works on simulators and emulators only.
 - On Chromium, each action goes to the active tab.
 
-The [tools reference](/docs/reference/tools) lists the tools in the **Interacting** and **Devices and apps** groups with their parameters.
+The [tools reference](/docs/reference/tools) contains all tools, including the ones in the **Interacting** and **Devices and apps** groups.
