@@ -1029,12 +1029,12 @@ async function collectFlowFiles(dir: string, recursive: boolean): Promise<string
  * remotely callable, but reject CLI routing that cannot guarantee the
  * shared filesystem. This deliberately rejects even single-file flows that
  * could run remotely — the CLI cannot tell them apart without parsing the
- * flow. Prints the recovery hint and returns false when remote routing is
+ * flow. Returns the refusal with its recovery hint when remote routing is
  * configured.
  */
-async function requireLocalToolServer(): Promise<boolean> {
+async function requireLocalToolServer(): Promise<string | undefined> {
   const routing = await getResolvedToolsUrl();
-  if (routing.source === "none") return true;
+  if (routing.source === "none") return undefined;
   // With ARGENT_TOOLS_URL set over an existing link file, unsetting only the
   // env var re-routes through the shadowed link — the same refusal with the
   // other source. Name both steps up front.
@@ -1045,10 +1045,7 @@ async function requireLocalToolServer(): Promise<boolean> {
           `a link to ${routing.shadowedLink.url} is also configured and takes over once the env var is unset.`
         : "Unset ARGENT_TOOLS_URL and try again."
       : "Run `argent unlink` and try again.";
-  console.error(
-    `argent flow run requires the auto-started local tool server; ${routing.source} routing is configured.\n${recovery}`
-  );
-  return false;
+  return `argent flow run requires the auto-started local tool server; ${routing.source} routing is configured.\n${recovery}`;
 }
 
 /** One flow-execute payload builder so single and batch runs cannot drift. */
@@ -1140,7 +1137,11 @@ async function runFlowDirectory(
     return exitAfterFlush(2);
   }
 
-  if (!(await requireLocalToolServer())) return exitAfterFlush(2);
+  const refusal = await requireLocalToolServer();
+  if (refusal) {
+    console.error(refusal);
+    return exitAfterFlush(2);
+  }
   const { callTool, baseUrl } = createToolsClient({ paths: options.paths });
 
   const outputBase = args.output ? path.resolve(args.output) : undefined;
@@ -1243,32 +1244,42 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     return exitAfterFlush(2);
   }
 
+  // Once streaming is requested stdout belongs exclusively to NDJSON. Help
+  // is still useful, but it is a diagnostic and therefore belongs on stderr.
+  const jsonStream = rest.some(
+    (tok) => tok === "--json-stream" || tok.startsWith("--json-stream=")
+  );
   // Checked before parseRunArgs so --help wins even when it trails a
   // value-taking flag (`--device --help` would otherwise throw "requires a
   // value" instead of printing help).
   if (rest.includes("--help") || rest.includes("-h")) {
-    // Once streaming is requested stdout belongs exclusively to NDJSON. Help
-    // is still useful, but it is a diagnostic and therefore belongs on stderr.
-    printHelp(rest.some((tok) => tok === "--json-stream" || tok.startsWith("--json-stream=")));
+    printHelp(jsonStream);
     return;
   }
+  const fail = (message: string, code: number, err: unknown = message): Promise<never> => {
+    if (jsonStream) writeJsonStreamError(err);
+    console.error(message);
+    return exitAfterFlush(code);
+  };
 
   let args: ReturnType<typeof parseRunArgs>;
   try {
     args = parseRunArgs(rest);
   } catch (err) {
     if (err instanceof FlagParseException) {
+      if (jsonStream) writeJsonStreamError(err);
       console.error(`Error: ${err.message}\n`);
-      printHelp(rest.some((tok) => tok === "--json-stream" || tok.startsWith("--json-stream=")));
+      printHelp(jsonStream);
       return exitAfterFlush(2);
     }
     throw err;
   }
   if (!args.flowRef) {
-    console.error(
-      "argent flow run <flow|flow.yaml|dir> requires a flow name, a YAML file path, or a directory path."
-    );
-    printHelp(args.jsonStream);
+    const message =
+      "argent flow run <flow|flow.yaml|dir> requires a flow name, a YAML file path, or a directory path.";
+    if (jsonStream) writeJsonStreamError(message);
+    console.error(message);
+    printHelp(jsonStream);
     return exitAfterFlush(2);
   }
 
@@ -1309,12 +1320,12 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
         // generic recovery stands.
       }
     }
-    console.error(
+    return fail(
       `Flow path must not contain ".." segments — they are collapsed without following symlinks, ` +
         `so the path can name a different file than the one your shell opens: ${suppliedPath}\n` +
-        recovery
+        recovery,
+      2
     );
-    return exitAfterFlush(2);
   }
   const resolvedPath = path.resolve(projectRoot, suppliedPath);
   // Stat-first so a directory named `foo.yaml` still batches; on a failed stat
@@ -1330,25 +1341,23 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     // name resolves to a .yaml file it never named, so "directory not found"
     // would quote a path they never typed. That form falls through instead.
     if (args.recursive && !fromName) {
-      console.error(`Flow directory not found: ${resolvedPath}`);
-      return exitAfterFlush(2);
+      return fail(`Flow directory not found: ${resolvedPath}`, 2);
     }
   }
   if (isDirectory) {
     if (args.jsonStream) {
-      console.error("--json-stream supports a single flow; directory runs are not supported.");
-      return exitAfterFlush(2);
+      return fail("--json-stream supports a single flow; directory runs are not supported.", 2);
     }
     return runFlowDirectory(resolvedPath, args, projectRoot, options);
   }
   if (args.recursive) {
-    console.error(
+    return fail(
       fromName
         ? `flow run --recursive requires a directory path; "${args.flowRef}" is a saved-flow name, ` +
             `which always addresses the single file ${suppliedPath}.`
-        : `flow run --recursive requires a directory path: ${suppliedPath}`
+        : `flow run --recursive requires a directory path: ${suppliedPath}`,
+      2
     );
-    return exitAfterFlush(2);
   }
   // A trailing separator asserts the path names a directory. When it does —
   // the directory dispatch above already ran — that assertion is honest (a
@@ -1375,13 +1384,13 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     const hint = SAFE_FLOW_NAME.test(separatorTrimmedPath)
       ? `.${path.sep}${separatorTrimmedPath}`
       : separatorTrimmedPath;
-    console.error(
+    return fail(
       `Flow path must not end in a path separator — the separator claims a directory, ` +
         `which the kernel would refuse to open as a file, so the CLI would run a file ` +
         `this string does not name: ${suppliedPath}\n` +
-        `Did you mean: argent flow run ${shellQuoteArg(hint)}`
+        `Did you mean: argent flow run ${shellQuoteArg(hint)}`,
+      2
     );
-    return exitAfterFlush(2);
   }
   if (path.extname(suppliedPath) !== ".yaml") {
     // A valid name never reaches here — resolveFlowRef already rewrote it to a
@@ -1397,39 +1406,41 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
       path.extname(suppliedPath) === "";
     if (path.basename(suppliedPath).toLowerCase() === ".yaml") {
       // path.extname treats a bare ".yaml" as an extensionless dotfile, so name the missing stem.
-      console.error(
-        `Flow filename must have a non-empty name containing only letters, numbers, "_", or "-": ${suppliedPath}`
+      return fail(
+        `Flow filename must have a non-empty name containing only letters, numbers, "_", or "-": ${suppliedPath}`,
+        2
       );
-    } else if (looksLikeName) {
-      console.error(
-        `Flow name must contain only letters, numbers, "_", or "-": ${suppliedPath}\n` +
-          `Names run \`${FLOWS_DIR}/<name>.yaml\`; pass a path ending in .yaml to run a flow file kept elsewhere.`
-      );
-    } else if (path.extname(suppliedPath).toLowerCase() === ".yaml") {
-      // On case-insensitive filesystems the path looks valid to the user, so name the real problem.
-      console.error(
-        `Flow extension must be lowercase .yaml, not ${path.extname(suppliedPath)}: ${suppliedPath}`
-      );
-    } else {
-      console.error(`Flow path must end in .yaml: ${suppliedPath}`);
     }
-    return exitAfterFlush(2);
+    if (looksLikeName) {
+      return fail(
+        `Flow name must contain only letters, numbers, "_", or "-": ${suppliedPath}\n` +
+          `Names run \`${FLOWS_DIR}/<name>.yaml\`; pass a path ending in .yaml to run a flow file kept elsewhere.`,
+        2
+      );
+    }
+    if (path.extname(suppliedPath).toLowerCase() === ".yaml") {
+      // On case-insensitive filesystems the path looks valid to the user, so name the real problem.
+      return fail(
+        `Flow extension must be lowercase .yaml, not ${path.extname(suppliedPath)}: ${suppliedPath}`,
+        2
+      );
+    }
+    return fail(`Flow path must end in .yaml: ${suppliedPath}`, 2);
   }
 
   const flowName = path.basename(suppliedPath, ".yaml");
   if (!SAFE_FLOW_NAME.test(flowName)) {
-    console.error(
-      `Flow filename must have a non-empty name containing only letters, numbers, "_", or "-": ${suppliedPath}`
+    return fail(
+      `Flow filename must have a non-empty name containing only letters, numbers, "_", or "-": ${suppliedPath}`,
+      2
     );
-    return exitAfterFlush(2);
   }
 
   const flowPath = resolvedPath;
   try {
     const stat = await fsp.stat(flowPath);
     if (!stat.isFile()) {
-      console.error(`Flow path is not a file: ${flowPath}`);
-      return exitAfterFlush(2);
+      return fail(`Flow path is not a file: ${flowPath}`, 2);
     }
     await fsp.access(flowPath, fsConstants.R_OK);
   } catch (err) {
@@ -1448,8 +1459,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
         ? `\nNo flow named "${args.flowRef}" is saved there — run \`argent flow list\` to see the saved flows.`
         : await savedFlowHint(projectRoot, flowPath);
     }
-    console.error(`${detail}: ${flowPath}${recovery}`);
-    return exitAfterFlush(2);
+    return fail(`${detail}: ${flowPath}${recovery}`, 2);
   }
 
   // The stat above matched the basename by the filesystem's rules, which on a
@@ -1487,17 +1497,18 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
       : actual !== undefined
         ? `Rename ${actual} to ${suppliedBase} to run it — flow files must be lowercase .yaml.`
         : "Pass the flow file's name exactly as it appears on disk.";
-    console.error(
+    return fail(
       `Flow path must name the file as it appears on disk — this filesystem matched ` +
         `${JSON.stringify(suppliedBase)} case-insensitively` +
         `${actual !== undefined ? ` to ${JSON.stringify(actual)}` : ""}, so the flow name ` +
         `(which keys the report, __baselines__/, and --output) would be one no file carries: ` +
-        `${suppliedPath}\n${recovery}`
+        `${suppliedPath}\n${recovery}`,
+      2
     );
-    return exitAfterFlush(2);
   }
 
-  if (!(await requireLocalToolServer())) return exitAfterFlush(2);
+  const refusal = await requireLocalToolServer();
+  if (refusal) return fail(refusal, 2);
 
   const { callTool, baseUrl } = createToolsClient({ paths: options.paths });
 
@@ -1542,16 +1553,11 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     // --output copies are fetched, below.
     report = resp.data as FlowReport;
   } catch (err) {
-    if (args.jsonStream) writeJsonStreamError(err);
-    console.error(err instanceof Error ? err.message : String(err));
-    return exitAfterFlush(1);
+    return fail(err instanceof Error ? err.message : String(err), 1, err);
   }
 
   if (!report || typeof report !== "object" || !("steps" in report)) {
-    const message = `"${flowName}" did not produce a run report.`;
-    if (args.jsonStream) writeJsonStreamError(new Error(message));
-    console.error(message);
-    return exitAfterFlush(2);
+    return fail(`"${flowName}" did not produce a run report.`, 2);
   }
 
   try {
@@ -1563,8 +1569,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     );
   } catch (err) {
     if (args.jsonStream) writeJsonStreamError(err);
-    console.error(err instanceof Error ? err.message : String(err));
-    return exitAfterFlush(1);
+    throw err;
   }
 
   if (args.jsonStream) {

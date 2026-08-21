@@ -1296,7 +1296,9 @@ describe("argent flow run", () => {
     );
 
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
-    expect(logs).toEqual([]);
+    expect(logs.map((line) => JSON.parse(line))).toEqual([
+      { event: "error", error: "--json and --json-stream cannot be combined" },
+    ]);
     expect(errs.join("\n")).toContain("--json and --json-stream cannot be combined");
     expect(errs.join("\n")).toContain("Usage: argent flow");
   });
@@ -1308,6 +1310,16 @@ describe("argent flow run", () => {
     expect(logs).toEqual([]);
     expect(errs.join("\n")).toContain("Usage: argent flow");
     expect(errs.join("\n")).toContain("--json-stream");
+  });
+
+  it("emits a structured error for a pre-flight refusal in streaming mode", async () => {
+    const missing = path.join(path.dirname(checkoutPath), "missing.yaml");
+    await expect(flow(["run", missing, "--json-stream"], opts)).rejects.toThrow("process.exit:2");
+
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    expect(logs.map((line) => JSON.parse(line))).toEqual([
+      { event: "error", error: expect.stringContaining(`Flow file not found: ${missing}`) },
+    ]);
   });
 
   it("emits a structured error for a primitive non-report in streaming mode", async () => {
@@ -1608,7 +1620,12 @@ describe("argent flow run <dir>", () => {
     await expect(flow(["run", flowsDir, "--json-stream"], opts)).rejects.toThrow("process.exit:2");
 
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
-    expect(logs).toEqual([]);
+    expect(logs.map((line) => JSON.parse(line))).toEqual([
+      {
+        event: "error",
+        error: "--json-stream supports a single flow; directory runs are not supported.",
+      },
+    ]);
     expect(errs.join("\n")).toContain(
       "--json-stream supports a single flow; directory runs are not supported"
     );
