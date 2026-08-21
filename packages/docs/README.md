@@ -8,7 +8,7 @@ The site has no landing page of its own. That is [argent.swmansion.com](https://
 
 ## Development
 
-This site lives at `packages/docs` but is a standalone npm project with its own lockfile, excluded from the root `packages/*` workspace glob so its dependencies stay out of the toolkit's lockfile.
+This site lives at `packages/docs` but is a standalone npm project with its own lockfile, excluded from the root `packages/*` workspace glob so its dependencies stay out of the toolkit's lockfile. ESLint still runs from the repo root (`npm run lint`) with the shared `eslint.config.mjs`; install this package's dependencies first so the type-aware rules can load `tsconfig.json`.
 
 ```bash
 cd packages/docs

@@ -25,7 +25,7 @@ permissions:
 
 jobs:
   docs-checks:
-    name: Format and lint
+    name: Format
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -49,11 +49,10 @@ jobs:
 
       # Prettier reads the .prettierrc at the repo root, so the docs site and
       # the packages share one style.
+      # ESLint runs from the repo root (.github/workflows/lint.yml); the root
+      # config covers packages/docs as well.
       - name: Check formatting
         run: npm run format:check
-
-      - name: Lint
-        run: npm run lint
 
   docs-build:
     name: Build
