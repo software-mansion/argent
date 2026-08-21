@@ -3,12 +3,24 @@ import { parseInitArgs } from "../src/init-args.js";
 
 describe("parseInitArgs", () => {
   it("parses the full known flag set", () => {
-    const parsed = parseInitArgs(["--yes", "--no-telemetry", "--local", "--from", "./argent.tgz"]);
+    const parsed = parseInitArgs([
+      "--yes",
+      "--no-telemetry",
+      "--no-allowlist",
+      "--local",
+      "--from",
+      "./argent.tgz",
+    ]);
     expect(parsed.nonInteractive).toBe(true);
     expect(parsed.noTelemetry).toBe(true);
+    expect(parsed.noAllowlist).toBe(true);
     expect(parsed.wantsLocal).toBe(true);
     expect(parsed.wantsGlobal).toBe(false);
     expect(parsed.fromTar).toBe("./argent.tgz");
+  });
+
+  it("defaults noAllowlist to false", () => {
+    expect(parseInitArgs(["-y"]).noAllowlist).toBe(false);
   });
 
   it("accepts -y and --global", () => {
