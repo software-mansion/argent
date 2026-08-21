@@ -35,6 +35,7 @@ import { gesturePinchTool } from "../tools/gesture-pinch";
 import { gestureRotateTool } from "../tools/gesture-rotate";
 import { buttonTool } from "../tools/button";
 import { createKeyboardTool } from "../tools/keyboard";
+import { createPasteTool } from "../tools/paste";
 import { rotateTool } from "../tools/rotate";
 import { shakeTool } from "../tools/shake";
 import { createTvRemoteTool } from "../tools/tv-remote";
@@ -134,6 +135,7 @@ export function createRegistry(): Registry {
   registry.registerTool(gestureRotateTool);
   registry.registerTool(buttonTool);
   registry.registerTool(createKeyboardTool(registry));
+  registry.registerTool(createPasteTool(registry));
   registry.registerTool(rotateTool);
   registry.registerTool(shakeTool);
   registry.registerTool(createTvRemoteTool(registry));

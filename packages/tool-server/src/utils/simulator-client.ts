@@ -153,6 +153,63 @@ async function pointerPost(
 }
 
 /**
+ * Put `text` on the DEVICE clipboard through simulator-server's
+ * `POST /api/clipboard/text`. On iOS the server fills a private NSPasteboard and
+ * pushes it into the simulator synchronously; on an Android emulator it goes
+ * through the emulator's gRPC `setClipboard`. The host clipboard is untouched
+ * either way. Resolves once the device pasteboard holds the text, so a paste
+ * keystroke sent afterwards cannot race the fill.
+ *
+ * The endpoint exists only in a simulator-server built with the `clipboard`
+ * feature. An older binary answers the route with a bare 404, which is
+ * reported as "unsupported" rather than as a network fault.
+ */
+export async function setSimulatorClipboardText(
+  api: SimulatorServerApi,
+  text: string,
+  signal?: AbortSignal
+): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch(`${api.apiUrl}/api/clipboard/text`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+      signal,
+    });
+  } catch (err) {
+    throw toSimulatorNetworkError("Paste", err, api.apiUrl);
+  }
+  if (res.status === 404) {
+    throw new FailureError(
+      "Paste failed: this simulator-server build has no clipboard endpoint. " +
+        "Update argent so its bundled simulator-server includes clipboard support, " +
+        "or type the text with the keyboard tool instead.",
+      {
+        error_code: FAILURE_CODES.PASTE_CLIPBOARD_UNSUPPORTED,
+        failure_stage: "simulator_clipboard_endpoint_missing",
+        failure_area: "tool_server",
+        error_kind: "unsupported",
+      }
+    );
+  }
+  // The route answers HTTP 200 for both outcomes and reports a failure in-band
+  // (`{ error }`), like the other simulator-server POST routes.
+  const body = (await res.json().catch(() => null)) as { status?: string; error?: string } | null;
+  if (!res.ok || body?.status !== "ok") {
+    throw new FailureError(
+      `Paste failed: could not set the device clipboard (${body?.error ?? `HTTP ${res.status}`}).`,
+      {
+        error_code: FAILURE_CODES.PASTE_CLIPBOARD_SET_FAILED,
+        failure_stage: "simulator_clipboard_set",
+        failure_area: "tool_server",
+        error_kind: "unknown",
+      }
+    );
+  }
+}
+
+/**
  * POST to a simulator-server endpoint, handling network errors and non-JSON
  * responses uniformly.  Callers handle domain-specific response validation.
  */
@@ -328,13 +385,6 @@ function routeViaTransport(
     case "rotate":
       transport.rotate(cmd.direction as RotationName);
       return;
-    case "paste": {
-      // paste() may be async on remote (pbcopy + Cmd+V); fire and forget
-      // here to preserve sendCommand's sync shape. Errors land in the host
-      // process's unhandledRejection logger — same as a websocket send fail.
-      void Promise.resolve(transport.paste(cmd.text as string));
-      return;
-    }
     default:
       throw new Error(`MoQ transport does not implement sendCommand cmd '${String(cmd.cmd)}'`);
   }
