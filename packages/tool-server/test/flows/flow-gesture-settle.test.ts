@@ -578,9 +578,11 @@ describe("a tree-source outage never fails a selector-less gesture", () => {
       "await:pass",
       "tap:pass",
     ]);
-    // One read for the await, then two for the second tap's own settle. A memo
-    // that outlived the await would leave the tap with none of its own.
-    expect(readsBetween(gestureAt(0), gestureAt(1))).toBe(3);
+    // Two reads for the await — `exists` is a positive condition, so it has to
+    // survive a second settled read before it passes — then two more for the
+    // second tap's own settle. A memo that outlived the await would leave the
+    // tap with none of its own.
+    expect(readsBetween(gestureAt(0), gestureAt(1))).toBe(4);
   }, 20_000);
 
   it("stops skipping as soon as an `idle` step reads, though it settles nothing either", async () => {

@@ -294,4 +294,36 @@ steps:
         "run-sequence stopped at keyboard after 1 of 2 steps: keyboard failed: no focused field",
     });
   });
+
+  it("forwards the request abort signal into each step invocation", async () => {
+    const flowFile = await writeFlow(GATED_FLOW);
+    const registry = makeRegistry(async () => ({ tapped: true, success: true }));
+    const tool = createRunFlowTool(registry);
+    const controller = new AbortController();
+
+    await tool.execute(
+      {},
+      { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile, device: "X" },
+      { signal: controller.signal } as never
+    );
+
+    const opts = (registry.invokeTool as any).mock.calls[0][2];
+    expect(opts.signal).toBe(controller.signal);
+  });
+
+  it("does not run any step when the signal is already aborted", async () => {
+    const flowFile = await writeFlow(GATED_FLOW);
+    const registry = makeRegistry(async () => ({ tapped: true }));
+    const tool = createRunFlowTool(registry);
+    const controller = new AbortController();
+    controller.abort();
+
+    await tool.execute(
+      {},
+      { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile, device: "X" },
+      { signal: controller.signal } as never
+    );
+
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
 });

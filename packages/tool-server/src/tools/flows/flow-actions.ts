@@ -1358,6 +1358,31 @@ async function runType(
 }
 
 /**
+ * Conditions whose verdict is "the element is there" and which therefore have
+ * to survive a second read before they pass. `hidden` is excluded on purpose:
+ * it already carries the blind-read guard, and there is no such thing as a
+ * node that is stale into existence.
+ */
+const NEEDS_SECOND_READ: ReadonlySet<WaitCondition> = new Set(["exists", "visible", "text"]);
+
+/**
+ * Identity of the set of nodes a selector matched, for comparing one read
+ * against the next. Frames are included: an element still sliding into place
+ * has not settled, and a `tap` resolved against a moving frame lands where the
+ * element no longer is.
+ */
+function matchFingerprint(matches: DescribeNode[]): string {
+  return matches
+    .map(
+      (n) =>
+        `${n.role}|${Math.round(n.frame.x * 1000)},${Math.round(n.frame.y * 1000)},` +
+        `${Math.round(n.frame.width * 1000)},${Math.round(n.frame.height * 1000)}` +
+        `|${n.label ?? ""}|${n.value ?? ""}|${n.identifier ?? ""}|${n.subtreeText ?? ""}`
+    )
+    .join("\n");
+}
+
+/**
  * Whether a `hidden` check that never saw its selector can still fail — i.e.
  * whether an earlier step of the run positively established that selector.
  * With no evidence set at all (a one-off directive caller outside a flow run)
@@ -1448,6 +1473,13 @@ async function waitForCondition(
   let lastTree: DescribeNode | undefined;
   let fetchError: string | undefined;
   let everMatched = false;
+  // State from the previous read, for confirming a POSITIVE condition. `heldPrev`
+  // is the weak form (the condition held), the fingerprints are the strong one
+  // (the same elements, on the same settled screen). All three reset whenever
+  // the condition stops holding or a read cannot be trusted.
+  let heldPrev = false;
+  let pendingMatch: string | undefined;
+  let pendingTree: string | undefined;
   // Date.now() of the most recent TRUSTED read — undefined until one lands.
   // Post-loop it anchors the dark-tail measurement: how long the window's
   // final stretch went without a trustworthy look at the screen.
@@ -1484,20 +1516,55 @@ async function waitForCondition(
         // to WRITE one; refuse to score one as clean, or a hand-written (or
         // hand-edited) flow keeps the permanently-green check the recorder
         // exists to prevent.
-        if (
-          step.condition === "hidden" &&
-          !everMatched &&
-          !hiddenCheckIsFalsifiable(env, step, lastTree)
-        ) {
-          return { ok: true, warning: vacuousHiddenReason(step.selector) };
+        if (!NEEDS_SECOND_READ.has(step.condition)) {
+          if (
+            step.condition === "hidden" &&
+            !everMatched &&
+            !hiddenCheckIsFalsifiable(env, step, lastTree)
+          ) {
+            return { ok: true, warning: vacuousHiddenReason(step.selector) };
+          }
+          return { ok: true };
         }
-        return { ok: true };
+        const fp = matchFingerprint(lastMatches);
+        const treeFp = treeFingerprint(data.tree);
+        // Two consecutive reads must agree. Inside the budget the bar is the
+        // strong one — the SAME elements, on a tree that did not change — so a
+        // node the tree has not finished evicting cannot be mistaken for the
+        // live screen: it is surrounded by churn, and one settled beat is
+        // enough for it to disappear.
+        //
+        // Once the budget is spent the bar drops to "it held on the previous
+        // read too". Anything stricter would REGRESS this check: an element
+        // sliding into place reports a new frame on every read and would never
+        // produce two identical ones, and a screen with something permanently
+        // in motion never produces two identical trees — both used to pass and
+        // must keep passing. The weak form is still strictly stronger than the
+        // single read this replaced.
+        const strong = pendingMatch === fp && pendingTree === treeFp;
+        if (heldPrev && (strong || Date.now() >= deadline)) return { ok: true };
+        heldPrev = true;
+        pendingMatch = fp;
+        pendingTree = treeFp;
+      } else {
+        heldPrev = false;
+        pendingMatch = undefined;
+        pendingTree = undefined;
       }
     } catch (err) {
       fetchError = err instanceof Error ? err.message : String(err);
       // A throw is as blind as an empty tree — `lastMatches` still holds the
-      // previous successful read, which must not pass for current evidence.
+      // previous successful read, which must not pass for current evidence,
+      // and it breaks the chain of consecutive reads. That means `heldPrev`
+      // too, not just the fingerprints: it is the weak form's entire claim
+      // ("it held on the previous read as well"), and leaving it set let the
+      // post-deadline branch honour that claim across a read that never
+      // happened. The blind-read branch above clears all three for the same
+      // reason, and a throw is strictly blinder than a blank tree.
       lastReadTrusted = false;
+      heldPrev = false;
+      pendingMatch = undefined;
+      pendingTree = undefined;
     }
     if (Date.now() >= deadline) {
       if (finalPoll) break;

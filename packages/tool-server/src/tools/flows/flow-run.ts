@@ -2501,19 +2501,17 @@ async function execLeafStep(
         // `reached`: the cancel can land after the gesture was dispatched, and
         // the outcome does not say which side it landed on.
         if (r.aborted) return { ...base, status: "skip", reason: r.reason, reached: true };
-        // `indeterminate` is `idle`'s only non-passing outcome: a screen that
-        // merely kept moving passes with a warning, and so does one that
-        // rendered nothing, so what is left here is a wait that could not run
-        // at all — a tree source that failed, or one that answered and then
-        // wedged. Scoring that `fail` would make CI
-        // read an environment problem as a regression and a QA author reset a
-        // pass streak over it. `error` keeps the run non-ok while saying
-        // plainly that the app was never judged. Scoped to `idle`, whose whole
-        // verdict rests on being able to observe the screen; the selector
-        // conditions keep their existing `fail` mapping.
-        if (!r.ok && r.indeterminate && step.kind === "idle") {
-          return { ...base, status: "error", reason: r.reason };
-        }
+        // An INDETERMINATE outcome is not a verdict about the app: the check
+        // could not run at all (an unreadable tree, no route reader, focus
+        // unconfirmed with nothing to read it from). It is `idle`'s only
+        // non-passing outcome — a screen that merely kept moving passes with a
+        // warning, and so does one that rendered nothing, so what is left there
+        // is a wait that could not run at all — and the selector conditions
+        // reach it the same way. Reporting it as `fail` makes CI read an
+        // environment problem as a regression and a QA author reset a pass
+        // streak over it. `error` keeps the run non-ok while saying plainly
+        // that the app was never judged.
+        if (!r.ok && r.indeterminate) return { ...base, status: "error", reason: r.reason };
         return {
           ...base,
           status: r.ok ? "pass" : "fail",
