@@ -3,19 +3,17 @@
  * Generates one Open Graph image per page at build time and points the
  * `og:image` / `twitter:image` tags of every built HTML file at it.
  *
- * The card is `static/img/og-background.png` with a frosted glass panel in the
- * middle, the white Argent logo centred on the panel and the page title
- * centred underneath it.
+ * The card is `static/img/og-background.png` with a frosted glass panel, the
+ * white Argent logo centred on the panel and the page title underneath.
  *
- * Two render passes keep the work small: the background and the panel are the
- * same on every card, so they are rendered once and reused as a bitmap. Only
- * the logo and the title are rendered per page.
+ * Background and panel are the same on every card, so they are rendered once
+ * into a bitmap and reused; only the logo and the title are per page.
  */
 
 const fs = require("node:fs/promises");
 const path = require("node:path");
 
-/** Canvas size expected by Open Graph consumers. */
+/** Standard Open Graph card size. */
 const WIDTH = 1200;
 const HEIGHT = 630;
 
@@ -24,10 +22,10 @@ const PANEL = {
   width: 920,
   height: 400,
   radius: 32,
-  /** `#C3D3E033` - the tint drawn over the blurred background. */
+  /** `#C3D3E033`, drawn over the blurred background. */
   tint: "#C3D3E0",
   tintOpacity: 0x33 / 0xff,
-  /** `backdrop-filter: blur(60px)`. An SVG blur takes the standard deviation. */
+  /** `backdrop-filter: blur(60px)`; an SVG blur takes half that as its standard deviation. */
   blurStdDeviation: 30,
 };
 const PANEL_X = (WIDTH - PANEL.width) / 2;
@@ -35,7 +33,7 @@ const PANEL_Y = (HEIGHT - PANEL.height) / 2;
 
 /** Logo and title inside the panel. */
 const LOGO_WIDTH = 280;
-const LOGO_ASPECT = 36.75 / 194; // from the viewBox of static/img/logo.svg
+const LOGO_ASPECT = 36.75 / 194; // viewBox of static/img/logo.svg
 const LOGO_GAP = 40;
 const TITLE_FONT_SIZE = 56;
 const TITLE_LINE_HEIGHT = 1.25;
@@ -45,12 +43,10 @@ const CONTENT_PADDING = 64;
 const ASSETS_DIR = path.join(__dirname, "..", "..", "scripts", "og-assets");
 const STATIC_IMG_DIR = path.join(__dirname, "..", "..", "static", "img");
 
-/** Output directory for the generated cards, relative to the build output. */
+/** Card output directory, relative to the build output. */
 const OUT_SUBDIR = path.join("img", "og");
 
 /**
- * Turns a route into a stable file name.
- *
  * @param {string} baseUrl
  * @param {string} routePath
  * @returns {string}
@@ -62,13 +58,12 @@ function fileNameForRoute(baseUrl, routePath) {
 }
 
 /**
- * Reads the page title out of a built HTML file. Docusaurus renders
+ * Reads the page title out of a built HTML file: Docusaurus renders
  * `<title>Page | Argent</title>`, and `<title>Argent</title>` on the home page.
  *
- * Returns `null` when the page has no title of its own to put on the card. That
- * covers the home page, whose title is the site title the logo already shows,
- * and the search page, whose title the search theme renders as
- * `[object Object]`. Those pages get a card with the logo alone.
+ * `null` means a card with the logo alone: the home page, whose title is the
+ * site title the logo already shows, and the search page, whose title the
+ * search theme renders as `[object Object]`.
  *
  * @param {string} html
  * @param {string} siteTitle
@@ -95,11 +90,7 @@ function titleFromHtml(html, siteTitle) {
 
 /**
  * Points the social image tags of a built page at `imageUrl` and declares the
- * card size, so consumers render the large summary card.
- *
- * The tags are written by React Helmet and by the shared theme, which order the
- * attributes differently, so each tag is matched by its `property` or `name`
- * attribute and only its `content` value is replaced.
+ * card size.
  *
  * @param {string} html
  * @param {string} imageUrl
@@ -130,8 +121,7 @@ function rewriteImageTags(html, imageUrl) {
 }
 
 /**
- * Renders the background and the frosted glass panel. The result is the same on
- * every card, so it is rendered once and reused.
+ * The background and frosted glass panel, identical on every card.
  *
  * @param {(svg: string) => Buffer} renderSvg
  * @returns {Promise<string>} a `data:` URI holding the rendered PNG
@@ -199,8 +189,8 @@ module.exports = function ogImagePlugin() {
       let generated = 0;
 
       for (const routePath of routesPaths) {
-        // Most routes are directories holding an index.html. `/404.html` is a
-        // file, so it is used as it stands.
+        // Most routes are directories holding an index.html; `/404.html` is
+        // a file.
         const relative = path.relative(baseUrl, `/${routePath.replace(/^\/+/, "")}`);
         const htmlPath = routePath.endsWith(".html")
           ? path.join(outDir, relative)
@@ -214,9 +204,8 @@ module.exports = function ogImagePlugin() {
 
         const title = titleFromHtml(html, siteConfig.title);
 
-        // Satori takes the React element shape, which is a plain object, so the
-        // card is described as an object literal and the site keeps no React
-        // dependency in its build scripts.
+        // Satori takes the React element shape, which is a plain object, so
+        // the card is described as an object literal rather than JSX.
         const element = /** @type {import("react").ReactNode} */ (
           /** @type {unknown} */ ({
             type: "div",

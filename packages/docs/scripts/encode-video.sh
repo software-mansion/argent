@@ -6,21 +6,18 @@
 #   ./scripts/encode-video.sh -h 720 recordings/*.mov
 #   ./scripts/encode-video.sh -p 6 recordings/wizard.mov
 #
-# Each input produces static/video/<name>.mp4 plus a <name>.jpg poster frame.
-# Reference them from MDX as <Video src="/video/<name>.mp4" portrait />.
+# Each input produces static/video/<slug>.mp4 plus a <slug>.jpg poster frame,
+# used from MDX as <Video src="/video/<slug>.mp4" portrait />.
 #
-# Encoding notes:
-#   -an              docs clips are silent, and muted video autoplays everywhere
+#   -an                   docs clips are silent
 #   -movflags +faststart  playback starts before the whole file has downloaded
-#   -pix_fmt yuv420p  required for Safari and iOS
-#   -crf 28          visually lossless enough for flat UI, roughly 30x smaller
-#                    than the same clip as a GIF
+#   -pix_fmt yuv420p      required for Safari and iOS
 
 set -euo pipefail
 
 HEIGHT=900
 CRF=28
-POSTER_AT=""  # seconds into the clip; defaults to a quarter of the duration
+POSTER_AT=""  # defaults to a quarter of the duration
 OUT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/static/video"
 
 usage() {
@@ -55,21 +52,19 @@ for input in "$@"; do
   fi
 
   name="$(basename "${input%.*}")"
-  # Lowercase, spaces and underscores to hyphens, so URLs stay tidy.
+  # Slugified so URLs stay tidy.
   slug="$(echo "$name" | tr '[:upper:]' '[:lower:]' | tr ' _' '--')"
   video="$OUT_DIR/$slug.mp4"
   poster="$OUT_DIR/$slug.jpg"
 
-  # scale=-2 keeps the aspect ratio and rounds the width to an even number,
-  # which H.264 requires.
+  # scale=-2 keeps the aspect ratio at the even width H.264 requires.
   ffmpeg -y -loglevel error -i "$input" \
     -vf "scale=-2:$HEIGHT" \
     -c:v libx264 -crf "$CRF" -preset slow \
     -pix_fmt yuv420p -movflags +faststart -an \
     "$video"
 
-  # The first frame of a demo is usually an empty terminal or a splash screen,
-  # so the poster comes from a quarter of the way in unless -p says otherwise.
+  # The opening frames are usually an empty terminal or a splash screen.
   poster_at="$POSTER_AT"
   if [ -z "$poster_at" ]; then
     duration="$(ffprobe -v error -show_entries format=duration \
