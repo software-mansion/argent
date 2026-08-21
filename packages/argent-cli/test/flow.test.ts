@@ -245,12 +245,19 @@ describe("parseRunArgs", () => {
     );
   });
 
-  it("counts an empty positional as the flow, not as a token to skip past", () => {
+  it("rejects an empty positional instead of skipping past it to the next token", () => {
     // A truthiness test here would take "extra.yaml" as the flow and run a file
     // the operator never named at that position.
     expect(() => parseRunArgs(["", "extra.yaml"])).toThrow(
-      "flow run accepts one flow name, YAML file path, or directory path"
+      "flow run requires a flow name, a YAML file path, or a directory path"
     );
+    // Nor does it mean "no argument": that reading resolves to the current
+    // directory and batches every flow under it.
+    expect(() => parseRunArgs([""])).toThrow(/omit the argument/);
+    expect(() => parseRunArgs(["--", ""])).toThrow(/omit the argument/);
+    // Once a flow is named, the empty token is one argument too many, and
+    // "omit the argument" would answer a question the operator never asked.
+    expect(() => parseRunArgs(["checkout", ""])).toThrow('unexpected argument ""');
   });
 });
 
@@ -402,12 +409,142 @@ describe("argent flow run", () => {
     expect(errs.join("\n")).toContain("unknown flag");
   });
 
-  it("exits 2 when no flow name or path is given", async () => {
-    await expect(flow(["run"], opts)).rejects.toThrow("process.exit:2");
+  it("batches .argent/flows when no flow name or path is given", async () => {
+    // A bare `run` is a defaulted spelling of `run .argent/flows`, so it must
+    // land in the same batch dispatch under the same absolute flow path — not
+    // in a second lookup that could resolve somewhere else.
+    const runRoot = await fsp.realpath(tempRoot);
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(flow(["run"], opts)).rejects.toThrow("process.exit:0");
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
+    expect(toolsClientMock.callTool).toHaveBeenCalledWith("flow-execute", {
+      flow_path: path.join(runRoot, ".argent", "flows", "saved.yaml"),
+      project_root: runRoot,
+      prerequisiteAcknowledged: true,
+    });
+    expect(logs.join("\n")).toContain("[1/1] saved.yaml");
+  });
+
+  it("exits 2 with a directory message when a bare run finds no .argent/flows", async () => {
+    // The single-file complaints below this dispatch ("must end in .yaml")
+    // would quote `.argent/flows`, a string this run never typed.
+    const bareRoot = await fsp.mkdtemp(path.join(tmpdir(), "argent-cli-flow-bare-"));
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(bareRoot);
+      await expect(flow(["run"], opts)).rejects.toThrow("process.exit:2");
+    } finally {
+      process.chdir(previousCwd);
+      await fsp.rm(bareRoot, { recursive: true, force: true });
+    }
+
     expect(errs.join("\n")).toContain(
-      "requires a flow name, a YAML file path, or a directory path"
+      `No ${path.join(".argent", "flows")} directory in the current working directory.`
     );
+    expect(errs.join("\n")).not.toContain("must end in .yaml");
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it("keeps the missing-directory message on a bare --recursive run", async () => {
+    // --recursive has its own "Flow directory not found" arm for a typed path;
+    // a defaulted ref must not fall into it and quote a path never supplied.
+    const bareRoot = await fsp.mkdtemp(path.join(tmpdir(), "argent-cli-flow-bare-r-"));
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(bareRoot);
+      await expect(flow(["run", "--recursive"], opts)).rejects.toThrow("process.exit:2");
+    } finally {
+      process.chdir(previousCwd);
+      await fsp.rm(bareRoot, { recursive: true, force: true });
+    }
+
+    expect(errs.join("\n")).toContain(
+      `No ${path.join(".argent", "flows")} directory in the current working directory.`
+    );
+    expect(errs.join("\n")).not.toContain("Flow directory not found");
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it("omits the -r hint when a bare run finds an empty .argent/flows", async () => {
+    // The hint is advice for a run that has not recursed yet; a bare one has.
+    const emptyRoot = await fsp.mkdtemp(path.join(tmpdir(), "argent-cli-flow-bare-empty-"));
+    await fsp.mkdir(path.join(emptyRoot, ".argent", "flows"), { recursive: true });
+    const runRoot = await fsp.realpath(emptyRoot);
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(emptyRoot);
+      await expect(flow(["run"], opts)).rejects.toThrow("process.exit:2");
+    } finally {
+      process.chdir(previousCwd);
+      await fsp.rm(emptyRoot, { recursive: true, force: true });
+    }
+
+    expect(errs.join("\n")).toContain(
+      `No flows found in ${path.join(runRoot, ".argent", "flows")}`
+    );
+    expect(errs.join("\n")).not.toContain("-r/--recursive");
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it("exits 2 without running anything on an empty flow argument", async () => {
+    // `argent flow run "$FLOW"` with the variable unset. Read as "no argument",
+    // the empty string resolves to the current directory and batches every
+    // flow under it.
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(flow(["run", ""], opts)).rejects.toThrow("process.exit:2");
+      expect(errs.join("\n")).toContain(
+        `flow run requires a flow name, a YAML file path, or a directory path; ` +
+          `omit the argument to run every flow in ${path.join(".argent", "flows")}`
+      );
+
+      // The end-of-options path collects positionals through the same helper,
+      // so it cannot accept what the ordinary path refuses.
+      errs.length = 0;
+      await expect(flow(["run", "--", ""], opts)).rejects.toThrow("process.exit:2");
+      expect(errs.join("\n")).toContain("flow run requires a flow name");
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it("recurses on a bare run, so a nested flow is not silently skipped", async () => {
+    // A bare run is the run half of `flow list`, which has always printed
+    // nested flows; a non-recursive default would skip what it advertises.
+    const nestedRoot = path.join(tempRoot, "bare-nested-project");
+    const nestedFlows = path.join(nestedRoot, ".argent", "flows");
+    await fsp.mkdir(path.join(nestedFlows, "suite"), { recursive: true });
+    await Promise.all([
+      fsp.writeFile(path.join(nestedFlows, "top.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(nestedFlows, "suite", "nested.yaml"), "steps: []\n"),
+    ]);
+    const runRoot = await fsp.realpath(nestedRoot);
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(nestedRoot);
+      await expect(flow(["run"], opts)).rejects.toThrow("process.exit:0");
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    const flowPaths = toolsClientMock.callTool.mock.calls.map(
+      (c) => (c[1] as { flow_path: string }).flow_path
+    );
+    expect(flowPaths).toEqual([
+      path.join(runRoot, ".argent", "flows", "suite", "nested.yaml"),
+      path.join(runRoot, ".argent", "flows", "top.yaml"),
+    ]);
+    expect(logs.join("\n")).toContain(`[1/2] ${path.join("suite", "nested.yaml")}`);
+    expect(logs.join("\n")).toContain("[2/2] top.yaml");
   });
 
   it("runs a saved flow named on the command line from .argent/flows", async () => {
@@ -1151,6 +1288,45 @@ describe("argent flow run", () => {
     }
 
     expect(logs.join("\n")).toBe("No flows found in .argent/flows");
+  });
+
+  it("runs exactly the set `flow list` prints, from one shared walker", async () => {
+    // The two commands answer the same question ("every flow I have saved"),
+    // so they walk one function: nested flows are covered by both, and
+    // __baselines__ / dot-directories / node_modules by neither.
+    const agreeRoot = path.join(tempRoot, "list-run-agreement-project");
+    const flowsDir = path.join(agreeRoot, ".argent", "flows");
+    await fsp.mkdir(path.join(flowsDir, "suite"), { recursive: true });
+    await fsp.mkdir(path.join(flowsDir, "__baselines__"), { recursive: true });
+    await fsp.mkdir(path.join(flowsDir, ".scratch"), { recursive: true });
+    await fsp.mkdir(path.join(flowsDir, "node_modules"), { recursive: true });
+    await Promise.all([
+      fsp.writeFile(path.join(flowsDir, "top.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "suite", "nested.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "__baselines__", "x.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, ".scratch", "hidden.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "node_modules", "dep.yaml"), "steps: []\n"),
+    ]);
+    const runRoot = await fsp.realpath(agreeRoot);
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(agreeRoot);
+      await flow(["list"], opts);
+      const listed = logs.join("\n").split("\n");
+      logs.length = 0;
+      await expect(flow(["run"], opts)).rejects.toThrow("process.exit:0");
+
+      expect(listed).toEqual([
+        path.join(".argent", "flows", "suite", "nested.yaml"),
+        path.join(".argent", "flows", "top.yaml"),
+      ]);
+      const ran = toolsClientMock.callTool.mock.calls.map((c) =>
+        path.relative(runRoot, (c[1] as { flow_path: string }).flow_path)
+      );
+      expect(ran).toEqual(listed);
+    } finally {
+      process.chdir(previousCwd);
+    }
   });
 
   it("renders the report — echo lines unnumbered, real steps numbered, reasons and fragment tags shown — and exits 1 on failure", async () => {
