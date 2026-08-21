@@ -2,9 +2,8 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { ChromiumCdpApi } from "../../../blueprints/chromium-cdp";
 import type { DescribeNode, DescribeTreeData } from "../contract";
 
-// `unknown` across the whole family: the failures here stem from uncontrolled
-// renderer output (eval threw, no value, unparseable payload), which we can't
-// validate. `validation` stays reserved for schemas we own.
+// `unknown`, not `validation`: these failures come from uncontrolled renderer
+// output, not from a schema we own.
 const DESCRIBE_FAILURE = {
   error_code: FAILURE_CODES.CHROMIUM_DESCRIBE_FAILED,
   failure_area: "tool_server",
@@ -12,38 +11,11 @@ const DESCRIBE_FAILURE = {
 } as const;
 
 /**
- * In-page script that returns a JSON UI tree mirroring `DescribeNode`. We
- * collect ARIA role / accessible name, interactivity flags, and bounding
- * rects normalized to fractions of window.innerWidth/innerHeight (matching
- * the iOS/Android describe contract, so the same frame-centre tap math
- * applies on Chromium).
- *
- * Choices:
- *  - Walk children plus open shadow roots and same-origin iframe documents so
- *    modern Chromium apps (VS Code, Slack, custom-element-heavy SPAs) don't
- *    appear as empty pages.
- *  - Skip purely structural wrappers (anonymous single-child divs) so the
- *    tree stays small.
- *  - Treat anchors, buttons, inputs, [role=button], [onclick], [tabindex]≥0
- *    as `clickable: true` so the agent knows which nodes to tap.
- *  - Prune a node only when it is truly invisible (display:none, opacity:0) or its
- *    border box is zero-area AND it clips overflow. A zero-area box with the default
- *    overflow:visible still paints its descendants — so we traverse it and promote them
- *    instead of cutting the subtree. This covers display:contents wrappers (React Native
- *    Web nests content under them), the zero-height anchor of an absolutely-positioned
- *    dropdown/popover/portal, and float/overflow wrappers that collapse to a zero-height
- *    box. A collapsed overflow:hidden container genuinely hides its content, so it stays
- *    pruned. visibility:hidden is NOT hard-pruned (it inherits, but a descendant can
- *    override it back to visible): we descend and suppress only the hidden element's own
- *    paint, so a visibility:visible descendant still surfaces.
- *  - Cap node count at 5000 — that, not depth, bounds the payload a runaway SPA
- *    would otherwise serialize past CDP's single Runtime.evaluate reply limit
- *    (~50MB). Cap depth at 60 purely to bound recursion: modern React DOMs
- *    (React Native Web, navigator/provider stacks) routinely nest 25+ levels
- *    before reaching leaf text, so a shallower cap silently clips real content.
- *    Callers with a bigger appetite (the flow tree keeps more than the
- *    agent-facing describe, like Android's FLOW_MAX_NODES) can raise both via
- *    `limits`.
+ * Caps on the in-page walk. `maxNodes` bounds the payload a runaway SPA would
+ * otherwise serialize past CDP's single Runtime.evaluate reply; `maxDepth` only
+ * bounds recursion — React DOMs (React Native Web, navigator/provider stacks)
+ * routinely nest 25+ levels before leaf text, so a shallower cap silently clips
+ * real content. Flow callers keep more of the tree and raise both.
  */
 export interface ChromiumWalkLimits {
   maxDepth: number;
@@ -52,13 +24,15 @@ export interface ChromiumWalkLimits {
 
 const DEFAULT_WALK_LIMITS: ChromiumWalkLimits = { maxDepth: 60, maxNodes: 5000 };
 
-// Interpolated into the in-page script: force a plain positive integer literal
-// so no caller can ever smuggle text (or a cap-disabling NaN) into the
-// renderer. Non-finite input falls back to the default.
+// Interpolated into the in-page script, so it must come out a plain positive
+// integer literal: no caller can smuggle in text or a cap-disabling NaN.
 function intForScript(value: number, fallback: number): number {
   return Number.isFinite(value) ? Math.max(1, Math.floor(value)) : fallback;
 }
 
+// In-page script returning a JSON tree shaped like `DescribeNode`, with frames
+// normalized to fractions of window.innerWidth/innerHeight — the same contract as
+// iOS/Android, so the frame-centre tap math is shared.
 const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `(() => {
   const MAX_DEPTH = ${intForScript(maxDepth, DEFAULT_WALK_LIMITS.maxDepth)};
   const MAX_NODES = ${intForScript(maxNodes, DEFAULT_WALK_LIMITS.maxNodes)};
@@ -486,18 +460,14 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   return JSON.stringify({ tree: root, truncated });
 })()`;
 
-// The default-limits build, exported for test/describe-chromium-script.test.ts,
-// which evals it against a mock DOM to lock in the visibility/pruning rules (the
-// script runs in the renderer, so the rest of the suite can only mock its CDP
-// response).
+// Exported for test/describe-chromium-script.test.ts, which evals it against a
+// mock DOM to lock in the visibility/pruning rules.
 export const DESCRIBE_DOM_SCRIPT = buildDescribeDomScript(DEFAULT_WALK_LIMITS);
 
 export async function describeChromium(
   api: ChromiumCdpApi,
   limits: ChromiumWalkLimits = DEFAULT_WALK_LIMITS
 ): Promise<DescribeTreeData> {
-  // Make sure the cached viewport is fresh — the script normalizes frames by
-  // the live window dimensions, so any rescroll between calls is reflected.
   await api.refreshViewport();
   const raw = (await api.cdp.send("Runtime.evaluate", {
     expression: buildDescribeDomScript(limits),
@@ -543,13 +513,9 @@ export async function describeChromium(
   }
   const data: DescribeTreeData = { tree: parsed.tree, source: "cdp-dom" };
   if (parsed.truncated) {
-    // Surface a server-side warning so a partial tree is visible to ops.
     process.stderr.write(
       `[chromium-describe] tree truncated at MAX_NODES — page exceeds the walker's budget; consider scoping the inspection.\n`
     );
-    // And tell the agent via the existing `hint` channel (iOS/Vega already use it) so a
-    // partial tree isn't silently consumed as if it were the whole page — no need to
-    // widen the shared contract just for Chromium.
     data.hint =
       "describe hit the node budget (MAX_NODES) and returned a PARTIAL tree — some on-screen content is missing. Scope the inspection to a smaller region (scroll to or focus the relevant view) and describe again.";
   }
