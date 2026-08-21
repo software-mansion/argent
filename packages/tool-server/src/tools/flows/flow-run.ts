@@ -393,7 +393,9 @@ const POST_LAUNCH_SETTLE_MS = 1500;
  * drifting literal.
  */
 export const NATIVE_READY_TIMEOUT_MS = NATIVE_DEVTOOLS_CONNECT_BUDGET_MS;
-const NATIVE_READY_POLL_MS = 250;
+// Exported for the recorder's own iOS readiness gate, which rides out the same
+// post-launch connect window at the same cadence (flow-add-step.ts).
+export const NATIVE_READY_POLL_MS = 250;
 
 /**
  * How long the launch step has spent on the app by the time the gate takes its
