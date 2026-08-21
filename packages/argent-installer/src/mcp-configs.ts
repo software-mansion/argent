@@ -97,10 +97,13 @@ export interface McpConfigAdapter {
   // say so instead of claiming a write.
   //
   // `refresh: true` marks update's periodic re-run, as opposed to init's
-  // explicit opt-in. An adapter whose rule has side effects beyond argent may
-  // treat a rule missing from an existing allowlist as a deliberate removal
-  // and decline to re-add it on refresh. Only Cursor does today; the other
-  // adapters re-add on both paths.
+  // explicit opt-in. An adapter whose write can override a choice the user
+  // made since init — Cursor's file allowlist, Zed's global tool_permissions
+  // default, Codex's per-tool approval modes — declines to re-impose it on
+  // refresh; adapters whose entries are argent-scoped and inert keep re-adding
+  // on both paths. Absence-based checks cannot tell "removed on purpose" from
+  // "never added" (no consent is persisted anywhere), so refresh errs toward
+  // not writing; `argent init` is the explicit (re-)opt-in path.
   addAllowlist?(
     root: string,
     scope: "local" | "global",
@@ -772,11 +775,13 @@ const cursorAdapter: McpConfigAdapter = {
       return `skipped - an mcpAllowlist here would turn off Cursor's "Run Everything" mode and override its in-app allowlist`;
     }
     if (list.includes(CURSOR_ALLOWLIST_PATTERN)) return;
-    // On update's refresh, argent:* missing from a list the user maintains is
-    // a deliberate removal — re-adding it would override that choice on every
-    // update. Re-opting in is `argent init`'s allowlist step.
+    // On update's refresh, argent:* missing from a list the user maintains
+    // usually means they removed it — re-adding would override that choice on
+    // every update. (It can also mean they never opted in; absence cannot tell
+    // the two apart, so refresh errs toward not writing.) Opting in is
+    // `argent init`'s allowlist step.
     if (options?.refresh) {
-      return `skipped - argent:* was removed from this allowlist; re-add it via argent init`;
+      return `skipped - argent:* is not on this allowlist; opt in via argent init`;
     }
     editJsoncFile(permPath, ["mcpAllowlist"], [...list, CURSOR_ALLOWLIST_PATTERN]);
   },
@@ -1262,11 +1267,26 @@ const zedAdapter: McpConfigAdapter = {
   // would need its own entry.  Setting the global default to "allow" is the
   // documented opt-in; built-in security rules still protect against
   // destructive operations.
-  addAllowlist(root: string, scope: "local" | "global"): void {
+  //
+  // That default governs EVERY agent tool in Zed, not just argent's, so
+  // update's refresh never re-imposes it: any other value is a choice the
+  // user made since init (or an opt-in that never happened), and overriding
+  // it on each update would be the Cursor run-mode bug in another skin.
+  addAllowlist(root, scope, options): string | void {
     const settingsPath =
       scope === "global"
         ? path.join(homedir(), ".config", "zed", "settings.json")
         : path.join(root, ".zed", "settings.json");
+    if (options?.refresh) {
+      const config = fs.existsSync(settingsPath) ? readJsonc(settingsPath) : {};
+      const perms = (config.agent as Record<string, unknown>)?.tool_permissions as
+        | Record<string, unknown>
+        | undefined;
+      if (perms?.default !== "allow") {
+        return `skipped - Zed's tool_permissions default is not "allow"; opt in via argent init`;
+      }
+      return;
+    }
     editJsoncFile(settingsPath, ["agent", "tool_permissions", "default"], "allow");
   },
 
@@ -1430,7 +1450,11 @@ const codexAdapter: McpConfigAdapter = {
     return this.getArgentEntry(configPath) !== null;
   },
 
-  addAllowlist(root, scope): void {
+  // On update's refresh the per-tool table is maintained, not re-imposed: ids
+  // a new version added are filled in, but an entry the user restricted keeps
+  // their approval_mode, and a table they emptied or removed stays gone —
+  // rewriting either would override a choice made since init.
+  addAllowlist(root, scope, options): string | void {
     const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
 
     if (!configPath) {
@@ -1439,6 +1463,22 @@ const codexAdapter: McpConfigAdapter = {
 
     const tools = getAvailableToolIds();
     const config = readToml(configPath) as CodexConfig;
+
+    if (options?.refresh) {
+      const toolsConfig = config.mcp_servers?.argent?.tools;
+      if (toolsConfig === undefined || Object.keys(toolsConfig).length === 0) {
+        return `skipped - no argent tools allowlist in config.toml; opt in via argent init`;
+      }
+      let added = false;
+      for (const tool of tools) {
+        if (!(tool in toolsConfig)) {
+          toolsConfig[tool] = { approval_mode: "approve" };
+          added = true;
+        }
+      }
+      if (added) writeToml(configPath, config);
+      return;
+    }
 
     config.mcp_servers ??= {};
     config.mcp_servers.argent ??= {};

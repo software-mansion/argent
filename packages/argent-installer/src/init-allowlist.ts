@@ -5,6 +5,8 @@ import { InitCancelled } from "./init-args.js";
 
 export interface AllowlistResult {
   enabled: boolean;
+  /** How `enabled` was reached: --no-allowlist, the -y default, or an answer. */
+  decidedBy: "flag" | "default" | "prompt";
   lines: string[];
 }
 
@@ -24,10 +26,11 @@ export async function configureAllowlist(args: {
   const adaptersWithoutAllowlist = adapters.filter((a) => !a.addAllowlist);
 
   let enabled = false;
+  let decidedBy: AllowlistResult["decidedBy"] = "default";
 
   if (noAllowlist) {
     p.log.info(pc.dim("Skipping editor auto-approve allowlists (--no-allowlist)."));
-    return { enabled, lines: [] };
+    return { enabled, decidedBy: "flag", lines: [] };
   }
 
   if (adaptersWithAllowlist.length > 0) {
@@ -49,10 +52,11 @@ export async function configureAllowlist(args: {
 
       if (p.isCancel(allowlistChoice)) throw new InitCancelled("allowlist");
       enabled = allowlistChoice as boolean;
+      decidedBy = "prompt";
     }
   }
 
-  if (!enabled) return { enabled, lines: [] };
+  if (!enabled) return { enabled, decidedBy, lines: [] };
 
   const lines: string[] = [];
 
@@ -80,5 +84,5 @@ export async function configureAllowlist(args: {
     );
   }
 
-  return { enabled, lines };
+  return { enabled, decidedBy, lines };
 }

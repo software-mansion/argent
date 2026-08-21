@@ -137,6 +137,8 @@ const NO_TELEMETRY_OPTION: InstallerOption = {
   flag: "--no-telemetry",
   description: "Opt out of anonymous telemetry for this run.",
 };
+// Shared spelling; the description differs per command (add vs refresh).
+const NO_ALLOWLIST_FLAG = "--no-allowlist";
 
 /**
  * How each installer subcommand is described in help — its summary and detail
@@ -158,7 +160,7 @@ export const INSTALLER_COMMAND_META: Record<InstallerCommand, InstallerCommandMe
       NON_INTERACTIVE_OPTION,
       NO_TELEMETRY_OPTION,
       {
-        flag: "--no-allowlist",
+        flag: NO_ALLOWLIST_FLAG,
         description: "Skip adding argent to editor auto-approve allowlists.",
       },
       {
@@ -192,7 +194,7 @@ export const INSTALLER_COMMAND_META: Record<InstallerCommand, InstallerCommandMe
       NON_INTERACTIVE_OPTION,
       NO_TELEMETRY_OPTION,
       {
-        flag: "--no-allowlist",
+        flag: NO_ALLOWLIST_FLAG,
         description: "Skip the editor auto-approve allowlist refresh.",
       },
       {

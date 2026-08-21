@@ -679,6 +679,27 @@ describe("Zed adapter", () => {
       default: "confirm",
     });
   });
+
+  // Zed's tool_permissions default governs every agent tool, not just
+  // argent's — refresh must not flip a value the user changed back to "allow".
+  it('addAllowlist on refresh does not re-impose default:"allow" the user reverted', () => {
+    const configPath = path.join(tmpDir, ".zed", "settings.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    const original = `{\n  "agent": { "tool_permissions": { "default": "confirm" } }\n}\n`;
+    fs.writeFileSync(configPath, original);
+    const note = adapter.addAllowlist!(tmpDir, "local", { refresh: true });
+    expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+    expect(note).toContain("not");
+    // The non-refresh path (init's explicit opt-in) still sets it.
+    expect(adapter.addAllowlist!(tmpDir, "local")).toBeUndefined();
+    expect((readJsoncFile(configPath).agent as Record<string, unknown>).tool_permissions).toEqual({
+      default: "allow",
+    });
+    // And refresh is a no-op once the value is already "allow".
+    const afterOptIn = fs.readFileSync(configPath, "utf8");
+    expect(adapter.addAllowlist!(tmpDir, "local", { refresh: true })).toBeUndefined();
+    expect(fs.readFileSync(configPath, "utf8")).toBe(afterOptIn);
+  });
 });
 
 // ── Gemini adapter ────────────────────────────────────────────────────────────
@@ -952,6 +973,47 @@ describe("Codex adapter", () => {
     expect(() => adapter.removeAllowlist!(tmpDir, "local")).not.toThrow();
     const content = fs.readFileSync(configPath, "utf8");
     expect(content).toContain('command = "argent"');
+  });
+
+  // Refresh maintains the table (fills in ids a new version added) but never
+  // overrides a choice made since init: a restricted entry keeps its value,
+  // and a table the user removed stays gone.
+  it("addAllowlist on refresh fills missing tools but keeps a user-restricted entry", () => {
+    const configPath = path.join(tmpDir, ".codex", "config.toml");
+    adapter.write(configPath, getMcpEntry());
+    adapter.addAllowlist!(tmpDir, "local");
+    // User restricts one tool and deletes another; a new version adds nothing.
+    let content = fs.readFileSync(configPath, "utf8");
+    content = content.replace(
+      /\[mcp_servers\.argent\.tools\.tool-b\]\napproval_mode = "approve"\n?/,
+      ""
+    );
+    content = content.replace(
+      /(\[mcp_servers\.argent\.tools\.tool-c\]\napproval_mode = )"approve"/,
+      '$1"deny"'
+    );
+    fs.writeFileSync(configPath, content);
+
+    expect(adapter.addAllowlist!(tmpDir, "local", { refresh: true })).toBeUndefined();
+
+    const after = fs.readFileSync(configPath, "utf8");
+    // tool-b was absent → refresh re-fills it (indistinguishable from a tool
+    // added by the update); tool-c keeps the user's restriction.
+    expect(after).toContain("[mcp_servers.argent.tools.tool-b]");
+    expect(after).toMatch(/\[mcp_servers\.argent\.tools\.tool-c\]\napproval_mode = "deny"/);
+  });
+
+  it("addAllowlist on refresh does not recreate a tools table the user removed", () => {
+    const configPath = path.join(tmpDir, ".codex", "config.toml");
+    adapter.write(configPath, getMcpEntry());
+    adapter.addAllowlist!(tmpDir, "local");
+    adapter.removeAllowlist!(tmpDir, "local");
+    const before = fs.readFileSync(configPath, "utf8");
+
+    const note = adapter.addAllowlist!(tmpDir, "local", { refresh: true });
+
+    expect(fs.readFileSync(configPath, "utf8")).toBe(before);
+    expect(note).toContain("opt in via argent init");
   });
 });
 
@@ -2358,7 +2420,7 @@ describe("installer preserves foreign MCP config", () => {
     fs.writeFileSync(permPath, `{\n  "mcpAllowlist": ["other:*"]\n}\n`);
     const note = cursor.addAllowlist!(tmpDir, "global", { refresh: true });
     expect(readJsoncFile(permPath).mcpAllowlist).toEqual(["other:*"]);
-    expect(note).toContain("removed");
+    expect(note).toContain("not on this allowlist");
     // The same file on init's path (no refresh) still gets the rule.
     expect(cursor.addAllowlist!(tmpDir, "global")).toBeUndefined();
     expect(readJsoncFile(permPath).mcpAllowlist).toEqual(["other:*", "argent:*"]);
