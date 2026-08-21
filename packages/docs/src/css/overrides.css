@@ -244,6 +244,17 @@ td code {
   .theme-doc-sidebar-container nav.menu > ul.menu__list {
     background-color: transparent;
   }
+
+  /*
+   * The shared theme paints every class containing "sidebar" with the off
+   * background, which catches the logo the desktop sidebar shows once the
+   * hideOnScroll navbar slides away. It sits above the inset panel, on the
+   * page itself, so it takes the page background.
+   */
+  .theme-doc-sidebar-container [class*="sidebarLogo"],
+  .theme-doc-sidebar-container [class*="logoWrapper"] {
+    background-color: var(--swm-background);
+  }
 }
 
 /* The sidebar menu keeps the ink color so it matches body copy. */
