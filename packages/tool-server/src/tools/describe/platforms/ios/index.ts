@@ -132,11 +132,11 @@ function emptyTree(): DescribeNode {
   });
 }
 
-export interface DescribeIosParams {
+interface DescribeIosParams {
   bundleId?: string;
 }
 
-export interface DescribeIosOptions {
+interface DescribeIosOptions {
   // Pre-resolved tvOS verdict, passed by poll/retry callers so the hot path
   // skips re-shelling `xcrun` each iteration. Omitted callers probe once.
   isTvOs?: boolean;

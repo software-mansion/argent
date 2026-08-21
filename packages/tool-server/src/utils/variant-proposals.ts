@@ -39,7 +39,7 @@ export interface VariantMatch {
   value: string;
 }
 
-export interface Variant {
+interface Variant {
   id: string;
   name: string;
   summary: string;
@@ -80,7 +80,7 @@ export interface SubmittedSelection {
   comment?: string;
 }
 
-export interface ResolvedSelection {
+interface ResolvedSelection {
   element: string;
   match: VariantMatch;
   chosenVariant: Variant | null;
@@ -100,7 +100,7 @@ export interface ElementAnnotation {
   comment: string;
 }
 
-export type AwaitOutcome =
+type AwaitOutcome =
   | {
       status: "completed";
       round: number;

@@ -50,7 +50,7 @@ async function run(args: string[], options?: SimRemoteOptions): Promise<{ stdout
  * Shape of `sim-remote simctl list devices --json`. Mirrors Apple's
  * `xcrun simctl list devices --json` output: `{ devices: { <runtime>: [ ... ] } }`.
  */
-export interface SimRemoteDevice {
+interface SimRemoteDevice {
   udid: string;
   name: string;
   state: string; // "Booted" | "Shutdown" | ...
@@ -58,7 +58,7 @@ export interface SimRemoteDevice {
   deviceTypeIdentifier?: string;
 }
 
-export interface SimRemoteListDevicesResult {
+interface SimRemoteListDevicesResult {
   devices: Record<string, SimRemoteDevice[]>;
 }
 
@@ -173,14 +173,9 @@ export async function simctlPbcopy(udid: string, text: string): Promise<void> {
   await run(["simctl", "pbcopy", stripRemotePrefix(udid)], { stdin: text });
 }
 
-export async function simctlPbpaste(udid: string): Promise<string> {
-  const { stdout } = await run(["simctl", "pbpaste", stripRemotePrefix(udid)]);
-  return stdout;
-}
-
 // ── generic in-simulator primitives ──
 
-export interface SpawnResult {
+interface SpawnResult {
   /** Set when spawned detached. */
   pid?: number;
   /** Set when run to completion (non-detached). */
@@ -244,10 +239,6 @@ export async function injectDylib(
   const args = ["dylib", "add", stripRemotePrefix(udid), opts.filePath];
   if (opts.insert) args.push("--insert");
   await run(args, { timeoutMs: 60_000 });
-}
-
-export async function removeDylib(udid: string, filename: string): Promise<void> {
-  await run(["dylib", "remove", stripRemotePrefix(udid), filename]);
 }
 
 /** Set a launchd environment variable inside the remote simulator. */

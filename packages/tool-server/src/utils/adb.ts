@@ -109,7 +109,7 @@ export async function emulatorSupportsFlag(
   return supported;
 }
 
-export interface AdbRunResult {
+interface AdbRunResult {
   stdout: string;
   stderr: string;
 }
@@ -222,7 +222,7 @@ export async function adbExecOutBinary(
   return runAdbBinary(["-s", serial, "exec-out", shellCommand], options);
 }
 
-export interface AndroidDevice {
+interface AndroidDevice {
   serial: string;
   state: string;
   isEmulator: boolean;
@@ -673,7 +673,7 @@ export async function waitForBootCompleted(
   });
 }
 
-export interface AvdInfo {
+interface AvdInfo {
   name: string;
 }
 
@@ -715,7 +715,7 @@ export async function listAvds(): Promise<AvdInfo[]> {
  * "Loadable" then crashes QEMU with `std::bad_alloc`). Pair with
  * `-force-snapshot-load` in the boot spawn so ram.bin corruption fails loudly.
  */
-export interface SnapshotProbeResult {
+interface SnapshotProbeResult {
   loadable: boolean;
   reason: string | null;
 }

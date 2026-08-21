@@ -18,7 +18,7 @@ import { AI_CLIENTS } from "./ai-identity.js";
 // Per-event property allowlist and validators. Unknown keys and invalid values
 // are dropped before anything reaches the OTLP collector.
 
-export type Validator = (v: unknown) => unknown | undefined;
+type Validator = (v: unknown) => unknown | undefined;
 
 const oneOf =
   <T extends string>(opts: readonly T[]): Validator =>
@@ -316,6 +316,3 @@ export function sanitize(event: string, raw: Record<string, unknown>): Record<st
   }
   return out;
 }
-
-/** Re-export of the validator combinators for unit tests. */
-export const _testValidators = { oneOf, matches, finiteNonNeg, bool, arrayOf };

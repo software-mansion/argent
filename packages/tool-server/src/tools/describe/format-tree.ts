@@ -170,7 +170,7 @@ function renderNested(root: DescribeNode, contentRoles: ReadonlySet<string>): st
   return lines;
 }
 
-export interface FormatDescribeOptions {
+interface FormatDescribeOptions {
   source: DescribeSource;
 }
 

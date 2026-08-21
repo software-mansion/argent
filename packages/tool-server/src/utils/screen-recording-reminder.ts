@@ -5,9 +5,9 @@
 // ScreenRecordingSession service, and a tool-server process owns at most one
 // recording per device.
 
-export type ScreenRecordingStatus = "recording" | "finalized";
+type ScreenRecordingStatus = "recording" | "finalized";
 
-export interface ActiveScreenRecording {
+interface ActiveScreenRecording {
   deviceId: string;
   startedAtMs: number;
   /** Cap in effect for this capture (already clamped per platform). */

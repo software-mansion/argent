@@ -152,7 +152,7 @@ export interface PtyProxy {
   dispose(): void;
 }
 
-export interface InjectBeat {
+interface InjectBeat {
   /** Milliseconds to wait BEFORE writing `data` (0 for the first beat). */
   delayBeforeMs: number;
   data: string;
@@ -195,7 +195,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export interface StartPtyProxyOptions {
+interface StartPtyProxyOptions {
   /** The loaded node-pty module (from `loadNodePty`). */
   pty: NodePty;
   /** Shell command run in the PTY (the agent launch line). */

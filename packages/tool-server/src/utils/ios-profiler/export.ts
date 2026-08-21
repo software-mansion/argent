@@ -8,7 +8,7 @@ import { execFileAsyncWithTimeout } from "./run-with-timeout";
  */
 const CPU_SCHEMA_CANDIDATES = ["time-profile", "cpu-profile", "time-sample"];
 
-export const EXPORTS: Record<string, { suffix: string; xpath: string }> = {
+const EXPORTS: Record<string, { suffix: string; xpath: string }> = {
   cpu: {
     suffix: "_raw_cpu.xml",
     xpath: '/trace-toc/run[@number="1"]/data/table[@schema="time-profile"]',

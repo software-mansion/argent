@@ -6,7 +6,7 @@ import { resolveDevice } from "./device-info";
 import { isTvOsSimulator } from "./ios-devices";
 import type { VariantMatch } from "./variant-proposals";
 
-export interface NormalizedFrame {
+interface NormalizedFrame {
   x: number;
   y: number;
   width: number;

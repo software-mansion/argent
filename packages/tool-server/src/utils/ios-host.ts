@@ -45,7 +45,7 @@ export type IosEndpoint =
  * its setup/teardown through one of these implementations and reads as a
  * linear pipeline instead of an `if (isRemote)` ladder.
  */
-export interface IosHost {
+interface IosHost {
   readonly kind: "local" | "remote";
   /** When true, the host can only carry TCP traffic (sim-remote tunnel can't bridge unix sockets). */
   readonly requiresTcp: boolean;
@@ -83,7 +83,7 @@ const ARGENT_BOOTSTRAP_DYLIB_BASENAMES = new Set([
 ]);
 
 /** How the process currently backing a bundle id was launched. */
-export interface RunningAppProcess {
+interface RunningAppProcess {
   pid: number;
   /** Time since exec. `ps -o etime` has whole-second resolution. */
   ageMs: number;
@@ -96,7 +96,7 @@ export interface RunningAppProcess {
   env: string;
 }
 
-export interface RunningAppInspection {
+interface RunningAppInspection {
   running: boolean;
   /**
    * Null when there is no process to inspect: the app is not running, or this

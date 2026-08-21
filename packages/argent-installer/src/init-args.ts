@@ -1,7 +1,7 @@
 // Parsed view of `argent init <args>` and the cancel sentinel the step modules
 // use to unwind to the orchestrator.
 
-export interface InitArgs {
+interface InitArgs {
   /** --yes / -y */
   nonInteractive: boolean;
   /** --no-telemetry */
@@ -41,7 +41,7 @@ export function parseInitArgs(args: string[]): InitArgs {
 // because there is no such prompt anymore: choosing the global install mode
 // (or --global) IS the consent, so a missing global package installs without
 // a second question. The event schema keeps the label for older clients.
-export type CancelStep = "install_mode" | "editors" | "scope" | "allowlist" | "skills";
+type CancelStep = "install_mode" | "editors" | "scope" | "allowlist" | "skills";
 
 // Thrown by a step module when the user cancels a prompt (Ctrl-C / Esc). The
 // orchestrator catches it, emits `cli_init_cancel { step }`, finalizes

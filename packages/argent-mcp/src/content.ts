@@ -145,7 +145,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * `diffPath` / `contextDiffPath` are artifact handles on current tool-servers
  * and raw host-path strings on older ones; both shapes render here.
  */
-export interface ScreenshotDiffResult {
+interface ScreenshotDiffResult {
   summary: string;
   diffPath?: unknown;
   contextDiffPath?: unknown;

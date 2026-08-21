@@ -146,7 +146,7 @@ export function parseUnlinkFlags(argv: string[]): UnlinkFlags {
   return flags;
 }
 
-export function printLinkHelp(): void {
+function printLinkHelp(): void {
   console.log(`Usage: argent link [<target>] [flags]
 
 Route argent client requests (argent tools / run / mcp) to a remote tool-server
@@ -210,7 +210,7 @@ Notes:
 `);
 }
 
-export function printUnlinkHelp(): void {
+function printUnlinkHelp(): void {
   console.log(`Usage: argent unlink [flags]
 
 Remove the persisted remote tool-server link (~/.argent/link.json) and return

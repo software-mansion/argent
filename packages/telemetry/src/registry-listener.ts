@@ -5,7 +5,7 @@ import { aiTelemetryFromMeta, type AiTelemetryProps } from "./ai-identity.js";
 
 // HTTP captures request-only metadata here so registry lifecycle events can
 // include platform context (and the coarse AI client) without carrying raw params.
-export interface InvocationMeta extends AiTelemetryProps {
+interface InvocationMeta extends AiTelemetryProps {
   platform?: Platform;
 }
 

@@ -8,8 +8,9 @@
  * remote client over `GET /artifacts/:id`. A co-located client never hits this
  * route; it reads the file in place via the handle's `hostPath`.
  *
- * The wire types are re-exported here so existing `../artifacts` importers keep
- * working; new code may import them straight from `@argent/registry`.
+ * The store handle is re-exported here so existing `../artifacts` importers keep
+ * working; new code may import it straight from `@argent/registry`, which is
+ * where the rest of the wire types are reached from directly.
  */
 
 import { createReadStream } from "node:fs";
@@ -25,14 +26,7 @@ import type {
   ToolContext,
 } from "@argent/registry";
 
-export {
-  ArtifactStore,
-  ARTIFACT_MARKER,
-  type ArtifactHandle,
-  type ArtifactEntry,
-  type ArtifactListItem,
-  type RegisterArtifactOptions,
-} from "@argent/registry";
+export { ArtifactStore, type ArtifactHandle } from "@argent/registry";
 
 /**
  * Pull the registry-owned artifact store from a tool's `execute` context.

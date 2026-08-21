@@ -19,7 +19,7 @@ import {
 // Re-exported for the env-merging unit test that imports it from this module.
 export { buildDyldInsertLibraries };
 
-export type NativeDevtoolsTransport = "unix" | "tcp";
+type NativeDevtoolsTransport = "unix" | "tcp";
 
 export const NATIVE_DEVTOOLS_NAMESPACE = "NativeDevtools";
 

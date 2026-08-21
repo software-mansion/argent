@@ -67,7 +67,7 @@ export function autoScreenshotEnabled(options?: FlagsPathOptions): boolean {
  * rather than imported because argent-mcp must keep working against older
  * tool-servers and shares no runtime package with it.
  */
-export const SECRET_PLACEHOLDER_MARKER = "{{secret:";
+const SECRET_PLACEHOLDER_MARKER = "{{secret:";
 
 /**
  * Deep-scan tool args for a secret placeholder. When one is present the

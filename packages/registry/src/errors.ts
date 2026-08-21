@@ -201,11 +201,9 @@ export function subprocessFailureMetadata(
 }
 
 export class ServiceNotFoundError extends Error {
-  public readonly serviceId: string;
   constructor(serviceId: string) {
     super(`Service "${serviceId}" not found`);
     this.name = "ServiceNotFoundError";
-    this.serviceId = serviceId;
     withFailureSignal(this, {
       error_code: FAILURE_CODES.REGISTRY_SERVICE_NOT_FOUND,
       failure_stage: "registry_resolve_service",
@@ -216,11 +214,9 @@ export class ServiceNotFoundError extends Error {
 }
 
 export class ServiceInitializationError extends Error {
-  public readonly serviceId: string;
   constructor(serviceId: string, message: string, options?: { cause?: Error }) {
     super(`[${serviceId}] ${message}`, options);
     this.name = "ServiceInitializationError";
-    this.serviceId = serviceId;
     withFailureSignal(
       this,
       getFailureSignalOrFallback(options?.cause, {
@@ -236,11 +232,9 @@ export class ServiceInitializationError extends Error {
 // ── Tool Errors ──
 
 export class ToolNotFoundError extends Error {
-  public readonly toolId: string;
   constructor(toolId: string) {
     super(`Tool "${toolId}" not found`);
     this.name = "ToolNotFoundError";
-    this.toolId = toolId;
     withFailureSignal(this, {
       error_code: FAILURE_CODES.REGISTRY_TOOL_NOT_FOUND,
       failure_stage: "registry_lookup_tool",
@@ -251,11 +245,9 @@ export class ToolNotFoundError extends Error {
 }
 
 export class ToolExecutionError extends Error {
-  public readonly toolId: string;
   constructor(toolId: string, message: string, options?: { cause?: Error }) {
     super(`[Tool:${toolId}] ${message}`, options);
     this.name = "ToolExecutionError";
-    this.toolId = toolId;
     withFailureSignal(
       this,
       getFailureSignalOrFallback(options?.cause, {

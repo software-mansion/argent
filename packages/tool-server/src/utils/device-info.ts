@@ -17,7 +17,7 @@ const IOS_UDID_SHAPE =
  * local iOS UDID — the prefix is the only thing that disambiguates a remote
  * sim from a local one.
  */
-export const REMOTE_PREFIX = "remote:";
+const REMOTE_PREFIX = "remote:";
 
 /** Strip the `remote:` prefix from a device id, returning the bare UDID. */
 export function stripRemotePrefix(id: string): string {
@@ -42,7 +42,7 @@ export const CHROMIUM_ID_PREFIX = "chromium-cdp-";
  * collide). v1 supports the Virtual Device only, so a Vega serial resolves to
  * kind `vvd`.
  */
-export const VEGA_SERIAL_PREFIX = "amazon-";
+const VEGA_SERIAL_PREFIX = "amazon-";
 
 /** Returns the platform a `udid` belongs to based on its shape. */
 export function classifyDevice(udid: string): Platform {

@@ -112,7 +112,7 @@ export function resizeDecodedPng(
   return { width: targetWidth, height: targetHeight, data: output };
 }
 
-export interface ResampleAxisWeights {
+interface ResampleAxisWeights {
   start: number;
   weights: Float32Array;
 }
