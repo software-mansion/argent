@@ -53,11 +53,7 @@ const zodSchema = z
     rotation: z
       .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
       .optional()
-      .describe(
-        "Orientation override for live baseline/current captures. Rarely needed: an Android capture " +
-          "already follows the device's rotation. Setting it pins a fixed rotation, which can make a " +
-          "live capture disagree with a saved baseline taken at a different device rotation."
-      ),
+      .describe("Orientation override for live baseline/current captures."),
     outputDir: z
       .string()
       .min(1)

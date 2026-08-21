@@ -27,11 +27,7 @@ const zodSchema = z.object({
     .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
     .optional()
     .describe(
-      "Orientation override. Rarely needed: on Android the capture already follows the device's " +
-        "current rotation, so it is upright without this. Setting it replaces that with a fixed " +
-        "rotation, which on a rotated device produces an image whose geometry no longer matches " +
-        "`describe` frames or gesture coordinates. On Chromium it rotates the captured image after " +
-        "Page.captureScreenshot."
+      "Orientation override for the screenshot (rotates the captured image after Page.captureScreenshot on Chromium). On Android the capture already follows the device's rotation."
     ),
   scale: z
     .number()
@@ -136,7 +132,6 @@ export function createScreenshotTool(registry: Registry): ToolDefinition<Params,
     },
     description: `Capture a screenshot of the device screen (iOS simulator, Android emulator, Apple TV simulator, Vega, or Chromium app). Returns { image }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
 Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.
-On a rotated Android device the capture follows the device's rotation, so it comes back upright and its geometry matches \`describe\` frames and gesture coordinates. Do not pass \`rotation\` to correct a sideways image.
 Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.`,
     alwaysLoad: true,
     searchHint: "device simulator emulator chromium screen image capture baseline tvos apple tv",
