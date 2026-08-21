@@ -10,17 +10,22 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+  pages: write
+  id-token: write
 
 concurrency:
   group: docs-publish
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   docs-publish:
     name: Publish to GitHub Pages
     if: github.repository == 'software-mansion/argent'
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     defaults:
       run:
         working-directory: packages/docs
@@ -42,9 +47,12 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Publish generated content to GitHub Pages
-        uses: JamesIves/github-pages-deploy-action@v4
+      # `path` is repository-relative and ignores `defaults.run.working-directory`.
+      - name: Upload generated content as a Pages artifact
+        uses: actions/upload-pages-artifact@v5
         with:
-          folder: packages/docs/build
-          branch: gh-pages
-          token: ${{ secrets.GITHUB_TOKEN }}
+          path: packages/docs/build
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
