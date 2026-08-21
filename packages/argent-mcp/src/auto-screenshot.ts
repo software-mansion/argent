@@ -22,6 +22,7 @@ export const AUTO_SCREENSHOT_TOOLS = new Set([
   "launch-app",
   "restart-app",
   "open-url",
+  "push-notification",
   "describe",
   "run-sequence",
 ]);
@@ -37,6 +38,8 @@ export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
   "launch-app": 3000,
   "restart-app": 3000,
   "open-url": 2000,
+  // A push banner slides in from the top over ~0.7 s after simctl returns.
+  "push-notification": 2000,
   "gesture-swipe": 1500,
   "gesture-scroll": 1500,
   "gesture-drag": 1500,
