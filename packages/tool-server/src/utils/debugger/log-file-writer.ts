@@ -1,6 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import {
+  attributeLogSource,
+  toFlatSourceToken,
+  type LogFrameMapper,
+} from "./log-source-attribution";
 
 export interface RichLogEntry {
   marker: string;
@@ -25,7 +30,9 @@ export interface MessageCluster {
   level: string;
   firstId: number;
   lastId: number;
+  /** Present if and only if `sourceLine` is. */
   sourceFile?: string;
+  /** 1-based, matching what an editor shows. Present if and only if `sourceFile` is. */
   sourceLine?: number;
 }
 
@@ -48,7 +55,6 @@ interface ClusterState {
 
 const MAX_ENTRIES = 50_000;
 const CLUSTER_KEY_LENGTH = 80;
-const SOURCE_EXT = /\.(tsx?|jsx?|mjs|cjs)$/;
 
 const LEVEL_DISPLAY: Record<string, string> = {
   log: "LOG  ",
@@ -59,7 +65,10 @@ const LEVEL_DISPLAY: Record<string, string> = {
 };
 
 // [L:<id>] <timestamp> <LEVEL> <source> | <message>
-const LINE_RE = /^\[L:(\d+)\] (\S+) (\S+)\s+(\S+) \| (.*)$/;
+// The source is matched non-greedily up to the first " | " rather than as a run of
+// non-space characters: source-mapped paths come from the user's filesystem and can
+// contain spaces, which would otherwise shift every later capture group.
+const LINE_RE = /^\[L:(\d+)\] (\S+) (\S+)\s+(.*?) \| (.*)$/;
 
 export class LogFileWriter {
   private filePath: string;
@@ -71,8 +80,15 @@ export class LogFileWriter {
   private clusters = new Map<string, ClusterState>();
   private ready = false;
   private closed = false;
+  private mapper?: LogFrameMapper;
 
-  constructor(port: number) {
+  /**
+   * @param mapper Resolves bundle positions back to original sources. Omitted by runtimes
+   *   that serve unbundled scripts, where a call frame already names its own file. Held by
+   *   reference so maps registered after construction are picked up on the next write.
+   */
+  constructor(port: number, mapper?: LogFrameMapper) {
+    this.mapper = mapper;
     const timestamp = Date.now();
     const dir = path.join(os.homedir(), ".argent", "tmp");
     fs.mkdirSync(dir, { recursive: true });
@@ -110,12 +126,11 @@ export class LogFileWriter {
       marker: `[L:${entry.id}]`,
     };
 
-    // Extract source from stackTrace at write time
-    const sourceUrl = entry.stackTrace?.callFrames?.[0]?.url;
-    const sourceLine = entry.stackTrace?.callFrames?.[0]?.lineNumber;
-    const sourceFile = sourceUrl ? (cleanSourceUrl(sourceUrl) ?? undefined) : undefined;
-    const source =
-      sourceFile !== undefined && sourceLine !== undefined ? `${sourceFile}:${sourceLine}` : "-";
+    // Attribute at write time, while the stack trace is still in hand — the flat file
+    // does not carry one. The file and line come from a single result, so a cluster can
+    // never end up with one and not the other.
+    const logSource = attributeLogSource(entry.stackTrace, this.mapper);
+    const source = toFlatSourceToken(logSource);
 
     // Collapse newlines in message for flat format
     const flatMessage = entry.message.replace(/\n/g, " ");
@@ -147,6 +162,12 @@ export class LogFileWriter {
     if (existing) {
       existing.count++;
       existing.lastId = entry.id;
+      // The first occurrence may have arrived before its source map was registered.
+      // A later one that does resolve fills the gap instead of being discarded.
+      if (existing.sourceFile === undefined && logSource) {
+        existing.sourceFile = logSource.file;
+        existing.sourceLine = logSource.line;
+      }
     } else {
       this.clusters.set(key, {
         message: entry.message.slice(0, 200),
@@ -154,8 +175,8 @@ export class LogFileWriter {
         level: entry.level,
         firstId: entry.id,
         lastId: entry.id,
-        sourceFile,
-        sourceLine,
+        sourceFile: logSource?.file,
+        sourceLine: logSource?.line,
       });
     }
 
@@ -232,17 +253,6 @@ export class LogFileWriter {
     } catch {
       // file may already be gone
     }
-  }
-}
-
-function cleanSourceUrl(url: string): string | null {
-  try {
-    const { pathname } = new URL(url);
-    const clean = pathname.replace(/^\//, "");
-    if (!SOURCE_EXT.test(clean)) return null;
-    return clean;
-  } catch {
-    return null;
   }
 }
 
