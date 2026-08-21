@@ -1322,6 +1322,20 @@ describe("argent flow run", () => {
     ]);
   });
 
+  it("emits a structured error and exits 2 when artifact export fails in streaming mode", async () => {
+    toolsClientMock.callTool.mockResolvedValue({ data: report() });
+    toolsClientMock.baseUrl.mockRejectedValueOnce(new Error("tool server unreachable"));
+
+    await expect(
+      flow(["run", checkoutPath, "--json-stream", "--output", path.join(tempRoot, "out")], opts)
+    ).rejects.toThrow("process.exit:2");
+
+    expect(logs.map((line) => JSON.parse(line))).toEqual([
+      { event: "error", error: "tool server unreachable" },
+    ]);
+    expect(errs).toEqual(["tool server unreachable"]);
+  });
+
   it("emits a structured error for a primitive non-report in streaming mode", async () => {
     toolsClientMock.callTool.mockResolvedValue({ data: "not-a-report" });
 

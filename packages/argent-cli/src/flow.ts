@@ -1568,8 +1568,8 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
       baseUrl
     );
   } catch (err) {
-    if (args.jsonStream) writeJsonStreamError(err);
-    throw err;
+    if (!args.jsonStream) throw err;
+    return fail(err instanceof Error ? err.message : String(err), 2, err);
   }
 
   if (args.jsonStream) {
