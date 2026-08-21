@@ -194,7 +194,6 @@ td code {
 
 /* Hovering a surface that sits on white lifts it to the secondary background. */
 .menu__link:hover,
-.pagination-nav__link:hover,
 .dropdown__link:hover,
 .table-of-contents__link:hover {
   background-color: var(--swm-off-background);
@@ -261,4 +260,17 @@ td code {
 .menu__link,
 .menu__list-item-collapsible > .menu__link {
   color: var(--swm-sidebar-menu-color);
+}
+
+/*
+ * Inline code in tables flips against the row it sits on, so the badge stays
+ * visible on both the plain and the striped rows.
+ */
+th code,
+table tr:nth-child(2n) td code {
+  background-color: var(--swm-background);
+}
+
+table tr:nth-child(2n + 1) td code {
+  background-color: var(--swm-off-background);
 }
