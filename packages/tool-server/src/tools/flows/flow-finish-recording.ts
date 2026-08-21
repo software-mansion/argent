@@ -8,39 +8,9 @@ import {
   clientFileDirective,
   parseFlow,
   serializeFlow,
-  selectorToYaml,
-  type FlowFile,
-  type FlowStep,
   type FlowSavedTo,
-  type FlowSelector,
 } from "./flow-utils";
-import type { TextMatchMode } from "../../utils/ui-tree-match";
-
-// Quote selectors in the step summary the way the flow FILE spells them
-// (`id`, bare string for loose, no internal `loose` flag) — the summary is what
-// gets read before hand-editing the YAML, so the spellings must agree.
-function selectorLabel(sel: FlowSelector): string {
-  return JSON.stringify(selectorToYaml(sel));
-}
-
-// Render a text condition for the summary, one spelling for every step kind
-// that carries one (await/assert/when): the comparator is preserved — regex
-// patterns as `matches /…/`, exact text as `== "…"`, substrings as
-// `contains "…"` — and literals use JSON quoting so embedded quotes and
-// control characters stay unambiguous.
-function textConditionLabel(
-  sel: FlowSelector,
-  expectedText: string | undefined,
-  textMatch: TextMatchMode | undefined
-): string {
-  const selector = selectorLabel(sel);
-  const expected = expectedText ?? "";
-  return textMatch === "matches"
-    ? `text ${selector} matches /${expected}/`
-    : textMatch === "equals"
-      ? `text ${selector} == ${JSON.stringify(expected)}`
-      : `text ${selector} contains ${JSON.stringify(expected)}`;
-}
+import { summarizeSteps } from "./flow-step-definitions";
 
 const zodSchema = z.object({
   name: z
@@ -117,7 +87,7 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
         // step bodies the parser does not fully constrain, and nothing that can
         // throw may run after the session is destroyed. The one known thrower
         // there — `JSON.stringify` on a cyclic `args` anchor — is guarded in
-        // {@link renderToolArgs}; keeping the order is what makes the next one
+        // flow-step-definitions; keeping the order is what makes the next one
         // recoverable rather than fatal.
         const summary = summarizeSteps(flow);
         clearRecordingSession(session);
@@ -136,150 +106,3 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
     };
   },
 };
-
-/**
- * A `tool:` step's `args` is the one step body the parser does not constrain, so
- * a cyclic YAML alias in a hand-edited file reaches here as a cyclic object and
- * `JSON.stringify` throws on it. Fall back to a marker, the way `parseFlow`
- * already does for the same input class (see `badEntry` in flow-utils) — the
- * summary of a recording that is otherwise fine should not fail on one
- * unrenderable step.
- *
- * The body interpolates rather than returning `JSON.stringify(args)` directly,
- * because `JSON.stringify(undefined)` is the VALUE `undefined`, not a string,
- * and would leave through a `string`-typed signature uncaught (TypeScript does
- * not flag it — `JSON.stringify`'s overload is declared to return `string`).
- * No reachable input is undefined today, on either of the two paths into
- * {@link summarizeStep}: the finish comes through {@link summarizeSteps}, which
- * is only ever handed `parseFlow` output, where `fromYamlStep` normalises a
- * missing/`null` `args:` to `{}` on the way through; the recorder
- * (`flow-add-step`) hands over a step it built in memory, whose `args` is
- * `stripDeviceKeys(params.args ? JSON.parse(params.args) : {})` — a fresh
- * spread, so an object either way. It is the `default:` arm of that switch this
- * guards — a step kind added without its own `case` lands there and is rendered
- * as a `tool:` step, with no `args` field to read.
- */
-function renderToolArgs(args: unknown): string {
-  try {
-    return `${JSON.stringify(args)}`;
-  } catch {
-    return "[cyclic args]";
-  }
-}
-
-/**
- * The pre-step sleep a replay performs, when the step carries one. Narrowed to
- * the one arm that has a `delayMs` — over the whole union the field could only
- * be read through a cast, which is also what would stop the compiler checking
- * it.
- *
- * A runtime check is still needed, because `fromYamlStep` copies `delayMs`
- * across unvalidated and `validateFlow` does not check it, so a hand-edited
- * non-number survives a parse. The check has to be the RUNNER's, though, not a
- * `typeof`: flow-run gates on truthiness and hands the raw value to
- * `setTimeout` (`if (step.delayMs && !(await sleepOrAbort(step.delayMs, …)))`),
- * which coerces it. A quoted `delayMs: "2000"` is not a number and sleeps two
- * real seconds; `delayMs: .nan` IS a number and sleeps none. Testing `typeof`
- * was therefore wrong in both directions — silent about a delay that happens,
- * and claiming `(after NaNms)` for one that does not.
- */
-function delayLabel(step: Extract<FlowStep, { kind: "tool" }>): string {
-  // The runner's own gate: a falsy `delayMs` (absent, 0, NaN) is never slept.
-  if (!step.delayMs) return "";
-  const ms = Number(step.delayMs);
-  // What `setTimeout` will actually wait. It floors anything under 1ms — and
-  // anything non-numeric, which coerces to NaN — to an immediate tick, so there
-  // is no delay to describe; an out-of-range value is clamped the same way.
-  return Number.isFinite(ms) && ms >= 1 ? ` (after ${ms}ms)` : "";
-}
-
-/** One human-readable line per recorded step, in the flow file's own spellings. */
-function summarizeSteps(flow: FlowFile): string[] {
-  return flow.steps.map((step, i) => summarizeStep(step, i + 1));
-}
-
-/**
- * One recorded step, rendered the way the flow FILE spells it. Shared with the
- * recorder, which echoes just the line it appended instead of the whole
- * growing file.
- */
-export function summarizeStep(step: FlowStep, n: number): string {
-  switch (step.kind) {
-    case "echo":
-      return `${n}. echo: ${step.message}`;
-    case "launch":
-      return `${n}. launch: ${typeof step.app === "string" ? step.app : JSON.stringify(step.app)}`;
-    case "run":
-      return `${n}. run: ${step.flow}`;
-    case "tap":
-    case "long-press": {
-      // `times` (tap) and `duration` (long-press) change what replays, so a
-      // summary line that drops them misdescribes the file. `times` has a
-      // second reason: `tap` is one of the kinds the recorder builds, and since
-      // it stopped returning the YAML per step this line is the author's only
-      // per-step view of what was appended. `long-press` has no recorder path,
-      // so it only ever reaches an author through flow-finish-recording's
-      // `summary`, which still returns `flowFile` beside it. Neither kind
-      // carries a `delayMs` (only `tool` steps do), so no delayLabel here.
-      //
-      // That reasoning is NOT applied file-wide, and the arms below show it:
-      // `type.submit` (whose `false` suppresses the Enter press) and
-      // `await.timeout` also change what replays and still render nothing, as
-      // they did before the recorder shared this renderer. Neither kind is
-      // recorder-built, so both reach an author only through the finish
-      // `summary` — beside the `flowFile` that spells them out. Rendering them
-      // is a fair follow-up, not a gap this per-step view opened.
-      const target = step.selector ? selectorLabel(step.selector) : `(${step.x}, ${step.y})`;
-      // Only ×2..×10 is renderable: `times: 1` is the default and never lands in
-      // the file (parseTapTimes normalizes it to absent), so rendering `×1` for
-      // a stray in-memory `times: 1` would describe a file that can't exist.
-      const times =
-        step.kind === "tap" && step.times !== undefined && step.times > 1 ? ` ×${step.times}` : "";
-      const held =
-        step.kind === "long-press" && step.duration !== undefined ? ` for ${step.duration}ms` : "";
-      return `${n}. ${step.kind}: ${target}${times}${held}`;
-    }
-    case "type":
-      return `${n}. type: ${selectorLabel(step.into)} ← "${step.text}"`;
-    case "await":
-    case "assert": {
-      const tail =
-        step.condition === "text"
-          ? textConditionLabel(step.selector, step.expectedText, step.textMatch)
-          : `${step.condition} ${selectorLabel(step.selector)}`;
-      return `${n}. ${step.kind}: ${tail}`;
-    }
-    case "wait":
-      return `${n}. wait: ${step.ms}ms`;
-    case "when": {
-      // Mirror the await/assert rendering above — selectorLabel spelling,
-      // same comparator tail for text guards.
-      const cond =
-        step.condition.kind === "platform"
-          ? `platform ${step.condition.platform}`
-          : step.condition.condition === "text"
-            ? textConditionLabel(
-                step.condition.selector,
-                step.condition.expectedText,
-                step.condition.textMatch
-              )
-            : `${step.condition.condition} ${selectorLabel(step.condition.selector)}`;
-      // Pluralize like flow-run's skip reason so the two surfaces agree.
-      const count = step.steps.length;
-      return `${n}. when: ${cond} (${count} step${count === 1 ? "" : "s"})`;
-    }
-    case "scroll-to":
-      return `${n}. scroll-to: ${selectorLabel(step.target)} (${step.direction})`;
-    case "pinch":
-      return `${n}. pinch: scale ${step.scale}${step.selector ? ` on ${selectorLabel(step.selector)}` : ""}`;
-    case "rotate":
-      return `${n}. rotate: by ${step.by}°${step.selector ? ` on ${selectorLabel(step.selector)}` : ""}`;
-    case "snapshot":
-      return `${n}. snapshot: ${step.name}`;
-    case "idle":
-      return `${n}. await: screen idle`;
-    case "tool":
-    default:
-      return `${n}. tool: ${step.name} ${renderToolArgs(step.args)}${delayLabel(step)}`;
-  }
-}

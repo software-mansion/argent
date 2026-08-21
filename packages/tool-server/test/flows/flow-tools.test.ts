@@ -7,10 +7,8 @@ import { ArtifactStore, zodObjectToJsonSchema } from "@argent/registry";
 
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
-import {
-  flowFinishRecordingTool,
-  summarizeStep,
-} from "../../src/tools/flows/flow-finish-recording";
+import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recording";
+import { summarizeStep } from "../../src/tools/flows/flow-step-definitions";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import {
   createRunFlowTool,
@@ -2746,8 +2744,9 @@ describe("the flow-add-step schema the CLI tests hand-copy", () => {
 // summarizeStep is the single spelling shared by the recorder's per-step
 // `recorded` line and flow-finish-recording's `summary`. `times` (tap),
 // `duration` (long-press) and `delayMs` (tool) change what replays, so a
-// summary that drops them misdescribes the file. long-press steps have no
-// live recorder path, so this is the only coverage of that rendering.
+// summary that drops them misdescribes the file. flow-step-definitions.test.ts
+// pins one case per kind; these add the `delayMs` shapes only a real YAML parse
+// yields — `soon`, `.nan`, `"2000"`, `0`, `-5`.
 describe("summarizeStep rendering", () => {
   it("renders a tap's times count", () => {
     // A recorded selector spells the id key `identifier`; selectorToYaml maps it

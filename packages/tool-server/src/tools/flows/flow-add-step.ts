@@ -15,7 +15,7 @@ import {
   type FlowStep,
   type RecordingSession,
 } from "./flow-utils";
-import { summarizeStep } from "./flow-finish-recording";
+import { summarizeStep } from "./flow-step-definitions";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { resolveDevice } from "../../utils/device-info";
 import { stripDeviceKeys } from "./flow-device";

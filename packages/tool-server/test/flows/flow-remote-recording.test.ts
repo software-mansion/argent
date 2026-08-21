@@ -13,10 +13,8 @@ import {
 
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
-import {
-  flowFinishRecordingTool,
-  summarizeStep,
-} from "../../src/tools/flows/flow-finish-recording";
+import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recording";
+import { summarizeStep } from "../../src/tools/flows/flow-step-definitions";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import { createRunFlowTool, resolveFlowSource } from "../../src/tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../../src/tools/flows/flow-read-prerequisite";
