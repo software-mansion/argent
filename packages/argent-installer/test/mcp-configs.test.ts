@@ -2347,6 +2347,36 @@ describe("installer preserves foreign MCP config", () => {
     fs.rmSync(homedirOverride, { recursive: true, force: true });
   });
 
+  // A list the user maintains that lacks argent:* means they removed it —
+  // update's refresh must not override that choice on every run. Opting back
+  // in is `argent init`'s allowlist step (which does append here).
+  it("Cursor addAllowlist on refresh does not re-add argent:* removed from a user's allowlist", () => {
+    const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    homedirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-home-"));
+    const permPath = path.join(homedirOverride, ".cursor", "permissions.json");
+    fs.mkdirSync(path.dirname(permPath), { recursive: true });
+    fs.writeFileSync(permPath, `{\n  "mcpAllowlist": ["other:*"]\n}\n`);
+    const note = cursor.addAllowlist!(tmpDir, "global", { refresh: true });
+    expect(readJsoncFile(permPath).mcpAllowlist).toEqual(["other:*"]);
+    expect(note).toContain("removed");
+    // The same file on init's path (no refresh) still gets the rule.
+    expect(cursor.addAllowlist!(tmpDir, "global")).toBeUndefined();
+    expect(readJsoncFile(permPath).mcpAllowlist).toEqual(["other:*", "argent:*"]);
+    fs.rmSync(homedirOverride, { recursive: true, force: true });
+  });
+
+  it("Cursor addAllowlist on refresh is a byte-level no-op when argent:* is present", () => {
+    const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    homedirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-home-"));
+    const permPath = path.join(homedirOverride, ".cursor", "permissions.json");
+    fs.mkdirSync(path.dirname(permPath), { recursive: true });
+    const original = `{\n  // mine\n  "mcpAllowlist": ["argent:*", "other:*"]\n}\n`;
+    fs.writeFileSync(permPath, original);
+    expect(cursor.addAllowlist!(tmpDir, "global", { refresh: true })).toBeUndefined();
+    expect(fs.readFileSync(permPath, "utf8")).toBe(original);
+    fs.rmSync(homedirOverride, { recursive: true, force: true });
+  });
+
   it("addClaudePermission preserves a comment and foreign permissions in settings.json", () => {
     const settingsPath = path.join(tmpDir, ".claude", "settings.json");
     fs.mkdirSync(path.dirname(settingsPath), { recursive: true });

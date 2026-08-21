@@ -138,6 +138,7 @@ export function resolveUpdatePackageAction(
 export async function update(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
   const noTelemetry = args.includes("--no-telemetry");
+  const noAllowlist = args.includes("--no-allowlist");
   const requestedVersion = getRequestedVersion(args);
   const trigger = getUpdateTriggerFromEnv();
   telemetryInit("installer");
@@ -742,14 +743,18 @@ export async function update(args: string[]): Promise<void> {
       }
 
       // Refresh allowlists only for scopes that already had argent configured —
-      // matches the editor list above.
-      for (const [scope, adapters] of adaptersByScope) {
-        for (const adapter of adapters) {
-          if (!adapter.addAllowlist) continue;
-          try {
-            adapter.addAllowlist(projectRoot, scope);
-          } catch {
-            // non-fatal
+      // matches the editor list above. `refresh: true` lets an adapter treat a
+      // rule missing from an existing allowlist as a deliberate removal
+      // instead of re-adding it; --no-allowlist skips the refresh entirely.
+      if (!noAllowlist) {
+        for (const [scope, adapters] of adaptersByScope) {
+          for (const adapter of adapters) {
+            if (!adapter.addAllowlist) continue;
+            try {
+              adapter.addAllowlist(projectRoot, scope, { refresh: true });
+            } catch {
+              // non-fatal
+            }
           }
         }
       }

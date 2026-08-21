@@ -158,6 +158,10 @@ export const INSTALLER_COMMAND_META: Record<InstallerCommand, InstallerCommandMe
       NON_INTERACTIVE_OPTION,
       NO_TELEMETRY_OPTION,
       {
+        flag: "--no-allowlist",
+        description: "Skip adding argent to editor auto-approve allowlists.",
+      },
+      {
         flag: "--from <path>",
         description: "Install from a local tarball or package spec instead of the npm release.",
       },
@@ -187,6 +191,10 @@ export const INSTALLER_COMMAND_META: Record<InstallerCommand, InstallerCommandMe
     options: [
       NON_INTERACTIVE_OPTION,
       NO_TELEMETRY_OPTION,
+      {
+        flag: "--no-allowlist",
+        description: "Skip the editor auto-approve allowlist refresh.",
+      },
       {
         flag: "--version <version>",
         description: "Update to a specific version instead of the latest.",

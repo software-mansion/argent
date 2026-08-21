@@ -16,12 +16,19 @@ export async function configureAllowlist(args: {
   effectiveRoot: string;
   scope: "local" | "global";
   nonInteractive: boolean;
+  /** --no-allowlist: skip the whole step without prompting */
+  noAllowlist: boolean;
 }): Promise<AllowlistResult> {
-  const { adapters, effectiveRoot, scope, nonInteractive } = args;
+  const { adapters, effectiveRoot, scope, nonInteractive, noAllowlist } = args;
   const adaptersWithAllowlist = adapters.filter((a) => a.addAllowlist);
   const adaptersWithoutAllowlist = adapters.filter((a) => !a.addAllowlist);
 
   let enabled = false;
+
+  if (noAllowlist) {
+    p.log.info(pc.dim("Skipping editor auto-approve allowlists (--no-allowlist)."));
+    return { enabled, lines: [] };
+  }
 
   if (adaptersWithAllowlist.length > 0) {
     p.log.info(

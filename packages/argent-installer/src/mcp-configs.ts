@@ -95,7 +95,17 @@ export interface McpConfigAdapter {
   findShadowingConfigs?(root: string, writtenScope: "local" | "global"): ShadowingConfigFinding[];
   // Returns a short note when the rule was deliberately NOT added so init can
   // say so instead of claiming a write.
-  addAllowlist?(root: string, scope: "local" | "global"): string | void;
+  //
+  // `refresh: true` marks update's periodic re-run, as opposed to init's
+  // explicit opt-in. An adapter whose rule has side effects beyond argent may
+  // treat a rule missing from an existing allowlist as a deliberate removal
+  // and decline to re-add it on refresh. Only Cursor does today; the other
+  // adapters re-add on both paths.
+  addAllowlist?(
+    root: string,
+    scope: "local" | "global",
+    options?: { refresh?: boolean }
+  ): string | void;
   removeAllowlist?(root: string, scope: "local" | "global"): void;
 }
 
@@ -747,7 +757,7 @@ const cursorAdapter: McpConfigAdapter = {
   // option — Cursor treats a permissions-file approvalMode as authoritative
   // (`getModeFullAutoRun` returns true for it), so it would force Run
   // Everything ON for users who chose "Ask every time".
-  addAllowlist(): string | void {
+  addAllowlist(_root, _scope, options): string | void {
     const permPath = path.join(homedir(), ".cursor", "permissions.json");
     if (!fs.existsSync(permPath)) {
       return `skipped - creating ~/.cursor/permissions.json would turn off Cursor's "Run Everything" mode`;
@@ -762,6 +772,12 @@ const cursorAdapter: McpConfigAdapter = {
       return `skipped - an mcpAllowlist here would turn off Cursor's "Run Everything" mode and override its in-app allowlist`;
     }
     if (list.includes(CURSOR_ALLOWLIST_PATTERN)) return;
+    // On update's refresh, argent:* missing from a list the user maintains is
+    // a deliberate removal — re-adding it would override that choice on every
+    // update. Re-opting in is `argent init`'s allowlist step.
+    if (options?.refresh) {
+      return `skipped - argent:* was removed from this allowlist; re-add it via argent init`;
+    }
     editJsoncFile(permPath, ["mcpAllowlist"], [...list, CURSOR_ALLOWLIST_PATTERN]);
   },
 
