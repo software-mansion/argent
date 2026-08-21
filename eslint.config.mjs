@@ -50,10 +50,6 @@ export default tseslint.config(
         // its test files in a separate tsconfig.test.json (which projectService
         // does not auto-discover), so we point the type-aware parser at both.
         project: ["packages/*/tsconfig.json", "packages/*/tsconfig.test.json"],
-        // The docs site is ignored above, but the project glob would still load
-        // packages/docs/tsconfig.json, which extends @docusaurus/tsconfig from
-        // the docs' own node_modules that the root install does not have.
-        projectFolderIgnoreList: ["**/node_modules/**", "**/packages/docs/**"],
         tsconfigRootDir: import.meta.dirname,
       },
       globals: { ...globals.node },
