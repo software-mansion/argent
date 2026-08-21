@@ -19,11 +19,9 @@ interface LogRegistryResponse extends LogStats {
   appName: string;
   logicalDeviceId: string | undefined;
   /**
-   * Why this registry is empty when it should not be — present only when the
-   * previous debugger session for this device was torn down by a
-   * `stop-all-simulator-servers` with console history captured. Without it an
-   * empty registry reads as "the app logged nothing", which is the wrong
-   * conclusion to hand an agent debugging a silent app.
+   * Set only when a teardown reaped the previous debugger session while it held
+   * captured console output. Without it an empty registry reads as "the app
+   * logged nothing".
    */
   note?: string;
 }
@@ -62,10 +60,10 @@ When the debugger cannot be reached, this tool does not fail: it returns { statu
     async execute(_services, params, ctx) {
       try {
         const api = await resolveDebuggerService(registry, params);
-        // Unlike debugger-status, no socket-state gate here: captured logs are
+        // No socket-state gate (unlike debugger-status): captured logs are
         // readable over a dead socket, and disposing the stale service would
-        // close the LogFileWriter — destroying exactly the post-crash logs the
-        // caller came for.
+        // close the LogFileWriter — destroying the post-crash logs the caller
+        // came for.
         const stats = api.logWriter.getStats();
         const clusters = api.logWriter.getClusters(20);
 
@@ -79,24 +77,16 @@ When the debugger cannot be reached, this tool does not fail: it returns { statu
           logicalDeviceId: api.logicalDeviceId,
         };
 
-        // Resolving the service above silently RECONNECTED if a teardown had
-        // reaped the previous session, so an empty registry here is ambiguous:
-        // either the app has logged nothing, or a `stop-all-simulator-servers`
-        // deleted the log file. Only the empty case is ambiguous — a registry
-        // with entries in it is reporting this session's own capture, and
-        // consuming a breadcrumb there would attach a stale explanation to a
-        // healthy result.
+        // Resolving above silently reconnects after a teardown, so only an
+        // EMPTY registry is ambiguous; one with entries is this session's own
+        // capture, and consuming a breadcrumb there would attach a stale
+        // explanation to a healthy result.
         if (stats.totalEntries === 0) {
-          // Every id this device answers to, and all of them unconditionally — NOT
-          // `a ?? b`. The disposer writes ONE event under two keys (the id the
-          // caller connected with and the `logicalDeviceId` Metro echoed) so either
-          // spelling can read it back. Short-circuiting consumed only the key that
-          // matched and left the other behind, where it would attach a stale
-          // explanation to a later, unrelated empty read — against the report-once
-          // invariant the breadcrumb store states. `forgetDeviceAlias` runs in that
-          // same dispose, so by the time this read happens the alias no longer
-          // joins the two: the logical id has to come from the freshly resolved
-          // api, which is the only thing that still knows it.
+          // Every id this device answers to, unconditionally — not `a ?? b`. The
+          // disposer writes one breadcrumb under both the connect id and the
+          // `logicalDeviceId` Metro echoed; leaving either behind would explain a
+          // later, unrelated empty read. `forgetDeviceAlias` ran in that same
+          // dispose, so only the freshly resolved api still knows the logical id.
           const aliases = [
             canonicalDeviceId(params.device_id),
             params.device_id,
@@ -104,8 +94,8 @@ When the debugger cannot be reached, this tool does not fail: it returns { statu
           ].filter((id): id is string => id !== undefined);
           let reaped: ReturnType<typeof takeReapedSession>;
           for (const id of new Set(aliases)) {
-            // Take FIRST, keep second: `reaped ??= take(...)` would short-circuit
-            // once one matched and leave the rest behind — the very bug above.
+            // Take from every id, keep the first hit: `reaped ??= take(...)`
+            // would stop taking once one matched.
             const entry = takeReapedSession("js-runtime-debugger", id);
             reaped ??= entry;
           }
