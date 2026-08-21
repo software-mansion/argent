@@ -371,7 +371,7 @@ export async function queryFullHierarchyTree(
     }
     // The pin was proven connected at launch, but the app can crash or be
     // killed later - the socket close removes it from the connections map. Gate
-    // on isConnected (a pure map lookup), never requiresAppRestart: its miss
+    // on isConnected (a pure map lookup), never appConnectionState: its miss
     // path runs reverifyEnv - a full env re-setup with 10s simctl timeouts -
     // and tree reads poll every 300ms, so a dead pin would drive that repair
     // once per poll and three failures latch the device's process-wide

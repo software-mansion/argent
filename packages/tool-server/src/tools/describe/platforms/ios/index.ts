@@ -179,13 +179,13 @@ export async function describeIos(
 
   // A system app is not a supported native-devtools target: pointing the
   // fallback at one either hangs on a background-launched process or, when its
-  // process is not connected, makes `requiresAppRestart` report true and
-  // `should_restart` loop forever. Measuring the state instead does not help:
-  // the launchd env carrying the bootstrap dylib is simulator-wide, so a system
-  // app's process inherits the very tokens the measurement reads and scores as
-  // injected - landing on `stale_process` (restart-app) or `unregistered`
-  // (restart the tool-server) by nothing but its age. Return the (empty) AX result with the
-  // terminal screenshot hint instead of restarting. The gate sits BEFORE the
+  // process is not connected, can land on a verdict that sets `should_restart`.
+  // Measuring the state instead does not help: the launchd env carrying the
+  // bootstrap dylib is simulator-wide, so a system app's process inherits the
+  // very tokens the measurement reads and scores as injected - landing on
+  // `stale_process` (restart-app) or `unregistered` (restart the tool-server)
+  // by nothing but its age. Return the (empty) AX result with the terminal
+  // screenshot hint instead of restarting. The gate sits BEFORE the
   // native-devtools fallback: the refusal is a static property of the explicit
   // bundle id, so the terminal hint must not depend on service resolution
   // succeeding (a downed ios-remote tunnel or a dispose race would otherwise
