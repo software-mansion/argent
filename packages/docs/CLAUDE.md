@@ -47,6 +47,21 @@ unregistered name renders nothing, silently, with no build error.
 When inserting a page in the middle of a section, bump the `sidebar_position` of the pages
 that follow it.
 
+## Open Graph images
+
+`plugins/og-image/` renders one social card per page in the `postBuild` step and rewrites the
+`og:image` and `twitter:image` tags of every built HTML file to point at it. The cards land in
+`build/img/og/` and are named after the route.
+
+The card is `static/img/og-background.png` with a frosted glass panel in the middle, the white
+Argent logo centred on the panel, and the page title centred underneath. The title comes from
+the `<title>` of the built page, with the ` | Argent` suffix removed.
+
+Satori lays out the logo and the title and embeds every glyph as a path. resvg rasterises the
+result. The font is vendored in `scripts/og-assets/`, so the cards do not depend on the fonts
+installed on the machine. Layout, colours and blur live as constants at the top of
+`plugins/og-image/index.js`.
+
 ## Checks
 
 Run `npx docusaurus build` after editing docs. It fails on broken internal links, which is

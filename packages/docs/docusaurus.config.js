@@ -110,6 +110,9 @@ const config = {
     }),
   plugins: [
     process.env.NODE_ENV !== "production" && "@docusaurus/plugin-debug",
+    // Renders one Open Graph card per page after the build and rewrites the
+    // social image tags of every built HTML file to point at it.
+    require.resolve("./plugins/og-image"),
     // Parts of the shared theme ship as untranspiled JSX, so they need the same
     // JS loader Docusaurus applies to the site's own sources.
     /** @type {() => import('@docusaurus/types').Plugin} */
