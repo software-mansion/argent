@@ -164,4 +164,130 @@ describe("type directive focus wait", () => {
     // The fixed settle still applies even without a focus-reporting source.
     expect(keys[0]!.t - tap!.t).toBeGreaterThanOrEqual(500);
   });
+
+  // R7: `waitForFocus`'s verdict used to be discarded, so an unfocused field
+  // was typed into anyway. The keys go to the HID layer, not to the element —
+  // observed live as a dropped leading character that iOS autocorrect then
+  // completed into a different word, which the app saved.
+  it("retries the focus tap once when focus never lands (android)", async () => {
+    const calls: Call[] = [];
+    // The field takes focus only on the SECOND tap — the shape of a field
+    // whose first tap was swallowed by a sheet still animating away.
+    const registry = mockRegistry(calls, () => ({
+      xml: emailXml(calls.filter((c) => c.id === "gesture-tap").length >= 2),
+    }));
+
+    await writeFlow("login", {
+      executionPrerequisite: "",
+      steps: [{ kind: "type", into: { identifier: "email" }, text: "a@b.com" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "login", project_root: tmpDir, device: ANDROID_DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    // Two focus taps, and the text was typed only after focus was confirmed.
+    expect(calls.filter((c) => c.id === "gesture-tap")).toHaveLength(2);
+    expect(calls.filter((c) => c.id === "keyboard").map((c) => c.args.text ?? c.args.key)).toEqual([
+      "a@b.com",
+      "enter",
+    ]);
+  }, 30_000);
+
+  // A modal composer three quarters of the screen tall CONTAINS every node of
+  // the screen behind it. Accepting a focused ancestor unconditionally let it
+  // vouch for any of them, so `type:` reported a pass on a static label while
+  // the keys — injected at the HID level — landed in the composer.
+  it("does not let a huge focused element vouch for a small target behind it", async () => {
+    const calls: Call[] = [];
+    const registry = mockRegistry(calls, () => ({
+      xml: `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.widget.EditText" resource-id="composer" focused="true" package="com.acme.app" bounds="[100,100][1000,1500]" />
+    <node index="1" class="android.widget.TextView" resource-id="tab-label" focused="false" package="com.acme.app" bounds="[200,300][400,340]" />
+  </node>
+</hierarchy>`,
+    }));
+
+    await writeFlow("behind", {
+      executionPrerequisite: "composer open",
+      steps: [{ kind: "type", into: { identifier: "tab-label" }, text: "WRONG", submit: false }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        {
+          name: "behind",
+          project_root: tmpDir,
+          device: ANDROID_DEVICE,
+          prerequisiteAcknowledged: true,
+        }
+      )
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.steps.at(-1)!.reason).toContain("did not take keyboard focus");
+    expect(calls.filter((c) => c.id === "keyboard")).toHaveLength(0);
+  }, 30_000);
+
+  it("still accepts a focused wrapper close to the field's own size (android)", async () => {
+    const calls: Call[] = [];
+    const registry = mockRegistry(calls, () => ({
+      xml: `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.widget.LinearLayout" resource-id="email-row" focused="true" package="com.acme.app" bounds="[30,190][1050,290]">
+      <node index="0" class="android.widget.EditText" resource-id="email" focused="false" package="com.acme.app" bounds="[40,200][1040,280]" />
+    </node>
+  </node>
+</hierarchy>`,
+    }));
+
+    await writeFlow("wrapper", {
+      executionPrerequisite: "",
+      steps: [{ kind: "type", into: { identifier: "email" }, text: "a@b.com", submit: false }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "wrapper", project_root: tmpDir, device: ANDROID_DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    expect(calls.filter((c) => c.id === "keyboard").map((c) => c.args.text)).toEqual(["a@b.com"]);
+  }, 30_000);
+
+  it("fails the step rather than typing into an unfocused field (android)", async () => {
+    const calls: Call[] = [];
+    const registry = mockRegistry(calls, () => ({ xml: emailXml(false) }));
+
+    await writeFlow("login", {
+      executionPrerequisite: "",
+      steps: [{ kind: "type", into: { identifier: "email" }, text: "a@b.com" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "login", project_root: tmpDir, device: ANDROID_DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(false);
+    const step = result.steps.at(-1)!;
+    expect(step.status).toBe("fail");
+    expect(step.reason).toContain("did not take keyboard focus");
+    expect(step.reason).toContain("nothing was typed");
+    // Two taps were attempted, and NOT ONE key was injected.
+    expect(calls.filter((c) => c.id === "gesture-tap")).toHaveLength(2);
+    expect(calls.filter((c) => c.id === "keyboard")).toHaveLength(0);
+  }, 30_000);
 });
