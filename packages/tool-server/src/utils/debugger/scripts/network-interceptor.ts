@@ -20,6 +20,32 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
   var MAX_ENTRIES = 2000;
   function genId() { return 'rn-net-' + (nextReqId++); }
   function ts() { return Date.now() / 1000; }
+  function utf8ByteLength(value) {
+    if (typeof TextEncoder !== 'undefined') {
+      return new TextEncoder().encode(value).length;
+    }
+
+    var length = 0;
+    for (var i = 0; i < value.length; i++) {
+      var code = value.charCodeAt(i);
+      if (code <= 0x7f) {
+        length += 1;
+      } else if (code <= 0x7ff) {
+        length += 2;
+      } else if (code >= 0xd800 && code <= 0xdbff && i + 1 < value.length) {
+        var next = value.charCodeAt(i + 1);
+        if (next >= 0xdc00 && next <= 0xdfff) {
+          length += 4;
+          i += 1;
+        } else {
+          length += 3;
+        }
+      } else {
+        length += 3;
+      }
+    }
+    return length;
+  }
 
   function getOrCreate(reqId) {
     if (byId[reqId]) return byId[reqId];
@@ -83,7 +109,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
         var cloned = response.clone();
         cloned.text().then(function(body) {
           entry.state = 'finished';
-          entry.encodedDataLength = body.length;
+          entry.encodedDataLength = utf8ByteLength(body);
           entry.durationMs = Math.round((ts() - t) * 1000);
           entry.responseBody = body;
         }).catch(function() {

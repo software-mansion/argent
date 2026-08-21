@@ -1,8 +1,38 @@
+import { runInNewContext } from "node:vm";
 import { describe, it, expect } from "vitest";
 import {
+  NETWORK_INTERCEPTOR_SCRIPT,
   makeNetworkLogReadScript,
   makeNetworkDetailReadScript,
 } from "../../src/utils/debugger/scripts/network-interceptor";
+
+describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
+  it.each([
+    ["TextEncoder", TextEncoder],
+    ["the legacy fallback", undefined],
+  ])("records UTF-8 response bytes with %s", async (_label, textEncoder) => {
+    const body = JSON.stringify({ message: "你好 👋" });
+    const response = {
+      url: "https://example.test/unicode",
+      status: 200,
+      statusText: "OK",
+      headers: { forEach: () => {} },
+      clone: () => ({ text: async () => body }),
+    };
+    const sandbox: Record<string, unknown> = {
+      TextEncoder: textEncoder,
+      fetch: async () => response,
+    };
+
+    runInNewContext(NETWORK_INTERCEPTOR_SCRIPT, sandbox);
+    await (sandbox.fetch as () => Promise<unknown>)();
+    await Promise.resolve();
+
+    const entries = sandbox.__argent_network_log as Array<{ encodedDataLength: number }>;
+    expect(entries[0]?.encodedDataLength).toBe(Buffer.byteLength(body, "utf8"));
+    expect(entries[0]?.encodedDataLength).not.toBe(body.length);
+  });
+});
 
 describe("makeNetworkLogReadScript", () => {
   it("returns a string containing the start and limit values", () => {
