@@ -40,6 +40,12 @@ function getAvailableToolIds(): string[] {
   return tools.map((t) => t.id);
 }
 
+// The exact opted-in shape Windsurf's alwaysAllow / Kiro's autoApprove get:
+// anything else there is a value the user narrowed since.
+function isWildcardOnly(value: unknown): boolean {
+  return Array.isArray(value) && value.length === 1 && value[0] === "*";
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 // MARK: Types
 
@@ -97,13 +103,17 @@ export interface McpConfigAdapter {
   // say so instead of claiming a write.
   //
   // `refresh: true` marks update's periodic re-run, as opposed to init's
-  // explicit opt-in. An adapter whose write can override a choice the user
-  // made since init — Cursor's file allowlist, Zed's global tool_permissions
-  // default, Codex's per-tool approval modes — declines to re-impose it on
-  // refresh; adapters whose entries are argent-scoped and inert keep re-adding
-  // on both paths. Absence-based checks cannot tell "removed on purpose" from
-  // "never added" (no consent is persisted anywhere), so refresh errs toward
-  // not writing; `argent init` is the explicit (re-)opt-in path.
+  // explicit opt-in. Refresh never changes the effective approval state the
+  // user has: when an adapter's opted-in value is absent or was changed since
+  // init, it skips with a note — re-imposing the value would override that
+  // choice (the Cursor run-mode bug in another skin). The one write refresh
+  // still performs is Codex's backfill of tool ids a new version added, for
+  // users whose table shows they are opted in. Absence cannot tell "removed
+  // on purpose" from "never added" (no consent is persisted anywhere), so
+  // refresh errs toward not writing; `argent init` is the explicit
+  // (re-)opt-in path. The option is advisory — an adapter that ignores it
+  // re-adds on both paths — so a new adapter must decide its refresh
+  // behavior explicitly.
   addAllowlist?(
     root: string,
     scope: "local" | "global",
@@ -1009,7 +1019,15 @@ const claudeAdapter: McpConfigAdapter = {
     return findings;
   },
 
-  addAllowlist(root: string, scope: "local" | "global"): void {
+  // On refresh there is nothing to maintain — the rule is a single
+  // argent-scoped entry — so a missing rule is only reported: re-adding it
+  // (and creating settings.json for a user who declined at init) would
+  // override a removal.
+  addAllowlist(root, scope, options): string | void {
+    if (options?.refresh) {
+      if (hasClaudePermission(root, scope)) return;
+      return `skipped - the argent permission rule is not in settings.json; opt in via argent init`;
+    }
     addClaudePermission(root, scope);
   },
 
@@ -1183,11 +1201,18 @@ const windsurfAdapter: McpConfigAdapter = {
   // before addAllowlist(). The old readJson path choked on any user comment and
   // silently skipped the toggle; editJsoncFile targets just the argent entry's
   // alwaysAllow key so comments and foreign servers survive.
-  addAllowlist(): void {
+  addAllowlist(_root, _scope, options): string | void {
     const configPath = path.join(homedir(), ".codeium", "windsurf", "mcp_config.json");
     const config = readJsonc(configPath);
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return;
+    // A user-narrowed or removed alwaysAllow is their choice — rewriting it
+    // to ["*"] on refresh would override it.
+    if (options?.refresh) {
+      const entry = servers[MCP_SERVER_KEY] as Record<string, unknown>;
+      if (isWildcardOnly(entry.alwaysAllow)) return;
+      return `skipped - argent's alwaysAllow is not ["*"]; opt in via argent init`;
+    }
     editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY, "alwaysAllow"], ["*"]);
   },
 
@@ -1210,6 +1235,17 @@ const windsurfAdapter: McpConfigAdapter = {
 // MARK: Zed
 // Format: merges { context_servers: { argent: { source: "custom", command, args, env } } }
 // Into existing settings.json
+
+// The one place Zed's agent.tool_permissions.default is read, so the opt-in
+// schema can't drift between addAllowlist's refresh guard and removeAllowlist.
+// readJsonc returns {} for a missing file.
+function zedToolPermissionsDefault(settingsPath: string): unknown {
+  const config = readJsonc(settingsPath);
+  const perms = (config.agent as Record<string, unknown>)?.tool_permissions as
+    | Record<string, unknown>
+    | undefined;
+  return perms?.default;
+}
 
 const zedAdapter: McpConfigAdapter = {
   name: "Zed",
@@ -1278,11 +1314,16 @@ const zedAdapter: McpConfigAdapter = {
         ? path.join(homedir(), ".config", "zed", "settings.json")
         : path.join(root, ".zed", "settings.json");
     if (options?.refresh) {
-      const config = fs.existsSync(settingsPath) ? readJsonc(settingsPath) : {};
-      const perms = (config.agent as Record<string, unknown>)?.tool_permissions as
-        | Record<string, unknown>
-        | undefined;
-      if (perms?.default !== "allow") {
+      // Zed merges project settings over global, so a project file with no
+      // agent block inherits the global default — check both before deciding
+      // the user is not opted in.
+      let current = zedToolPermissionsDefault(settingsPath);
+      if (current === undefined && scope === "local") {
+        current = zedToolPermissionsDefault(
+          path.join(homedir(), ".config", "zed", "settings.json")
+        );
+      }
+      if (current !== "allow") {
         return `skipped - Zed's tool_permissions default is not "allow"; opt in via argent init`;
       }
       return;
@@ -1296,11 +1337,7 @@ const zedAdapter: McpConfigAdapter = {
         ? path.join(homedir(), ".config", "zed", "settings.json")
         : path.join(root, ".zed", "settings.json");
     if (!fs.existsSync(settingsPath)) return;
-    const config = readJsonc(settingsPath);
-    const perms = (config.agent as Record<string, unknown>)?.tool_permissions as
-      | Record<string, unknown>
-      | undefined;
-    if (!perms || perms.default !== "allow") return;
+    if (zedToolPermissionsDefault(settingsPath) !== "allow") return;
     editJsoncFile(settingsPath, ["agent", "tool_permissions", "default"], "confirm");
   },
 };
@@ -1363,7 +1400,7 @@ const geminiAdapter: McpConfigAdapter = {
   // before addAllowlist(). The old readJson path choked on any user comment and
   // silently skipped the toggle; editJsoncFile targets just the argent entry's
   // trust key so comments and foreign servers survive.
-  addAllowlist(root: string, scope: "local" | "global"): void {
+  addAllowlist(root, scope, options): string | void {
     const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
 
     if (!configPath) {
@@ -1373,6 +1410,12 @@ const geminiAdapter: McpConfigAdapter = {
     const config = readJsonc(configPath);
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return;
+    // trust unset or false on refresh is the user's state, not ours to flip.
+    if (options?.refresh) {
+      const entry = servers[MCP_SERVER_KEY] as Record<string, unknown>;
+      if (entry.trust === true) return;
+      return `skipped - argent's trust flag is not set; opt in via argent init`;
+    }
     editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY, "trust"], true);
   },
 
@@ -1452,8 +1495,10 @@ const codexAdapter: McpConfigAdapter = {
 
   // On update's refresh the per-tool table is maintained, not re-imposed: ids
   // a new version added are filled in, but an entry the user restricted keeps
-  // their approval_mode, and a table they emptied or removed stays gone —
-  // rewriting either would override a choice made since init.
+  // their approval_mode, and a table they emptied, removed, or turned
+  // all-"deny" stays theirs — rewriting any of those would override a choice
+  // made since init. Opt-in is read from the values (at least one entry the
+  // user left on "approve"), not mere table presence.
   addAllowlist(root, scope, options): string | void {
     const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
 
@@ -1461,23 +1506,17 @@ const codexAdapter: McpConfigAdapter = {
       return;
     }
 
-    const tools = getAvailableToolIds();
+    const refresh = options?.refresh === true;
     const config = readToml(configPath) as CodexConfig;
 
-    if (options?.refresh) {
-      const toolsConfig = config.mcp_servers?.argent?.tools;
-      if (toolsConfig === undefined || Object.keys(toolsConfig).length === 0) {
-        return `skipped - no argent tools allowlist in config.toml; opt in via argent init`;
+    if (refresh) {
+      const existing = config.mcp_servers?.argent?.tools;
+      const optedIn =
+        existing !== undefined &&
+        Object.values(existing).some((entry) => entry.approval_mode === "approve");
+      if (!optedIn) {
+        return `skipped - no approved argent tools in config.toml; opt in via argent init`;
       }
-      let added = false;
-      for (const tool of tools) {
-        if (!(tool in toolsConfig)) {
-          toolsConfig[tool] = { approval_mode: "approve" };
-          added = true;
-        }
-      }
-      if (added) writeToml(configPath, config);
-      return;
     }
 
     config.mcp_servers ??= {};
@@ -1485,13 +1524,15 @@ const codexAdapter: McpConfigAdapter = {
     config.mcp_servers.argent.tools ??= {};
     const toolsConfig = config.mcp_servers.argent.tools;
 
-    for (const tool of tools) {
-      toolsConfig[tool] = {
-        approval_mode: "approve",
-      };
+    let changed = false;
+    for (const tool of getAvailableToolIds()) {
+      // Refresh only backfills ids the table doesn't know; init's explicit
+      // opt-in (re)writes them all.
+      if (refresh && tool in toolsConfig) continue;
+      toolsConfig[tool] = { approval_mode: "approve" };
+      changed = true;
     }
-
-    writeToml(configPath, config);
+    if (changed) writeToml(configPath, config);
   },
 
   removeAllowlist(root, scope): void {
@@ -1670,9 +1711,15 @@ const openCodeAdapter: McpConfigAdapter = {
     return this.getArgentEntry(configPath) !== null;
   },
 
-  addAllowlist(root: string, scope: "local" | "global"): void {
+  addAllowlist(root, scope, options): string | void {
     const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
     if (!configPath) return;
+    // A removed or falsified tools entry on refresh stays the user's call.
+    if (options?.refresh) {
+      const tools = readJsonc(configPath).tools as Record<string, unknown> | undefined;
+      if (tools?.[OPENCODE_ALLOWLIST_PATTERN] === true) return;
+      return `skipped - the argent tools entry is not enabled; opt in via argent init`;
+    }
     editJsoncFile(configPath, ["tools", OPENCODE_ALLOWLIST_PATTERN], true);
   },
 
@@ -1758,12 +1805,18 @@ const kiroAdapter: McpConfigAdapter = {
   // preserving) before addAllowlist(). The old readJson path choked on any user
   // comment and silently skipped the toggle; editJsoncFile targets just the
   // argent entry's autoApprove key so comments and foreign servers survive.
-  addAllowlist(root: string, scope: "local" | "global"): void {
+  addAllowlist(root, scope, options): string | void {
     const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
     if (!configPath) return;
     const config = readJsonc(configPath);
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return;
+    // Same rule as Windsurf: a narrowed or removed autoApprove stays theirs.
+    if (options?.refresh) {
+      const entry = servers[MCP_SERVER_KEY] as Record<string, unknown>;
+      if (isWildcardOnly(entry.autoApprove)) return;
+      return `skipped - argent's autoApprove is not ["*"]; opt in via argent init`;
+    }
     editJsoncFile(
       configPath,
       ["mcpServers", MCP_SERVER_KEY, "autoApprove"],
@@ -1849,6 +1902,17 @@ export function findConfiguredAdapterScopes(
 }
 
 // ── Claude permissions helpers ────────────────────────────────────────────────
+
+function hasClaudePermission(root: string, scope: "local" | "global"): boolean {
+  const settingsPath =
+    scope === "global"
+      ? path.join(homedir(), ".claude", "settings.json")
+      : path.join(root, ".claude", "settings.json");
+  const config = readJsonc(settingsPath);
+  const permissions = (config.permissions ?? {}) as Record<string, unknown>;
+  const allow = Array.isArray(permissions.allow) ? (permissions.allow as string[]) : [];
+  return allow.includes(PERMISSION_RULE);
+}
 
 export function addClaudePermission(root: string, scope: "local" | "global"): void {
   const settingsPath =

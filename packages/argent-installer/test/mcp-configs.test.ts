@@ -17,6 +17,7 @@ import {
   injectCodexRules,
   removeCodexRules,
 } from "../src/mcp-configs.js";
+import { editJsoncFile } from "../src/utils.js";
 
 // ── homedir mock ──────────────────────────────────────────────────────────────
 // Allows individual tests to redirect homedir() to a temp path so that
@@ -466,6 +467,24 @@ describe("Claude Code adapter", () => {
   it("globalPath returns ~/.claude.json", () => {
     expect(adapter.globalPath()).toBe(path.join(os.homedir(), ".claude.json"));
   });
+
+  it("addAllowlist on refresh does not create settings.json or re-add a removed rule", () => {
+    const settingsPath = path.join(tmpDir, ".claude", "settings.json");
+    // Absent file: refresh reports instead of creating it.
+    let note = adapter.addAllowlist!(tmpDir, "local", { refresh: true });
+    expect(note).toContain("opt in via argent init");
+    expect(fs.existsSync(settingsPath)).toBe(false);
+    // Rule present: refresh is a no-op.
+    adapter.addAllowlist!(tmpDir, "local");
+    expect(adapter.addAllowlist!(tmpDir, "local", { refresh: true })).toBeUndefined();
+    // Rule removed: refresh reports and leaves the file alone.
+    removeClaudePermission(tmpDir, "local");
+    note = adapter.addAllowlist!(tmpDir, "local", { refresh: true });
+    expect(note).toContain("opt in via argent init");
+    if (fs.existsSync(settingsPath)) {
+      expect(fs.readFileSync(settingsPath, "utf8")).not.toContain("mcp__argent");
+    }
+  });
 });
 
 // ── VS Code adapter ──────────────────────────────────────────────────────────
@@ -555,6 +574,25 @@ describe("Windsurf adapter", () => {
     const servers2 = readJsoncFile(configPath).mcpServers as Record<string, unknown>;
     expect(servers2).toHaveProperty("myserver");
     expect(servers2.argent as Record<string, unknown>).not.toHaveProperty("alwaysAllow");
+  });
+
+  it("addAllowlist on refresh keeps a user-narrowed alwaysAllow", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const configPath = path.join(homedirOverride, ".codeium", "windsurf", "mcp_config.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    adapter.write(configPath, getMcpEntry());
+    adapter.addAllowlist!(tmpDir, "global");
+    // User narrows the wildcard to one tool.
+    editJsoncFile(configPath, ["mcpServers", "argent", "alwaysAllow"], ["screenshot"]);
+
+    const note = adapter.addAllowlist!(tmpDir, "global", { refresh: true });
+
+    expect(note).toContain("opt in via argent init");
+    const servers = readJsoncFile(configPath).mcpServers as Record<string, unknown>;
+    expect((servers.argent as Record<string, unknown>).alwaysAllow).toEqual(["screenshot"]);
+    // Still ["*"]: refresh is a no-op, not a note.
+    editJsoncFile(configPath, ["mcpServers", "argent", "alwaysAllow"], ["*"]);
+    expect(adapter.addAllowlist!(tmpDir, "global", { refresh: true })).toBeUndefined();
   });
 });
 
@@ -700,6 +738,22 @@ describe("Zed adapter", () => {
     expect(adapter.addAllowlist!(tmpDir, "local", { refresh: true })).toBeUndefined();
     expect(fs.readFileSync(configPath, "utf8")).toBe(afterOptIn);
   });
+
+  // Zed merges project settings over global: a project file with no agent
+  // block inherits the global default, so a local-scope refresh must not
+  // report "not opted in" when the global file carries the opt-in.
+  it("addAllowlist on refresh sees a global opt-in from local scope", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const globalPath = path.join(homedirOverride, ".config", "zed", "settings.json");
+    fs.mkdirSync(path.dirname(globalPath), { recursive: true });
+    fs.writeFileSync(globalPath, `{ "agent": { "tool_permissions": { "default": "allow" } } }\n`);
+    const localPath = path.join(tmpDir, ".zed", "settings.json");
+    fs.mkdirSync(path.dirname(localPath), { recursive: true });
+    fs.writeFileSync(localPath, `{}\n`);
+
+    expect(adapter.addAllowlist!(tmpDir, "local", { refresh: true })).toBeUndefined();
+    expect(fs.readFileSync(localPath, "utf8")).toBe(`{}\n`);
+  });
 });
 
 // ── Gemini adapter ────────────────────────────────────────────────────────────
@@ -785,6 +839,30 @@ describe("Gemini adapter", () => {
     const config = readJsonFile(configPath);
     const entry = (config.mcpServers as Record<string, unknown>).argent as Record<string, unknown>;
     expect(entry.trust).toBe(true);
+  });
+
+  it("addAllowlist on refresh does not flip a trust flag the user unset", () => {
+    const configPath = path.join(tmpDir, ".gemini", "settings.json");
+    adapter.write(configPath, getMcpEntry());
+    // Never opted in: note, no write.
+    let note = adapter.addAllowlist!(tmpDir, "local", { refresh: true });
+    expect(note).toContain("opt in via argent init");
+    let entry = (readJsoncFile(configPath).mcpServers as Record<string, unknown>).argent as Record<
+      string,
+      unknown
+    >;
+    expect(entry).not.toHaveProperty("trust");
+    // Opted in: no-op. User sets trust:false: refresh leaves it false.
+    adapter.addAllowlist!(tmpDir, "local");
+    expect(adapter.addAllowlist!(tmpDir, "local", { refresh: true })).toBeUndefined();
+    editJsoncFile(configPath, ["mcpServers", "argent", "trust"], false);
+    note = adapter.addAllowlist!(tmpDir, "local", { refresh: true });
+    expect(note).toContain("opt in via argent init");
+    entry = (readJsoncFile(configPath).mcpServers as Record<string, unknown>).argent as Record<
+      string,
+      unknown
+    >;
+    expect(entry.trust).toBe(false);
   });
 
   it("addAllowlist sets trust:true on the argent entry (global)", () => {
@@ -1014,6 +1092,23 @@ describe("Codex adapter", () => {
 
     expect(fs.readFileSync(configPath, "utf8")).toBe(before);
     expect(note).toContain("opt in via argent init");
+  });
+
+  // Opt-in is read from the values, not table presence: a table the user
+  // switched entirely to "deny" is non-consent, and new tool ids must not
+  // arrive pre-approved into it.
+  it("addAllowlist on refresh treats an all-deny table as opted out", () => {
+    const configPath = path.join(tmpDir, ".codex", "config.toml");
+    adapter.write(configPath, getMcpEntry());
+    adapter.addAllowlist!(tmpDir, "local");
+    let content = fs.readFileSync(configPath, "utf8");
+    content = content.replaceAll('approval_mode = "approve"', 'approval_mode = "deny"');
+    fs.writeFileSync(configPath, content);
+
+    const note = adapter.addAllowlist!(tmpDir, "local", { refresh: true });
+
+    expect(note).toContain("opt in via argent init");
+    expect(fs.readFileSync(configPath, "utf8")).toBe(content);
   });
 });
 
@@ -1372,6 +1467,20 @@ describe("opencode adapter", () => {
     expect(tools["argent*"]).toBe(true);
   });
 
+  it("addAllowlist on refresh does not re-add a removed 'argent*' entry", () => {
+    const configPath = path.join(tmpDir, "opencode.json");
+    adapter.write(configPath, getMcpEntry());
+    adapter.addAllowlist!(tmpDir, "local");
+    expect(adapter.addAllowlist!(tmpDir, "local", { refresh: true })).toBeUndefined();
+    adapter.removeAllowlist!(tmpDir, "local");
+
+    const note = adapter.addAllowlist!(tmpDir, "local", { refresh: true });
+
+    expect(note).toContain("opt in via argent init");
+    const tools = readJsoncFile(configPath).tools as Record<string, unknown> | undefined;
+    expect(tools?.["argent*"]).toBeUndefined();
+  });
+
   it("addAllowlist sets 'argent*' wildcard in tools (global)", () => {
     homedirOverride = path.join(tmpDir, "home");
     const configPath = path.join(homedirOverride, ".config", "opencode", "opencode.json");
@@ -1525,6 +1634,21 @@ describe("Kiro adapter", () => {
     const config = readJsonFile(configPath);
     const entry = (config.mcpServers as Record<string, unknown>).argent as Record<string, unknown>;
     expect(entry.autoApprove).toEqual(["*"]);
+  });
+
+  it("addAllowlist on refresh keeps a user-narrowed autoApprove", () => {
+    const configPath = path.join(tmpDir, ".kiro", "settings", "mcp.json");
+    adapter.write(configPath, getMcpEntry());
+    adapter.addAllowlist!(tmpDir, "local");
+    expect(adapter.addAllowlist!(tmpDir, "local", { refresh: true })).toBeUndefined();
+    editJsoncFile(configPath, ["mcpServers", "argent", "autoApprove"], ["screenshot"]);
+
+    const note = adapter.addAllowlist!(tmpDir, "local", { refresh: true });
+
+    expect(note).toContain("opt in via argent init");
+    const entry = (readJsoncFile(configPath).mcpServers as Record<string, unknown>)
+      .argent as Record<string, unknown>;
+    expect(entry.autoApprove).toEqual(["screenshot"]);
   });
 
   it("addAllowlist sets autoApprove: ['*'] on the argent entry (global)", () => {
