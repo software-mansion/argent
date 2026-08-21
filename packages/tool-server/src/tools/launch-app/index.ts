@@ -41,6 +41,12 @@ const zodSchema = z.object({
     .describe(
       "Android-only: fully-qualified Activity name (e.g. `.MainActivity` or `com.example/com.example.MainActivity`). If omitted on Android, the app's default launcher activity is used. Ignored on iOS / Chromium."
     ),
+  launchArgs: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Apple simulator-only: process arguments forwarded verbatim after the bundle id in `simctl launch`. Useful for launch-time feature flags and UserDefaults overrides such as `["-FeatureFlag", "YES"]`. Ignored on Android / Chromium / Vega.'
+    ),
 });
 
 type Params = z.infer<typeof zodSchema>;
@@ -74,6 +80,7 @@ export function createLaunchAppTool(registry: Registry): ToolDefinition<Params, 
     description: `Open an app by its bundle id (iOS) or package name (Android), or confirm the running renderer (Chromium).
 Use when starting any app — prefer this over tapping home-screen / launcher icons. Also prepares the native-devtools injection before the app starts (the iOS slice on iOS, the tvOS slice on Apple TV); on tvOS, interaction is focus-driven — use the tv-* tools rather than coordinate taps.
 Returns { launched, bundleId }. Fails if the app is not installed on the target device (iOS / Android).
+On Apple simulators, pass launchArgs to forward process arguments after the bundle id in \`simctl launch\`.
 For Chromium, the app is already running behind a CDP port; this call simply refreshes the cached viewport and acknowledges the bundleId tag. To change the visible route, use \`open-url\`.
 On Vega (Fire TV), pass the interactive component app id from manifest.toml (e.g. com.example.app.main) as bundleId.
 

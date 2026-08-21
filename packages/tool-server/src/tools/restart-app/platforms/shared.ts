@@ -23,7 +23,7 @@ export function buildIosRestartHandler(backend: SimctlBackend) {
       // App may not be running — ignore.
     }
     try {
-      await backend.launch(udid, bundleId);
+      await backend.launch(udid, bundleId, params.launchArgs);
     } catch (err) {
       throw new FailureError(
         `Failed to restart iOS app ${bundleId} on ${udid}.`,
