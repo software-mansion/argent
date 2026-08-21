@@ -139,6 +139,24 @@ describe("parseRunArgs", () => {
     expect(parseRunArgs(["--json-stream", "checkout.yaml"]).jsonStream).toBe(true);
   });
 
+  it("parses --tool-registry in space-separated and inline forms", () => {
+    expect(
+      parseRunArgs(["checkout.yaml", "--tool-registry", ".argent/tools.ts"]).toolRegistry
+    ).toBe(".argent/tools.ts");
+    expect(parseRunArgs(["--tool-registry=.argent/tools.ts", "checkout.yaml"]).toolRegistry).toBe(
+      ".argent/tools.ts"
+    );
+  });
+
+  it("throws when --tool-registry has no value", () => {
+    expect(() => parseRunArgs(["checkout.yaml", "--tool-registry"])).toThrow(
+      "--tool-registry requires a value"
+    );
+    expect(() => parseRunArgs(["checkout.yaml", "--tool-registry="])).toThrow(
+      "--tool-registry requires a value"
+    );
+  });
+
   it("accepts -r and --recursive in any position", () => {
     expect(parseRunArgs(["flows", "-r"]).recursive).toBe(true);
     expect(parseRunArgs(["--recursive", "flows"]).recursive).toBe(true);
@@ -274,6 +292,8 @@ describe("argent flow run", () => {
   let checkoutPath: string;
   let bundleDirPath: string;
   let unreadablePath: string;
+  let toolRegistryPath: string;
+  let unreadableRegistryPath: string;
   let exitSpy: ReturnType<typeof vi.spyOn>;
   let logs: string[];
   let errs: string[];
@@ -304,6 +324,15 @@ describe("argent flow run", () => {
     unreadablePath = path.join(tempRoot, "noperm.yaml");
     await fsp.writeFile(unreadablePath, "steps: []\n", "utf8");
     await fsp.chmod(unreadablePath, 0o000);
+    toolRegistryPath = path.join(tempRoot, "tools.ts");
+    await fsp.writeFile(toolRegistryPath, "export default { version: 1, tools: [] };\n", "utf8");
+    unreadableRegistryPath = path.join(tempRoot, "unreadable-tools.ts");
+    await fsp.writeFile(
+      unreadableRegistryPath,
+      "export default { version: 1, tools: [] };\n",
+      "utf8"
+    );
+    await fsp.chmod(unreadableRegistryPath, 0o000);
   });
 
   afterAll(async () => {
@@ -311,6 +340,7 @@ describe("argent flow run", () => {
     // parent's write bit, but a stray 0o000 file is a trap for anything that
     // later walks tmpdir, so never leave one behind if the rm is interrupted.
     await fsp.chmod(unreadablePath, 0o600).catch(() => {});
+    await fsp.chmod(unreadableRegistryPath, 0o600).catch(() => {});
     await fsp.rm(tempRoot, { recursive: true, force: true });
   });
 
@@ -366,6 +396,55 @@ describe("argent flow run", () => {
     );
     expect(logs.join("\n")).toContain("PASS — 1 passed, 0 failed, 0 errored, 0 skipped");
   });
+
+  it("canonicalizes --tool-registry and forwards it for one flow", async () => {
+    const runRoot = await fsp.realpath(tempRoot);
+    const canonicalRegistry = await fsp.realpath(toolRegistryPath);
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(
+        flow(["run", "checkout.yaml", "--tool-registry", "tools.ts"], opts)
+      ).rejects.toThrow("process.exit:0");
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledWith(
+      "flow-execute",
+      {
+        flow_path: path.join(runRoot, "checkout.yaml"),
+        project_root: runRoot,
+        prerequisiteAcknowledged: true,
+        tool_registry_path: canonicalRegistry,
+      },
+      { onProgress: expect.any(Function) }
+    );
+  });
+
+  it("rejects a missing external registry before invoking the flow", async () => {
+    const missing = path.join(tempRoot, "missing-tools.ts");
+    await expect(flow(["run", checkoutPath, "--tool-registry", missing], opts)).rejects.toThrow(
+      "process.exit:2"
+    );
+
+    expect(errs.join("\n")).toContain(`External tool registry not found: ${missing}`);
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it.skipIf(!canDenyRead)(
+    "rejects an unreadable external registry before invoking the flow",
+    async () => {
+      await expect(
+        flow(["run", checkoutPath, "--tool-registry", unreadableRegistryPath], opts)
+      ).rejects.toThrow("process.exit:2");
+
+      expect(errs.join("\n")).toContain(
+        `Could not read external tool registry: ${await fsp.realpath(unreadableRegistryPath)}`
+      );
+      expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    }
+  );
 
   it("exits 2 without calling the tool when --device is missing its value", async () => {
     await expect(flow(["run", "checkout", "--device"], opts)).rejects.toThrow("process.exit:2");
@@ -940,6 +1019,24 @@ describe("argent flow run", () => {
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
 
+  it("clearly rejects a local external registry in linked tool-server mode", async () => {
+    getResolvedToolsUrlMock.mockResolvedValue({
+      url: "http://linked.test:4141",
+      source: "link",
+    });
+
+    await expect(
+      flow(["run", checkoutPath, "--tool-registry", toolRegistryPath], opts)
+    ).rejects.toThrow("process.exit:2");
+
+    const out = errs.join("\n");
+    expect(out).toContain(
+      "A local external tool registry cannot be executed through ARGENT_TOOLS_URL or a linked tool server."
+    );
+    expect(out).toContain("argent unlink");
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
   it("names both recoveries when env routing shadows an existing link", async () => {
     // Unsetting only ARGENT_TOOLS_URL would re-route through the shadowed link
     // and produce a second refusal — the message must instruct both steps.
@@ -1251,6 +1348,55 @@ describe("argent flow run", () => {
     expect(errs).toEqual([]);
   });
 
+  it("keeps stdout NDJSON-only when --json-stream uses an external registry", async () => {
+    const step = {
+      index: 0,
+      kind: "tool",
+      tool: "fixture.echo",
+      status: "pass" as const,
+      result: { value: "ok" },
+    };
+    const finalReport = report({ steps: [step] });
+    toolsClientMock.callTool.mockImplementation(
+      async (
+        _name: string,
+        _payload: unknown,
+        options?: { onProgress?: (event: unknown) => void }
+      ) => {
+        options?.onProgress?.(step);
+        return { data: finalReport };
+      }
+    );
+
+    await expect(
+      flow(["run", checkoutPath, "--tool-registry", toolRegistryPath, "--json-stream"], opts)
+    ).rejects.toThrow("process.exit:0");
+
+    expect(toolsClientMock.callTool.mock.calls[0]![1]).toMatchObject({
+      tool_registry_path: await fsp.realpath(toolRegistryPath),
+    });
+    expect(logs.map((line) => JSON.parse(line))).toEqual([
+      { event: "progress", data: step },
+      { event: "result", data: finalReport },
+    ]);
+    expect(errs).toEqual([]);
+  });
+
+  it("keeps missing-registry diagnostics structured in --json-stream mode", async () => {
+    const missing = path.join(tempRoot, "missing-stream-tools.ts");
+    await expect(
+      flow(["run", checkoutPath, "--tool-registry", missing, "--json-stream"], opts)
+    ).rejects.toThrow("process.exit:2");
+
+    expect(logs).toHaveLength(1);
+    expect(JSON.parse(logs[0]!)).toEqual({
+      event: "error",
+      error: `External tool registry not found: ${missing}`,
+    });
+    expect(errs).toEqual([`External tool registry not found: ${missing}`]);
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
   it("prints one final result and exits 1 for a failed report with --json-stream", async () => {
     const failedReport = report({
       ok: false,
@@ -1553,6 +1699,7 @@ describe("argent flow run", () => {
 describe("argent flow run <dir>", () => {
   let tempRoot: string;
   let flowsDir: string;
+  let toolRegistryPath: string;
   let exitSpy: ReturnType<typeof vi.spyOn>;
   let logs: string[];
   let errs: string[];
@@ -1580,6 +1727,8 @@ describe("argent flow run <dir>", () => {
       fsp.writeFile(path.join(flowsDir, ".hidden", "hidden.yaml"), "steps: []\n"),
       fsp.writeFile(path.join(flowsDir, "node_modules", "dep.yaml"), "steps: []\n"),
     ]);
+    toolRegistryPath = path.join(tempRoot, "tools.ts");
+    await fsp.writeFile(toolRegistryPath, "export default { version: 1, tools: [] };\n");
   });
 
   afterAll(async () => {
@@ -1642,6 +1791,17 @@ describe("argent flow run <dir>", () => {
     ]);
     expect(errs.join("\n")).toContain(
       "--json-stream supports a single flow; directory runs are not supported"
+    );
+  });
+
+  it("rejects --tool-registry for directory runs", async () => {
+    await expect(
+      flow(["run", flowsDir, "--tool-registry", toolRegistryPath], opts)
+    ).rejects.toThrow("process.exit:2");
+
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    expect(errs.join("\n")).toContain(
+      "--tool-registry supports a single flow; directory runs are not supported"
     );
   });
 

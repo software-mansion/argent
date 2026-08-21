@@ -1,4 +1,4 @@
-import type { DeviceInfo, Registry, ToolContext } from "@argent/registry";
+import type { DeviceInfo, Registry, ToolContext, ToolLookup } from "@argent/registry";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
 import { invokeSubTool } from "../../utils/sub-invoke";
@@ -214,7 +214,7 @@ export function stripDeviceKeys(args: Record<string, unknown>): Record<string, u
  *   and could disagree with it if the file changed in between. The cost is that
  *   composing a narration-only fragment still resolves a device.
  */
-export function stepRequiresDevice(registry: Registry, step: FlowStep): boolean {
+export function stepRequiresDevice(registry: ToolLookup, step: FlowStep): boolean {
   switch (step.kind) {
     case "echo":
     case "wait":
@@ -258,7 +258,7 @@ export function stepRequiresDevice(registry: Registry, step: FlowStep): boolean 
  * classified `true`; the walk - here and in {@link flowScopesDevice}, the
  * question the runner asks next - is what makes either answer safe.
  */
-export function flowRequiresDevice(registry: Registry, steps: FlowStep[]): boolean {
+export function flowRequiresDevice(registry: ToolLookup, steps: FlowStep[]): boolean {
   return steps.some(
     (step) =>
       stepRequiresDevice(registry, step) || flowRequiresDevice(registry, blockSteps(step) ?? [])
@@ -284,7 +284,7 @@ export function flowRequiresDevice(registry: Registry, steps: FlowStep[]): boole
  * would execute with its unscoped meaning, the machine-wide sweep the scope
  * exists to prevent.
  */
-export function flowScopesDevice(registry: Registry, steps: FlowStep[]): boolean {
+export function flowScopesDevice(registry: ToolLookup, steps: FlowStep[]): boolean {
   return steps.some(
     (step) =>
       (step.kind === "tool" && declaresAny(registry, step.name, DEVICE_BIND_LIST_KEYS)) ||
@@ -292,14 +292,14 @@ export function flowScopesDevice(registry: Registry, steps: FlowStep[]): boolean
   );
 }
 
-function toolRequiresDevice(registry: Registry, toolName: string): boolean {
+function toolRequiresDevice(registry: ToolLookup, toolName: string): boolean {
   // An unknown tool is assumed to need a device: the step is going to fail
   // either way, and it fails more usefully with one resolved.
   if (!registry.getTool(toolName)) return true;
   return declaresAny(registry, toolName, DEVICE_ARG_KEYS);
 }
 
-function declaresAny(registry: Registry, toolName: string, keys: readonly string[]): boolean {
+function declaresAny(registry: ToolLookup, toolName: string, keys: readonly string[]): boolean {
   const toolDef = registry.getTool(toolName);
   const props = (toolDef?.inputSchema as { properties?: Record<string, unknown> } | undefined)
     ?.properties;
@@ -309,7 +309,7 @@ function declaresAny(registry: Registry, toolName: string, keys: readonly string
 }
 
 export function bindDeviceArgs(
-  registry: Registry,
+  registry: ToolLookup,
   toolName: string,
   deviceId: string,
   args: Record<string, unknown>,
