@@ -1,63 +1,63 @@
 :root {
   /*
-   * Argent brand palette - sourced from https://argent.swmansion.com
-   *   dark     #0D0F26 (hover #1A1D3A)
-   *   blue     #99DAFF (hover #7FCFF7)
-   *   lavender #E4E1FF
-   *   light    #FEFEFE
-   *   mist     #F1F1F1
-   * The ramps below are tints and shades of those five colors. Variable names
-   * follow the shared Software Mansion docs theme (@swmansion/t-rex-ui), so the
-   * "navy" slot carries Argent dark and the "purple" slot carries Argent lavender.
+   * Argent brand palette
+   *   background  #FFFFFF
+   *   secondary   #F0F5F9 (hover surface on white)
+   *   highlight   #3A6B9C (sporadic accent, links, active states)
+   *   ink         #141414 (body text, important buttons)
+   * The ramps below are tints and shades of those colors. Variable names follow
+   * the shared Software Mansion docs theme (@swmansion/t-rex-ui), so the "navy"
+   * slot carries the ink and both the "purple" and "blue" slots carry the
+   * highlight.
    */
 
-  /* Argent dark */
-  --swm-navy-light-100: #0d0f26;
-  --swm-navy-light-80: #393a4d;
-  --swm-navy-light-60: #696a78;
-  --swm-navy-light-40: #999aa4;
-  --swm-navy-light-20: #cfcfd4;
-  --swm-navy-light-10: #f1f1f1;
-  --swm-navy-light-transparent: #393a4d40;
+  /* Neutral ink - #141414, the primary text and important-button color */
+  --swm-navy-light-100: #141414;
+  --swm-navy-light-80: #3d3d3d;
+  --swm-navy-light-60: #6b6b6b;
+  --swm-navy-light-40: #999999;
+  --swm-navy-light-20: #d5dde5;
+  --swm-navy-light-10: #f0f5f9;
+  --swm-navy-light-transparent: #3d3d3d40;
 
-  --swm-navy-dark-140: #1b1d33;
-  --swm-navy-dark-120: #14162b;
-  --swm-navy-dark-100: #0d0f26;
-  --swm-navy-dark-80: #1a1d3a;
-  --swm-navy-dark-70: #393a4d;
-  --swm-navy-dark-60: #7d7f8f;
-  --swm-navy-dark-40: #b9bac4;
-  --swm-navy-dark-20: #cfcfd4;
+  --swm-navy-dark-140: #262626;
+  --swm-navy-dark-120: #1c1c1c;
+  --swm-navy-dark-100: #141414;
+  --swm-navy-dark-80: #2b2b2b;
+  --swm-navy-dark-70: #3d3d3d;
+  --swm-navy-dark-60: #808080;
+  --swm-navy-dark-40: #b8b8b8;
+  --swm-navy-dark-20: #d1d1d1;
 
-  /* Argent lavender - accent color for interactive elements */
-  --swm-purple-light-100: #6c63f5;
-  --swm-purple-light-80: #9892f8;
-  --swm-purple-light-60: #b6b1fa;
-  --swm-purple-light-40: #d6d3fc;
-  --swm-purple-light-20: #edecfe;
-  --swm-purple-light-transparent: #edecfe40;
+  /* Highlight - #3A6B9C, used sporadically for accents and active states */
+  --swm-purple-light-100: #3a6b9c;
+  --swm-purple-light-80: #6189b3;
+  --swm-purple-light-60: #89a6c9;
+  --swm-purple-light-40: #b0c4de;
+  --swm-purple-light-20: #d8e2ee;
+  --swm-purple-light-transparent: #d8e2ee40;
 
-  --swm-purple-dark-140: #2b2950;
-  --swm-purple-dark-120: #413d98;
-  --swm-purple-dark-100: #8f88ff;
-  --swm-purple-dark-80: #a9a3ff;
-  --swm-purple-dark-60: #c4c0ff;
-  --swm-purple-dark-40: #e4e1ff;
-  --swm-purple-dark-transparent: #2b295040;
+  --swm-purple-dark-140: #1b2836;
+  --swm-purple-dark-120: #2a4d6f;
+  --swm-purple-dark-100: #6ea0cf;
+  --swm-purple-dark-80: #8db6dc;
+  --swm-purple-dark-60: #adcbe8;
+  --swm-purple-dark-40: #cee0f3;
+  --swm-purple-dark-transparent: #1b283640;
 
-  /* Argent blue - links */
-  --swm-blue-light-100: #0f6e9e;
-  --swm-blue-light-80: #4a9fc9;
-  --swm-blue-light-60: #99daff;
-  --swm-blue-light-40: #c7ebff;
-  --swm-blue-light-20: #eaf7ff;
+  /* Links - the highlight color */
+  --swm-blue-light-100: #3a6b9c;
+  --swm-blue-light-80: #6189b3;
+  --swm-blue-light-60: #89a6c9;
+  --swm-blue-light-40: #b0c4de;
+  --swm-blue-light-20: #eaf1f7;
 
-  --swm-blue-dark-140: #16303f;
-  --swm-blue-dark-120: #1d5474;
-  --swm-blue-dark-100: #7fcff7;
-  --swm-blue-dark-80: #99daff;
-  --swm-blue-dark-60: #bfe7ff;
-  --swm-blue-dark-40: #e2f4ff;
+  --swm-blue-dark-140: #1b2836;
+  --swm-blue-dark-120: #2a4d6f;
+  --swm-blue-dark-100: #6ea0cf;
+  --swm-blue-dark-80: #8db6dc;
+  --swm-blue-dark-60: #adcbe8;
+  --swm-blue-dark-40: #cee0f3;
 
   --swm-green-light-100: #57b495;
   --swm-green-light-80: #82cab2;
@@ -100,14 +100,14 @@
   --swm-yellow-dark-40: #fff9db;
 
   /* Black & White palette, mainly for background settings */
-  --swm-off-white: #f1f1f1;
-  --swm-white: #fefefe;
-  --swm-white-transparent-light: #fefefe40;
-  --swm-white-transparent-dark: #fefefe80;
+  --swm-off-white: #f0f5f9;
+  --swm-white: #ffffff;
+  --swm-white-transparent-light: #ffffff40;
+  --swm-white-transparent-dark: #ffffff80;
 
-  --swm-light-off-navy: #2a2d42;
-  --swm-off-navy: #191c30;
-  --swm-navy: #0f1226;
+  --swm-light-off-navy: #2a2a2a;
+  --swm-off-navy: #1c1c1c;
+  --swm-navy: #141414;
 
   /* Infima main colors */
   --ifm-color-primary: var(--swm-navy-light-100);
@@ -117,6 +117,11 @@
   --ifm-color-primary-light: var(--swm-navy-light-100);
   --ifm-color-primary-lighter: var(--swm-navy-light-80);
   --ifm-color-primary-lightest: var(--swm-navy-light-40);
+
+  /* Shape */
+  --ifm-global-radius: 24px;
+  --swm-radius: 24px;
+  --swm-radius-small: 12px;
 
   /* Main site settings */
   --swm-background: var(--swm-white);
@@ -187,7 +192,7 @@
   --swm-border: var(--swm-navy-light-20);
   --docusaurus-highlighted-code-line-bg: var(--swm-blue-light-20);
   /* --swm-navy-light-40 in rgba */
-  --swm-code-lines-buttons-background: rgba(145, 159, 207, 0.2);
+  --swm-code-lines-buttons-background: rgba(153, 153, 153, 0.2);
 
   /* Interactive Examples */
   --swm-interactive-button-color: var(--swm-navy-light-60);
@@ -197,8 +202,8 @@
   --swm-interactive-slider-rail: var(--swm-navy-light-20);
 
   /* --swm-navy-light-100 in rgba */
-  --swm-interactive-copy-button-off: rgba(0, 26, 114, 0);
-  --swm-interactive-copy-button-on: rgba(0, 26, 114, 1);
+  --swm-interactive-copy-button-off: rgba(20, 20, 20, 0);
+  --swm-interactive-copy-button-on: rgba(20, 20, 20, 1);
 
   /* Table */
   --swm-table-border-color: var(--swm-navy-light-20);
@@ -241,11 +246,13 @@
 
   /* Sidebar */
   --swm-sidebar-background: var(--swm-off-white);
-  --swm-sidebar-menu-color: var(--swm-navy-light-60);
+  --swm-sidebar-menu-color: var(--swm-navy-light-100);
+  /* The lucide icons in front of every sidebar entry carry the highlight. */
+  --swm-sidebar-icon-color: var(--swm-purple-light-100);
 
   /* Mobile sidebar */
   /* --swm-navy-light-100 in rgba */
-  --swm-sidebar-backdrop: rgba(0, 26, 114, 0.5);
+  --swm-sidebar-backdrop: rgba(20, 20, 20, 0.5);
 
   /* Hire Us Section */
 
@@ -398,8 +405,8 @@
   --swm-interactive-slider-rail: var(--swm-navy-light-20);
 
   /* --swm-navy-light-20 in rgba schema */
-  --swm-interactive-copy-button-off: rgba(193, 198, 229, 0);
-  --swm-interactive-copy-button-on: rgba(193, 198, 229, 1);
+  --swm-interactive-copy-button-off: rgba(213, 221, 229, 0);
+  --swm-interactive-copy-button-on: rgba(213, 221, 229, 1);
 
   /* Table */
   --swm-table-border-color: var(--swm-navy-light-60);
@@ -434,13 +441,15 @@
   --swm-search-page-query-text-color: var(--swm-navy-light-10);
 
   /* Sidebar */
-  --swm-sidebar-background: var(--swm-navy);
+  --swm-sidebar-background: var(--swm-off-navy);
   --swm-sidebar-elements-background: var(--swm-off-navy);
   --swm-sidebar-menu-color: var(--swm-navy-light-20);
+  /* The highlight is too dim on the dark background, so it lifts a step. */
+  --swm-sidebar-icon-color: var(--swm-purple-dark-100);
 
   /* Mobile sidebar */
   /* --swm-navy in rgba */
-  --swm-sidebar-backdrop: rgba(35, 39, 54, 0.5);
+  --swm-sidebar-backdrop: rgba(20, 20, 20, 0.5);
 
   /* Hire Us Section */
 

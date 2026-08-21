@@ -45,13 +45,12 @@ table thead tr {
   background-color: var(--ifm-navbar-link-hover-color);
 }
 
-[class*="codeBlockContent"] pre {
-  border: 1px solid var(--swm-border);
-}
-
+[class*="codeBlockContainer"],
+[class*="codeBlockContent"],
 [class*="codeBlockContent"] pre,
 [class*="codeBlockContent"] code {
-  border-radius: 0;
+  border: none;
+  border-radius: var(--swm-radius);
   background-color: var(--swm-off-background);
 }
 
@@ -63,8 +62,8 @@ table thead tr {
 .theme-doc-version-badge {
   color: var(--swm-version-badge);
   background: var(--swm-version-badge-background);
-  padding: 6px;
-  border-radius: 8px;
+  padding: 6px 10px;
+  border-radius: var(--swm-radius-small);
   border: none;
   margin-bottom: 8px;
 }
@@ -133,4 +132,122 @@ details .tabs__item--active {
  */
 .navbar [class*="colorModeToggle"] {
   margin-left: auto !important;
+}
+
+
+/*
+ * Shape - every surface that reads as a card, pill or panel shares the 24px
+ * radius; small inline chips keep the smaller one so they stay readable.
+ */
+[class*="cardContainer"],
+[class*="admonition"],
+[class*="codeBlockContainer"],
+[class*="codeBlockContent"],
+[class*="llmDropdown"],
+[class*="tocCollapsible"],
+[class*="pagination"],
+[class*="searchQueryInput"],
+[class*="searchVersionInput"],
+[class*="navbarSearch"] button,
+[class*="buttonGroup"] button,
+[class*="llmButton"],
+[class*="toggleButton"],
+.button,
+.card,
+.tabs-container,
+.markdown img,
+details {
+  border-radius: var(--swm-radius);
+}
+
+[class*="_badge_"],
+[class*="tagRegular"],
+[class*="tagWithCount"] span,
+.menu__link,
+.pagination-nav__link {
+  border-radius: var(--swm-radius-small);
+}
+
+/* Nested code inside a rounded panel would otherwise double up the corners. */
+.markdown a code,
+p code,
+li code,
+td code {
+  border-radius: var(--swm-radius-small);
+}
+
+/*
+ * Important buttons sit on the ink color; the highlight stays reserved for
+ * links and active states.
+ */
+.button--primary {
+  --ifm-button-background-color: var(--swm-navy-light-100);
+  --ifm-button-border-color: var(--swm-navy-light-100);
+  color: var(--swm-white);
+}
+
+.button--primary:hover {
+  --ifm-button-background-color: var(--swm-navy-light-80);
+  --ifm-button-border-color: var(--swm-navy-light-80);
+  color: var(--swm-white);
+}
+
+/* Hovering a surface that sits on white lifts it to the secondary background. */
+.menu__link:hover,
+.pagination-nav__link:hover,
+.dropdown__link:hover,
+.table-of-contents__link:hover {
+  background-color: var(--swm-off-background);
+}
+
+/* On the dark background the ink button would disappear, so it inverts. */
+:root[data-theme="dark"] .button--primary {
+  --ifm-button-background-color: var(--swm-off-white);
+  --ifm-button-border-color: var(--swm-off-white);
+  color: var(--swm-navy-light-100);
+}
+
+:root[data-theme="dark"] .button--primary:hover {
+  --ifm-button-background-color: var(--swm-navy-light-20);
+  --ifm-button-border-color: var(--swm-navy-light-20);
+  color: var(--swm-navy-light-100);
+}
+
+/* Code blocks read as flat surfaces - no drop shadow, no border. */
+[class*="codeBlockContainer"],
+[class*="codeBlockContent"],
+[class*="codeBlockContent"] pre {
+  box-shadow: none;
+}
+
+/*
+ * Sidebar - the menu reads as an inset panel floating on the white page: a
+ * transparent border cuts it away from the page edges so the background shows
+ * around its 24px corners.
+ */
+@media (min-width: 997px) {
+  .theme-doc-sidebar-container,
+  .theme-doc-sidebar-container [class*="sidebarViewport"],
+  .theme-doc-sidebar-container [class*="sidebar_"] {
+    border-right: none !important;
+    background-color: var(--swm-background);
+  }
+
+  .theme-doc-sidebar-container nav.menu {
+    border: 12px solid transparent;
+    border-radius: var(--swm-radius);
+    background-color: var(--swm-sidebar-background);
+    background-clip: padding-box;
+    padding: 8px 24px;
+  }
+
+  .theme-doc-sidebar-container nav.menu > ul.menu__list {
+    background-color: transparent;
+  }
+}
+
+/* The sidebar menu keeps the ink color so it matches body copy. */
+.menu__link,
+.menu__list-item-collapsible > .menu__link {
+  color: var(--swm-sidebar-menu-color);
 }
