@@ -138,6 +138,7 @@ export function resolveUpdatePackageAction(
 export async function update(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
   const noTelemetry = args.includes("--no-telemetry");
+  const noAllowlist = args.includes("--no-allowlist");
   const requestedVersion = getRequestedVersion(args);
   const trigger = getUpdateTriggerFromEnv();
   telemetryInit("installer");
@@ -742,15 +743,30 @@ export async function update(args: string[]): Promise<void> {
       }
 
       // Refresh allowlists only for scopes that already had argent configured —
-      // matches the editor list above.
-      for (const [scope, adapters] of adaptersByScope) {
-        for (const adapter of adapters) {
-          if (!adapter.addAllowlist) continue;
-          try {
-            adapter.addAllowlist(projectRoot, scope);
-          } catch {
-            // non-fatal
+      // matches the editor list above. `refresh: true` lets an adapter treat a
+      // rule missing from an existing allowlist as a deliberate removal
+      // instead of re-adding it; --no-allowlist skips the refresh entirely.
+      // Both skips leave a trace so a missing auto-approve entry after an
+      // update is explainable from the output.
+      if (noAllowlist) {
+        p.log.info(pc.dim("Skipped editor auto-approve allowlist refresh (--no-allowlist)."));
+      } else {
+        // Set-dedup: an adapter configured in both scopes (Cursor's allowlist
+        // is machine-global regardless) would otherwise note twice.
+        const allowlistNotes = new Set<string>();
+        for (const [scope, adapters] of adaptersByScope) {
+          for (const adapter of adapters) {
+            if (!adapter.addAllowlist) continue;
+            try {
+              const note = adapter.addAllowlist(projectRoot, scope, { refresh: true });
+              if (note) allowlistNotes.add(`- ${adapter.name}: ${note}`);
+            } catch {
+              // non-fatal
+            }
           }
+        }
+        if (allowlistNotes.size > 0) {
+          p.log.info(pc.dim([...allowlistNotes].join("\n")));
         }
       }
 

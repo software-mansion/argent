@@ -71,6 +71,8 @@ export interface InstallationEditorsSelectProps {
 
 export interface InstallationAllowlistDecisionProps {
   is_enabled: boolean;
+  /** "flag" = --no-allowlist, "default" = -y accepted defaults, "prompt" = the user answered. */
+  decided_by: "flag" | "default" | "prompt";
 }
 
 // Stale argent config (entries in other scopes that would shadow or block the
