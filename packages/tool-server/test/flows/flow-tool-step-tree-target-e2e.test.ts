@@ -73,7 +73,6 @@ function nativeApi(hierarchyReads: string[]): NativeDevtoolsApi {
       }
       return appState(id);
     },
-    requiresAppRestart: async () => false,
     queryViewHierarchy: async (id: string) => {
       hierarchyReads.push(id);
       return { windows: [readyWindow()] };

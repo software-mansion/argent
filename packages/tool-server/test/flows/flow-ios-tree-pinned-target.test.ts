@@ -5,6 +5,7 @@ import {
   NON_INJECTABLE_NATIVE_WARNING,
   type NativeAppState,
   type NativeDevtoolsApi,
+  type NativeDevtoolsAppState,
 } from "../../src/blueprints/native-devtools";
 import type { FlowTreeTarget } from "../../src/tools/flows/flow-actions";
 import { queryFullHierarchyTree } from "../../src/tools/flows/flow-ios-tree";
@@ -89,10 +90,11 @@ function windowSpanning() {
 
 /**
  * The healthy app under test plus a poisoned sibling whose getState only ever
- * times out; records state probes, hierarchy reads, and env-repair calls
- * (requiresAppRestart / reverifyEnv). `connected` overrides the connection set
- * to model a dropped pin; `states` overrides per-app state to model a
- * backgrounded pin; `probeFailures` makes an app's own getState throw.
+ * times out; records state probes, hierarchy reads, and the env repair a miss
+ * path triggers (`appConnectionState` -> `reverifyEnv`). `connected` overrides
+ * the connection set to model a dropped pin; `states` overrides per-app state
+ * to model a backgrounded pin; `probeFailures` makes an app's own getState
+ * throw.
  */
 function poisonedApi(
   connected: string[] = [APP, POISONER],
@@ -115,12 +117,13 @@ function poisonedApi(
       }
       return states[id] ?? appState(id);
     },
-    requiresAppRestart: async (id: string) => {
-      repaired.push(`requiresAppRestart:${id}`);
-      if (connected.includes(id)) return false;
-      // The real miss path runs a full reverifyEnv before returning true.
+    appConnectionState: async (id: string): Promise<NativeDevtoolsAppState> => {
+      repaired.push(`appConnectionState:${id}`);
+      if (connected.includes(id)) return "connected";
+      // The real miss path awaits a full reverifyEnv before it diagnoses; the
+      // dropped pin this models is a process that died.
       repaired.push("reverifyEnv");
-      return true;
+      return "not_running";
     },
     reverifyEnv: async () => {
       repaired.push("reverifyEnv");
@@ -398,7 +401,7 @@ describe("queryFullHierarchyTree - pinned target vs poisoned auto-resolve", () =
     expect(message).toContain("restart it (restart-app, or a flow `launch` step)");
     expect(message).not.toMatch(/relaunch it \(launch-app/);
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NATIVE_DEVTOOLS_NOT_CONNECTED);
-    // A dead pin is re-read every 300ms poll; requiresAppRestart's miss path
+    // A dead pin is re-read every 300ms poll; appConnectionState's miss path
     // would run a full reverifyEnv per poll and latch the device's give-up
     // after three failures, so the pinned path must never invoke either.
     expect(repaired).toEqual([]);
