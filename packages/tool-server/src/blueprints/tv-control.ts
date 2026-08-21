@@ -15,8 +15,7 @@ import { cachedDeviceSetForUdid, simctlPrefix } from "../utils/ios-device-sets";
 import { UnsupportedOperationError } from "../utils/capability";
 import type { TvControlApi, TvDescribeResponse, TvDirection, TvElement } from "./tv-control-types";
 
-// Re-export the shared TV contract so existing importers of `tv-control` keep
-// working. The Android TV backend implements the same `TvControlApi`.
+// Re-exported so existing importers of `tv-control` keep working.
 export type { TvControlApi, TvDescribeResponse, TvDirection, TvElement };
 
 export const TV_CONTROL_NAMESPACE = "TvControl";
@@ -27,10 +26,9 @@ type TvControlFactoryOptions = Record<string, unknown> & {
 };
 
 /**
- * Build the `ServiceRef` for the tvOS control service keyed by a resolved
- * `DeviceInfo`. The factory verifies the target really is a tvOS simulator
- * before spawning anything — `resolveDevice` only classifies by UDID shape and
- * cannot distinguish tvOS from iOS, so the runtime-kind check lives here.
+ * `ServiceRef` for the tvOS control service, keyed by a resolved `DeviceInfo`.
+ * The factory re-checks the runtime kind before spawning: `resolveDevice`
+ * classifies by UDID shape and cannot tell tvOS from iOS.
  */
 export function tvControlRef(device: DeviceInfo): {
   urn: string;
@@ -41,11 +39,6 @@ export function tvControlRef(device: DeviceInfo): {
     options: { device },
   };
 }
-
-// The TV read-path / control types (`TvElement`, `TvDescribeResponse`,
-// `TvDirection`, `TvControlApi`) live in `tv-control-types.ts` so the Android TV
-// backend can share them without importing the iOS daemon binaries. The tvOS
-// daemon JSON shapes mirror `TvDescribeResponse`.
 
 function axSocketPath(udid: string): string {
   return `/tmp/argent-tv-ax-${udid.slice(0, 8)}.sock`;
@@ -58,8 +51,7 @@ function hidSocketPath(udid: string): string {
 /**
  * The tvOS daemons are themselves the socket *server* (bind → accept → read one
  * line → write JSON → close), the inverse of the iOS ax-service where the host
- * listens. So a request is one short-lived client connection per command:
- * connect, write the line, read until the daemon closes, parse.
+ * listens — so every command is its own short-lived client connection.
  */
 function sendLine(socketPath: string, line: string, timeoutMs = 10_000): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -91,14 +83,10 @@ function sendLine(socketPath: string, line: string, timeoutMs = 10_000): Promise
   });
 }
 
-// The HID daemon types ~1 keypress every ~40ms and only writes its reply once
-// the WHOLE string is entered, so the timeout for a `type` must scale with the
-// input length — the fixed 10s default (fine for a single `navigate` press)
-// would fire mid-type on a long input, rejecting and destroying the socket while
-// the daemon is still typing, so `keyboard` reports a hard failure for text that
-// was in fact largely entered. Budget the per-char cost (generous over the ~40ms
-// observed) plus fixed overhead (connect + the daemon's own setup) so the reply
-// reliably wins the race.
+// The HID daemon types ~1 keypress every ~40ms and only replies once the WHOLE
+// string is entered, so a fixed 10s timeout would fire mid-type on a long input
+// and report a hard failure for text that was largely entered. The per-char
+// budget is generous over the observed cadence, plus connect/setup overhead.
 const TYPE_MS_PER_CHAR = 60;
 const TYPE_BASE_MS = 10_000;
 export function typeTimeoutMs(textLength: number): number {
@@ -118,9 +106,8 @@ async function sendJson(socketPath: string, command: string, timeoutMs?: number)
 // Spawn the AX reader *inside* the simulator. It binds its own unix socket on
 // the host-shared /tmp, so the host connects to that path directly.
 function spawnAxDaemon(udid: string, socketPath: string): ChildProcess {
-  // Sync by contract (returns the ChildProcess); the factory's device-list
-  // validation has already learned the UDID's device set, so the cached view
-  // is warm here.
+  // The factory's device-list validation already learned this UDID's device
+  // set, so the synchronous cached lookup is warm here.
   const proc = execFile(
     "xcrun",
     [
@@ -153,9 +140,8 @@ function spawnHidDaemon(udid: string, socketPath: string): ChildProcess {
   return proc;
 }
 
-// Poll until the daemon has bound its socket (it prints a "ready" line on
-// stdout, but waiting on the socket file existing + accepting is simpler and
-// works identically for both the in-sim and host daemons).
+// Readiness is probed on the socket itself, so one wait covers both the in-sim
+// and the host daemon.
 async function waitForSocket(
   socketPath: string,
   proc: ChildProcess,
@@ -164,11 +150,11 @@ async function waitForSocket(
   const deadline = Date.now() + timeoutMs;
   let exited: number | null | undefined;
   // A daemon that fails to *spawn* (missing binary, missing `xcrun`) emits
-  // `error`, not `exit`; without watching for it the wait polls to the full
-  // timeout and hides the real cause. ax-service listens for both too.
+  // `error`, not `exit`; unwatched, the wait polls to the full timeout and
+  // hides the real cause.
   let spawnError: Error | undefined;
-  // Listeners are scoped to this wait — removed on every exit path so they don't
-  // accumulate on a daemon that lives ~1h.
+  // Removed on every exit path so they don't accumulate on a daemon that
+  // lives ~1h.
   const onExit = (code: number | null) => (exited = code);
   const onError = (err: Error) => (spawnError = err);
   proc.once("exit", onExit);
@@ -228,9 +214,8 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
     }
     const udid = device.id;
 
-    // resolveDevice classifies by UDID shape alone and can't tell tvOS from iOS,
-    // so confirm the runtime here via simctl before spawning the tv daemons.
-    // This also yields a clear error when someone passes an iPhone udid.
+    // Shape-based classification can't tell tvOS from iOS, so confirm the
+    // runtime via simctl before spawning the tv daemons.
     const sims = await listIosSimulators();
     const match = sims.find((s) => s.udid === udid);
     if (!match) {
@@ -238,14 +223,12 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
         `${TV_CONTROL_NAMESPACE}: no available simulator with udid '${udid}'. Run list-devices to find a booted Apple TV.`
       );
     }
-    // Warm the synchronous runtime-kind cache the telemetry hot path reads. Without
-    // this, a tv-remote-only Apple TV session never touches describe/screenshot/
-    // streaming and so stays attributed to the coarse `ios` platform — whereas the
-    // Android TV factory warms its cache via getAndroidRuntimeKind. Warming here
-    // makes the two TV platforms symmetric (refined from the call after the first).
+    // Warm the synchronous runtime-kind cache the telemetry hot path reads:
+    // a tv-remote-only session never touches describe/screenshot/streaming and
+    // would otherwise stay attributed to the coarse `ios` platform, unlike
+    // Android TV whose factory warms its cache too.
     cacheSimulatorRuntimeKind(udid, match.runtimeKind);
     if (match.runtimeKind !== "tv") {
-      // Wrong device class (an iPhone shape-classifies as iOS and reaches here).
       // UnsupportedOperationError so http.ts maps it to 400, not 500 — a 500
       // reads as a transient fault and invites retries of a wrong target.
       throw new UnsupportedOperationError(
@@ -266,27 +249,24 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
     const hidSock = hidSocketPath(udid);
     let disposed = false;
 
-    // setfocus needs AutomationEnabled; same pref the iOS ax-service relies on.
     await ensureAutomationEnabled(udid);
 
     let axProc = spawnAxDaemon(udid, axSock);
     const hidProc = spawnHidDaemon(udid, hidSock);
 
-    // The ax daemon is a standalone process spawned via `simctl spawn` — it is
-    // NOT a child of the foreground app, so it survives launch-app / restart-app.
-    // What it does NOT survive cleanly is AXRuntime's `primaryApp` cache, which
-    // can keep pointing at the now-dead app and make describe report an empty
-    // focus set on a fully-rendered screen. Two recovery paths therefore
-    // exist: respawn if the process happens to have exited (rare), and an
-    // on-demand `recycleAx()` that kills + respawns to drop a stale cache.
+    // Spawned via `simctl spawn`, not as a child of the app, so it survives
+    // launch-app / restart-app — but AXRuntime's `primaryApp` cache can keep
+    // pointing at the dead app and make describe report an empty focus set on a
+    // rendered screen. Hence two recovery paths: respawn on a (rare) process
+    // exit, and on-demand `recycleAx()` to drop a stale cache.
     let axExited = false;
     const onAxExit = (_code: number | null) => {
       if (disposed) return;
       axExited = true;
     };
     axProc.on("exit", onAxExit);
-    // Handle a post-init `error` (else Node crashes on the unhandled event);
-    // treat it like an exit so the next `ensureAxAlive` respawns.
+    // Handle a post-init `error` (unhandled, it crashes Node); treat it like an
+    // exit so the next `ensureAxAlive` respawns.
     const onAxError = (_err: Error) => {
       if (disposed) return;
       axExited = true;
@@ -314,23 +294,19 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       ]);
     } catch (err) {
       // The factory is about to throw, so this instance is never handed to the
-      // registry and no one is subscribed to its events. Detach the exit
-      // listeners before killing the procs so the kill doesn't fire a
-      // `terminated` emit on an instance that was never returned.
+      // registry. Detach before killing, so the kill doesn't fire `terminated`
+      // on an instance nobody subscribed to.
       axProc.removeListener("exit", onAxExit);
       axProc.removeListener("error", onAxError);
       hidProc.removeListener("exit", onHidExit);
       hidProc.removeListener("error", onHidError);
-      // SIGKILL the ax daemon to match dispose()/spawnFreshAx: it runs via
-      // `simctl spawn`, where SIGTERM doesn't reliably propagate to the in-sim
-      // process, so a SIGTERM here would orphan the in-sim ax daemon when one
-      // socket came up but the other timed out. The hid daemon is a direct host
-      // process, so SIGTERM reaps it.
+      // SIGKILL the ax daemon: under `simctl spawn` SIGTERM doesn't reliably
+      // reach the in-sim process, which would orphan it. The hid daemon is a
+      // direct host process, so SIGTERM reaps it.
       if (!axProc.killed) axProc.kill("SIGKILL");
       if (!hidProc.killed) hidProc.kill("SIGTERM");
-      // Unlink any socket a daemon already bound before the other timed out, so
-      // a stale file can't make the next factory's accept-probe see a false
-      // "ready" against a dead socket before the fresh daemon rebinds.
+      // Drop any socket a daemon already bound, so a stale file can't make the
+      // next factory's accept-probe read as "ready" against a dead socket.
       for (const p of [axSock, hidSock]) {
         try {
           fs.unlinkSync(p);
@@ -341,9 +317,8 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       throw err;
     }
 
-    // Kill any current ax daemon, clear its socket, spawn a fresh one and wait
-    // until it accepts connections. Serialized via `axRespawn` so concurrent
-    // ax commands can't race a half-spawned daemon or double-spawn.
+    // Serialized via `axRespawn` so concurrent ax commands can't race a
+    // half-spawned daemon or double-spawn.
     let axRespawn: Promise<void> | null = null;
     async function spawnFreshAx(): Promise<void> {
       if (axProc && !axProc.killed) {
@@ -352,7 +327,6 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
         axProc.kill("SIGKILL");
       }
       axExited = false;
-      // Best-effort: the socket file may not exist yet on first spawn.
       try {
         fs.unlinkSync(axSock);
       } catch {
@@ -364,11 +338,10 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       try {
         await waitForSocket(axSock, axProc, 15_000);
       } catch (err) {
-        // The socket never came up (a slow bind that timed out, not a clean
-        // process exit — `onAxExit` only fires for the latter). Mark the daemon
-        // dead so the next `ensureAxAlive` re-enters the respawn branch instead
-        // of returning early and connecting to the socket we just unlinked and
-        // never rebound. Best-effort reap the half-spawned process too.
+        // The socket never came up (a bind that timed out, not a clean exit —
+        // `onAxExit` only fires for the latter). Mark the daemon dead so the
+        // next `ensureAxAlive` respawns instead of connecting to a socket that
+        // was unlinked and never rebound, and reap the half-spawned process.
         axExited = true;
         if (!axProc.killed) {
           axProc.removeListener("exit", onAxExit);
@@ -377,11 +350,9 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
         }
         throw err;
       }
-      // dispose() may have run while we were awaiting the new socket. dispose
-      // kills only the axProc reference current at *its* moment and doesn't wait
-      // for an in-flight respawn, so without this a daemon spawned here would
-      // outlive teardown (orphaned in-sim process + a re-created socket file).
-      // Reap what we just spawned and re-clear the socket.
+      // dispose() may have run while we awaited the new socket: it kills only
+      // the axProc current at *its* moment and doesn't wait for an in-flight
+      // respawn, so reap what we spawned or it outlives teardown.
       if (disposed) {
         if (!axProc.killed) {
           axProc.removeListener("exit", onAxExit);
@@ -397,13 +368,12 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
     }
 
     // Respawn only if the daemon process actually exited (rare — it normally
-    // outlives the app). Stale-cache recovery goes through `recycleAx` instead.
+    // outlives the app). Stale-cache recovery goes through `recycleAx`.
     async function ensureAxAlive(): Promise<void> {
       if (disposed) return;
-      // A respawn already in flight (e.g. a concurrent `recycleAx`) means the
-      // socket has been unlinked and not yet rebound: `axExited` is false but
-      // the daemon is mid-rebuild, so connecting now would hit a missing socket.
-      // Wait it out before the liveness check rather than racing past it.
+      // A respawn in flight (e.g. a concurrent `recycleAx`) means the socket is
+      // unlinked and not yet rebound: `axExited` is false, yet connecting now
+      // would hit a missing socket. Wait it out before the liveness check.
       if (axRespawn) {
         await axRespawn;
         return;
@@ -426,26 +396,21 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       await axRespawn;
     }
 
-    // Send a command on the ax socket, tolerating the unlink→rebind window of a
-    // *concurrent* recycle. `ensureAxAlive` only holds the single-flight guard
-    // for its own duration; once it returns, a recycle on another in-flight call
-    // (the service instance is shared per device, so two concurrent describes
-    // can race) can set `axRespawn`, unlink the socket, and begin rebinding
-    // before this connect lands — surfacing as ECONNREFUSED/ENOENT on a socket
-    // that is merely mid-respawn, not dead. When a respawn is in flight at the
-    // point of failure, wait it out and retry against the rebound socket rather
-    // than reporting a hard failure. Bounded so a genuinely dead daemon (no
-    // respawn pending) still propagates immediately.
+    // Tolerates the unlink→rebind window of a *concurrent* recycle: the service
+    // instance is shared per device, so once `ensureAxAlive` drops its
+    // single-flight guard another in-flight call can unlink the socket before
+    // this connect lands, surfacing as ECONNREFUSED/ENOENT on a socket that is
+    // merely mid-respawn. Bounded, so a genuinely dead daemon (no respawn
+    // pending) still propagates immediately.
     async function sendAx(command: string, timeoutMs: number): Promise<unknown> {
       for (let attempt = 0; ; attempt++) {
         await ensureAxAlive();
         try {
           return await sendJson(axSock, command, timeoutMs);
         } catch (err) {
-          // Only a respawn racing this connect is recoverable: `axRespawn` is set
-          // synchronously (kill + unlink happen before spawnFreshAx's first
-          // await), so it is non-null here exactly when the socket was pulled out
-          // from under us. No respawn in flight ⇒ a real failure ⇒ rethrow.
+          // `axRespawn` is set synchronously (kill + unlink precede
+          // spawnFreshAx's first await), so it is non-null here exactly when a
+          // respawn pulled the socket out from under us; otherwise it's real.
           if (axRespawn && attempt < 2) {
             await axRespawn.catch(() => {});
             continue;
@@ -471,13 +436,11 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
 
       async type(text: string): Promise<void> {
         // The daemon reads one line per connection, so an embedded newline would
-        // type only the first line while resolving cleanly (reporting the whole
-        // string as typed). Reject it, like the Vega `send_text` backend.
+        // type only the first line yet resolve cleanly, reporting the whole
+        // string as typed. Reject it, like the Vega `send_text` backend.
         if (/[\n\r]/.test(text)) {
           throw new Error("Apple TV keyboard text must not contain newlines");
         }
-        // Scale the socket timeout to the input length (see typeTimeoutMs) so a
-        // long string doesn't time out mid-type and report a false failure.
         await sendJson(hidSock, `type ${text}`, typeTimeoutMs(text.length));
       },
 
@@ -490,10 +453,9 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       api,
       dispose: async () => {
         disposed = true;
-        // Wait out an in-flight recycle/respawn so we kill the *final* axProc
-        // (and clean its socket) rather than a reference that spawnFreshAx is
-        // about to replace. spawnFreshAx also re-checks `disposed` after its
-        // await and self-reaps, so the daemon is torn down on either ordering.
+        // Wait out an in-flight respawn so we kill the *final* axProc rather
+        // than one spawnFreshAx is about to replace. spawnFreshAx re-checks
+        // `disposed` and self-reaps, so either ordering tears the daemon down.
         if (axRespawn) {
           try {
             await axRespawn;
@@ -501,11 +463,9 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
             /* respawn failed — nothing extra to kill beyond the current axProc */
           }
         }
-        // SIGKILL the ax daemon (axProc may be a respawned instance): it runs
-        // via `simctl spawn`, where SIGTERM doesn't reliably propagate to the
-        // in-sim process — so spawnFreshAx already uses SIGKILL to reap it, and
-        // dispose must match or risk orphaning the in-sim daemon. The hid daemon
-        // is a direct host process, so SIGTERM is enough there.
+        // SIGKILL for the same reason as spawnFreshAx: under `simctl spawn`
+        // SIGTERM doesn't reliably reach the in-sim process, which would leave
+        // it orphaned. The hid daemon is a direct host process, so SIGTERM does.
         if (!axProc.killed) axProc.kill("SIGKILL");
         if (!hidProc.killed) hidProc.kill("SIGTERM");
         for (const p of [axSock, hidSock]) {

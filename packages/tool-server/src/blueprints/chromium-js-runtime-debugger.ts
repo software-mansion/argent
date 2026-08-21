@@ -96,12 +96,6 @@ function createConsoleLogServer(
   });
 }
 
-// Stubs for fields only consumed by debugger-inspect-element, which is locked
-// out on Chromium (it depends on the React Native internal
-// getInspectorDataForViewAtPoint). Keeping them shaped means chromium and
-// metro paths can share a single api interface — tools that *don't* use them
-// work uniformly, and any future tool that calls one on a chromium api hits a
-// loud, clearly-named error instead of `undefined`.
 function makeStubSourceResolver(): SourceResolver {
   const unsupported = () => {
     throw new Error(
@@ -120,9 +114,7 @@ class StubSourceMapsRegistry extends SourceMapsRegistry {
     super("");
   }
   override async waitForPending(): Promise<void> {
-    // No Metro source-map fetch loop on Chromium — page scripts already carry
-    // their own //# sourceMappingURL=data:... or rely on the browser devtools'
-    // own resolution path.
+    // Nothing to await: no source map is ever registered on the Chromium path.
   }
 }
 
@@ -134,29 +126,17 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
   },
 
   getDependencies(_payload: string) {
-    // The payload IS the device id (e.g. "chromium-cdp-9222") so we depend on
-    // the matching ChromiumCdp service. Keeping the device id in the payload —
-    // rather than passing through options — means the registry can compute
-    // dependency URNs without needing the resolved DeviceInfo.
+    // The device id lives in the payload, not in options, so the registry can
+    // compute this URN without the resolved DeviceInfo.
     return { chromium: `${CHROMIUM_CDP_NAMESPACE}:${_payload}` };
   },
 
-  // Deliberately NO recoverable() here. The registry's self-heal disposes the
-  // recovering node before it retries, and this blueprint's dispose closes the
-  // LogFileWriter — which UNLINKS the session's captured console log from disk
-  // (log-file-writer.ts) — so a recovery pass would destroy the logs whether or
-  // not the retry then succeeds. It would also buy nothing: the one window
-  // where a call fails while this node and its ChromiumCdp dependency stay
-  // RUNNING is a tab switch, where CDPClient.reconnect() rejects in-flight
-  // requests with CONNECTION_CLOSED (late sends with NOT_CONNECTED) but
-  // re-points the SAME client object at the new tab — the cached node heals
-  // itself for the next call without any dispose. The failing call surfaces a
-  // classified error that debugger-status maps to a structured "reconnecting"
-  // result with retry-once guidance. A genuinely dead Chromium socket instead
-  // fires ChromiumCdp's own terminated event, whose teardown cascades into this
-  // dependent — the node leaves RUNNING and the next call re-resolves fresh.
-  // (Same log-preservation reasoning as debugger-log-registry's missing socket
-  // gate — see that tool's comment.)
+  // Deliberately NO recoverable(): the registry's self-heal disposes the node
+  // before retrying, and dispose unlinks the captured console log. It would
+  // also buy nothing — the only failure window while this node and ChromiumCdp
+  // both stay RUNNING is a tab switch, where CDPClient.reconnect() re-points
+  // the same client object and the cached node heals itself; a genuinely dead
+  // socket arrives instead as ChromiumCdp's terminated cascade.
 
   async factory(deps, payload, options) {
     const opts = options as ChromiumJsdFactoryOptions | undefined;
@@ -177,17 +157,10 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
     const cdp = chromium.cdp;
     const port = chromium.port;
 
-    // Attach the terminated bridge *before* any awaits below. This is mainly
-    // about post-factory disconnects: once the registry binds to our `events`
-    // (after factory returns), a `disconnected` here translates cleanly to
-    // `terminated` so the service is torn down. The disconnect-DURING-factory
-    // window is handled by the upstream ChromiumCdp service, which has its own
-    // `terminated` event already bound to the registry — when it fires, the
-    // registry cascades teardown into us. So this listener and the upstream
-    // one cooperate: upstream covers the factory-init window; this one covers
-    // everything after factory returns. The dispose closure must `off` both
-    // listeners symmetrically — otherwise the upstream `cdp.events` outlives
-    // our blueprint and would emit into a disposed event bus.
+    // Bridges a post-factory `disconnected` to `terminated`, which the registry
+    // only binds once factory returns; the disconnect-during-factory window is
+    // covered by ChromiumCdp's own terminated event cascading into us. Both
+    // listeners must come back off in dispose — `cdp.events` outlives us.
     const events = new TypedEventEmitter<ServiceEvents>();
     const onDisconnected = (error?: Error) => {
       events.emit("terminated", error ?? new Error("Chromium CDP disconnected"));
@@ -199,11 +172,9 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
     let nextLogId = 0;
 
     const onConsoleAPI = (params: ConsoleAPICalledParams) => {
-      // consoleAPICalled.timestamp is ms-since-epoch on both Chrome and Hermes/RN
-      // (see consoleTimestampToIso). Keep the numeric entry.timestamp finite: a
-      // non-finite value (CDP server bug / future protocol revision) is coerced to
-      // now, matching the ISO helper below, so the streamed entry and the log file
-      // stay consistent.
+      // consoleAPICalled.timestamp is ms-since-epoch on Chrome as on Hermes (see
+      // consoleTimestampToIso); keep it finite so streamed entries carry a usable
+      // number.
       const ts = Number.isFinite(params.timestamp) ? params.timestamp : Date.now();
       const entry: ConsoleLogEntry = {
         id: nextLogId++,
@@ -230,10 +201,8 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
 
     const consoleServer = await createConsoleLogServer(consoleEvents, logWriter);
 
-    // Best-effort: bind a callback name so evaluateWithBinding works if a
-    // future Chromium tool wants it. Failure is non-fatal — the existing
-    // four ported tools don't use it. Future tools that DO use bindings must
-    // re-attempt addBinding themselves and surface their own errors loudly.
+    // Best-effort: no Chromium-capable tool uses evaluateWithBinding today (its
+    // only two callers are gated RN-only), so a failure here is not fatal.
     await cdp.addBinding("__argent_callback").catch(() => {});
 
     const sourceMaps = new StubSourceMapsRegistry();
@@ -241,14 +210,13 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
 
     const api: JsRuntimeDebuggerApi = {
       port,
-      // Chromium apps have no Metro project root. Empty string keeps the
-      // contract type-clean; callers that care (only inspect-element via the
-      // source resolver) are gated out before they ever touch this field.
+      // No Metro project root on Chromium; debugger-connect and debugger-status
+      // document the field as empty here.
       projectRoot: "",
       deviceName: device.name ?? "Chromium",
       appName: "Chromium",
       logicalDeviceId: device.id,
-      // Chromium always speaks the new CDP — there is no Hermes-legacy mode.
+      // No legacy RN inspector on Chromium.
       isNewDebugger: true,
       cdp,
       sourceResolver,
@@ -264,18 +232,12 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
         cdp.events.off("consoleAPICalled", onConsoleAPI);
         cdp.events.off("disconnected", onDisconnected);
         await consoleServer.close();
-        // Same breadcrumb the Hermes blueprint leaves, for the same reason:
-        // `logWriter.close()` unlinks the log file, and since
-        // `ChromiumJsRuntimeDebugger` joined `DEVICE_OWNED_NAMESPACES` this
-        // dispose is routinely triggered by another agent's
-        // `stop-all-simulator-servers`. Without it `debugger-log-registry`
-        // reports `totalEntries: 0` with no note — and its description promises
-        // that, absent the note, empty means the app logged nothing. That
-        // promise covers V8 as much as Hermes, so this side has to keep it too.
-        //
-        // One id, unlike Hermes: a chromium device's `logicalDeviceId` IS its
-        // `device.id` (set from it in the api above), so there is no second key
-        // to write.
+        // `logWriter.close()` below unlinks the log file, and this dispose is
+        // routinely triggered by another agent's `stop-all-simulator-servers`
+        // (`ChromiumJsRuntimeDebugger` is in `DEVICE_OWNED_NAMESPACES`). The
+        // breadcrumb is what keeps `debugger-log-registry`'s promise that an
+        // empty result with no note means the app logged nothing. Only one key
+        // to write, unlike Hermes: here `logicalDeviceId` IS `device.id`.
         const captured = logWriter.getStats().totalEntries;
         if (captured > 0) {
           recordReapedSession(
@@ -287,9 +249,9 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
           );
         }
         logWriter.close();
-        // Do NOT disconnect the cdp — it belongs to the ChromiumCdp service.
-        // Disposing this blueprint must leave the underlying CDP session alive
-        // for other consumers (screenshot, describe, gesture-tap, ...).
+        // Deliberately no `cdp.disconnect()` (unlike the Hermes blueprint): the
+        // session belongs to ChromiumCdp and its other consumers — screenshot,
+        // describe, gesture-tap, ...
       },
       events,
     };
