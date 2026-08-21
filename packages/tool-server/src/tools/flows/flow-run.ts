@@ -202,7 +202,9 @@ export interface StepReport {
    * selector-less gesture (coordinate `tap`/`long-press`, centre-anchored
    * `pinch`/`rotate`) that a tree-source outage left unsettled: it is dispatched
    * regardless, and the warning is the only thing separating it from one that
-   * waited.
+   * waited. Also by `scroll-to`, when the edge-avoid nudge was swallowed after
+   * the target was already accepted, so the step passed on a landing nobody
+   * read back.
    */
   warning?: string;
   /** Underlying tool id for `tool` steps. */
@@ -1100,7 +1102,7 @@ order), \`next: <selector>\` (CSS \`+\` — the nearest such follower, which unl
 non-matching neighbour rather than failing), plus \`any: true\` (CSS \`*\` — legal only WITH a scope and
 never beside text/id/role). Scopes nest to disambiguate — \`within: { id: card, within: { id: list } }\`
 reads "inside card inside list", each container's frame inside the next);
-\`scroll-to\` scrolls (momentum-free) until a target is visible; \`pinch\` zooms
+\`scroll-to\` scrolls (momentum-free) until a target is visible and, on touch devices, nudged clear of the screen edge it entered from - so an already-visible target flush at that edge can still move the viewport; \`pinch\` zooms
 (\`pinch: { on?, scale }\` — scale > 1 in, < 1 out; screen center when \`on\` is omitted); \`rotate\` is the
 two-finger rotation gesture (\`rotate: { on?, by }\` — degrees, + clockwise, within ±3000°; screen center
 when \`on\` is omitted; distinct from the \`rotate\` tool, which changes device orientation); \`await\` waits

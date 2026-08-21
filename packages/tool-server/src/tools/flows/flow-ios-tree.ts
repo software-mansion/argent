@@ -102,6 +102,28 @@ function asViewNode(v: unknown): RawViewNode | null {
   };
 }
 
+// The class name a suffix test can read. Swift classes arrive mangled
+// (NSStringFromClass), and a GENERIC one carries its type arguments AFTER the
+// class name - `_TtGC7SwiftUI19UIHostingScrollViewVS_7AnyView_`, SwiftUI's
+// ScrollView backing view - so its suffix is not the view's kind. Module and
+// class are `<length><name>` components after the prefix; the second is the
+// class. Every other form already ends with the class name, mangled
+// (`_TtC7SwiftUI33UpdateCoalescingCollectionView`) or module-qualified
+// (`SwiftUI.ListCollectionViewCell`).
+function baseClassName(cn: string): string {
+  if (!cn.startsWith("_TtGC")) return cn;
+  let at = "_TtGC".length;
+  let name = "";
+  for (let component = 0; component < 2; component++) {
+    const len = /^\d+/.exec(cn.slice(at))?.[0];
+    if (!len) return cn;
+    at += len.length;
+    name = cn.slice(at, at + Number(len));
+    at += Number(len);
+  }
+  return name;
+}
+
 // Best-effort role from the UIView class name (the full hierarchy carries no
 // accessibility traits). Selectors lean on text/identifier, so a coarse mapping
 // is enough; unknowns fall back to a generic group.
@@ -112,7 +134,23 @@ function roleFromClassName(cn: string | undefined): string {
   if (/(Label|Text)/i.test(cn)) return "AXStaticText";
   if (/Image/i.test(cn)) return "AXImage";
   if (/(Slider|Stepper|Switch|ProgressView)/i.test(cn)) return "AXAdjustable";
-  if (/(ScrollView|TableView|CollectionView)/i.test(cn)) return "AXScrollArea";
+  // UIKit class names are suffix-typed, so the tail names the kind of view and
+  // both tests below key on it rather than on a substring anywhere in the name.
+  // A row (`UITableViewCell`, `UICollectionViewCell`) carries a scroller word
+  // but does not scroll its content, and the edge-avoid nudge resolves a
+  // target's container to the smallest containing scroller - a
+  // scrollable-flagged cell would shadow its list. It is not a plain group
+  // either: a stock cell - like an app's own `MyPhotoCell` - carries no
+  // identifier and no label, so the leaf gate below would drop it and a tap on
+  // a row's dead space would resolve to the whole list. A role of its own keeps
+  // the row in the tree while staying out of the scroller set, which
+  // `isScrollContainer` reads off the role by matching "scroll". Reading `Cell`
+  // anywhere in the name would take genuine scrollers down with the rows:
+  // `UITableViewCellScrollView` (the swipe-actions scroller UIKit puts under a
+  // row) and an app's own `PhotoCellCollectionView`.
+  const base = baseClassName(cn);
+  if (/Cell$/i.test(base)) return "AXCell";
+  if (/(ScrollView|TableView|CollectionView)$/i.test(base)) return "AXScrollArea";
   return "AXGroup";
 }
 
@@ -162,6 +200,15 @@ function projectIosNode(
   const win = node.windowFrame;
   const rect = win ? { x: win.x, y: win.y, w: win.width, h: win.height } : null;
 
+  // Nothing nameable, no leaf: a row whose whole subtree is unnamed plain views
+  // is absent from the tree, so it carries none of the list's motion into
+  // `treeFingerprint` (settle detection, end-of-scroll), and a tap on its dead
+  // space resolves to the list instead. Anything nameable in the row covers it -
+  // its own testID/label, or a descendant with text or an image, each emitted
+  // and moving with the row. A UIKit cell needs none of that: `AXCell` is a
+  // specific role (see roleFromClassName), so a stock id-less, label-less row
+  // clears this gate on its own terms. The residual is the unnamed React Native
+  // or custom row class, which this gate has always dropped.
   let leaf: DescribeNode | null = null;
   let frame: DescribeFrame | null = null;
   if (!skip && (node.identifier || node.label || role !== "AXGroup" || node.firstResponder)) {
