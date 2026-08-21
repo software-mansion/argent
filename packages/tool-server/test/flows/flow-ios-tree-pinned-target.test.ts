@@ -312,8 +312,9 @@ describe("queryFullHierarchyTree - pinned target vs poisoned auto-resolve", () =
 
   it("a pinned read whose probe answered earlier refuses a later timeout instead of reading", async () => {
     // Same RPC timeout, opposite verdict: this pin already had a probe answer,
-    // so the main queue WAS being serviced and has stopped - for a pinned app,
-    // the suspension iOS applies once a flow leaves it. The hierarchy read
+    // so the main queue WAS being serviced and has stopped - usually the
+    // suspension iOS applies once a flow leaves the app, and in-app work that
+    // blocks the main thread is indistinguishable from here. The hierarchy read
     // would dispatch onto that same unserviced queue behind the abandoned
     // probe, so it is not a second chance, only a second timeout.
     const { api, probed, queried } = poisonedApi([APP, POISONER], {}, { [APP]: rpcTimeout() });

@@ -407,12 +407,15 @@ export async function queryFullHierarchyTree(
     //    unanswerable probe is not an answer of "backgrounded". Ride it out and
     //    read the pin - accepting that a flow which left the app before ever
     //    reading it is indistinguishable here and pays both timeouts.
-    //  - Already has: the app was servicing its main queue and stopped, which
-    //    for a pinned app is the suspension iOS applies once a flow leaves it.
-    //    Refuse here. Falling through is not a second chance: getFullHierarchy
-    //    hops onto the same main queue nothing is servicing, so the read would
-    //    spend its own (longer) timeout only to surface a bare "RPC timed out"
-    //    that reads like a wedged simulator.
+    //  - Already has: the app was servicing its main queue and stopped. For a
+    //    pinned app that is usually the suspension iOS applies once a flow
+    //    leaves it; in-app work blocking the main thread past the probe
+    //    timeout is indistinguishable from here, and refused the same way.
+    //    Refuse rather than fall through: getFullHierarchy hops onto the same
+    //    unserviced queue, so unless the block clears inside its longer
+    //    timeout it spends that too, only to surface a bare "RPC timed out"
+    //    that reads like a wedged simulator. Refusing early costs nothing the
+    //    caller's poll does not recover, since it re-reads until its deadline.
     //
     // Every probe that DOES answer still decides.
     let pinnedState: NativeAppState | undefined;
@@ -433,7 +436,7 @@ export async function queryFullHierarchyTree(
         // answers never sinks the fan-out at all. Hardening it against
         // per-connection failures is the follow-up named in the PR description.
         throw new FailureError(
-          `${bundleId} (the launched app) stopped answering Application.getState - the probe timed out although an earlier one in this run answered, so the app's main queue is no longer being serviced. For a pinned app that is the suspension iOS applies once a flow leaves it (e.g. a tap that opened another app), and a suspended app's hierarchy is not what is on screen; reading it anyway would park on the same unserviced queue and time out again. If this flow's subject IS the other app, give the flow a \`launch:\` step for that app - it re-pins reads to it, and a pinned read probes only the app it names, so the suspended ${bundleId} is never touched; a raw \`tool:\` step does not work here, because demoting the pin sends reads back to auto-resolve, which probes every connection at once and is sunk by this same silent one. Otherwise make the flow return to ${bundleId} before reading the UI, or \`launch\` it again.`,
+          `${bundleId} (the launched app) stopped answering Application.getState - the probe timed out although an earlier one in this run answered, so the app's main queue is no longer being serviced. For a pinned app that is usually the suspension iOS applies once a flow leaves it (e.g. a tap that opened another app), and a suspended app's hierarchy is not what is on screen; in-app work blocking the main thread past the probe timeout looks the same from here. Reading anyway parks on that same unserviced queue: certain to time out if the app is suspended, and paying the longer hierarchy timeout to find that out if it is not. If this flow's subject IS the other app, give the flow a \`launch:\` step for that app - it re-pins reads to it, and a pinned read probes only the app it names, so the silent ${bundleId} is never touched; a raw \`tool:\` step does not work here, because demoting the pin sends reads back to auto-resolve, which probes every connection at once and is sunk by this same silent one. If the flow left ${bundleId} but is still about it, make it return before reading the UI. If it never left, the main thread is busy: raise the step's \`timeout:\` so the poll re-reads past the work, or \`launch\` ${bundleId} again.`,
           {
             // The timeout's own code, NOT
             // NATIVE_TARGET_SINGLE_APP_NOT_FOREGROUND: no app state was
