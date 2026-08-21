@@ -66,6 +66,12 @@ interface IdleResult {
   waitedMs: number;
   /** Number of tree reads taken. */
   polls: number;
+  /**
+   * Present only when the budget ran out mid-read, which leaves `settled: false`
+   * standing for "never sampled twice" rather than "kept changing". Absent on a
+   * screen that was genuinely still moving.
+   */
+  note?: string;
 }
 
 const capability: ToolCapability = {
@@ -117,7 +123,11 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
     interaction: {
       startedMsg: () => "Waiting for screen to settle",
       completedMsg: ({ result }) =>
-        result.settled ? "Screen settled" : "Screen did not settle before timeout",
+        result.settled
+          ? "Screen settled"
+          : result.note
+            ? "Could not read the screen twice before timeout"
+            : "Screen did not settle before timeout",
       failedMsg: ({ failureSignal }) =>
         `Failed while waiting for screen to settle: ${failureSignal.error_code}`,
     },
@@ -125,8 +135,10 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
 
 Polls the same accessibility / DOM tree as \`describe\` every pollIntervalMs (default ${DEFAULT_POLL_INTERVAL_MS}ms) until it
 has content and that content holds identical for minStableMs (default ${DEFAULT_MIN_STABLE_MS}ms), or timeoutMs (default
-${DEFAULT_TIMEOUT_MS}ms) is reached. Returns { settled, waitedMs, polls } — settled=false means the screen never went
-still before the timeout. Use after a launch/navigation to wait for the UI to render before screenshotting or tapping.`,
+${DEFAULT_TIMEOUT_MS}ms) is reached. Returns { settled, waitedMs, polls, note? } — settled=false means the screen never
+went still before the timeout, except when a note is present: that says the tree could not be read twice inside the
+budget, so whether the screen was still went untested and raising timeoutMs is what resolves it. Use after a
+launch/navigation to wait for the UI to render before screenshotting or tapping.`,
     searchHint:
       "wait until screen settles idle stable stops changing animation transition rendered ready before screenshot",
     longRunning: true,
@@ -179,7 +191,29 @@ still before the timeout. Use after a launch/navigation to wait for the UI to re
         },
       });
 
-      return { settled: poll.result === true, waitedMs: poll.elapsedMs, polls: poll.polls };
+      const settled = poll.result === true;
+      return {
+        settled,
+        waitedMs: poll.elapsedMs,
+        polls: poll.polls,
+        // Settling takes two samples that agree across minStableMs. A tree too
+        // slow to read twice inside the budget never yields the second one, so
+        // `settled: false` here would otherwise stand for "the screen kept
+        // changing" on a screen that may have been perfectly still — the reader
+        // simply never got to compare it with itself. Say which of the two
+        // happened, and name the knob that fixes this one. The test is how many
+        // samples came back, not whether the final read straddled the deadline:
+        // the loop reads until the budget is gone, so the last one is cut off on
+        // almost every timeout however fast the reads are.
+        ...(!settled && poll.samples < 2
+          ? {
+              note:
+                `reading the tree did not finish within the ${params.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms budget, ` +
+                `so the screen was never sampled twice — this is a read that outran the budget, not an observed change. ` +
+                `Raise timeoutMs for a tree this large.`,
+            }
+          : {}),
+      };
     },
   };
 }

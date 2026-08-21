@@ -189,9 +189,20 @@ function timeoutNote(
   params: Params,
   lastTree: DescribeNode | null,
   fetchError: string | undefined,
-  lastData: DescribeTreeData | null
+  lastData: DescribeTreeData | null,
+  samples: number
 ): string {
   if (fetchError) return `last tree fetch failed: ${fetchError}`;
+  // A tree too slow to read more than once inside the budget leaves the verdict
+  // below resting on that single sample, which can be the one taken before the
+  // element ever appeared. Measured by samples returned, not by whether the last
+  // read straddled the deadline — the loop reads until the budget is gone, so
+  // one always does, however fast the reads are. The selector diagnosis is still
+  // the most useful thing to report, so qualify it rather than replace it.
+  const readCaveat =
+    samples < 2
+      ? " (only one tree read completed within the budget, so this rests on that single sample — raise timeoutMs)"
+      : "";
   const matches = lastTree ? findAll(lastTree, params.selector) : [];
   let base: string;
   switch (params.condition) {
@@ -219,7 +230,7 @@ function timeoutNote(
     default:
       base = "no element matched the selector before timeout";
   }
-  return appendDiagnostics(base, lastData);
+  return appendDiagnostics(base + readCaveat, lastData);
 }
 
 // ── Tool ─────────────────────────────────────────────────────────────────
@@ -356,7 +367,13 @@ or before tapping an element that appears asynchronously.`,
       return {
         success: false,
         elapsed: Date.now() - start,
-        note: timeoutNote(params, poll.lastData?.tree ?? null, poll.lastError, poll.lastData),
+        note: timeoutNote(
+          params,
+          poll.lastData?.tree ?? null,
+          poll.lastError,
+          poll.lastData,
+          poll.samples
+        ),
       };
     },
   };

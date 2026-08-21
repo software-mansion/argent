@@ -147,6 +147,74 @@ describe("await-ui-element tool", () => {
     expect(result.note).toMatch(/no element matched/i);
   });
 
+  // The selector verdict below is built from the newest tree that arrived, so on
+  // a tree too slow to read more than once it describes a single sample — one
+  // possibly taken before the element rendered. The note has to say so, or "no
+  // element matched" reads as a settled fact about the screen.
+  it("flags that the verdict rests on one sample when the tree outran the budget", async () => {
+    const slowAx: AXServiceApi = {
+      degraded: false,
+      describe: async () => {
+        await new Promise((r) => setTimeout(r, 200));
+        return axResponse([{ label: "Settings", frame: FRAME, traits: ["button"] }]);
+      },
+      alertCheck: async () => false,
+      ping: async () => true,
+    };
+    const tool = createAwaitUiElementTool(iosRegistry(slowAx));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        condition: "visible",
+        selector: { text: "Nope" },
+        timeoutMs: 300,
+        pollIntervalMs: 10,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.note).toMatch(/no element matched/i);
+    expect(result.note).toMatch(/only one tree read completed/i);
+    expect(result.note).toMatch(/single sample/i);
+  });
+
+  // Each read here takes real time — a tenth of the budget, so the tree is
+  // plainly fast enough — because a describe that resolves within a microtask is
+  // not a transport any device has, and it is the one shape that cannot catch
+  // the failure: the wait always ends with a read cut off by the deadline, so a
+  // caveat keyed on that fires on every timeout, and only a fetch slow enough to
+  // lose the race against a zero-length timer shows it.
+  it("leaves the note unqualified when the tree was read plenty of times", async () => {
+    const steady: AXServiceApi = {
+      degraded: false,
+      describe: async () => {
+        await new Promise((r) => setTimeout(r, 20));
+        return axResponse([{ label: "Settings", frame: FRAME, traits: ["button"] }]);
+      },
+      alertCheck: async () => false,
+      ping: async () => true,
+    };
+    const tool = createAwaitUiElementTool(iosRegistry(steady));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        condition: "visible",
+        selector: { text: "Nope" },
+        timeoutMs: 200,
+        pollIntervalMs: 5,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.note).toMatch(/no element matched/i);
+    expect(result.note ?? "").not.toMatch(/single sample/i);
+    expect(result.note ?? "").not.toMatch(/raise timeoutMs/i);
+  });
+
   it("clamps the poll sleep to the deadline so a large pollIntervalMs can't overshoot timeoutMs", async () => {
     // Element never appears; pollIntervalMs (1000) dwarfs timeoutMs (100). Without
     // clamping, the first sleep alone would run the full 1000ms past the initial
