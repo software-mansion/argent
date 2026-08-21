@@ -1,12 +1,10 @@
 /**
- * Minimal Server-Sent-Events client for `argent lens`.
+ * Server-Sent-Events client for `argent lens`: the tool-server pushes
+ * `agent-choice` / `outcome` / `session-end` frames over
+ * `GET /preview/lens-stream` the instant the underlying store event fires.
  *
- * The tool-server pushes `agent-choice` / `outcome` / `session-end` frames over
- * `GET /preview/lens-stream` the instant the underlying store event fires —
- * this replaces the old fixed-interval poll of `/preview/outcome`. Node has no
- * built-in `EventSource`, so we read the `fetch` response body (a web
- * `ReadableStream`) and parse the wire format ourselves. The framing parser is
- * split out as a pure function so it can be unit-tested without a socket.
+ * The framing parser is split out as a pure function so it can be unit-tested
+ * without a socket.
  */
 
 export interface SseEvent {
@@ -18,10 +16,9 @@ export interface SseEvent {
 
 /**
  * Parse as many COMPLETE SSE frames as `buffer` contains, returning them plus
- * the unconsumed remainder (a partial frame still arriving). Frames are
- * separated by a blank line; `:`-prefixed lines are comments (heartbeats) and
- * ignored. Only `event:` and `data:` fields are read; multiple `data:` lines
- * join with "\n" per the spec.
+ * the unconsumed remainder (a partial frame still arriving). Frames are blank-
+ * line separated; `:`-prefixed lines are comments (heartbeats); only `event:`
+ * and `data:` are read, and multiple `data:` lines join with "\n" per the spec.
  */
 export function parseSseBuffer(buffer: string): { events: SseEvent[]; rest: string } {
   // Normalise CRLF so the blank-line split is uniform.
@@ -38,7 +35,7 @@ export function parseSseBuffer(buffer: string): { events: SseEvent[]; rest: stri
     let event = "message";
     const dataLines: string[] = [];
     for (const line of rawFrame.split("\n")) {
-      if (line === "" || line.startsWith(":")) continue; // blank or comment
+      if (line === "" || line.startsWith(":")) continue;
       const colon = line.indexOf(":");
       const field = colon === -1 ? line : line.slice(0, colon);
       // A single leading space after the colon is stripped per the SSE spec.
@@ -54,9 +51,9 @@ export function parseSseBuffer(buffer: string): { events: SseEvent[]; rest: stri
 }
 
 /**
- * Subscribe to the Lens SSE stream, yielding each parsed event. Ends when the
- * server closes the stream or `signal` aborts. Throws on a non-OK response or a
- * mid-stream network error — the caller decides whether to reconnect.
+ * Subscribe to the Lens SSE stream, yielding each parsed event. Throws on a
+ * non-OK response or a mid-stream network error — the caller decides whether to
+ * reconnect.
  */
 export async function* lensEvents(baseUrl: string, signal: AbortSignal): AsyncGenerator<SseEvent> {
   const res = await fetch(`${baseUrl}/preview/lens-stream`, {
@@ -79,12 +76,12 @@ export async function* lensEvents(baseUrl: string, signal: AbortSignal): AsyncGe
       for (const ev of events) yield ev;
     }
   } finally {
-    // Releasing the lock lets the underlying connection be torn down when the
-    // generator is disposed (break / abort), so we don't leak sockets.
+    // Releasing the lock lets the connection be torn down when the generator is
+    // disposed (break / abort), so we don't leak sockets.
     try {
       reader.releaseLock();
     } catch {
-      /* already released */
+      /* ignore */
     }
   }
 }

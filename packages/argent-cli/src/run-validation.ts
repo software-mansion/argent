@@ -1,29 +1,23 @@
 // Turns a rejected tool invocation into the message a CLI user needs.
 //
-// Two things can make an invocation invalid, and they are found in different places:
-//
-//   - a required flag was not passed. Knowable here, from the tool's published schema, so it is
-//     caught before the call goes out.
-//   - a value was passed but the tool rejected it (out of range, bad enum, a rule spanning two
-//     fields). Only the tool-server knows these, and it answers with a serialized validation
-//     issue list.
-//
-// Both end up as one `ValidationReport` rendered by one function, so the wording cannot drift
-// between them.
+// A missing required flag is knowable here from the tool's published schema, so it is caught
+// before the call goes out. A value the tool rejects (range, enum, a rule spanning two fields) is
+// known only to the tool-server, which answers with a serialized validation issue list. Both
+// become one `ValidationReport` rendered by one function, so the wording cannot drift.
 
 import { flagNameFor, type JsonSchema } from "./flag-parser.js";
 
-/** A field the tool rejected, addressed by its path within the payload. */
+/** A rejected value, addressed by its path in the payload; an empty path means the payload. */
 export interface InvalidField {
   path: (string | number)[];
   message: string;
 }
 
 export interface ValidationReport {
-  /** Names of required properties absent from the payload, in schema declaration order. */
+  /** Required properties absent from the payload, in schema declaration order. */
   missing: string[];
   invalid: InvalidField[];
-  /** The server's issue list verbatim, for `--json` callers. Null when we never called out. */
+  /** The server's issue list verbatim, for `--json` callers; null when no call was made. */
   rawIssues: unknown[] | null;
 }
 
@@ -34,12 +28,12 @@ interface ValidationIssue {
 }
 
 /**
- * Required properties with no value in the payload, in the order the schema declares them — the
- * same order the help block below the message lists them in.
+ * Required properties with no value in the payload, in schema declaration order — the order the
+ * help block below the message lists them in.
  *
- * A presence check only: a field that is present but wrong is the tool-server's call, not ours.
- * Fields carrying a default are not marked required by the schema generator, so this cannot
- * reject an invocation the server would have accepted.
+ * Presence only: a field that is present but wrong is the tool-server's call. Fields carrying a
+ * default are not marked required by the schema generator, so this cannot reject an invocation
+ * the server would have accepted.
  */
 export function findMissingRequired(
   payload: Record<string, unknown>,
@@ -48,8 +42,8 @@ export function findMissingRequired(
   const required = new Set(schema?.required ?? []);
   if (required.size === 0) return [];
   const declared = Object.keys(schema?.properties ?? {});
-  // Iterate the declared properties so the result is in schema order, then append any required
-  // name the schema forgot to declare, which would otherwise be dropped silently.
+  // Declared order first, then any required name the schema declares no property for, which
+  // would otherwise be dropped silently.
   const names = [...declared.filter((n) => required.has(n))];
   for (const name of required) {
     if (!names.includes(name)) names.push(name);
@@ -60,11 +54,9 @@ export function findMissingRequired(
 /**
  * Interpret a failed tool call as input validation, or return null to leave it alone.
  *
- * Recognition is structural — the shape of the issue list and the tool's own schema decide it,
- * never the wording of any message, which is not ours to depend on.
- *
- * Returning null must leave the caller's existing error handling untouched: anything that is not
- * provably this tool's own input validation is still an ordinary runtime failure.
+ * Recognition is structural — the issue list's shape and the tool's own schema decide it, never
+ * the wording of a message that is not ours to depend on. Anything not provably this tool's own
+ * input validation stays an ordinary runtime failure with its existing handling.
  */
 export function describeServerValidationFailure(
   err: unknown,
@@ -84,10 +76,10 @@ export function describeServerValidationFailure(
   if (!parsed.every(isValidationIssue)) return null;
 
   const properties = schema?.properties ?? {};
-  // Every issue must address either a field this tool declares, or the payload as a whole (an
-  // empty path, which a rule spanning several fields produces). A tool that validates something
-  // other than its input — a device's response, say — and lets that error escape names fields
-  // that are not flags, and must keep its existing handling rather than be dressed up as user error.
+  // Every issue must address a field this tool declares, or the payload as a whole (an empty
+  // path, which a rule spanning several fields produces). A tool that lets an error from validating
+  // something other than its input escape — a device's response, say — names fields that are not
+  // flags, and must keep its existing handling rather than be dressed up as user error.
   const addressesThisTool = (issue: ValidationIssue) =>
     issue.path.length === 0 ||
     (typeof issue.path[0] === "string" && Object.hasOwn(properties, issue.path[0]));
@@ -98,9 +90,9 @@ export function describeServerValidationFailure(
   const invalid: InvalidField[] = [];
   for (const issue of parsed) {
     const head = issue.path[0];
-    // Only a required field with nothing supplied reads as "you forgot this". A rule that fires
-    // on an optional field would otherwise be reported as a missing required flag, contradicting
-    // the help block printed underneath, which marks no such field required.
+    // Only a required field with nothing supplied reads as "you forgot this". A rule firing on
+    // an optional field would otherwise be reported as a missing required flag, contradicting the
+    // help block printed underneath, which marks no such field required.
     if (
       issue.path.length === 1 &&
       typeof head === "string" &&
@@ -117,8 +109,8 @@ export function describeServerValidationFailure(
 }
 
 /**
- * The message shown for a rejected invocation. The single renderer for both the locally detected
- * and the server-reported case, so the two read identically.
+ * The message shown for a rejected invocation — one renderer for both the locally detected and
+ * the server-reported case, so the two read identically.
  */
 export function formatValidationError(
   report: ValidationReport,
@@ -142,7 +134,7 @@ export function formatValidationError(
   return lines.join("\n       ");
 }
 
-/** Flag names for a report's missing fields — what a `--json` caller echoes back to its user. */
+/** Flag names for a report's missing fields, for `--json` output. */
 export function missingFlagNames(
   report: ValidationReport,
   schema: JsonSchema | undefined
@@ -154,8 +146,7 @@ export function missingFlagNames(
 }
 
 function describeInvalidField(field: InvalidField, properties: Record<string, JsonSchema>): string {
-  // An empty path means the rule spans the whole payload rather than one field, so there is no
-  // flag to name — the tool's own explanation is the whole message.
+  // An empty path means the rule spans the whole payload, so there is no flag to name.
   if (field.path.length === 0) return field.message;
 
   const [head, ...rest] = field.path;

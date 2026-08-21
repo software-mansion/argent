@@ -43,8 +43,7 @@ function validateHost(raw: string): string {
 }
 
 function validateConnectPort(raw: string): number {
-  // Reuse parsePort for digits/range, then additionally reject 0 — you can
-  // bind to "pick a free port" but never connect to port 0.
+  // parsePort allows 0 (bind = "pick a free port"); you can't connect to port 0.
   const port = parsePort(raw);
   if (port === 0) {
     throw new StartFlagError(`--port must be 1..65535 for a connect target, got "${raw}"`);
@@ -107,9 +106,8 @@ export function parseLinkFlags(argv: string[]): LinkFlags {
       flags.token = tok.slice("--token=".length);
       continue;
     }
-    // Positional target: an argent://[<token>@]<host>:<port> pairing string or a
-    // full http(s):// URL (for a reverse proxy / tunnel). parseLinkTarget throws
-    // on a malformed recognized URL and returns null for anything else.
+    // parseLinkTarget throws on a malformed argent:// or http(s):// target and
+    // returns null for anything it doesn't recognize.
     if (!tok.startsWith("-")) {
       const parsed = parseLinkTarget(tok);
       if (!parsed) {
@@ -289,9 +287,9 @@ async function preflightHealth(
       signal: controller.signal,
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
-    // Drain the (large) /tools body so undici frees the keep-alive socket
-    // immediately; an unread body otherwise keeps the socket ref'd until the
-    // server's idle keepAliveTimeout (~5s), lingering the command after it's done.
+    // Cancel the (large) /tools body so undici frees the keep-alive socket now;
+    // an unread body keeps it ref'd until the server's ~5s idle keepAliveTimeout,
+    // delaying process exit.
     await res.body?.cancel().catch(() => {});
     if (!res.ok) {
       const hint =
@@ -320,8 +318,6 @@ function printSecurityCaveat(host: string, token: string | undefined, url: strin
   if (isLoopback(host)) return;
   const tls = url.startsWith("https://");
   if (tls) {
-    // TLS handles transport security; nothing alarming to add beyond the
-    // (already required) token for a public endpoint.
     if (!token) {
       process.stderr.write(
         pc.yellow(
@@ -376,7 +372,6 @@ export async function link(argv: string[]): Promise<void> {
 
   const existing = await readLinkConfig();
 
-  // Resolve host
   let host: string;
   if (flags.host !== null) {
     host = flags.host;
@@ -388,29 +383,25 @@ export async function link(argv: string[]): Promise<void> {
     host = await promptHost(existing);
   }
 
-  // Resolve port
   let port: number;
   if (flags.port !== null) {
     port = flags.port;
   } else if (flags.yes) {
-    // --yes with --host but no --port → default 3001
     port = 3001;
   } else {
     port = await promptPort(existing);
   }
 
-  // Resolve token: an explicit --token / argent:// URL wins; otherwise reuse
-  // the existing link's token when re-pointing at the same target, so a bare
-  // `argent link` re-run doesn't silently drop authentication.
+  // Reuse the existing link's token when re-pointing at the same target, so a
+  // bare `argent link` re-run doesn't silently drop authentication.
   const token: string | undefined =
     flags.token ??
     (existing && existing.host === host && existing.port === port ? existing.token : undefined);
 
-  // A full http(s):// / argent:// target carries its own canonical URL (scheme,
-  // optional path); the --host/--port path builds a plain http://host:port.
+  // A full http(s):// target keeps its own scheme and path prefix; --host/--port
+  // builds a plain http://host:port.
   let url = flags.url ?? formatToolsServerUrl(host, port);
 
-  // Overwrite confirmation (interactive only)
   if (!flags.yes && existing) {
     if (existing.url === url) {
       p.log.info(`Already linked to ${pc.cyan(url)}.`);
@@ -427,7 +418,6 @@ export async function link(argv: string[]): Promise<void> {
     }
   }
 
-  // Pre-flight health check (unless --no-verify)
   if (!flags.noVerify) {
     while (true) {
       const spinnerActive = !flags.yes;
@@ -446,7 +436,7 @@ export async function link(argv: string[]): Promise<void> {
       const detail = result.error ? ` (${result.error})` : "";
 
       if (flags.yes) {
-        // Non-interactive: can't prompt, keep original fail-fast behaviour.
+        // Non-interactive: can't prompt, so fail fast.
         console.error(
           `Error: pre-flight GET ${url}/tools failed${detail}. ` +
             `Make sure the remote tool-server is running, or pass --no-verify to skip.`
@@ -477,7 +467,6 @@ export async function link(argv: string[]): Promise<void> {
         port = await promptPort(existing, port);
         url = formatToolsServerUrl(host, port);
       }
-      // "retry" (or after "modify") loops and re-runs preflightHealth.
     }
   }
 
