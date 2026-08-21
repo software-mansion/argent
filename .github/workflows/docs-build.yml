@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "packages/docs/**"
+      - ".prettierrc"
       - ".github/workflows/docs-build.yml"
       - ".github/workflows/docs-publish.yml"
   pull_request:
@@ -13,6 +14,7 @@ on:
       - main
     paths:
       - "packages/docs/**"
+      - ".prettierrc"
       - ".github/workflows/docs-build.yml"
       - ".github/workflows/docs-publish.yml"
   workflow_call:
@@ -22,6 +24,37 @@ permissions:
   contents: read
 
 jobs:
+  docs-checks:
+    name: Format and lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/docs
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: packages/docs/package-lock.json
+
+      # packages/docs is excluded from the root npm workspaces and carries its
+      # own lockfile, so it installs on its own.
+      - name: Install dependencies
+        run: npm ci
+
+      # Prettier reads the .prettierrc at the repo root, so the docs site and
+      # the packages share one style.
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
   docs-build:
     name: Build
     runs-on: ubuntu-latest

@@ -52,3 +52,11 @@ that follow it.
 Run `npx docusaurus build` after editing docs. It fails on broken internal links, which is
 the main thing to catch after moving or renaming a page (also update any `/docs/...` links
 that pointed at the old path).
+
+Run `npm run format` after editing docs, and `npm run lint` after editing `src/`. Prettier
+reads the `.prettierrc` at the repo root, so this site and the packages share one style.
+ESLint uses `eslint.config.mjs` in this directory: the root config ignores `packages/docs/`
+because this package installs its own dependencies.
+
+The `Docs build` workflow runs `format:check`, `lint`, `typecheck` and `build` on every pull
+request that touches `packages/docs/`.

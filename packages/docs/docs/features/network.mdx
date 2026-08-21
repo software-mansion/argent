@@ -19,11 +19,11 @@ Argent records the HTTP requests of the running app. The agent reads this record
 
 Argent captures the traffic in three different layers.
 
-| Layer                    | Platforms              | Content                                                     |
-| ------------------------ | ---------------------- | ----------------------------------------------------------- |
-| JS runtime               | iOS, Android, Vega     | The `fetch()` calls of your JavaScript code                   |
-| Native `NSURLProtocol`   | iOS                    | All requests, also from native modules and background transfers |
-| Chrome DevTools Protocol | Chromium and Electron  | All request types of the active tab, also documents and assets  |
+| Layer                    | Platforms             | Content                                                         |
+| ------------------------ | --------------------- | --------------------------------------------------------------- |
+| JS runtime               | iOS, Android, Vega    | The `fetch()` calls of your JavaScript code                     |
+| Native `NSURLProtocol`   | iOS                   | All requests, also from native modules and background transfers |
+| Chrome DevTools Protocol | Chromium and Electron | All request types of the active tab, also documents and assets  |
 
 Each layer captures the traffic in the process of the app. Argent does not use a proxy. Thus you do not install a certificate, and you can read HTTPS traffic directly.
 

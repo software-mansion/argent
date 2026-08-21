@@ -40,6 +40,14 @@ function useNearViewport<T extends Element>(): [React.RefObject<T>, boolean, boo
     }
 
     if (typeof IntersectionObserver === "undefined") {
+      /*
+       * This cannot move into the initial state: the server has no
+       * IntersectionObserver either, so a lazy initializer would render "loaded"
+       * on the server and "not loaded" in a browser that supports the observer,
+       * which breaks hydration. It runs once, in the rare browser without the
+       * API.
+       */
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setShouldLoad(true);
       setIsVisible(true);
       return undefined;
@@ -52,7 +60,7 @@ function useNearViewport<T extends Element>(): [React.RefObject<T>, boolean, boo
         }
         setIsVisible(entry.isIntersecting);
       },
-      { rootMargin: "200px 0px" },
+      { rootMargin: "200px 0px" }
     );
 
     observer.observe(element);

@@ -50,11 +50,11 @@ The agent can find the source of a component in the report. Argent returns the f
 
 After the report, the agent can query the stored data without a new recording.
 
-| Query          | Content                                                                                   |
-| -------------- | ----------------------------------------------------------------------------------------- |
-| Commits        | The commits of one component, the commits in a time window, or the cascade tree of a commit |
-| CPU            | The top functions, the CPU in a time window, the call tree of a function, or the CPU of a component |
-| Native stacks  | The stacks during a hang, the callers of a function, the CPU of each thread, or the leaked objects |
+| Query         | Content                                                                                             |
+| ------------- | --------------------------------------------------------------------------------------------------- |
+| Commits       | The commits of one component, the commits in a time window, or the cascade tree of a commit         |
+| CPU           | The top functions, the CPU in a time window, the call tree of a function, or the CPU of a component |
+| Native stacks | The stacks during a hang, the callers of a function, the CPU of each thread, or the leaked objects  |
 
 Argent writes each session to disk in a directory with the name `argent-profiler-cwd` in the temporary directory of the system. The agent can load a session from disk later and query it again. Thus you can compare the profile before and after a change.
 

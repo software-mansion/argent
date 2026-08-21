@@ -24,8 +24,9 @@ export default tseslint.config(
       // Downloaded Perfetto trace-processor bundle (git-ignored build artifact,
       // fetched by download-trace-processor.sh) — generated, not ours to lint.
       "packages/native-devtools-android/assets/trace-processor/",
-      "packages/docs/build/",
-      "packages/docs/.docusaurus/",
+      // The docs site sits outside the npm workspaces and installs its own
+      // dependencies, so it lints itself with packages/docs/eslint.config.mjs.
+      "packages/docs/",
       "coverage/",
     ],
   },

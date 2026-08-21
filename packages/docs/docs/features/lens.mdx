@@ -32,15 +32,15 @@ Argent Lens is in development. The feature is behind the `argent-lens` flag and 
 
 The Lens window streams the device that the agent used for the screenshots. Each element with staged variants has a floating card. A thin line connects the card to the element on the streamed screen. Each card shows the name, the preview image and the summary of every variant. Expand a variant to read its code.
 
-| Control                        | Function                                                                 |
-| ------------------------------ | ------------------------------------------------------------------------ |
-| Variant card                   | Pick one variant for the element, or pick none to keep the current design |
-| Comment on an element          | Add a note to the decision for one element                               |
-| Comment inspector              | Pin a comment to any element of the screen, also one without variants     |
-| **Show them**                  | Reveal the choices for elements that are on a different screen            |
-| Overall comment                | Give one direction for the whole round                                     |
-| **Complete**                   | Submit the round to the agent                                             |
-| **Clear**                      | Remove all picks and comments of the round                                |
+| Control               | Function                                                                  |
+| --------------------- | ------------------------------------------------------------------------- |
+| Variant card          | Pick one variant for the element, or pick none to keep the current design |
+| Comment on an element | Add a note to the decision for one element                                |
+| Comment inspector     | Pin a comment to any element of the screen, also one without variants     |
+| **Show them**         | Reveal the choices for elements that are on a different screen            |
+| Overall comment       | Give one direction for the whole round                                    |
+| **Complete**          | Submit the round to the agent                                             |
+| **Clear**             | Remove all picks and comments of the round                                |
 
 If no device runs, the window offers a picker. The picker boots a simulator for the stream.
 
@@ -60,11 +60,11 @@ argent lens --agent codex        # bind a specific agent
 argent lens --forget             # forget the remembered agent
 ```
 
-| Option                 | Description                                                              |
-| ---------------------- | ------------------------------------------------------------------------ |
-| `-a, --agent <id>`     | Agent to bind: `claude`, `codex`, `gemini`, `opencode` or `cursor`       |
-| `-t, --terminal <app>` | Terminal for the new-window fallback: `iterm` or `terminal`              |
-| `--forget`             | Forget the remembered agent, then exit                                   |
+| Option                 | Description                                                        |
+| ---------------------- | ------------------------------------------------------------------ |
+| `-a, --agent <id>`     | Agent to bind: `claude`, `codex`, `gemini`, `opencode` or `cursor` |
+| `-t, --terminal <app>` | Terminal for the new-window fallback: `iterm` or `terminal`        |
+| `--forget`             | Forget the remembered agent, then exit                             |
 
 When more than one agent is installed, the window shows a picker. The picker can remember your choice. Argent stores the choice in the `lens.agent` setting, in the global or in the project configuration.
 

@@ -24,11 +24,11 @@ The agent can compare two saved screenshots, or one saved screenshot and a live 
 
 Argent does more than count different pixels. The summary contains three parts.
 
-| Part           | Content                                                                                              |
-| -------------- | ---------------------------------------------------------------------------------------------------- |
-| Overall status | Unchanged or changed, and the percentage of pixels that are different                                |
-| Changed areas  | The position and size of each area that changed, and the direction of the color change in the area   |
-| Text changes   | Text that appeared, disappeared, moved, or changed its content, its font, its size or its color       |
+| Part           | Content                                                                                            |
+| -------------- | -------------------------------------------------------------------------------------------------- |
+| Overall status | Unchanged or changed, and the percentage of pixels that are different                              |
+| Changed areas  | The position and size of each area that changed, and the direction of the color change in the area |
+| Text changes   | Text that appeared, disappeared, moved, or changed its content, its font, its size or its color    |
 
 Argent reads the text of both screenshots with OCR. Thus the agent knows that the label "Save" became "Saved", or that a heading moved down by the height of one line. Argent also compares the shape and the stroke of the glyphs. Thus the agent sees a font change even when the words are the same.
 

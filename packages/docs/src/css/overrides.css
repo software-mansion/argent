@@ -134,7 +134,6 @@ details .tabs__item--active {
   margin-left: auto !important;
 }
 
-
 /*
  * Shape - every surface that reads as a card, pill or panel shares the 24px
  * radius; small inline chips keep the smaller one so they stay readable.
@@ -298,7 +297,9 @@ article button[class*="llmButton_"] {
   background-color: var(--swm-background);
   border: 1px solid var(--swm-border);
   border-radius: var(--swm-radius);
-  transition: background-color 0.15s, border-color 0.15s;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s;
 }
 
 article button[class*="llmButton_"]:hover,

@@ -28,23 +28,23 @@ import styles from "./styles.module.css";
  * `sidebar_custom_props: { icon: "rocket" }`; category headings carry no icon.
  */
 const ICONS: Record<string, LucideIcon> = {
-  bug: Bug,
-  download: Download,
+  "bug": Bug,
+  "download": Download,
   "file-code": FileCode,
-  gauge: Gauge,
-  images: Images,
-  layers: Layers,
+  "gauge": Gauge,
+  "images": Images,
+  "layers": Layers,
   "mouse-pointer-click": MousePointerClick,
-  network: Network,
+  "network": Network,
   "repeat-2": Repeat2,
-  rocket: Rocket,
+  "rocket": Rocket,
   "scroll-text": ScrollText,
   "settings-2": Settings2,
   "shield-check": ShieldCheck,
   "swatch-book": SwatchBook,
-  terminal: Terminal,
-  video: Video,
-  wrench: Wrench,
+  "terminal": Terminal,
+  "video": Video,
+  "wrench": Wrench,
 };
 
 type Props = {
