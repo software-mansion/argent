@@ -9,15 +9,15 @@
 // commands live in `@argent/cli` and import the primitives below.
 //
 // `setFlag` writes a boolean, `unsetFlag` removes the entry at the chosen scope.
-// `isFlagEnabled` walks project → global, so an entry at the project scope
-// shadows the same key at the global scope. To opt a single project out of
-// a globally-enabled flag, hand-edit `<project>/.argent/flags.json` to
-// `{"flags":{"name":false}}` — there is no CLI for an explicit override.
+// `isFlagEnabled` walks process overlay → project → global. To opt a single
+// project out of a globally-enabled flag, hand-edit
+// `<project>/.argent/flags.json` to `{"flags":{"name":false}}` — there is no
+// CLI for an explicit persisted override.
 //
 // FLAG_REGISTRY below is the single source of truth for which flags exist:
 // `argent enable` only accepts a name listed there, and `argent flags`
-// documents every entry. `isFlagEnabled` only reads storage — it never
-// consults the registry, keeping runtime callers decoupled from CLI validation.
+// documents every entry. `isFlagEnabled` never consults the registry, keeping
+// runtime callers decoupled from CLI validation.
 //
 // Deprecating a flag is safe: only the *write* path (`argent enable`) consults
 // the registry. Every read path (readFlags / isFlagEnabled / `argent flags`)
@@ -34,11 +34,33 @@ interface FlagsFile {
   flags?: Record<string, boolean>;
 }
 
+// A linked client can temporarily override the receiving process without
+// rewriting the remote operator's project/global files. The whole map is
+// replaced in one synchronous step after a snapshot has been validated.
+let runtimeFlagOverrides: ReadonlyMap<string, boolean> = new Map();
+
+export function replaceRuntimeFlagOverrides(overrides: Readonly<Record<string, boolean>>): void {
+  const next = new Map<string, boolean>();
+  for (const [name, value] of Object.entries(overrides)) {
+    if (typeof value !== "boolean") {
+      throw new TypeError(`Runtime flag override "${name}" must be boolean.`);
+    }
+    next.set(name, value);
+  }
+  runtimeFlagOverrides = next;
+}
+
+export function clearRuntimeFlagOverrides(): void {
+  runtimeFlagOverrides = new Map();
+}
+
 // A recognized feature flag. `name` is what users pass to enable/disable and
 // what `isFlagEnabled` reads; `description` is shown by `argent flags`.
 export interface FlagDefinition {
   readonly name: string;
   readonly description: string;
+  /** Whether `argent link` should copy this live flag to the remote process. */
+  readonly syncToRemote?: true;
   // Opt-OUT flag: the feature is ON when the flag has never been set. `argent
   // disable <name>` then persists an explicit `false` (rather than unsetting,
   // which would revert to this ON default), and `argent enable <name>` / no
@@ -58,6 +80,7 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     name: "argent-lens",
     description:
       "Argent Lens — the propose_variant / await_user_selection tools and the Electron preview window for staging UI design variants and letting a human pick among them. Off by default while the feature is in development.",
+    syncToRemote: true,
   },
   {
     name: "artifacts-list-endpoint",
@@ -76,6 +99,7 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     name: "video-watermark",
     description:
       "Overlay the argent corner watermark on recorded screen videos. On by default; turn it off with `argent disable video-watermark`.",
+    syncToRemote: true,
     defaultEnabled: true,
   },
 ];
@@ -213,14 +237,15 @@ export function unsetFlag(name: string, scope: FlagScope, options: FlagsPathOpti
   return true;
 }
 
-// Effective value: project overrides global. Returns the caller-supplied
-// `default` (false when omitted) if the flag is not set in either scope. Stays
-// storage-only and registry-decoupled — for a flag's *declared* default use
-// `isFeatureEnabled`.
+// Effective value: the process-only linked-client overlay overrides project,
+// which overrides global. Returns the caller-supplied `default` (false when
+// omitted) if the flag is not set in any layer. Stays registry-decoupled — for
+// a flag's *declared* default use `isFeatureEnabled`.
 export function isFlagEnabled(
   name: string,
   options: FlagsPathOptions & { default?: boolean } = {}
 ): boolean {
+  if (runtimeFlagOverrides.has(name)) return runtimeFlagOverrides.get(name)!;
   // hasOwn, not `in`: otherwise prototype keys ("toString", "constructor", …)
   // resolve to a truthy Object.prototype member for a flag that was never set.
   const projectFlags = readFlags("project", options);
@@ -232,7 +257,8 @@ export function isFlagEnabled(
 
 // Registry-aware read: resolves an unset flag to its declared `defaultEnabled`
 // (so an opt-out feature reads as on until disabled). This is the check runtime
-// features should use; `isFlagEnabled` stays the low-level storage primitive.
+// features should use; `isFlagEnabled` stays the low-level registry-agnostic
+// primitive.
 export function isFeatureEnabled(
   name: string,
   options: FlagsPathOptions = {},
