@@ -435,6 +435,38 @@ describe("queryFullHierarchyTree - pinned target vs poisoned auto-resolve", () =
     expect(repaired).toEqual([]);
   });
 
+  it("refuses a system-app pin that is not connected, rather than sending the flow to restart it", async () => {
+    // The other arrival: treeSourceGate deliberately withholds its verdict for
+    // a com.apple.* bundle id, so a `launch:` naming one passes after the full
+    // wait even when nothing ever connected - and the pin lands with no
+    // connection behind it. Which of the two happens is runtime-dependent (see
+    // isInjectableBundleId), so both are covered. What pins the
+    // ORDER of the two gates: run the isConnected check first and this state
+    // reports a dropped connection and tells the author to restart the app,
+    // rebuilding the unbounded restart -> retry loop the policy gate exists to
+    // end.
+    const { api, probed, queried, repaired } = poisonedApi([APP]);
+    const err: unknown = await queryFullHierarchyTree(
+      registryFor(api),
+      IOS_DEVICE,
+      pin(POISONER)
+    ).then(
+      () => {
+        throw new Error("expected the disconnected system-app pin to be refused");
+      },
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(Error);
+    const message = (err as Error).message;
+    expect(message).toContain(`${POISONER} is an Apple system app`);
+    expect(message).toContain("no relaunch or retry changes this verdict");
+    expect(message).not.toMatch(/lost its devtools connection|restart it/);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE);
+    expect(probed).toEqual([]);
+    expect(queried).toEqual([]);
+    expect(repaired).toEqual([]);
+  });
+
   it("refuses a system-app pin in any casing, even while it is connected", async () => {
     // Bundle ids are case-insensitive on iOS, and connected-and-healthy is
     // exactly the state the isConnected gate would wave through.
