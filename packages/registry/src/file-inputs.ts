@@ -3,24 +3,22 @@
  *
  * Artifacts move files the tool-server *produced* out to the client; this
  * module's types move files the client *owns* (saved screenshots, flow YAMLs)
- * in to the tool-server. A tool that reads a caller-supplied path declares it
- * in {@link ToolDefinition.fileInputs}; the declaration is surfaced through
+ * in. A tool declares its caller-supplied paths in
+ * {@link ToolDefinition.fileInputs}; the declaration is surfaced through
  * `GET /tools`, so the client knows — without tool-specific logic — which args
  * name files on *its* filesystem.
  *
- * Before sending a call, the client replaces each declared arg with a
- * {@link FileInputWire} wrapper carrying the path, its stat, and (only when the
- * client is routed to a remote tool-server) the base64 file content. The
- * tool-server resolves the wrapper back to a server-readable path *before* zod
- * validation: when the path on its own disk matches the recorded stat it is
- * used in place (co-located ⇒ zero copies, exactly mirroring the artifact
- * gate), otherwise the inlined content is materialized to a temp file. Tools
- * therefore always execute against a plain local path and stay
- * location-agnostic.
+ * The client replaces each declared arg with a {@link FileInputWire} carrying
+ * the path, its stat, and (only when routed to a remote tool-server) the
+ * base64 content. The tool-server resolves it back to a server-readable path
+ * *before* zod validation: used in place when the path on its own disk matches
+ * the recorded stat (co-located ⇒ zero copies, mirroring the artifact gate),
+ * otherwise materialized from the inlined content. Tools therefore always
+ * execute against a plain local path.
  *
- * {@link ClientFileDirective} is the reverse of an upload: a tool that needs a
- * file to land in the *client's* project (e.g. a recorded flow YAML) returns
- * the content plus the client-side destination path, and the client writes it.
+ * {@link ClientFileDirective} is the reverse: a tool whose output belongs in
+ * the *client's* project (e.g. a recorded flow YAML) returns the content plus
+ * the client-side destination path, and the client writes it.
  */
 
 /** Discriminant key identifying a client-file wrapper inside tool args. */
@@ -40,57 +38,52 @@ export interface FileInputWire {
   size?: number;
   mtimeMs?: number;
   /**
-   * Base64 file bytes. The client inlines them only when it is routed to an
-   * external tool-server (`argent link` / ARGENT_TOOLS_URL), so unlinked local
-   * calls never pay the encoding cost.
+   * Base64 file bytes, inlined only when the client is routed to an external
+   * tool-server (`argent link` / ARGENT_TOOLS_URL), so unlinked local calls
+   * never pay the encoding cost.
    */
   content?: string;
   /**
-   * Present when the client had readable content but deliberately did not
-   * inline it. Lets the server explain *why* an absent-on-host file has no
-   * bytes instead of guessing ("size-limit" = file exceeds the client's
-   * inline-content cap). A string enum so future reasons extend it without
-   * another field.
+   * The client had readable content but deliberately did not inline it, so the
+   * server can explain *why* an absent-on-host file has no bytes instead of
+   * guessing ("size-limit" = over the client's inline-content cap).
    */
   contentOmitted?: "size-limit";
   /**
-   * Upload ID returned by `POST /upload` on the tool-server. Required together with
-   * {@link contentHash} for `kind: "tar-upload"` remote sessions — the client
-   * tars the file or directory and streams it to `/upload` before the tool
-   * call, avoiding the base64-in-JSON body limit. Absent for co-located
-   * sessions (the server reads the path in place). Pair with {@link contentHash}
-   * so the server can verify tarball integrity before extraction.
+   * Upload ID returned by `POST /upload`. Set together with
+   * {@link contentHash} for remote `kind: "tar-upload"` inputs — the client
+   * tars the file or directory and streams it ahead of the call, avoiding the
+   * base64-in-JSON body limit. Absent for co-located sessions (the server
+   * reads the path in place).
    */
   uploadId?: string;
   /**
    * SHA-256 hex digest of the streamed tarball bytes. Required whenever
    * {@link uploadId} is set; the server recomputes the digest while receiving
-   * receiving `POST /upload` and rejects a mismatch before extraction.
+   * `POST /upload` and rejects a mismatch before extraction.
    */
   contentHash?: string;
 }
 
 /**
  * How the server treats a declared file input:
- * - `"file"`    — the tool reads this file. Resolved to a server-readable path
- *                 (in place, or materialized from `content`); the call fails
- *                 with a clear error when neither is possible.
- * - `"directory"` — the tool reads a tree that cannot travel over the wire
- *                 (e.g. a project root). Must exist on the tool-server host;
- *                 otherwise the call fails with remote-mode guidance instead
- *                 of silently reading nothing.
+ * - `"file"`    — resolved to a server-readable path (in place, or
+ *                 materialized from `content`); the call fails with a clear
+ *                 error when neither is possible.
+ * - `"directory"` — a tree that cannot travel over the wire (e.g. a project
+ *                 root). Must exist on the tool-server host; otherwise the
+ *                 call fails with remote-mode guidance instead of silently
+ *                 reading nothing.
  * - `"probe"`   — advisory only. The arg passes through unchanged; the tool
  *                 learns via `ctx.fileInputs` whether the path exists on the
  *                 server host and adapts (e.g. flow recording switches to
- *                 client-side persistence, screenshot-diff falls back to a
- *                 temp output dir).
- * - `"tar-upload"` — the tool reads a file or directory that the client owns
- *                 (e.g. an iOS `.app` bundle, an Android `.apk`, a Vega
- *                 `.vpkg`). Co-located: used in place when path + stat match.
- *                 Remote: the client tars the path, streams it to `POST /upload`,
- *                 sets `uploadId` and `contentHash` on the wire, and the server
- *                 always extracts from the upload (even if the path also exists
- *                 locally). Extraction lands in a hash-prefixed temp dir.
+ *                 client-side persistence).
+ * - `"tar-upload"` — a file or directory the client owns (e.g. an iOS `.app`
+ *                 bundle, an Android `.apk`, a Vega `.vpkg`). Co-located: used
+ *                 in place when path + stat match. Remote: the client tars the
+ *                 path, streams it to `POST /upload`, and the server always
+ *                 extracts from the upload (even if the path also exists
+ *                 locally) into a hash-prefixed temp dir.
  */
 export type FileInputKind = "file" | "directory" | "probe" | "tar-upload";
 
@@ -106,23 +99,15 @@ export interface FileInputSpec {
   /** Client-side path template; `${param}` substitutes the tool's string args. */
   path: string;
   kind: FileInputKind;
-  /**
-   * Skip this spec silently when a referenced param is absent (e.g.
-   * screenshot-diff's baselinePath in live-capture mode). A non-optional spec
-   * with absent params is also skipped client-side — the tool's own zod
-   * validation owns required-param errors.
-   */
   optional?: boolean;
   /**
-   * Skip this spec whenever the named param is set — it is an alternate source
-   * that supersedes this template (e.g. flow-execute's flow_file spec is
-   * skipped when flow_path is set). The client then does not derive/wrap
-   * `target`, and the server drops a derived wrapper an older client still
-   * sent, so a dual-source misuse is diagnosed by the tool's own validation
-   * instead of by this spec's file resolution. "Set" means a non-empty string
-   * (or, server-side, a not-yet-resolved wrapper); explicit string values on
-   * `target` are caller-authored and pass through regardless. Only for
-   * client-DERIVED targets — a caller-authored one needs {@link unwrapWhenSet}.
+   * Client-DERIVED targets only: skip this spec whenever the named param is
+   * set — it is an alternate source that supersedes this template (e.g.
+   * flow-execute's flow_file spec is skipped when flow_path is set). The
+   * client then does not derive/wrap `target`, and the server drops a derived
+   * wrapper an older client still sent, so a dual-source misuse is diagnosed
+   * by the tool's own validation instead of by this spec's file resolution.
+   * A caller-authored target needs {@link unwrapWhenSet}.
    */
   skipWhenSet?: string;
   /**
@@ -132,11 +117,10 @@ export interface FileInputSpec {
    * alternate source param (e.g. flow-execute's flow_path vs name): both on
    * the wire is a dual-source misuse the tool's own exactly-one validation
    * must diagnose, so the boundary must not resolve the wrapper (the error
-   * would hinge on whether an unused file exists) and must not drop it
-   * (skipWhenSet's remedy — right for a derived param, but here it would
-   * erase the caller's mistake and silently run the other source). Unwrapping
-   * hands zod both params as plain strings. Clients ignore this field: they
-   * still wrap `target` whenever it is set, which is the wire this handles.
+   * would hinge on whether an unused file exists) and must not drop it (which
+   * would erase the caller's mistake and silently run the other source).
+   * Unwrapping hands zod both params as plain strings. Clients ignore this
+   * field.
    */
   unwrapWhenSet?: string;
 }
@@ -150,23 +134,20 @@ export interface ResolvedFileInput {
   /** True when the value was materialized from uploaded content. */
   viaUpload: boolean;
   /**
-   * True only when the wire carried BOTH client stat fields (size and mtimeMs)
-   * and the host file matched both — the strong same-file evidence a
-   * containment gate can require; absent for directory/probe kinds and for
-   * stat-less wrappers (which `presentOnHost` deliberately still accepts).
+   * True only when the wire carried BOTH client stat fields and the host file
+   * matched both — the strong same-file evidence a containment gate can
+   * require; absent for directory/probe kinds and for stat-less wrappers
+   * (which `presentOnHost` deliberately still accepts).
    */
   statVerified?: boolean;
 }
-
-// ── Flow-name contract ───────────────────────────────────────────────
 
 /** Path-safe flow-name charset: no separators, no "..", no spaces. */
 const FLOW_NAME_CHARSET = "[A-Za-z0-9_-]+";
 
 /**
  * The one authoritative flow-name pattern — shared by the tool-server's flow
- * tools, the CLI's artifact export, and the client-write path gate so the
- * contract cannot drift between packages.
+ * tools and the CLI so the contract cannot drift between packages.
  */
 export const FLOW_NAME_PATTERN = new RegExp(`^${FLOW_NAME_CHARSET}$`);
 
@@ -212,8 +193,7 @@ export function isClientFileDirective(value: unknown): value is ClientFileDirect
  * Interpolate a {@link FileInputSpec.path} template from string args.
  * Returns null when any referenced param is missing or not a non-empty
  * string — callers treat that as "spec does not apply to this call".
- * Shared by the client (to read the file) and kept here so both sides agree
- * on the micro-grammar: `${name}` only, no nesting, no defaults.
+ * Grammar: `${name}` only, no nesting, no defaults.
  */
 export function interpolateFileInputPath(
   template: string,

@@ -1,25 +1,17 @@
 /**
- * Artifact store — the registry's owned home for files a tool produces on the
+ * Artifact store — the registry's home for files a tool produces on the
  * tool-server host.
  *
- * Tools that produce a file (screenshots, profiler exports, …) register it here
- * and return the resulting {@link ArtifactHandle} in their result instead of a
- * raw host path. The handle is a wire contract: the MCP client deep-walks tool
- * results for these markers, downloads the bytes over the remote-aware HTTP
- * boundary (`GET /artifacts/:id`), and materializes them on the *client*
- * filesystem.
+ * A file-producing tool registers the file here and returns the resulting
+ * {@link ArtifactHandle} instead of a raw host path; the client deep-walks tool
+ * results for these markers and materializes the bytes on its own filesystem.
+ * That is what keeps such tools working when the tool-server runs on another
+ * machine, where a host path or a `127.0.0.1` URL means nothing.
  *
- * This is what makes file-producing tools work when the tool-server runs on a
- * different machine than the agent: a `127.0.0.1` URL or a host path is
- * meaningless across the boundary, but an artifact id resolved through the tools
- * URL is not.
- *
- * The store is a plain in-memory map with no transport concerns — the HTTP
- * route that streams `/artifacts/:id` lives in the tool-server and reads from a
- * store instance via {@link ArtifactStore.get}. The store is owned by the
- * {@link Registry} (one per process, lifecycle tied to the registry) rather than
- * a module singleton, so both the tool `execute` path and the route resolve the
- * same instance through the registry.
+ * The store is a plain in-memory map; the route that streams `/artifacts/:id`
+ * lives in the tool-server. It is owned by the {@link Registry} rather than
+ * being a module singleton, so the tool `execute` path and the route resolve the
+ * same instance.
  */
 
 import { stat } from "node:fs/promises";
@@ -37,31 +29,25 @@ export interface ArtifactHandle {
   mimeType: string;
   size: number;
   /**
-   * Absolute path of the file on this (tool-server) host. A co-located client
-   * uses it to read the file directly instead of downloading it over
-   * `/artifacts/:id`. The client verifies it against `size`/`mtimeMs` first, so
-   * a remote client (where the path is meaningless or absent) simply falls back
-   * to the download route.
+   * Absolute path on this (tool-server) host. A co-located client reads the file
+   * directly, but only after checking it against `size`/`mtimeMs`; a remote
+   * client falls back to `/artifacts/:id`.
    */
   hostPath: string;
   /** mtime of `hostPath` (ms) at registration, for the client's integrity check. */
   mtimeMs?: number;
   /**
    * Set when `hostPath` is a directory (e.g. an Instruments `.trace` bundle).
-   * A single file can't represent a directory, so `GET /artifacts/:id` streams
-   * it as a gzipped tar **only when a remote client actually requests it** —
-   * never in local mode, where the client uses the directory in place via the
-   * gate. The client unpacks the tar back into a directory after download.
+   * `GET /artifacts/:id` then streams a gzipped tar that the client unpacks —
+   * only for a remote client; a local one uses the directory in place.
    */
   archive?: "tar.gz";
   /**
-   * A relative directory where the client should durably persist this artifact
-   * instead of the ephemeral temp cache — e.g. `.argent/recordings` for a screen
-   * recording. The client resolves it against its own project root (nearest
-   * ancestor with `.git`/`package.json`/`.argent`, else its home dir) and
-   * sanitizes it (relative, no `..`), so for a remote (`argent link`) tool-server
-   * the file lands on the *client* host, not the server. Absent ⇒ the artifact
-   * is disposable scratch.
+   * Relative directory (e.g. `.argent/recordings`) the client should durably
+   * persist this artifact into instead of the ephemeral temp cache. The client
+   * resolves and validates the hint against its own roots, so for a remote
+   * (`argent link`) tool-server the file lands on the *client* host, not the
+   * server. Absent ⇒ disposable scratch.
    */
   saveDir?: string;
 }
@@ -110,22 +96,21 @@ export interface RegisterArtifactOptions {
   mimeType?: string;
   /**
    * Force directory (tar.gz) delivery even if the path can't be stat'd at
-   * registration time (e.g. a `.trace` bundle referenced from a recovered
-   * session). When omitted, directories are auto-detected via stat.
+   * registration (e.g. a `.trace` bundle from a recovered session). Otherwise
+   * directories are auto-detected via stat.
    */
   archive?: "tar.gz";
   /**
-   * Relative directory to durably persist the artifact into (resolved on the
-   * client against its project root, else home) instead of the temp cache —
-   * surfaced to the client on the handle. See {@link ArtifactHandle.saveDir}.
+   * Durable destination for the artifact instead of the temp cache, surfaced to
+   * the client on the handle. See {@link ArtifactHandle.saveDir}.
    */
   saveDir?: string;
 }
 
 /**
- * Process-scoped artifact store, owned by a {@link Registry}. A tool registers
- * an entry during `execute` and the `/artifacts/:id` route — resolving the same
- * registry's store — serves it later.
+ * Process-scoped artifact store owned by a {@link Registry}: a tool registers an
+ * entry during `execute`, and the `/artifacts/:id` route serves it later from
+ * that same registry's store.
  */
 export class ArtifactStore {
   private readonly entries = new Map<string, ArtifactEntry>();
@@ -142,9 +127,8 @@ export class ArtifactStore {
       mtimeMs = st.mtimeMs;
       if (st.isDirectory()) isDirectory = true;
     } catch {
-      // File may be produced lazily or be a bundle directory; size/mtime are
-      // advisory. A co-located client re-stats and falls back to download if
-      // they don't match what's on disk at read time.
+      // size/mtime stay advisory: the file may be produced lazily. A co-located
+      // client re-stats and falls back to download when they don't match.
     }
     const id = randomUUID();
     this.entries.set(id, { path: hostPath, filename, mimeType, size, isDirectory });
