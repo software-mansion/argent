@@ -26,6 +26,10 @@ import {
   isVisible,
   firstInReadingOrder,
   evaluateCondition,
+  confusableTextNote,
+  confusableTextNoteIn,
+  selectorMissNote,
+  quoteScreenText,
 } from "../../utils/ui-tree-match";
 
 // Tool id. Exported so run-sequence can both allow this tool and recognise its
@@ -125,7 +129,7 @@ const zodSchema = z
       .enum(["contains", "equals"])
       .optional()
       .describe(
-        "For condition `text`: how expectedText is compared. `contains` (default) is a case-insensitive substring; `equals` is a case-insensitive full-string match."
+        "For condition `text`: how expectedText is compared. Both fold the text first, so a non-breaking space matches a plain one and an LTR bidi wrapper around left-to-right text is ignored. `contains` (default) is a case-insensitive substring, in which a leading or trailing space is significant and constrains the match; `equals` is a case-insensitive full-string match, trimmed at both ends."
       ),
     bundleId: z
       .string()
@@ -325,6 +329,17 @@ function timeoutNote(
 ): string {
   if (fetchError) return `${TREE_FETCH_FAILED_NOTE_PREFIX}${fetchError}`;
   const matches = lastTree ? findAll(lastTree, params.selector) : [];
+  // Explains which element on screen nearly matched the selector. The text is
+  // the field that missed, so drop it and keep the other constraints. A
+  // `visible` wait must not get a zero-area node. `hidden` never reaches this
+  // note, because a selector that matches nothing satisfies `hidden`.
+  const missNote = (): string => {
+    if (lastTree === null || params.selector.text === undefined) return "";
+    const candidates = findAll(lastTree, { ...params.selector, text: undefined });
+    const eligible = params.condition === "visible" ? candidates.filter(isVisible) : candidates;
+    const note = selectorMissNote(eligible, params.selector.text);
+    return note === undefined ? "" : ` — ${note}`;
+  };
   let base: string;
   switch (params.condition) {
     case "text": {
@@ -332,9 +347,27 @@ function timeoutNote(
       // same element the check read, or the two can contradict each other.
       const first = firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches);
       const wanted = params.textMatch === "equals" ? "equal" : "contain";
-      base = first
-        ? `element matched but its text was "${nodeText(first)}" (wanted to ${wanted} "${params.expectedText}")`
-        : "no element matched the selector before timeout";
+      if (!first) {
+        base = `no element matched the selector before timeout${missNote()}`;
+        break;
+      }
+      // The two quoted strings can look the same on screen and still compare
+      // unequal. The note names the codepoints that differ.
+      const shown = nodeText(first);
+      // Use the comparator of the wait: `equals` asks about the whole string,
+      // `contains` about a substring.
+      const confusable =
+        params.expectedText === undefined
+          ? undefined
+          : params.textMatch === "equals"
+            ? confusableTextNote(shown, params.expectedText)
+            : confusableTextNoteIn(shown, params.expectedText);
+      // Quote both strings. An unbalanced U+202E reverses every character
+      // after it, and the expectation is authored text too. See quoteScreenText.
+      base =
+        `element matched but its text was "${quoteScreenText(shown)}" ` +
+        `(wanted to ${wanted} "${quoteScreenText(params.expectedText ?? "")}")` +
+        (confusable ? ` — ${confusable}` : "");
       break;
     }
     case "hidden":
@@ -346,10 +379,10 @@ function timeoutNote(
       base =
         matches.length > 0
           ? "element(s) matched but none was visible (zero-area frame) before timeout"
-          : "no element matched the selector before timeout";
+          : `no element matched the selector before timeout${missNote()}`;
       break;
     default:
-      base = "no element matched the selector before timeout";
+      base = `no element matched the selector before timeout${missNote()}`;
   }
   return appendDiagnostics(base, lastData);
 }
@@ -404,6 +437,12 @@ Conditions:
 The selector is { text?, identifier?, role? }; every provided field must match. text and role match as
 case-insensitive substrings of the element's label/value and role; identifier matches exactly (case-insensitive),
 also accepting the unqualified Android resource-id name ('submit' matches 'com.example.app:id/submit').
+text and role are compared on FOLDED text, so a non-breaking space matches a plain one and an LTR bidi wrapper
+around left-to-right text is ignored — but characters that change the rendering are not folded (bidi controls
+that reorder, a soft hyphen, emoji ZWJ/variation selectors), and a leading or trailing space is significant.
+identifier is never folded: it is a machine key, so spell it exactly. A field of only invisible characters
+matches nothing rather than everything, and so does a whitespace-only identifier — but a whitespace-only role
+is a real constraint, and matches any role that holds a space.
 It polls the same accessibility / DOM tree as \`describe\`
 (iOS AXRuntime, Android uiautomator, Chromium CDP, Vega automation toolkit) every pollIntervalMs
 (default ${DEFAULT_POLL_INTERVAL_MS}ms) until timeoutMs (default ${DEFAULT_TIMEOUT_MS}ms).

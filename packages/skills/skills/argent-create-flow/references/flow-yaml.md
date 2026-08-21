@@ -47,7 +47,7 @@ Use values that meet the [stable-selector definition](../SKILL.md#stable-selecto
 { id: settings-row, text: Notifications }
 ```
 
-All provided fields must match. `id` is exact and case-insensitive. `text` and `role` are case-insensitive substrings. An unqualified Android id also matches its qualified resource id. `identifier` is accepted as an alias, but `id` is canonical. Never author a bare string. It is loose shorthand that tries id before text.
+All provided fields must match. `id` is exact and case-insensitive. `text` and `role` are case-insensitive substrings compared on [folded text](#invisible-characters). An unqualified Android id also matches its qualified resource id. `identifier` is accepted as an alias, but `id` is canonical. Never author a bare string. It is loose shorthand that tries id before text.
 
 Use single quotes for anchored, case-sensitive regexes:
 
@@ -78,6 +78,14 @@ When several nodes match, the directive decides:
 - **Conditions** (`await`, `assert`) do not rank. `exists`/`visible` hold if any match qualifies and `hidden` only if none does; `text` reads the first visible match in reading order.
 
 A container that aggregates a child's text therefore splits them: `tap` hits the leaf while `text.in` reads the container, so `equals` fails against correct UI. Use an `id` or a [relational scope](#relational-scopes) when an action and a check must agree, and a stricter selector when ranking can still choose the wrong element.
+
+### Invisible characters
+
+Type what you see. Every literal comparison — `text` and `role` selectors, `contains`, `equals` — folds both sides first, so invisible differences are ignored: a non-breaking space matches a plain one, a stray zero-width space is dropped, and an LTR bidi wrapper around left-to-right text needs no reproducing. Around right-to-left text that same wrapper reorders what is drawn, so the comparison keeps it. Spell it out only in an `equals` of the whole label. A substring test — a `text` selector, or `contains` — takes the bare text you see, because a needle that carries half a wrapper puts the closing half mid-label and matches nothing.
+
+Anything that changes the rendering is deliberately not folded: reordering bidi controls, a soft hyphen, emoji joiners and variation selectors, and a line break. A run of spaces or tabs collapses to one space, but no number of spaces matches a label the screen breaks across two lines. `id` is never folded, because it is a machine key. `matches` is never folded either, because a regex carries its own precision.
+
+Two consequences: a leading or trailing space in a `contains` needle is significant and acts as a word boundary, and a value made only of invisible characters folds to nothing and matches nothing rather than everything. Use `any: true` for "any element". When a check fails against strings that look identical, the failure reason names the differing code points or the typographic variant. Read it instead of guessing.
 
 ### Relational scopes
 
@@ -130,7 +138,7 @@ A **selector-less gesture** — a coordinate `tap`/`long-press`, or a `pinch`/`r
 - `equals`: case-insensitive full match.
 - `matches`: case-sensitive JavaScript regex.
 
-Use `equals` or an anchored regex when boundaries matter. For example, `contains: "Taps: 3"` also matches `Taps: 30`.
+Use `equals` or an anchored regex when boundaries matter. For example, `contains: "Taps: 3"` also matches `Taps: 30`, while `contains: "Taps: 3 "` with its trailing space does not. `contains` and `equals` compare [folded text](#invisible-characters); `matches` does not.
 
 Use `await` for an outcome that can take time. Its default is 7500 ms. Add a larger timeout only after the default expires. Use `assert` for settled state. It has a fixed 1000 ms grace and rejects `timeout`.
 

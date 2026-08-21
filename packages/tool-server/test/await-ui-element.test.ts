@@ -340,6 +340,176 @@ describe("await-ui-element tool", () => {
     expect(result.note).toMatch(/Loading/);
   });
 
+  it("`text` timeout note names the codepoints when the two strings LOOK identical", async () => {
+    // The value holds U+034F after "42". The character is not visible on the
+    // screen, so the two strings look identical.
+    const { api } = makeSequencedAXService([
+      axResponse([{ label: "Amount", value: "PLN 42͏", frame: FRAME, traits: [] }]),
+    ]);
+    const tool = createAwaitUiElementTool(iosRegistry(api));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        condition: "text",
+        selector: { text: "Amount" },
+        expectedText: "Amount PLN 42",
+        textMatch: "equals",
+        timeoutMs: 30,
+        pollIntervalMs: 10,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.note).toMatch(/differ only in invisible characters/);
+    expect(result.note).toMatch(/U\+034F/);
+  });
+
+  it("explains a SELECTOR miss, as the flow runner explains the same one", async () => {
+    // The label holds one U+2026 ellipsis. The selector holds three periods.
+    const { api } = makeSequencedAXService([
+      axResponse([{ label: "Loading…", value: "", frame: FRAME, traits: [] }]),
+    ]);
+    const tool = createAwaitUiElementTool(iosRegistry(api));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        condition: "visible",
+        selector: { text: "Loading..." },
+        timeoutMs: 30,
+        pollIntervalMs: 10,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.note).toMatch(/typographic variant/);
+    expect(result.note).toMatch(/Loading…/);
+  });
+
+  it("names the code points when only an invisible kept a SELECTOR from matching", async () => {
+    const { api } = makeSequencedAXService([
+      axResponse([{ label: "SaveChanges", value: "", frame: FRAME, traits: [] }]),
+    ]);
+    const tool = createAwaitUiElementTool(iosRegistry(api));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        condition: "visible",
+        selector: { text: "Save͏Changes" }, // U+034F the screen does not carry
+        timeoutMs: 30,
+        pollIntervalMs: 10,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.note).toMatch(/differ only in invisible characters/);
+    expect(result.note).toMatch(/U\+034F/);
+  });
+
+  it("stays bare when nothing on screen resembles the selector", async () => {
+    const { api } = makeSequencedAXService([
+      axResponse([{ label: "Loading…", value: "", frame: FRAME, traits: [] }]),
+    ]);
+    const tool = createAwaitUiElementTool(iosRegistry(api));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        condition: "visible",
+        selector: { text: "Nothing like this" },
+        timeoutMs: 30,
+        pollIntervalMs: 10,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.note).toBe("no element matched the selector before timeout");
+  });
+
+  it("`text` timeout note defuses a directional override in the label it quotes", async () => {
+    // The label holds U+202E after "report". The character reverses the text
+    // that follows it, and the fold keeps such controls on purpose.
+    const { api } = makeSequencedAXService([
+      axResponse([{ label: "report‮txt.exe", value: "", frame: FRAME, traits: [] }]),
+    ]);
+    const tool = createAwaitUiElementTool(iosRegistry(api));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        condition: "text",
+        selector: { text: "report" },
+        expectedText: "reporttxt.exe",
+        textMatch: "equals",
+        timeoutMs: 30,
+        pollIntervalMs: 10,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.note).not.toContain("‮");
+    expect(result.note).toMatch(/<U\+202E>/);
+    expect(result.note).toMatch(/REORDERS/);
+  });
+
+  it("`text` timeout note defuses a directional override in the EXPECTATION too", async () => {
+    // The message prints the note after the expectation, so a U+202E in the
+    // expectation reverses the note.
+    const { api } = makeSequencedAXService([
+      axResponse([{ label: "bedrock", value: "", frame: FRAME, traits: [] }]),
+    ]);
+    const tool = createAwaitUiElementTool(iosRegistry(api));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        condition: "text",
+        selector: { text: "bedrock" },
+        expectedText: "bed\u202Erock",
+        textMatch: "contains",
+        timeoutMs: 30,
+        pollIntervalMs: 10,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.note).not.toContain("\u202E");
+    expect(result.note).toMatch(/<U\+202E>/);
+    expect(result.note).toMatch(/REORDERS/);
+  });
+
+  it("`text` timeout note stays bare when the strings differ visibly", async () => {
+    const { api } = makeSequencedAXService([
+      axResponse([{ label: "Amount", value: "PLN 43", frame: FRAME, traits: [] }]),
+    ]);
+    const tool = createAwaitUiElementTool(iosRegistry(api));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        condition: "text",
+        selector: { text: "Amount" },
+        expectedText: "Amount PLN 42",
+        textMatch: "equals",
+        timeoutMs: 30,
+        pollIntervalMs: 10,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.note).toMatch(/PLN 43/);
+    expect(result.note ?? "").not.toMatch(/invisible characters/);
+  });
+
   it("`text` check and timeout note both read the visible match, not a zero-area shadow", async () => {
     // A stale zero-area "Total 0" sits above the visible "Total 42". Both the
     // condition and the note must read the visible node — otherwise the check
