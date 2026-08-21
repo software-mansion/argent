@@ -74,13 +74,13 @@ One abstract permission can map to several concrete Android permissions; which o
 **Android emulator and physical device.** Changes the app's `android.permission.*` runtime permissions over adb (and, for `reset`, best-effort clears the user-set/user-fixed flags - the revoke is what decides success; flag-clearing needs Android 13 / API 33+). Requirements:
 
 - The app must be **installed** - the tool probes for the package first and errors clearly if it is missing (a transport/timeout failure surfaces adb's real cause, not a false "not installed").
-- The app must **declare** the permission in its manifest. The package manager rejects any mapped permission the manifest doesn't request; those come back in the result's `skipped` list. The action succeeds if **at least one** mapped permission sticks, and errors only if **all** of them were rejected.
+- The app must **declare** the permission in its manifest. Any mapped permission the manifest doesn't request comes back in the result's `skipped` list. Recent Android accepts a request for an undeclared permission and silently does nothing, so the result is checked against the package manager's own state rather than the command's exit status. Granting succeeds if **at least one** mapped permission sticks and errors only if none did; denying a permission the app never declared is already satisfied and is reported as skipped.
 
 ## Gotchas
 
 - **Changing a permission can terminate a running app** (system behavior on both platforms). Prefer setting permissions **before** `launch-app`; if you change one while the app is running, `restart-app` afterward.
 - **Reset is per-app on both platforms** - pass `bundleId`; there is no reliable device-wide reset.
-- **A partial Android result is normal.** `applied` lists what actually changed; `skipped` lists mapped permissions the package manager rejected (usually not in the manifest, or gated by API level). Both together tell you what happened.
+- **A partial Android result is normal.** `applied` lists what actually changed, confirmed against the package manager's state; `skipped` lists mapped permissions that did not take effect (usually not in the manifest, or not runtime-changeable on this device). `unverified`, when present, lists applied entries that could not be confirmed — an older device or an unfamiliar layout — so you can tell a checked result from one taken on trust.
 - **A pre-launch `deny` suppresses the prompt on iOS only.** On iOS a TCC denial answers the app's request, so no dialog appears. On Android a `deny` clears the grant but sets no "user-fixed" flag, so the app's next request still shows the system dialog - a pre-launch `deny` there tests the revoked _state_, not a suppressed prompt.
 - **`camera` on iOS** may be rejected by a simulator **runtime** that doesn't model the service (it varies by simruntime, not by the installed Xcode - a runtime can accept `camera` even when the platform's own service list omits it). A rejection surfaces as a generic CoreSimulator error, so a `camera` failure (unless it's the shutdown-simulator case, which gets the boot hint instead) is reported with a hint about the runtime's supported services.
 - **`grant location` needs the app installed first (iOS).** Location authorization isn't stored in TCC and isn't applied to a bundle id until the app exists, so a pre-install `grant location` / `grant location-always` records nothing. On a **local** simulator the tool checks install state and errors clearly instead of reporting a false success; on a **remote** simulator it cannot probe install state, so a pre-install grant there reports success while recording nothing - make sure the app is installed before granting location remotely. (TCC-backed services like `camera`/`photos` _can_ be granted before install; they persist and apply on install.)
@@ -90,7 +90,8 @@ One abstract permission can map to several concrete Android permissions; which o
 Returns `{ action, permission, bundleId, applied, skipped? }`:
 
 - `applied` - the platform-level services/permissions actually changed (the TCC service(s) on iOS; the `android.permission.*` names on Android).
-- `skipped` - Android only, present when some mapped permissions were rejected but others succeeded.
+- `skipped` - Android only, present when some mapped permissions did not take effect but others did.
+- `unverified` - Android only, present when an applied entry could not be confirmed against the device's state.
 
 The call **fails** when nothing could be applied - read the error; it names the reason: an unsupported permission for the platform (`notifications` on iOS, `reminders` on Android), the app not installed (including a pre-install `grant location` on iOS), a shutdown simulator (iOS), or every mapped permission being rejected (usually a missing manifest entry). A non-shutdown `camera` failure additionally hints about the simulator runtime's supported services (a shutdown-simulator failure gets the boot hint instead).
 

@@ -1,6 +1,7 @@
 import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { adbShell, isTerminalAdbError, shellQuote } from "../../../utils/adb";
+import { readPackagePermissionState, verifyPermission } from "./android-permission-state";
 import type {
   PermissionAction,
   PermissionName,
@@ -200,7 +201,12 @@ export const androidImpl: PlatformImpl<
     }
 
     const applied: string[] = [];
-    const failures: Array<{ permission: string; detail: string }> = [];
+    const pending: string[] = [];
+    const unverified: string[] = [];
+    // `rejected` distinguishes the package manager refusing outright from a
+    // change that was accepted and then found not to have happened — they read
+    // very differently to a caller, and only the former is a hard failure.
+    const failures: Array<{ permission: string; detail: string; rejected: boolean }> = [];
 
     for (const perm of permissions) {
       let result: PmResult;
@@ -238,9 +244,32 @@ export const androidImpl: PlatformImpl<
         }
       }
       if (result.ok) {
-        applied.push(perm);
+        // Not yet `applied`: the command reporting success is no longer evidence
+        // that anything happened, so hold it until the state has been read.
+        pending.push(perm);
       } else {
-        failures.push({ permission: perm, detail: result.detail });
+        failures.push({ permission: perm, detail: result.detail, rejected: true });
+      }
+    }
+
+    // One read for the whole fan-out, and only when something claims to have
+    // landed — a call the package manager rejected outright has nothing to
+    // verify and should not pay for a round trip.
+    if (pending.length > 0) {
+      const state = await readPackagePermissionState(udid, bundleId);
+      for (const perm of pending) {
+        const verdict = verifyPermission(state, perm, action);
+        if (verdict.kind === "contradicted") {
+          failures.push({ permission: perm, detail: verdict.detail, rejected: false });
+        } else {
+          applied.push(perm);
+          // Fail open, but say so. The command succeeded and we could not read
+          // the state to check it — on an older device, an unfamiliar dump, or a
+          // failed read. Refusing to believe it would break every such device;
+          // staying silent would leave the caller exactly where this bug left
+          // them, unable to tell a confirmed change from an assumed one.
+          if (verdict.kind === "unknown") unverified.push(perm);
+        }
       }
     }
 
@@ -250,16 +279,28 @@ export const androidImpl: PlatformImpl<
     // don't reassert that here — surface pm's own per-permission reasons, which
     // also carry any transport/timeout cause verbatim, so the caller sees the
     // real problem rather than a fixed manifest guess.
-    if (applied.length === 0) {
+    // Zero successes means the action did nothing — but only for `grant`. Asking
+    // to DENY a permission the app never declared is already satisfied: the app
+    // cannot hold it, which is exactly what the caller wanted. Erroring there
+    // would break the most natural setup call there is ("make sure this app has
+    // no camera access") on any app that simply doesn't use the camera.
+    const undeclaredOnly =
+      action !== "grant" && failures.length > 0 && failures.every((f) => !f.rejected);
+
+    if (applied.length === 0 && !undeclaredOnly) {
       const details = failures.map((f) => `${f.permission}: ${f.detail}`).join("; ");
       throw new FailureError(
-        `Failed to ${action} '${permission}' for ${bundleId} on ${udid} — every mapped runtime permission was rejected. ` +
-          `Usually the manifest doesn't declare it, or it isn't a runtime-changeable permission; see the per-permission detail for the exact cause. (${details})`,
+        `Failed to ${action} '${permission}' for ${bundleId} on ${udid} — no mapped runtime permission took effect. ` +
+          `Usually the app's manifest doesn't declare it, or it isn't a runtime-changeable permission; see the per-permission detail for the exact cause. (${details})`,
         {
           error_code: FAILURE_CODES.ANDROID_SETTINGS_PERMISSION_FAILED,
-          failure_stage: "android_settings_permission_pm",
+          failure_stage: failures.some((f) => f.rejected)
+            ? "android_settings_permission_pm"
+            : "android_settings_permission_unverified",
           failure_area: "tool_server",
-          error_kind: "subprocess",
+          // Nothing crashed when the change was silently dropped — the app just
+          // cannot take this permission.
+          error_kind: failures.some((f) => f.rejected) ? "subprocess" : "unsupported",
         }
       );
     }
@@ -270,6 +311,7 @@ export const androidImpl: PlatformImpl<
       bundleId,
       applied,
       ...(failures.length > 0 ? { skipped: failures.map((f) => f.permission) } : {}),
+      ...(unverified.length > 0 ? { unverified } : {}),
     };
   },
 };
