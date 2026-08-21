@@ -11,7 +11,7 @@
 // Both end up as one `ValidationReport` rendered by one function, so the wording cannot drift
 // between them.
 
-import { flagNameFor, type JsonSchema } from "./flag-parser.js";
+import { flagNameFor, isRetiredField, type JsonSchema } from "./flag-parser.js";
 
 /** A field the tool rejected, addressed by its path within the payload. */
 export interface InvalidField {
@@ -40,14 +40,23 @@ interface ValidationIssue {
  * A presence check only: a field that is present but wrong is the tool-server's call, not ours.
  * Fields carrying a default are not marked required by the schema generator, so this cannot
  * reject an invocation the server would have accepted.
+ *
+ * Retired keys are skipped, because this and `formatSchemaUsage` read the same schema and must
+ * agree about which fields exist: usage renders a retirement as a notice rather than a flag row,
+ * and the parser refuses every spelling of it. Both shipped retirements are `.optional()`, so
+ * they never reach `required`; one declared without it would be demanded as `missing required
+ * flag --settle` for a flag the help does not show and no input can satisfy.
  */
 export function findMissingRequired(
   payload: Record<string, unknown>,
   schema: JsonSchema | undefined
 ): string[] {
-  const required = new Set(schema?.required ?? []);
+  const properties = schema?.properties ?? {};
+  const required = new Set(
+    (schema?.required ?? []).filter((name) => !isRetiredField(properties[name] ?? {}))
+  );
   if (required.size === 0) return [];
-  const declared = Object.keys(schema?.properties ?? {});
+  const declared = Object.keys(properties);
   // Iterate the declared properties so the result is in schema order, then append any required
   // name the schema forgot to declare, which would otherwise be dropped silently.
   const names = [...declared.filter((n) => required.has(n))];

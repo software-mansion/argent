@@ -73,6 +73,24 @@ describe("findMissingRequired", () => {
     expect(findMissingRequired({}, schema)).toEqual(["constructor"]);
   });
 
+  it("never asks for a retired key", () => {
+    // `formatSchemaUsage` filters retired keys out of the usage block and the parser refuses every
+    // spelling of one, so this reader must agree with them about which fields exist. Both shipped
+    // retirements are `.optional()` and so stay out of `required`; one declared without it lands
+    // there (z.never() alone is required), and would be reported as `missing required flag
+    // --settle` for a flag the help does not show and no input can supply.
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        udid: { type: "string" },
+        settle: { not: {}, description: "Retired: renamed to `momentum`" },
+      },
+      required: ["udid", "settle"],
+    };
+    expect(findMissingRequired({}, schema)).toEqual(["udid"]);
+    expect(findMissingRequired({ udid: "X" }, schema)).toEqual([]);
+  });
+
   it("reports nothing when the schema requires nothing", () => {
     expect(findMissingRequired({}, { type: "object", properties: {} })).toEqual([]);
     expect(findMissingRequired({}, undefined)).toEqual([]);

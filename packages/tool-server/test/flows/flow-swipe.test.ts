@@ -42,7 +42,7 @@ describe("swipe: parse/serialize", () => {
           direction: "up" as const,
         },
         { kind: "swipe" as const, from: { x: 0.5, y: 0.8 }, by: { y: -0.4 } },
-        { kind: "swipe" as const, by: { x: 0.2, y: -0.3 }, settle: true },
+        { kind: "swipe" as const, by: { x: 0.2, y: -0.3 }, momentum: false },
         // 0.03 is the exact tap/swipe floor — must round-trip clean.
         { kind: "swipe" as const, by: { x: 0.03 } },
         // Diagonal whose per-axis components are each sub-floor (0.025) but whose
@@ -171,17 +171,17 @@ describe("swipe: parse/serialize", () => {
     ["zero", 0],
     ["one", 1],
     ["null", null],
-  ])("rejects a programmatic swipe settle of %s", (_description, settle) => {
-    // Both the bare-direction sugar and the body builder read `settle` for
-    // truthiness only, so an unguarded non-boolean is rewritten rather than
-    // refused: "false" would emit `settle: true` and 0 would vanish into the
-    // bare spelling. parseSwipe takes nothing but a boolean.
+  ])("rejects a programmatic swipe momentum of %s", (_description, momentum) => {
+    // Both the bare-direction sugar and the body builder test `momentum`
+    // against `false` only, so an unguarded non-boolean is dropped rather than
+    // refused: "false" and 0 would both serialize to the momentum they were
+    // meant to turn off. parseSwipe takes nothing but a boolean.
     expect(() =>
       serializeFlow({
         executionPrerequisite: "",
-        steps: [{ kind: "swipe", direction: "left", settle } as never],
+        steps: [{ kind: "swipe", direction: "left", momentum } as never],
       })
-    ).toThrow(/cannot serialize flow swipe\.settle: must be true or false/i);
+    ).toThrow(/cannot serialize flow swipe\.momentum: must be true or false/i);
   });
 
   it.each([
@@ -268,23 +268,57 @@ describe("swipe: parse/serialize", () => {
     // Any other option forces the map form.
     const yaml = serializeFlow({
       executionPrerequisite: "",
-      steps: [{ kind: "swipe", direction: "left", settle: true }],
+      steps: [{ kind: "swipe", direction: "left", momentum: false }],
     });
     expect(yaml).toContain("direction: left");
-    expect(yaml).toContain("settle: true");
+    expect(yaml).toContain("momentum: false");
   });
 
-  it("bare-direction sugar: a programmatic settle: false still collapses to the bare string", () => {
-    // `settle: false` is the default — the options body only ever emits
-    // `settle: true` and parse normalizes the explicit false away, so a
+  it("bare-direction sugar: a programmatic momentum: true still collapses to the bare string", () => {
+    // `momentum: true` is the default — the options body only ever emits
+    // `momentum: false` and parse normalizes the explicit true away, so a
     // programmatic step carrying it must not be pushed into the verbose form.
     const yaml = serializeFlow({
       executionPrerequisite: "",
-      steps: [{ kind: "swipe", direction: "left", settle: false }],
+      steps: [{ kind: "swipe", direction: "left", momentum: true }],
     });
     expect(yaml).toContain("- swipe: left");
     expect(parseFlow(yaml).steps).toEqual([{ kind: "swipe", direction: "left" }]);
   });
+
+  it.each<[string, FlowStep, FlowStep]>([
+    [
+      "by travel",
+      { kind: "swipe", by: { x: 0.2 }, momentum: true },
+      { kind: "swipe", by: { x: 0.2 } },
+    ],
+    [
+      "an anchor",
+      { kind: "swipe", from: { x: 0.5, y: 0.8 }, direction: "up", momentum: true },
+      { kind: "swipe", from: { x: 0.5, y: 0.8 }, direction: "up" },
+    ],
+    [
+      "a duration",
+      { kind: "swipe", direction: "left", duration: 800, momentum: true },
+      { kind: "swipe", direction: "left", duration: 800 },
+    ],
+  ])(
+    "verbose body: a programmatic momentum: true with %s emits no momentum key",
+    (_description, step, normalized) => {
+      // The sugar gate's twin on the branch the sugar test above cannot reach:
+      // each of these carries a second field, so the bare-direction return never
+      // fires and the options body builder alone decides the default's fate.
+      // Emitting `momentum: true` there writes a key parseSwipe normalizes
+      // straight back to absent, so serialize stops being parse's inverse while
+      // the file still reads back fine. Deliberately NOT in the round-trip
+      // fixture above: that one asserts the parsed steps equal the INPUT steps,
+      // and these inputs are not fixed points, since the default is dropped on
+      // the way back. The asymmetry is the assertion here.
+      const yaml = serializeFlow({ executionPrerequisite: "", steps: [step] });
+      expect(yaml).not.toContain("momentum");
+      expect(parseFlow(yaml).steps).toEqual([normalized]);
+    }
+  );
 
   it("rejects a bare string that is not a direction", () => {
     expect(() => parseFlow("steps:\n  - swipe: Login\n")).toThrow(
@@ -318,7 +352,7 @@ describe("swipe: parse/serialize", () => {
       /swipe has unknown key `duraton` \(did you mean `duration`\?\).*allowed keys/i
     );
     expect(() => parseFlow("steps:\n  - swipe: { direction: left, foo: 1 }\n")).toThrow(
-      /swipe has unknown key `foo`.*allowed keys: from, direction, to, by, settle, duration/i
+      /swipe has unknown key `foo`.*allowed keys: from, direction, to, by, momentum, duration/i
     );
   });
 
@@ -371,12 +405,12 @@ describe("swipe: parse/serialize", () => {
     );
   });
 
-  it("validates direction, settle, and duration values", () => {
+  it("validates direction, momentum, and duration values", () => {
     expect(() => parseFlow("steps:\n  - swipe: { direction: diagonal }\n")).toThrow(
       /swipe.direction must be one of up, down, left, right/i
     );
-    expect(() => parseFlow('steps:\n  - swipe: { direction: left, settle: "yes" }\n')).toThrow(
-      /settle must be true or false/i
+    expect(() => parseFlow('steps:\n  - swipe: { direction: left, momentum: "yes" }\n')).toThrow(
+      /momentum must be true or false/i
     );
     expect(() => parseFlow("steps:\n  - swipe: { direction: left, duration: .inf }\n")).toThrow(
       /duration needs a positive number/i
@@ -424,9 +458,20 @@ describe("swipe: parse/serialize", () => {
     expect(steps).toEqual([{ kind: "swipe", direction: "left", duration: 10000 }]);
   });
 
-  it("normalizes settle: false to absent (round-trip stays inverse)", () => {
-    const steps = parseFlow("steps:\n  - swipe: { direction: left, settle: false }\n").steps;
+  it("normalizes momentum: true to absent (round-trip stays inverse)", () => {
+    const steps = parseFlow("steps:\n  - swipe: { direction: left, momentum: true }\n").steps;
     expect(steps).toEqual([{ kind: "swipe", direction: "left" }]);
+  });
+
+  it("rejects the old `settle` spelling by name, pointing at the inverted replacement", () => {
+    // Never aliased: `settle: true` means `momentum: false`, so a silent key
+    // rewrite would invert the author's intent.
+    expect(() => parseFlow("steps:\n  - swipe: { direction: left, settle: true }\n")).toThrow(
+      /swipe\.settle was renamed to swipe\.momentum, with the opposite sense.*momentum: false/is
+    );
+    expect(() => parseFlow("steps:\n  - swipe: { direction: left, settle: false }\n")).toThrow(
+      /swipe\.settle was renamed to swipe\.momentum/i
+    );
   });
 
   it("from carries the usual target sugar: bare = loose, map = strict, point = point", () => {
@@ -893,7 +938,7 @@ describe("swipe: execution", () => {
     expect(d.toY - d.fromY).toBeCloseTo(0.4, 10);
   });
 
-  it("to resolves a target endpoint; settle and duration ride the gesture", async () => {
+  it("to resolves a target endpoint; momentum and duration ride the gesture", async () => {
     currentTree = () =>
       screen([n({ label: "Archive", frame: { x: 0.0, y: 0.9, width: 0.2, height: 0.1 } })]);
     await writeFlow("to-target", {
@@ -903,7 +948,7 @@ describe("swipe: execution", () => {
           kind: "swipe",
           from: { x: 0.5, y: 0.5 },
           to: { selector: { text: "Archive", loose: true } },
-          settle: true,
+          momentum: false,
           duration: 800,
         },
       ],
@@ -919,7 +964,7 @@ describe("swipe: execution", () => {
         fromY: 0.5,
         toX: 0.1,
         toY: expect.closeTo(0.95, 10),
-        settle: true,
+        momentum: false,
         durationMs: 800,
       },
     });
@@ -1324,10 +1369,10 @@ describe("swipe: execution", () => {
     expect(result.calls).toEqual([]);
   });
 
-  it("maps to a mouse drag on chromium with settle forwarded (web fling reads pointer release velocity)", async () => {
+  it("maps to a mouse drag on chromium with momentum forwarded (web fling reads pointer release velocity)", async () => {
     await writeFlow("desktop", {
       executionPrerequisite: "",
-      steps: [{ kind: "swipe", direction: "left", settle: true, duration: 500 }],
+      steps: [{ kind: "swipe", direction: "left", momentum: false, duration: 500 }],
     });
 
     const result = await run("desktop", "chromium-cdp-9222");
@@ -1343,7 +1388,7 @@ describe("swipe: execution", () => {
           toX: 0.1,
           toY: 0.5,
           durationMs: 500,
-          settle: true,
+          momentum: false,
         },
       },
     ]);
@@ -1458,14 +1503,14 @@ describe("swipe: post-dispatch settle", () => {
     expect(events).toEqual(["gesture-swipe", "tree", "tree"]);
   });
 
-  it("waits out the animation after a settle: true swipe too", async () => {
-    // `settle` zeroes the finger's release velocity — it says nothing about the
-    // app's own animations (a dismissed card, a paging carousel), so the wait is
-    // not conditional on it.
+  it("waits out the animation after a momentum: false swipe too", async () => {
+    // `momentum: false` zeroes the finger's release velocity — it says nothing
+    // about the app's own animations (a dismissed card, a paging carousel), so
+    // the wait is not conditional on it.
     const { result, events } = await runLoggedSwipe({
       kind: "swipe",
       by: { y: -0.5 },
-      settle: true,
+      momentum: false,
     });
 
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["swipe:pass"]);

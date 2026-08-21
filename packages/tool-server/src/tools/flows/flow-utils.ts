@@ -712,7 +712,9 @@ export type FlowStep =
       direction?: SwipeDirection;
       to?: GestureTarget;
       by?: { x?: number; y?: number };
-      settle?: boolean;
+      // Only the non-default `false` (momentum-free) is ever stored: absent is
+      // the natural flinging swipe, so parse/serialize stay exact inverses.
+      momentum?: boolean;
       duration?: number;
     }
   | { kind: "type"; into: FlowSelector; text: string; submit?: boolean }
@@ -905,7 +907,9 @@ type TapBody = YamlTarget | { on: YamlTarget; times?: number };
  * an unanchored `by` too large to fit from the centre slides its whole
  * start→end segment on-screen rather than truncating the delta, so its
  * touch-down is the centre only while each axis delta stays within 0.5 (see
- * runSwipe). `duration` is the travel time in milliseconds, floored at
+ * runSwipe). `momentum` defaults to true (a natural flinging swipe); `false`
+ * is the momentum-free variant that lands exactly where the finger lifts.
+ * `duration` is the travel time in milliseconds, floored at
  * {@link SWIPE_MIN_DURATION_MS} — shorter overshoots the travel it asks for
  * instead of landing on it. It is also capped at
  * {@link SWIPE_MAX_DURATION_MS}: the finger stays down for exactly that long.
@@ -917,7 +921,7 @@ type SwipeBody =
       direction?: SwipeDirection;
       to?: YamlTarget;
       by?: { x?: number; y?: number };
-      settle?: boolean;
+      momentum?: boolean;
       duration?: number;
     };
 
@@ -1290,10 +1294,10 @@ export const SWIPE_MIN_TRAVEL = 0.03;
  * platforms, at 33ms on iOS.
  *
  * 150ms is 9 moves across 9 frames: 8 interpolated plus that repeat. It is also
- * the wall clock `settle`'s ease-out needs to be read as a stop instead of
- * inverting; gesture-swipe refuses `settle` below this same duration, a shorter
- * one being fitted as a flick rather than a stop (a fling back to the top of the
- * list on Android, 1.6x the plain swipe's on iOS). The floor is applied on every
+ * the wall clock `momentum: false`'s ease-out needs to be read as a stop instead
+ * of inverting; gesture-swipe refuses `momentum: false` below this same duration,
+ * a shorter one being fitted as a flick rather than a stop (a fling back to the
+ * top of the list on Android, 1.6x the plain swipe's on iOS). The floor is applied on every
  * platform, though Chromium's `gesture-drag` floors its own step count and so
  * never degenerates to a bare press/release: there the floor is margin rather
  * than a rescue. An envelope on faithful delivery, not a judgment that fast
@@ -1376,8 +1380,8 @@ function swipeByToYaml(by: { x?: number; y?: number }): { x?: number; y?: number
 /** Display spelling of a relative swipe delta (`x=-0.31, y=0.2`, absent axes
  * dropped) — the DELTA's spelling shared by the run report's stepTarget and the
  * recording summary, so the two never disagree on it. That is all they share:
- * the recording summary goes on to append an options tail (`(settle, 800ms)`)
- * that the report's target does not carry. */
+ * the recording summary goes on to append an options tail
+ * (`(momentum-free, 800ms)`) that the report's target does not carry. */
 export function swipeByLabel(by: { x?: number; y?: number }): string {
   return (["x", "y"] as const)
     .filter((axis) => by[axis] !== undefined)
@@ -1519,28 +1523,27 @@ function toYamlStep(step: FlowStep): YamlStep {
         throw new Error("Cannot serialize flow swipe: needs exactly one of direction, to, or by");
       }
 
-      // Same reason on `settle`, and it has to land before the sugar below:
-      // both that sugar and the body builder read the field for truthiness
-      // only, so a programmatic non-boolean is rewritten instead of refused —
-      // `settle: "false"` emits `settle: true`, inverting what was authored,
-      // and `settle: 0` collapses into the bare-direction spelling. parseSwipe
-      // takes nothing but a boolean.
-      if (step.settle !== undefined && typeof step.settle !== "boolean") {
-        throw new Error("Cannot serialize flow swipe.settle: must be true or false");
+      // Same reason on `momentum`, and it has to land before the sugar below:
+      // both that sugar and the body builder test the field against `false`
+      // only, so a programmatic non-boolean is dropped instead of refused —
+      // `momentum: "false"` and `momentum: 0` both serialize to the momentum
+      // the author asked to turn off. parseSwipe takes nothing but a boolean.
+      if (step.momentum !== undefined && typeof step.momentum !== "boolean") {
+        throw new Error("Cannot serialize flow swipe.momentum: must be true or false");
       }
 
       // Canonical minimal spelling: a direction with no other field
-      // round-trips to the bare-direction sugar (`swipe: left`). A falsy
-      // `settle` counts as no field, matching the body builder below and
-      // parseSwipe's normalization of `settle: false` to absent — otherwise a
-      // programmatically-built step carrying the default would serialize to
-      // the verbose form.
+      // round-trips to the bare-direction sugar (`swipe: left`). Any
+      // `momentum` but the explicit `false` counts as no field, matching the
+      // body builder below and parseSwipe's normalization of `momentum: true`
+      // to absent — otherwise a programmatically-built step carrying the
+      // default would serialize to the verbose form.
       if (
         step.direction !== undefined &&
         step.from === undefined &&
         step.to === undefined &&
         step.by === undefined &&
-        !step.settle &&
+        step.momentum !== false &&
         step.duration === undefined
       ) {
         return { swipe: step.direction };
@@ -1550,7 +1553,7 @@ function toYamlStep(step: FlowStep): YamlStep {
       if (step.direction !== undefined) body.direction = step.direction;
       if (step.to !== undefined) body.to = swipeTargetToYaml(step.to, "swipe.to");
       if (step.by !== undefined) body.by = swipeByToYaml(step.by);
-      if (step.settle) body.settle = true;
+      if (step.momentum === false) body.momentum = false;
       if (step.duration !== undefined) body.duration = swipeDurationToYaml(step.duration);
       return { swipe: body };
     }
@@ -2878,7 +2881,7 @@ function completeRunExtension(value: string): string {
 
 const SWIPE_DIRECTIONS: readonly SwipeDirection[] = ["up", "down", "left", "right"];
 
-const SWIPE_OPTION_KEYS = ["from", "direction", "to", "by", "settle", "duration"] as const;
+const SWIPE_OPTION_KEYS = ["from", "direction", "to", "by", "momentum", "duration"] as const;
 
 /**
  * Parse a swipe's `by:` delta: signed normalized fractions of the screen,
@@ -2932,7 +2935,7 @@ function parseSwipeBy(raw: unknown, entry: unknown): { x?: number; y?: number } 
  * Parse a `swipe` body: a bare direction (`swipe: left` — whole-screen; the
  * one directive whose bare string is NOT a selector, because a selector alone
  * could never express a valid swipe, so there is no ambiguity to protect) or
- * the options form `{ from?, direction|to|by, settle?, duration? }`. The
+ * the options form `{ from?, direction|to|by, momentum?, duration? }`. The
  * travel is exactly one of `direction` (semantic preset with
  * Maestro-compatible geometry — see SWIPE_GEOMETRY in flow-actions.ts), `to`
  * (explicit endpoint target), or `by` (relative delta). `direction` is the
@@ -2965,6 +2968,18 @@ function parseSwipe(body: unknown, entry: unknown): FlowStep {
       "the swipe options form takes a nested point — e.g. swipe: { from: { x: 0.5, y: 0.5 }, direction: left }"
     );
   }
+  // `settle` was this flag's old spelling, with the opposite polarity. Rejected
+  // by name rather than left to rejectUnknownKeys' generic message, and never
+  // aliased: `settle: true` maps to `momentum: false`, so a silent key rewrite
+  // would invert what the author wrote. The name was retired because `settle`
+  // also means "wait for the tree to quiesce" throughout the runner — the very
+  // wait this step performs afterwards, whichever way the flag is set.
+  if (obj.settle !== undefined) {
+    badEntry(
+      entry,
+      "swipe.settle was renamed to swipe.momentum, with the opposite sense — write `momentum: false` for the momentum-free swipe that `settle: true` used to mean (plain `settle: false` was the default, so just drop it)"
+    );
+  }
   rejectUnknownKeys(entry, obj, SWIPE_OPTION_KEYS, "swipe");
 
   // The travel spec: three mutually exclusive spellings.
@@ -2993,13 +3008,13 @@ function parseSwipe(body: unknown, entry: unknown): FlowStep {
       step.by = parseSwipeBy(obj.by, entry);
       break;
   }
-  if (obj.settle !== undefined) {
-    if (typeof obj.settle !== "boolean") {
-      badEntry(entry, "swipe.settle must be true or false");
+  if (obj.momentum !== undefined) {
+    if (typeof obj.momentum !== "boolean") {
+      badEntry(entry, "swipe.momentum must be true or false");
     }
-    // `false` is the default and normalizes to absent, keeping
+    // `true` is the default and normalizes to absent, keeping
     // parse/serialize exact inverses.
-    if (obj.settle) step.settle = true;
+    if (!obj.momentum) step.momentum = false;
   }
   if (obj.duration !== undefined) {
     const duration = parsePositiveMs(obj.duration, entry, "swipe.duration", "duration: 800");
