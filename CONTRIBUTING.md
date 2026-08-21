@@ -54,7 +54,7 @@ Thank you for your interest in contributing to Argent! This guide covers everyth
 
    > **Note:** `packages/argent-private` is a private git submodule that holds the ObjC source for the native devtools dylibs. If you don't have SSH access to it, `npm run dev` will use the pre-built dylibs committed to the repository — everything else works normally.
 
-That's it — no separate install steps per package are needed.
+That's it, no separate install steps per package are needed, except `packages/docs`. It is excluded from the workspace glob and keeps its own lockfile, so `npm run lint` from the root needs `npm install` run inside `packages/docs` first.
 
 ---
 

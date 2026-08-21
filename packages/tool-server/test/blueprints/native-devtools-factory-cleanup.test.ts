@@ -57,8 +57,9 @@ import {
   MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS,
   nativeDevtoolsBlueprint,
 } from "../../src/blueprints/native-devtools";
+import { processScopedUdid } from "../helpers/process-scoped-udid";
 
-const UDID = "FACTORY1-1111-1111-1111-111111111111";
+const UDID = processScopedUdid("-1111-1111-1111-111111111111");
 const device: DeviceInfo = { id: UDID, platform: "ios", kind: "simulator" };
 const SOCKET_PATH = `/tmp/argent-nd-${UDID.slice(0, 8)}.sock`;
 

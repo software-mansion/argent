@@ -1,0 +1,31 @@
+---
+sidebar_position: 1
+sidebar_label: CLI
+title: CLI reference
+sidebar_custom_props:
+  icon: terminal
+---
+
+| Command            | Description                                                                                                                                                                                                                                                       |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `argent init`      | Install and configure MCP in the current workspace (`--global` default, `--local` for a committable devDependency)                                                                                                                                                |
+| `argent install`   | Alias for `init`                                                                                                                                                                                                                                                  |
+| `argent update`    | Pull the latest version and refresh workspace configuration. Acts on the present install; `--global` and `--local` select explicitly when both coexist.                                                                                                           |
+| `argent uninstall` | Unregister the MCP server and uninstall the package. `--global` and `--local` choose which install is removed; non-interactive runs never remove a coexisting global install.                                                                                     |
+| `argent remove`    | Alias for `uninstall`                                                                                                                                                                                                                                             |
+| `argent mcp`       | Start an MCP server instance, used internally by the agent                                                                                                                                                                                                        |
+| `argent tools`     | List tools exposed by the tool-server (`describe <name>` for details)                                                                                                                                                                                             |
+| `argent run`       | Invoke a tool by name                                                                                                                                                                                                                                             |
+| `argent flow`      | Run a flow by name or YAML path (`argent flow --help` for options)                                                                                                                                                                                                |
+| `argent server`    | Manage the shared tool-server: `start` / `status` / `stop` / `logs`                                                                                                                                                                                               |
+| `argent lens`      | Open Argent Lens bound to a fresh coding-agent session. Shows a picker when more than one agent is installed, or pass `--agent` to select claude, codex, gemini, opencode or cursor (macOS; behind the `argent-lens` flag, run `argent enable argent-lens` first) |
+| `argent link`      | Route client requests to a remote tool-server                                                                                                                                                                                                                     |
+| `argent unlink`    | Remove the persisted remote tool-server link                                                                                                                                                                                                                      |
+| `argent enable`    | Enable a predefined feature flag (`--scope project` for project-local)                                                                                                                                                                                            |
+| `argent disable`   | Disable a feature flag (`--scope project` for project-local)                                                                                                                                                                                                      |
+| `argent flags`     | List available feature flags and their state                                                                                                                                                                                                                      |
+| `argent config`    | Manage configuration: `list` / `get` / `set` / `unset`, project and global                                                                                                                                                                                        |
+| `argent secrets`   | List the secrets a `{{secret:NAME}}` placeholder can resolve, and their sources                                                                                                                                                                                   |
+| `argent telemetry` | Manage telemetry: `status` / `enable` / `disable`                                                                                                                                                                                                                 |
+
+Run `argent --help` for the full set of options, and `argent --version` to print the installed version.

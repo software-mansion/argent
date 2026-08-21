@@ -1,0 +1,79 @@
+---
+sidebar_position: 2
+sidebar_label: Installation
+title: Installation
+sidebar_custom_props:
+  icon: download
+---
+
+## Prerequisites
+
+- **Node.js 20.12** or later
+- **iOS / tvOS**: macOS with **Xcode** installed. Apple TV uses tvOS simulators, and Xcode downloads the tvOS runtime on demand.
+- **Android / Android TV**: **Android SDK Platform Tools** (`adb`) on `PATH`, plus the **Android Emulator** package to boot AVDs from Argent. Create AVDs via Android Studio or `avdmanager`.
+- **Fire TV (Vega)**: the **Vega SDK** (`vega` CLI) on `PATH`, plus **Android SDK Platform Tools** (`adb`) on `PATH`. Most Vega tools, including UI inspection and screenshots, run over `adb`.
+- **Electron / Chromium**: nothing extra to control an already running app. Launch it with `--remote-debugging-port`, or let Argent spawn your Electron app for you.
+
+## Run `init` in your project
+
+```bash
+npx @swmansion/argent@latest init
+```
+
+In a pnpm project, where npm's `devEngines` check may refuse to run `npx`:
+
+```bash
+pnpm dlx @swmansion/argent@latest init
+```
+
+The installation wizard:
+
+- installs `@swmansion/argent` globally,
+- detects your editor and registers the MCP server,
+- copies skills, rules and agent definitions into your workspace.
+
+<Video
+  src="/video/installation-wizard.mp4"
+  width={1618}
+  height={1080}
+  caption="The wizard detects your editors, then asks where the MCP server should live"
+/>
+
+## Manual install
+
+```bash
+npm install -g @swmansion/argent
+argent init
+```
+
+## Share Argent with your team
+
+By default Argent installs **globally**. To version Argent with your repo, so every teammate gets the same setup on `npm install`, choose the local mode:
+
+```bash
+npx @swmansion/argent@latest init --local
+```
+
+This adds `@swmansion/argent` to your project's `devDependencies` and writes MCP configs that launch the project-local copy. Commit `package.json` and your lockfile, the generated MCP config (`.mcp.json`, `.cursor/mcp.json`, and so on), `.argent/install.json`, and the skills, rules and agents files. Teammates then run `npm install`.
+
+Pass `--global` to force the default mode in scripts. `--local` and `--global` are mutually exclusive. A non-interactive (`--yes`) run defaults to global unless the project already opted into local mode.
+
+:::note
+In local mode the committed MCP config runs the project-local copy, so the bare `argent` command is **not** on teammates' `PATH`. Note that `npm install` builds Argent's native dependencies (`tree-sitter`) on each machine. These are prebuilt for macOS, Linux x64 and Windows x64; other targets compile from source and need a C/C++ toolchain.
+:::
+
+## Linux hosts running Android emulators
+
+Argent runs Android emulators on Linux, but a few host-side knobs matter:
+
+- **KVM access.** Without `/dev/kvm` the emulator falls back to slow software emulation. Enable virtualization in BIOS/UEFI and add your user to the `kvm` group:
+
+  ```bash
+  sudo usermod -aG kvm "$USER"
+  # log out and back in so the new group takes effect
+  ```
+
+- **GPU mode.** Argent picks `-gpu swiftshader` on Linux for universal compatibility. Override it with `ARGENT_EMULATOR_GPU_MODE=host` if you have verified that hardware GL works on your machine.
+- **System image.** Prefer the `default` or `google_apis` variants of `x86_64` images. Always pick `x86_64` on Intel and AMD hosts, since ARM images run through QEMU translation and are dramatically slower.
+- **AVD resources.** Stock 2 GB / 4 vCPU AVDs can be CPU-starved by a concurrent Gradle build. Bump `hw.ramSize`, `hw.cpu.ncore` and `vm.heapSize` in `~/.android/avd/<name>.avd/config.ini`.
+- **Headless mode.** Export `ARGENT_EMULATOR_NO_WINDOW=1` before starting the tool-server in CI, containers or Wayland-only sessions.

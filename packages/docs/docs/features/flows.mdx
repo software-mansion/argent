@@ -1,0 +1,74 @@
+---
+sidebar_position: 7
+sidebar_label: Record and replay flows
+title: Record and replay flows
+sidebar_custom_props:
+  icon: repeat-2
+---
+
+A flow is a recorded sequence of interactions with the app. The agent records the flow one time. Then the agent, or a CI job, replays the flow as many times as you need. Each replay follows the same path. Thus a manual reproduction, a smoke test or a comparison of two builds becomes repeatable.
+
+<Video
+  src="/video/flow.mp4"
+  width={1494}
+  height={900}
+  caption="The agent replays a recorded flow on an iOS simulator after a single instruction"
+/>
+
+Use a flow when:
+
+- you profile the app again after a fix and you need the same path both times,
+- you compare two builds on the same screens,
+- you check a regression on each branch with the same steps,
+- you worked through a long path with the agent and you want to keep it.
+
+## Recording a flow
+
+The agent records a flow while it operates the app. You describe the path in one instruction. The agent starts a recording, performs each step on the device and records the step. Each step runs live during the recording. Thus the agent sees the result of a step before the agent records the step.
+
+The agent adds a label between the steps. A label explains what the step does and which screen the agent expects. During a replay, Argent prints each label. Thus the report of a replay is readable.
+
+When the agent has recorded the last step, the agent finishes the recording. Argent writes the flow to a file in the project.
+
+Argent makes a recorded tap portable. When the tapped element has a stable text or identifier, Argent records the element instead of the coordinates. During a replay, Argent finds the element on the screen again. When the element has no stable text or identifier, Argent records the coordinates and adds a warning.
+
+## The flow file
+
+Argent stores each flow as a YAML file in the `.argent/flows/` directory of the project. The file contains a list of steps. The file does not contain a device identifier. Thus the same flow runs on a different simulator or a different emulator.
+
+A flow has one of two shapes:
+
+| Shape           | First step          | Start state                                         |
+| --------------- | ------------------- | --------------------------------------------------- |
+| End-to-end flow | A launch of the app | Argent starts the app from scratch                  |
+| Fragment        | Any other step      | The app is already in the state that the flow needs |
+
+A fragment declares its start state in a prerequisite. The prerequisite is a sentence, for example "The Settings screen is open". Before a replay, the agent reads the prerequisite and puts the app into that state.
+
+A flow can contain more than taps and text. A step can wait for an element, wait for the screen to settle, check a condition, take a screenshot and compare it to a baseline, or run a different flow. See [Baselines in flows](/docs/features/visual-regression#baselines-in-flows) for the screenshot comparison.
+
+The file is plain text. You can commit the file, review the file in a pull request and edit a step by hand.
+
+## Replaying a flow
+
+You ask the agent to run a flow by its name. The agent replays each step in order on the connected device. When a step fails, Argent stops the flow. Argent reports the later steps as skipped. At the end, the agent receives a report with the result of each step.
+
+A flow also runs without an agent. The `argent flow run` command replays a flow from the terminal. The command prints the result of each step and exits with a status code. Thus a flow runs in a CI job or in a script. The command runs one flow, a flow file in a different location, or all flows in a directory.
+
+## Example instructions
+
+- "Record the path from the start screen to the checkout summary as a flow named checkout."
+- "Run the checkout flow and tell me which step fails."
+- "Run the login flow on the iOS simulator and on the Android emulator. Compare the results."
+- "Add a label before each screen change in the onboarding flow."
+- "Profile the app while you run the search flow. Then apply my fix and run the flow again."
+
+## Limits
+
+- A replay runs on one booted device. When more than one device is booted, name the device in the instruction.
+- A recorded tap with coordinates breaks when the layout changes. Give the element a stable text or identifier, then record the step again.
+- A flow does not reset the data of the app. When a step creates data, for example a new item, each replay creates the data again. Start the flow with a launch of the app or with a step that restores a known state.
+- The agent records a launch step for iOS, Android and Vega apps. For a Chromium or Electron app, add the launch step to the file by hand.
+- A replay needs the same connected instrumentation as the recording. When the agent cannot read the UI tree, a step that still uses coordinates sends the tap anyway and adds a warning. A step that uses a stable identifier fails instead, because it has no coordinates to fall back on.
+
+Argent does this with the `flow-start-recording`, `flow-add-step`, `flow-add-echo`, `flow-finish-recording`, `flow-read-prerequisite` and `flow-execute` tools, and with the `argent flow` command. The [tools reference](/docs/reference/tools) contains all tools. The [Flow YAML reference](/docs/reference/flow-yaml) contains the file format and the command options.

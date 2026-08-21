@@ -13,8 +13,9 @@
 # Env overrides:
 #   E2E_RN_DIR       default ~/dev/bluesky
 #   E2E_RN_PKG       default xyz.blueskyweb.app
-#   E2E_RN_PREBUILT  =1 to assume the dev-client is already installed (default;
-#                    building via `expo run:android` is too heavy to auto-run)
+#   E2E_RN_BUILD     =1 to build the dev-client with `expo run:android` when it
+#                    is not installed. Off by default: the build is too heavy to
+#                    run unasked, so the tier skips itself instead.
 #   E2E_METRO_PORT   default 8081
 
 _metro_ready() { curl -fsS -m 3 "http://127.0.0.1:${1}/status" 2>/dev/null | grep -q 'packager-status:running'; }
@@ -55,16 +56,38 @@ run_phase() {
   fi
 
   # --- start Metro ----------------------------------------------------------
+  local STARTED_METRO=0
   if ! _metro_ready "$MPORT"; then
     log "starting Metro in $RN_DIR"
     local expo="$RN_DIR/node_modules/.bin/expo"
     [ -x "$expo" ] || expo="npx --prefix $RN_DIR expo"
     ( cd "$RN_DIR" && exec $expo start --dev-client --port "$MPORT" ) >/tmp/e2e-metro.log 2>&1 &
     export E2E_METRO_PID=$!
+    STARTED_METRO=1
     local i
     for i in $(seq 1 45); do _metro_ready "$MPORT" && break; sleep 2; done
   fi
-  if _metro_ready "$MPORT"; then pass "$P" metro ready; else fail "$P" metro ready "Metro not up on :$MPORT"; _skip_all "Metro unavailable"; return 0; fi
+  # Stop only a Metro this phase started. A developer's own Metro on :8081 is
+  # not ours to kill, and every early return past this point has to run it or
+  # the one we did start outlives the run.
+  _rn_stop_metro() {
+    if [ "$STARTED_METRO" -ne 1 ]; then
+      skip "$P" stop-metro stop "Metro was already running on :$MPORT; left as found"
+    elif _metro_ready "$MPORT"; then
+      assert_ok "$P" stop-metro stop "{}"
+    else
+      # We spawned it, but nothing is serving the port, so stop-metro has
+      # nothing to find and failing the run on that says nothing true. The pid
+      # is still held in E2E_METRO_PID, which 90-cleanup kills.
+      skip "$P" stop-metro stop "the Metro this tier started is not serving :$MPORT; pid reaped in cleanup"
+    fi
+  }
+  if _metro_ready "$MPORT"; then
+    pass "$P" metro ready
+  else
+    fail "$P" metro ready "Metro not up on :$MPORT"
+    _skip_all "Metro unavailable"; _rn_stop_metro; return 0
+  fi
 
   # --- launch app + connect the debugger -----------------------------------
   assert_true "$P" launch-app launch "{\"udid\":\"$DEV\",\"bundleId\":\"$PKG\"}" '.launched'
@@ -72,18 +95,32 @@ run_phase() {
 
   run_tool debugger-connect "{\"device_id\":\"$DEV\",\"port\":$MPORT}"
   if [ "$RT_RC" -ne 0 ]; then
-    fail "$P" debugger-connect connect "$(printf '%s' "$RT_OUT"|tr '\n' ' '|cut -c1-160)"
-    _skip_all "debugger-connect failed"; return 0
+    fail "$P" debugger-connect connect "$(rt_detail 160)"
+    _skip_all "debugger-connect failed"; _rn_stop_metro; return 0
   fi
-  local LID; LID="$(printf '%s' "$RT_JSON" | jq -r '.logicalDeviceId // .device_id // empty')"
-  [ -z "$LID" ] && LID="$DEV"
-  pass "$P" debugger-connect "connected (logicalDeviceId=$LID)"
-  local D="\"device_id\":\"$LID\",\"port\":$MPORT"
+  local LID; LID="$(printf '%s' "$RT_JSON" | jq -r '.logicalDeviceId // empty')"
+  pass "$P" debugger-connect connect "logicalDeviceId=${LID:-none}"
+  # Keep driving the list-devices id. debugger-connect's own contract: "Pass this
+  # SAME id as device_id to every subsequent debugger-* call… The returned
+  # logicalDeviceId is informational… you do not switch to it." Forwarding the
+  # logical id still resolves for the debugger tools via the alias, but the
+  # profiler tools cache their paths under the id they are handed, so a session
+  # recorded under one id would be looked up under the other and come back "No
+  # profiling data stored".
+  local D="\"device_id\":\"$DEV\",\"port\":$MPORT"
 
   # --- debugger chain -------------------------------------------------------
-  assert_ok    "$P" debugger-status status "{$D}"
+  # Both of these answer 200 even when the debugger is not connected, so the
+  # exit code alone says only that the server replied. debugger-status is the
+  # dead-session gate: its `.connected` fails even over a half-closed socket.
+  # debugger-log-registry does not gate on socket state, so its `status` only
+  # turns "not_connected" when the runtime itself is unreachable ("connected"
+  # on a healthy call); the `// "connected"` default below covers the pre-#610
+  # shape where that field was absent, so on this base the log-registry line is
+  # a no-op that only bites once #610 is in the tree.
+  assert_true  "$P" debugger-status status "{$D}" '.connected'
   assert_field "$P" debugger-evaluate eval "{$D,\"expression\":\"1+1\"}" '(.result|tostring)' '2'
-  assert_ok    "$P" debugger-log-registry logs "{$D}"
+  assert_field "$P" debugger-log-registry logs "{$D}" '(.status // "connected")' 'connected'
   assert_ok    "$P" debugger-component-tree tree "{$D}"
   assert_ok    "$P" debugger-inspect-element inspect "{$D,\"x\":0.5,\"y\":0.5}"
   assert_ok    "$P" debugger-reload-metro reload "{$D}"
@@ -115,31 +152,51 @@ run_phase() {
     # profiler query tools operate on the loaded react session
     assert_ok "$P" profiler-load load-list "{\"mode\":\"list\",\"device_id\":\"$DEV\"}"
     assert_ok "$P" profiler-cpu-query cpu-top "{$D,\"mode\":\"top_functions\",\"top_n\":10}"
-    assert_ok "$P" profiler-commit-query commits "{$D,\"mode\":\"by_time_range\"}"
-    assert_ok "$P" profiler-stack-query stacks "{$D,\"mode\":\"thread_breakdown\"}"
-    assert_ok "$P" profiler-combined-report combined "{$D}"
+    # by_time_range requires time_range_ms; without it the tool throws before it
+    # reads any data. The window is the whole performance.now timeline, so the
+    # case exercises the query rather than a filter that matches nothing.
+    assert_ok "$P" profiler-commit-query commits \
+      "{$D,\"mode\":\"by_time_range\",\"time_range_ms\":{\"start\":0,\"end\":99999999}}"
     # component-source needs a component name from the render list — best-effort
     skip "$P" react-profiler-component-source rp-src "needs a specific component name (manual)"
   else
     for t in react-profiler-start react-profiler-status react-profiler-stop react-profiler-analyze \
              react-profiler-renders react-profiler-fiber-tree react-profiler-cpu-summary react-profiler-component-source \
-             profiler-load profiler-cpu-query profiler-commit-query profiler-stack-query profiler-combined-report; do
-      skip "$P" "$t" happy-path "react-profiler-start failed: $(printf '%s' "$RT_OUT"|tr '\n' ' '|cut -c1-80)"
+             profiler-load profiler-cpu-query profiler-commit-query; do
+      skip "$P" "$t" happy-path "react-profiler-start failed: $(rt_detail 80)"
     done
   fi
 
   # --- native profiler (Android perfetto) ----------------------------------
+  # profiler-stack-query and profiler-combined-report belong here, not in the
+  # react block: both read the native trace and throw "No Android trace loaded.
+  # Run native-profiler-stop → native-profiler-analyze first." until analyze has
+  # run, so calling them earlier fails on every healthy build.
   run_tool native-profiler-start "{\"device_id\":\"$DEV\",\"app_process\":\"$PKG\"}"
   if [ "$RT_RC" -eq 0 ]; then
     pass "$P" native-profiler-start np-start
     run_tool gesture-swipe "{\"udid\":\"$DEV\",\"fromX\":0.5,\"fromY\":0.7,\"toX\":0.5,\"toY\":0.3}" >/dev/null 2>&1; sleep 3
     assert_ok "$P" native-profiler-stop    np-stop   "{\"device_id\":\"$DEV\"}"
     assert_ok "$P" native-profiler-analyze np-analyze "{\"device_id\":\"$DEV\"}"
-    assert_ok "$P" profiler-load load-native "{\"mode\":\"load_native\",\"device_id\":\"$DEV\",\"app_process\":\"$PKG\"}"
+    assert_ok "$P" profiler-stack-query stacks "{$D,\"mode\":\"thread_breakdown\"}"
+    assert_ok "$P" profiler-combined-report combined "{$D}"
+    # load_native needs the session_id that `list` mode prints; sessions are
+    # stamped YYYYMMDD-HHMMSS. Without one the tool throws before loading, so
+    # take the newest and skip rather than fail when list shows none.
+    run_tool profiler-load "{\"mode\":\"list\",\"device_id\":\"$DEV\"}"
+    local SID; SID="$(printf '%s' "$RT_OUT" | grep -oE '[0-9]{8}-[0-9]{6}' | sort -u | tail -1)"
+    if [ -n "$SID" ]; then
+      assert_ok "$P" profiler-load load-native "{\"mode\":\"load_native\",\"device_id\":\"$DEV\",\"app_process\":\"$PKG\",\"session_id\":\"$SID\"}"
+    else
+      skip "$P" profiler-load load-native "no session id in profiler-load list output"
+    fi
   else
-    skip "$P" native-profiler-start  np-start   "start failed: $(printf '%s' "$RT_OUT"|tr '\n' ' '|cut -c1-80)"
+    skip "$P" native-profiler-start  np-start   "start failed: $(rt_detail 80)"
     skip "$P" native-profiler-stop   np-stop    "native profiler not started"
     skip "$P" native-profiler-analyze np-analyze "native profiler not started"
+    skip "$P" profiler-stack-query stacks "native profiler not started"
+    skip "$P" profiler-combined-report combined "native profiler not started"
+    skip "$P" profiler-load load-native "native profiler not started"
   fi
   skip "$P" native-network-logs happy-path "iOS-only (not applicable on Android)"
 
@@ -152,5 +209,5 @@ run_phase() {
   fi
 
   # --- teardown -------------------------------------------------------------
-  assert_ok "$P" stop-metro stop "{}"
+  _rn_stop_metro
 }

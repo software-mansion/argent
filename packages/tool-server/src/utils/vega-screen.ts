@@ -61,7 +61,7 @@ async function captureViaEmulatorConsole(opts: { scale?: number }): Promise<stri
  * Downscale a decoded RGBA PNG by `scale`. Defaults and resampling are shared
  * with the other platforms rather than re-derived here: the default + range
  * handling comes from `getScreenshotScale()` (the iOS/Android env parser, which
- * rejects out-of-(0,1] values and falls back to 0.3), and the resample is the
+ * rejects out-of-(0,1] values and falls back to 0.25), and the resample is the
  * lanczos3 `resizeDecodedPng()` used by screenshot-diff — so Vega screenshots
  * honour `ARGENT_SCREENSHOT_SCALE` identically and at the same quality.
  */
