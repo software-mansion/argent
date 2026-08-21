@@ -21,6 +21,7 @@ vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
 
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow, parseFlow } from "../../src/tools/flows/flow-utils";
+import { gestureDragTool } from "../../src/tools/gesture-drag/index";
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
 let tmpDir: string;
@@ -83,9 +84,69 @@ describe("long-press: parse/serialize", () => {
         { kind: "long-press" as const, selector: { text: "Row 3", loose: true }, duration: 1200 },
         { kind: "long-press" as const, x: 0.5, y: 0.6 },
         { kind: "long-press" as const, x: 0.5, y: 0.6, duration: 1200 },
+        // The exact ceiling — must round-trip clean.
+        { kind: "long-press" as const, selector: { identifier: "row-3" }, duration: 10_000 },
       ],
     };
     expect(parseFlow(serializeFlow(flow)).steps).toEqual(flow.steps);
+  });
+
+  it.each([
+    ["one millisecond over the ceiling", "10001"],
+    ["a hold authored in the wrong unit", "20000"],
+    ["a literal that clears parsePositiveMs's finite check", "1e21"],
+  ])("rejects a duration of %s as longer than a hold can be dispatched", (_description, value) => {
+    // Unbounded, this parsed clean and then died inside the registry on Chromium
+    // alone: there a long-press IS a gesture-drag (from == to) and that tool's
+    // own durationMs stops at 10s, so the step reported the tool's raw schema
+    // message as an error. The bound belongs at parse, where the author is told
+    // once, at authoring time, on every platform.
+    expect(() => parseFlow(`steps:\n  - long-press: { on: A, duration: ${value} }\n`)).toThrow(
+      /long-press\.duration is \S+ms - above the maximum long-press duration of 10000ms/i
+    );
+  });
+
+  it("rejects a programmatic long-press duration above the ceiling", () => {
+    expect(() =>
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "long-press", selector: { text: "Row 3", loose: true }, duration: 15_000 }],
+      })
+    ).toThrow(
+      /Cannot serialize flow long-press\.duration: 15000ms - above the maximum long-press duration of 10000ms/
+    );
+  });
+
+  it("bounds duration at exactly what the Chromium dispatch accepts", () => {
+    // The two numbers are the same by construction, not by coincidence: this is
+    // the pairing that broke, so it is asserted rather than assumed.
+    const steps = parseFlow('steps:\n  - long-press: { on: "Row", duration: 10000 }\n').steps;
+    const duration = (steps[0] as { duration: number }).duration;
+    expect(duration).toBe(10_000);
+    expect(
+      gestureDragTool.zodSchema!.safeParse({
+        udid: "chromium-cdp-9222",
+        fromX: 0.5,
+        fromY: 0.5,
+        toX: 0.5,
+        toY: 0.5,
+        durationMs: duration,
+      }).success
+    ).toBe(true);
+  });
+
+  it.each([
+    ["zero", 0],
+    ["NaN", Number.NaN],
+  ])("rejects a programmatic long-press duration that is %s", (_description, duration) => {
+    // A FlowStep built in code bypasses the YAML parser, so the serializer must
+    // apply the same positive-milliseconds guard the parser enforces.
+    expect(() =>
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "long-press", selector: { text: "Row 3", loose: true }, duration }],
+      })
+    ).toThrow("Cannot serialize flow long-press.duration: needs a positive number of milliseconds");
   });
 
   it("parses the options form with the usual selector sugar", () => {

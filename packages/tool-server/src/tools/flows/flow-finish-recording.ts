@@ -9,10 +9,12 @@ import {
   parseFlow,
   serializeFlow,
   selectorToYaml,
+  swipeByLabel,
   type FlowFile,
   type FlowStep,
   type FlowSavedTo,
   type FlowSelector,
+  type GestureTarget,
 } from "./flow-utils";
 import type { TextMatchMode } from "../../utils/ui-tree-match";
 
@@ -40,6 +42,10 @@ function textConditionLabel(
     : textMatch === "equals"
       ? `text ${selector} == ${JSON.stringify(expected)}`
       : `text ${selector} contains ${JSON.stringify(expected)}`;
+}
+
+function targetLabel(target: GestureTarget): string {
+  return "selector" in target ? selectorLabel(target.selector) : `(${target.x}, ${target.y})`;
 }
 
 const zodSchema = z.object({
@@ -229,7 +235,9 @@ export function summarizeStep(step: FlowStep, n: number): string {
       // recorder-built, so both reach an author only through the finish
       // `summary` — beside the `flowFile` that spells them out. Rendering them
       // is a fair follow-up, not a gap this per-step view opened.
-      const target = step.selector ? selectorLabel(step.selector) : `(${step.x}, ${step.y})`;
+      const target = targetLabel(
+        step.selector ? { selector: step.selector } : { x: step.x as number, y: step.y as number }
+      );
       // Only ×2..×10 is renderable: `times: 1` is the default and never lands in
       // the file (parseTapTimes normalizes it to absent), so rendering `×1` for
       // a stray in-memory `times: 1` would describe a file that can't exist.
@@ -238,6 +246,25 @@ export function summarizeStep(step: FlowStep, n: number): string {
       const held =
         step.kind === "long-press" && step.duration !== undefined ? ` for ${step.duration}ms` : "";
       return `${n}. ${step.kind}: ${target}${times}${held}`;
+    }
+    case "swipe": {
+      // The summary always runs over `parseFlow`'s output, and parse enforces
+      // exactly one of direction/to/by — so with the first two absent, `to` is
+      // present. The cast is that invariant, not an assumption about the
+      // recorder: an `undefined` here would mean the parser stopped enforcing
+      // it, which its own tests would catch first.
+      const travel =
+        step.direction ??
+        (step.by ? `by ${swipeByLabel(step.by)}` : `to ${targetLabel(step.to as GestureTarget)}`);
+      const from = step.from ? ` from ${targetLabel(step.from)}` : "";
+      // Present options only — otherwise distinct gestures collapse into
+      // one line in the very summary read before hand-editing the YAML.
+      const options = [
+        ...(step.settle ? ["settle"] : []),
+        ...(step.duration !== undefined ? [`${step.duration}ms`] : []),
+      ];
+      const tail = options.length > 0 ? ` (${options.join(", ")})` : "";
+      return `${n}. swipe: ${travel}${from}${tail}`;
     }
     case "type":
       return `${n}. type: ${selectorLabel(step.into)} ← "${step.text}"`;

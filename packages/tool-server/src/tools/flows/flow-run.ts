@@ -31,9 +31,11 @@ import {
   isBlockStep,
   parseFlow,
   runTargetName,
+  swipeByLabel,
   type BlockStep,
   type FlowFile,
   type FlowSelector,
+  type GestureTarget,
   type FlowStep,
   type Launch,
   type WhenCondition,
@@ -1090,6 +1092,9 @@ export function createRunFlowTool(
         `Failed to run flow ${displayFlowName(params)}: ${failureSignal.error_code}`,
     },
     description: `Run a saved flow from the .argent/flows/ directory, or an explicit boundary-managed flow_path.
+Use when a scenario is already authored as YAML and the whole of it should replay in one call with a
+per-step verdict; reach for the individual gesture tools when nothing is authored yet, and for
+run-sequence when the steps are an ad-hoc list rather than a stored flow.
 Steps run in order: \`launch\` starts an app from scratch (terminate + relaunch) and waits until it is
 ready; \`tool\` calls dispatch through the registry; \`tap\`/\`long-press\`/\`type\` resolve a selector to an
 element and act on it (\`tap: { on, times: 2 }\` double-taps; \`long-press: { on, duration }\` presses and
@@ -1100,6 +1105,10 @@ order), \`next: <selector>\` (CSS \`+\` — the nearest such follower, which unl
 non-matching neighbour rather than failing), plus \`any: true\` (CSS \`*\` — legal only WITH a scope and
 never beside text/id/role). Scopes nest to disambiguate — \`within: { id: card, within: { id: list } }\`
 reads "inside card inside list", each container's frame inside the next);
+\`swipe\` performs one finger flick (\`swipe: left\`, or \`swipe: { from?, direction|to|by, settle?, duration? }\` —
+direction is the FINGER's travel, the opposite sense of scroll-to's content direction; \`by: { x?, y? }\` — signed
+0–1 screen fractions, combined length at least 0.03 (a diagonal clears it where neither axis does); duration in ms,
+default 300, minimum 150, maximum 10000; each bound is a parse error that rejects the file before any step runs);
 \`scroll-to\` scrolls (momentum-free) until a target is visible; \`pinch\` zooms
 (\`pinch: { on?, scale }\` — scale > 1 in, < 1 out; screen center when \`on\` is omitted); \`rotate\` is the
 two-finger rotation gesture (\`rotate: { on?, by }\` — degrees, + clockwise, within ±3000°; screen center
@@ -1745,6 +1754,11 @@ function conditionLabel(
   return `${cond.condition} ${sel}`;
 }
 
+/** Human-readable selector/point spelling shared by gesture reports. */
+function gestureTargetLabel(target: GestureTarget): string {
+  return "selector" in target ? selectorLabel(target.selector) : `(${target.x}, ${target.y})`;
+}
+
 /** Display-only "what this step acts on" for {@link StepReport.target}. */
 function stepTarget(step: FlowStep): string | undefined {
   switch (step.kind) {
@@ -1753,6 +1767,19 @@ function stepTarget(step: FlowStep): string | undefined {
       if (step.selector) return selectorLabel(step.selector);
       if (step.x !== undefined && step.y !== undefined) return `(${step.x}, ${step.y})`;
       return undefined;
+    case "swipe": {
+      let travel: string;
+      if (step.direction !== undefined) {
+        travel = step.direction;
+      } else if (step.by !== undefined) {
+        travel = `by ${swipeByLabel(step.by)}`;
+      } else if (step.to !== undefined) {
+        travel = `to ${gestureTargetLabel(step.to)}`;
+      } else {
+        return undefined;
+      }
+      return `${travel}${step.from ? ` from ${gestureTargetLabel(step.from)}` : ""}`;
+    }
     case "type":
       return `into ${selectorLabel(step.into)}`;
     case "await":
@@ -2350,6 +2377,7 @@ async function execLeafStep(
 
     case "tap":
     case "long-press":
+    case "swipe":
     case "type":
     case "await":
     case "assert":
@@ -2533,6 +2561,13 @@ async function execLeafStep(
         }
         return { ...base, status: "pass", tool: step.name, result, outputHint, args };
       } catch (err) {
+        // A gesture tool that consults the signal rejects when the run is
+        // cancelled mid-dispatch. Per ABORTED_OUTCOME that is a skip, the same
+        // as the directives and the delay above — never a step failure carrying
+        // the tool's own "aborted after N of M frames" as its reason.
+        if (signal?.aborted) {
+          return { ...base, status: "skip", tool: step.name, reason: ABORTED_OUTCOME.reason };
+        }
         return { ...base, status: "error", tool: step.name, reason: errMsg(err) };
       }
     }
