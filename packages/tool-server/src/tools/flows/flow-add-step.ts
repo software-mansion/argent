@@ -11,6 +11,8 @@ import {
 import {
   requireRecordingSession,
   appendStepToFlow,
+  assertSessionStillLive,
+  withRecordingLock,
   appIdForPlatform,
   parseFlow,
   assertSafeFlowName,
@@ -28,6 +30,7 @@ import {
   unmetUiWaitCause,
   type UnmetUiWaitCause,
 } from "../await-ui-element";
+import { nestedOrchestratorOutcome } from "./flow-nested-outcome";
 import { probeWhenCondition, type DirectiveOutcome } from "./flow-actions";
 import { stepAnchor, summarizeStep } from "./flow-finish-recording";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
@@ -763,23 +766,40 @@ async function captureTapSelector(
  * Deliberately NOT the flow's YAML: returning the whole growing file per call
  * made the recorder the largest consumer of a session's context. The full file
  * comes back once, from `flow-finish-recording`.
+ *
+ * The liveness check comes first, as on the append path. The caller resolved
+ * its session BEFORE a tool that can run for minutes, so the recording can be
+ * finished, restarted or evicted by now. Without the check, the read below
+ * reports another take's step count as this one's.
+ *
+ * The check and the read hold the flow lock, as {@link appendStepToFlow} does.
+ * The check is synchronous and the read is not, and `flow-start-recording`
+ * truncates the file under that same lock. A restart between the two would make
+ * this report the SUPERSEDED take's count as a success.
+ *
+ * `ranOnDevice` says whether the refused call already ran, which decides what
+ * the liveness error tells the author to undo.
  */
 async function activeFlowState(
-  session: RecordingSession
+  session: RecordingSession,
+  ranOnDevice: boolean
 ): Promise<{ stepCount: number; note?: string }> {
-  if (session.persist === "host") {
-    try {
-      session.flow = parseFlow(await fs.readFile(session.filePath, "utf8"));
-    } catch (err) {
-      return {
-        stepCount: session.flow.steps.length,
-        note:
-          `The persisted flow could not be read and parsed (${err instanceof Error ? err.message : String(err)}); ` +
-          `the step count is from the last valid in-memory snapshot.`,
-      };
+  return withRecordingLock(session, async () => {
+    assertSessionStillLive(session, ranOnDevice);
+    if (session.persist === "host") {
+      try {
+        session.flow = parseFlow(await fs.readFile(session.filePath, "utf8"));
+      } catch (err) {
+        return {
+          stepCount: session.flow.steps.length,
+          note:
+            `The persisted flow could not be read and parsed (${err instanceof Error ? err.message : String(err)}); ` +
+            `the step count is from the last valid in-memory snapshot.`,
+        };
+      }
     }
-  }
-  return { stepCount: session.flow.steps.length };
+    return { stepCount: session.flow.steps.length };
+  });
 }
 
 /**
@@ -797,7 +817,7 @@ async function recordNothing(
   stepCount: number;
   savedTo: FlowSavedTo;
 }> {
-  const { stepCount, note } = await activeFlowState(session);
+  const { stepCount, note } = await activeFlowState(session, false);
   return {
     message: `${guidance} Nothing was executed and no step was recorded.${note ? ` ${note}` : ""}`,
     toolResult: undefined,
@@ -981,6 +1001,102 @@ export function directiveCommandHint(command: string): string | undefined {
       : `. It is stored as a raw \`tool: ${hint.tool}\` step; converting it to \`${command}:\` ` +
         `is part of the polish pass.`)
   );
+}
+
+/**
+ * Whether this step must be refused rather than recorded, and why.
+ *
+ * `flow-execute` and `run-sequence` report a failed, cancelled or never-run
+ * nested run in their RESULT, not by throwing. If the recorder does not read
+ * that result, a composition that failed everything becomes a step that passed.
+ *
+ * The verdict comes from {@link nestedOrchestratorOutcome}, the reader the
+ * RUNNER scores a nested step with. A step the recorder refuses is a step the
+ * runner would not have passed, so one reader keeps the two in agreement.
+ *
+ * `undefined` means the nested run finished cleanly. A cancel in the trailing
+ * delay after the last declared step is clean: that step ran in full.
+ */
+function nestedRecordRefusal(
+  command: string,
+  result: unknown,
+  aborted: boolean
+): { reason: string; mayHaveMutated: boolean } | null {
+  const outcome = nestedOrchestratorOutcome(command, result);
+  if (!outcome) return null;
+  // Read the signal before the verdict, the order the runner uses.
+  // `run-sequence` has no abort field: a nested tool that is cancelled returns
+  // unmet or throws, and either becomes an ordinary error entry. A
+  // verdict-first read would file the author's own cancel as a failed nested
+  // step. `skip` is the reader's own abort branch, so it speaks for itself.
+  //
+  // `attempted` is the third condition, because a cancel can only affect an
+  // outcome the run got far enough to have. A `flow-execute` prerequisite
+  // notice reached no step, so the wrapper would report a cancel of something
+  // that never started.
+  const attempted = nestedStepAttempted(result);
+  const reason =
+    aborted && attempted && outcome.status !== "skip"
+      ? `${command} was cancelled (${outcome.reason})`
+      : outcome.reason;
+  return { reason, mayHaveMutated: attempted };
+}
+
+/**
+ * The advice asks for a CHECK, not a restore.
+ *
+ * The result cannot show whether an attempted step moved the device (see
+ * {@link nestedStepAttempted}), so this fires on read-only nested runs too. A
+ * composed flow of only `assert`s reaches a step and trips it. "Restore the
+ * device" would invite a relaunch, and a relaunch shows the start screen, not
+ * the state the recorded prefix leaves.
+ */
+function partialMutationWarning(command: "flow-execute" | "run-sequence"): string {
+  const stepKind = command === "flow-execute" ? "composed" : "nested";
+  return (
+    `Prior ${stepKind} steps may already have changed the device — a step can act and then fail, ` +
+    "so the result cannot rule it out. Check the device against the state the recorded prefix " +
+    "leaves it in before adding the next step, and put it back by hand if it has moved; " +
+    "relaunching the app does NOT reproduce that prefix."
+  );
+}
+
+/**
+ * Whether the nested run ATTEMPTED a step. This is the trigger for the warning
+ * that the device may no longer be where the recorded prefix leaves it.
+ *
+ * Not "did a step succeed". A step often acts and THEN fails. A `scroll-to`
+ * scrolls to the end of the list before it reports a miss. A `keyboard` types
+ * part of its text before it throws. Both leave `passed` and `completed` at 0
+ * while the screen moved. The result settles only whether a step was reached.
+ *
+ * A false warning is safe, because the message says "may" and asks for a check.
+ * Silence leaves the author recording against a screen the prefix cannot reach.
+ */
+function nestedStepAttempted(result: unknown): boolean {
+  if (typeof result !== "object" || result === null) return true;
+  const steps = (result as { steps?: unknown }).steps;
+  if (!Array.isArray(steps)) {
+    // Only `flow-execute`'s prerequisite notice has no step list, because it
+    // ran nothing. Any other unknown shape must assume that a step ran.
+    return !Object.prototype.hasOwnProperty.call(result, "notice");
+  }
+  // The flow runner reports one entry per DECLARED step and marks the ones it
+  // never reached `skip`. A step CUT SHORT by a cancel is a skip too, and that
+  // one can have acted. A `launch` becomes cancellable only after `restart-app`
+  // relaunched the app. The runner marks those `reached`.
+  //
+  // `run-sequence` appends one entry per step it got to, so its entries are
+  // attempts. The exceptions carry `dispatched: false`: an unlisted tool, one
+  // the platform does not support, or args the registry refuses. A sequence
+  // rejected on its FIRST step touched nothing, and a warning there would
+  // contradict "after 0 of N steps" in the same message.
+  return steps.some((s) => {
+    if (typeof s !== "object" || s === null) return true;
+    const entry = s as { status?: unknown; reached?: unknown; dispatched?: unknown };
+    if (entry.status === "skip") return entry.reached === true;
+    return entry.dispatched !== false;
+  });
 }
 
 // Replaying a fragment to set up state during recording is done by running it
@@ -1313,10 +1429,25 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
     toolResult: unknown;
     stepCount: number;
     /**
-     * The flow line just appended. Absent on the two paths that record NOTHING
-     * and still SUCCEED — a recorder tool as `command`, and a flow-directive
-     * name — where a placeholder would claim a line that is not there. Also the
-     * discriminator the completion message reads, so the log line does not
+     * The flow line just appended, and the discriminator for "was anything
+     * recorded at all". Every path that records NOTHING still returns normally
+     * with the unchanged `stepCount`, so the caller can see its take was left
+     * alone. Those paths are:
+     *
+     * - a `command` that names a recorder tool, or a flow-file directive
+     *   instead of a tool. Both answer with the call to make.
+     * - a nested `flow-execute` that failed, was cancelled, or returned a
+     *   prerequisite notice.
+     * - a nested `run-sequence` that stopped on a failed step or was cancelled
+     *   part-way.
+     *
+     * The list is NOT split by whether the call reached the device, because
+     * some refusals provably ran nothing. `message` carries that half. See
+     * {@link partialMutationWarning}.
+     *
+     * Required while every return appended a step; these returns are what
+     * reopened it, and a placeholder would claim a line that is not there. Also
+     * the discriminator the completion message reads, so the log line does not
      * announce a step the body says was never recorded.
      */
     recorded?: string;
@@ -1329,19 +1460,23 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
       // Name the flow: recordings are concurrent, so several of these lines can
       // interleave in one log and "the recorded flow" would not identify which.
       startedMsg: ({ params }) => `Adding ${params.command} step to flow ${params.name}`,
-      // The guidance paths succeed and record nothing, so an unconditional
-      // "Added …" line would contradict its own result body in the same log.
-      // `recorded` is absent exactly when no line was appended.
+      // Several returns are success-SHAPED and record nothing: a refused
+      // directive command, or a nested orchestrator that failed or was
+      // cancelled. An "Added …" line for those makes the event log contradict
+      // the message in the same result. An agent reads that log to reconstruct
+      // what a take contains. `recorded` is absent exactly when no line was
+      // appended.
       completedMsg: ({ params, result }) =>
         result.recorded === undefined
-          ? `Recorded no ${params.command} step in flow ${params.name}`
+          ? `Did NOT add ${params.command} step to flow ${params.name} (see the returned message)`
           : `Added ${params.command} step to flow ${params.name}`,
       failedMsg: ({ params, failureSignal }) =>
         `Failed to add ${params.command} step to flow ${params.name}: ${failureSignal.error_code}`,
     },
     description: `Execute a tool call and record it as a step in the flow named by \`name\` + \`project_root\` (the recording must already be open — see flow-start-recording). Use when recording a flow and you want to run and capture each action. A coordinate \`gesture-tap\` is recorded as a portable \`tap: { selector }\` step when the tapped element has stable text/identifier (otherwise coordinates are kept with a warning); a \`restart-app\` is recorded as a \`launch\` step (record one FIRST to make the flow a self-contained e2e flow; restart-app has no chromium support, so a chromium flow records as a fragment — add the \`launch: { chromium: <app path> }\` line to the YAML afterward, deleting the executionPrerequisite line if one was recorded: a flow that starts with a launch must not declare it).
 A recorded \`await-ui-element\` that PASSED is re-probed against the tree the RUNNER resolves \`await:\`/\`assert:\` directives against, which is NOT the tree the live call read; a wait that came back \`{ success: false }\` is not probed at all, and its warning says so; when the condition does not hold there the step is still recorded and \`message\` carries a warning to read before converting — whether the conversion actually breaks depends on WHY the two disagree, since a screen that moved on between the live wait and the re-probe reads the same way. If that tree could not be read at all, the warning says so instead: the conversion is UNKNOWN, not known-bad. The probe judges the selector exactly as recorded, so write the conversion in the strict map spelling (\`{ visible: { text: Continue } }\`, copying the step's \`selector:\`) — the bare-string spelling (\`{ visible: Continue }\`) re-parses as a loose selector that resolves identifier-first and falls back to text, which is a different check. \`message\` also warns when the live wait itself came back \`{ success: false }\` — that tool reports a failed wait by returning rather than throwing, so the step is recorded either way. That warning names the cause, because only one of them judges the condition: a genuine miss will stop the run at replay, while a wait whose tree source was unreadable, or one that was cancelled, observed nothing and leaves the condition UNKNOWN.
-Returns { message, toolResult, stepCount, recorded, savedTo } on success — \`message\` is \`Step added to "<name>" flow\` plus any warning about what was recorded (read it; a warning never means the step was skipped). If it fails an error is returned and nothing is recorded. Two calls SUCCEED while recording nothing, and omit \`recorded\` to say so: a \`command\` naming a recording tool, and one naming a flow-file directive rather than a tool. Both answer with what to do instead — usually the call to make (the tool that records that directive, or the recording tool called directly), but \`wait\`, \`long-press\`, \`scroll-to\`, \`snapshot\` and \`when\` have no recording tool, so those name no call and say what to record or add by hand in its place. Either way nothing runs at the device and the take is left untouched — read \`recorded\`, not the status, to know whether a step was appended.
+Returns { message, toolResult, stepCount, recorded, savedTo } on success — \`message\` is \`Step added to "<name>" flow\` plus any warning about what was recorded (read it; a warning never means the step was skipped). If it fails an error is returned and nothing is recorded. Two calls record NOTHING and answer with guidance instead: a \`command\` naming a recording tool, and one naming a flow-file directive rather than a tool. Both answer with what to do instead — usually the call to make (the tool that records that directive, or the recording tool called directly), but \`wait\`, \`long-press\`, \`scroll-to\`, \`snapshot\` and \`when\` have no recording tool, so those name no call and say what to record or add by hand in its place. Either way nothing runs at the device, both omit \`recorded\`, and the take is left untouched — read \`recorded\`, not the status, to know whether a step was appended.
+A NORMAL return can also mean "not recorded": \`recorded\` is the discriminator - it is absent, and \`message\` says "step NOT recorded", whenever the call ran but its outcome must not become a step. That covers a nested \`flow-execute\` that failed, was cancelled, or returned a prerequisite notice instead of running, and a nested \`run-sequence\` that stopped on a failed nested step or was cancelled part-way. Read \`message\` before assuming the step landed. Whether anything ran is what \`message\` says, not something to infer from which case it was: it warns that the device may have moved whenever a nested step was reached, and stays silent when the refusal provably reached none (a prerequisite notice, a sequence rejected before its first step could be dispatched, a cancel that landed before it). On the warning, CHECK the device against the state your recorded prefix leaves it in before adding the next step - do not relaunch the app to "reset", which lands on the start screen instead and makes the rest of the recording unreproducible.
 If a step was recorded by mistake, remove it from the .yaml after \`flow-finish-recording\` rather than during the recording: against a remote client the in-memory copy is authoritative and every write serializes it over your edit, and in host mode a mid-recording edit renumbers the steps, which costs the finish the cross-tree verdicts anchored to them.`,
     // The recorded tool RUNS here, so this call is as long as whatever it
     // wraps — and the three it most often wraps all declare this. Without it
@@ -1467,6 +1602,29 @@ If a step was recorded by mistake, remove it from the .yaml after \`flow-finish-
           const probed = (await probeAgainstRunnerTree(registry, ctx, args)).warning;
           if (probed) waitWarning = { warning: probed, kind: "conversion" };
         }
+      }
+
+      const refusal = nestedRecordRefusal(
+        params.command,
+        toolResult,
+        ctx?.signal?.aborted === true
+      );
+      if (refusal) {
+        // The mutation warning below reads the same predicate, for the same
+        // reason. A refusal that provably ran nothing must not tell a
+        // superseded author their step "already ran on the device".
+        const { stepCount, note } = await activeFlowState(session, refusal.mayHaveMutated);
+        const mutationWarning = refusal.mayHaveMutated
+          ? ` ${partialMutationWarning(
+              params.command === RUN_TARGET_COMMAND ? "flow-execute" : "run-sequence"
+            )}`
+          : "";
+        return {
+          message: `${refusal.reason} — step NOT recorded.${mutationWarning}${note ? ` ${note}` : ""}`,
+          toolResult,
+          stepCount,
+          savedTo: session.filePath,
+        };
       }
 
       // Running a fragment via flow-execute mid-recording is recorded as a

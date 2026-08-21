@@ -136,6 +136,34 @@ describe("a nested flow-execute reports its own verdict", () => {
     expect(result.failed).toBe(0);
   });
 
+  it("still names the failing step when the run was cancelled after it failed", async () => {
+    // `summarize` folds the abort into the verdict. A step that failed and was
+    // then cancelled takes the abort branch, not the `ok: false` one that
+    // renders the detail. `reason` is the only string the recorder's refusal
+    // can render, so a loss here is a loss everywhere.
+    const { result } = await run("flow-execute", { ...FAILED_SUBFLOW, aborted: true });
+
+    expect(result.steps[0].status).toBe("skip");
+    expect(result.steps[0].reason).toBe(
+      'flow "sub" was aborted (await-ui-element: no element matched the selector before timeout)'
+    );
+  });
+
+  it("says only that it was aborted when no composed step failed", async () => {
+    // The other side of the same branch: a cancel that reached no failure has
+    // nothing to name, and must not grow an empty parenthesis.
+    const { result } = await run("flow-execute", {
+      ...FAILED_SUBFLOW,
+      aborted: true,
+      failed: 0,
+      skipped: 1,
+      steps: [{ index: 0, kind: "tap", status: "skip", reason: "run aborted" }],
+    });
+
+    expect(result.steps[0].status).toBe("skip");
+    expect(result.steps[0].reason).toBe('flow "sub" was aborted');
+  });
+
   it("still passes a composed flow that succeeded", async () => {
     const passing = { ...FAILED_SUBFLOW, ok: true, passed: 1, failed: 0, steps: [] };
     const { result, registry } = await run("flow-execute", passing);
@@ -168,6 +196,37 @@ describe("a nested run-sequence reports its own verdict", () => {
     expect(result.steps[0].reason).toMatch(/device not found/);
     expect(result.steps[1].status).toBe("skip");
     expect(result.ok).toBe(false);
+  });
+
+  it("flags a nested failure whose error message is empty", () => {
+    // A tool that throws `new Error("")` records `error: ""`. A check on a
+    // non-empty message would skip that entry and score the failed sequence as
+    // a pass. The empty message is named, so the reason does not trail off at
+    // the colon.
+    const out = nestedOrchestratorOutcome("run-sequence", {
+      completed: 0,
+      total: 1,
+      steps: [{ tool: "keyboard", error: "" }],
+    });
+
+    expect(out?.status).toBe("fail");
+    expect(out?.reason).toBe(
+      "run-sequence stopped at keyboard after 0 of 1 steps: failed without an error message"
+    );
+  });
+
+  it("reports the FIRST failure, not a later one", () => {
+    const out = nestedOrchestratorOutcome("run-sequence", {
+      completed: 0,
+      total: 2,
+      steps: [
+        { tool: "keyboard", error: "first" },
+        { tool: "gesture-tap", error: "second" },
+      ],
+    });
+
+    expect(out?.reason).toMatch(/stopped at keyboard/);
+    expect(out?.reason).toMatch(/first$/);
   });
 
   it("skips when the sequence was cut short by cancellation", async () => {

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { Registry } from "@argent/registry";
 import type { ToolContext } from "@argent/registry";
 import { createRunSequenceTool } from "../src/tools/run-sequence";
+import { InvalidToolInputError } from "../src/utils/capability";
 
 // A minimal registry stub: records every invokeTool call and returns a marker.
 function makeMockRegistry() {
@@ -128,8 +129,62 @@ describe("run-sequence", () => {
     expect(result.steps[0]).toMatchObject({
       tool: "not-a-tool",
       error: expect.stringContaining("not allowed"),
+      // The entry must say the step never reached the registry. `completed` is
+      // 0 for a step that ran and failed too, and these entries carry no
+      // status, so only this marker separates them.
+      dispatched: false,
     });
     expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("marks a step rejected by the capability pre-flight as never dispatched", async () => {
+    // The second pre-dispatch exit: the tool is allow-listed but does not
+    // support this target. `button` on a Chromium device is the ordinary case.
+    const registry = {
+      getTool: vi.fn(() => ({
+        capability: { apple: { simulator: true }, android: { emulator: true } },
+      })),
+      invokeTool: vi.fn(async () => ({ ok: true })),
+    } as unknown as Registry;
+    const tool = createRunSequenceTool(registry);
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: "chromium-cdp-9222",
+        steps: [
+          { tool: "button", args: { button: "home" }, delayMs: 0 },
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.5 }, delayMs: 0 },
+        ],
+      }
+    );
+
+    expect(result.completed).toBe(0);
+    expect(result.steps).toHaveLength(1);
+    expect(result.steps[0]).toMatchObject({
+      tool: "button",
+      error: expect.stringContaining("not supported"),
+      dispatched: false,
+    });
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("does not mark a step that WAS dispatched and then failed", async () => {
+    // The control for the two above. The marker must be absent whenever the
+    // registry was reached, or a reader treats a real action as a no-op.
+    const registry = mockRegistry((id: string) => {
+      if (id === "keyboard") throw new Error("keyboard failed: device went away");
+      return { ok: true };
+    });
+    const tool = createRunSequenceTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: IOS, steps: [{ tool: "keyboard", args: { text: "hi" }, delayMs: 0 }] }
+    );
+
+    expect(result.steps[0]).toMatchObject({ tool: "keyboard", error: expect.any(String) });
+    expect(result.steps[0]).not.toHaveProperty("dispatched");
   });
 
   it("stops the sequence when an await-ui-element step reports an unmet condition", async () => {
@@ -429,6 +484,49 @@ describe("run-sequence", () => {
       expect(result.completed).toBe(0);
       expect(result.total).toBe(2);
       expect(executed).toEqual([]); // neither step reached the device
+    });
+
+    it("marks the entry `dispatched: false`, since the parse precedes execute", async () => {
+      // The registry parses before it calls `execute`, so a schema miss touched
+      // the device as little as an unlisted tool name did. Without the marker
+      // the recorder reads the entry as "ran and then failed".
+      const { registry, executed } = liveRegistry();
+      const tool = createRunSequenceTool(registry);
+
+      const result = await tool.execute(
+        {},
+        { udid: IOS, steps: [{ tool: "gesture-tap", args: { xx: 0.5, y: 0.3 } }] }
+      );
+
+      expect(result.steps[0]).toMatchObject({ tool: "gesture-tap", dispatched: false });
+      expect(executed).toEqual([]);
+    });
+
+    it("leaves a tool that rejects its OWN args unmarked", async () => {
+      // The control. `dispatched: false` must mean "never reached the device",
+      // not "the error mentions params". A tool that parses its args and then
+      // throws from inside `execute` DID run.
+      const registry = new Registry();
+      const executed: string[] = [];
+      registry.registerTool({
+        id: "keyboard",
+        description: "test double that rejects from inside execute",
+        zodSchema: z.object({ udid: z.string(), text: z.string().optional() }),
+        services: () => ({}),
+        execute: async () => {
+          executed.push("keyboard");
+          throw new InvalidToolInputError("text must not be empty");
+        },
+      } as never);
+      const tool = createRunSequenceTool(registry);
+
+      const result = await tool.execute(
+        {},
+        { udid: IOS, steps: [{ tool: "keyboard", args: { text: "" } }] }
+      );
+
+      expect(result.steps[0]).not.toHaveProperty("dispatched");
+      expect(executed).toEqual(["keyboard"]);
     });
 
     it("still emits the step's own invoked/failed events", async () => {

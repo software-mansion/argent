@@ -412,6 +412,22 @@ export async function withFlowFileLock<T>(
 }
 
 /**
+ * The same lock for a caller that already holds a session. The returns that
+ * record NOTHING read the file back to report the step count, and that read
+ * must not straddle a restart.
+ *
+ * Keyed off `session.key`, not re-resolved from (projectRoot, name): {@link
+ * resolveFlowKey} touches the filesystem, which would add another await inside
+ * the window this lock closes.
+ */
+export async function withRecordingLock<T>(
+  session: RecordingSession,
+  fn: () => Promise<T>
+): Promise<T> {
+  return withFlowLock(session.key, fn);
+}
+
+/**
  * Leak backstop only. Sessions are small and auto-spawned servers idle out
  * after 30 min, but a long-lived server could accumulate recordings an agent
  * started and never finished. Well past any realistic concurrent-agent count,
@@ -3366,8 +3382,16 @@ export type FlowSavedTo = string | ClientFileDirective;
  * therefore drop this session between the check and the write. That race is
  * benign — the step still lands in the file it was recorded for, and only the
  * NEXT call on the key reports the recording gone.
+ *
+ * The returns that record NOTHING call it too, under the same lock. They have
+ * the same window and the same stake: the count and file path they report
+ * would otherwise be a different take's.
+ *
+ * `ranOnDevice` picks the recovery clause. Only the caller knows whether the
+ * action ran. An author told that a step they never ran "already ran on the
+ * device" undoes something that never happened.
  */
-function assertSessionStillLive(session: RecordingSession, step: FlowStep): void {
+export function assertSessionStillLive(session: RecordingSession, ranOnDevice: boolean): void {
   const current = recordings.get(session.key);
   if (current === session) return;
   // A key that is occupied by a DIFFERENT session was restarted; an empty key
@@ -3395,9 +3419,9 @@ function assertSessionStillLive(session: RecordingSession, step: FlowStep): void
       `it unconditionally, so re-record under a fresh name rather than restarting this one.`;
   const recovery =
     `Nothing was added to the flow file` +
-    (step.kind === "echo"
-      ? ". "
-      : ", but the step itself already ran on the device — repeating it repeats that action. ") +
+    (ranOnDevice
+      ? ", but the step itself already ran on the device — repeating it repeats that action. "
+      : ". ") +
     whatIsAtStake;
   throw new FailureError(
     `Recording of "${session.name}" in ${session.projectRoot} is no longer active — ${why}. ` +
@@ -3558,7 +3582,7 @@ export async function appendStepToFlow(
   // mid-recording) would let the append hold one lock while asserting about
   // another.
   return withFlowLock(session.key, async () => {
-    assertSessionStillLive(session, step);
+    assertSessionStillLive(session, step.kind !== "echo");
     session.lastTouchedSeq = touch();
     if (session.persist === "host") {
       const before = session.flow.steps;

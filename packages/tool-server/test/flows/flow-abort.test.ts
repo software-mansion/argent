@@ -384,6 +384,9 @@ describe("run cancellation mid-launch", () => {
     // tree-source gate were cut short, so the launch verified nothing.
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:skip"]);
     expect(result.steps[0].reason).toBe("run aborted");
+    // The app was terminated and relaunched before the cancel, so this skip is
+    // not proof that the device is untouched.
+    expect(result.steps[0].reached).toBe(true);
     expect(result.ok).toBe(false);
     expect(calls).toContain("restart-app");
   });
@@ -408,6 +411,38 @@ describe("run cancellation mid-launch", () => {
     // A skip with the uniform abort reason — NOT an error blaming restart-app.
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:skip"]);
     expect(result.steps[0].reason).toBe("run aborted");
+    // restart-app can act and then be cancelled, so this exit is `reached` too.
+    expect(result.steps[0].reached).toBe(true);
     expect(calls).toContain("restart-app");
+  });
+
+  it("leaves a step the cancel never reached unmarked", async () => {
+    // The control for `reached`. The pre-step guard skips the second launch
+    // without calling restart-app. Same status and reason, so only the marker
+    // separates "may have moved the device" from "provably did not".
+    const controller = new AbortController();
+    const calls: string[] = [];
+    const registry = launchRegistry(calls, () => {
+      controller.abort();
+      return { ok: true };
+    });
+
+    await writeFlow("cancelled-launch-pair", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: "com.acme.app" },
+        { kind: "launch", app: "com.acme.other" },
+      ],
+    });
+
+    const result = await run("cancelled-launch-pair", registry, controller.signal);
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "launch:skip",
+      "launch:skip",
+    ]);
+    expect(result.steps[0].reached).toBe(true);
+    expect(result.steps[1].reached).toBeUndefined();
+    expect(calls.filter((c) => c === "restart-app")).toHaveLength(1);
   });
 });

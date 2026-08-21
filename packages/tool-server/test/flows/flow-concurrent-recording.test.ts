@@ -105,7 +105,7 @@ function gateNextSubTool(): { reached: Promise<void>; release: () => void } {
 
 function createMockRegistry(): Registry {
   return {
-    invokeTool: vi.fn(async (id: string) => {
+    invokeTool: vi.fn(async (id: string, args?: unknown) => {
       if (id === "list-devices") return { devices: [] };
       // Yield a macrotask, so calls issued without an await in between all
       // finish their LIVE phase before any of them appends. This is NOT what
@@ -116,6 +116,37 @@ function createMockRegistry(): Registry {
       // the same starting gun.
       await new Promise((resolve) => setTimeout(resolve, 0));
       if (subToolGate) await subToolGate();
+      // The two returns that drive flow-add-step's refuse-to-record path. Both
+      // report a verdict by RETURNING. This one ran a nested step at the
+      // device, the notice below ran nothing.
+      if (id === "run-sequence") {
+        // The third shape. run-sequence rejects a tool it does not allow
+        // BEFORE the registry, so this entry proves that nothing ran.
+        const first = (args as { steps?: Array<{ tool?: string }> })?.steps?.[0];
+        if (first?.tool === "screenshot") {
+          return {
+            completed: 0,
+            total: 2,
+            steps: [
+              {
+                tool: "screenshot",
+                error: 'Tool "screenshot" is not allowed in run-sequence.',
+                dispatched: false,
+              },
+            ],
+          };
+        }
+        return { completed: 0, total: 2, steps: [{ tool: "keyboard", error: "device went away" }] };
+      }
+      // The refusal that provably executed NOTHING, keyed on the target name so
+      // the other flow-execute cases keep the plain success above.
+      if (id === "flow-execute" && (args as { name?: string })?.name === "needs-prereq") {
+        return {
+          flow: "needs-prereq",
+          notice: "This flow has an execution prerequisite",
+          executionPrerequisite: "On login screen",
+        };
+      }
       return { ok: true };
     }),
     getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
@@ -1344,6 +1375,123 @@ describe("a restart that lands while a step is still running", () => {
     expect(finished.steps).toBe(1);
   });
 
+  it("rejects a superseded step that records NOTHING, rather than counting another take", async () => {
+    // A return that records nothing still reports `stepCount` and `savedTo`,
+    // both read off the session it resolved before the live call. Without the
+    // liveness check the append path performs, a refusal that lands after a
+    // takeover answers with the OTHER take's step count.
+    const root = await makeRoot("supersede-refusal");
+    await start(root, "alpha");
+    await addStep(root, "alpha", "a1");
+
+    const gate = gateNextSubTool();
+    // run-sequence reports a failed nested step by RETURNING, so this call takes
+    // flow-add-step's refuse-to-record path rather than throwing.
+    const refusing = addRawStep(root, "alpha", "run-sequence", {
+      udid: "ABC",
+      steps: [
+        { tool: "keyboard", args: { text: "x" } },
+        { tool: "keyboard", args: { text: "y" } },
+      ],
+    });
+    await gate.reached;
+
+    const restarted = await start(root, "alpha");
+    expect(restarted.restarted).toBe(true);
+
+    gate.release();
+    const err = await captureFailure(refusing);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_NO_ACTIVE_RECORDING);
+    expect((err as Error).message).toContain("restarted while this step was running");
+    // Nothing was recorded, but the nested sequence DID run at the device.
+    expect((err as Error).message).toContain("already ran on the device");
+    expect(await readMarkers(root, "alpha")).toEqual([]);
+  });
+
+  it("does not warn a superseded refusal that provably executed nothing", async () => {
+    // The other half of the same ternary. A `flow-execute` that answers with a
+    // prerequisite NOTICE runs no step, so the refusal above and the liveness
+    // error must agree that nothing moved. Otherwise the author undoes an
+    // action that never happened.
+    const root = await makeRoot("supersede-notice");
+    await start(root, "alpha");
+    await addStep(root, "alpha", "a1");
+
+    const gate = gateNextSubTool();
+    const refusing = addRawStep(root, "alpha", "flow-execute", {
+      name: "needs-prereq",
+      project_root: root,
+      device: "ABC",
+    });
+    await gate.reached;
+
+    const restarted = await start(root, "alpha");
+    expect(restarted.restarted).toBe(true);
+
+    gate.release();
+    const err = await captureFailure(refusing);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_NO_ACTIVE_RECORDING);
+    expect((err as Error).message).toContain("restarted while this step was running");
+    expect((err as Error).message).toContain("Nothing was added to the flow file");
+    expect((err as Error).message).not.toContain("already ran on the device");
+    expect(await readMarkers(root, "alpha")).toEqual([]);
+  });
+
+  it("does not warn a superseded refusal whose sequence never dispatched a step", async () => {
+    // The same invariant as the notice above, through the other orchestrator.
+    // `run-sequence` rejects an unlisted tool before the registry, so a
+    // sequence rejected on its FIRST step touched nothing. Its entries carry no
+    // `status`, so only the marker proves it.
+    const root = await makeRoot("supersede-rejected");
+    await start(root, "alpha");
+    await addStep(root, "alpha", "a1");
+
+    const gate = gateNextSubTool();
+    const refusing = addRawStep(root, "alpha", "run-sequence", {
+      udid: "ABC",
+      steps: [
+        { tool: "screenshot", args: {} },
+        { tool: "gesture-tap", args: { x: 0.5, y: 0.5 } },
+      ],
+    });
+    await gate.reached;
+
+    const restarted = await start(root, "alpha");
+    expect(restarted.restarted).toBe(true);
+
+    gate.release();
+    const err = await captureFailure(refusing);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_NO_ACTIVE_RECORDING);
+    expect((err as Error).message).toContain("restarted while this step was running");
+    expect((err as Error).message).toContain("Nothing was added to the flow file");
+    expect((err as Error).message).not.toContain("already ran on the device");
+    expect(await readMarkers(root, "alpha")).toEqual([]);
+  });
+
+  it("does not warn a superseded GUIDANCE return that it already ran on the device", async () => {
+    // The third `ranOnDevice` argument, and the last one unpinned. A `command`
+    // that names a recorder tool is answered with guidance and dispatches
+    // NOTHING. The clause "already ran on the device" would send its author
+    // undoing an action that never happened. Same trick as the echo above: this
+    // return reads the step count under the flow's lock.
+    const root = await makeRoot("supersede-guidance");
+    await start(root, "alpha");
+
+    const gate = openGate();
+    const held = withFlowFileLock(root, "alpha", () => gate.promise);
+    const restarting = start(root, "alpha");
+    const guiding = addRawStep(root, "alpha", "flow-add-step", { udid: "ABC" });
+
+    gate.open();
+    await held;
+    expect((await restarting).restarted).toBe(true);
+
+    const err = await captureFailure(guiding);
+    expect(getFailureSignal(err)?.failure_stage).toBe("flow_session_superseded");
+    expect((err as Error).message).toContain("Nothing was added to the flow file");
+    expect((err as Error).message).not.toContain("already ran on the device");
+  });
+
   it("does not warn a superseded ECHO that it already ran on the device", async () => {
     // The "repeating it repeats that action" caveat is true of a tool step,
     // which executed live before the append was rejected. An echo is a label —
@@ -1372,6 +1520,52 @@ describe("a restart that lands while a step is still running", () => {
     expect((err as Error).message).toContain("Nothing was added to the flow file");
     expect((err as Error).message).toContain("fresh name");
     expect((err as Error).message).not.toContain("already ran on the device");
+  });
+
+  it("reads a refusal's step count only once the flow's lock is free", async () => {
+    // The liveness assert alone only NARROWS this window. It is synchronous and
+    // the file read after it is not, while `flow-start-recording` truncates and
+    // re-registers under this same lock. A refusal that reads outside the lock
+    // can pass the assert and then report the superseded take's count as a
+    // success.
+    const root = await makeRoot("refusal-lock");
+    await start(root, "alpha");
+    await addStep(root, "alpha", "a1");
+
+    // Stand in for another writer mid read-modify-write on alpha's file.
+    const lock = openGate();
+    const held = withFlowFileLock(root, "alpha", () => lock.promise);
+
+    const order: string[] = [];
+    const refusing = addRawStep(root, "alpha", "run-sequence", {
+      udid: "ABC",
+      steps: [
+        { tool: "keyboard", args: { text: "x" } },
+        { tool: "keyboard", args: { text: "y" } },
+      ],
+    }).then((r) => {
+      order.push("refusal-returned");
+      return r;
+    });
+
+    await settle();
+    // The live sub-tool has long returned. It is waiting on the lock.
+    expect(order).toEqual([]);
+
+    // Queued behind the refusal, so it can only truncate AFTER the read. That
+    // is the interleaving the lock forbids.
+    const restarting = start(root, "alpha");
+
+    order.push("lock-released");
+    lock.open();
+    await held;
+
+    const result = await refusing;
+    expect(order).toEqual(["lock-released", "refusal-returned"]);
+    // Its own take's count, not the truncated one the restart leaves behind.
+    expect(result.stepCount).toBe(1);
+    expect(result.recorded).toBeUndefined();
+    expect((await restarting).discardedSteps).toBe(1);
   });
 
   it("truncates and re-registers only once the flow's lock is free", async () => {

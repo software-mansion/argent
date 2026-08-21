@@ -1545,13 +1545,27 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   });
 
   it("raises no warning for a wait nested inside a recorded run-sequence", async () => {
-    // `flow-start-recording`'s description tells the author this. The recorder
-    // keys every wait warning off the tool id, so a `run-sequence` — whose own
-    // result carries no `success` key — is neither probed nor reported on,
-    // however its nested wait ended.
+    // `flow-start-recording`'s description tells the author this, and nothing
+    // pinned it: the recorder keys every wait warning off the tool id, so a
+    // `run-sequence` — whose own result carries no `success` key — is neither
+    // probed nor reported on, however its nested wait ended. The author has to
+    // read `toolResult` themselves, so the claim has to stay true.
+    //
+    // The sequence must be a CLEAN one. A sequence that stopped short is
+    // refused a recording, so it could never reach a wait warning and would
+    // pass for the wrong reason. A nested wait that PASSED discriminates,
+    // because a top-level wait that passed is what gets re-probed.
     const registry = {
       invokeTool: vi.fn(async (id: string) => {
-        if (id === "run-sequence") return { completed: 0, total: 2, steps: [] };
+        if (id === "run-sequence")
+          return {
+            completed: 2,
+            total: 2,
+            steps: [
+              { tool: "await-ui-element", result: { success: true, elapsed: 12 } },
+              { tool: "gesture-tap", result: { tapped: true } },
+            ],
+          };
         throw new Error(`Tool "${id}" not found`);
       }),
       getTool: vi.fn(() => undefined),
@@ -1580,7 +1594,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
     expect(warningOf(result, "nested")).toBeUndefined();
     expect(fetchCount).toBe(0);
-    expect(result.toolResult).toMatchObject({ completed: 0, total: 2 });
+    expect(result.toolResult).toMatchObject({ completed: 2, total: 2 });
   });
 
   it("quotes a reason at or under the cap verbatim", async () => {

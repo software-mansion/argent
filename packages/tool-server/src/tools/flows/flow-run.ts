@@ -281,6 +281,15 @@ export interface StepReport {
    * waited.
    */
   warning?: string;
+  /**
+   * The runner had begun this step when the run was cancelled, so its `skip` is
+   * NOT proof that the device is untouched. A `launch` reaches its abort only
+   * after `restart-app` relaunched the app. Set only on the skips a reached
+   * step produces. The pre-step guard and an unreached block leave it absent,
+   * which is what makes their silence provable. The flow recorder reads it to
+   * decide whether to warn that the recorded prefix may no longer reproduce.
+   */
+  reached?: true;
   /** Underlying tool id for `tool` steps. */
   tool?: string;
   /** Tool result for `tool` steps. */
@@ -2430,7 +2439,9 @@ async function execLeafStep(
       const r = await runLaunch(state, step.app);
       // A run cancelled mid-launch is a skip (matching the pre-step guard and
       // the directives), never a step failure — the app did nothing wrong.
-      if (r.aborted) return { ...base, status: "skip", reason: r.reason };
+      // Still `reached`: every abort exit in `runLaunch` is after the relaunch
+      // or the chromium attach.
+      if (r.aborted) return { ...base, status: "skip", reason: r.reason, reached: true };
       return { ...base, status: r.ok ? "pass" : "error", reason: r.reason };
     }
 
@@ -2449,8 +2460,10 @@ async function execLeafStep(
       try {
         const r = await runDirective(deviceEnv(state), step);
         // A run cancelled mid-directive is a skip (matching the pre-step guard
-        // and `wait`), never a step failure — the app did nothing wrong.
-        if (r.aborted) return { ...base, status: "skip", reason: r.reason };
+        // and `wait`), never a step failure — the app did nothing wrong. Still
+        // `reached`: the cancel can land after the gesture was dispatched, and
+        // the outcome does not say which side it landed on.
+        if (r.aborted) return { ...base, status: "skip", reason: r.reason, reached: true };
         // `indeterminate` is `idle`'s only non-passing outcome: a screen that
         // merely kept moving passes with a warning, and so does one that
         // rendered nothing, so what is left here is a wait that could not run
@@ -2548,6 +2561,26 @@ async function execLeafStep(
           state.treeOutage.proven = undefined;
         }
         const result = await invokeSubTool(registry, ctx, step.name, args);
+        // A cancelled `await-ui-element` reports itself by RETURNING unmet, and
+        // the check below would score that `fail`. That blames the app for the
+        // author's own cancel. Score it a skip, as `wait` and the directives do.
+        //
+        // Deliberately narrow, not "the signal is set, so this step is a skip".
+        // Every other cancellation here already lands correctly. A nested
+        // orchestrator reports the cancel IN ITS OWN WORDS below, and a generic
+        // skip would drop that sub-report. A tool that finished before the
+        // cancel arrived did run, and `skip` means "did not run" everywhere
+        // else in this file.
+        if (signal?.aborted && isUnmetUiWaitResult(step.name, result)) {
+          // The sub-tool ran and returned, unlike the pre-invoke delay skip.
+          return {
+            ...base,
+            status: "skip",
+            tool: step.name,
+            reason: "run aborted during wait",
+            reached: true,
+          };
+        }
         if (isUnmetUiWaitResult(step.name, result)) {
           const note = (result as { note?: string }).note;
           return {

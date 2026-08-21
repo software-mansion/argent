@@ -85,8 +85,18 @@ function flowExecuteOutcome(result: Record<string, unknown>): NestedOutcome | un
 
   // A cancelled run is a skip, never a failure — the same rule the runner
   // applies to its own steps when the signal fires mid-flight.
+  //
+  // `summarize` folds the abort into the verdict: `ok` is false whenever
+  // `aborted` is set. A composed step that FAILED and was then cancelled
+  // reaches this branch, not the one below. Carry the failing step in `reason`,
+  // which is the only string the RECORDER's refusal renders. Without it, two
+  // identically-worded cancellations look the same.
   if (result.aborted === true) {
-    return { status: "skip", reason: `flow "${flow}" was aborted` };
+    const detail = firstFailingStep(result.steps);
+    return {
+      status: "skip",
+      reason: `flow "${flow}" was aborted${detail ? ` (${detail})` : ""}`,
+    };
   }
 
   if (result.ok === false) {
@@ -115,14 +125,23 @@ function runSequenceOutcome(result: Record<string, unknown>): NestedOutcome | un
   const steps = result.steps;
   if (!Array.isArray(steps)) return undefined;
 
+  // A nested step failed if it carries an `error` KEY. Success pushes
+  // `{ tool, result }` and never sets one. Keyed on presence, not on a
+  // non-empty message. A tool that throws `new Error("")` records `error: ""`,
+  // and a skip there would score a failed step as a pass. An empty message is
+  // named instead, so the report does not trail off after the colon.
   const failed = steps.find((s) => isRecord(s) && typeof s.error === "string");
   if (failed && isRecord(failed)) {
     const tool = typeof failed.tool === "string" ? failed.tool : "step";
+    // Re-narrowed, not coerced: the proof from `find` does not survive into
+    // `failed`, and a coerced object would render "[object Object]".
+    const message = typeof failed.error === "string" ? failed.error : "";
+    const why = message || "failed without an error message";
     return {
       status: "fail",
       reason:
         `run-sequence stopped at ${tool} after ${count(result.completed)} of ` +
-        `${count(result.total)} steps: ${String(failed.error)}`,
+        `${count(result.total)} steps: ${why}`,
     };
   }
 
