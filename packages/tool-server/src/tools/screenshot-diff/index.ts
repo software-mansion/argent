@@ -7,6 +7,7 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type {
   DeviceInfo,
   FileInputSpec,
+  Registry,
   ServiceRef,
   ToolContext,
   ToolCapability,
@@ -16,6 +17,8 @@ import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/si
 import { resolveDevice } from "../../utils/device-info";
 import { httpScreenshot } from "../../utils/simulator-client";
 import { captureScreenshotUpright } from "../../utils/rotation-aware-capture";
+import { androidDevtoolsRotationPeek } from "../../utils/android-devtools-rotation-peek";
+import type { RotationPeek } from "../../utils/device-orientation";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 import { diffPngFiles } from "./screenshot-diff";
 
@@ -132,11 +135,31 @@ Fails if the input sources are invalid, PNG files cannot be read, outputDir cann
   },
 };
 
+/**
+ * The registered form: same tool, but live captures can read a rotated Android
+ * device's rotation from the android-devtools helper when it is already running
+ * (~1 ms) instead of probing over adb (~8 ms). `screenshotDiffTool` itself stays
+ * registry-free for callers and tests that have no registry.
+ */
+export function createScreenshotDiffTool(
+  registry: Registry
+): ToolDefinition<Params, ScreenshotDiffResult> {
+  return {
+    ...screenshotDiffTool,
+    async execute(services, params, options) {
+      return executeScreenshotDiffTool(services, params, options, httpScreenshot, (device) =>
+        androidDevtoolsRotationPeek(registry, device)
+      );
+    },
+  };
+}
+
 export async function executeScreenshotDiffTool(
   services: Record<string, unknown>,
   params: Params,
   options?: Partial<ToolContext>,
-  captureScreenshot: CaptureScreenshot = httpScreenshot
+  captureScreenshot: CaptureScreenshot = httpScreenshot,
+  peekFor?: (device: DeviceInfo) => RotationPeek
 ): Promise<ScreenshotDiffResult> {
   const outputDir = await resolveOutputDir(params, options);
 
@@ -145,7 +168,8 @@ export async function executeScreenshotDiffTool(
     params,
     outputDir,
     options,
-    captureScreenshot
+    captureScreenshot,
+    peekFor
   );
 
   const result = await diffPngFiles({
@@ -196,7 +220,8 @@ async function resolveInputPaths(
   params: Params,
   outputDir: string,
   options: Partial<ToolContext> | undefined,
-  captureScreenshot: CaptureScreenshot
+  captureScreenshot: CaptureScreenshot,
+  peekFor?: (device: DeviceInfo) => RotationPeek
 ): Promise<{ baselinePath: string; currentPath: string }> {
   validateInputSources(params);
 
@@ -204,6 +229,7 @@ async function resolveInputPaths(
     ? await captureLiveInput({
         api: requireSimulatorServer(services),
         device: resolveDevice(params.udid),
+        peekFor,
         outputDir,
         name: "baseline",
         rotation: params.rotation,
@@ -216,6 +242,7 @@ async function resolveInputPaths(
     ? await captureLiveInput({
         api: requireSimulatorServer(services),
         device: resolveDevice(params.udid),
+        peekFor,
         outputDir,
         name: "current",
         rotation: params.rotation,
@@ -291,6 +318,7 @@ async function captureLiveInput(params: {
   // `screenshot` tool does. Without it a rotated-Android `captureCurrent` would
   // come back sideways and diff at ~100% against an upright saved baseline.
   device: DeviceInfo;
+  peekFor?: (device: DeviceInfo) => RotationPeek;
   outputDir: string;
   name: "baseline" | "current";
   rotation?: Params["rotation"];
@@ -312,7 +340,8 @@ async function captureLiveInput(params: {
       params.rotation,
       params.signal,
       1.0,
-      params.captureScreenshot
+      params.captureScreenshot,
+      params.peekFor?.(params.device)
     );
   } catch {
     capture = await captureScreenshotUpright(
@@ -321,7 +350,8 @@ async function captureLiveInput(params: {
       params.rotation,
       params.signal,
       undefined,
-      params.captureScreenshot
+      params.captureScreenshot,
+      params.peekFor?.(params.device)
     );
   }
   const suffix = crypto.randomBytes(4).toString("hex");

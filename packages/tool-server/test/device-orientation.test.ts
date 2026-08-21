@@ -17,6 +17,14 @@ import * as path from "node:path";
 
 const adbShell = vi.hoisted(() => vi.fn(async (_serial: string, _cmd: string) => ""));
 vi.mock("../src/utils/adb", () => ({ adbShell }));
+// The adb-server socket path is tried before the spawned client. Default it to
+// "server not reachable" so the existing probe tests keep exercising the client.
+const adbServerShell = vi.hoisted(() =>
+  vi.fn(async (_serial: string, _cmd: string): Promise<string> => {
+    throw new Error("ECONNREFUSED");
+  })
+);
+vi.mock("../src/utils/adb-server", () => ({ adbServerShell }));
 
 import {
   SURFACE_ROTATION_TO_NAME,
@@ -34,6 +42,67 @@ const DUMPSYS_WINDOW = (r: number) =>
 beforeEach(() => {
   vi.clearAllMocks();
   adbShell.mockResolvedValue("");
+  adbServerShell.mockRejectedValue(new Error("ECONNREFUSED"));
+});
+
+describe("the rotation is read from the cheapest source that answers", () => {
+  // Measured on a Pixel_9 emulator: helper peek ~1 ms, adb server socket ~8 ms,
+  // spawned adb client ~19 ms. All three report the same platform value, so
+  // the order only changes latency — these tests pin that order and that each
+  // tier's failure hands over to the next rather than becoming a guess.
+  it("prefers a peek that answers, and then touches no adb at all", async () => {
+    const peek = vi.fn(async () => 3);
+    expect(await readAndroidSurfaceRotation("emulator-5554", peek)).toBe(3);
+    expect(adbServerShell).not.toHaveBeenCalled();
+    expect(adbShell).not.toHaveBeenCalled();
+  });
+
+  it("falls through when the peek has no answer", async () => {
+    adbServerShell.mockResolvedValueOnce(DUMPSYS_DISPLAY(1));
+    expect(await readAndroidSurfaceRotation("emulator-5554", async () => null)).toBe(1);
+    expect(adbServerShell).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls through when the peek throws or answers nonsense", async () => {
+    adbServerShell.mockResolvedValueOnce(DUMPSYS_DISPLAY(2));
+    expect(
+      await readAndroidSurfaceRotation("emulator-5554", async () => {
+        throw new Error("helper gone");
+      })
+    ).toBe(2);
+    adbServerShell.mockResolvedValueOnce(DUMPSYS_DISPLAY(2));
+    expect(await readAndroidSurfaceRotation("emulator-5554", async () => 7)).toBe(2);
+  });
+
+  it("uses the adb server socket before spawning a client", async () => {
+    adbServerShell.mockResolvedValueOnce(DUMPSYS_DISPLAY(1));
+    expect(await readAndroidSurfaceRotation("emulator-5554")).toBe(1);
+    expect(adbServerShell).toHaveBeenCalledWith(
+      "emulator-5554",
+      expect.stringContaining("mCurrentOrientation"),
+      expect.anything()
+    );
+    expect(adbShell).not.toHaveBeenCalled();
+  });
+
+  it("tries the second probe over the socket before giving up on it", async () => {
+    adbServerShell.mockResolvedValueOnce("").mockResolvedValueOnce(DUMPSYS_WINDOW(3));
+    expect(await readAndroidSurfaceRotation("emulator-5554")).toBe(3);
+    expect(adbServerShell).toHaveBeenCalledTimes(2);
+    expect(adbShell).not.toHaveBeenCalled();
+  });
+
+  it("spawns the client when the server socket cannot be used", async () => {
+    // e.g. the adb server is not running: the client will start it.
+    adbShell.mockResolvedValueOnce(DUMPSYS_DISPLAY(1));
+    expect(await readAndroidSurfaceRotation("emulator-5554")).toBe(1);
+    expect(adbServerShell).toHaveBeenCalledTimes(2);
+    expect(adbShell).toHaveBeenCalledTimes(1);
+  });
+
+  it("still refuses to guess when every source is silent", async () => {
+    expect(await readAndroidSurfaceRotation("emulator-5554", async () => undefined)).toBeNull();
+  });
 });
 
 describe("the surface-rotation → rotation-name table", () => {

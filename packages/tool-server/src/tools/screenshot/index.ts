@@ -9,6 +9,7 @@ import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-c
 import { resolveDevice } from "../../utils/device-info";
 import { getScreenshotScale } from "../../utils/simulator-client";
 import { captureScreenshotUpright } from "../../utils/rotation-aware-capture";
+import { androidDevtoolsRotationPeek } from "../../utils/android-devtools-rotation-peek";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { simctlArgsForUdid } from "../../utils/ios-device-sets";
 import { captureVegaScreenshotPng } from "../../utils/vega-screen";
@@ -188,7 +189,9 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
         device,
         params.rotation,
         signal,
-        params.scale
+        params.scale,
+        undefined,
+        androidDevtoolsRotationPeek(registry, device)
       );
       const image = await requireArtifacts(ctx).register(capturedPath, { mimeType: "image/png" });
       return { image };

@@ -5,6 +5,7 @@ import {
   captureRotationForSurface,
   readAndroidSurfaceRotation,
   readPngSize,
+  type RotationPeek,
 } from "./device-orientation";
 import { httpScreenshot } from "./simulator-client";
 
@@ -24,13 +25,13 @@ import { httpScreenshot } from "./simulator-client";
  * be staler than a ~40 ms probe, and serving a stale orientation is precisely
  * the failure this fixes.
  *
- * Why query over adb rather than reuse the android-devtools helper, which also
- * reports rotation: resolving that service *installs and starts* it (APK
- * install, `am instrument`, a 30 s ready timeout). `screenshot` is `alwaysLoad`
- * and fires automatically after more than a dozen tools, so making it able to
- * install an APK is not acceptable. Gating on "use it only if already running"
- * would be worse still — the capture would come out upright or sideways
- * depending on whether something happened to call `describe` first.
+ * The android-devtools helper also reports rotation, ~1 ms against ~8 ms for an
+ * adb probe — but resolving that service *installs and starts* it (APK install,
+ * `am instrument`, a 30 s ready timeout), and `screenshot` is `alwaysLoad` and
+ * fires automatically after more than a dozen tools. So it is consulted only
+ * when it is already running (`peek`), and otherwise the rotation is read over
+ * adb. Both answer with the same platform value, so the capture comes out
+ * upright either way; only the latency depends on whether `describe` ran first.
  *
  * iOS is deliberately untouched. There the whole surface (describe frames,
  * gesture input, capture) is consistently in the portrait-native space, so
@@ -42,7 +43,10 @@ export async function captureScreenshotUpright(
   requestedRotation: string | undefined,
   signal?: AbortSignal,
   scale?: number,
-  capture: typeof httpScreenshot = httpScreenshot
+  capture: typeof httpScreenshot = httpScreenshot,
+  // Optional cheaper rotation source (the running android-devtools helper).
+  // Purely a latency optimisation: with or without it the same rotation is read.
+  peek?: RotationPeek
 ): Promise<{ url: string; path: string }> {
   // An explicit rotation from the caller always wins, and no other platform
   // takes this path, so both cases are byte-identical to the previous behaviour.
@@ -50,7 +54,7 @@ export async function captureScreenshotUpright(
     return capture(api, requestedRotation, signal, scale);
   }
 
-  const surface = await readAndroidSurfaceRotation(device.id);
+  const surface = await readAndroidSurfaceRotation(device.id, peek);
   const rotation = captureRotationForSurface(surface);
   // Unrotated, or the rotation could not be read: send no rotation at all, exactly
   // as before. An unreadable rotation must never become a guess.
