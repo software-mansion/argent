@@ -38,8 +38,7 @@ const DEGRADED_BLIND_HINT =
 const DEGRADED_STANDING_HINT =
   "This simulator was not booted through argent, so system dialogs and native modals may not appear " +
   "in this tree; everything else reads normally. If something you expect is missing, boot-device with " +
-  "force=true reboots the simulator with the full accessibility settings — at the cost of restarting " +
-  "it and everything running on it.";
+  "force=true reboots the simulator with the full accessibility settings";
 
 // Devices already told DEGRADED_STANDING_HINT. Bounded by the number of
 // simulators driven in one server lifetime, and not cleared on shutdown or
