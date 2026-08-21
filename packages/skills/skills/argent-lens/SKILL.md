@@ -1,9 +1,11 @@
 ---
 name: argent-lens
-description: Propose multiple visual design variants for on-screen elements and let the human pick in the Argent Lens window. Use when the user asks for design alternatives / options / A-B choices for a screen or component, or any time you have produced more than one candidate look for an element and want a human decision before committing.
+description: Propose multiple visual design variants for on-screen elements and let the human pick in the Argent Lens window (macOS only — the tools do not exist on other platforms). Use when the user asks for design alternatives / options / A-B choices for a screen or component, or any time you have produced more than one candidate look for an element and want a human decision before committing.
 ---
 
-> **Prerequisite — feature flag.** This workflow is gated behind the `argent-lens` flag (off by default). Run `argent enable argent-lens` once before using it. If `propose_variant` / `await_user_selection` come back not-found, the flag is off — enable it and retry.
+> **Prerequisite — macOS, and a feature flag.** This workflow is gated behind the `argent-lens` flag (off by default). Run `argent enable argent-lens` once before using it. If `propose_variant` / `await_user_selection` come back not-found, the flag is off — enable it and retry.
+>
+> **On any other platform these tools do not exist**, and enabling the flag will not create them: they are only registered on macOS. `argent enable` there stores the setting and says so. If you are not on macOS, do not retry — tell the user Argent Lens is macOS-only and pick a different approach.
 
 ## 1. Overview
 

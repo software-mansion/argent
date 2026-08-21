@@ -46,3 +46,24 @@ describe("Argent Lens tools — macOS-only registration gate", () => {
     expect(registry.getTool("list-devices")).toBeDefined();
   });
 });
+
+/**
+ * The registration gate and the flag's declared platforms are two statements of
+ * the same fact, in two packages. They are kept separate deliberately — deriving
+ * registration from the registry would register the tools everywhere the day the
+ * flag graduates and its entry is removed — so this pins them together instead.
+ */
+describe("the flag's declared platforms match where the tools actually register", () => {
+  it("declares darwin, and registers exactly there", async () => {
+    const { getFlagDefinition } = await import("@argent/configuration-core");
+    const declared = getFlagDefinition("argent-lens")?.platforms;
+    expect(declared).toEqual(["darwin"]);
+
+    for (const platform of ["darwin", "linux", "win32"] as NodeJS.Platform[]) {
+      setPlatform(platform);
+      const createRegistry = await freshCreateRegistry();
+      const registered = createRegistry().getTool("propose_variant") !== undefined;
+      expect(registered, `platform: ${platform}`).toBe(declared!.includes(platform));
+    }
+  });
+});
