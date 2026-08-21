@@ -258,6 +258,8 @@ When using `screenshot` for permission or native modal navigation:
 
 Optional rotation parameter: `{ "udid": "<UDID>", "rotation": "LandscapeLeft" }` — rotates the capture without changing simulator orientation.
 
+Pass `name` when the capture is a user-facing artifact or needs to be identifiable in EAS Simulator logs, for example `{ "udid": "<UDID>", "name": "checkout-complete" }`. The name appears in screenshot lifecycle events and becomes the PNG filename; Argent appends `.png` when omitted.
+
 Screenshots are downscaled by default (30% of original resolution) to reduce context size. Use the normal downscaled screenshot for UI context and state checks. `scale` accepts values from 0.01 to 1.0, but do not use `scale: 1.0` as a general readability or tapping aid.
 
 Use full-resolution screenshots only when saving baseline/current PNG files for comparison. In that case, suppress the image block so the full-size PNG is not loaded into agent context:

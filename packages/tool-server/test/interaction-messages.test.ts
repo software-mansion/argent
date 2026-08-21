@@ -76,12 +76,29 @@ describe("tool interaction messages", () => {
       "Pressed a key"
     );
 
+    const screenshot = definitions.get("screenshot")!.interaction!;
     expect(
-      definitions.get("screenshot")!.interaction!.completedMsg!({
+      screenshot.completedMsg!({
         params: { udid: "device-1" },
         result: { image: { filename: "screenshot.png" } },
       })
     ).toBe("Captured screenshot screenshot.png");
+    expect(
+      screenshot.startedMsg!({ params: { udid: "device-1", name: "Checkout complete" } })
+    ).toBe("Capturing screenshot Checkout complete");
+    expect(
+      screenshot.completedMsg!({
+        params: { udid: "device-1", name: "Checkout complete" },
+        result: { image: { filename: "Checkout-complete.png" } },
+      })
+    ).toBe("Captured screenshot Checkout-complete.png");
+    expect(
+      screenshot.failedMsg!({
+        params: { udid: "device-1", name: "Checkout complete" },
+        error: new Error("raw error"),
+        failureSignal,
+      })
+    ).toBe(`Failed to capture screenshot Checkout complete: ${failureSignal.error_code}`);
 
     expect(
       definitions.get("gesture-tap")!.interaction!.failedMsg!({
