@@ -35,7 +35,7 @@ During polish, use `within`, `after`, and `next` to disambiguate repeated elemen
 ## Workflow
 
 1. Choose the flow type:
-   - **e2e:** the first non-echo step is `launch:`. The flow controls process start.
+   - **e2e:** the first non-echo step is `launch:`, written directly or inside a leading count-bounded `repeat:` block. The flow controls process start.
    - **fragment:** there is no leading launch. Declare a precise `executionPrerequisite`.
 2. Follow [Live authoring](references/live-authoring.md): start, record one verified step at a time, finish, polish, audit, and replay.
 3. Report the file, replay command, result, prerequisite or side effects, and every coordinate or raw-gesture exception.

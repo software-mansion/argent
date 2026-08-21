@@ -51,6 +51,18 @@ function between(file: string, start: string, end: string): string {
   return section;
 }
 
+/**
+ * The bounded-repetition section of the flow-yaml reference — the place the
+ * doc spells a repeat bound, now that SKILL.md routes directive shapes here.
+ */
+function repeatDocs(): string {
+  return between(FLOW_YAML, "\n## Bounded repetition", "\n## Composition");
+}
+
+// `…` marks an illustrative fragment (`within: <sel>`, and a deliberately
+// REJECTED spelling a doc contrasts against) — not runnable YAML.
+const runnable = (snippet: string): boolean => !snippet.includes("…") && !snippet.includes("<sel>");
+
 describe("create-flow selector-scope docs", () => {
   it("keeps the core skill concise and routes every relation", () => {
     const section = between(SKILL, "### Flow-only selector scopes", "\n## Workflow");
@@ -153,5 +165,73 @@ describe("create-flow idle docs", () => {
         new RegExp(`at least ${smallest}ms`)
       );
     }
+  });
+});
+
+describe("create-flow repeat snippets", () => {
+  it("every repeat: bound the doc spells parses, in both bounds", () => {
+    // The doc writes the bound and its sibling `steps: [...]` as two separate
+    // snippets, so a bound alone is not a runnable step — supply a body, which
+    // is what an agent copying the pair ends up with.
+    const bounds = [...repeatDocs().matchAll(/`-? ?(repeat: [^`]*)`/g)]
+      .map((m) => m[1]!)
+      // A bare `{ times }` names the KEY, not a count: the heading contrasting
+      // `repeat: { times }` with `tap: { times }` is not runnable YAML. A real
+      // count (`repeat: { times: 3 }`) doesn't match this string and IS run.
+      .filter((b) => runnable(b) && !b.includes("{ times }"));
+    // Both bounds: the count and the drain.
+    expect(new Set(bounds).size).toBeGreaterThanOrEqual(2);
+    expect(bounds.some((b) => b.includes("until"))).toBe(true);
+    for (const bound of bounds) {
+      expect(
+        () => parseFlow(`steps:\n  - ${bound}\n    steps: [{ tap: A }]\n`),
+        bound
+      ).not.toThrow();
+    }
+  });
+
+  it("both surfaces count the same deliberate edges off the paste-equivalence", () => {
+    // The count is enumerated in the reference and quoted in the flow-execute
+    // description, which is the surface an MCP client carries in every session
+    // — so a fifth edge added to one leaves the other quietly undercounting.
+    // This pins the two prose counts to each other and no more: unlike the
+    // idle warning count above, the edges are not a list this can count, so
+    // an edge added to both prose surfaces without either count moving still
+    // passes.
+    const description = createRunFlowTool({} as unknown as Registry).description ?? "";
+    const quoted = description.match(/minus\s+(\w+)\s+deliberate edges/);
+    expect(quoted, "the flow-execute description no longer counts the edges").not.toBeNull();
+    expect(repeatDocs()).toMatch(new RegExp(`${quoted![1]!} deliberate edges`, "i"));
+  });
+
+  it("the section's two stated parse errors really are parse errors", () => {
+    // Both are claims the doc makes about the parser: if either stopped
+    // holding, the section would be teaching a restriction that isn't one.
+    const docs = repeatDocs();
+    expect(docs).toContain("**minus `platform`**");
+    expect(() =>
+      parseFlow("steps:\n  - repeat: { until: { platform: ios } }\n    steps: [{ tap: A }]\n")
+    ).toThrow(/repeat\.until takes no platform/i);
+
+    expect(docs).toContain("is a **parse error**");
+    expect(() => parseFlow("steps:\n  - repeat: 2\n    steps: [{ snapshot: home }]\n")).toThrow(
+      /cannot run inside a repeat block/i
+    );
+  });
+
+  it("the snapshot refusal really does hold at bound 1, in both bounds", () => {
+    // The section tells an author the refusal is on the construct, not the
+    // count, and names the two spellings that bound a block at a single
+    // iteration. A parser that let either through would make that a lie at
+    // exactly the moment an author narrows a failing block down.
+    expect(repeatDocs()).toContain("`repeat: 1` and `max: 1` are refused like any other block");
+    expect(() => parseFlow("steps:\n  - repeat: 1\n    steps: [{ snapshot: home }]\n")).toThrow(
+      /cannot run inside a repeat block/i
+    );
+    expect(() =>
+      parseFlow(
+        "steps:\n  - repeat: { until: { hidden: X }, max: 1 }\n    steps: [{ snapshot: home }]\n"
+      )
+    ).toThrow(/cannot run inside a repeat block/i);
   });
 });

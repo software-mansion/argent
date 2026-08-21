@@ -21,11 +21,16 @@ steps:
   - await: { idle: true }
 ```
 
-An e2e flow has a literal `launch:` as its first non-echo step. It cannot declare `executionPrerequisite`. Put the named start state in a leading echo.
+An e2e flow has a `launch:` as its first non-echo step, written directly or inside a leading count-bounded `repeat:` block. It cannot declare `executionPrerequisite`. Put the named start state in a leading echo.
 
 A leading `run:` does not classify the outer flow as e2e, but the runner still follows the chain to the launch it reaches, and on Chromium that launch boots the app before step 1. A flow whose `run:` chain reaches a launch is refused an `executionPrerequisite` too: parse accepts the file, then the run rejects it. The one exception is a run pinned to a Chromium instance you brought to the required state yourself (`--device chromium-cdp-<port>`), where that leading launch only attaches.
 
-A fragment reaches no leading launch, by its own step or through a `run:` chain, and can declare:
+Three scanners ask where the leading launch is: the Chromium boot hoist, the `executionPrerequisite` guard, and the e2e classification above. A leading `run:` chain is transparent to the first two only, which is why parse accepts the file and the run rejects it. One more wrapper is transparent to all three. One is deliberately opaque:
+
+- **A count-bounded `repeat:` block is seen through.** A count is its body pasted out ([Bounded repetition](#bounded-repetition)), so the first iteration's launch runs at step 1 exactly where the unwrapped spelling puts it. `repeat: 1` around a leading launch is an e2e flow, and the refusal names the block to drop, not a top-level launch step the file has not got.
+- **An `until` drain is not.** Its guard is checked before the first iteration, so the body can run zero times, and a launch that may never happen is no basis for booting an app or refusing a prerequisite. A `when:` guard reads the same way. Any other step ends the scan, so a launch further down does not count.
+
+A fragment reaches no leading launch, by its own step, through a `run:` chain, or inside a leading count-bounded block, and can declare:
 
 ```yaml
 executionPrerequisite: User is signed in and viewing Settings
@@ -97,7 +102,7 @@ Scopes can combine and nest, with at most six scope keys. Use strict selectors f
 
 ## Directives
 
-Directives stop the flow on failure and skip later steps. `flow-execute` documents their shapes. The available directives are `launch`, `tap`, `long-press`, `type`, `scroll-to`, `pinch`, `rotate`, `await`, `assert`, `wait`, `snapshot`, `run`, `when`, `echo`, and `tool`.
+Directives stop the flow on failure and skip later steps. `flow-execute` documents their shapes. The available directives are `launch`, `tap`, `long-press`, `type`, `scroll-to`, `pinch`, `rotate`, `await`, `assert`, `wait`, `snapshot`, `run`, `when`, `repeat`, `echo`, and `tool`.
 
 Use the launch map for cross-platform flows. A bare launch applies everywhere and becomes an app path on Chromium. The map takes `native:`, `ios:`, `android:`, `vega:`, and `chromium:`. `native:` is one id shared by iOS, Android, and Vega, and a per-platform key overrides it for that platform. `chromium:` accepts a relative or absolute app path. A launch that declares no id for the run's platform is an error, not a cue to switch platforms.
 
@@ -181,6 +186,53 @@ Use `when:` only for optional setup or an interstitial that reconverges:
 ```
 
 The guard accepts one `exists`, `visible`, `hidden`, or `text` condition, or `{ platform: ios|android|chromium|vega }`. UI guards use the short assert grace and reject `timeout`. There is no `else` or per-step `optional`. Put separate behavioral paths in separate flows. Never place a required acceptance check inside `when:`.
+
+## Bounded repetition
+
+`repeat:` runs a sibling `steps: [...]` list, like `when:`. Give each block exactly one bound:
+
+| Bound                                                          | Behavior                                                                                                                         |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `repeat: 3`                                                    | Run the body a literal 1-100 times. `repeat: { times: 3 }` parses to the same flow; the serializer writes back the bare integer. |
+| `repeat: { until: { hidden: "Clear notification" }, max: 15 }` | Drain: run the body until the condition holds. `max` defaults to 10 and takes the same 1-100 range.                              |
+
+A count is the body pasted that many times, down to a completed run's counts: the block's opening line and its per-iteration lines are structure, not steps, so they are not counted (the treatment `echo` already gets) and `repeat: 3` over one tap reports 3 passed. That equivalence is the point, so the count is always a literal - there is deliberately no loop variable and no parameter.
+
+Step numbers are not equivalent: `tool: flow-execute` numbers every report line and counts them in its header, markers included, where `argent flow run` skips them. So a `repeat: 3` over one tap makes the step after the block `[8]` over MCP and step 4 in the CLI. The pass and fail counts agree either way, so cite a step number with the surface it came from.
+
+Four deliberate edges stop short of the paste:
+
+- A block cut short by a failure does not pad its unrun iterations as skips.
+- A block skipped by an enclosing `when:` stands in one skip line per authored step, not per pasted-out step.
+- The block resolves a device even when every step in it is device-free.
+- `snapshot:` is refused inside the block, where the pasted spelling parses (below).
+
+### Draining to a condition
+
+`until` takes the same one condition key as a `when:` guard **minus `platform`** (fixed for a run, so the loop would be infinite or empty - parse-rejected), and is checked **before each iteration including the first**. An already-drained list therefore runs zero iterations and passes; each authored step still reports one `skip` line (`until guard already met`), so no step drops out of the report. **Reaching `max` with the condition still unmet fails the step** - a drain that never converged asserts nothing if it passes.
+
+A drain's closing line is an evaluated outcome, not structure, so unlike the markers it IS counted: one pass when it converged, one fail at the cap, one `error` when the guard cannot be evaluated, or one `skip` when the run is cancelled mid-block (the one closing line a count-bounded block can also emit).
+
+Each iteration boundary costs the ~1s assert grace, and that grace is all the settling a drain does. The guard is a probe of the screen NOW, not a wait: `until` takes no `timeout` by design. **The body carries its own settling.** When its effect is asynchronous or slow, end the body with an `await:` for the state the next probe should read - that wait takes a full `timeout:`, and it is the tunable you get.
+
+Without it the probe reads the screen mid-effect, in either direction:
+
+- A `hidden` guard is satisfied by the first read that finds no match. A list that tears down and rebuilds asynchronously is probed inside its own re-render gap, so the drain exits after one iteration and **passes with the list still not empty**.
+- An effect that lands after the grace leaves the probe on stale state, so the body fires again. The drain converges on the target and then overshoots it: the run is green and the app is left holding more than the flow asserted.
+
+A `tool:` step's full result stays in the report once per iteration with nothing truncating it - a screenshot-returning tool inlines one image per pass. So keep drains short, nesting shallow, and result-heavy tools out of repeat bodies.
+
+### What a repeat block is not
+
+**`repeat` is not retry.** A failure inside any iteration is a real failure and hard-stops the flow — re-running a side-effecting iteration would double-fire it. "Repeat until it works" is the Maestro habit to unlearn; if a step is flaky, fix the wait (`await:`), don't loop over it.
+
+**`repeat: { times }` is not `tap: { times }`.** `tap: { on: X, times: 2 }` is ONE gesture — two presses inside the OS double-tap window, which is what makes a double-tap register. `repeat: 2` + `steps: [tap: X]` is two independent taps, each resolving the selector against a settled tree.
+
+### Snapshots inside a block
+
+A `snapshot:` in a repeat body is a **parse error**: a snapshot name maps to one baseline, but a repeat body is written to be re-run, and a later iteration's legitimately different screen would still compare against that one baseline. The refusal is on the construct, not the count: `repeat: 1` and `max: 1` are refused like any other block, a block bounded at 1 being one edit from N. Put the snapshot after the block.
+
+A `snapshot:` reached through a `run:` fragment or a nested `tool: flow-execute` is not caught at parse - it fails that outer step when the fragment or nested flow loads, before any of its steps run. Both fire only when an iteration actually reaches the composition: a drain that converges before its first iteration never loads it, so the mistake surfaces on the first run that iterates - like any load-time refusal inside a block that did not run.
 
 ## Composition and platform limits
 

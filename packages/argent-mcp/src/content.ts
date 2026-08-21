@@ -230,10 +230,15 @@ export type FlowStepResult = {
   target?: string;
   /**
    * Nesting depth: absent/0 at top level, +1 inside each nesting step
-   * (`when:` guarded steps, `run:` fragment steps). The label is indented by
-   * it; a pre-depth tool-server sends none and the report renders flat.
+   * (`when:` guarded steps, `run:` fragment steps, `repeat:` iteration markers
+   * and body steps). The label is indented by it; a pre-depth tool-server
+   * sends none and the report renders flat.
    */
   depth?: number;
+  // The wire also carries `structural` on a repeat block's marker lines;
+  // deliberately absent here — this renderer numbers raw report entries (the
+  // treatment `echo` already gets), a divergence from the CLI's numbering that
+  // the tool-server's StepReport.structural docstring owns.
   /**
    * Snapshot-step artifacts keyed by role (baseline/current/diff). Values are
    * artifact handles on current tool-servers; treated as untrusted wire data
