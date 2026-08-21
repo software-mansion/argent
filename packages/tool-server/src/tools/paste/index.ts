@@ -28,6 +28,31 @@ const capability: ToolCapability = {
   // handler probes the runtime kind and rejects a TV itself.
 };
 
+/**
+ * Per-device paste queue. A paste is two steps — fill the clipboard, then send
+ * the paste keystroke — and neither platform serializes them: two concurrent
+ * calls on one device let the second clipboard fill land before the first
+ * keystroke, so one text is pasted twice and the other never, while both
+ * report success. Chain calls per device id so each clipboard fill is
+ * followed by its own keystroke before the next fill starts.
+ */
+const pasteQueues = new Map<string, Promise<unknown>>();
+
+function serializedPerDevice<T>(deviceId: string, task: () => Promise<T>): Promise<T> {
+  const previous = pasteQueues.get(deviceId) ?? Promise.resolve();
+  const next = previous.then(task, task);
+  pasteQueues.set(deviceId, next);
+  void next.then(
+    () => {
+      if (pasteQueues.get(deviceId) === next) pasteQueues.delete(deviceId);
+    },
+    () => {
+      if (pasteQueues.get(deviceId) === next) pasteQueues.delete(deviceId);
+    }
+  );
+  return next;
+}
+
 export function createPasteTool(registry: Registry): ToolDefinition<PasteParams, PasteResult> {
   const dispatch = dispatchByPlatform<PasteServices, PasteServices, PasteParams, PasteResult>({
     toolId: "paste",
@@ -56,12 +81,14 @@ Supports \`{{secret:<NAME>}}\` placeholders like \`keyboard\`; the value is neve
       // boundary and before the platform dispatch — so transcripts, the event
       // log and recorded sequences only ever see the placeholder form.
       const { text, secrets } = resolveSecretPlaceholders(params.text);
-      if (secrets.length === 0) return dispatch(services, params, options);
-      try {
-        return await dispatch(services, { ...params, text }, options);
-      } catch (err) {
-        throw redactSecretsFromError(err, secrets);
-      }
+      return serializedPerDevice(params.udid, async () => {
+        if (secrets.length === 0) return dispatch(services, params, options);
+        try {
+          return await dispatch(services, { ...params, text }, options);
+        } catch (err) {
+          throw redactSecretsFromError(err, secrets);
+        }
+      });
     },
   };
 }

@@ -18,6 +18,7 @@ export const AUTO_SCREENSHOT_TOOLS = new Set([
   "gesture-rotate",
   "button",
   "keyboard",
+  "paste",
   "rotate",
   "launch-app",
   "restart-app",
@@ -48,6 +49,7 @@ export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
   "button": 1500,
   "rotate": 1000,
   "keyboard": 300,
+  "paste": 300,
   "describe": 100,
 };
 

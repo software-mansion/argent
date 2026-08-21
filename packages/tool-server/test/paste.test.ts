@@ -110,6 +110,52 @@ describe("paste tool", () => {
       expect(keys).toEqual([]);
     });
 
+    it("serializes concurrent pastes on one device so each fill precedes its own chord", async () => {
+      const events: string[] = [];
+      const api = {
+        apiUrl: API_URL,
+        pressKey: (direction: string, code: number) => events.push(`key ${direction} ${code}`),
+      };
+      fetchMock.mockImplementation(async (_url: string, init: RequestInit) => {
+        events.push(`fill ${JSON.parse(String(init.body)).text}`);
+        return jsonResponse(200, { status: "ok" });
+      });
+      const tool = toolFor(api);
+
+      await Promise.all([
+        tool.execute({}, { udid: IOS_UDID, text: "first" }),
+        tool.execute({}, { udid: IOS_UDID, text: "second" }),
+      ]);
+
+      expect(events).toEqual([
+        "fill first",
+        "key Down 227",
+        "key Down 25",
+        "key Up 25",
+        "key Up 227",
+        "fill second",
+        "key Down 227",
+        "key Down 25",
+        "key Up 25",
+        "key Up 227",
+      ]);
+    });
+
+    it("keeps queuing after a failed paste on the same device", async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, { error: "boom" }));
+      const { api, keys } = fakeApi();
+      const tool = toolFor(api);
+
+      const [first, second] = await Promise.allSettled([
+        tool.execute({}, { udid: IOS_UDID, text: "a" }),
+        tool.execute({}, { udid: IOS_UDID, text: "b" }),
+      ]);
+
+      expect(first.status).toBe("rejected");
+      expect(second.status).toBe("fulfilled");
+      expect(keys).toHaveLength(4);
+    });
+
     it("rejects a tvOS simulator before resolving a simulator-server", async () => {
       vi.mocked(isTvOsSimulator).mockResolvedValueOnce(true);
       const resolveService = vi.fn();

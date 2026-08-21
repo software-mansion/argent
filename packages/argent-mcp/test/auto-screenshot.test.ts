@@ -205,6 +205,7 @@ describe("shouldAutoScreenshot — unified surface", () => {
       "gesture-swipe",
       "button",
       "keyboard",
+      "paste",
       "rotate",
       "launch-app",
       "restart-app",
