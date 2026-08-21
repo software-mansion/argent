@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { FAILURE_CODES, Registry, type FailureSignal } from "@argent/registry";
 import { createRegistry } from "../src/utils/setup-registry";
 import { definitionsById, EXPECTED_TOOL_COUNT } from "./helpers/catalog";
+import { flowStartRecordingTool } from "../src/tools/flows/flow-start-recording";
+import { createFlowAddStepTool } from "../src/tools/flows/flow-add-step";
 
 const failureSignal: FailureSignal = {
   error_code: FAILURE_CODES.ARGENT_UNCLASSIFIED_FAILURE,
@@ -234,6 +239,59 @@ describe("tool interaction messages", () => {
         i.failedMsg!({ params, error: new Error("raw error"), failureSignal }),
         `${id}.failedMsg`
       ).toContain(name);
+    }
+  });
+
+  it("does not announce a recorded step on the paths that record nothing", () => {
+    // The guidance paths (a nested recorder tool as `command`, a flow-directive
+    // name) return SUCCESSFULLY and append nothing, so the completion line
+    // fires — and must not read "Added echo step" in the same log where the
+    // result body says nothing was recorded.
+    const completedMsg =
+      definitionsById(createRegistry()).get("flow-add-step")!.interaction!.completedMsg!;
+    const params = { name: "checkout", project_root: "/tmp/proj", command: "echo" };
+
+    expect(
+      completedMsg({ params, result: { message: "", toolResult: undefined, stepCount: 0 } })
+    ).toBe("Recorded no echo step in flow checkout");
+    expect(
+      completedMsg({
+        params,
+        result: { message: "", toolResult: undefined, stepCount: 1, recorded: "1. echo: hi" },
+      })
+    ).toBe("Added echo step to flow checkout");
+  });
+
+  it("joins the record-nothing RESULT to the line the registry actually logs", async () => {
+    // The case above pins `completedMsg` against a hand-built result, and the
+    // recorder's own tests call `execute()` directly, so nothing else joins the
+    // two halves: adding `recorded: ""` to `recordNothing` restores the
+    // contradiction with the whole suite green. So drive a real recording
+    // through a real Registry and read the completion event.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "interaction-msg-"));
+    try {
+      await flowStartRecordingTool.execute(
+        {},
+        { name: "checkout", project_root: tmpDir, executionPrerequisite: "on the form" }
+      );
+
+      const registry = new Registry();
+      registry.registerTool(createFlowAddStepTool(registry) as never);
+      const completions: string[] = [];
+      registry.events.on("toolCompleted", (_id, _callId, _ms, msg) => completions.push(msg));
+
+      // `command: "echo"` is a flow directive, not a tool: flow-add-step answers
+      // with guidance and records nothing.
+      const result = await registry.invokeTool<{ recorded?: string }>("flow-add-step", {
+        name: "checkout",
+        project_root: tmpDir,
+        command: "echo",
+      });
+
+      expect(result.recorded).toBeUndefined();
+      expect(completions).toEqual(["Recorded no echo step in flow checkout"]);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
 

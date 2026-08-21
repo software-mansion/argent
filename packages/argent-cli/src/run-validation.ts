@@ -58,6 +58,41 @@ export function findMissingRequired(
 }
 
 /**
+ * The server's schema-validation issue list, from whichever channel carried it — or null when this
+ * failure did not carry one.
+ *
+ * Two channels, because the wire changed. A tool-server now answers a rejected call with PROSE in
+ * `error` and the issue list beside it in `issues`; before that, the issue list WAS the message.
+ * Reading the structured field first and falling back to parsing the message covers NEW client ->
+ * OLD server.
+ *
+ * The reverse direction is a real break and is reachable, since `argent link` can point a local
+ * CLI at a remote tool-server with no version handshake: an already-released CLI knows only
+ * `JSON.parse(message)`, so prose makes it fall through to a bare `console.error(message)`, losing
+ * the `--flag` attribution, the help block, and a `--json` caller's JSON object. Nothing here can
+ * fix that. (`argent flow run` is unaffected — `requireLocalToolServer` refuses env/link routing.)
+ *
+ * Neither channel is trusted on faith: the payload must still BE a non-empty list of issues.
+ */
+function serverIssueList(err: unknown): ValidationIssue[] | null {
+  const carried = (err as { issues?: unknown } | null)?.issues;
+  if (Array.isArray(carried)) {
+    return carried.length > 0 && carried.every(isValidationIssue) ? carried : null;
+  }
+
+  const message = err instanceof Error ? err.message : typeof err === "string" ? err : null;
+  if (message === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(message);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) return null;
+  return parsed.every(isValidationIssue) ? parsed : null;
+}
+
+/**
  * Interpret a failed tool call as input validation, or return null to leave it alone.
  *
  * Recognition is structural — the shape of the issue list and the tool's own schema decide it,
@@ -71,17 +106,8 @@ export function describeServerValidationFailure(
   payload: Record<string, unknown>,
   schema: JsonSchema | undefined
 ): ValidationReport | null {
-  const message = err instanceof Error ? err.message : typeof err === "string" ? err : null;
-  if (message === null) return null;
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(message);
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(parsed) || parsed.length === 0) return null;
-  if (!parsed.every(isValidationIssue)) return null;
+  const parsed = serverIssueList(err);
+  if (parsed === null) return null;
 
   const properties = schema?.properties ?? {};
   // Every issue must address either a field this tool declares, or the payload as a whole (an

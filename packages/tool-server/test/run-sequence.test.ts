@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
-import type { Registry, ToolContext } from "@argent/registry";
+import { z } from "zod";
+import { Registry } from "@argent/registry";
+import type { ToolContext } from "@argent/registry";
 import { createRunSequenceTool } from "../src/tools/run-sequence";
 
 // A minimal registry stub: records every invokeTool call and returns a marker.
@@ -354,5 +356,112 @@ describe("run-sequence", () => {
 
     expect(result.completed).toBe(1);
     expect(registry.invokeTool).toHaveBeenCalledTimes(1);
+  });
+
+  describe("a step whose args the sub-tool rejects", () => {
+    // A REAL registry, not a stub: the rejection must come from the same schema
+    // check the live dispatch runs, and the events it emits are half of what
+    // these tests assert.
+    const liveRegistry = () => {
+      const registry = new Registry();
+      const executed: string[] = [];
+      registry.registerTool({
+        id: "gesture-tap",
+        description: "test double for gesture-tap",
+        zodSchema: z.object({ udid: z.string(), x: z.number(), y: z.number() }),
+        services: () => ({}),
+        execute: async () => {
+          executed.push("gesture-tap");
+          return { ok: true };
+        },
+      } as never);
+      registry.registerTool({
+        id: "keyboard",
+        description: "test double for keyboard",
+        zodSchema: z.object({ udid: z.string(), text: z.string().optional() }),
+        services: () => ({}),
+        execute: async () => {
+          executed.push("keyboard");
+          return { ok: true };
+        },
+      } as never);
+      return { registry, executed };
+    };
+
+    it("names only the keys the AUTHOR wrote, not the injected udid", async () => {
+      // `udid` is injected into every step — the tool's own docs tell authors to
+      // leave it out — so listing it beside the misspelling the list exists to
+      // expose points at a key they never typed.
+      const { registry } = liveRegistry();
+      const tool = createRunSequenceTool(registry);
+
+      const result = await tool.execute(
+        {},
+        { udid: IOS, steps: [{ tool: "gesture-tap", args: { xx: 0.5, y: 0.3 } }] }
+      );
+
+      const error = (result.steps[0] as { error?: string }).error!;
+      expect(error).toContain("`x` is required");
+      expect(error).toContain("You sent: `xx`, `y`.");
+      expect(error).not.toContain("`udid`");
+    });
+
+    it("STOPS the sequence, leaving the later steps un-run", async () => {
+      // Two steps, because a single-step sequence cannot tell `break` from
+      // `continue`, and the existing multi-step "stops on first error" tests
+      // all exercise the INVOKE path. A regression here types into whatever
+      // screen the un-tapped app is still on.
+      const { registry, executed } = liveRegistry();
+      const tool = createRunSequenceTool(registry);
+
+      const result = await tool.execute(
+        {},
+        {
+          udid: IOS,
+          steps: [
+            { tool: "gesture-tap", args: { xx: 0.5, y: 0.3 } },
+            { tool: "keyboard", args: { text: "hello" } },
+          ],
+        }
+      );
+
+      expect(result.steps).toHaveLength(1);
+      expect(result.completed).toBe(0);
+      expect(result.total).toBe(2);
+      expect(executed).toEqual([]); // neither step reached the device
+    });
+
+    it("still emits the step's own invoked/failed events", async () => {
+      // The rejection is re-rendered from the registry's failure rather than
+      // pre-empting the dispatch, so the step stays visible to the telemetry
+      // listener and the event log. A pre-flight that returned before invoking
+      // would make an invalid step emit nothing while the outer call still
+      // reported completion.
+      const { registry } = liveRegistry();
+      const events: string[] = [];
+      registry.events.on("toolInvoked", (id) => events.push(`invoked:${id}`));
+      registry.events.on("toolFailed", (id) => events.push(`failed:${id}`));
+      const tool = createRunSequenceTool(registry);
+
+      await tool.execute(
+        {},
+        { udid: IOS, steps: [{ tool: "gesture-tap", args: { xx: 0.5, y: 0.3 } }] }
+      );
+
+      expect(events).toEqual(["invoked:gesture-tap", "failed:gesture-tap"]);
+    });
+
+    it("still accepts a step that omits udid, since it is injected", async () => {
+      const { registry, executed } = liveRegistry();
+      const tool = createRunSequenceTool(registry);
+
+      const result = await tool.execute(
+        {},
+        { udid: IOS, steps: [{ tool: "gesture-tap", args: { x: 0.5, y: 0.3 } }] }
+      );
+
+      expect((result.steps[0] as { error?: string }).error).toBeUndefined();
+      expect(executed).toEqual(["gesture-tap"]);
+    });
   });
 });

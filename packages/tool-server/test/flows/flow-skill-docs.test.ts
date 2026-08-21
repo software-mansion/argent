@@ -10,8 +10,10 @@ import {
   IDLE_SETTLE_SPAN_MS,
   idleMinimumTimeoutMs,
   parseFlow,
+  STEP_DIRECTIVE_KEYS,
 } from "../../src/tools/flows/flow-utils";
 import { createRunFlowTool } from "../../src/tools/flows/flow-run";
+import { createFlowAddStepTool, directiveCommandHint } from "../../src/tools/flows/flow-add-step";
 
 /**
  * Keep the core skill's scope routing concise while guarding the linked
@@ -22,6 +24,10 @@ const FLOW_YAML = path.resolve(
   __dirname,
   "../../../skills/skills/argent-create-flow/references/flow-yaml.md"
 );
+const LIVE_AUTHORING = path.resolve(
+  __dirname,
+  "../../../skills/skills/argent-create-flow/references/live-authoring.md"
+);
 /**
  * The three surfaces that quote the number of `idle` warnings instead of
  * listing them. They cite the reference rather than restating it, so a warning
@@ -29,7 +35,7 @@ const FLOW_YAML = path.resolve(
  * how "five different warnings" survived a sixth being added.
  */
 const WARNING_COUNT_CITATIONS = [
-  path.resolve(__dirname, "../../../skills/skills/argent-create-flow/references/live-authoring.md"),
+  LIVE_AUTHORING,
   path.resolve(
     __dirname,
     "../../../skills/skills/argent-create-flow/references/reliability-and-recovery.md"
@@ -152,6 +158,64 @@ describe("create-flow idle docs", () => {
       expect(() => parseFlow(step(smallest - 1)), `${stableFor}`).toThrow(
         new RegExp(`at least ${smallest}ms`)
       );
+    }
+  });
+});
+
+/**
+ * The two agent-facing surfaces that ENUMERATE the directive answers rather
+ * than citing them: the recorder-contract paragraph and flow-add-step's own
+ * `description`. Each must list every directive `directiveCommandHint` answers,
+ * or an author reads that the recorder names a recording tool and is then told
+ * no tool does.
+ */
+describe("create-flow directive-answer docs", () => {
+  const answered = STEP_DIRECTIVE_KEYS.filter((key) => directiveCommandHint(key) !== undefined);
+  // Each of these hints says in those words that no tool records the
+  // directive; flow-record-cross-tree.test.ts pins the phrase alongside the
+  // per-directive reason that follows it.
+  const withoutRecordingTool = answered.filter((key) =>
+    directiveCommandHint(key)!.includes("records one")
+  );
+  const withRecordingTool = answered.filter((key) => !withoutRecordingTool.includes(key));
+
+  /** The sentence carrying `marker`, so one clause cannot satisfy the other. */
+  function sentenceWith(paragraph: string, marker: string): string {
+    const hit = paragraph.split(". ").find((s) => s.includes(marker));
+    expect(hit, `no sentence mentions "${marker}"`).toBeDefined();
+    return hit!;
+  }
+
+  function recorderContract(): string {
+    const section = between(LIVE_AUTHORING, "## Recorder contract", "\nObey these lifecycle rules");
+    const paragraph = section
+      .split("\n")
+      .find((line) => line.startsWith("`command` takes a **tool** name"));
+    expect(paragraph, "the recorder-contract paragraph is missing").toBeDefined();
+    return paragraph!;
+  }
+
+  it("names each directive answered with the tool that records it, and only those", () => {
+    // Guard the readers: an empty bucket agrees with every list.
+    expect(withRecordingTool.length).toBeGreaterThan(0);
+    const clause = sentenceWith(recorderContract(), "names the tool that records the directive");
+    for (const key of withRecordingTool) expect(clause, key).toContain(`\`${key}\``);
+    for (const key of withoutRecordingTool) expect(clause, key).not.toContain(`\`${key}\``);
+  });
+
+  it("names each directive that has no recording tool, on both surfaces", () => {
+    expect(withoutRecordingTool.length).toBeGreaterThan(0);
+    // `ToolDefinition.description` is optional on the type, and an absent one
+    // would otherwise read as a surface that lists nothing and agrees.
+    const { description } = createFlowAddStepTool({} as Registry);
+    expect(description, "flow-add-step no longer declares a description").toBeDefined();
+    const clauses = [
+      sentenceWith(recorderContract(), "have no recording tool"),
+      sentenceWith(description!, "have no recording tool"),
+    ];
+    for (const clause of clauses) {
+      for (const key of withoutRecordingTool) expect(clause, key).toContain(`\`${key}\``);
+      for (const key of withRecordingTool) expect(clause, key).not.toContain(`\`${key}\``);
     }
   });
 });

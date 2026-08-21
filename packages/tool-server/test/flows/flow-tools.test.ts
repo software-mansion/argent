@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Registry, ToolContext } from "@argent/registry";
-import { ArtifactStore, zodObjectToJsonSchema } from "@argent/registry";
+import type { ToolContext } from "@argent/registry";
+import { ArtifactStore, Registry, zodObjectToJsonSchema } from "@argent/registry";
 
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
@@ -454,7 +454,7 @@ describe("flow-add-step", () => {
       counts.push(result.stepCount);
       // The number `recorded` opens with IS the reported count, so the author
       // cannot be shown "3." while being told the flow holds one step.
-      expect(result.recorded.startsWith(`${result.stepCount}. `)).toBe(true);
+      expect(result.recorded?.startsWith(`${result.stepCount}. `)).toBe(true);
     }
 
     expect(counts).toEqual([1, 2, 3]);
@@ -1195,6 +1195,62 @@ describe("flow-add-step", () => {
     });
   });
 
+  it("names the flow_path the author wrote when the rewritten call is rejected", async () => {
+    // `rewriteSiblingFlowPath` mutates the object handed to the nested invoke —
+    // `delete args.flow_path; args.name = stem` — so the registry closes with a
+    // `name` the author never typed and drops the `flow_path` they did. The
+    // other two dispatchers already re-render against the authored args.
+    //
+    // A REAL registry, because the rejection must come from the same schema the
+    // live dispatch parses: `platform: "iOS"` misses the lowercase enum, so
+    // flow-execute's own `execute` is never entered and no device is needed.
+    const registry = new Registry();
+    registry.registerTool(createRunFlowTool(registry) as never);
+    const tool = createFlowAddStepTool(registry);
+    registry.registerTool(tool as never);
+
+    await flowStartRecordingTool.execute({}, { name: "reframe", project_root: tmpDir });
+    await writeSiblingFlow("login", "steps:\n  - echo: hi\n");
+    const sibling = path.join(tmpDir, ".argent", "flows", "login.yaml");
+
+    const authored = await tool
+      .execute(
+        {},
+        {
+          name: "reframe",
+          project_root: tmpDir,
+          command: "flow-execute",
+          args: JSON.stringify({ flow_path: sibling, project_root: tmpDir, platform: "iOS" }),
+        }
+      )
+      .then(() => undefined)
+      .catch((err: unknown) => (err as Error).message);
+
+    expect(authored).toContain("`platform`");
+    expect(authored).toContain("You sent: `flow_path`, `project_root`, `platform`.");
+    expect(authored).not.toContain("`name`");
+
+    // The control: a call that named the flow the other way is unaffected, so
+    // the reframe cannot be satisfied by simply never printing `name`.
+    const byName = await tool
+      .execute(
+        {},
+        {
+          name: "reframe",
+          project_root: tmpDir,
+          command: "flow-execute",
+          args: JSON.stringify({ name: "login", project_root: tmpDir, platform: "iOS" }),
+        }
+      )
+      .then(() => undefined)
+      .catch((err: unknown) => (err as Error).message);
+
+    expect(byName).toContain("You sent: `name`, `project_root`, `platform`.");
+
+    // Nothing was recorded either way.
+    expect(parseFlow(await onDisk("reframe")).steps).toEqual([]);
+  });
+
   it("rejects a mis-cased sibling flow_path, naming the on-disk spelling", async () => {
     const registry = createMockRegistry({
       "flow-execute": { result: { ok: true, steps: [] } },
@@ -1552,6 +1608,62 @@ describe("flow-add-step", () => {
     const nested = (registry.invokeTool as any).mock.calls[0][1];
     await expect(resolveFlowSource(nested)).rejects.toThrow("Pass exactly one flow source");
     expect(parseFlow(await readFlowFile("compose-ambiguous")).steps).toEqual([]);
+  });
+
+  // The alias spelling of the same dangerous shape. `flow_name` names a flow as
+  // much as `name` does, so the bail-out must see it: reading `name` alone lets
+  // the rewrite delete flow_path, substitute the file's stem, RUN that flow,
+  // and record it as a `run:` success with nothing saying "checkout" was
+  // discarded.
+  it("hands a flow-execute that names flow_name and flow_path to flow-execute verbatim", async () => {
+    const registry = createMockRegistry({ "flow-execute": { result: null, throws: true } });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "compose-alias", project_root: tmpDir });
+    // A genuinely rewritable target: every check downstream of the bail-out
+    // accepts this flow_path, so the bail-out is the only thing standing
+    // between the caller's "checkout" and a swap to "login".
+    await writeSiblingFlow("login", "steps:\n  - echo: hi\n");
+    const args = {
+      flow_name: "checkout",
+      flow_path: path.join(tmpDir, ".argent", "flows", "login.yaml"),
+      project_root: tmpDir,
+    };
+
+    await expect(
+      tool.execute(
+        {},
+        {
+          name: "compose-alias",
+          project_root: tmpDir,
+          command: "flow-execute",
+          args: JSON.stringify(args),
+        }
+      )
+    ).rejects.toThrow();
+
+    expect(registry.invokeTool).toHaveBeenCalledWith("flow-execute", args);
+    // …so that flow-execute's own exactly-one-source rule is what rejects it.
+    const nested = (registry.invokeTool as any).mock.calls[0][1];
+    const parsed = createRunFlowTool(registry as unknown as Registry).zodSchema!.safeParse(nested);
+    expect(parsed.success).toBe(false);
+    expect(JSON.stringify(parsed.error?.issues)).toContain("Pass exactly one flow source");
+    // …and the in-process copy of that rule, which covers direct execute()
+    // callers, must reach the same verdict rather than complaining about the
+    // file-input boundary as if only flow_path had been given.
+    await expect(resolveFlowSource(nested)).rejects.toThrow("Pass exactly one flow source");
+    expect(parseFlow(await readFlowFile("compose-alias")).steps).toEqual([]);
+  });
+
+  it("resolves a direct execute() caller's flow_name the way it resolves name", async () => {
+    // Every call through the tool folds the alias in before resolveFlowSource,
+    // so the fold must exist here too — otherwise a direct in-process caller
+    // passing only `flow_name` is told to pass a source it just passed.
+    await fs.mkdir(path.join(tmpDir, ".argent", "flows"), { recursive: true });
+    await writeSiblingFlow("aliased-direct", "steps:\n  - echo: hi\n");
+    const resolved = await resolveFlowSource({ flow_name: "aliased-direct", project_root: tmpDir });
+    expect(resolved.flowName).toBe("aliased-direct");
+    expect(resolved.filePath).toBe(path.join(tmpDir, ".argent", "flows", "aliased-direct.yaml"));
   });
 
   it("throws on invalid JSON in args", async () => {
@@ -2707,6 +2819,34 @@ describe("flow-read-prerequisite", () => {
       )
     ).rejects.toThrow("exactly one flow source");
   });
+
+  it("accepts `flow_name` as an alias for `name` (parity with flow-execute)", async () => {
+    // An agent that learned the alias on flow-execute must not hit a bare
+    // "name required" here — the same tool reads the same flow.
+    const dir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "aliased.yaml"),
+      serializeFlow({
+        executionPrerequisite: "On the form",
+        steps: [{ kind: "echo", message: "hi" }],
+      })
+    );
+
+    const result = await flowReadPrerequisiteTool.execute(
+      {},
+      { flow_name: "aliased", project_root: tmpDir }
+    );
+
+    expect(result.flow).toBe("aliased");
+    expect(result.executionPrerequisite).toBe("On the form");
+  });
+
+  it("names the parameter it needs when neither `name` nor `flow_name` is present", async () => {
+    await expect(flowReadPrerequisiteTool.execute({}, { project_root: tmpDir })).rejects.toThrow(
+      /flow-read-prerequisite needs the flow's name/
+    );
+  });
 });
 
 describe("the flow-add-step schema the CLI tests hand-copy", () => {
@@ -2786,12 +2926,12 @@ describe("summarizeStep rendering", () => {
   });
 
   it("renders a multi-field selector independently of its key order", () => {
-    // This render is also the step anchor. The anchor compares an in-memory
-    // selector, whose key order comes from the source object, with one from
-    // `parseSelector`, whose key order comes from the zod schema. If the two
-    // spellings render differently, the recording loses every verdict, and
-    // nothing in the payload shows it. Today `deriveSelector` returns one field
-    // on every branch, so nothing else pins this.
+    // This render is also the step ANCHOR, which compares a selector the
+    // recorder built in memory — key order from the source object — against one
+    // that came back through `parseSelector`, whose key order is the zod
+    // schema's. Two spellings rendering differently drops every verdict in the
+    // recording. Unreachable today only because `deriveSelector` returns one
+    // field on every branch, so nothing else pins it.
     const a = summarizeStep({ kind: "tap", selector: { identifier: "b", text: "Go" } }, 1);
     const b = summarizeStep({ kind: "tap", selector: { text: "Go", identifier: "b" } }, 1);
     expect(a).toBe(b);

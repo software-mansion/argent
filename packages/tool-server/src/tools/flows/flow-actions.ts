@@ -155,11 +155,11 @@ export interface DirectiveOutcome {
    * blind/degraded tree), or a `hidden` check ended on a blind or failed
    * read after the element had matched.
    *
-   * Every reader turns it into "unknown" its own way. The `when:` guard probe
-   * errors rather than skip a block a broken tree source cannot vouch for. A
-   * plain `assert` reports an ordinary failure. An `idle` step scores `error`
-   * rather than `fail`. The recorder's cross-tree re-probe keeps the step and
-   * warns that the conversion is UNKNOWN, not known-bad.
+   * Every reader turns it into "unknown" its own way: the `when:` guard errors
+   * rather than skip a block it cannot vouch for, `assert` reports an ordinary
+   * failure, `idle` scores `error` rather than `fail`, and the recorder's
+   * cross-tree re-probe keeps the step and warns that the conversion is
+   * UNKNOWN, not known-bad.
    */
   indeterminate?: boolean;
   /**
@@ -355,14 +355,15 @@ const CONDITION_DARK_TAIL_TOLERANCE_MS = POLL_INTERVAL_MS * 2;
 /**
  * Evaluate a UI condition on the assert grace window — the same engine as
  * `assert`, and deliberately not an await-sized wait. `ok` is "condition met";
- * `indeterminate` separates an unreadable tree, which is unknown rather than
- * false, from a plainly unmet condition.
+ * `indeterminate` separates an unreadable tree (unknown) from a plainly unmet
+ * condition.
  *
  * Named for its first caller, the `when:` block guard, where the grace window
- * is the whole point: a skipped block must not add a dead wait to every clean
- * run, and the two outcomes map onto error (unknown) versus skip (unmet). The
- * recorder's cross-tree re-probe is the second caller; it wants the same grace
- * window, because that is the window an `assert:` conversion would get.
+ * is the point: a skipped block must not add a dead wait to every clean run.
+ * The recorder's cross-tree re-probe is a second caller — it neither errors nor
+ * skips, and wants this function because an `assert:` conversion polls on
+ * exactly this window. It does not inherit the guard's tolerance for a slow
+ * read; see PROBE_BUDGET_MS there.
  */
 export function probeWhenCondition(
   env: ActionEnv,

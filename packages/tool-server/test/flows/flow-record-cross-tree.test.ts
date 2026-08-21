@@ -3,12 +3,19 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Registry } from "@argent/registry";
+import { ToolNotFoundError, ToolExecutionError } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
 
-// `await-ui-element` reads the agent-facing describe tree; the `await:`/`assert:`
-// directive polish converts the step into reads `fetchFlowTree`'s. Neither tree
-// contains the other, so a check can pass live and fail once converted. These
-// tests serve the runner's tree, stub the live wait, and use the real adapters.
+// `await-ui-element` evaluates against the agent-facing describe tree; the
+// `await:`/`assert:` directive polish converts the step into is evaluated
+// against `fetchFlowTree`'s. On no platform does one contain the other, so a
+// check can pass live and fail once converted.
+//
+// These tests serve the RUNNER's tree while the await-ui-element tool is
+// stubbed to report success — i.e. the recorder's tree agreed. Every runner
+// tree is built by the REAL per-platform flow adapter from a raw payload of
+// that platform's shape, so each divergence is the one that projection actually
+// produces, not a platform label on one shared fixture.
 
 let fetchCount: number;
 // The whole fetch is the seam; `beforeEach` resets it between tests.
@@ -43,13 +50,18 @@ import { parseUiAutomatorDump } from "../../src/tools/describe/platforms/android
 import { adaptChromiumTreeForFlows } from "../../src/tools/flows/flow-chromium-tree";
 import { adaptVegaTreeForFlows } from "../../src/tools/flows/flow-vega-tree";
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
-import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
+import {
+  createFlowAddStepTool,
+  directiveCommandHint,
+  UNHINTED_DIRECTIVE_KEYS,
+} from "../../src/tools/flows/flow-add-step";
 import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recording";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
 import {
   __resetRecordingsForTesting,
   parseFlow,
   serializeFlow,
+  STEP_DIRECTIVE_KEYS,
 } from "../../src/tools/flows/flow-utils";
 import { n } from "./harness";
 
@@ -141,7 +153,10 @@ function registryWhereWaitSucceeds(): Registry {
     invokeTool: vi.fn(async (id: string) => {
       if (id === "await-ui-element") return { success: true, elapsed: 120 };
       if (id === "gesture-tap") return { tapped: true };
-      throw new Error(`Tool "${id}" not found`);
+      // The real registry throws `ToolNotFoundError` (not a plain Error) for an
+      // unregistered id — `isToolNotFound` keys on that type, so the mock must
+      // match production for the directive-hint path to be reached.
+      throw new ToolNotFoundError(id);
     }),
     getTool: vi.fn(() => undefined),
   } as unknown as Registry;
@@ -153,8 +168,13 @@ function registryWhereWaitTimesOut(): Registry {
 }
 
 /**
- * `{ success: false }` with a `note` and optional `cause`. Without `cause` a
- * blind window and a genuine miss write the same note.
+ * A registry whose `await-ui-element` returns `{ success: false }` carrying
+ * `note`, and optionally the `cause` the real tool decides in its poll loop.
+ *
+ * Without `cause` this is the LEGACY shape, where the recorder has only the
+ * note to read. With it the note may say anything — on
+ * `visible`/`exists`/`text` a blind window produces prose byte-identical to a
+ * genuine miss, which is why the cause is carried rather than parsed back out.
  */
 function registryWhereWaitFails(note: string, extra: { cause?: string } = {}): Registry {
   return {
@@ -237,8 +257,10 @@ function warningOf(result: { message: string }, name: string): string | undefine
 }
 
 /**
- * Verdicts from a finished `summary`, keyed by the step they follow. Each is its
- * own ARRAY ELEMENT: a folded newline would reach the agent escaped.
+ * The verdicts a finished `summary` carries, keyed by the step number each one
+ * follows. A verdict is its own ARRAY ELEMENT, indented under its step: the
+ * finish has no bespoke MCP renderer, so a newline folded into the step's
+ * element would reach the agent escaped inside one long string.
  */
 function verdictsIn(summary: string[]): Map<number, string> {
   const prefix = "   warning: ";
@@ -276,8 +298,10 @@ afterEach(async () => {
 });
 
 /**
- * Serve one runner-tree read. `source` is a label only: the platform arm comes
- * from the UDID shape alone, so a fixture exercises the SHAPE, not the source.
+ * Serve one runner-tree read. `source` is labelling only: the probe never reads
+ * `data.source`, and every clause picks its platform arm from the UDID shape.
+ * So a fixture passing "cdp-dom" exercises the Chromium tree SHAPE, which the
+ * real `adaptChromiumTreeForFlows` built, not the source.
  */
 const serveTree = (tree: DescribeNode, source: DescribeTreeData["source"] = "native-devtools") => {
   fetchRunnerTree = async () => ({ tree, source });
@@ -304,8 +328,13 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     ]);
   });
 
-  // The probe uses flowFindAll + evaluateCondition; the live wait used findAll +
-  // evaluateMatches. If they drift, the recorder warns on every correct wait.
+  // ── The evaluators on the two sides must not drift ────────────────────────
+  //
+  // The probe re-evaluates with the flow runner's engine (flowFindAll +
+  // evaluateCondition); the live wait used await-ui-element's (findAll +
+  // evaluateMatches). Nothing else here would notice them drifting apart — the
+  // tree is mocked and the live tool stubbed — and the recorder would then warn
+  // on every correctly-recorded wait. So feed both engines the SAME tree.
   const AGREEMENT: Array<{ name: string; wait: WaitArgs; tree: () => DescribeNode }> = [
     {
       name: "visible",
@@ -416,7 +445,11 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   });
 
   it("reads the cause off the RESULT, not off a note that reads like a miss", async () => {
-    // A blind window writes the same note as a genuine miss; only `cause` parts them.
+    // Every other recorder test here omits `cause`, exercising only
+    // `unmetUiWaitCause`'s note fallback. The case the field exists for is the
+    // one the note cannot express: on `visible`/`exists`/`text` a blind window
+    // reads byte-identical to a genuine miss, and the note alone would send the
+    // author to delete the step.
     await startRecording("carried");
 
     const result = await recordWait(
@@ -443,8 +476,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warningOf(bare, "bare")).toContain("the wait itself never held");
   });
 
-  // The delete advice must say WHEN: after the finish, in both modes. In host
-  // mode the re-read renumbers the steps the verdicts are anchored to.
+  // The unmet warning tells the author to delete the failed step, and must say
+  // WHEN: after the finish, in both persistence modes. Against a remote client
+  // the in-memory copy is authoritative and the next append writes the step
+  // back; in host mode the re-read renumbers the steps the verdicts anchor to.
   it("records against a remote client, and defers the delete to the finish", async () => {
     await startRemoteRecording("remoteunmet");
 
@@ -480,8 +515,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   });
 
   it("carries a verdict through a client-mode finish", async () => {
-    // Client mode has no file: the finish serializes the flow, parses it back,
-    // and compares against the RAW objects. `summarizeStep` must render both alike.
+    // Client mode is the hardest arm for the anchor comparison: with no file
+    // the finish serializes the in-memory flow, parses it back, and compares
+    // those steps against `session.flow.steps` — the RAW objects the recorder
+    // pushed. Every verdict rides on `summarizeStep` rendering both alike.
     serveTree(iosRunnerTree([iosLabel("Proceed")]));
     await startRemoteRecording("remotefinish");
     await recordWait("remotefinish", { condition: "visible", selector: { text: "Continue" } });
@@ -601,9 +638,14 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     ]);
   });
 
-  // The probe reads `args.selector` strictly. The grammar's bare string is a
-  // LOOSE selector: identifier first, then text. Where a node's id equals the
-  // recorded text the two spellings resolve different elements.
+  // ── Which SPELLING of the conversion the verdict is about ────────────────
+  //
+  // The probe evaluates `args.selector` strictly, as recorded. The directive
+  // grammar's bare-string sugar is a LOOSE selector, resolved identifier-first
+  // with text only as a fallback — so on a screen where some node's id equals
+  // the recorded text the two spellings resolve different elements and the
+  // verdict flips. Both trees below are the live Chromium repro's shape:
+  // `<button id="Continue">Proceed</button>`.
   const CONTINUE_BUTTON = () =>
     chromiumRunnerTree([
       n({ role: "button", identifier: "Continue", value: "Proceed", frame: ROW, children: [] }),
@@ -644,8 +686,15 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).toContain("re-parses as a LOOSE selector");
   });
 
-  // `await-ui-element` defaults to `contains` and the YAML omits a defaulted
-  // field. The `text:` directive has no default, so polish must choose.
+  // ── The `text` comparator the recorded step does NOT carry ───────────────
+  //
+  // `await-ui-element` compares with `contains` unless the step passed
+  // `textMatch: equals`, and the recorded YAML omits a defaulted field — while
+  // the `text:` directive has no default and forces the author to pick. So the
+  // comparator is a polish-time decision the artifact does not record, and the
+  // wrong pick fails on the very screen the probe approved. The skill's
+  // conversion rule (no `textMatch` ⇒ `contains:`) is sound only while the two
+  // readings differ this way.
   it("judges a text wait with the tool's `contains` default, not `equals`", async () => {
     const totalRow = () => iosRunnerTree([iosLabel("Total: $5.00")]);
 
@@ -671,9 +720,17 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
   // ── Per-platform divergences, each produced by that platform's adapter ────
 
-  // iOS: an `accessible` container. The AX tree merges it into ONE leaf whose
-  // label aggregates its children, so the author records a merged string. The
-  // flow projection hoists that text into `subtreeText`, which `findAll` skips.
+  // iOS: an `accessible` container. The AX tree the recorder read merges it
+  // into ONE leaf whose label aggregates its children (see
+  // `captureTapSelector`), so the author records the merged string and it
+  // resolves nothing for the runner: the flow projection keeps the container as
+  // an addressable leaf and hoists the children's text into `subtreeText`,
+  // which `findAll` does not match on.
+  //
+  // An `alpha: 0` view would NOT do here: whether the AX tree reports a fully
+  // transparent one is a device question the suite cannot settle. The adapter
+  // rule that fixture was reaching for is asserted directly below, as what it
+  // is — a statement about the projection, not about a divergence.
   const IOS_ACCESSIBLE_CONTAINER = [
     {
       className: "UIView",
@@ -702,8 +759,11 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     const warning = warningOf(result, "ios");
 
     expect(warning).toContain("does NOT hold against the tree the runner resolves");
-    // The probe uses the same short grace an `assert:` uses. The consequence is
-    // conditional because the same verdict also comes from a screen that moved on.
+    // The probe reads on the same short grace an `assert:` uses, so it predicts
+    // that conversion exactly — but only where the two trees really differ,
+    // which is this fixture. The consequence stays conditional because the same
+    // verdict comes back from a screen that merely moved on; an `await:` polls
+    // longer, so it carries the extra escape hatch.
     expect(warning).toContain(
       "if the trees really do differ over this element, an `assert:` conversion fails the same way"
     );
@@ -712,30 +772,46 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
       "if the SCREEN simply moved on since the live wait, this verdict is no evidence"
     );
     expect(warning).not.toContain("WILL fail");
-    // Elsewhere this text is pinned only by its ABSENCE, so the arm could ship "".
+    // WHY the two disagree, in iOS's own terms. Elsewhere this text is only
+    // ever pinned by its ABSENCE, so without a positive assertion the whole arm
+    // could return "".
     expect(warning).toContain(
       "The recorder reads the accessibility tree and the runner reads the full native view " +
         "hierarchy; they overlap but neither contains the other."
     );
-    // The admission no tree story rules out, appended per arm.
+    // And the admission no tree story rules out, appended per arm. The
+    // consequence sentence upstream conditions itself on this cause ("if the
+    // SCREEN simply moved on…"), so an arm that omits it leaves that
+    // conditional groundless.
     expect(warning).toContain("changed between the live wait and this re-probe");
-    // iOS must NOT be told a tool "reads the runner's side". The Apple-only
-    // readers match identifier/label/className exactly; `text`/`role` are substrings.
+    // iOS must NOT be told a tool "reads the runner's side": the Apple-only
+    // full-hierarchy readers return the RAW view tree — both UILabels, still no
+    // view carrying the merged label — and match identifier/label/className
+    // exactly, where a recorded selector's `text`/`role` are substrings.
+    // Anchored on the preceding sentence's end, so the join is pinned too.
     expect(warning).toContain(
       "rule that out first. No read-only tool reports the runner's projection on iOS"
     );
-    // `native-full-hierarchy` takes no matcher; only `native-find-views` matches exactly.
+    // The two tools fail the question DIFFERENTLY, so pooling them names a
+    // query one cannot be asked: `native-full-hierarchy` takes no matcher at
+    // all. Only `native-find-views` has the exact-match behaviour.
     expect(warning).toContain(
       "`native-find-views` matches `identifier`/`label`/`className` EXACTLY"
     );
     expect(warning).toContain("`native-full-hierarchy` takes no matcher at all");
-    // The skill gates on visible text and retargets at polish, which PRODUCES this.
+    // Nor may it answer "re-record": the skill's workflow for a testID the
+    // trimmed tree hides is to gate on visible text and retarget at polish,
+    // which is what PRODUCES this divergence. Sending the author back asks for
+    // a step the skill just said cannot be recorded live.
     expect(warning).not.toContain("re-record");
     expect(warning).toContain("retarget the DIRECTIVE at an `id` the full hierarchy carries");
     expect(await recordedSteps("ios")).toHaveLength(1);
   });
 
-  // Whether the AX tree reports an `alpha: 0` view is a device question; this is not.
+  // The projection rule as what it actually is. Whether the AX tree still
+  // reports an `alpha: 0` view — and so whether this rule ever produces a
+  // divergence — is a device question; that the runner's projection drops one
+  // is not.
   it("iOS: the runner's projection drops a transparent view", () => {
     expect(findAll(iosRunnerTree([iosLabel("Continue")]), { text: "Continue" })).toHaveLength(1);
     expect(
@@ -780,9 +856,18 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).not.toContain("retarget the DIRECTIVE at a `resource-id` the full hierarchy");
   });
 
-  // Android: an RN `Pressable testID` wrapping a `Text testID`. The TRIM makes
-  // the clickable row BORROW its descendant's text and drops the TextView. The
-  // FLOW parse keeps both, and the inner resource-id shields its text.
+  // Android: a testID'd label inside a testID'd clickable row — an everyday RN
+  // `Pressable testID` wrapping a `Text testID`.
+  //
+  // The TRIM collapses the pair: the row is clickable with no own label, so it
+  // BORROWS its descendant's text and the inner TextView disappears into it —
+  // `describe` shows one node, `id=continue-row label="Continue"`. The FLOW
+  // parse keeps both, and the inner node's own resource-id SHIELDS its text
+  // from hoisting, so the row reaches the runner with no text at all. A `text`
+  // check on it holds live and not for the runner.
+  //
+  // A `com.android.systemui` target would NOT work: both parses drop system
+  // chrome, so the live wait would fail too and only the stub keeps it green.
   const ANDROID_ROW = `<node index="0" class="android.widget.LinearLayout" resource-id="com.acme.app:id/continue-row" clickable="true" package="com.acme.app" bounds="[40,400][1040,480]">
            <node index="0" class="android.widget.TextView" resource-id="com.acme.app:id/continue-label" text="Continue" package="com.acme.app" bounds="[60,410][600,470]" />
          </node>`;
@@ -818,8 +903,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     // No tree story rules out a screen that moved on, so every platform says so.
     expect(warning).toContain("changed between the live wait and this re-probe");
     expect(warning).not.toContain("native-find-views");
-    // Pin Android's OWN story: one dump parsed two ways on this host.
-    // `describeAndroid` and `flow-android-tree` both call `getHierarchy()`.
+    // Pin Android's OWN story, not merely that it differs from the others:
+    // "four distinct strings" is satisfied by four wrong ones. Android's story
+    // is one dump parsed two ways on this host — no view tree, and no second
+    // read: both sides call `devtools.getHierarchy()`.
     expect(warning).toContain("Both read the same `getHierarchy` dump");
     expect(warning).toContain("this host then parses it two ways");
     expect(warning).toContain("each holds elements the other drops");
@@ -904,8 +991,11 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).not.toContain("keeps only addressable nodes");
   });
 
-  // Not a MEMBERSHIP divergence. `text` inspects one winner and
-  // `firstInReadingOrder` breaks a tie by order: `findAll` pre, `flattenHoisting` post.
+  // A divergence that is not about MEMBERSHIP. Both trees hold both nodes; the
+  // sides elect different ones, because `text` inspects a single winner and
+  // `firstInReadingOrder` breaks an exact (y, x) tie by encounter order — and
+  // the two enumerate in opposite orders. The verdict is right and every other
+  // explanation in the message is wrong for it.
   it("Chromium: names the multi-match cause when a `text` wait elects two different winners", async () => {
     const TIE = { x: 0.007, y: 0.062, width: 0.98, height: 0.014 };
     const recorderRow = n({
@@ -953,8 +1043,11 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   });
 
   it("iOS: explains the `text` tie without a container neither of its trees has", async () => {
-    // On iOS both sides are FLAT, so the container-over-child story names a
-    // shape the platform does not have.
+    // On iOS both sides are FLAT, so the tie is still reachable — two flat
+    // lists from different sources can order an exact frame tie differently —
+    // but the container-over-child story sends an author hunting a shape the
+    // platform does not have. The clause is gated on `condition === "text"`
+    // alone, so nothing else keeps it off this arm.
     serveTree(iosRunnerTree([iosLabel("Total: $5.00")]));
     await startRecording("iostie");
 
@@ -992,8 +1085,11 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).not.toContain("elect DIFFERENT ones");
   });
 
-  // Chromium, the OTHER direction: the runner KEEPS the node but redacts a
-  // password leaf's name to `[password]`, so only an `id` selector resolves it.
+  // Chromium, the OTHER direction: a node the runner KEEPS.
+  // `projectChromiumNode` redacts a password leaf's name to `[password]`, so an
+  // `id` selector resolves it while no text selector can. A message that only
+  // says "the runner dropped it" is false here in both halves, and its
+  // "re-record with a text or label" remedy is unreachable by construction.
   it("Chromium: does not claim the runner dropped a password field it kept", async () => {
     const tree = chromiumRunnerTree([
       n({
@@ -1029,8 +1125,11 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).toContain("omits nodes the runner keeps");
   });
 
-  // Vega's runner tree CANNOT disagree on an unchanged screen: `projectVegaNode`
-  // skips nothing. Its only edit is a hoisted `subtreeText`, added beside own text.
+  // Vega is the one platform whose runner tree CANNOT disagree on an unchanged
+  // screen: `projectVegaNode` skips nothing, so membership, frames and
+  // visibility are identical, and its hoisted `subtreeText` is only ever extra
+  // evidence beside a node's own text. The two assertions pin both halves: the
+  // hoist never flips a passing check, and a warning blames the screen.
   it("Vega: the text hoist alone never turns a passing check into a warning", async () => {
     const parsed = [
       n({
@@ -1073,7 +1172,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     const warning = warningOf(result, "vega");
 
     expect(warning).toContain("does NOT hold against the tree the runner resolves");
-    // Anchored on the word this arm and the `text` arm differ by, not the shared prefix.
+    // Anchored on the word this arm and the `text` arm differ by: the bare
+    // "the SCREEN changed between…" is a substring of BOTH, so forcing the
+    // `text` cause everywhere would offer a `visible` author an election tie
+    // that `visible` cannot have.
     expect(warning).toContain(
       "disagreement means the SCREEN changed between the live wait and this re-probe"
     );
@@ -1093,7 +1195,9 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   });
 
   it("Vega: admits the tie its own text clause names two sentences later", async () => {
-    // The tie comes from the two enumeration orders, and Vega has them too.
+    // The tie mechanism is not a platform difference but the two enumeration
+    // orders, which Vega has too. So on `text` the screen is not the only
+    // cause, and saying it is contradicts the clause the same message carries.
     const TIE = { x: 0.1, y: 0.1, width: 0.5, height: 0.05 };
     const row = n({
       identifier: "row",
@@ -1241,7 +1345,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   });
 
   // `probeWhenCondition` budgets its POLL LOOP at the 1s assert grace, but each
-  // read is unbounded (10s Chromium CDP, 15s Android `getHierarchy`).
+  // tree read inside it is awaited unbounded and the clock is checked only
+  // between reads — so a slow source stalls the recorder far past the window
+  // the warning advertises. Ceiling the probe, and report an overrun as
+  // indeterminate rather than as a verdict.
   it("gives up on a tree read that outruns the probe budget, and stops it", async () => {
     // A read held open past the ceiling, then released. One that never settles proves less.
     let releaseRead: () => void = () => {};
@@ -1276,25 +1383,41 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).toContain("when the device is quieter");
     expect(warning).not.toContain("once that tree source is back");
     expect(warning).not.toContain("does NOT hold");
-    // This bound is a BACKSTOP, not the proof: the read cannot land until
-    // `releaseRead()`, so a probe that never gave up would park forever.
+    // The bound is a BACKSTOP, not the proof. The read cannot land until
+    // `releaseRead()` below, so a probe that did not give up would park forever
+    // and never return — returning is the proof, and the per-test timeout
+    // catches the failure. Wall-clock only guards an overrun so large the
+    // timeout would be reached another way.
     expect(elapsed).toBeLessThan(12_000);
     expect(await recordedSteps("slow")).toHaveLength(1);
     expect(fetchCount).toBe(1);
 
-    // Let the abandoned read land. Past its deadline the poll loop takes one more
-    // full read (`finalPoll`) unless it was stopped, which would move the stall
-    // behind the recorder's next step. Raced, not slept.
+    // Now let the abandoned read land. Past its deadline the poll loop takes
+    // one more full read (`finalPoll`) unless stopped, which would put a second
+    // device read behind whatever step runs next — relocating the stall the
+    // ceiling exists to remove.
+    //
+    // Raced rather than slept: `secondRead` resolves the moment a second fetch
+    // is issued, so the failure path ends at once and the success path gets the
+    // whole window. A fixed 50ms sleep was neither under load.
     releaseRead();
     await Promise.race([secondRead, new Promise((resolve) => setTimeout(resolve, 750))]);
     expect(fetchCount).toBe(1);
   }, 15_000);
 
-  // A determinate verdict costs TWO full reads, so a ceiling of "grace plus one
-  // read" turns a merely slow device into an indeterminate warning.
+  // The budget must cover the branch the probe exists for. A determinate
+  // verdict costs TWO full reads — the loop checks its deadline only after a
+  // completed read, then fires one more — so a ceiling of "the grace plus one
+  // in-flight read" gives the divergence warning half the clean case's
+  // tolerance and substitutes the indeterminate one on a merely slow device.
   it("still reaches a determinate verdict when each read is slower than the grace window", async () => {
-    // 1.9s per read is over the 1s grace, so the loop takes two reads, near 3.8s.
-    // Load only pushes that UP: above the 3500ms ceiling, under the 6000ms budget.
+    // 1.9s per read: over the 1s grace, so the loop takes exactly two reads and
+    // the total lands near 3.8s. The clean case returns from the first read, so
+    // it always tolerated this; the determinate branch needs two.
+    //
+    // Both bounds are one-directional under load, which is what keeps this from
+    // flaking: load only pushes the total UP, so it stays above the 3500ms
+    // ceiling under test while leaving 2.2s under the real 6000ms budget.
     fetchRunnerTree = async () => {
       await new Promise((resolve) => setTimeout(resolve, 1900));
       return { tree: iosRunnerTree([iosLabel("Proceed")]), source: "native-devtools" };
@@ -1312,8 +1435,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).not.toContain("could not be re-verified");
   }, 20_000);
 
-  // A `text` reason quotes the matched element's content, and on the flow tree
-  // that content is HOISTED. Unbounded, one check pastes a whole log pane.
+  // A `text` reason quotes the matched element's rendered content, and on the
+  // flow tree that content is HOISTED — a container carries every descendant's
+  // text. Unbounded, one failed check can paste a whole log pane into a tool
+  // result the agent reads in full.
   it("caps the screen text it echoes back", async () => {
     const wall = "Lorem ipsum dolor sit amet ".repeat(60); // ~1600 chars
     serveTree(iosRunnerTree([iosLabel(`Total ${wall}`)]));
@@ -1329,7 +1454,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).toContain("does NOT hold against the tree the runner resolves");
     expect(warning).toContain("more chars)");
     expect(warning).toContain("Lorem ipsum");
-    // Bound the ECHOED REASON: the fixed prose around it is longer than this fixture.
+    // Bound the ECHOED REASON, not the whole message: the fixed prose around it
+    // is longer than this fixture, so `warning.length < wall.length` would turn
+    // on how much explanation the message carries. Pin the EMITTED string,
+    // marker included.
     const echoed = echoedReasonOf(warning);
     expect(echoed.length).toBeLessThanOrEqual(200);
     const [, tail] = echoed.split(/… \(\d+ more chars\) …/);
@@ -1393,7 +1521,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   });
 
   it("reports a probe that threw outright as indeterminate, not as a verdict", async () => {
-    // Elsewhere `fetchFlowTree` throws into an indeterminate VALUE; here the probe rejects.
+    // The arm no tree fixture reaches: every "cannot be read" case makes
+    // `fetchFlowTree` throw, which `waitForCondition` catches into an
+    // indeterminate VALUE. This is the other half — the probe itself rejecting
+    // — and it must read as "the tree did not answer", not as a divergence.
     probeRejection = new Error("probe blew up");
     await startRecording("threw");
 
@@ -1414,7 +1545,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   });
 
   it("raises no warning for a wait nested inside a recorded run-sequence", async () => {
-    // The recorder keys wait warnings off the tool id, so `run-sequence` is never probed.
+    // `flow-start-recording`'s description tells the author this. The recorder
+    // keys every wait warning off the tool id, so a `run-sequence` — whose own
+    // result carries no `success` key — is neither probed nor reported on,
+    // however its nested wait ended.
     const registry = {
       invokeTool: vi.fn(async (id: string) => {
         if (id === "run-sequence") return { completed: 0, total: 2, steps: [] };
@@ -1593,8 +1727,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   });
 
   it("keeps every verdict when the recording ends with an echo", async () => {
-    // `flow-add-echo` appends through the same helper and files no verdict, so it
-    // can leave the recording longer than the count flow-add-step kept.
+    // `flow-add-echo` appends through the same helper and files no verdict, so
+    // a trailing echo must not drop the verdicts already filed: it moves none
+    // of the warned steps, and labelling a recording with echoes is what
+    // flow-start-recording's description asks for.
     await startRecording("echolast");
     serveTree(iosRunnerTree([iosLabel("Proceed")]));
     await recordWait("echolast", { condition: "visible", selector: { text: "Continue" } });
@@ -1648,8 +1784,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   });
 
   it("drops an untouched step's verdict when a LATER step was edited in place", async () => {
-    // Check 1's own behaviour. The edit is on step 2's args: same length, same
-    // order, so only the whole-flow comparison notices, and it drops EVERY verdict.
+    // Check 1's own behaviour, which nothing else reaches: the warned step is
+    // step 1 and the edit is on step 2's args — same length, same order, step 1
+    // untouched — so check 2 has nothing to say. Only the whole-flow comparison
+    // notices, and it drops EVERY verdict, which the finish must report.
     await startRecording("inplace");
     serveTree(iosRunnerTree([iosLabel("Proceed")]));
     await recordWait("inplace", { condition: "visible", selector: { text: "Continue" } });
@@ -1740,7 +1878,9 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
   it("drops the verdict a hand edit moved onto an identical twin step", async () => {
     // The case both content checks are blind to. A verdict is not a function of
-    // content: a twin can diverge at one position and agree at another.
+    // the step's content — the probe reads the live device at that step's
+    // moment — so a byte-identical wait can diverge at one position and agree
+    // at another. Renumber the two and the anchor cannot tell them apart.
     await startRecording("twins");
     serveTree(iosRunnerTree([iosLabel("Ready marker")]));
     await recordWait("twins", { condition: "visible", selector: { text: "Ready marker" } });
@@ -1808,8 +1948,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   });
 
   it("keeps a live verdict when a delete makes the next append reuse its number", async () => {
-    // TWO verdicts alive across the edit make the reused key reachable: the next
-    // append returns a `stepCount` a verdict already holds.
+    // TWO verdicts alive across the edit, which makes the reused key reachable:
+    // the file loses a step, so the next append returns a `stepCount` a verdict
+    // already holds. Overwriting it would lose a warning on a step still in the
+    // flow and still diverging.
     await startRecording("collide");
     serveTree(iosRunnerTree([iosLabel("Proceed")]));
     await recordWait("collide", { condition: "visible", selector: { text: "Alpha" } });
@@ -1834,7 +1976,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
       { name: "collide", project_root: tmpDir }
     );
 
-    // "Beta" moved from 2 to 1, so its verdict has no number, but it must be COUNTED.
+    // "Beta" moved from 2 to 1, so its verdict cannot be reported against a
+    // number any more — but it must be COUNTED, not replaced by "Gamma"'s.
+    // Three verdicts were raised: one survives, "Alpha"'s went with the deleted
+    // step, "Beta"'s with the renumbering.
     expect(finished.summary[0]).toContain('"Beta"');
     expect([...verdictsIn(finished.summary).keys()]).toEqual([2]);
     expect(finished.summary[2]).toContain('"Gamma"');
@@ -1845,9 +1990,11 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   });
 
   it("is declared longRunning, so the probe's budget is not spent from a 30s cap", () => {
-    // Without the flag the MCP adapter caps the POST at FETCH_TIMEOUT_MS and
-    // retries MAX_RETRIES times; each retry re-runs the action and appends a step.
-    // The re-probe spends PROBE_BUDGET_MS from that same ceiling.
+    // The recorded tool runs inside this call, so it is as long as whatever it
+    // wraps — and the three it most often wraps all declare this. Without it
+    // the MCP adapter caps the POST at FETCH_TIMEOUT_MS and retries the body
+    // MAX_RETRIES more times, each retry re-running the action and appending
+    // another step. The re-probe spends PROBE_BUDGET_MS from that same ceiling.
     expect(createFlowAddStepTool(registryWhereWaitSucceeds()).longRunning).toBe(true);
     // The tool it proxies most often: a standalone wait duplicated once recorded.
     expect(createAwaitUiElementTool(registryWhereWaitSucceeds()).longRunning).toBe(true);
@@ -1868,8 +2015,11 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   });
 
   it("keeps the verdicts a hand edit left in place", async () => {
-    // Removing an UNwarned step must not cost earlier steps their verdicts. The
-    // removed step must be DISTINGUISHABLE, or the file matches both alignments.
+    // The other half of the anchor rule: removing an UNwarned step must not
+    // cost the steps before it their verdicts, or the guard is the length
+    // heuristic under another name. The removed step must be DISTINGUISHABLE
+    // from the warned one — deleting a step identical to its neighbour leaves
+    // the file matching both alignments (see the test below).
     await startRecording("kept");
     serveTree(iosRunnerTree([iosLabel("Proceed")]));
     await recordWait("kept", { condition: "visible", selector: { text: "Continue" } });
@@ -1895,9 +2045,12 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   });
 
   it("drops the verdict when a delete of a twin puts the length back", async () => {
-    // The case a prefix comparison alone cannot see. Step 1 diverges, step 2 is
-    // its twin that agrees. Delete step 1 and record one more that agrees: the
-    // length is back and the survivor at 1 renders like the step judged.
+    // The case a prefix comparison alone cannot see. Step 1 diverges and
+    // carries the verdict; step 2 is the byte-identical wait against a tree
+    // that DOES hold the element. Delete step 1 and record one more that agrees
+    // — the file is two steps long again, so the length says nothing, and the
+    // survivor at number 1 renders exactly like the step the verdict judged.
+    // Every wait left agreed, so any verdict here convicts an innocent step.
     await startRecording("relen");
     serveTree(iosRunnerTree([iosLabel("Proceed")]));
     await recordWait("relen", { condition: "visible", selector: { text: "Continue" } });
@@ -1951,8 +2104,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   });
 
   it("records the next step when a hand edit made an earlier one unserializable", async () => {
-    // The anchor check renders both views of the prefix, and a cyclic YAML alias
-    // has no rendering. Throwing fails an append that already ran.
+    // The anchor check renders both views of the prefix, and a cyclic YAML
+    // alias — which `parseFlow` accepts inside a step's `args` — has no
+    // rendering. Throwing there fails an append that already wrote the step and
+    // ran it on the device, so the documented retry duplicates both.
     await startRecording("cyclic");
     serveTree(iosRunnerTree([iosLabel("Proceed")]));
     await recordWait("cyclic", { condition: "visible", selector: { text: "Continue" } });
@@ -2015,7 +2170,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).toContain("UNKNOWN, not known-bad");
     expect(warning).not.toContain("does NOT hold");
     expect(await recordedSteps("cancel")).toHaveLength(1);
-    // ZERO reads. The signal must reach the POLL LOOP, not just the wait for it.
+    // ZERO reads. The caller's signal must reach the POLL LOOP, not just the
+    // wait for it: `waitForCondition` tests it before its first fetch, so an
+    // already-cancelled call must never touch the device. Dropping `ctx.signal`
+    // would let `settleWithin` report the abort while the loop still reads.
     expect(fetchCount).toBe(0);
   });
 
@@ -2038,13 +2196,413 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(await recordedSteps("cancelmid")).toHaveLength(1);
   });
 
-  // No `ios-remote` arm: a remote sim never reaches the probe, assertSupported
-  // throws first. If appleRemote is added, both tables need that arm.
+  // Why the clause tables carry no `ios-remote` arm: a remote sim never reaches
+  // the probe. `await-ui-element` declares no appleRemote capability, so
+  // assertSupported throws while the step is still executing live. If that
+  // capability is ever added, both tables need an ios-remote arm — the
+  // AX-vs-full-hierarchy story, not the generic fallback.
   it("cannot be reached on ios-remote: await-ui-element refuses the device", () => {
     const tool = createAwaitUiElementTool(registryWhereWaitSucceeds());
     expect(tool.capability?.appleRemote).toBeUndefined();
     expect(() =>
       assertSupported("await-ui-element", tool.capability, resolveDevice(`remote:${IOS}`))
     ).toThrow(/not supported on ios-remote/);
+  });
+});
+
+// `command` names an MCP tool, but the vocabulary an author has in mind
+// while recording is the flow file's own directives, so `command: "echo"`
+// used to come back as a bare "Tool not found".
+describe("a flow-directive name points at the tool that records it", () => {
+  beforeEach(async () => {
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "hints", project_root: tmpDir, executionPrerequisite: "anywhere" }
+    );
+  });
+
+  const hint = async (command: string) => {
+    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
+    return tool.execute({}, { name: "hints", project_root: tmpDir, command });
+  };
+
+  it("answers EVERY directive the parser accepts, or lists it as deliberately unanswered", async () => {
+    // Every name the parser accepts must be answered or exempted on purpose:
+    // one left out answers with the bare "Tool not found" this feature exists
+    // to replace. Held against the parser's own registry rather than a copy, so
+    // a directive added there cannot slip through.
+    const unanswered = STEP_DIRECTIVE_KEYS.filter((key) => directiveCommandHint(key) === undefined);
+    expect([...unanswered].sort()).toEqual([...UNHINTED_DIRECTIVE_KEYS].sort());
+  });
+
+  it("names no tool for the directives that have none, and says what to do instead", async () => {
+    // Five directives have no recording tool, each for its own reason, and an
+    // author who is told to "call X" for one of them goes looking for a tool
+    // that does not exist.
+    const cases: [string, string][] = [
+      ["wait", "a fixed sleep is not a readiness signal"],
+      ["long-press", "there is no gesture-long-press"],
+      ["scroll-to", "it SEARCHES"],
+      ["snapshot", "compares the screen against a stored baseline"],
+      ["when", "it GUARDS the steps nested under it"],
+    ];
+    for (const [command, why] of cases) {
+      const result = await hint(command);
+      expect(result.message, command).toContain("is a flow directive, not a tool");
+      expect(result.message, command).toContain("records one");
+      expect(result.message, command).toContain(why);
+      // No "Record it by calling `X` through flow-add-step" — that sentence
+      // is the table's, and following it here sends the author after a tool
+      // that does not exist.
+      expect(result.message, command).not.toContain("Record it by calling");
+      expect(result.message, command).toContain("no step was recorded");
+      expect(result.stepCount, command).toBe(0);
+    }
+    expect(await recordedSteps("hints")).toEqual([]);
+  });
+
+  it("names gesture-pinch for `pinch`, stored raw", async () => {
+    const result = await hint("pinch");
+    expect(result.message).toContain("gesture-pinch");
+    expect(result.message).toContain("stored as a raw `tool: gesture-pinch` step");
+    expect(result.stepCount).toBe(0);
+  });
+
+  it("names flow-add-echo for `echo`", async () => {
+    const result = await hint("echo");
+    expect(result.message).toContain("flow-add-echo");
+    expect(result.message).toContain("no step was recorded");
+  });
+
+  it("explains that `wait` has no recording tool at all", async () => {
+    const result = await hint("wait");
+    expect(result.message).toContain("a fixed sleep is not a readiness signal");
+    expect(result.message).toContain("await-ui-element");
+  });
+
+  it("names restart-app for `launch`", async () => {
+    expect((await hint("launch")).message).toContain("restart-app");
+  });
+
+  // Routing `echo` through flow-add-step appends TWO steps: flow-add-echo
+  // writes its own directive, and flow-add-step records a raw
+  // `tool: flow-add-echo` step that errors on every replay, since no recording
+  // is open then. Both report success.
+  it("refuses a recorder tool as `command` instead of nesting it", async () => {
+    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
+    for (const command of [
+      "flow-add-echo",
+      "flow-add-step",
+      "flow-start-recording",
+      "flow-finish-recording",
+    ]) {
+      const result = await tool.execute(
+        {},
+        { name: "hints", project_root: tmpDir, command, args: "{}" }
+      );
+      expect(result.message, command).toContain("no step was recorded");
+      expect(result.stepCount, command).toBe(0);
+    }
+    expect(await recordedSteps("hints")).toEqual([]);
+  });
+
+  it("gives each refused recorder tool ITS OWN reason", async () => {
+    // The `command` `.describe()` promises the four are refused "each for its
+    // own reason", so the per-entry text IS the contract. Without a content
+    // assertion per entry, exchanging the `flow-start-recording` and
+    // `flow-finish-recording` bodies passes while an author is told that
+    // finishing truncates and starting ends the take.
+    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
+    const reasons: [string, string[], string[]][] = [
+      [
+        "flow-add-echo",
+        ["must be called DIRECTLY", "fails on every replay"],
+        ["truncates", "ends the recording"],
+      ],
+      ["flow-add-step", ["cannot record itself"], ["truncates", "ends the recording"]],
+      ["flow-start-recording", ["truncates the flow it names", "erase"], ["ends the recording"]],
+      [
+        "flow-finish-recording",
+        ["ends the recording", "cannot also be a step in it"],
+        ["truncates"],
+      ],
+    ];
+    for (const [command, present, absent] of reasons) {
+      const result = await tool.execute(
+        {},
+        { name: "hints", project_root: tmpDir, command, args: "{}" }
+      );
+      for (const fragment of present) {
+        expect(result.message, `${command} should say "${fragment}"`).toContain(fragment);
+      }
+      for (const fragment of absent) {
+        expect(result.message, `${command} should not say "${fragment}"`).not.toContain(fragment);
+      }
+    }
+    expect(await recordedSteps("hints")).toEqual([]);
+  });
+
+  it("refuses a recorder tool BEFORE parsing `args`, so malformed `args` cannot pre-empt the guidance", async () => {
+    // The guard runs ahead of `JSON.parse(params.args)` on purpose: a nested
+    // recorder tool must be refused even when `args` is malformed, or a bare
+    // SyntaxError replaces the guidance. Every other test passes valid `args`,
+    // so only this one catches a guard moved after the parse.
+    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
+    const result = await tool.execute(
+      {},
+      { name: "hints", project_root: tmpDir, command: "flow-add-echo", args: "{not valid json" }
+    );
+    expect(result.message).toContain("must be called DIRECTLY");
+    expect(result.message).toContain("no step was recorded");
+    expect(result.stepCount).toBe(0);
+    expect(await recordedSteps("hints")).toEqual([]);
+  });
+
+  it("still answers a directive name when `args` is malformed", async () => {
+    // The hint fires from the sub-invoke catch, which a JSON syntax error never
+    // reaches. An author who wrote `command: "echo"` needs to hear that echo is
+    // a directive, not that a payload which was never going to run is
+    // unparseable.
+    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
+    for (const command of ["echo", "wait", "tap", "run"]) {
+      const result = await tool.execute(
+        {},
+        { name: "hints", project_root: tmpDir, command, args: "{not json" }
+      );
+      expect(result.message, command).toContain("is a flow directive");
+      expect(result.message, command).toContain("no step was recorded");
+      expect(result.stepCount, command).toBe(0);
+    }
+    expect(await recordedSteps("hints")).toEqual([]);
+  });
+
+  it("lets a REGISTERED command's malformed `args` fail as the syntax error it is", async () => {
+    // The gate is the registry, not the hint table: a command the registry
+    // knows is not a directive the author misspelled, whatever it is named, so
+    // its unparseable payload must surface as itself.
+    const registryWhereTapIsRegistered = {
+      invokeTool: vi.fn(async () => ({ ok: true })),
+      getTool: vi.fn((id: string) => (id === "tap" ? ({ id } as never) : undefined)),
+    } as unknown as Registry;
+    const tool = createFlowAddStepTool(registryWhereTapIsRegistered);
+    await expect(
+      tool.execute({}, { name: "hints", project_root: tmpDir, command: "tap", args: "{not json" })
+    ).rejects.toThrow(SyntaxError);
+    expect(await recordedSteps("hints")).toEqual([]);
+  });
+
+  it("reports the step count as the hand-edited file now stands, not the stale snapshot", async () => {
+    // Host mode re-reads the flow on the record-nothing paths so a
+    // mid-recording hand edit reaches the count they report. The failure half
+    // below expects 0, which matches the in-memory snapshot with or without the
+    // refresh — so only this test catches a dropped
+    // `session.flow = parseFlow(...)`.
+    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
+    const flowPath = path.join(tmpDir, ".argent", "flows", "hints.yaml");
+
+    // One recorded step, so the in-memory snapshot is a NON-zero number that
+    // differs from what the file will say — a count of 0 either way would not
+    // tell the two sources apart.
+    await tool.execute(
+      {},
+      {
+        name: "hints",
+        project_root: tmpDir,
+        command: "gesture-tap",
+        args: JSON.stringify({ udid: IOS, x: 0.5, y: 0.5 }),
+      }
+    );
+    expect(await recordedSteps("hints")).toHaveLength(1);
+
+    // The author edits the YAML by hand while the recording is open.
+    await fs.writeFile(flowPath, "steps:\n  - echo: one\n  - echo: two\n  - echo: three\n", "utf8");
+
+    const result = await tool.execute(
+      {},
+      { name: "hints", project_root: tmpDir, command: "echo", args: "{}" }
+    );
+
+    expect(result.message).toContain("flow-add-echo");
+    expect(result.message).not.toContain("could not be read");
+    expect(result.stepCount).toBe(3); // the file, not the snapshot's 1
+  });
+
+  it("qualifies the step count when the persisted flow can no longer be read", async () => {
+    // When the record-nothing paths' re-read (or parse) fails, the count comes
+    // from the last valid in-memory snapshot and must SAY so — otherwise the
+    // author reads a confident number for a file that is now broken.
+    const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", "hints.yaml"),
+      "steps:\n  - [unclosed",
+      "utf8"
+    );
+
+    const result = await tool.execute(
+      {},
+      { name: "hints", project_root: tmpDir, command: "echo", args: "{}" }
+    );
+
+    expect(result.message).toContain("flow-add-echo");
+    expect(result.message).toContain("The persisted flow could not be read and parsed");
+    expect(result.message).toContain("last valid in-memory snapshot");
+    expect(result.stepCount).toBe(0);
+  });
+
+  it("tells the author to call flow-add-echo directly, not through the recorder", async () => {
+    const result = await hint("echo");
+    expect(result.message).toContain("DIRECTLY");
+    expect(result.message).toContain("fails on every replay");
+  });
+
+  it("does not claim a rewrite for the commands the recorder stores raw", async () => {
+    // `type`/`await`/`assert` are recorded as `tool:` steps; polish converts
+    // them. Promising a rewrite sends the author looking for a directive that
+    // is not in the file.
+    for (const command of ["type", "await", "assert"]) {
+      const result = await hint(command);
+      expect(result.message, command).toContain("stored as a raw");
+      expect(result.message, command).toContain("polish pass");
+    }
+    // …while the four that ARE rewritten still say so.
+    expect((await hint("launch")).message).toContain("rewrites it into the `launch:` step");
+  });
+
+  it("names the TOOL that records each directive the recorder stores raw", async () => {
+    // Which tool to call is the one fact these hints exist to convey, and the
+    // assertions above hold whichever tool is named — so without this, swapping
+    // `type`'s `keyboard` for `await-ui-element` passes while the recorder
+    // tells an author to record typing with a wait.
+    const named: [string, string][] = [
+      ["type", "keyboard"],
+      ["await", "await-ui-element"],
+      ["assert", "await-ui-element"],
+    ];
+    for (const [command, tool] of named) {
+      const message = (await hint(command)).message;
+      expect(message, command).toContain(`Record it by calling \`${tool}\` through flow-add-step`);
+      expect(message, command).toContain(`stored as a raw \`tool: ${tool}\` step`);
+    }
+    // `type` must not be answered with the wait tool, nor the checks with the
+    // typing one — the mutation that stayed green was exactly that swap.
+    expect((await hint("type")).message).not.toContain("await-ui-element");
+    for (const command of ["await", "assert"]) {
+      expect((await hint(command)).message, command).not.toContain("`keyboard`");
+    }
+  });
+
+  it("qualifies a rewrite hint with the delayMs opt-out", async () => {
+    // `tap`/`launch`/`run` are rewritten only when the flow-add-step call sets no
+    // `delayMs` (a replay delay has no directive form, so the step is kept raw).
+    // The hint has to say so, or an author who adds delayMs is promised a `tap:`
+    // step the recorder then declines to write.
+    const tap = (await hint("tap")).message;
+    expect(tap).toContain("rewrites it into the `tap:` step");
+    expect(tap).toContain("delayMs");
+    expect(tap).toContain("raw `tool: gesture-tap`");
+  });
+
+  it("names flow-execute for `run`, with the sibling-flow rewrite condition", async () => {
+    // `run` is rewritten into a `run:` step only when its target resolves as a
+    // sibling flow; the hint must state that condition (and the delayMs opt-out),
+    // or the author is promised a `run:` step the recorder may decline to write.
+    const msg = (await hint("run")).message;
+    expect(msg).toContain("flow-execute");
+    expect(msg).toContain("rewrites it into the `run:` step");
+    expect(msg).toContain("sibling flow");
+    expect(msg).toContain("delayMs");
+    // Three outcomes, not two. "Otherwise the raw step is kept" holds for the
+    // name route only: a non-sibling flow_path is refused before anything runs,
+    // and a remote recording keeps the raw step whatever the target is.
+    expect(msg).toContain("REMOTE");
+    expect(msg).toContain("refused outright and records nothing");
+  });
+
+  it("lets a genuine tool failure report itself", async () => {
+    // "screenshot" is not a directive name, so a not-found for it must surface
+    // as the registry's own error rather than being rewritten.
+    await expect(hint("screenshot")).rejects.toThrow(/not found/i);
+  });
+
+  it("does not rewrite a REGISTERED tool's own 'not found' failure into a directive hint", async () => {
+    // The identity check in `isToolNotFound`: a tool that RAN and failed with a
+    // message containing "not found" is a ToolExecutionError, not a
+    // ToolNotFoundError — so even a command sharing a directive name (`tap`)
+    // surfaces its own error. A message-substring check would mask it.
+    const registryWhereTapRanAndFailed = {
+      invokeTool: vi.fn(async () => {
+        throw new ToolExecutionError("tap", "element not found");
+      }),
+      getTool: vi.fn(() => undefined),
+    } as unknown as Registry;
+    const tool = createFlowAddStepTool(registryWhereTapRanAndFailed);
+    await expect(
+      tool.execute({}, { name: "hints", project_root: tmpDir, command: "tap", args: "{}" })
+    ).rejects.toThrow(/element not found/);
+  });
+
+  it("treats a prototype-member command name as a plain not-found, not a table hit", async () => {
+    // `command` is caller-controlled. A value equal to an inherited member
+    // (`__proto__`, `constructor`, …) must not read truthy off the directive
+    // tables' prototype and refuse the call with a garbage message — it falls
+    // through to the ordinary not-found, and records nothing.
+    for (const command of ["__proto__", "constructor", "toString", "hasOwnProperty"]) {
+      await expect(hint(command), command).rejects.toThrow(/not found/i);
+    }
+    expect(await recordedSteps("hints")).toEqual([]);
+  });
+});
+
+// A nested flow-execute recorded via the `flow_name` alias must still be
+// captured as the portable `run: <name>` directive, not kept as a raw
+// `tool: flow-execute` step with a false "had no flow name" warning.
+describe("a recorded flow-execute honors the flow_name alias", () => {
+  // A registry whose only registered tool is flow-execute, which succeeds — so
+  // the recorder reaches `captureRunTarget` (which runs only after the sub-tool
+  // returns).
+  const registryWhereRunSucceeds = (): Registry =>
+    ({
+      invokeTool: vi.fn(async (id: string) => {
+        if (id === "flow-execute") return { ok: true };
+        throw new ToolNotFoundError(id);
+      }),
+      getTool: vi.fn(() => undefined),
+    }) as unknown as Registry;
+
+  const recordRun = async (execArgs: Record<string, unknown>) => {
+    const tool = createFlowAddStepTool(registryWhereRunSucceeds());
+    return tool.execute(
+      {},
+      {
+        name: "wrapper",
+        project_root: tmpDir,
+        command: "flow-execute",
+        args: JSON.stringify(execArgs),
+      }
+    );
+  };
+
+  beforeEach(async () => {
+    // `run:` capture resolves the target against the recording's own flows dir,
+    // so the sibling must exist and parse.
+    const dir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "helper.yaml"), "steps:\n  - echo: hi\n");
+    await flowStartRecordingTool.execute({}, { name: "wrapper", project_root: tmpDir });
+  });
+
+  it("captures `run: <name>` when the nested call named the flow via flow_name", async () => {
+    const result = await recordRun({ flow_name: "helper", project_root: tmpDir, device: IOS });
+    expect(result.message).not.toContain("had no flow name");
+    const steps = await recordedSteps("wrapper");
+    expect(steps).toHaveLength(1);
+    expect(steps[0]).toEqual({ kind: "run", flow: "helper.yaml" });
+  });
+
+  it("still captures `run: <name>` for the canonical `name` (no regression)", async () => {
+    await recordRun({ name: "helper", project_root: tmpDir, device: IOS });
+    const steps = await recordedSteps("wrapper");
+    expect(steps).toHaveLength(1);
+    expect(steps[0]).toEqual({ kind: "run", flow: "helper.yaml" });
   });
 });

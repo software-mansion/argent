@@ -52,10 +52,12 @@ export interface PollDescribeTreeResult<R> {
    * Did the FINAL fetch attempt settle — return a tree or an error — before the
    * loop stopped waiting for it?
    *
-   * `lastError` cannot answer this. It is cleared on every successful fetch, so
-   * a set value means the last fetch failed; but an unset one does NOT mean it
-   * succeeded, because the deadline arm below leaves it unset for an abandoned
-   * fetch, so that the caller can still build a note from an older tree.
+   * `lastError` cannot answer this. A set value means the last fetch failed,
+   * but an unset one does NOT mean it succeeded: the deadline arm below leaves
+   * it unset for a fetch it abandoned after an earlier read had landed, so the
+   * caller can still build a note from that older tree. Reading
+   * `lastError === undefined` as "the last read landed" would vouch for a tree
+   * the source stopped answering about.
    */
   lastAttemptSettled: boolean;
 }
@@ -70,6 +72,7 @@ export async function pollDescribeTree<R>(
   let polls = 0;
   let lastData: DescribeTreeData | null = null;
   let lastError: string | undefined;
+  // No attempt made yet, so none to have settled.
   let lastAttemptSettled = false;
 
   const outcome = (result: R | undefined, aborted: boolean): PollDescribeTreeResult<R> => ({
@@ -95,8 +98,8 @@ export async function pollDescribeTree<R>(
     if (settled.type === "timeout") {
       // Only synthesize a "did not complete" error when we never got a usable
       // tree; a final fetch that merely straddled the deadline leaves lastData
-      // in place so the caller can build a content-based note from it.
-      // `lastAttemptSettled` is what tells that stale tree from a fresh one.
+      // in place so the caller can build a content-based note from it;
+      // `lastAttemptSettled` is how the caller tells it is stale.
       if (lastData === null) {
         lastError ??= `tree fetch did not complete within the ${timeoutMs}ms wait budget`;
       }

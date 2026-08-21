@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { FAILURE_CODES, describeParamIssues, getFailureSignal } from "@argent/registry";
 import type { Registry, ToolContext } from "@argent/registry";
 
 /**
@@ -52,4 +53,40 @@ export async function invokeSubTool<T = unknown>(
   } finally {
     release();
   }
+}
+
+/**
+ * A nested schema rejection re-rendered against the args the CALLER wrote, or
+ * undefined when `err` is not one.
+ *
+ * Every dispatcher injects the device key into the args it forwards, and the
+ * registry can only describe what it was handed — so its "You sent:" list names
+ * a key the author never typed beside the misspelling that list exists to
+ * expose. Here is the only place both the dispatched and the authored args are
+ * in scope.
+ *
+ * Re-parsing rather than short-circuiting the dispatch: the invoke is what
+ * emits `toolInvoked`/`toolFailed`, so validating up front would make an
+ * invalid step invisible to telemetry and the event log. This runs on a failure
+ * path only.
+ */
+export function describeNestedParamError(
+  registry: Registry,
+  err: unknown,
+  toolId: string,
+  dispatchedArgs: unknown,
+  authoredArgs: unknown
+): string | undefined {
+  if (getFailureSignal(err)?.error_code !== FAILURE_CODES.TOOL_INPUT_INVALID) return undefined;
+  const zodSchema = registry.getTool(toolId)?.zodSchema;
+  if (!zodSchema) return undefined;
+  // `?? {}` mirrors what the registry parsed, so the issues are the same ones.
+  const parsed = zodSchema.safeParse(dispatchedArgs ?? {});
+  // Not defensive — this fires on a live path. `InvalidToolInputError` DEFAULTS
+  // to `TOOL_INPUT_INVALID`, so a tool that rejects its own arguments from
+  // inside `execute` passes the gate above with args that parsed fine (a
+  // `tool: flow-execute` step whose `name` is the empty string). There is no
+  // zod error to re-render then, and the tool's own message is already right.
+  if (parsed.success) return undefined;
+  return `Invalid params for tool "${toolId}": ${describeParamIssues(parsed.error, authoredArgs)}`;
 }

@@ -24,6 +24,7 @@ import { FAILURE_CODES } from "./failure-codes";
 import { parseURN } from "./urn";
 import { zodObjectToJsonSchema } from "./zod-to-json-schema";
 import { randomUUID } from "node:crypto";
+import type { $ZodIssue as ZodIssue } from "zod/v4/core";
 
 export class Registry {
   /** Single map: URN -> ServiceNode (all instances). */
@@ -127,7 +128,27 @@ export class Registry {
       if (definition.zodSchema) {
         const parsed = definition.zodSchema.safeParse(params ?? {});
         if (!parsed.success) {
-          throw new Error(`Invalid params for tool "${id}": ${parsed.error.message}`);
+          // A schema miss is a client-input error wherever it is caught. The
+          // same rejection can land here or inside a tool, and telemetry must
+          // not read those as different kinds of failure — an unsignalled Error
+          // is wrapped as REGISTRY_TOOL_EXECUTION_FAILED / `error_kind:
+          // "unknown"`, i.e. an internal fault the caller could not have
+          // avoided. Signalling here makes both read as `validation`, and gives
+          // the HTTP boundary the code to answer a nested miss with a 400.
+          throw new FailureError(
+            `Invalid params for tool "${id}": ${describeParamIssues(parsed.error, params)}`,
+            {
+              error_code: FAILURE_CODES.TOOL_INPUT_INVALID,
+              failure_stage: "tool_params_parse",
+              // "registry", not "tool_server": the area names WHO raised the
+              // signal, and this parse runs before `execute` is entered.
+              // "tool_server" is reserved for a signal the tool itself
+              // attached, so using it here would make every non-HTTP schema
+              // miss read as the tool rejecting its own arguments.
+              failure_area: "registry",
+              error_kind: "validation",
+            }
+          );
         }
         effectiveParams = parsed.data;
       }
@@ -462,6 +483,145 @@ function terminatingSignalCause(message: string): FailureError {
     failure_area: "registry",
     error_kind: "unknown",
   });
+}
+
+/**
+ * The value at a Zod issue's `path` within the caller's params, or `undefined`
+ * when any segment is absent (or the parent is not indexable). Used to tell an
+ * OMITTED field from a present-but-wrong one, without parsing Zod's message.
+ */
+function valueAtPath(root: unknown, path: readonly PropertyKey[]): unknown {
+  let current: unknown = root;
+  for (const key of path) {
+    if (current === null || typeof current !== "object") return undefined;
+    // Own-property only: an omitted field named after an `Object.prototype`
+    // member (`toString`, `constructor`, …) must read as absent. A bare
+    // `current[key]` returns the inherited function, so it would be
+    // misreported as a type error instead of "is required".
+    if (!Object.hasOwn(current as object, key)) return undefined;
+    current = (current as Record<PropertyKey, unknown>)[key];
+  }
+  return current;
+}
+
+/**
+ * How many branch reasons a union parameter's message enumerates before it
+ * stops and says so. No well-formed call reaches this; it bounds the case where
+ * the branch is an array and the issue count follows the caller's input rather
+ * than the schema.
+ */
+const MAX_UNION_ALTERNATIVES = 12;
+
+/**
+ * A schema failure as one sentence per bad parameter, instead of Zod's raw
+ * issue JSON. The raw form names the parameter the tool wanted but never the
+ * one the caller sent, so a reader who wrote `flow_name` for `name` cannot see
+ * it. Naming the unrecognized keys alongside the missing ones makes the mistake
+ * self-evident.
+ */
+export function describeParamIssues(
+  error: { issues: readonly ZodIssue[] },
+  params: unknown
+): string {
+  // Key names only, never values: a params object can carry a secret, and this
+  // string reaches logs, telemetry and the agent transcript. An array's keys
+  // are indices, which say nothing, so skip it.
+  const allKeys =
+    params !== null && typeof params === "object" && !Array.isArray(params)
+      ? Object.keys(params as object)
+      : [];
+  // Cap the echoed list, but SIGNAL the cut: when the schema strips unknowns
+  // this list is the only clue to a misspelled key, so a silent truncation
+  // could drop the very key it exists to surface.
+  const supplied = allKeys.slice(0, 24);
+  const truncated = allKeys.length > supplied.length;
+  const parts = error.issues.map((issue) => {
+    const at = issue.path.length > 0 ? issue.path.join(".") : "(root)";
+    // A custom refinement's message is author-written, so it is never
+    // rewritten the way the branches below rewrite Zod's own wording — the
+    // absence check must not turn it into "`flow_path` is required", naming a
+    // field the caller may have omitted deliberately. Hence this arm comes
+    // FIRST.
+    //
+    // The PATH is still printed, because a `.refine()` BOUND to a field
+    // (`selector.text`'s visible-character rule) reads as prose about some
+    // parameter the sentence does not identify — `await-ui-element` declares
+    // both `selector.text` and `expectedText`. A cross-field rule anchors at
+    // the root instead, where there is no field to name.
+    if (issue.code === "custom") {
+      return issue.path.length > 0 ? `\`${at}\`: ${issue.message}` : issue.message;
+    }
+    // Decide "missing" from the INPUT, not the rendered message: Zod signals
+    // absence as `invalid_type` for a plain field but `invalid_value` for an
+    // omitted enum, whose "Invalid option: expected one of …" reads as if a bad
+    // value had been sent. An `undefined` at the issue's path is absence
+    // whatever the code, and nested paths count the same as top-level ones.
+    if (valueAtPath(params, issue.path) === undefined) {
+      const expected = (issue as { expected?: unknown }).expected;
+      const kind = typeof expected === "string" ? ` (${expected})` : "";
+      return `\`${at}\` is required${kind} and was not provided`;
+    }
+    if (issue.code === "unrecognized_keys") {
+      const keys = (issue as { keys?: readonly string[] }).keys ?? [];
+      // Qualify by path, like every other branch: a key nested in `selector`
+      // reported bare contradicts the top-level-only "You sent:" list one
+      // clause later. The hottest instance is flow YAML's `id` against the
+      // schema's `identifier`.
+      const at = issue.path.length > 0 ? `${issue.path.join(".")}.` : "";
+      return `unknown parameter${keys.length === 1 ? "" : "s"} ${keys.map((k) => `\`${at}${k}\``).join(", ")}`;
+    }
+    // A union's own message is the bare "Invalid input"; everything the caller
+    // needs sits in the per-branch issue arrays the fallback never reads. Those
+    // carry the most actionable text a schema produces — `tv-remote`'s `button`
+    // enumerates 16 legal values — so render every branch's reason instead.
+    if (issue.code === "invalid_union") {
+      const branches = (issue as { errors?: readonly (readonly ZodIssue[])[] }).errors ?? [];
+      const alternatives: string[] = [];
+      // A `Set` for the seen-check, and a hard cap on what is collected: branch
+      // issues are CALLER-sized, since a union whose branch is an array reports
+      // one issue per element. A linear `includes` scan would be quadratic on
+      // the request thread, and an unbounded join renders megabytes. The cap
+      // keeps the work proportional to what is printed, not to what was sent.
+      const seen = new Set<string>();
+      let moreAlternatives = false;
+      for (const branch of branches) {
+        for (const inner of branch) {
+          // Inner paths are relative to the union's own path, so qualify them
+          // rather than print a bare tail that reads as a top-level key.
+          const innerAt = inner.path.length > 0 ? `${at}.${inner.path.join(".")}: ` : "";
+          const text = `${innerAt}${inner.message}`;
+          // Two branches can fail identically (a union of enums over the same
+          // values); saying it twice is noise.
+          if (seen.has(text)) continue;
+          if (alternatives.length >= MAX_UNION_ALTERNATIVES) {
+            moreAlternatives = true;
+            break;
+          }
+          seen.add(text);
+          alternatives.push(text);
+        }
+        if (moreAlternatives) break;
+      }
+      if (alternatives.length > 0) {
+        // Signal the cut: a silently shortened enumeration reads as the
+        // complete set of legal forms, so the caller would rule out the branch
+        // they wanted.
+        return `\`${at}\`: ${alternatives.join("; or ")}${moreAlternatives ? "; or …" : ""}`;
+      }
+    }
+    return `\`${at}\`: ${issue.message}`;
+  });
+  const sent =
+    supplied.length > 0
+      ? ` You sent: ${supplied.map((k) => `\`${k}\``).join(", ")}${truncated ? ", …" : ""}.`
+      : "";
+  // Guard the (exported, call-site-unreachable) empty-issues case so it never
+  // renders a bare leading ".", and drop a part's own trailing full stop before
+  // adding this one: a custom refinement's message survives verbatim, so one
+  // that ends in a period rendered a double one ("…<name>.yaml.. You sent: …").
+  // Only a period is trimmed — "?" and "!" keep their own punctuation.
+  const body = parts.length > 0 ? `${parts.map((p) => p.replace(/\.$/, "")).join("; ")}.` : "";
+  return `${body}${sent}`.trim() || "invalid parameters";
 }
 
 function formatInteractionMessage(format: () => string | undefined, fallback: string): string {

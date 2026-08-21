@@ -357,6 +357,26 @@ describe("flow-execute flow_path over HTTP", () => {
     expect(steps.invokeTool).not.toHaveBeenCalled();
   });
 
+  it("diagnoses flow_name + an unresolvable flow_path the same way as name", async () => {
+    // The alias names a flow every bit as much as `name` does, so the unwrap
+    // gate has to see it. Keyed on `name` alone this call falls through to the
+    // resolve path and answers with a 422 about re-creating a file the call
+    // never needed, instead of the 400 that names the real mistake.
+    const res = await supertest(handle.app)
+      .post("/tools/flow-execute")
+      .send({
+        flow_name: "checkout",
+        project_root: projectRoot,
+        device: DEVICE,
+        flow_path: { __argentFileInput: true, path: path.join(tmpDir, "nope.yaml") },
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Pass exactly one flow source: name or flow_path\./);
+    expect(res.body.error).not.toMatch(/was not found on the tool-server host/);
+    expect(steps.invokeTool).not.toHaveBeenCalled();
+  });
+
   it("diagnoses an old-client dual-source wire where neither wrapper resolves", async () => {
     // Worst case of the skew: a pre-skipWhenSet client derived flow_file for
     // an unsaved name AND the caller mistyped flow_path, so both wrappers are
@@ -507,6 +527,20 @@ describe("flow-read-prerequisite flow_path over HTTP", () => {
       .post("/tools/flow-read-prerequisite")
       .send({
         name: "checkout",
+        project_root: projectRoot,
+        flow_path: { __argentFileInput: true, path: path.join(tmpDir, "nope.yaml") },
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Pass exactly one flow source: name or flow_path\./);
+    expect(res.body.error).not.toMatch(/was not found on the tool-server host/);
+  });
+
+  it("diagnoses flow_name + an unresolvable flow_path the same way as name", async () => {
+    const res = await supertest(handle.app)
+      .post("/tools/flow-read-prerequisite")
+      .send({
+        flow_name: "checkout",
         project_root: projectRoot,
         flow_path: { __argentFileInput: true, path: path.join(tmpDir, "nope.yaml") },
       });
