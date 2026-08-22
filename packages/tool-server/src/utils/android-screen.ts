@@ -7,18 +7,12 @@ export interface AndroidScreenSize {
 }
 
 /**
- * Read the device's current logical screen size via `wm size`. Used by
- * `describe` to normalize uiautomator's absolute-pixel bounds into the
- * 0–1 coordinate space shared with the rest of the tools.
+ * Logical screen size via `wm size`, used as the divisor that normalizes
+ * uiautomator's absolute-pixel bounds into the 0–1 coordinate space the tools
+ * share. The reported "Override size" wins over "Physical size" when present.
  *
- * `wm size` reports "Physical size: WxH\nOverride size: WxH"; the override
- * wins when present (set by emulators and some system configs).
- *
- * NOT cached: a 5 s TTL would have served stale dimensions for several
- * describes after a rotation (rotation completes in <500 ms), producing
- * normalized frames with x>1 / width>1 because the screenW used for the
- * divisor was pre-rotation. One extra `adb shell` per `describe` is cheap
- * compared to the uiautomator dump exec-out it sits next to.
+ * Deliberately uncached: rotation changes the size within a describe's lifetime,
+ * and a stale divisor yields frames with x or width above 1.
  */
 export async function getAndroidScreenSize(serial: string): Promise<AndroidScreenSize> {
   const out = await adbShell(serial, "wm size", { timeoutMs: 5_000 });
