@@ -1,15 +1,11 @@
-// Pure (pngjs-free) image resampling helpers for screenshot-diff.
-//
-// This module intentionally has NO dependency on `pngjs`. It operates on a
-// plain decoded-image shape (`{ width, height, data }` with tightly-packed
-// RGBA bytes) so that it can be unit-tested in environments where `pngjs` is
-// not runtime-resolvable. `screenshot-diff.ts` re-uses these helpers and wraps
-// the results back into `pngjs` `PNG` objects where it needs them.
+// Deliberately free of any `pngjs` dependency, so these helpers stay usable and
+// testable where `pngjs` is not runtime-resolvable; callers wrap the results
+// back into `PNG` objects themselves.
 
 /**
- * Minimal decoded-image shape shared with `screenshot-diff.ts`'s `DecodedPng`
- * and `font-diff.ts`'s `FontGeometryImage`. `data` is a tightly-packed RGBA
- * byte buffer of length `width * height * 4`.
+ * Structurally identical to `screenshot-diff.ts`'s `DecodedPng` and
+ * `font-diff.ts`'s `FontGeometryImage`. `data` is tightly-packed RGBA of length
+ * `width * height * 4`.
  */
 export interface DecodedRgbaImage {
   width: number;
@@ -17,20 +13,16 @@ export interface DecodedRgbaImage {
   data: Buffer;
 }
 
-// Aspect ratios are treated as equal when they agree within this relative
-// tolerance. Uniform scalings of the same framebuffer (e.g. a 0.3x saved
-// screenshot vs a 1.0x live capture) match exactly in theory but pick up tiny
-// rounding error from integer pixel dimensions, so a small tolerance is needed.
+// Relative tolerance: uniform scalings of one framebuffer (0.3x save vs 1.0x
+// capture) match in theory but pick up rounding error from integer dimensions.
 const ASPECT_RATIO_TOLERANCE = 0.01;
 
 /**
- * When two decoded images share the same aspect ratio (within
- * {@link ASPECT_RATIO_TOLERANCE}) but differ in resolution, downscale the
- * larger one to the smaller one's exact dimensions so they can be compared
- * pixel-for-pixel. The smaller image is returned untouched; we never upscale.
+ * Downscale the larger image to the smaller one's dimensions when both share an
+ * aspect ratio within {@link ASPECT_RATIO_TOLERANCE}; never upscales.
  *
- * Returns `null` when the aspect ratios genuinely differ — callers should keep
- * treating that as a hard dimension mismatch.
+ * @returns `null` when the aspect ratios genuinely differ — a hard dimension
+ * mismatch for callers.
  */
 export function normalizeToCommonSize(
   baseline: DecodedRgbaImage,
@@ -72,9 +64,8 @@ function aspectRatiosMatch(a: DecodedRgbaImage, b: DecodedRgbaImage): boolean {
 }
 
 /**
- * Lanczos3-resample a decoded RGBA image to the target dimensions, returning a
- * new decoded image backed by a plain `Buffer`. Shared with the diff-artifact
- * downscaler in `screenshot-diff.ts`.
+ * Lanczos3-resample to the target dimensions. Always returns a fresh `Buffer`,
+ * never a view onto `src.data`.
  */
 export function resizeDecodedPng(
   src: DecodedRgbaImage,
@@ -188,9 +179,8 @@ function resampleVerticalRgba(params: {
 
 function buildLanczos3AxisWeights(sourceSize: number, targetSize: number): ResampleAxisWeights[] {
   const scale = targetSize / sourceSize;
-  // For downscaling, stretch the kernel by `scale` to act as a low-pass
-  // anti-aliasing filter. For upscaling, evaluate the kernel at its native
-  // width so we interpolate rather than blur.
+  // Downscaling stretches the kernel by `scale` so it low-pass anti-aliases;
+  // upscaling keeps its native width so we interpolate rather than blur.
   const filterScale = scale < 1 ? scale : 1;
   const supportInSource = LANCZOS3_RADIUS / filterScale;
   const axis: ResampleAxisWeights[] = new Array(targetSize);
