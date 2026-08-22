@@ -3,7 +3,8 @@ import * as readline from "node:readline";
 
 // Feeds app.getName() and the default menu items ("Quit Argent Lens", the
 // About panel). Must run before `app` is ready for the default menu to pick
-// it up.
+// it up. The bold menu-bar title comes from the bundle's CFBundleName and no
+// runtime call overrides it.
 app.setName("Argent Lens");
 
 // One-window-at-a-time host for the Argent Lens preview UI. The tool-server

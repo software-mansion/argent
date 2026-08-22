@@ -105,6 +105,8 @@ type CodexConfig = {
 // How the MCP entry locates the argent executable. local-npx is the fallback for
 // when the bin path is unverifiable; `--no-install` keeps it from silently
 // network-installing.
+// How the argent MCP binary is invoked. Never a bare `npx -y`, which can hang a
+// TTY-less stdio server.
 export type McpCommandMode =
   | { kind: "global" }
   | { kind: "local-node"; binRelPath: string }
@@ -1113,6 +1115,8 @@ const zedAdapter: McpConfigAdapter = {
     return this.getArgentEntry(configPath) !== null;
   },
 
+  // Zed has no server-level wildcard for MCP tools — each tool would need its
+  // own entry — so the global default is set to "allow" instead.
   addAllowlist(root: string, scope: "local" | "global"): void {
     const settingsPath =
       scope === "global"
@@ -1476,6 +1480,11 @@ const openCodeAdapter: McpConfigAdapter = {
 };
 
 // MARK: Kiro
+//
+// One .kiro/settings/mcp.json serves both the Kiro IDE and the Kiro CLI.
+// `autoApprove` is IDE syntax; the CLI's server config has no such field and
+// does not reject unknown ones, so the key is honored by the IDE and ignored by
+// the CLI, which carries its own trust model.
 
 const KIRO_AUTO_APPROVE_ALL = ["*"];
 

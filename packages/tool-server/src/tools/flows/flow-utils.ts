@@ -132,6 +132,9 @@ export function getFlowPath(projectRoot: string, name: string): string {
  * ({@link followDanglingLink}), collapsing the two spellings onto the one file
  * the write produces there.
  *
+ * A case-SENSITIVE volume (ext4) keeps `Login` and `login` apart on its own:
+ * `realpath` there simply fails to find the variant spelling.
+ *
  * "client" mode needs no special case: the caller's root does not exist on this
  * host, so both `realpath` calls fail and the fallback returns
  * {@link getFlowPath} unchanged.
@@ -3078,7 +3081,9 @@ export async function writeNewFlowFile(filePath: string, content: string): Promi
  * For counting what a truncate is about to destroy, and therefore only ever
  * called in "host" mode: in "client" mode the file lives on the client's machine
  * and this host cannot read it at all, so the in-memory copy is both the take
- * and the only thing countable.
+ * and the only thing countable — the guarantee below does not carry across that
+ * boundary. The agent-facing statement of it lives in
+ * `packages/skills/skills/argent-create-flow/references/live-authoring.md`.
  *
  * The file — not the session's in-memory `flow` — is the take in "host" mode:
  * {@link appendStep} re-reads it before every append and `flow-finish-recording`

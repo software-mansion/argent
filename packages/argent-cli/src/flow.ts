@@ -68,7 +68,7 @@ const STATUS_GLYPH: Record<StepReport["status"], string> = {
 
 /**
  * Display cap on the nesting indent, not a producer bound: the tool-server's
- * run-chain and when-nesting limits accumulate, so legitimate depth can exceed
+ * run-chain and block-nesting limits accumulate, so legitimate depth can exceed
  * it and such steps keep the maximum indent. Depth also arrives over the wire,
  * so the clamp doubles as a guard against a server driving `repeat()` with a
  * huge or negative count.

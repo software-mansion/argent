@@ -32,7 +32,8 @@ const DEFAULT_INIT_MS = 1500;
 // resident memory.
 const MAX_WARM_ENGINES = 3;
 // Dispose a warm engine after this long with no query, so the MCP server doesn't
-// hold trace memory forever once an analysis is done.
+// hold trace memory forever once an analysis is done. The timer is unref'd, so
+// it never keeps the process alive.
 const IDLE_DISPOSE_MS = 5 * 60_000;
 // Perfetto's RPC ring buffer rejects any single request frame larger than
 // 64 MiB, and parse() emits one TPM_APPEND_TRACE_DATA frame per call, so a

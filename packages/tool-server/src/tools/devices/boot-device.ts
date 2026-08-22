@@ -452,6 +452,11 @@ async function bootIos(
       );
     });
 
+    // The same boot transition wipes the sim's launchd DYLD_INSERT_LIBRARIES,
+    // but a cached NativeDevtools keeps a sticky envSetup=true from the previous
+    // boot, so ensureEnvReady() short-circuits and never re-sets it. Dropping the
+    // service forces a rebuild with envSetup=false. tvOS-gated to match the
+    // validated repro; widen if this is ever reproduced on iOS.
     const ndUrn = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" }).urn;
     await registry.disposeService(ndUrn).catch((err: unknown) => {
       if (err instanceof ServiceNotFoundError) return;
