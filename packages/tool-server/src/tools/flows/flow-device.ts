@@ -4,72 +4,52 @@ import { resolveDevice } from "../../utils/device-info";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { blockSteps, type FlowStep, type WhenPlatform } from "./flow-utils";
 
-/**
- * Device resolution + binding for the flow runner. Flows store no device id
- * (they are portable); the runner resolves one from explicit input, a platform
- * hint, or the single booted device — mirroring the SDK's `device()` binding —
- * and injects it schema-aware into each step's tool args.
- */
-
-// One platform set for the whole flows directory — see LAUNCH_PLATFORMS in
-// flow-utils, which this aliases via WhenPlatform.
+// The flows directory's one platform set — LAUNCH_PLATFORMS in flow-utils,
+// reached through WhenPlatform.
 export type FlowPlatform = WhenPlatform;
 
 /**
- * Arg names that mean "the device to act on".
+ * Arg names that mean "the device to act on". Stripped from every recorded step
+ * and re-injected with the resolved run device, so a name here must mean a
+ * device id on EVERY tool that declares one — the strip is schema-blind.
+ * `device` is `flow-execute`'s own, so a nested flow inherits the run device
+ * instead of pinning the one it was recorded on (#607).
  *
- * The runner strips these from every recorded step and re-injects the resolved
- * run device, so a name here must mean a device id on EVERY tool that declares
- * one — the strip is schema-blind. `udid` covers most tools, `device_id` the
- * debugger and profiler families, and `device` is `flow-execute`'s own, so a
- * nested flow inherits the run device instead of pinning the one it was
- * recorded on (#607).
- *
- * `platform` is deliberately absent, for two independent reasons. It is only
- * ever read when no device was given — `resolveFlowDevice` returns on
- * `opts.device` before touching it, and the chromium boot spec is gated on
- * `!params.device` — so once `device` is bound it is inert. And it is not
- * device-specific on every tool: `react-profiler-analyze` declares its own
- * `platform`, which a blind strip would silently retarget.
+ * `platform` is deliberately absent: it is not device-specific on every tool
+ * (`react-profiler-analyze` declares its own, which a blind strip would
+ * retarget), and it is read only when no device was given, so binding it would
+ * change nothing.
  */
 const DEVICE_BIND_KEYS = ["udid", "device_id", "device"] as const;
 
 /**
  * Args keys holding a LIST of device ids. Same treatment as
- * {@link DEVICE_BIND_KEYS} — stripped at record time, re-injected at replay —
- * but rebound to `[deviceId]`, since the runner resolves exactly one device per
- * run and a flow that named several would be naming the recording host's.
+ * {@link DEVICE_BIND_KEYS}, but rebound to `[deviceId]`, since a run resolves
+ * exactly one device and a flow that named several would be naming the
+ * recording host's.
  *
- * `stop-all-simulator-servers`' `devices` is the only such key. It is a scope
- * rather than a target, and that difference decides when it is rebound. A
- * recording of the UNSCOPED sweep always replays as a stop of the run device:
- * the replayed artifact must not tear down devices another agent is mid-session
- * on, which is the hazard the `devices` scope was added for, and binding can
- * only narrow there. A recorded scope, on the other hand, is the flow's own
- * statement of what to reap, and is overridden only by an explicit `device` —
- * see {@link bindDeviceArgs}, which is where the two cases part.
+ * `stop-all-simulator-servers`' `devices` is the only such key, and it is a
+ * scope rather than a target: a recording of the UNSCOPED sweep rebinds to the
+ * run device (binding can only narrow, and the replay must not reap devices
+ * another agent is mid-session on), while a recorded scope is the flow's own
+ * statement of what to reap and is overridden only by an explicit `device` —
+ * see {@link bindDeviceArgs}, where the two cases part.
  */
 const DEVICE_BIND_LIST_KEYS = ["devices"] as const;
 
 /**
  * Keys that mean a tool needs a device to act on at all — the TARGET keys, and
- * deliberately not the scope keys in {@link DEVICE_BIND_LIST_KEYS}.
+ * deliberately not the scope keys in {@link DEVICE_BIND_LIST_KEYS}. What
+ * separates them is what a missing device does to the step: a `screenshot` with
+ * no `udid` cannot run, while `stop-all-simulator-servers` with no `devices` is
+ * the machine-wide sweep — a complete call, and the whole content of a cleanup
+ * flow. Listing `devices` here made such a flow demand a device it has no use
+ * for, failing it in the two situations it actually runs in: none booted, or
+ * several.
  *
- * `toolRequiresDevice` consults this, and `resolveRunDevice` skips resolving a
- * device for a flow no step here matches. The distinction is what a missing
- * device does to the step: a `screenshot` with no `udid` has nothing to point
- * at and cannot run, while `stop-all-simulator-servers` with no `devices` is
- * the machine-wide sweep — a complete, meaningful call, and the whole content
- * of a cleanup flow. Listing `devices` here made such a flow demand a device it
- * has no use for, so the two situations a cleanup flow actually runs in — none
- * booted, or several — failed it outright.
- *
- * A scope key is therefore bound OPPORTUNISTICALLY: {@link bindDeviceArgs}
- * injects it when the run resolved a device (so a replayed teardown cannot reap
- * devices another agent is mid-session on) and leaves it off when the run has
- * none, rather than binding the empty string — `{ devices: [""] }` would be a
- * teardown scoped to an id that owns nothing, reaping nothing while reporting
- * pass, which is the failure {@link DEVICE_BIND_LIST_KEYS} exists to prevent.
+ * A scope key is therefore bound OPPORTUNISTICALLY by {@link bindDeviceArgs} —
+ * only when the run resolved a device, never as `{ devices: [""] }`, a teardown
+ * scoped to an id that owns nothing and so reaps nothing while reporting pass.
  */
 const DEVICE_ARG_KEYS = DEVICE_BIND_KEYS;
 
@@ -151,25 +131,17 @@ export async function resolveFlowDevice(
 }
 
 /**
- * Strip the device-TARGET keys from a set of args (so a recorded flow stores no
- * device to point at). Scope keys are deliberately kept — see below.
- *
- * Schema-blind on purpose: `bindDeviceArgs` strips unconditionally and re-injects
+ * Strip the device-TARGET keys from a set of args, so a recorded flow stores no
+ * device to point at. Schema-blind on purpose: {@link bindDeviceArgs} re-injects
  * only what the target tool declares, so a stale id is never forwarded to a tool
  * that does not want it.
  *
  * A SCOPE survives into the YAML because dropping it changes what the recorded
- * step MEANS. `stop-all-simulator-servers` with no `devices` is the machine-wide
- * sweep, so a correctly scoped teardown would record as a bare
- * `- tool: stop-all-simulator-servers` — and the YAML is the artifact that gets
- * committed, read, and (per the create-flow skill's manual-execution strategy)
- * hand-run a step at a time. Replay rebinds it either way, but hand-running that
- * bare step reaps every device on the machine, which is the cross-agent teardown
- * the scope exists to prevent. The contrast is the point: a recorded `screenshot`
- * loses its `udid` too, and hand-running it fails loudly because `udid` is
- * required. Losing `devices` fails OPEN. The recorded ids are host-specific, but
- * that costs only a no-op plus an `unmatched` report on another machine — the
- * safe direction, and a legible one.
+ * step MEANS: a correctly scoped teardown would record as a bare
+ * `- tool: stop-all-simulator-servers`, and hand-running that reaps every device
+ * on the machine. Losing `devices` fails OPEN, where a `screenshot` that lost its
+ * required `udid` fails loudly. Replay rebinds it either way, and recorded ids
+ * cost only a no-op plus an `unmatched` report on another host.
  */
 export function stripDeviceKeys(args: Record<string, unknown>): Record<string, unknown> {
   const out = { ...args };
@@ -178,41 +150,21 @@ export function stripDeviceKeys(args: Record<string, unknown>): Record<string, u
 }
 
 /**
- * Bind the resolved device id into a tool's args. The runner is **authoritative**
- * on the device to act ON: any device id stored in the step is dropped and
- * replaced with the resolved one — so a flow recorded on one device stays
- * portable to another and a stale baked-in udid can't override the run target.
- * The id is injected only for the device-id keys the tool's input schema
- * declares (so `.strict()` schemas stay valid), as a bare id or as a one-element
- * list depending on which set the key is in.
- *
- * It is NOT authoritative on a device SCOPE it did not resolve from the caller;
- * `deviceIsExplicit` is what tells the two apart. See the loop below.
- *
- * This covers a nested `tool: flow-execute` step too — its own `device` arg is
- * rebound, so a composed run inherits the run device rather than driving the one
- * it was recorded against, matching how `run:` composition already behaves.
- */
-/**
  * Whether a step acts on a device.
  *
  * Answered per kind rather than by trying and failing, so a flow that touches no
- * device never has to have one. The default is that a step DOES need one: a kind
- * added later inherits today's behaviour instead of silently running against no
- * device, and the `never` binding makes leaving it unclassified a compile error.
+ * device never has to have one. Unclassified defaults to needing one, and the
+ * `never` binding makes leaving a new kind unclassified a compile error.
  *
  * Three of the classifications are worth stating outright:
  *
  * - `when` needs a device whatever its body contains, because the guard itself
  *   reads one — the device's platform, or its view tree. That classifies the
- *   header alone; a block's body is left to {@link flowRequiresDevice}'s
- *   walk, not here.
+ *   header alone; the body is left to {@link flowRequiresDevice}'s walk.
  * - `idle` needs one despite carrying no selector: it reads the device twice
  *   over, the UI tree and a screenshot of it.
- * - `run` needs one without the fragment being read here. The flow it names is
- *   resolved at run time; resolving it a second time would duplicate that lookup
- *   and could disagree with it if the file changed in between. The cost is that
- *   composing a narration-only fragment still resolves a device.
+ * - `run` needs one without the fragment being read here: it is resolved at run
+ *   time, so composing a narration-only fragment still resolves a device.
  */
 export function stepRequiresDevice(registry: Registry, step: FlowStep): boolean {
   switch (step.kind) {
@@ -246,17 +198,12 @@ export function stepRequiresDevice(registry: Registry, step: FlowStep): boolean 
 /**
  * Whether any step in a flow acts on a device - each block header's own
  * classification OR, via {@link blockSteps}, the steps it actually CONTAINS.
- * Today the header half answers every case: `when`, the only block kind,
- * classifies device-requiring in {@link stepRequiresDevice}, so the child walk
- * is a no-op until a block kind classifies `false`.
  *
- * Header classification alone is not enough: a block directive whose header
- * reads nothing off the device would naturally be classified `false` in
- * {@link stepRequiresDevice}, and a flow that is only that block would then
- * resolve device-free and hard-stop on the first device step in its body. The
- * exhaustiveness check there forces a new kind to be classified, but not to be
- * classified `true`; the walk - here and in {@link flowScopesDevice}, the
- * question the runner asks next - is what makes either answer safe.
+ * The child walk answers nothing today: `when`, the only block kind, classifies
+ * device-requiring in {@link stepRequiresDevice}. It is what makes a future
+ * block kind safe to classify `false` — a flow that is only such a block would
+ * otherwise resolve device-free and hard-stop on the first device step in its
+ * body.
  */
 export function flowRequiresDevice(registry: Registry, steps: FlowStep[]): boolean {
   return steps.some(
@@ -270,19 +217,14 @@ export function flowRequiresDevice(registry: Registry, steps: FlowStep[]): boole
  * without needing one to run — a `devices` scope, and only that today.
  *
  * Asked of a flow that {@link flowRequiresDevice} said no to, so the run has a
- * choice: resolve a device opportunistically and scope the teardown to it
- * (keeping the cross-agent protection the scope exists for), or, where no
- * single device is resolvable, run the step's unscoped meaning rather than
- * failing a flow whose whole purpose is to clear the machine.
+ * choice: resolve a device opportunistically and scope the teardown to it, or,
+ * where no single device is resolvable, run the step's unscoped meaning rather
+ * than failing a flow whose whole purpose is to clear the machine.
  *
- * Walks a block's body via {@link blockSteps}. The walk answers nothing in a
- * run today: `when`, the only block kind, classifies device-requiring, so a
- * flow holding a block is answered by {@link flowRequiresDevice} and never
- * reaches this question at all. The pair needs both walks - under
- * a block kind that reads nothing off the device, a `devices` scope in its body
- * would be invisible here, the run would resolve no device, and the teardown
- * would execute with its unscoped meaning, the machine-wide sweep the scope
- * exists to prevent.
+ * The walk into a block's body is dead today for the same reason as
+ * {@link flowRequiresDevice}'s, and guards the same future block kind: a
+ * `devices` scope inside one would be invisible here, so the run would resolve
+ * no device and the teardown would sweep the machine.
  */
 export function flowScopesDevice(registry: Registry, steps: FlowStep[]): boolean {
   return steps.some(
@@ -293,8 +235,8 @@ export function flowScopesDevice(registry: Registry, steps: FlowStep[]): boolean
 }
 
 function toolRequiresDevice(registry: Registry, toolName: string): boolean {
-  // An unknown tool is assumed to need a device: the step is going to fail
-  // either way, and it fails more usefully with one resolved.
+  // An unknown tool is assumed to need a device: the step fails either way, and
+  // it fails more usefully with one resolved.
   if (!registry.getTool(toolName)) return true;
   return declaresAny(registry, toolName, DEVICE_ARG_KEYS);
 }
@@ -303,11 +245,22 @@ function declaresAny(registry: Registry, toolName: string, keys: readonly string
   const toolDef = registry.getTool(toolName);
   const props = (toolDef?.inputSchema as { properties?: Record<string, unknown> } | undefined)
     ?.properties;
-  // A tool with no declared input takes no device.
   if (!props) return false;
   return keys.some((k) => k in props);
 }
 
+/**
+ * Bind the resolved device id into a tool's args. The runner is authoritative on
+ * the device to act ON: any device id stored in the step is dropped and replaced
+ * with the resolved one, so a flow recorded on one device stays portable and a
+ * stale baked-in udid cannot override the run target. The id is injected only
+ * for the device-id keys the tool's input schema declares (so `.strict()`
+ * schemas stay valid), bare or as a one-element list depending on which set the
+ * key is in.
+ *
+ * It is NOT authoritative on a device SCOPE it did not resolve from the caller;
+ * `deviceIsExplicit` is what tells the two apart.
+ */
 export function bindDeviceArgs(
   registry: Registry,
   toolName: string,
@@ -331,20 +284,17 @@ export function bindDeviceArgs(
     if (!deviceId) continue;
     // With NO recorded scope the run device NARROWS what the step would
     // otherwise do — an unscoped `stop-all-simulator-servers` is the
-    // machine-wide sweep — so bind it whatever resolved it. Strictly the safe
-    // direction, and the reason a device is resolved for a cleanup flow at all.
+    // machine-wide sweep — so bind it whatever resolved it.
     if (out[k] === undefined) {
       out[k] = [deviceId];
       continue;
     }
     // With one recorded, OVERRIDING it is destructive rather than portable: a
     // flow that named device A would tear down whichever device happened to
-    // resolve, which is precisely the cross-agent teardown the `devices` scope
-    // was added to prevent. Only an explicit `device` overrides — there the
-    // caller named the run target itself, so retargeting the teardown at it is
-    // what they asked for. An auto-resolved device names nobody's intent, so
-    // the recorded ids stand: on another host they reap nothing and come back
-    // in `unmatched`, which is the safe direction and a legible one.
+    // resolve, the cross-agent teardown the `devices` scope was added to
+    // prevent. Only an explicit `device` overrides — there the caller named the
+    // run target itself. An auto-resolved one names nobody's intent, so the
+    // recorded ids stand and on another host come back in `unmatched`.
     if (deviceIsExplicit) out[k] = [deviceId];
   }
   if (props) for (const k of DEVICE_BIND_KEYS) if (k in props) out[k] = deviceId;

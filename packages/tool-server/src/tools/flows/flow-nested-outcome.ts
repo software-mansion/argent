@@ -3,26 +3,21 @@ import type { StepStatus } from "./flow-run";
 /**
  * Reading the verdict of a nested orchestrator step.
  *
- * Two registered tools run other tools and report what happened in their
- * result rather than by throwing: `flow-execute` and `run-sequence`. The flow
- * runner dispatches both through the generic `tool` step, which — apart from one
- * `await-ui-element` special case — treats any non-throwing result as a pass. So
- * a composed flow that failed every step, or a sequence that stopped on its
- * first tool, was reported as a green pass by the run that contained it (#606).
+ * `flow-execute` and `run-sequence` report what happened in their result
+ * rather than by throwing, so the generic `tool` step counted a composed flow
+ * that failed every step, or a sequence that stopped on its first tool, as a
+ * pass (#606).
  *
- * These are deliberately two named, tool-scoped branches rather than a general
- * "a result with `ok: false` fails the step" rule. There is no such contract in
- * this codebase to generalise: the only other soft-verdict tool spells it
- * `success` (`await-ui-element`), `run-sequence` spells it neither way, and the
- * generic `tool` step dispatches tools whose results are typed `unknown` or
- * `Record<string, unknown>` — several of them carrying app-derived payloads. A
- * blanket rule would silently bind all of those, and every tool added later, to
- * "a key called `ok` decides my flow's verdict". `isUnmetUiWaitResult` set the
- * precedent for naming the tool instead.
+ * Deliberately two named, tool-scoped branches rather than a general
+ * "`ok: false` fails the step" rule: the generic `tool` step dispatches results
+ * typed `unknown`, several carrying app-derived payloads, and a blanket rule
+ * would bind all of them — and every tool added later — to "a key called `ok`
+ * decides my flow's verdict". `isUnmetUiWaitResult` set the precedent for
+ * naming the tool instead.
  *
- * Everything here narrows defensively: results cross the registry boundary as
- * `unknown`, and a shape this does not recognise must fall through to the
- * runner's existing behaviour rather than guess at a verdict.
+ * Results cross the registry boundary as `unknown`: a shape not recognised
+ * here falls through to the runner's existing behaviour rather than guessing a
+ * verdict.
  */
 
 export const FLOW_EXECUTE_TOOL_ID = "flow-execute";
@@ -37,15 +32,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-/** The first step in a nested flow report that did not pass, rendered for a human. */
 function firstFailingStep(steps: unknown): string | undefined {
   if (!Array.isArray(steps)) return undefined;
   for (const entry of steps) {
     if (!isRecord(entry)) continue;
     if (entry.status !== "fail" && entry.status !== "error") continue;
-    // Prefer the tool id; fall back to the step kind. Both are checked for being
-    // strings rather than coerced — this report crossed the registry boundary as
-    // `unknown`, and an object here would render as "[object Object]".
+    // Typed checks rather than coercion: this report crossed the registry
+    // boundary as `unknown`, and an object here would render "[object Object]".
     const what =
       typeof entry.tool === "string"
         ? entry.tool
@@ -66,10 +59,9 @@ function count(value: unknown): number {
 function flowExecuteOutcome(result: Record<string, unknown>): NestedOutcome | undefined {
   const flow = typeof result.flow === "string" ? result.flow : "the composed flow";
 
-  // A notice means the sub-flow ran NOTHING. Reported as an error rather than a
-  // failure: nothing was asserted, so "the app misbehaved" would be untrue —
-  // the step was never runnable as written, which is the class the runner
-  // already labels error (an unreadable fragment, a cyclic reference).
+  // A notice means the sub-flow ran NOTHING: nothing was asserted, so this is
+  // the runner's error class — never runnable as written, like an unreadable
+  // fragment or a cyclic reference — not a failure.
   if (!("steps" in result) && typeof result.notice === "string") {
     const prerequisite =
       typeof result.executionPrerequisite === "string" && result.executionPrerequisite
@@ -83,8 +75,8 @@ function flowExecuteOutcome(result: Record<string, unknown>): NestedOutcome | un
     };
   }
 
-  // A cancelled run is a skip, never a failure — the same rule the runner
-  // applies to its own steps when the signal fires mid-flight.
+  // Cancellation is a skip, never a failure — the rule the runner applies to
+  // its own steps.
   if (result.aborted === true) {
     return { status: "skip", reason: `flow "${flow}" was aborted` };
   }
@@ -105,11 +97,9 @@ function flowExecuteOutcome(result: Record<string, unknown>): NestedOutcome | un
 /**
  * A nested `run-sequence` result.
  *
- * `run-sequence` has no verdict field at all. Every one of its failure paths —
- * a disallowed tool, an unsupported operation, an unmet `await-ui-element`, a
- * tool that threw — pushes an `error` entry, breaks the loop, and returns
- * normally. So a sequence that stopped on its first of eight steps returned a
- * perfectly ordinary result, and the flow step reported a pass.
+ * `run-sequence` has no verdict field: every failure path — a disallowed tool,
+ * an unsupported operation, an unmet `await-ui-element`, a tool that threw —
+ * pushes an `error` entry, breaks the loop, and returns normally.
  */
 function runSequenceOutcome(result: Record<string, unknown>): NestedOutcome | undefined {
   const steps = result.steps;
@@ -127,7 +117,7 @@ function runSequenceOutcome(result: Record<string, unknown>): NestedOutcome | un
   }
 
   // No error entry but the sequence stopped short: its only other exit is the
-  // abort check. Cancellation is a skip, matching the flow-execute branch.
+  // abort check. Cancellation is a skip, matching flow-execute.
   const total = count(result.total);
   if (total > 0 && steps.length < total) {
     return {
@@ -140,9 +130,9 @@ function runSequenceOutcome(result: Record<string, unknown>): NestedOutcome | un
 }
 
 /**
- * Every nested orchestrator with the reader for its result shape. One list, so
- * a caller asking only WHETHER a tool runs a nested flow — the flow runner
- * spends its tree-outage verdict on one — cannot drift from this dispatch.
+ * One list, so a caller asking only WHETHER a tool runs a nested flow — the
+ * flow runner spends its tree-outage verdict on one — cannot drift from this
+ * dispatch.
  */
 const NESTED_ORCHESTRATORS = new Map<
   string,
@@ -158,9 +148,9 @@ export function isNestedOrchestratorTool(tool: string): boolean {
 }
 
 /**
- * Classify a nested orchestrator's result, or `undefined` when this is not one
- * of them, when it succeeded, or when the shape is not recognised — in every
- * one of which cases the runner's existing handling is correct.
+ * Classify a nested orchestrator's result. `undefined` when this is not one of
+ * them, when it succeeded, or when the shape is not recognised — the runner's
+ * existing handling is correct in each case.
  */
 export function nestedOrchestratorOutcome(
   tool: string,
