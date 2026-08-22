@@ -1,4 +1,3 @@
-/** How often the idle timer checks for inactivity (ms). */
 export const IDLE_CHECK_INTERVAL_MS = 60_000;
 
 export interface IdleTimer {
