@@ -6,27 +6,14 @@
  *
  * e.g. with latest=0.13.0 and no canaries yet → `0.13.1-next.0`.
  *
- * Why patch-bump-of-stable: each main build is a preview of the next patch
- * release. A prerelease of 0.13.1 still outranks the 0.13.0 release by SemVer
- * precedence, so `next` always lands strictly above `latest`, while staying
- * below the eventual 0.13.1 stable.
+ * Why patch-bump-of-stable: each main build previews the next patch release,
+ * and a prerelease of 0.13.1 outranks the 0.13.0 release by SemVer precedence,
+ * so `next` lands strictly above `latest` while staying below the eventual
+ * 0.13.1 stable.
  *
- * The counter resets per base: it's the next index after the highest
- * `<base>-next.<k>` already on npm, or 0 if this base has no canaries yet. So
- * each new patch line starts at `.0` and increments per publish:
+ * The counter resets per base, so each patch line starts at `.0`:
  *   0.13.1-next.0, 0.13.1-next.1, ...  then 0.13.1 ships stable  ...
  *   0.13.2-next.0, 0.13.2-next.1, ...
- *
- * Because the counter is read from the registry, the `concurrency` group in
- * publish-next.yml serializes canary publishes so two runs can't read the same
- * index at once. That removes the concurrent race but not npm's read-after-write
- * lag (a freshly published version may not be visible to the next run's read for
- * a few seconds), so the publish step ALSO retries on a version-exists collision
- * by recomputing — see "Publish canary" in publish-next.yml. Either way a
- * collision fails safe (npm 409, no bad artifact, no tag move).
- *
- * Zero npm dependencies (runs in a lightweight CI job without `npm ci`); the
- * SemVer helpers are shared with sync-next-dist-tag.mjs.
  *
  * Usage:
  *   node scripts/next-canary-version.mjs           print the canary version
@@ -55,15 +42,13 @@ export function computeCanaryVersion(versions) {
   }
 
   const stable = valid.filter((v) => parseSemver(v).pre.length === 0);
-  // Prefer the highest stable release and bump its patch. With no stable
-  // release yet, preview the highest prerelease's own target version (no bump).
+  // With no stable release yet, preview the highest prerelease's own target
+  // version instead of bumping past it.
   const pool = stable.length > 0 ? stable : valid;
   const { main } = parseSemver(pool.slice().sort((a, b) => compareSemver(b, a))[0]);
   const [major, minor, patch] = main;
   const base = stable.length > 0 ? [major, minor, patch + 1] : [major, minor, patch];
 
-  // Counter resets per base: next index after the highest existing
-  // `<base>-next.<k>`, or 0 if this base has no canaries yet.
   let counter = 0;
   for (const v of valid) {
     const { main: m, pre } = parseSemver(v);
