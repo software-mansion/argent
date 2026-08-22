@@ -1,9 +1,7 @@
 /**
- * Shared skip-rule logic for filtering React Native component names.
+ * Skip rules for React Native component names, used by inspect-element pruning.
  *
- * Used by the TypeScript layer (inspect-element pruning). The JS-side script
- * (component-tree.ts) maintains its own copy of these rules because it runs
- * inside the app's JS runtime, not in Node.
+ * component-tree.ts keeps its own copy: it runs inside the app's JS runtime, not Node.
  */
 
 const HARD_SKIP_SET = new Set([
@@ -122,7 +120,6 @@ const SKIP_SET = new Set([
   "TextInputLabel",
   "ThemeContext",
   "BaseHTMLEngineProvider",
-  // Fabric / cross-app entries
   "VScrollViewNativeComponent",
   "InnerScreen",
   "ScreenStackItem",

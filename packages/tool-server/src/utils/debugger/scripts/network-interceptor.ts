@@ -1,12 +1,7 @@
 /**
- * JS script injected via Runtime.evaluate to intercept network requests.
- * Monkey-patches globalThis.fetch and XMLHttpRequest to capture request/response
- * metadata and store them in globalThis.__argent_network_log.
- *
- * The network tools read this array via Runtime.evaluate to fetch captured logs.
- * Each entry follows the NetworkLogEntry shape used by the tools.
- *
- * Designed to be idempotent — calling it twice won't double-patch.
+ * Injected via Runtime.evaluate: patches globalThis.fetch to record request/response
+ * metadata into globalThis.__argent_network_log for the network tools to read.
+ * Idempotent — a second install is a no-op.
  */
 export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
   if (globalThis.__argent_network_installed) return JSON.stringify({ installed: false, reason: 'already installed' });
@@ -110,11 +105,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
   return JSON.stringify({ installed: true });
 })()`;
 
-/**
- * Script to read captured network logs from the JS runtime.
- * Returns JSON with the entries array and total count.
- * Accepts optional start index and limit for pagination.
- */
+/** Reads a page of captured network logs, minus Metro's own traffic on `metroPort`. */
 export function makeNetworkLogReadScript(start: number, limit: number, metroPort: number): string {
   return `(function() {
   var log = globalThis.__argent_network_log;
@@ -160,9 +151,7 @@ export function makeNetworkLogReadScript(start: number, limit: number, metroPort
 })()`;
 }
 
-/**
- * Script to read a single network request's full details from the JS runtime.
- */
+/** Reads one captured request's full details, response body included. */
 export function makeNetworkDetailReadScript(requestId: string): string {
   return `(function() {
   var byId = globalThis.__argent_network_by_id;
