@@ -11,10 +11,9 @@ const zodSchema = z.object({
 });
 
 /**
- * The AST lookup scans the whole project tree, which can't ride along in a
- * tool call — so the boundary gates on the directory existing on this host. A
- * remote caller whose checkout isn't mirrored here gets an actionable error
- * instead of a silent empty index ("component not found" for everything).
+ * A project tree can't ride along in a tool call, so `kind: "directory"` fails
+ * a remote caller whose checkout isn't mirrored on this host, instead of
+ * indexing nothing and reporting "component not found" for everything.
  */
 const fileInputs: FileInputSpec[] = [
   { target: "project_root", path: "${project_root}", kind: "directory" },
@@ -37,20 +36,16 @@ Call this per-finding after react-profiler-analyze to inspect source before prop
 Returns found: false if the component is not found in user-owned code (e.g. lives in node_modules).
 When several files define a component with the same name (e.g. platform variants like List.tsx and List.web.tsx), returns the primary match and lists the rest under otherMatches[] (file/line/col) — check it before assuming the returned file is the one you meant.`,
   zodSchema,
-  // Companion to react-profiler-analyze. Carries the same RN-only capability
-  // declaration as the rest of react-profiler-* for intent-clarity, even
-  // though the HTTP gate is a no-op here (the tool takes no device_id, so
-  // there's nothing for the gate to inspect). An LLM agent reading the tool
-  // catalogue should see this is paired with the other react-profiler tools
-  // and not reach for it on a Chromium app.
+  // Declared so the tool catalogue groups this with the other react-profiler-*
+  // tools; the HTTP gate itself is a no-op here, as there is no device arg to
+  // inspect.
   capability: RN_ONLY_TOOL_CAPABILITY,
   fileInputs,
   services: () => ({}),
   async execute(_services, params) {
     const astIndex = await buildAstIndexWithDiagnostics(params.project_root);
     // The profiler reports DevTools names (`Forget(Foo)`); the index is keyed on
-    // source identifiers (`Foo`). Without this, the one name the query tools
-    // accept is the one name this tool can never find.
+    // source identifiers (`Foo`).
     const lookupKeys = astLookupCandidates(params.component_name);
     const matchedKey = lookupKeys.find((k) => astIndex.index.has(k));
     const entry = matchedKey ? astIndex.index.get(matchedKey) : undefined;
@@ -88,13 +83,13 @@ When several files define a component with the same name (e.g. platform variants
       const endLine = Math.min(lines.length, startLine + 50);
       source = lines.slice(startLine, endLine).join("\n");
     } catch {
-      // non-fatal — file may have been renamed or deleted
+      // file may have been renamed or deleted
     }
 
     return {
       found: true,
-      // The key that actually matched, so the caller can tell which name hit
-      // when a wrapped name resolved through to a bare source identifier.
+      // The key that matched, so the caller sees when a wrapped name resolved
+      // through to a bare source identifier.
       component: matchedKey ?? params.component_name,
       requested: params.component_name,
       file: entry.file,

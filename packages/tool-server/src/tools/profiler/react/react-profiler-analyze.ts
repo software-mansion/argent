@@ -25,11 +25,9 @@ import { requireArtifacts, type ArtifactHandle } from "../../../artifacts";
 import type { ArtifactStore } from "@argent/registry";
 
 /**
- * Register a server-side file path as a downloadable artifact (or pass through
- * null/undefined). Lets the client materialize the raw profiler dumps (CPU
- * profile, commit tree) and the rendered report to local files — in place when
- * co-located, downloaded when remote — instead of receiving a dangling host
- * path it can't open.
+ * Register a path as a downloadable artifact so the client gets fetchable bytes
+ * rather than a host path it may not be able to open; null/undefined passes
+ * through.
  */
 async function fileArtifact(
   store: ArtifactStore,
@@ -94,8 +92,8 @@ is returned by react-profiler-start.
 Use when the profiling session is complete and you need to interpret the collected data.
 Fails if react-profiler-stop has not been called or no profiling data is stored.`,
   zodSchema,
-  // RN-only: operates on profiler trace files captured via the React DevTools
-  // backend's commit recording, which is not present on Chromium.
+  // RN-only: reads commit data captured via the React DevTools backend, which
+  // Chromium does not have.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: () => ({}),
   async execute(_services, params, ctx) {
@@ -116,7 +114,6 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
       );
     }
 
-    // Read profiling data from disk (transient — GC'd when function returns)
     let cpuProfile: HermesCpuProfile | null = null;
     if (sessionPaths.cpuProfilePath) {
       cpuProfile = await readCpuProfile(sessionPaths.cpuProfilePath);
@@ -166,7 +163,7 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
 
     const pipelineOutput = await runPipeline(input);
 
-    // Serialize CpuSampleIndex to disk for subsequent query tool calls
+    // profiler-cpu-query reads the index back from disk.
     if (pipelineOutput.cpuSampleIndex) {
       const indexPath = await writeDumpCompact(
         sessionPaths.debugDir,
@@ -176,14 +173,13 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
       sessionPaths.cpuSampleIndexPath = indexPath;
     }
 
-    // Enrich component findings with source locations via AST index
     try {
       const astIndex = await buildAstIndexWithDiagnostics(params.project_root);
       for (const finding of pipelineOutput.componentFindings) {
-        // `finding.component` is the raw DevTools name; the index is keyed on
-        // source identifiers. Without the fallback every compiler/memo/forwardRef
-        // component silently loses its source location and the File column
-        // renders "—" even when the file is right there in the project.
+        // `finding.component` is the raw DevTools name; the AST index is keyed
+        // on bare source identifiers, so without the candidate fallback every
+        // Memo/ForwardRef/Forget component loses its source location and the
+        // report's File column renders "—".
         const entry = astLookupCandidates(finding.component)
           .map((k) => astIndex.index.get(k))
           .find(Boolean);
@@ -199,10 +195,9 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
         }
       }
     } catch {
-      // non-fatal — AST index may fail if tree-sitter native bindings aren't compiled
+      /* best-effort */
     }
 
-    // Attach source snippets to the top 5 findings by totalMs
     const top5 = pipelineOutput.componentFindings
       .slice()
       .sort((a, b) => b.totalMs - a.totalMs)
@@ -217,7 +212,7 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
           const endLine = Math.min(allLines.length, startLine + 50);
           finding.sourceSnippet = allLines.slice(startLine, endLine).join("\n");
         } catch {
-          // non-fatal — file may not be readable
+          /* best-effort */
         }
       })
     );
@@ -250,8 +245,8 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
       },
     };
 
-    // Warn only when hook was genuinely not installed (null).
-    // hotCommitIndices === [] means hook was installed but 0 commits — that's valid, not an error.
+    // Only null means no commit data was recorded; [] is the valid "no hot
+    // commits" outcome.
     if (hotCommitIndices === null) {
       result["warning"] =
         "No React commit data — the DevTools hook may not be present in this runtime, or the commit-capture script failed to inject (check react-profiler-start output for errors).";

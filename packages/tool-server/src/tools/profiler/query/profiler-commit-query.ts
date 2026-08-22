@@ -128,7 +128,6 @@ function renderByComponent(
     return `_Component \`${resolvedName}\` not found in commit data._`;
   }
 
-  // Group by commitIndex
   const byCommit = new Map<number, DevToolsFiberCommit[]>();
   for (const c of matching) {
     let group = byCommit.get(c.commitIndex);
@@ -183,7 +182,6 @@ function renderByTimeRange(
     return `_No commits found in the range ${start.toFixed(0)}ms → ${end.toFixed(0)}ms._`;
   }
 
-  // Group by commitIndex
   const byCommit = new Map<number, DevToolsFiberCommit[]>();
   for (const c of matching) {
     let group = byCommit.get(c.commitIndex);
@@ -242,10 +240,8 @@ export function renderByIndex(
   const timestamp = matching[0]!.timestamp;
 
   const sorted = [...matching].sort((a, b) => b.actualDuration - a.actualDuration);
-  // Only cap when the caller asked for one. The rows are fibers, and a commit's
-  // fibers collapse to far fewer distinct components, so a small default here
-  // would routinely return less than the analyze report that points at this
-  // mode — the opposite of a "full detail" drill-down.
+  // Uncapped by default: rows are fibers, so a small cap would show less than
+  // the analyze report that points here.
   const shown = topN !== undefined ? sorted.slice(0, topN) : sorted;
   const hidden = sorted.length - shown.length;
 
@@ -278,9 +274,8 @@ export function renderByIndex(
     );
   }
 
-  // Scans the FULL commit, never the truncated table: the fiber carrying the
-  // root cause is often cheap and falls outside top_n, and losing that line is
-  // losing the most useful thing in this output.
+  // Scans the full commit, not the truncated table: the root-cause fiber is
+  // often cheap and falls outside top_n.
   const withRootCause = matching.find((c) => c.rootCauseParent);
   if (withRootCause?.rootCauseChain && withRootCause.rootCauseChain.length > 0) {
     lines.push("");
@@ -301,7 +296,6 @@ function renderCascadeTree(commits: DevToolsFiberCommit[], commitIndex: number):
     return `_Commit #${commitIndex} not found in stored data._`;
   }
 
-  // Build parent-child adjacency from parentName
   const children = new Map<string, DevToolsFiberCommit[]>();
   const roots: DevToolsFiberCommit[] = [];
 
@@ -321,7 +315,6 @@ function renderCascadeTree(commits: DevToolsFiberCommit[], commitIndex: number):
 
   const lines: string[] = [`## Cascade Tree — Commit #${commitIndex}`, ""];
 
-  // Deduplicate: group by component name at same level
   const rendered = new Set<string>();
 
   function renderNode(name: string, depth: number): void {
@@ -344,7 +337,6 @@ function renderCascadeTree(commits: DevToolsFiberCommit[], commitIndex: number):
     }
   }
 
-  // Deduplicate roots by name
   const rootNames = new Set(roots.map((r) => r.componentName));
   for (const name of rootNames) {
     renderNode(name, 0);
@@ -402,7 +394,7 @@ Use when drilling into specific components or time windows after react-profiler-
 Returns a markdown table or tree of commit data matching the requested mode.
 Fails if react-profiler-stop has not been called or no commit data is stored.`,
   zodSchema,
-  // RN-only: reads React commit data captured via the React DevTools backend.
+  // Reads React commit data captured via the React DevTools backend.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: () => ({}),
   async execute(_services, params) {

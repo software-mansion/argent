@@ -131,9 +131,7 @@ Call react-profiler-stop first. Reads directly from the stored cpuProfile.
 Returns a markdown table of the top hotspot functions with self-time, total-time, and location.
 Fails if react-profiler-stop has not been called or no CPU profile is stored.`,
   zodSchema,
-  // RN-only: reads a Hermes CPU profile captured via the React profiler
-  // session. Chromium's V8 Profiler emits a different sample format — see the
-  // PR description for the follow-up scope.
+  // RN-only: reads a Hermes CPU profile; Chromium's V8 sample format differs.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: () => ({}),
   async execute(_services, params) {

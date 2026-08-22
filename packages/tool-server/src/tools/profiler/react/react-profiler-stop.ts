@@ -33,11 +33,9 @@ const zodSchema = z.object({
 interface StopReadResult {
   live: ProfilingDataBackend | null;
   displayNameById: Record<string, string | null>;
-  // False when every renderer interface lacked both getDisplayNameForElementID
-  // and getDisplayNameForFiberID — typically a react-devtools-core version we
-  // don't recognize. When false, every fiber is dropped as unattributed even
-  // though commits were captured; surfaced in the response so the operator
-  // doesn't mistake it for a transient-unmount race.
+  // False when no renderer interface exposed getDisplayNameForElementID or
+  // getDisplayNameForFiberID; every fiber is then unattributed even though
+  // commits were captured, which is not a transient-unmount race.
   displayNameApiAvailable?: boolean;
 }
 
@@ -52,9 +50,8 @@ function normalizeChangeDescription(raw: unknown): DevToolsChangeDescription | n
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   const props = Array.isArray(r.props) ? (r.props as string[]) : null;
-  // `null` is the expected value for function components — the DevTools backend only
-  // emits boolean `state` for class components. For Forget()/hooks components state
-  // changes surface through `hooks[]` + useState/useReducer hookType detection instead.
+  // The backend emits boolean `state` only for class components; for function
+  // components state changes surface through `hooks[]` + useState/useReducer hookTypes.
   const state = typeof r.state === "boolean" ? (r.state as boolean) : null;
   const hooks = Array.isArray(r.hooks) ? (r.hooks as number[]) : null;
   const context = typeof r.context === "boolean" ? (r.context as boolean) : null;
@@ -64,15 +61,12 @@ function normalizeChangeDescription(raw: unknown): DevToolsChangeDescription | n
 }
 
 /**
- * Flatten `ProfilingDataBackend` into the `DevToolsFiberCommit[]` shape the
- * downstream pipeline expects. `commitIndex` is assigned flatly across roots
- * so the map-key grouping in `buildHotCommitSummaries` works correctly.
+ * Flatten `ProfilingDataBackend` into `DevToolsFiberCommit[]`. `commitIndex` runs
+ * flatly across roots so the map-key grouping in `buildHotCommitSummaries` stays correct.
  *
- * `unattributedByCommit` records fibers with a real `actualDuration` whose
- * display name could not be resolved (typically transient components that
- * unmounted before `STOP_AND_READ_SCRIPT` ran). These would otherwise be
- * silently dropped; surfacing the count + summed ms lets the report warn when
- * a commit's breakdown is incomplete. Tuple shape: `[commitIndex, fiberCount, ms]`.
+ * `unattributedByCommit` records fibers whose display name could not be resolved
+ * (typically components unmounted before `STOP_AND_READ_SCRIPT` ran), so the report
+ * can warn that a breakdown is incomplete. Tuple: `[commitIndex, fiberCount, ms]`.
  */
 export function flattenProfilingData(
   merged: ProfilingDataBackend,
@@ -111,9 +105,8 @@ export function flattenProfilingData(
         const componentName = displayNameById[String(fiberID)] ?? null;
         if (!componentName) {
           droppedCount++;
-          // selfDuration is the exclusive per-fiber render time. Summing actualDuration
-          // (inclusive subtree time) across dropped fibers double-counts parent work
-          // whenever both a parent and its child were dropped.
+          // selfDuration is exclusive; summing actualDuration (inclusive subtree time)
+          // would double-count parent work when both a parent and its child are dropped.
           droppedMs += selfMap.get(fiberID) ?? 0;
           continue;
         }
@@ -170,7 +163,6 @@ Returns { duration_ms, sample_count, fiber_renders_captured, total_react_commits
 When any commit had fibers whose display name could not be resolved at stop time (typically transient components like modals/tooltips/animations that unmounted before stop), the response also includes { unattributed_ms, unattributed_fiber_count, unattributed_commit_count } — these quantify how much work is not accounted for in the per-component breakdown (the per-commit duration itself remains correct).
 Fails if no active profiling session exists or the CDP connection was lost during recording.`,
     zodSchema,
-    // RN-only: companion to react-profiler-start.
     capability: RN_ONLY_TOOL_CAPABILITY,
     services: () => ({}),
     async execute(_services, params) {
@@ -210,13 +202,9 @@ Fails if no active profiling session exists or the CDP connection was lost durin
         );
       }
 
-      // The CPU sampler is enabled by react-profiler-start only after the
-      // DevTools-hook checks pass. If `profilingActive` is false, start
-      // either threw before `Profiler.start` (e.g. release build with
-      // React DevTools stripped) or never ran. Calling `Profiler.stop`
-      // against an un-started Hermes sampler returns an empty profile
-      // that would later crash `profile.samples.length` with a generic
-      // TypeError — detect it up front and explain.
+      // `profilingActive` is set only once react-profiler-start's DevTools-hook
+      // checks pass and the sampler is running; stopping a sampler that was never
+      // started fails further down with a far less actionable message.
       if (!api.profilingActive) {
         throw new FailureError(
           "No active profiling run to stop. The session exists but Hermes CPU sampling was never started — typically because react-profiler-start failed before reaching the sampler (often on release builds without React DevTools). " +
@@ -225,16 +213,14 @@ Fails if no active profiling session exists or the CDP connection was lost durin
             error_code: FAILURE_CODES.REACT_PROFILER_NO_ACTIVE_SESSION,
             failure_stage: "react_profiler_stop_inactive",
             failure_area: "tool_server",
-            // Internal session-state (start never reached the sampler), not caller
-            // input — matches the sibling session-lookup site above and the
-            // native NATIVE_PROFILER_NO_ACTIVE_SESSION so this code carries one
-            // consistent kind rather than splitting by which guard tripped.
+            // Internal session-state, not caller input — matches the session-lookup
+            // site above and the native NATIVE_PROFILER_NO_ACTIVE_SESSION twin.
             error_kind: "not_found",
           }
         );
       }
 
-      api.profilingActive = false; // reset BEFORE the CDP call so state is clean even if it throws
+      api.profilingActive = false; // reset before the CDP call so state is clean if it throws
 
       const cpuResult = (await cdp.send("Profiler.stop")) as {
         profile?: HermesCpuProfile;
@@ -270,8 +256,8 @@ Fails if no active profiling session exists or the CDP connection was lost durin
         );
       }
 
-      // Single evaluate: stop the backend profiler, read the live buffer, and
-      // resolve every referenced fiberID to a displayName in one round-trip.
+      // One round-trip: stop the backend profiler, read the live buffer, and resolve
+      // every referenced fiberID to a display name.
       const stopReadStr = (await cdp.send("Runtime.evaluate", {
         expression: STOP_AND_READ_SCRIPT,
         returnByValue: true,
@@ -317,7 +303,7 @@ Fails if no active profiling session exists or the CDP connection was lost durin
             fiberMeta = JSON.parse(metaStr.result.value) as FiberMetaMap;
           }
         } catch {
-          // non-fatal — hookTypes / parentName / isCompilerOptimized fall back to defaults
+          // non-fatal — fiber metadata falls back to defaults
         }
       }
 
@@ -437,10 +423,8 @@ Fails if no active profiling session exists or the CDP connection was lost durin
           response["unattributed_ms"] = Math.round(totalMs * 100) / 100;
           response["unattributed_fiber_count"] = totalFibers;
           response["unattributed_commit_count"] = unattributedByCommit.length;
-          // Distinguish "API missing" from "transient-unmount race". When the
-          // backend never exposed a display-name accessor, every fiber is
-          // unattributed by construction — telling the operator to look for
-          // race conditions in their component lifecycle would be wrong.
+          // With no display-name accessor every fiber is unattributed by
+          // construction, so don't point the operator at an unmount race.
           if (stopRead.displayNameApiAvailable === false) {
             response["unattributed_reason"] =
               "react-devtools backend in this app does not expose a recognized display-name accessor (neither getDisplayNameForElementID nor getDisplayNameForFiberID). The component breakdown is unavailable for this profiling session; commit-level timing data remains correct.";
