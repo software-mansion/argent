@@ -56,9 +56,8 @@ const capability: ToolCapability = {
   chromium: { app: true },
 };
 
-// One press-release is 50ms; taps in a multi-tap gesture are 100ms apart —
-// comfortably inside the OS double-tap window (~300ms on both platforms and
-// in Chromium's click counter), which separate tool calls could not guarantee.
+// Timings keep a multi-tap inside the OS double-tap window, which separate
+// tool calls could not guarantee.
 const TAP_HOLD_MS = 50;
 const MULTI_TAP_GAP_MS = 100;
 
@@ -72,8 +71,7 @@ async function tapChromium(
   const pxX = Math.max(0, Math.min(vp.width, x * vp.width));
   const pxY = Math.max(0, Math.min(vp.height, y * vp.height));
   await api.dispatchMouseEvent({ type: "mouseMoved", x: pxX, y: pxY });
-  // The browser's click counter drives dblclick: each press carries the
-  // running count (1, then 2, …), the way a real mouse reports it.
+  // dblclick fires off the escalating clickCount, not off timing.
   for (let i = 1; i <= clickCount; i++) {
     if (i > 1) await sleep(MULTI_TAP_GAP_MS);
     await api.dispatchMouseEvent({ type: "mousePressed", x: pxX, y: pxY, clickCount: i });
@@ -113,8 +111,7 @@ Before tapping, determine the correct coordinates by using discovery tools — p
     const clickCount = params.clickCount ?? 1;
     if (device.platform === "chromium") {
       const chromium = services.chromium as ChromiumCdpApi;
-      // Mouse dispatches wait on compositor hit-testing, which a hidden
-      // window services at ~5s per event — refuse up front like gesture-scroll.
+      // Mouse dispatch stalls at ~5s per event on a hidden window.
       await assertChromiumWindowVisible(chromium, "tap", "chromium_tap_window_hidden");
       await tapChromium(chromium, params.x, params.y, clickCount);
       return { tapped: true, timestampMs };

@@ -3,7 +3,6 @@ import { updateConfig } from "@argent/configuration-core";
 import { configFilePath } from "./paths.js";
 
 // Consent is evaluated on every track() so a running tool server sees opt-outs.
-// The config file is re-parsed only when its mtime or inode changes.
 export interface ConsentSource {
   source:
     | "env_do_not_track"
@@ -11,7 +10,6 @@ export interface ConsentSource {
     | "session_override"
     | "config_file"
     | "default";
-  /** Detailed override identifier for `argent telemetry status` output. */
   detail?: string;
 }
 
@@ -28,10 +26,8 @@ interface CachedConfig {
 
 const cache: { current: CachedConfig | null } = { current: null };
 
-// Non-persisted, in-process consent decision for the current run. Set while a
-// first-run consent choice is pending commit so the pick governs THIS session's
-// events immediately, without writing to config.json. null means "no in-process
-// override — fall through to the env / config / default precedence below".
+// In-process consent decision, never written to config.json: set while a
+// first-run pick is pending commit so it governs THIS session's events.
 let sessionOverride: boolean | null = null;
 
 function readConfigOverride(): boolean | null {
@@ -43,7 +39,6 @@ function readConfigOverride(): boolean | null {
       cache.current = { mtimeMs: null, fingerprint: null, enabledOverride: null };
       return null;
     }
-    // File errors must not silently flip telemetry on.
     cache.current = { mtimeMs: null, fingerprint: null, enabledOverride: null };
     return null;
   }
@@ -54,11 +49,8 @@ function readConfigOverride(): boolean | null {
     return null;
   }
 
-  // Include size so a same-mtime edit (coarse filesystem mtime granularity, or
-  // a same-millisecond in-place write that preserves the inode) still busts the
-  // cache. Toggling telemetry.enabled true↔false always changes the byte length,
-  // so a long-lived tool-server can't keep serving a stale "enabled" after the
-  // user opts out within the same mtime tick.
+  // Size is in the fingerprint so an edit landing in the same mtime tick still
+  // busts the cache: toggling enabled true↔false always changes the byte length.
   const fingerprint = `${stats.dev}:${stats.ino}:${stats.size}`;
   const mtimeMs = stats.mtimeMs;
 
@@ -82,7 +74,7 @@ function readConfigOverride(): boolean | null {
       }
     }
   } catch {
-    // Malformed config — treat as "no override" rather than crash.
+    // Malformed config — treat as "no override".
   }
 
   cache.current = { mtimeMs, fingerprint, enabledOverride: parsedEnabled };
@@ -100,7 +92,7 @@ function isDoNotTrackSet(value: string | undefined): boolean {
   return !parseFalsy(value);
 }
 
-/** Computes the effective consent state without mutating anything on disk. */
+/** Effective consent state; never writes to disk. */
 export function getConsentState(env: NodeJS.ProcessEnv = process.env): ConsentState {
   if (isDoNotTrackSet(env.DO_NOT_TRACK)) {
     return {
@@ -117,11 +109,6 @@ export function getConsentState(env: NodeJS.ProcessEnv = process.env): ConsentSt
     };
   }
 
-  // An in-process first-run choice that hasn't been committed to disk yet. It
-  // loses to an explicit environment opt-out (handled above) but beats the
-  // config file and the default, so a pending "Disabled" pick suppresses this
-  // session's events even though the choice isn't persisted until the install
-  // completes.
   if (sessionOverride !== null) {
     return { enabled: sessionOverride, source: { source: "session_override" } };
   }
@@ -134,7 +121,6 @@ export function getConsentState(env: NodeJS.ProcessEnv = process.env): ConsentSt
     return { enabled: true, source: { source: "config_file", detail: "config.json" } };
   }
 
-  // Default-on unless one of the explicit opt-out sources above applies.
   return { enabled: true, source: { source: "default" } };
 }
 
@@ -155,18 +141,16 @@ export function writeConsentFlag(enabled: boolean): void {
 }
 
 /**
- * Apply (or clear) an in-process consent decision for the current run without
- * touching config.json. `argent init` uses this so a first-run "Enable/Disable"
- * pick governs the session immediately, while the durable record is only written
- * once the install actually completes — an aborted init leaves nothing behind
- * (the override dies with the process) and the next run re-prompts. Pass null to
- * clear it. See `writeConsentFlag` for the persisted counterpart.
+ * Apply (null clears) a consent decision for this run without touching
+ * config.json: `argent init` persists the pick only once setup completes, so an
+ * aborted init leaves nothing behind and the next run re-prompts.
+ * @see writeConsentFlag for the persisted counterpart.
  */
 export function setSessionConsentOverride(enabled: boolean | null): void {
   sessionOverride = enabled;
 }
 
-/** Test seam: blow away the in-memory mtime cache and any session override. */
+/** Test seam: clear the config cache and any session override. */
 export function _resetConsentCacheForTest(): void {
   cache.current = null;
   sessionOverride = null;

@@ -22,11 +22,8 @@ let sharpCache: SharpModule | null | undefined;
 let sharpLoadWarningEmitted = false;
 
 /**
- * Try to load `sharp` once per process. It is an optional dependency — we
- * fall back to writing the raw CDP screenshot bytes when it's missing, and
- * emit one warning so the user knows scale / rotation were ignored. Adding
- * sharp as a hard dep would bloat the tool-server install with a ~30 MB
- * native binary every consumer pays for whether they touch Chromium or not.
+ * Cached once per process. `sharp` is optional and declared as a dependency
+ * nowhere in this repo; without it scale / rotation are skipped.
  */
 function tryLoadSharp(): SharpModule | null {
   if (sharpCache !== undefined) return sharpCache;
@@ -51,7 +48,7 @@ function warnSharpMissingOnce(reason: string): void {
 
 const DOWNSCALER_TO_KERNEL: Record<DownscalerType, string> = {
   lanczos3: "lanczos3",
-  box: "mitchell", // sharp doesn't expose a true box kernel; mitchell is the closest fast alternative
+  box: "mitchell", // sharp has no box kernel
   bilinear: "lanczos2",
   nearest: "nearest",
 };
@@ -65,26 +62,16 @@ const ROTATION_DEGREES: Record<Rotation, number> = {
 
 interface CaptureContext {
   cdp: CDPClient;
-  /** Used in the persisted filename for traceability. */
+  /** Used in the persisted filename. */
   deviceId: string;
 }
 
-/**
- * One-shot capture pipeline:
- *   Page.captureScreenshot (PNG)
- *   ↓
- *   if rotation || scale<1 then sharp transform
- *   ↓
- *   write to mediaDir / argent-screenshot-<deviceId>-<timestamp|id>.png
- *
- * Returns { url: file://…, path } matching sim-server's MediaReady shape.
- */
+/** Capture, optionally rotate / downscale with sharp, persist under `mediaDir()`. */
 export async function captureScreenshot(
   ctx: CaptureContext,
   opts: ScreenshotOpts = {}
 ): Promise<MediaReady> {
-  // Always use PNG from CDP — JPEG would lose precision on downscale and
-  // disagrees with sim-server's screenshot output format (also PNG).
+  // PNG, not JPEG: matches sim-server's output and survives the downscale.
   const cdpResult = (await ctx.cdp.send("Page.captureScreenshot", {
     format: "png",
     captureBeyondViewport: false,
@@ -111,9 +98,7 @@ export async function captureScreenshot(
       let pipeline = sharp(bytes);
       if (rotation) pipeline = pipeline.rotate(ROTATION_DEGREES[rotation]);
       if (scale) {
-        // Need the source dimensions to compute the target size in pixels.
-        // sharp exposes them through `.metadata()` but that's an extra round
-        // trip; reading the PNG header is faster and avoids a sharp call.
+        // Cheaper than asking sharp for `.metadata()`.
         const dims = readPngSize(bytes);
         if (dims) {
           const targetW = Math.max(1, Math.round(dims.width * scale));
@@ -124,9 +109,6 @@ export async function captureScreenshot(
           });
         }
       }
-      // The newer @types/node strictly types `Buffer<ArrayBuffer>` while
-      // sharp's d.ts still resolves to `Buffer<ArrayBufferLike>`. Both refer to
-      // the same runtime object; coerce to silence the mismatch.
       bytes = Buffer.from(await pipeline.png({ compressionLevel: 6 }).toBuffer());
     }
   }
@@ -138,29 +120,20 @@ export async function captureScreenshot(
   return { url: `file://${filePath}`, path: filePath };
 }
 
-/**
- * Read width / height from a PNG IHDR chunk without spinning up a decoder.
- * Returns null on a malformed or non-PNG buffer — the caller falls back to
- * sharp metadata in that case (which costs a roundtrip but always works).
- */
+/** Width / height from the PNG IHDR chunk; null if `buf` is not a valid PNG. */
 function readPngSize(buf: Buffer): { width: number; height: number } | null {
-  // PNG signature: 89 50 4E 47 0D 0A 1A 0A
   const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
   if (buf.length < 24) return null;
   for (let i = 0; i < signature.length; i++) {
     if (buf[i] !== signature[i]) return null;
   }
-  // IHDR chunk: length (4) + "IHDR" (4) + width (4) + height (4) + ...
-  // Starts at offset 8, header data is at offset 16.
+  // IHDR starts at offset 8: length (4) + "IHDR" (4), then width, height.
   return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
 }
 
 /**
- * Sim-server can also copy a screenshot directly to the OS clipboard (handy
- * for "share this state with QA"). On Chromium we go through the renderer's
- * Clipboard API because CDP doesn't expose the OS clipboard. The path is
- * best-effort — if clipboard permission is denied the call rejects with the
- * underlying renderer error so callers can surface it.
+ * Goes through the renderer's Clipboard API because CDP exposes no OS clipboard.
+ * Rejects with the renderer's own error when the write is refused.
  */
 export async function copyScreenshotToClipboard(
   ctx: CaptureContext,
@@ -170,10 +143,6 @@ export async function copyScreenshotToClipboard(
   const bytes = fs.readFileSync(shot.path);
   const b64 = bytes.toString("base64");
 
-  // Build a script that copies a PNG blob through the clipboard API. The
-  // renderer must support ClipboardItem (Chromium ≥ 79, every Chromium we
-  // care about) — older runtimes would throw, but the surrounding try/catch
-  // surfaces that as a clear error rather than a silent no-op.
   const script = `(async () => {
     const b64 = "${b64}";
     const bin = atob(b64);
@@ -197,18 +166,15 @@ export async function copyScreenshotToClipboard(
   )) as { result?: { value?: { ok?: boolean; error?: string } } };
   const v = out.result?.value;
   if (!v?.ok) {
-    // Plain Error, not a classified FailureError: copyScreenshotToClipboard has
-    // no production caller (only wired into the chromium-server object / type),
-    // and even the sibling clipboard route reformats errors before any registry
-    // boundary — so a code here could never reach telemetry.
+    // Plain Error, not FailureError: no production caller, and the sibling
+    // clipboard route reformats errors before any registry boundary.
     throw new Error(
       `Chromium clipboard image copy failed: ${v?.error ?? "renderer rejected the write"}`
     );
   }
 }
 
-/** Test seam: reset the cached sharp module so a unit test can simulate the
- * "sharp unavailable" path without monkey-patching require. */
+/** Test seam: clears the cached sharp module and the one-shot warning flag. */
 export function __resetSharpCacheForTests(): void {
   sharpCache = undefined;
   sharpLoadWarningEmitted = false;

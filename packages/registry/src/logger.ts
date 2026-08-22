@@ -2,10 +2,7 @@ import type { Registry } from "./registry";
 
 const PREFIX = "[registry]";
 
-/**
- * Walk the .cause chain and build a single string with all unique messages,
- * then append the deepest available stack trace.
- */
+/** Flattens the .cause chain into one message plus the deepest stack. */
 function formatError(error: Error): string {
   const parts: string[] = [];
   let current: unknown = error;
@@ -18,7 +15,7 @@ function formatError(error: Error): string {
 
   const fullMessage = parts.length === 1 ? parts[0]! : parts.join(" — caused by: ");
 
-  // Prefer the deepest stack in the chain (closest to the actual throw site)
+  // The deepest stack is the one closest to the actual throw site
   let deepestStack: string | undefined;
   let cursor: unknown = error;
   while (cursor instanceof Error) {
@@ -27,8 +24,8 @@ function formatError(error: Error): string {
   }
 
   if (deepestStack) {
-    // Replace the first line of the stack (which repeats the message) with our
-    // full cause-chain message so the log line is self-contained.
+    // The stack's first line repeats only the innermost message; swap in the whole chain
+    // so the log line is self-contained.
     const stackBody = deepestStack.includes("\n")
       ? deepestStack.slice(deepestStack.indexOf("\n"))
       : "";
@@ -38,10 +35,7 @@ function formatError(error: Error): string {
   return fullMessage;
 }
 
-/**
- * Subscribes to all registry lifetime events and logs them to the console.
- * Call this after creating the registry to observe service/tool lifecycle in the server.
- */
+/** Logs every registry event to the console. */
 export function attachRegistryLogger(registry: Registry): void {
   registry.events.on("serviceStateChange", (serviceId, from, to) => {
     console.log(`${PREFIX} serviceStateChange ${serviceId}: ${from} → ${to}`);

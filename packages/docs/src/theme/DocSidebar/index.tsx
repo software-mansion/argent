@@ -9,15 +9,12 @@ import SidebarIcon from "@site/src/theme/SidebarIcon";
 type Props = WrapperProps<typeof DocSidebarType>;
 
 /*
- * The shared theme (@swmansion/t-rex-ui) renders its sidebar items straight
- * from its own bundle, so swizzling DocSidebarItem has no effect. The items
- * prop is the last place the theme still reads from the site, and every item
- * renders its label as the link's children, so putting the icon in front of
- * the label is enough to get it into the menu.
+ * The shared theme (@swmansion/t-rex-ui) renders sidebar items from its own
+ * bundle, so swizzling DocSidebarItem has no effect; an item's label is
+ * rendered as the link's children, so the icon has to ride along in there.
  */
 function withIcons(items: readonly PropSidebarItem[]): PropSidebarItem[] {
   return items.map((item) => {
-    // Category headings stay plain; only the pages under them carry an icon.
     if (item.type === "category") {
       return { ...item, items: withIcons(item.items) };
     }

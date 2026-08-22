@@ -8,7 +8,7 @@ import {
   status as telemetryStatus,
 } from "@argent/telemetry";
 
-// Consent-management subcommands for opt-out telemetry.
+// Telemetry is opt-out: on by default.
 export async function telemetry(args: string[]): Promise<void> {
   const sub = args[0];
   telemetryInit("cli");

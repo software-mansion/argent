@@ -9,15 +9,15 @@ import type { PackageManager } from "./utils.js";
 export interface ResolvedUpdateTarget {
   latestVersion: string;
   latestPublishedAt: string | null;
-  /** Newest stable version installable now under the release-age policy, or null. */
+  /** Newest stable upgrade installable now under the release-age policy. */
   targetVersion: string | null;
   minReleaseAgeMs: number;
 }
 
 /**
  * Resolve the version `argent update` should install for `pm`: the newest
- * stable release that is both newer than `current` and past the machine's
- * minimum-release-age policy. Returns null if the registry is unreachable.
+ * stable release newer than `current` that also clears the machine's
+ * minimum-release-age policy. Returns null when the registry lookup fails.
  */
 export async function resolveInstallableUpdateTarget(
   pm: PackageManager,

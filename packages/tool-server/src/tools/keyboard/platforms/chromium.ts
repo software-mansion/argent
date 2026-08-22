@@ -11,14 +11,14 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
   const delay = params.delayMs ?? 50;
   let keysPressed = 0;
 
-  // The tool rejects a request carrying both `text` and `key` (see ../index.ts),
-  // so at most one of the two blocks below runs.
+  // ../index.ts rejects a request carrying both `text` and `key`, so at most
+  // one of the two blocks below runs.
   if (params.text) {
     for (const char of params.text) {
       const desc = charToChromiumKey(char);
       if (!desc) {
-        // A character with no CDP descriptor can't be typed — caller input error
-        // → 400, keeping the KEYBOARD_CHARACTER_UNSUPPORTED telemetry code (#420).
+        // Caller input error → 400, in the cross-backend
+        // KEYBOARD_CHARACTER_UNSUPPORTED telemetry bucket (#420).
         throw new InvalidToolInputError(`No CDP key descriptor for character "${char}"`, {
           error_code: FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED,
           failure_stage: "keyboard_char_chromium",
@@ -31,8 +31,7 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
         code: desc.code,
         windowsVirtualKeyCode: desc.windowsVirtualKeyCode,
       });
-      // `char` delivers the actual codepoint to the focused input; without
-      // this the field receives no value.
+      // Without the `char` event the focused input receives no value.
       await api.dispatchKeyEvent({ type: "char", text: desc.text });
       await api.dispatchKeyEvent({
         type: "keyUp",
@@ -47,16 +46,14 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
 
   if (params.key) {
     const lower = params.key.toLowerCase();
-    // Own-property check: a prototype key like "constructor" would otherwise
-    // pass the falsy guard with a garbage value and dispatch a broken CDP key
-    // event instead of rejecting as an unknown key.
+    // Own-property check: "constructor" would otherwise pass the falsy guard
+    // with a garbage value and dispatch a broken CDP event.
     const named = Object.hasOwn(CHROMIUM_NAMED_KEYS, lower)
       ? CHROMIUM_NAMED_KEYS[lower]
       : undefined;
     if (!named) {
-      // Well-typed but unusable input (`key` is a free string) — a caller
-      // mistake mapped to 400 (matching the Android path, uniform across
-      // backends), keeping the KEYBOARD_KEY_UNSUPPORTED telemetry code (#420).
+      // `key` is a free string, so an unknown name is a caller mistake → 400
+      // (as on Android), in the KEYBOARD_KEY_UNSUPPORTED bucket (#420).
       throw new InvalidToolInputError(
         `Unknown key "${params.key}". Supported: ${Object.keys(CHROMIUM_NAMED_KEYS).join(", ")}`,
         {

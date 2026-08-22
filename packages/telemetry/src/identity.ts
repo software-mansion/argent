@@ -3,41 +3,28 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { argentHomeDir, identityFilePath } from "./paths.js";
 
-// The simulator-server `fingerprint` subcommand emits exactly 64 lowercase hex
-// chars — a one-way hash of stable hardware identifiers, so no raw hardware id
-// is ever exposed. That validated hash is used verbatim as the telemetry
-// distinct_id. Require the exact shape (after lower-casing) so a truncated read,
-// a wrong-length hex token (e.g. a 40-hex git SHA), or an error banner is
-// rejected and we fall back to a random id rather than persisting garbage as a
-// "stable" id. (A same-length 64-hex blob is indistinguishable from a real
-// fingerprint by shape alone, so shape validation guards length/charset, not
-// provenance.) We
-// lower-case before matching so a future binary emitting upper-case hex still
-// maps to the same id — and it doubles as the self-describing marker for the
-// fast path below (a fingerprint id is 64-hex; the random fallback is a dashed
-// v4 UUID), letting us skip re-spawning the binary once one is on disk.
+// A fingerprint id is exactly 64 lowercase hex chars; the random fallback is a
+// dashed v4 UUID. So this shape check both rejects malformed resolver output (a
+// truncated read, a 40-hex git SHA, an error banner) before it can be persisted
+// as a "stable" id, and tells the two id kinds apart once one is on disk.
 const FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/;
 
-// In-memory cache of the resolved id. Keyed by the resolved path so a process
-// whose home dir changes (e.g. tests scoping HOME) doesn't serve a stale id.
-// Only a FINGERPRINT id is authoritative here — a cached fallback is provisional
-// (a later async upgrade, or another process, may migrate the on-disk id to the
-// fingerprint), so readOrCreateAnonId re-reads disk rather than short-circuiting
-// on a cached fallback.
+// In-memory cache of the resolved id, keyed by resolved path so a changed home
+// dir (e.g. tests scoping HOME) doesn't serve a stale id. Only a FINGERPRINT id
+// is authoritative: a cached fallback may since have been migrated on disk by an
+// async upgrade or another process, so readOrCreateAnonId re-reads disk for it.
 let cached: { path: string; id: string } | null = null;
 
-// Memoize the SYNCHRONOUS fingerprint resolution (including a failed/absent one
-// as null), so the blocking binary spawn on the truly-fresh path happens AT MOST
-// ONCE per process even if id-file persistence keeps failing (a broken ~/.argent
-// would otherwise re-enter readOrCreateAnonId — and re-spawn — on every event).
+// Memoized SYNCHRONOUS fingerprint resolution (a failed/absent one included, as
+// null), so the blocking spawn happens at most once per process even if id-file
+// persistence keeps failing and every event re-enters readOrCreateAnonId.
 let fingerprintResolved: { value: string | null } | null = null;
 
-// Coordination for the NON-BLOCKING async upgrade (scheduleFingerprintUpgrade):
-// migrate a fallback id to the fingerprint in the background without ever
-// stalling the event loop. Bounded — at most one probe in flight, spaced by a
-// cooldown and capped — so a permanently-unfingerprintable binary can't spawn on
-// every event; once the cap is hit the process still adopts a fingerprint any
-// OTHER process migrates, via the cheap disk re-read in readOrCreateAnonId.
+// Coordination for the non-blocking async upgrade (scheduleFingerprintUpgrade).
+// Bounded — one probe in flight, a cooldown, an attempt cap — so a permanently
+// unfingerprintable binary can't spawn on every event; past the cap the process
+// still adopts a fingerprint another process migrates, via the disk re-read in
+// readOrCreateAnonId.
 let upgradeInFlight = false;
 let upgradeAttempts = 0;
 let upgradeLastAttemptMs = 0;
@@ -45,108 +32,87 @@ const UPGRADE_COOLDOWN_MS = 60_000;
 const UPGRADE_MAX_ATTEMPTS = 3;
 
 /**
- * Resolve the telemetry id.
- *
- * When a host fingerprint is available, the id IS that fingerprint — the 64-hex
- * one-way hash emitted by `simulator-server fingerprint`, used verbatim so the
- * distinct id counts unique machines, stable across reinstalls.
+ * Resolve the telemetry id: the 64-hex host fingerprint when one is available,
+ * so the distinct id counts machines rather than installs.
  *
  * Blocking is confined to ONE path: the truly-fresh machine (nothing valid on
- * disk yet), where the fingerprint is resolved SYNCHRONOUSLY so the very first
- * event this machine ever sends already carries the stable id instead of a
- * random fallback that later migrates (which would split the machine across two
- * distinct_ids). That spawn happens at most once per process (memoized).
+ * disk), resolved SYNCHRONOUSLY so the first event already carries the stable id
+ * instead of a random fallback that later migrates — which would split the
+ * machine across two distinct_ids. That spawn happens at most once per process.
  *
- * Every other case returns WITHOUT a blocking spawn:
- *  - a fingerprint id already on disk (or cached) → served directly (steady
- *    state; also how a stuck long-lived process adopts a fingerprint another
- *    process migrated — a cheap disk read);
- *  - a fallback id already on disk → returned as-is; the caller separately kicks
- *    off scheduleFingerprintUpgrade to migrate it in the background.
+ * Every other case returns without a spawn: a fingerprint id on disk (or cached)
+ * is served directly — also how a long-lived process adopts a fingerprint another
+ * process migrated — and a fallback id on disk is returned as-is, with the caller
+ * separately kicking off scheduleFingerprintUpgrade to migrate it.
  *
- * Fallbacks (binary absent, command fails, no resolver injected): keep the
- * already-stored id, or mint a fresh random UUID. This function must never throw
- * on a fingerprint-resolution failure — telemetry stays best-effort.
+ * Never throws on a fingerprint-resolution failure; telemetry stays best-effort.
  */
 export function readOrCreateAnonId(resolveFingerprint?: () => string | null): string {
   const finalPath = identityFilePath();
 
-  // Fast path A: a cached FINGERPRINT id is authoritative — serve without
-  // touching disk. A cached FALLBACK is only provisional, so we do NOT
-  // short-circuit on it: we fall through to re-read disk so a fingerprint that
-  // an async upgrade or another process has since migrated is adopted.
+  // Fast path A: only a cached FINGERPRINT is authoritative. A cached fallback
+  // falls through to a disk re-read, to pick up a fingerprint an async upgrade or
+  // another process has since migrated.
   if (cached && cached.path === finalPath && FINGERPRINT_PATTERN.test(cached.id)) {
     return cached.id;
   }
 
   const stored = tryReadId(finalPath);
 
-  // Fast path B: a fingerprint id is already persisted. Its canonical 64-hex
-  // shape is self-describing (the random fallback is a dashed v4 UUID), so it is
-  // the stable per-machine id and we return it WITHOUT spawning the binary. Only
-  // the canonical LOWER-case form qualifies — our writers only ever persist
-  // lower-case, so a mixed-case 64-hex value is an external write; it falls
-  // through to the fallback path and the async upgrade rewrites it to canonical.
+  // Fast path B: a persisted fingerprint is the stable per-machine id — serve it
+  // WITHOUT spawning. Only the canonical LOWER-case form qualifies: our writers
+  // only ever persist lower-case, so mixed-case 64-hex is an external write and
+  // falls through to the fallback path, where the async upgrade rewrites it.
   if (stored && FINGERPRINT_PATTERN.test(stored)) {
     cached = { path: finalPath, id: stored };
     return stored;
   }
 
-  // A valid (non-fingerprint) fallback id is already on disk. We are already
-  // emitting under it, so there is no rush and no reason to pay a BLOCKING spawn
-  // here: return it now. The caller's scheduleFingerprintUpgrade migrates it to
-  // the fingerprint asynchronously, and the next call then hits fast path B.
-  // This is what keeps a machine with a legacy id, or a binary that can't
-  // fingerprint, from re-spawning and blocking on every process's first event.
+  // A fallback id is already on disk and we are already emitting under it, so no
+  // BLOCKING spawn here: return it, and the caller's scheduleFingerprintUpgrade
+  // migrates it in the background so the next call hits fast path B. This is what
+  // keeps a machine with a legacy id, or a binary that can't fingerprint, from
+  // re-spawning on every process's first event.
   if (stored) {
     cached = { path: finalPath, id: stored };
     return stored;
   }
 
   // Truly fresh: nothing valid on disk (fresh install, or a corrupt/empty file).
-  // This is the ONLY place the fingerprint is resolved SYNCHRONOUSLY — the
-  // one-time cost, per machine, that lets the first-ever event carry the stable
-  // id. At most once per process (memoized in resolveFingerprintOnce).
+  // The ONLY synchronous resolve — the one-time, per-machine cost that lets the
+  // first-ever event carry the stable id. At most once per process.
   const target = resolveFingerprintOnce(resolveFingerprint);
   if (target) {
-    // Fingerprint available on a fresh machine: persist it. (stored is null here,
-    // so this always writes; idempotent once persisted on later runs.)
+    // `stored` is null here, so this always writes.
     try {
       writeIdFileAtomic(finalPath, target);
     } catch {
-      // Persisting failed (e.g. ENOSPC / read-only home). The fingerprint is
-      // stable, so we still return `target` in memory and stay consistent across
-      // this process; a later run retries the rewrite.
+      // Unwritable home (ENOSPC, read-only): the fingerprint is stable, so keep
+      // it in memory and let a later run retry the write.
     }
     cached = { path: finalPath, id: target };
     return target;
   }
 
-  // No fingerprint and no valid stored id: mint a random id. A corrupt / empty
-  // regular file squatting the path (e.g. a truncated prior write from a legacy
-  // or external writer) is cleared inside mintRandomId, behind its no-overwrite
-  // link() — never by an up-front unlink. Crucially the corrupt occupant is
-  // removed by CLAIMING it (atomic rename aside + inspect), not by unlinking the
-  // path by name: so a valid id a concurrent self-healer publishes into the
-  // check→clear gap is adopted, not destroyed — two concurrent heals converge on
-  // one id instead of splitting a machine into two distinct_ids.
+  // No fingerprint and no valid stored id: mint a random one. A corrupt/empty
+  // regular file squatting the path is cleared inside mintRandomId by CLAIMING it
+  // (atomic rename aside, then inspect) rather than by unlinking the path by name,
+  // so a valid id a concurrent self-healer publishes into the check→clear gap is
+  // adopted rather than destroyed — two heals converge on one id.
   return mintRandomId(finalPath);
 }
 
 /**
- * Kick off a NON-BLOCKING upgrade of a fallback id to the host fingerprint.
+ * Kick off a NON-BLOCKING upgrade of a fallback id to the host fingerprint, so a
+ * process emitting under one — a legacy random id, a fresh machine whose sync
+ * resolve failed transiently, a long-lived tool-server that started before the
+ * binary was warm — converges on the fingerprint without stalling the event loop.
+ * On success it migrates the on-disk id and the cache; **local only**, no remote
+ * identity/alias event is emitted.
  *
- * Called on tracked events (after readOrCreateAnonId) so a process currently
- * emitting under a fallback id — a legacy random id awaiting migration, a fresh
- * machine whose truly-fresh sync resolve failed transiently, or a long-lived
- * tool-server that started before the binary was warm — eventually converges on
- * the deterministic fingerprint WITHOUT ever blocking the event loop. On success
- * it migrates the on-disk id and updates the cache, so subsequent events use the
- * fingerprint; **local only**, no remote identity/alias event is emitted.
- *
- * Directly fixes the divergence where a stuck long-lived process kept emitting a
- * fallback while short-lived processes migrated the on-disk id to the
- * fingerprint (two distinct_ids for one machine). Never throws.
+ * Fixes the divergence where a stuck long-lived process kept emitting a fallback
+ * while short-lived processes migrated the on-disk id (two distinct_ids for one
+ * machine). Never throws.
  *
  * No-op when: no async resolver is injected, a fingerprint id is already
  * established (cached or on disk), a probe is in flight, the cooldown has not
@@ -171,8 +137,8 @@ export function scheduleFingerprintUpgrade(
   upgradeAttempts += 1;
   upgradeLastAttemptMs = now;
 
-  // Wrap in Promise.resolve().then so a synchronous throw from the resolver is
-  // funnelled into .catch rather than escaping this function.
+  // Promise.resolve().then funnels a synchronous throw from the resolver into
+  // .catch instead of letting it escape this function.
   void Promise.resolve()
     .then(() => resolveFingerprintAsync())
     .then((raw) => {
@@ -191,14 +157,14 @@ export function scheduleFingerprintUpgrade(
  * Establish the id OFF the hot path, for a long-lived entry point (the
  * tool-server) that must not pay a blocking resolve on its accept path.
  *
- * Resolves the fingerprint ASYNCHRONOUSLY (no event-loop stall) before the
- * server advertises readiness. On success the fingerprint is persisted; on
- * failure a fallback id is read or minted, so that by the time the first event
- * fires the on-disk id already exists and readOrCreateAnonId never enters its
- * synchronous truly-fresh resolve on the accept path. Returns the established id.
- * Best-effort: the fingerprint resolve never throws, and the only remaining
- * throw path is minting a fallback onto a wedged disk (ENOSPC/EROFS after
- * retries) — the sole caller (warmTelemetryIdentity) catches it.
+ * Resolves the fingerprint ASYNCHRONOUSLY before the server advertises readiness;
+ * on failure a fallback id is read or minted. Either way an on-disk id exists
+ * before the first event, so readOrCreateAnonId never enters its synchronous
+ * truly-fresh resolve on the accept path. Returns the established id.
+ *
+ * Best-effort: the resolve never throws, and the only remaining throw path is
+ * minting onto a wedged disk (ENOSPC/EROFS after retries), which the caller
+ * (warmTelemetryIdentity) catches.
  */
 export async function warmIdentity(
   resolveFingerprintAsync?: () => Promise<string | null>
@@ -221,11 +187,10 @@ export async function warmIdentity(
     }
   }
 
-  // No fingerprint yet: ensure SOME id exists on disk (fallback), without a
-  // blocking spawn — readOrCreateAnonId() with no sync resolver reads the stored
-  // fallback or mints a random one. The next tracked event then returns it via
-  // fast path (no truly-fresh resolve), and scheduleFingerprintUpgrade keeps
-  // retrying the fingerprint in the background.
+  // No fingerprint yet: ensure SOME id exists on disk without a blocking spawn —
+  // readOrCreateAnonId with no sync resolver reads the stored fallback or mints
+  // one. The next event then hits a fast path, and scheduleFingerprintUpgrade
+  // keeps retrying the fingerprint in the background.
   return readOrCreateAnonId();
 }
 
@@ -235,22 +200,18 @@ export async function warmIdentity(
  * resolver.
  *
  * Why sync, not `warmIdentity`: resolveHostFingerprintAsync unrefs its child,
- * stdout pipe, and watchdog so a background probe never holds a CLI open — which
- * means awaiting it as the only pending work in a short-lived process leaves the
- * promise unsettled and the process EXITS (Node drains the loop past the unref'd
- * handles). A short-lived caller therefore cannot reliably await it. This variant
- * resolves SYNCHRONOUSLY (execFileSync, SIGKILL-bounded) instead, so it always
- * returns without an exit hazard.
+ * stdout pipe and watchdog so a background probe never holds a CLI open — awaited
+ * as the only pending work, that promise stays unsettled and the process EXITS.
+ * This variant resolves SYNCHRONOUSLY (execFileSync, SIGKILL-bounded) instead.
  *
- * Unlike readOrCreateAnonId — which serves a fallback id already on disk WITHOUT
- * resolving (the hot-path contract that keeps the tool-server's accept path from
- * blocking) — this DELIBERATELY forces the sync resolve and migrates a
- * legacy/fresh fallback to the fingerprint up front, so the first tracked event
- * carries the stable per-machine id rather than the id the background upgrade
- * would only migrate to AFTER that first event. On resolve failure it falls back
- * to readOrCreateAnonId (keep/mint a fallback) and the caller's per-event
- * scheduleFingerprintUpgrade retries in the background. Best-effort; the only
- * throw path is minting onto a wedged disk, which the wrapper catches.
+ * Unlike readOrCreateAnonId — which serves an on-disk fallback WITHOUT resolving,
+ * the hot-path contract that keeps the tool-server's accept path unblocked — this
+ * DELIBERATELY forces the resolve and migrates a legacy/fresh fallback up front,
+ * so the first tracked event carries the stable id rather than the one the
+ * background upgrade would only reach afterwards. On failure it falls back to
+ * readOrCreateAnonId and the caller's per-event scheduleFingerprintUpgrade
+ * retries. Best-effort; the only throw path is minting onto a wedged disk, which
+ * the wrapper catches.
  */
 export function warmIdentitySync(resolveFingerprint?: () => string | null): string {
   const finalPath = identityFilePath();
@@ -258,7 +219,7 @@ export function warmIdentitySync(resolveFingerprint?: () => string | null): stri
   if (served) return served;
 
   // Force the (memoized, at-most-once) sync resolve even over a legacy fallback,
-  // then migrate on-disk + cache so the next readOrCreateAnonId hits fast path.
+  // then migrate on-disk + cache so the next readOrCreateAnonId serves it cached.
   const fp = resolveFingerprintOnce(resolveFingerprint);
   if (fp) {
     adoptFingerprint(fp);
@@ -269,15 +230,14 @@ export function warmIdentitySync(resolveFingerprint?: () => string | null): stri
 }
 
 /**
- * Return an already-established FINGERPRINT id — authoritative in the cache, or
- * persisted on disk (refreshing the cache) — or null if none is established yet.
+ * An already-established FINGERPRINT id — from the cache, or from disk (which
+ * refreshes the cache) — or null if none is established yet.
  *
  * A 64-hex fingerprint is the terminal, per-machine id: any path that finds one
- * is done and returns it WITHOUT resolving the binary. This is the shared
- * fast-path prologue of the two warm entry points and scheduleFingerprintUpgrade.
- * readOrCreateAnonId deliberately inlines the same two checks instead of calling
- * this, because it also needs the non-fingerprint `stored` value afterward for
- * its serve-the-fallback branch — routing through here would re-read the file.
+ * is done and returns it WITHOUT resolving the binary. Shared prologue of the two
+ * warm entry points and scheduleFingerprintUpgrade. readOrCreateAnonId inlines
+ * the same two checks instead, because it also needs the non-fingerprint `stored`
+ * value afterwards and routing through here would re-read the file.
  */
 function servedFingerprintId(finalPath: string): string | null {
   if (cached && cached.path === finalPath && FINGERPRINT_PATTERN.test(cached.id)) {
@@ -291,7 +251,7 @@ function servedFingerprintId(finalPath: string): string | null {
   return null;
 }
 
-/** Validate and normalize a raw resolver output to a canonical 64-hex id. */
+/** Trim and lower-case a raw resolver output; null unless it is then 64-hex. */
 function normalizeFingerprint(raw: string | null | undefined): string | null {
   if (!raw) return null;
   const normalized = raw.trim().toLowerCase();
@@ -299,11 +259,10 @@ function normalizeFingerprint(raw: string | null | undefined): string | null {
 }
 
 /**
- * Adopt a resolved fingerprint as the id: migrate the on-disk file to it (once,
- * if it differs) and update the in-memory cache so subsequent reads serve it.
- * The fingerprint is deterministic, so a rename-over race between processes is
- * safe (all write the same value). Best-effort persistence — an unwritable home
- * still yields a consistent in-memory id, and a later run retries the write.
+ * Adopt a resolved fingerprint as the id: migrate the on-disk file to it (if it
+ * differs) and update the cache. The fingerprint is deterministic, so a
+ * rename-over race between processes is safe. Best-effort persistence — an
+ * unwritable home still yields a consistent in-memory id, and a later run retries.
  */
 function adoptFingerprint(fp: string): void {
   const finalPath = identityFilePath();
@@ -316,20 +275,16 @@ function adoptFingerprint(fp: string): void {
     }
   }
   cached = { path: finalPath, id: fp };
-  // A fingerprint in `cached` is authoritative (fast path A), so readOrCreateAnonId
-  // never re-reaches the sync resolver after this — no need to touch the
-  // truly-fresh `fingerprintResolved` memo here.
+  // A fingerprint in `cached` is authoritative (fast path A), so the sync resolver
+  // is never reached again — no need to touch the `fingerprintResolved` memo.
 }
 
 /**
- * Invoke the injected SYNC resolver at most once per process and cache the
- * validated fingerprint (or null). Returns the normalized (trimmed, lower-cased)
- * 64-hex fingerprint, or null when no resolver is injected, it throws/returns
- * nothing, or the value isn't a well-formed fingerprint.
+ * Invoke the injected SYNC resolver at most once per process, caching the
+ * normalized fingerprint or null (no resolver, it threw, or a malformed value).
  */
 function resolveFingerprintOnce(resolveFingerprint?: () => string | null): string | null {
-  // No resolver -> nothing to spawn or cache; callers without the binary always
-  // pass undefined, so this can't poison a later resolver-bearing call.
+  // Return without memoizing, so a later resolver-bearing call can still resolve.
   if (!resolveFingerprint) return null;
   if (fingerprintResolved) return fingerprintResolved.value;
 
@@ -344,9 +299,9 @@ function resolveFingerprintOnce(resolveFingerprint?: () => string | null): strin
   return value;
 }
 
-// True iff a regular file exists at filePath whose contents tryReadId rejects —
-// a corrupt id file safe to overwrite. Symlinks / non-regular files return false
-// so they are never followed or clobbered.
+// True iff a regular file at filePath holds contents tryReadId rejects — a
+// corrupt id file safe to overwrite. Symlinks / non-regular files return false so
+// they are never followed or clobbered.
 function isCorruptIdFile(filePath: string): boolean {
   let isRegularFile: boolean;
   try {
@@ -357,24 +312,18 @@ function isCorruptIdFile(filePath: string): boolean {
   return isRegularFile && tryReadId(filePath) === null;
 }
 
-// Atomically replace the id file with `id` (mode 0600). Write to a temp file in
-// the same dir, fsync, then rename() over the final path. rename() within a
-// directory is atomic, so a concurrent reader sees either the old or new id,
-// never a torn write — and two processes racing here both write the SAME
-// deterministic value, so the result is identical regardless of who wins.
+// Atomically replace the id file with `id` (mode 0600): write a temp file in the
+// same dir, fsync, then rename() over the final path, so a concurrent reader sees
+// either the old or the new id, never a torn write. Two processes racing here
+// write the SAME deterministic value.
 function writeIdFileAtomic(finalPath: string, id: string): void {
   fs.mkdirSync(argentHomeDir(), { recursive: true });
 
-  // Fail closed on a NON-REGULAR occupant (symlink, dir, fifo, ...) — matching
-  // the mint path, which lstat-guards and leaves a symlink untouched (fails
-  // closed via isCorruptIdFile/mintRandomId). rename() does not follow a
-  // symlink, so without this guard the fingerprint writers (the truly-fresh
-  // write and adoptFingerprint) would silently swap a symlink at the identity
-  // path for a regular file — diverging from the mint path's handling of the
-  // exact same occupant. Both id writers must treat the path identically, so
-  // refuse here too. ENOENT (fresh) or a regular file (steady-state migration)
-  // proceeds and is replaced atomically. Callers already treat a write failure
-  // as best-effort (keep the id in memory), so the symlink is preserved.
+  // Fail closed on a NON-REGULAR occupant (symlink, dir, fifo, ...). rename() does
+  // not follow a symlink, so without this guard the fingerprint writers would
+  // swap a symlink at the identity path for a regular file while the mint path
+  // leaves it untouched; both id writers must treat the occupant alike. Callers
+  // treat a write failure as best-effort, so the symlink is preserved.
   let occupant: fs.Stats | undefined;
   try {
     occupant = fs.lstatSync(finalPath);
@@ -399,8 +348,7 @@ function writeIdFileAtomic(finalPath: string, id: string): void {
     }
     fs.renameSync(tmpPath, finalPath);
   } finally {
-    // rename() consumes tmpPath on success; on a pre-rename failure this cleans
-    // up the orphan. ENOENT (already renamed) is ignored.
+    // rename() consumed tmpPath on success; otherwise clean up the orphan.
     try {
       fs.unlinkSync(tmpPath);
     } catch {
@@ -415,12 +363,11 @@ function writeIdFileAtomic(finalPath: string, id: string): void {
 function mintRandomId(finalPath: string): string {
   fs.mkdirSync(argentHomeDir(), { recursive: true });
 
-  // The id we publish. Starts random; if a corrupt-file self-heal below claims a
-  // valid id that a racer published into the gap, we switch to adopting THAT
-  // value and republish it on the next iteration, so concurrent heals converge.
+  // Starts random; if the self-heal below claims a valid id a racer published into
+  // the gap, we switch to that value and republish it, so concurrent heals
+  // converge.
   let value: string = crypto.randomUUID();
 
-  // The random tmp path should be unique; retry defensively anyway.
   for (let attempt = 0; attempt < 3; attempt++) {
     const tmpPath = path.join(
       argentHomeDir(),
@@ -433,9 +380,8 @@ function mintRandomId(finalPath: string): string {
       if ((err as NodeJS.ErrnoException).code === "EEXIST") continue;
       throw err;
     }
-    // One try/finally around write + publish so the temp file is cleaned up on
-    // any failure after openSync — a throwing writeSync/fsyncSync (e.g. ENOSPC,
-    // EIO) must not leave a `.telemetry-id.tmp.*` orphan behind.
+    // One try/finally around write + publish so a throwing writeSync/fsyncSync
+    // (ENOSPC, EIO) can't leave a `.telemetry-id.tmp.*` orphan behind.
     try {
       try {
         fs.writeSync(fd, value);
@@ -454,28 +400,22 @@ function mintRandomId(finalPath: string): string {
       if ((err as NodeJS.ErrnoException).code === "EEXIST") {
         const beatUs = tryReadId(finalPath);
         if (beatUs) {
-          // A racer published a VALID id first — adopt it, never clobber. This
-          // is the concurrency guarantee: whoever links first wins.
+          // A racer published a VALID id first — adopt it, never clobber.
           cached = { path: finalPath, id: beatUs };
           return beatUs;
         }
-        // The occupant is not a valid id. If a corrupt / empty *regular* file
-        // squats the path (the self-heal case — a truncated prior write from a
-        // legacy or external writer), clear it so the retry can publish. We must
-        // NOT unlink finalPath by name: the tryReadId above and the removal are
-        // not atomic, so a valid id a racer publishes into that gap would be
-        // deleted by name, splitting the machine. claimCorruptOccupant instead
-        // moves the occupant aside atomically (rename) and inspects it — if the
-        // gap turned it into a valid id we adopt that value (republished on the
-        // next iteration) rather than destroying it. A symlink / non-regular file
-        // is left untouched (isCorruptIdFile is false for it) so we still fail
-        // closed and throw.
+        // The occupant is not a valid id. If a corrupt/empty *regular* file squats
+        // the path, clear it so the retry can publish — but never by unlinking
+        // finalPath by name: the tryReadId above and the removal are separate
+        // syscalls, so a valid id a racer publishes into that gap would be deleted,
+        // splitting the machine. claimCorruptOccupant moves the occupant aside
+        // atomically and inspects it, adopting a value that turned out valid. A
+        // symlink / non-regular file is left untouched, so we still fail closed.
         if (isCorruptIdFile(finalPath)) {
           const adopted = claimCorruptOccupant(finalPath);
           if (adopted) value = adopted;
         }
-        // Occupant vanished / was cleared, or we adopted a racer's id to
-        // republish: retry.
+        // Occupant vanished / was cleared, or we adopted a racer's id: retry.
         continue;
       }
       throw err;
@@ -490,18 +430,14 @@ function mintRandomId(finalPath: string): string {
   throw new Error("telemetry: failed to create identity after retries");
 }
 
-// Clear a non-id occupant squatting the identity path during a mint retry,
-// without ever deleting a valid id by name. Unlinking finalPath directly is a
-// TOCTOU: the caller's tryReadId (which rejected the occupant) and the removal
-// are separate syscalls, so a valid id a racer publishes into that gap would be
-// unlinked by name — splitting the machine into two distinct_ids. Instead we
-// CLAIM the current occupant with an atomic rename aside: rename() relocates
-// whatever inode is at finalPath right now without destroying it. We then
-// inspect the relocated copy — if the gap had turned it into a valid id, its
-// value is returned so the caller republishes and adopts it (converging both
-// heals on one id); if it really was corrupt it is dropped and null is returned
-// so the caller retries its own publish. A rename that fails (racer already
-// cleared/moved it) also yields null → the caller re-evaluates.
+// Clear a non-id occupant squatting the identity path during a mint retry without
+// ever deleting a valid id by name. Unlinking finalPath directly is a TOCTOU: the
+// caller's tryReadId and the removal are separate syscalls, so a valid id a racer
+// publishes into that gap would be unlinked, splitting the machine into two
+// distinct_ids. Instead rename the current inode aside — atomic, non-destructive
+// — and inspect it: a valid id is returned for the caller to republish and adopt,
+// a truly corrupt one is dropped and null returned so the caller retries its own
+// publish. A rename that fails (a racer already cleared it) also yields null.
 function claimCorruptOccupant(finalPath: string): string | null {
   const claimed = path.join(
     argentHomeDir(),
@@ -517,8 +453,7 @@ function claimCorruptOccupant(finalPath: string): string | null {
     grabbed = tryReadId(claimed);
   } finally {
     // The relocated copy is our private temp now; drop it. An adopted id lives on
-    // as a string value (republished by the caller), independent of this inode,
-    // so removing the copy loses nothing.
+    // as a string value, independent of this inode.
     try {
       fs.unlinkSync(claimed);
     } catch {
@@ -564,7 +499,6 @@ function tryReadId(filePath: string): string | null {
     return null;
   }
   const value = raw.trim();
-  // Accept a UUID-like value in case older versions wrote a different shape.
   if (/^[0-9a-fA-F-]{32,128}$/.test(value)) return value;
   return null;
 }

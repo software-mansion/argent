@@ -1,5 +1,3 @@
-// ── Service Errors ──
-
 import { FAILURE_CODES, type FailureCode } from "./failure-codes";
 
 export const FAILURE_AREAS = ["cli", "http", "registry", "tool_server", "installer"] as const;
@@ -67,21 +65,19 @@ export const NETWORK_FAILURES = [
 export type NetworkFailure = (typeof NETWORK_FAILURES)[number];
 
 export interface FailureSignal {
-  /** Static, searchable code. Never derive this from an Error message. */
+  /** Static code; never derive it from an Error message. */
   error_code: FailureCode;
-  /** Static source-location hint, e.g. `http_zod_validation` or `registry_execute`. */
+  /** Static source-location hint, e.g. `http_zod_validation`. */
   failure_stage: string;
   failure_area: FailureArea;
   error_kind: FailureKind;
-  /** Optional coarse command category; never a command line or argv. */
+  /** Coarse command category; never a command line or argv. */
   failure_command?: FailureCommand;
-  /** Optional process exit code; sanitized to a small non-negative integer. */
+  /** Process exit code; kept only when it is an integer in 0-255. */
   failure_exit_code?: number;
-  /** Optional allowlisted POSIX signal name. */
   failure_signal?: FailureSignalName;
-  /** Optional allowlisted spawn failure code. */
   failure_spawn_code?: FailureSpawnCode;
-  /** Optional coarse network failure class; never a URL, host, or port. */
+  /** Coarse network failure class; never a URL, host, or port. */
   network_failure?: NetworkFailure;
 }
 
@@ -121,10 +117,8 @@ export function withFailureSignal<T extends Error>(error: T, signal: FailureSign
 }
 
 export function getFailureSignal(error: unknown): FailureSignal | null {
-  // Bounded breadth-first walk so the shallowest (outermost) signal still wins,
-  // while also descending into AggregateError.errors — a signal attached to an
-  // aggregated sub-error would otherwise be missed. The visited set guards
-  // against cyclic `.cause`/`.errors` references.
+  // Breadth-first so the outermost signal wins; also descends into
+  // AggregateError.errors. `seen` guards against cyclic `.cause`/`.errors`.
   const seen = new Set<unknown>();
   const queue: unknown[] = [error];
   for (let visited = 0; visited < 16 && queue.length > 0; visited++) {
@@ -232,8 +226,6 @@ export class ServiceInitializationError extends Error {
     );
   }
 }
-
-// ── Tool Errors ──
 
 export class ToolNotFoundError extends Error {
   public readonly toolId: string;

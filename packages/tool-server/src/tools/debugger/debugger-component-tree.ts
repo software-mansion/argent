@@ -85,11 +85,9 @@ export function buildTextTree(
     }
   }
 
-  // Remove components that are entirely off-screen and prune their entire subtree.
-  // This catches off-canvas navigation stacks (drawer, hidden tabs) whose children
-  // would otherwise survive because they lack rects.
+  // Prune the whole subtree: children of off-canvas stacks (drawer, hidden tabs)
+  // lack rects and would otherwise survive.
   if (canNormalize && opts.onScreenOnly) {
-    // Build a quick parent→children index for subtree pruning
     const tempChildren = new Map<number, number[]>();
     for (const c of components) {
       if (c.parentIdx >= 0) {
@@ -123,8 +121,7 @@ export function buildTextTree(
       }
     }
 
-    // Also remove rectless components whose entire ancestor chain is removed.
-    // These are children of off-screen containers that have no rect themselves.
+    // Rectless components hanging off an ancestor that was just removed off-screen.
     for (const c of components) {
       if (removed.has(c.id) || c.rect) continue;
       let ancestor = c.parentIdx;
@@ -139,9 +136,8 @@ export function buildTextTree(
     }
   }
 
-  // Collapse same-testID parent→child chains caused by prop drilling through HOC layers.
-  // e.g. ScreenWrapper [testID=X] → ScreenWrapperContainer [testID=X] → View [testID=X]
-  // Keep only the topmost component carrying each testID.
+  // Collapse same-testID chains from prop drilling through HOC layers
+  // (ScreenWrapper → ScreenWrapperContainer → View, all [testID=X]); keep the topmost.
   for (const c of components) {
     if (removed.has(c.id) || !c.testID) continue;
     let ancestor = c.parentIdx;
@@ -156,9 +152,8 @@ export function buildTextTree(
     }
   }
 
-  // Collapse full-screen transparent wrappers — components that span the entire screen
-  // with no meaningful content (no text, testID, or accessibilityLabel) are pure layout
-  // infrastructure and add nothing but indentation noise.
+  // Full-screen spans with no text, testID or accLabel are pure layout
+  // infrastructure — nothing but indentation noise.
   if (canNormalize) {
     for (const c of components) {
       if (removed.has(c.id) || c.text || c.testID || c.accLabel) continue;
@@ -175,10 +170,8 @@ export function buildTextTree(
     }
   }
 
-  // Remove components whose display text (text or accLabel) is already present
-  // in an ancestor's display text. Handles chains like:
+  // Drop display text already contained in an ancestor's, up to 6 levels:
   //   Link "Browse topic X" → Button "Browse topic X" → Text "X"
-  // where children repeat or subset the parent's label. Up to 6 levels deep.
   for (const c of components) {
     const cDisplay = c.text ?? c.accLabel;
     if (removed.has(c.id) || !cDisplay || c.testID) continue;
@@ -201,9 +194,8 @@ export function buildTextTree(
     }
   }
 
-  // Collapse content-free wrappers with same rect as their effective parent.
-  // A component that has no text, testID, or accLabel and overlaps its parent's
-  // rect is a layout wrapper that adds indentation noise without navigation value.
+  // A content-free component overlapping its parent's rect is a layout wrapper:
+  // indentation noise with no navigation value.
   for (const c of components) {
     if (removed.has(c.id) || c.text || c.testID || c.accLabel) continue;
     if (!c.rect) continue;
@@ -222,10 +214,8 @@ export function buildTextTree(
   const roots: number[] = [];
   for (const c of components) {
     if (removed.has(c.id)) {
-      // Reparent children of the removed node to its parent
       continue;
     }
-    // Walk up to find closest non-removed ancestor
     let effectiveParent = c.parentIdx;
     while (effectiveParent >= 0 && removed.has(effectiveParent)) {
       effectiveParent = components[effectiveParent].parentIdx;
@@ -242,11 +232,8 @@ export function buildTextTree(
     }
   }
 
-  // Remove single-child leaf nodes that add no navigation value: the component
-  // has no testID, is the sole child of a parent that already has text/testID,
-  // and has no children of its own. Catches patterns like:
-  //   WebOnlyInlineLinkText "Rachel Maddow" → UITextView "View profile"
-  //   ShareMenuButton [testID=postShareBtn] → Trigger "Open share menu"
+  // Drop content-free sole-child leaves under a parent that already carries
+  // text/testID — e.g. ShareMenuButton [testID=postShareBtn] → Trigger "Open share menu".
   {
     const toRemove: number[] = [];
     for (const [parentId, children] of childrenOf) {
@@ -264,7 +251,6 @@ export function buildTextTree(
         removed.add(id);
         filterStats.soleChildLeaf.count++;
       }
-      // Rebuild childrenOf after removals
       childrenOf.clear();
       roots.length = 0;
       for (const c of components) {
@@ -287,8 +273,6 @@ export function buildTextTree(
     }
   }
 
-  // Count visible nodes and identify collapsible single-child wrapper chains
-  // for maxNodes truncation.
   function countNodes(id: number): number {
     let n = 1;
     const ch = childrenOf.get(id);
@@ -299,8 +283,6 @@ export function buildTextTree(
   let totalVisible = 0;
   for (const rid of roots) totalVisible += countNodes(rid);
 
-  // A node is a "content-free single-child wrapper" if it has exactly 1 child
-  // and carries no text, testID, or accLabel.
   function isWrapper(id: number): boolean {
     const c = components[id];
     const ch = childrenOf.get(id);
@@ -308,14 +290,10 @@ export function buildTextTree(
     return !c.text && !c.testID && !c.accLabel;
   }
 
-  // collapsed maps a node id → number of wrappers collapsed below it.
-  // When set, the node's single-child chain is replaced with "... via N wrappers".
   const collapsed = new Map<number, number>();
   let collapsedCount = 0;
 
   if (opts.maxNodes !== undefined && totalVisible > opts.maxNodes) {
-    // Find all maximal single-child wrapper chains: sequences of consecutive
-    // wrapper nodes (each with exactly 1 child and no content).
     type Chain = { startId: number; length: number };
     const chains: Chain[] = [];
 
@@ -341,15 +319,11 @@ export function buildTextTree(
 
     for (const rid of roots) findChains(rid);
 
-    // Sort by chain length descending — collapse longest chains first
     chains.sort((a, b) => b.length - a.length);
 
     const excess = totalVisible - opts.maxNodes;
     for (const chain of chains) {
       if (collapsedCount >= excess) break;
-      // Collapsing a chain of N wrappers saves (N - 1) nodes
-      // (we keep the chain start, replace middle with summary, keep the end)
-      // Actually we replace all N wrappers with 1 summary line, saving N - 1.
       collapsed.set(chain.startId, chain.length);
       collapsedCount += chain.length - 1;
     }
@@ -381,7 +355,6 @@ export function buildTextTree(
 
     const chainLen = collapsed.get(id);
     if (chainLen !== undefined) {
-      // Skip through the wrapper chain to find the end node
       let cur = id;
       for (let i = 0; i < chainLen; i++) {
         cur = childrenOf.get(cur)![0];
@@ -546,9 +519,8 @@ Use when you need tap coordinates for a React Native UI element. Returns a compa
   alwaysLoad: true,
   searchHint: "react native component tree discovery tap coordinates",
   zodSchema,
-  // RN-only: depends on the React DevTools backend that ships with the JS
-  // bundle in dev builds. Chromium has no equivalent — use `describe` instead
-  // for DOM-tree discovery on Chromium.
+  // RN-only: needs the React DevTools backend from the dev JS bundle. Chromium has
+  // no equivalent — use `describe` there.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}:${canonicalDeviceId(params.device_id)}`,

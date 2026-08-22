@@ -23,10 +23,10 @@ import {
 const STATE_DIR = path.join(homedir(), ".argent");
 const LOG_FILE = path.join(STATE_DIR, "tool-server.log");
 
-// State records are tracked per argent install (per tool-server bundle), so
-// status/stop target THIS binary's server, never another install's.
+// State records are per argent install (per tool-server bundle), so status/stop
+// target THIS install's server, never another's.
 
-/** One-line hint when other installs' servers are alive but ours is not. */
+/** One-line hint listing live tool-servers from other argent installs. */
 async function describeForeignServers(ownBundlePath?: string): Promise<string | null> {
   const others = (await readAllToolsServerStates()).filter(
     ({ state }) => state.bundlePath !== ownBundlePath && isToolsServerProcessAlive(state.pid)
@@ -52,8 +52,7 @@ async function statusCmd(json: boolean, paths?: ToolsServerPaths): Promise<void>
   const alive = isToolsServerProcessAlive(state.pid);
   const healthy = alive ? await isToolsServerHealthy(state.port, host, 2000, state.token) : false;
   if (json) {
-    // Hide the token from JSON output — it's a secret. Surface its presence
-    // without leaking the value.
+    // The token is a secret: report its presence, never its value.
     const { token, ...publicState } = state;
     console.log(
       JSON.stringify(
@@ -96,8 +95,8 @@ function logsCmd(follow: boolean): void {
     process.stdout.write(fs.readFileSync(LOG_FILE, "utf8"));
     return;
   }
-  // -f: tail -f equivalent. Spawning `tail` keeps this small and behaves the
-  // same as the user's terminal expects (Ctrl-C to exit).
+  // Delegate follow to `tail` rather than reimplementing it; Ctrl-C then exits
+  // the way a terminal user expects.
   const child = spawn("tail", ["-f", LOG_FILE], { stdio: "inherit" });
   child.on("exit", (code) => process.exit(code ?? 0));
 }
@@ -108,7 +107,7 @@ export interface StartFlags {
   idleTimeoutMinutes: number;
   detach: boolean;
   force: boolean;
-  /** Disable auth (no token minted). Server accepts unauthenticated requests. */
+  /** No token minted; the server accepts unauthenticated requests. */
   noAuth: boolean;
   help: boolean;
 }
@@ -180,9 +179,7 @@ export function parseStartFlags(argv: string[]): StartFlags {
   return flags;
 }
 
-// Require digits only — rejects empty strings, signs, decimals, hex, scientific
-// notation, and trailing that `parseInt` would silently truncate
-// (e.g. `--port=123abc` parsing as 123).
+// Digits only: `Number` alone would accept "", signs, decimals, hex and `1e3`.
 const NON_NEGATIVE_INT = /^\d+$/;
 
 export function parsePort(raw: string): number {
@@ -240,8 +237,7 @@ function isWildcard(host: string): boolean {
   return host === "0.0.0.0" || host === "::" || host === "::0" || host === "";
 }
 
-/** First non-internal IPv4 address, for suggesting a reachable host when bound
- * to a wildcard address. Null when none is found (e.g. offline). */
+/** First non-internal IPv4, to suggest a reachable host when bound to a wildcard. */
 function primaryLanIPv4(): string | null {
   const ifaces = networkInterfaces();
   for (const addrs of Object.values(ifaces)) {
@@ -258,10 +254,7 @@ function resolveConnectHost(bindHost: string): string {
   return bindHost;
 }
 
-/**
- * Print the copy-pasteable pairing block: the `argent://` connection string
- * (headline) plus the explicit-flags fallback for scripting.
- */
+/** Pairing block: the `argent://` connection string plus an explicit-flags fallback. */
 function printConnectionInfo(bindHost: string, port: number, token?: string): void {
   const connectHost = resolveConnectHost(bindHost);
   console.log("");
@@ -283,9 +276,8 @@ async function ensureNoExistingServer(force: boolean, paths: ToolsServerPaths): 
   const state = await readToolsServerState(paths.bundlePath);
   if (!state) return;
   const alive = isToolsServerProcessAlive(state.pid);
-  // Pass the recorded token: authed servers 401 a tokenless probe, which reads
-  // as unhealthy — clearing the state and orphaning a live server instead of
-  // triggering the "already running" guard below.
+  // Pass the recorded token: an authed server 401s a tokenless probe and reads as
+  // unhealthy, which would clear the state and orphan a live server.
   const healthy = alive
     ? await isToolsServerHealthy(state.port, state.host ?? "127.0.0.1", 2000, state.token)
     : false;
@@ -299,7 +291,6 @@ async function ensureNoExistingServer(force: boolean, paths: ToolsServerPaths): 
   if (alive && force) {
     await killToolServer(paths.bundlePath);
   } else {
-    // Stale state file — clear it so we don't leave it pointing at a dead pid.
     await clearToolsServerState(paths.bundlePath);
   }
 }
@@ -345,8 +336,8 @@ async function startCmd(argv: string[], paths: ToolsServerPaths | undefined): Pr
 
   const port = await resolvePort(flags.port);
 
-  // Auth on by default; --no-auth opts out (token stays undefined → the
-  // tool-server runs unauthenticated and prints its own warning).
+  // --no-auth leaves the token undefined: the tool-server then runs
+  // unauthenticated and prints its own warning.
   const token = flags.noAuth ? undefined : generateAuthToken();
 
   if (!isLoopback(flags.host)) {
@@ -390,8 +381,8 @@ async function runDetached(
     startedAt: new Date().toISOString(),
     bundlePath: paths.bundlePath,
     host,
-    // Mark this as an explicitly-started (possibly supervisor-managed) server so
-    // the MCP auto-spawn path's kill-before-respawn never terminates it.
+    // Tags this as explicitly started (possibly supervisor-managed) so the MCP
+    // auto-spawn path's kill-before-respawn never terminates it.
     managed: "cli",
     ...(token ? { token } : {}),
   });
@@ -422,8 +413,8 @@ async function runForeground(
     env,
   });
 
-  // Forward signals so process supervisors can stop us cleanly. The child has
-  // its own SIGINT/SIGTERM handlers that drain HTTP + dispose the registry.
+  // The child has its own SIGINT/SIGTERM handlers that drain HTTP and dispose the
+  // registry, so forwarding lets a supervisor stop us cleanly.
   const forward = (signal: NodeJS.Signals) => () => {
     try {
       child.kill(signal);
@@ -454,12 +445,12 @@ async function runForeground(
       });
       stateWritten = true;
     } catch {
-      /* non-fatal: foreground run still works without the state file */
+      /* non-fatal: the run works without the state file */
     }
   }
 
-  // Print the pairing block now, before the child's inherited stdout starts
-  // streaming its own "listening on…" banner and log lines.
+  // Print before the child's inherited stdout starts streaming its own
+  // "Tools server listening on…" banner and log lines.
   printConnectionInfo(host, port, token);
 
   await new Promise<void>(() => {
@@ -472,8 +463,8 @@ async function runForeground(
         });
       }
     };
-    // Spawn-level failures (ENOENT, EACCES) emit `error` instead of `exit` —
-    // surface them cleanly so the user gets a real message, not a stack trace.
+    // Spawn-level failures (ENOENT, EACCES) emit `error` instead of `exit`; report
+    // them as a message rather than an unhandled stack trace.
     child.on("error", (err) => {
       cleanup();
       console.error(`argent server start: failed to spawn tool-server: ${err.message}`);
@@ -481,8 +472,7 @@ async function runForeground(
     });
     child.on("exit", (code, signal) => {
       cleanup();
-      // Mirror the child's exit. Signal-terminated children get conventional
-      // 128+signo exit codes so shells / supervisors see the right outcome.
+      // Mirror the child's exit; signal deaths use the conventional 128+signo code.
       const exitCode = code ?? (signal ? 128 + (signalNumber(signal) ?? 0) : 0);
       process.exit(exitCode);
     });

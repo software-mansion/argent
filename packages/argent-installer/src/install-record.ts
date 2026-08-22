@@ -4,7 +4,7 @@ import { isDeclaredLocally } from "./topology.js";
 
 // Committed marker recording that a project uses local (devDependency) mode, so
 // `update`/`uninstall` and teammates act on the repo-local install rather than a
-// global one. Only written for local mode — global mode stays zero-footprint.
+// global one. Written only for local mode.
 
 export type InstallMode = "global" | "local";
 
@@ -53,10 +53,9 @@ export function removeInstallRecord(projectRoot: string): boolean {
   }
 }
 
-// Effective install mode: the committed record wins; otherwise infer local
-// only from a dep the project's own package.json declares — a copy merely in
-// node_modules (hoisted/transitive) is not intent. Default global (all
-// pre-record installs were global).
+// Effective install mode: the committed record wins; otherwise only a dep the
+// project's own package.json declares means local — a copy merely in
+// node_modules (hoisted/transitive) is not intent. Default global.
 export function resolveInstallMode(projectRoot: string): InstallMode {
   const record = readInstallRecord(projectRoot);
   if (record) return record.mode;
@@ -68,10 +67,9 @@ export class InstallModeFlagError extends Error {}
 // Resolve the install mode from `argent init` flags; null means "ask the user
 // interactively". Throws InstallModeFlagError on conflicting flags.
 //
-// `recordedMode` is the mode the project already opted into (committed
-// .argent/install.json, or a manifest-declared dep — see init.ts). A
-// non-interactive run honors it so `argent init -y` in a local-mode repo
-// doesn't silently convert it back to global. Explicit flags still win.
+// `recordedMode` is the mode the project already opted into (see init.ts). A
+// non-interactive run honors it so `argent init -y` in a local-mode repo doesn't
+// silently convert it back to global. Explicit flags still win.
 export function resolveInstallModeFromFlags(opts: {
   local: boolean;
   global: boolean;

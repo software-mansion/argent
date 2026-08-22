@@ -23,11 +23,8 @@ type AndroidTvControlFactoryOptions = Record<string, unknown> & {
 };
 
 /**
- * Build the `ServiceRef` for the Android TV control service keyed by a resolved
- * `DeviceInfo`. The factory verifies the target really is an Android TV
- * (leanback) device — `resolveDevice` only classifies by serial shape and tags
- * every Android target `platform: "android"`, so the runtime-kind check lives
- * in the factory (mirroring `tvControlRef` on the tvOS side).
+ * `ServiceRef` for the Android TV control service. The leanback check happens in
+ * the factory, not here (mirroring `tvControlRef` on the tvOS side).
  */
 export function androidTvControlRef(device: DeviceInfo): {
   urn: string;
@@ -39,12 +36,7 @@ export function androidTvControlRef(device: DeviceInfo): {
   };
 }
 
-// D-pad / system keyevents. Android TV is driven entirely through the remote's
-// directional pad — there is no touch — so the full TV-remote vocabulary maps
-// onto Android KEYCODE_* values:
-//   back → BACK; menu → KEYCODE_MENU (the options-menu affordance, distinct from
-//   back). The media-transport and volume keys map onto the standard Android
-//   media/volume keycodes, all of which `adb input keyevent` accepts.
+// android.view.KeyEvent keycodes for the TV-remote vocabulary (`adb input keyevent`).
 const KEYEVENTS: Record<TvDirection, number> = {
   up: 19, // KEYCODE_DPAD_UP
   down: 20, // KEYCODE_DPAD_DOWN
@@ -64,8 +56,7 @@ const KEYEVENTS: Record<TvDirection, number> = {
   mute: 164, // KEYCODE_VOLUME_MUTE
 };
 
-// One parsed focusable node. A TV surface is focus-driven (no tap coordinates),
-// so we keep only what the focus view renders — no pixel geometry.
+// One parsed node. A TV surface is focus-driven, so no pixel geometry is kept.
 interface TvNode {
   label: string;
   value: string;
@@ -77,24 +68,17 @@ interface TvNode {
   pkg: string;
 }
 
-// `attrIsTrue` and `labelOf` (the content-desc-vs-text label contract) are
-// shared with the phone describe parser so the two stay in lockstep — imported
-// from uiautomator-parser rather than re-implemented here.
-
 function valueOf(attrs: Record<string, string>): string {
   const cd = (attrs["content-desc"] ?? "").trim();
   const text = (attrs.text ?? "").trim();
-  // When both are populated and differ, content-desc is the label and text is
-  // the value (an editable field with a placeholder + typed content). When only
-  // one is set it's already the label, so there's no separate value.
+  // content-desc is the label, so `text` is a distinct value only when both are
+  // set and differ (an editable field with a placeholder + typed content).
   return cd && text && cd !== text ? text : "";
 }
 
 /**
- * Walk a parsed uiautomator tree collecting the focused node and every
- * focusable node. Unlike `parseUiAutomatorDump` (which drops the `focused`
- * attribute and normalises to the describe contract), the focus walk needs the
- * raw `focused` flag, so this is a dedicated lightweight pass.
+ * Collect the focused node and every focusable node. `parseUiAutomatorDump`
+ * drops the `focused` attribute, so the focus walk needs its own pass.
  */
 function collectTvNodes(xml: string): { focused: TvNode | null; focusable: TvNode[] } {
   const root = parseUiAutomatorXml(xml);
@@ -105,9 +89,7 @@ function collectTvNodes(xml: string): { focused: TvNode | null; focusable: TvNod
   const stack = [root];
   while (stack.length > 0) {
     const node = stack.pop()!;
-    // Push children in reverse so they pop back in document order — the agent
-    // sees focusables in the same top-to-bottom / left-to-right order the dump
-    // lists them, which matches how D-pad focus traverses them.
+    // Push children in reverse so they pop back in document order.
     for (let i = node.children.length - 1; i >= 0; i--) stack.push(node.children[i]!);
 
     const attrs = node.attrs;
@@ -116,9 +98,8 @@ function collectTvNodes(xml: string): { focused: TvNode | null; focusable: TvNod
     if (!isFocusable && !isFocused) continue;
 
     const label = labelOf(attrs);
-    // A focusable node with no label is a layout focus-trap, not something the
-    // agent can identify — skip it for the focusable list (but still honour it
-    // as the focused node so describe can report "focused but unlabelled").
+    // An unlabelled focusable is a layout focus-trap: kept out of `focusable`,
+    // but still reported as the focused node.
     const className = attrs.class ?? "";
     const tvNode: TvNode = {
       label,
@@ -178,9 +159,7 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
     const serial = device.id;
 
     // resolveDevice classifies by serial shape alone and tags every Android
-    // target `platform: "android"`, so confirm this is actually a leanback (TV)
-    // device here. Yields a clear error when someone points a tv-* tool at a
-    // phone/tablet emulator.
+    // target `platform: "android"`, so confirm leanback here.
     const kind = await getAndroidRuntimeKind(serial);
     if (kind === undefined) {
       throw new Error(
@@ -189,8 +168,8 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
       );
     }
     if (kind !== "tv") {
-      // Wrong device class — UnsupportedOperationError so http.ts maps it to 400,
-      // not 500 (which invites retries of a wrong target). Mirrors the tvOS twin.
+      // UnsupportedOperationError so http.ts maps it to 400, not a 500 that
+      // reads as transient and invites retries of a wrong target.
       throw new UnsupportedOperationError(
         "tv-remote",
         device,
@@ -203,9 +182,8 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
 
     async function dumpHierarchy(): Promise<string> {
       // Per-call dump path so concurrent calls on the same serial don't race on
-      // a shared /sdcard file (one call's cat reading the other's mid-write).
-      // /data/local/tmp is world-writable on every Android we support; trailing
-      // `; rm -f` (not `&&`) so cleanup fires even when dump/cat fails.
+      // a shared /sdcard file. `uiautomator` rejects unwritable paths, hence
+      // /data/local/tmp; trailing `; rm -f` so cleanup fires even when it fails.
       const suffix = `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
       const dumpPath = `/data/local/tmp/argent-tv-dump-${suffix}.xml`;
       const raw = (
@@ -248,24 +226,14 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
       },
 
       async type(text: string): Promise<void> {
-        // Same on-device `input text` sink as the Android phone path
-        // (utils/android-input): a newline would truncate the input line, an
-        // emoji crashes `sendText`, and other non-ASCII is silently dropped —
-        // so run the same printable-ASCII guard for the same clean input
-        // rejection (InvalidToolInputError → 400) instead of a raw adb 500.
+        // `input text` cannot type a newline, crashes on emoji and silently
+        // drops other non-ASCII — reject up front as a 400, not a raw adb 500.
         assertTypeableAndroidText(text);
-        // `input text` decodes the two-char sequence "%s" back into a space on
-        // the device — and a bare space is an argument separator — so the old
-        // `replace(/ /g, "%s")` was not round-trip safe: a user string that
-        // already contained "%s" came out with a stray space and no error.
-        //
-        // Instead, send real spaces as KEYCODE_SPACE keyevents (never emitting
-        // "%s" ourselves) and type each space-free word through the shared
-        // `injectAndroidText`, which owns the `%`-adjacency handling (a
-        // user-supplied "%s" is split across separate `input text` calls and
-        // arrives verbatim) and the shell quoting. An empty word is a no-op
-        // inside `injectAndroidText`, so consecutive/leading/trailing spaces
-        // round-trip as bare KEYCODE_SPACE presses.
+        // `input text` decodes "%s" back into a space on the device, and a bare
+        // space is an argument separator — so spaces go as KEYCODE_SPACE
+        // keyevents and each space-free word through `injectAndroidText`, which
+        // owns the `%`-adjacency handling and the shell quoting. An empty word
+        // is a no-op there, so repeated/leading/trailing spaces round-trip.
         const KEYCODE_SPACE = 62;
         const words = text.split(" ");
         for (let i = 0; i < words.length; i++) {
@@ -276,15 +244,13 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
         }
       },
 
-      // Android TV reads the live hierarchy on every describe (no cached
-      // daemon), so there is no stale-cache class of bug to recover from.
+      // Android TV reads the live hierarchy on every describe — no cache to drop.
       async recycleAx(): Promise<void> {},
     };
 
     const instance: ServiceInstance<TvControlApi> = {
       api,
-      // Stateless: every method is a fresh adb shell-out, so there is nothing to
-      // tear down. Present to satisfy the ServiceInstance contract.
+      // Stateless: every call is a fresh adb shell-out, so nothing to tear down.
       dispose: async () => {},
       events,
     };

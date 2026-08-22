@@ -208,16 +208,13 @@ export const FAILURE_CODES = {
   NATIVE_PROFILER_SESSION_TORN_DOWN: "NATIVE_PROFILER_SESSION_TORN_DOWN",
   NATIVE_PROFILER_APP_PROCESS_NOT_FOUND: "NATIVE_PROFILER_APP_PROCESS_NOT_FOUND",
   NATIVE_PROFILER_NO_EXPORTED_TRACE: "NATIVE_PROFILER_NO_EXPORTED_TRACE",
-  // Android perfetto start-failure modes — mirror the iOS xctrace set so a
-  // failed recording start is classified rather than falling through to the
-  // generic tool-execution bucket.
+  // Android perfetto start failures, mirroring the iOS xctrace set above.
   NATIVE_PROFILER_PERFETTO_PROCESS_ERROR: "NATIVE_PROFILER_PERFETTO_PROCESS_ERROR",
   NATIVE_PROFILER_PERFETTO_READY_TIMEOUT: "NATIVE_PROFILER_PERFETTO_READY_TIMEOUT",
   NATIVE_PROFILER_PERFETTO_READY_EXITED: "NATIVE_PROFILER_PERFETTO_READY_EXITED",
 
-  // screen-recording-start / screen-recording-stop. One capture path for every
-  // platform (simulator-server's frame stream into ffmpeg), so the stages name
-  // the step that failed rather than the device family.
+  // iOS and Android share one capture path (simulator-server frames into
+  // ffmpeg), so these name the failing stage, not the device family.
   SCREEN_RECORDING_FACTORY_OPTIONS_MISSING: "SCREEN_RECORDING_FACTORY_OPTIONS_MISSING",
   SCREEN_RECORDING_WRONG_PLATFORM: "SCREEN_RECORDING_WRONG_PLATFORM",
   SCREEN_RECORDING_ALREADY_ACTIVE: "SCREEN_RECORDING_ALREADY_ACTIVE",

@@ -50,14 +50,8 @@ import { bootElectronApp, type ElectronBootResult } from "./boot-electron";
 
 const execFileAsync = promisify(execFile);
 
-// NOTE on mutual exclusion: `udid` / `avdName` / `vvdImage` / `electronAppPath`
-// are exactly-one — but zod's
-// `.refine()` returns a ZodEffects that our Registry ToolDefinition type does
-// not accept (it requires a ZodObject so the JSON Schema generator can walk
-// `.shape`). The exactly-one check therefore lives inside `execute` and
-// surfaces with a specific error message on the first call. We restate the
-// constraint in each field's `.describe()` so MCP clients still see it in the
-// generated tool docs even if their JSON-schema inspector ignores the runtime.
+// The exactly-one check over `udid`/`avdName`/`vvdImage`/`electronAppPath` lives in
+// `execute`, so each field's `.describe()` restates the constraint for MCP clients.
 const zodSchema = z.object({
   udid: z
     .string()
@@ -133,31 +127,17 @@ function bootTarget(params: BootDeviceParams): string {
   return params.udid ?? params.avdName ?? params.vvdImage ?? params.electronAppPath ?? "device";
 }
 
-// Flags every boot-device launch should always pass. Two purposes:
+// Flags every boot-device launch passes. Performance: `-noaudio` skips guest
+// audio init, `-no-boot-anim` skips the boot animation (a CPU spike under
+// software rendering), `-netfast` disables network shaping. Dialog
+// suppression: `-crash-report-mode never` and `-no-metrics` stop emulator
+// crash/metrics consent dialogs from blocking the next boot until a human
+// dismisses them.
 //
-//   - Performance: `-noaudio` skips guest pulseaudio init (one thread, ~50 MB
-//     RSS); `-no-boot-anim` skips the Pixel boot animation, which is a major
-//     CPU spike on software-rendered GPU modes; `-netfast` disables network
-//     shaping (latency/speed simulation), pure overhead for MCP use cases.
-//     Measured on a 4-core Skylake host with a 4096 MB / 228 MB-heap AVD:
-//     warm-cache cold boot drops 66 s → 49 s (~25%), qemu RSS at +20 s drops
-//     ~190 MB. android-emulator-runner (the canonical CI launcher) passes the
-//     same three by default for the same reasons.
-//
-//   - Dialog suppression: `-crash-report-mode never` keeps emulator crashes
-//     from popping a Qt consent dialog that blocks the next boot until a
-//     human dismisses it; `-no-metrics` suppresses the metrics-collection
-//     consent dialog with the same blocking behavior. Crash dumps are still
-//     written to /tmp/android-unknown/emu-crash-*.db so the data isn't lost
-//     — only the modal popup is. `-no-metrics` is Google's anonymous
-//     emulator-usage telemetry and is unrelated to any argent profiler tool
-//     (those run guest-side via Perfetto/simpleperf or Metro CDP).
-//
-// All five are flag-only with no host detection, so they apply uniformly to
-// macOS and Linux. `-noaudio` and `-netfast` change qemu device topology,
-// which means they must be passed identically to the snapshot probe, hot
-// boot, and cold boot — a mismatch would silently invalidate the snapshot
-// the previous cold boot saved.
+// `-noaudio` and `-netfast` change qemu device topology, so they must be
+// passed identically to the snapshot probe, hot boot and cold boot — a
+// mismatch would silently invalidate the snapshot the previous cold boot
+// saved.
 const LAUNCH_HARDENING_ARGS = [
   "-noaudio",
   "-no-boot-anim",
@@ -167,23 +147,21 @@ const LAUNCH_HARDENING_ARGS = [
   "-no-metrics",
 ] as const;
 
-// Each stage has its own sub-budget so a hang in one stage cannot consume the
-// entire overall budget and a bootTimeoutMs bump doesn't quietly mask a regression.
+// Per-stage sub-budgets so a hang in one stage cannot consume the entire
+// overall budget.
 const STAGE_BUDGET = {
   adbRegister: 60_000, // adb devices sees the serial for this AVD
   deviceReady: 180_000, // adb -s wait-for-device returns (state === "device")
   bootCompleted: 300_000, // sys.boot_completed = 1
   pmReady: 45_000, // pm path android answers (retried; non-fatal on the final attempt)
-  firstRealFrame: 90_000, // screencap returns ≥1 non-zero pixel after cold boot
-  firstRealFrameHot: 8_000, // tighter budget for snapshot-restore composite —
-  // the broken state is sticky (per assertScreencapAlive's docstring), so a
-  // few seconds is enough to discriminate transient blanks from genuine wedge.
+  firstRealFrame: 90_000,
+  firstRealFrameHot: 8_000, // the sticky-blank state never clears on its own, so a
+  // few seconds is enough to tell it from a transient blank.
 } as const;
 
-// Whitelist of -gpu values the emulator binary accepts (per `emulator -help-gpu`).
-// We validate the override at boot-start instead of letting the emulator reject
-// a typoed value mid-launch: that path otherwise burns the full hot-boot budget
-// before surfacing the error, which is the worst possible UX for a 1-line fix.
+// `-gpu` values the emulator binary accepts (per `emulator -help-gpu`).
+// Validated at boot-start so a typoed override fails immediately instead of
+// after the emulator rejects it mid-launch.
 const VALID_GPU_MODES = new Set([
   "auto",
   "host",
@@ -199,15 +177,11 @@ const VALID_GPU_MODES = new Set([
   "swangle_indirect",
 ]);
 
-// Linux: `-gpu auto` lands on `hw.gpu.mode=lavapipe` (slow CPU Vulkan via host
-// libvulkan + Mesa shims, ~10× cold-boot regression), and `-gpu host` silently
-// produces a corrupted/black emulator window on dual-GPU laptops, NVIDIA+Mesa
-// hosts via libglvnd, Wayland sessions on hybrid graphics, and containerized
-// hosts — argent's screencap-based screenshot tool reports success while the
-// developer sees a black window. `swiftshader` (emulator's bundled CPU
-// renderer) sidesteps both traps and is indistinguishable from `host` on
-// modern multi-core machines. `ARGENT_EMULATOR_GPU_MODE` overrides. macOS
-// uses `auto` (resolves to ANGLE→Metal, hardware-accelerated).
+// Linux: `-gpu auto` lands on lavapipe (CPU Vulkan, large cold-boot
+// regression) and `-gpu host` can produce a corrupted/black emulator window on
+// dual-GPU, NVIDIA+Mesa, Wayland and containerized hosts while screencap-based
+// screenshots still report success. `swiftshader` avoids both.
+// `ARGENT_EMULATOR_GPU_MODE` overrides; macOS uses `auto`.
 function selectGpuMode(): string {
   const override = process.env.ARGENT_EMULATOR_GPU_MODE;
   if (override && override.trim()) {
@@ -229,49 +203,41 @@ function selectGpuMode(): string {
   return process.platform === "linux" ? "swiftshader" : "auto";
 }
 
-// Poll cadences for the boot state machine. These intervals only pace how
-// often we re-probe adb between attempts — they bound latency, not
-// correctness. Values are deliberately conservative: a hung adb on the
-// default 30s timeout must not be re-spawned every few ms. Timing-sensitive
-// tests drive these with vitest fake timers rather than mutating production
-// state, so this stays an immutable constant.
+// Poll cadences for the boot state machine: they bound latency, not
+// correctness. Deliberately conservative so a hung adb on the default 30s
+// timeout is not re-spawned every few ms.
 const BOOT_POLL_INTERVALS_MS = {
   serialByAvd: 1_500, // findSerialByAvdName: re-scan when >1 new emulator appeared
   adbRegister: 1_000, // attemptBoot stage 2: re-scan adb devices for the new serial
   earlyExit: 500, // createEarlyExitRacer: re-check the crash latch during a blocking adb call
 } as const;
 
-// Probe pipeline shared by assertScreencapAlive (hot-boot guard) and
-// awaitFirstRealFrame (cold-boot guard). `screencap -p` emits a PNG of the
-// current frame; awk thresholds the byte count. Real content is reliably
-// >20 KB; a uniform-color frame (sticky-blank or pre-composite) RLE/deflates
-// to <10 KB regardless of resolution — see assertScreencapAlive's docstring
-// for why raw-RGBA byte sniffing isn't sufficient. Outputs exactly "1" or "0".
-// `wc -c` of empty input is "0" so a missing/failed screencap surfaces as
-// "0" rather than a silent pass. Starts with the literal token "screencap"
-// so existing test mocks that match on shellCmd.startsWith("screencap") still fire.
+// Probe shared by assertScreencapAlive (hot boot) and awaitFirstRealFrame
+// (cold boot): `screencap -p` emits a PNG of the current frame and awk
+// thresholds its byte count — real content is reliably >20 KB, a uniform-color
+// frame deflates to a few KB at any resolution (see assertScreencapAlive for
+// why raw-RGBA byte sniffing isn't sufficient). `wc -c` of empty input is "0",
+// so a missing/failed screencap reads as failure rather than a silent pass.
+// The leading literal token "screencap" keeps test mocks matching on it firing.
 const FRAME_PROBE = "screencap -p 2>/dev/null | wc -c | awk '$1>20000{print 1;exit} {print 0}'";
 
 async function killEmulatorQuietly(
   serial: string | null,
   child?: import("node:child_process").ChildProcess
 ): Promise<void> {
-  // Preferred path: emulator console's kill command (the supported API).
-  // It drains pending writes — including a mid-save ram.bin on the cold path
-  // — before qemu exits. Generous timeout because a graceful flush of a
-  // multi-hundred-MB ram.bin under host memory pressure can take several
-  // seconds, and we'd rather wait than orphan a half-written snapshot.
+  // Preferred path: the emulator console's kill command drains pending writes,
+  // including a mid-save ram.bin, before qemu exits. Generous timeout because
+  // that flush can take seconds under host memory pressure, and waiting beats
+  // orphaning a half-written snapshot.
   if (serial) {
     await runAdb(["-s", serial, "emu", "kill"], { timeoutMs: 15_000 }).catch(() => {});
   }
   if (!child) return;
-  // Fallback for a wedged console (hypervisor stall, GPU driver reset, IO-
-  // thread deadlock — all leave qemu alive but deaf to `adb emu kill`).
-  // SIGTERM, not SIGKILL: qemu installs a SIGTERM handler that mirrors the
-  // console-kill flush path, so a writable snapshot stays consistent. SIGKILL
-  // could truncate an in-flight ram.bin write and poison the next boot.
-  // Fire-and-forget — if qemu ignores SIGTERM too, it is unrecoverably stuck
-  // and blocking our caller any longer just delays the user's next action.
+  // Fallback for a wedged console (hypervisor stall, GPU driver reset, IO-thread
+  // deadlock all leave qemu alive but deaf to `adb emu kill`). SIGTERM, not
+  // SIGKILL: qemu's SIGTERM handler mirrors the console-kill flush, so a
+  // snapshot stays consistent, while SIGKILL could truncate an in-flight ram.bin
+  // write. Fire-and-forget — if SIGTERM is ignored too, qemu is unrecoverable.
   if (child.exitCode === null && child.signalCode === null) {
     try {
       child.kill("SIGTERM");
@@ -281,13 +247,10 @@ async function killEmulatorQuietly(
   }
 }
 
-// Best-effort termination for an emulator that was spawned detached + unref'd
-// but never registered with adb — in that state `adb emu kill` has no serial
-// to target, so we must signal the ChildProcess directly. SIGTERM only
-// (fire-and-forget): qemu's SIGTERM handler mirrors the console-kill flush
-// path, keeping any in-progress snapshot save consistent. SIGKILL could
-// truncate a mid-write ram.bin; if qemu ignores SIGTERM it is wedged past
-// recovery and blocking the caller any longer is worse than walking away.
+// Termination path for an emulator spawned detached but never registered with
+// adb: with no serial, `adb emu kill` has nothing to target. SIGTERM only and
+// fire-and-forget — qemu's handler flushes like the console kill, SIGKILL could
+// truncate a mid-write ram.bin, and a qemu that ignores SIGTERM is unrecoverable.
 function killDetachedEmulator(child: import("node:child_process").ChildProcess): void {
   try {
     child.kill("SIGTERM");
@@ -297,53 +260,33 @@ function killDetachedEmulator(child: import("node:child_process").ChildProcess):
 }
 
 /**
- * Verify that `screencap` returns real pixel data, not an all-zero buffer.
+ * Verify that `screencap` returns real pixel data, not a blank frame.
  *
- * Observed failure: on a hot-boot restore, every Android-side readiness probe
- * passes (`sys.boot_completed=1`, `pm path android` resolves, launcher is the
- * focused window, SurfaceFlinger reports the display as enabled, `gfxinfo`
- * confirms frames are rendering) yet every pixel `screencap` returns is
- * `(0,0,0,0)`. The broken frame is sticky: waking the screen, dismissing
- * keyguard, toggling power, swiping, launching a new activity, and capturing
- * on-device (`screencap /sdcard/shot.png`) all produce the same all-zero
- * output. Only a cold boot restores a working capture path. Hypothesis:
- * SurfaceFlinger's host-side composite buffer is not restored with the guest
- * state, so any screenshot reader sees an unhydrated framebuffer. The exact
- * trigger isn't fully pinned down — fresh snapshots saved on this host do not
- * reproduce it today, but the sticky-blank state has been observed after
- * long-lived emulator sessions and against stale snapshots. A caller who
- * trusts `booted:true` and screenshots the device gets a silently-wrong blank
- * image, which is worse than a slower boot; we pay ~200 ms per hot boot to
- * eliminate that failure mode entirely.
+ * Observed on hot-boot restore: every Android-side readiness probe passes
+ * (`sys.boot_completed=1`, `pm path android`, focused launcher, SurfaceFlinger
+ * display enabled, `gfxinfo` rendering) yet every pixel `screencap` returns is
+ * zero, and the state is sticky — waking, dismissing keyguard, launching an
+ * activity and capturing on-device all reproduce it, and only a cold boot
+ * restores a working capture path. Suspected cause: SurfaceFlinger's host-side
+ * composite buffer is not restored with the guest state. A caller that trusts
+ * `booted:true` would silently get blank screenshots.
  *
- * Detection: take a PNG of the current frame and threshold its byte count.
- * A uniform-color image (the sticky-blank / pre-composite case) compresses
- * to a few KB even at full resolution; a real frame with any UI on it is
- * reliably >20 KB. We can't probe the raw RGBA buffer with a simple
- * "any non-zero byte" check because Android fills uninitialised framebuffers
- * with `(0,0,0,0xFF)` — opaque black — so every 4th byte (alpha) is already
- * non-zero before SurfaceFlinger has drawn anything, which would silently
- * report a blank frame as healthy. PNG byte-count sidesteps the alpha
- * pitfall: uniform alpha-only content RLE/deflates to ~7 KB regardless of
- * pixel count, real content blows past the threshold.
+ * Detection thresholds the PNG byte count (see `FRAME_PROBE`): a raw-RGBA
+ * "any non-zero byte" check cannot work, because Android fills uninitialised
+ * framebuffers with `(0,0,0,0xFF)`, so alpha is non-zero before anything is
+ * drawn.
  *
- * Polling, not a single probe: snapshot restore can produce a transient blank
- * for up to 30 s under SwiftShader before the composite hydrates. A
- * single-probe assertion landing inside that window would kill the emulator
- * and force a cold boot every time, defeating the whole point of hot-booting.
- * We poll until either a real frame shows up (success) or `budgetMs` expires
- * (sticky blank — kill the emulator so the outer catch can fall through to
- * cold boot, and the eventual serial is always usable for screenshots).
+ * Polls rather than probing once, because a restore can read blank for a while
+ * before the composite hydrates. On `budgetMs` expiry the emulator is killed so
+ * the caller falls through to a cold boot.
  */
 async function assertScreencapAlive(
   serial: string,
   budgetMs: number = STAGE_BUDGET.firstRealFrameHot
 ): Promise<void> {
   const deadline = Date.now() + budgetMs;
-  // Match success on "1" specifically: empty output (screencap binary missing,
-  // exec-out drained nothing) used to trim to "" which !== "0" and silently
-  // returned success — i.e. a broken capture path was reported as healthy.
-  // Any non-"1" reading (zero pixels OR no output at all) is a failure.
+  // Success only on "1": empty output (no screencap binary, nothing captured)
+  // must count as a failure, not as a healthy capture path.
   let lastReading: string | null = null;
   while (Date.now() < deadline) {
     try {
@@ -372,22 +315,15 @@ async function assertScreencapAlive(
 /**
  * Cold-boot counterpart to `assertScreencapAlive`.
  *
- * `sys.boot_completed=1` fires before SurfaceFlinger has actually composited
- * the lockscreen — on Linux + Weston-headless + SwiftShader software rendering
- * the gap is 5–60 s. Callers that trust `booted:true` and immediately screenshot
- * get an all-black 324×720 PNG (~5 KB) instead of a real lockscreen frame.
+ * `sys.boot_completed=1` fires before SurfaceFlinger has composited the
+ * lockscreen — under software rendering the gap runs to tens of seconds, so a
+ * caller that trusts `booted:true` and screenshots gets an all-black PNG. The
+ * blank is transient here, so poll `FRAME_PROBE` until a frame crosses the size
+ * threshold. `KEYCODE_WAKEUP` is issued once in case the display went dim right
+ * after boot.
  *
- * Unlike the hot-boot case the blank is *transient* — we just need to wait for
- * the first real composite. Same on-device probe as `assertScreencapAlive`
- * (PNG byte-count, see `FRAME_PROBE`), polled until a frame crosses the size
- * threshold or the deadline is hit. We also issue `KEYCODE_WAKEUP` once on
- * entry in case the display was driven straight to dim/off after boot
- * (cheap, idempotent — no-op if already awake).
- *
- * On deadline expiry we throw without killing the emulator: the caller's outer
- * cold-boot catch already wraps with the "wipe-data" hint, and at this point
- * the device is otherwise healthy, so we'd rather surface the timeout than
- * orphan a working AVD.
+ * On deadline expiry we throw without killing the emulator: the device is
+ * otherwise healthy and the caller's cold-boot catch adds the wipe-data hint.
  */
 async function awaitFirstRealFrame(serial: string, timeoutMs: number): Promise<void> {
   await adbShell(serial, "input keyevent 224", { timeoutMs: 5_000 }).catch(() => {
@@ -499,19 +435,13 @@ async function bootIos(
   });
   await execFileAsync("xcrun", [...prefix, "bootstatus", udid, "-b"]);
 
-  // tvOS only: a boot transition (Shutdown→Booted, or a force reboot) orphans
-  // the host-side HID daemon. Unlike the ax-service — which runs *inside* the
-  // sim via `simctl spawn` and is therefore killed by the reboot and respawned
-  // on the next describe — the tvos-hid-daemon runs on the host and holds a
-  // SimDeviceLegacyClient bound to the *previous* boot for its whole lifetime.
-  // The reboot invalidates that client, but the daemon process stays alive and
-  // its `navigate`/`type` sends are fire-and-forget, so a TV `button` press
-  // silently no-ops with no error and no recovery path (the daemon-exit
-  // reconnect never fires). Dropping the cached TvControl service here forces
-  // the next TV call to rebuild it with a fresh daemon bound to the new boot.
-  // Disposal is
-  // best-effort: ServiceNotFoundError just means nothing was cached (the common
-  // fresh-boot case), which is a no-op.
+  // tvOS only: a boot transition orphans the host-side tvos-hid-daemon, which
+  // holds a SimDeviceLegacyClient bound to the previous boot for its whole
+  // lifetime (unlike the ax daemon, which runs inside the sim and is respawned).
+  // The daemon survives the reboot with an invalid client and its sends are
+  // fire-and-forget, so TV button presses silently no-op. Dropping the cached
+  // TvControl service forces the next TV call to rebuild it against the new
+  // boot. ServiceNotFoundError just means nothing was cached.
   if (isTvOs && needsPreBoot) {
     await registry.disposeService(`${TV_CONTROL_NAMESPACE}:${udid}`).catch((err: unknown) => {
       if (err instanceof ServiceNotFoundError) return;
@@ -522,19 +452,11 @@ async function bootIos(
       );
     });
 
-    // The same boot transition also wipes the simulator's launchd
-    // DYLD_INSERT_LIBRARIES, but the cached NativeDevtools service keeps a
-    // sticky `envSetup=true` flag from the *previous* boot — so its
-    // `ensureEnvReady()` short-circuits and never re-sets the env. The result:
-    // launch-app / restart-app produce an uninjected process and
-    // native-devtools-status stays `connected:false` until something re-applies
-    // the env out of band — `appConnectionState` does, via reverifyEnv, but only
-    // once an app is queried. Dropping the cached service here forces
-    // the resolveService below to rebuild it with a fresh `envSetup=false`, so
-    // ensureEnv re-applies DYLD on this boot. The DYLD-clear-on-reboot is not
-    // strictly tvOS-specific, but we gate this on tvOS to match the validated
-    // repro and avoid changing the well-exercised iOS boot path; widen the gate
-    // if the same stuck-injection state is ever reproduced on an iOS reboot.
+    // The same boot transition wipes the sim's launchd DYLD_INSERT_LIBRARIES,
+    // but a cached NativeDevtools keeps a sticky envSetup=true from the previous
+    // boot, so ensureEnvReady() short-circuits and never re-sets it. Dropping the
+    // service forces a rebuild with envSetup=false. tvOS-gated to match the
+    // validated repro; widen if this is ever reproduced on iOS.
     const ndUrn = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" }).urn;
     await registry.disposeService(ndUrn).catch((err: unknown) => {
       if (err instanceof ServiceNotFoundError) return;
@@ -546,31 +468,26 @@ async function bootIos(
     });
   }
 
-  // Best-effort fallback: no-op on the happy path (pref already cached from
-  // pre-boot write). When the sim was already Booted without force, writes
-  // prefs via `defaults write` — SB won't pick them up until next restart,
-  // but describe surfaces a hint about it.
+  // Covers the sim that was already Booted without force, where no pre-boot
+  // write happened: SB won't pick these prefs up until the next restart, but
+  // describe surfaces a degraded-quality hint.
   await ensureAutomationEnabled(udid).catch(() => undefined);
 
   const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
   const ndApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
-  // We just (re)booted the sim, which wipes DYLD_INSERT_LIBRARIES from launchd.
-  // If this service was already initialized (e.g. by the simulator watcher),
-  // `resolveService` returns the cached instance whose one-shot env latch is
-  // set, so the env would never be re-applied and the next launch wouldn't be
-  // injected. Force a re-apply so describe / native tools work without an
-  // extra restart-app round-trip. Failures surface via getInitFailure below.
+  // The (re)boot wiped DYLD_INSERT_LIBRARIES from launchd. A service cached from
+  // before the boot has its one-shot env latch set, so `ensureEnvReady` would
+  // skip re-applying and the next launch would be uninjected. Failures surface
+  // via getInitFailure below.
   await ndApi.reverifyEnv().catch(() => {});
   const initFailure = ndApi.getInitFailure();
   if (initFailure?.givenUp) {
     return buildInitFailedResult(udid, initFailure);
   }
   // A Simulator.app instance displays ONE device set (the default, unless
-  // launched with -DeviceSetPath). A device from an additional set therefore
-  // can't be surfaced by attaching the stock GUI — it runs headless and is
-  // streamed via simulator-server (exactly how Radon IDE presents its own
-  // set's devices) — so skip the GUI attach and the CurrentDeviceUDID write
-  // that only steers the default-set window.
+  // launched with -DeviceSetPath), so a device from an additional set can only
+  // run headless and stream via simulator-server. Skip the GUI attach and the
+  // CurrentDeviceUDID write, which only steers the default-set window.
   if (!deviceSet) {
     await execFileAsync("defaults", [
       "write",
@@ -579,16 +496,14 @@ async function bootIos(
       udid,
     ]).catch(() => {});
   }
-  // `simctl boot` above already booted the device CORE (headless). Opening
-  // Simulator.app only attaches the GUI window — surfaces that stream the
-  // device through simulator-server (e.g. Argent Lens) don't need it, so
-  // `headless` skips it to avoid popping a window the user didn't ask for.
-  // ARGENT_SIMULATOR_NO_WINDOW forces the same skip host-wide (the iOS analog
-  // of ARGENT_EMULATOR_NO_WINDOW) so CI/Lens hosts never have to pass the flag.
+  // `simctl boot` above already booted the device core headless; opening
+  // Simulator.app only attaches the GUI window, which surfaces streaming through
+  // simulator-server don't need. ARGENT_SIMULATOR_NO_WINDOW forces the same skip
+  // host-wide.
   if (!headless && !iosHeadlessFromEnv() && !deviceSet) {
-    // Xcode 27 drops Simulator.app in favour of Device Hub.app
-    // (com.apple.dt.Devices); fall back to it, and keep the GUI attach
-    // best-effort so a missing app never fails a boot whose core is already up.
+    // Xcode 27 replaces Simulator.app with Device Hub.app (com.apple.dt.Devices);
+    // the attach stays best-effort so a missing app never fails a boot whose core
+    // is already up.
     await execFileAsync("open", ["-a", "Simulator.app"])
       .catch(() => execFileAsync("open", ["-b", "com.apple.dt.Devices"]))
       .catch(() => {});
@@ -600,11 +515,11 @@ async function bootIos(
  * Boot a remote iOS simulator through `sim-remote`. Mirrors `bootIos` but:
  *
  * - Uses `sim-remote simctl` for boot/shutdown/bootstatus (no local xcrun).
- * - Pre-warms the native-devtools blueprint so the dylib injection env is
- *   set inside the remote sim before the app launches. Accessibility defaults
- *   are applied lazily by the ax-service blueprint's `bootstrapAx` (which runs
- *   the `defaults write` through the orchestrator's generic spawn) before the
- *   first describe-driven tool — we have no filesystem access to the remote sim.
+ * - Pre-warms the native-devtools blueprint so the dylib injection env is set
+ *   inside the remote sim before the app launches. Accessibility defaults are
+ *   applied lazily by the ax-service blueprint's `bootstrapAx` over the
+ *   orchestrator's generic spawn — we have no filesystem access to the remote
+ *   sim, so there is no pre-boot plist write.
  */
 async function bootIosRemote(
   id: string,
@@ -616,8 +531,8 @@ async function bootIosRemote(
   await ensureDep("sim-remote");
   const udid = stripRemotePrefix(id);
 
-  // Look up current state via sim-remote. Treat lookup failures as "unknown
-  // state" — the boot/bootstatus dance below tolerates an already-booted sim.
+  // Lookup failures are treated as unknown state: the boot/bootstatus dance
+  // below tolerates an already-booted sim.
   let simState: string | undefined;
   try {
     const list = await simRemoteListDevices();
@@ -637,8 +552,8 @@ async function bootIosRemote(
     await simRemoteShutdown(id).catch(() => undefined);
   }
 
-  // Boot. `Booted` exit-code error from sim-remote means it's already up —
-  // benign; the bootstatus call below normalizes the state regardless.
+  // A `Booted` error from sim-remote just means it is already up; bootstatus
+  // below normalizes the state either way.
   await simRemoteBoot(id).catch((err: Error) => {
     if (!/Booted/i.test(err.message)) throw err;
   });
@@ -654,20 +569,16 @@ async function bootIosRemote(
   return { platform: "ios-remote", udid: id, booted: true };
 }
 
-// Tight budget for a hot boot attempt. A successful hot boot completes well
-// under 15 s on fast hardware and under ~45 s on a cold host page cache; the
-// 90 s ceiling exists to bound the pathological case where snapshot load
-// succeeds but the guest system_server is stuck — without this cap, a silent
-// system-server hang would eat the full cold-boot budget before we retry.
+// Bounds the pathological hot boot where the snapshot loads but the guest's
+// system_server is stuck; without the cap that hang would eat the cold-boot
+// budget before we retry.
 const HOT_BOOT_BUDGET_MS = 90_000;
 
 /**
- * Attempt a single boot with the supplied emulator args. Extracted from
- * `bootAndroid` so the hot-boot path and the cold-boot fallback share every
- * stage without diverging. The caller supplies the serialsBefore snapshot
- * (captured once per `bootAndroid` invocation, *before* either attempt)
- * because recomputing it between attempts would include the serial from the
- * failed hot-boot child if reaping is still in flight.
+ * One boot attempt with the supplied emulator args, shared by the hot-boot path
+ * and the cold-boot fallback. The caller supplies `serialsBefore` (captured once
+ * per `bootAndroid` invocation, before either attempt) because recomputing it
+ * between attempts could include a failed hot-boot child still being reaped.
  */
 async function attemptBoot(params: {
   avdName: string;
@@ -680,22 +591,18 @@ async function attemptBoot(params: {
   bootCompletedBudgetMs: number;
   // How long to keep retrying the PackageManager sanity probe before giving up.
   pmProbeBudgetMs: number;
-  // Whether a PM probe that never succeeds should tear the emulator down and
-  // throw. True on the hot-boot attempt (so the caller can fall back to a cold
-  // boot); false on the final cold attempt, where a slow-but-alive guest is
-  // returned as booted rather than destroyed.
+  // Tear the emulator down and throw when the PM probe never succeeds. True on
+  // the hot-boot attempt (the caller can still fall back to a cold boot); false
+  // on the final cold attempt, where a slow-but-alive guest is returned as
+  // booted rather than destroyed.
   tearDownIfUnready: boolean;
 }): Promise<{ serial: string }> {
-  // On Windows the emulator hangs mid-boot when spawned with stdio:"ignore":
+  // On Windows the emulator hangs mid-boot when spawned with stdio:"ignore" —
   // a detached process whose stdout/stderr are NUL never reaches
-  // sys.boot_completed (verified on windows-latest — the identical flag set
-  // boots fine when given real handles). Redirect its output to a per-AVD log
-  // file so it has valid write handles, mirroring a `emulator ... > log` launch.
-  // The name is fixed per AVD and truncated on open ("w"), so repeated boots
-  // reuse one file instead of littering temp with a new log every boot — only
-  // one emulator per AVD can run at a time (the AVD is lock-guarded), so there
-  // is no concurrent writer to clobber. POSIX is unchanged: "ignore" works
-  // there, and detaching keeps the emulator alive across a tool-server restart.
+  // sys.boot_completed — so give it a per-AVD log file for valid write handles.
+  // The name is fixed per AVD and truncated on open, so boots reuse one file
+  // rather than littering temp; only one emulator per AVD can run at a time, so
+  // there is no concurrent writer. POSIX keeps "ignore".
   let emulatorLogFd: number | undefined;
   let stdio: StdioOptions = "ignore";
   if (process.platform === "win32") {
@@ -709,8 +616,8 @@ async function attemptBoot(params: {
     stdio,
   });
   child.unref();
-  // The spawned child inherited its own handle for the log fd; close the
-  // parent's copy so a descriptor doesn't leak per boot. No-op on POSIX.
+  // The child holds its own handle for the log fd; close the parent's copy so a
+  // descriptor doesn't leak per boot.
   if (emulatorLogFd !== undefined) {
     try {
       closeSync(emulatorLogFd);
@@ -721,10 +628,9 @@ async function attemptBoot(params: {
 
   let earlyExitError: Error | null = null;
   child.on("exit", (code, signal) => {
-    // A QEMU SIGSEGV/SIGABRT comes through as `code === null, signal !== null`.
-    // The previous `code !== null` guard treated those as a normal exit, so a
-    // hot-boot child that segfaulted on a bad ram.bin restore would hang the
-    // outer wait until the per-stage budget elapsed instead of failing fast.
+    // A QEMU SIGSEGV/SIGABRT arrives as `code === null, signal !== null`, so a
+    // signal must be treated as an early exit or the outer wait hangs until the
+    // stage budget elapses.
     if (signal) {
       earlyExitError = new Error(
         `emulator binary terminated by signal ${signal} before the device booted. ` +
@@ -741,22 +647,19 @@ async function attemptBoot(params: {
       );
     }
   });
-  // `spawn` itself can fail (ENOENT — emulator binary missing/EACCES, transient
-  // FS hiccup) by emitting an `error` event on the child. EventEmitter
-  // convention is that an unhandled `error` escapes as an uncaught exception
-  // that would crash the tool-server. Funnel it into the same earlyExitError
-  // race so the boot promise rejects with the actual cause and the in-flight
-  // Map entry (cleared by `bootAndroid`'s `finally`) doesn't leak.
+  // `spawn` failures (ENOENT, EACCES) arrive as an `error` event; unhandled,
+  // that escapes as an uncaught exception and crashes the tool-server. Funnel it
+  // into the same earlyExitError race so the boot promise rejects with the real
+  // cause and the in-flight Map entry is cleared.
   child.on("error", (err: NodeJS.ErrnoException) => {
     earlyExitError = new Error(
       `Failed to spawn emulator binary (${err.code ?? "unknown"}): ${err.message}. ` +
         `Verify Android SDK Emulator is installed and on PATH, then retry.`
     );
   });
-  // `earlyExitError` is assigned only inside the event-handler closures above, so
-  // a direct synchronous read flow-narrows to `null`. Read the live value through
-  // this getter so the declared `Error | null` type (and thus the thrown Error)
-  // is preserved.
+  // `earlyExitError` is assigned only inside the handler closures above, so a
+  // direct read flow-narrows to `null`. This getter preserves the declared
+  // `Error | null` type.
   const readEarlyExitError = (): Error | null => earlyExitError;
 
   // Stage 2: wait for adb to see the new emulator.
@@ -803,7 +706,6 @@ async function attemptBoot(params: {
     );
   }
 
-  // Stage 3: wait-for-device (tcp socket up).
   const stage3Racer = createEarlyExitRacer(() => earlyExitError);
   try {
     await Promise.race([
@@ -824,7 +726,6 @@ async function attemptBoot(params: {
     stage3Racer.cancel();
   }
 
-  // Stage 4: sys.boot_completed = 1.
   const bootBudget = Math.max(
     5_000,
     Math.min(params.bootCompletedBudgetMs, params.attemptDeadline - Date.now())
@@ -837,13 +738,11 @@ async function attemptBoot(params: {
   }
 
   // Stage 5: PackageManager sanity — a snapshot restore preserves
-  // sys.boot_completed=1 so this is the first real proof the guest is live.
-  // `pm` can take tens of seconds to answer on a loaded host or a freshly
-  // wiped image still finishing its first-boot package scan, even though the
-  // device is healthy and already registered with adb — so retry within a
-  // budget instead of failing on a single 10 s window. Each attempt races
-  // earlyExitError so a real crash surfaces with the actual signal/exit-code
-  // error rather than a misleading "PackageManager did not respond".
+  // sys.boot_completed=1, so this is the first real proof the guest is live.
+  // `pm` can take tens of seconds on a loaded host or a freshly wiped image
+  // still scanning packages, so retry within a budget instead of failing on one
+  // window. Each attempt races earlyExitError so a real crash surfaces as the
+  // signal/exit-code error instead of "PackageManager did not respond".
   const pmBudgetMs = Math.max(10_000, params.pmProbeBudgetMs);
   const pmDeadline = Math.min(params.attemptDeadline, Date.now() + pmBudgetMs);
   let pmReady = false;
@@ -872,18 +771,15 @@ async function attemptBoot(params: {
   }
 
   if (!pmReady) {
-    // A confirmed crash (mid-probe or via the exit racer) always tears down and
-    // rethrows the real cause.
+    // A confirmed crash always tears down and rethrows the real cause.
     const crash = pmCrash ?? earlyExitError;
     if (crash) {
       await killEmulatorQuietly(serial, child);
       throw crash;
     }
-    // Tear down only when there is still a fallback left to try (hot boot ->
-    // cold boot). On the final attempt a slow-but-alive guest is NOT a reason
-    // to destroy it: it reached boot_completed and registered with adb, gRPC
-    // screenshots/gestures work without PM, and killing it guarantees failure
-    // with nothing to fall back to.
+    // Tear down only while a fallback remains (hot -> cold). On the final
+    // attempt a guest that reached boot_completed is still usable — gRPC
+    // screenshots/gestures work without PM — and killing it guarantees failure.
     if (params.tearDownIfUnready) {
       await killEmulatorQuietly(serial, child);
       throw new FailureError(
@@ -907,12 +803,11 @@ async function attemptBoot(params: {
   return { serial };
 }
 
-// In-flight boot per AVD. Two `bootAndroid` calls for the same AVD would each
-// pass the "already running" fast-path (the emulator hasn't registered yet)
-// and both spawn QEMU — the second collides on the AVD's exclusive on-disk
-// lock and bails after the boot deadline with a confusing "Running multiple
-// emulators" error. Coalescing in-flight calls per AVD makes a duplicate call
-// reuse the result of the first one (or its eventual error).
+// In-flight boot per AVD. Two concurrent `bootAndroid` calls for the same AVD
+// would both pass the "already running" fast path (the emulator hasn't
+// registered yet) and spawn QEMU twice; the second collides on the AVD's
+// exclusive on-disk lock and bails with a confusing "Running multiple
+// emulators". Coalescing makes the duplicate reuse the first result or error.
 const inFlightBoots = new Map<
   string,
   Promise<{
@@ -924,10 +819,9 @@ const inFlightBoots = new Map<
 >();
 
 /**
- * Clear the in-flight boot map. Exposed for tests that intentionally abandon
- * a half-started boot to assert orphan-cleanup behavior — without this hook
- * the leaked promise would coalesce into the next test that targets the same
- * AVD and starve it of a real spawn.
+ * Clear the in-flight boot map. For tests that intentionally abandon a
+ * half-started boot: the leaked promise would otherwise coalesce into the next
+ * test targeting the same AVD and starve it of a real spawn.
  */
 export function __resetInFlightBootsForTesting(): void {
   inFlightBoots.clear();
@@ -963,15 +857,13 @@ async function bootAndroidImpl(params: {
   booted: true;
 }> {
   // Preflight both Android binaries up front so a missing emulator package
-  // surfaces as a 424 "install hint" — not a misleading "no AVDs" error from
-  // `listAvds()`'s empty result. `ensureDep("emulator")` consults the
-  // resolver, which honors `$ANDROID_HOME` in addition to PATH.
+  // surfaces as an install hint, not a misleading "no AVDs" from `listAvds()`.
+  // `ensureDep` resolves through `$ANDROID_HOME` as well as PATH.
   await ensureDep("adb");
   await ensureDep("emulator");
-  // Validate and capture boot-configuration env vars upfront so a typo in
-  // ARGENT_EMULATOR_GPU_MODE surfaces before any slow I/O (snapshot probe,
-  // AVD list, emulator spawn) rather than mid-function with a misleading
-  // "emulator has been terminated" suffix.
+  // Validate boot-configuration env vars before any slow I/O so a typo in
+  // ARGENT_EMULATOR_GPU_MODE surfaces immediately rather than mid-boot with a
+  // misleading "emulator has been terminated" suffix.
   const gpuMode = selectGpuMode();
   // Opt-in headless mode via ARGENT_EMULATOR_NO_WINDOW (see no-window-env.ts).
   const extraEmulatorArgs = androidHeadlessFromEnv() ? ["-no-window"] : [];
@@ -982,9 +874,8 @@ async function bootAndroidImpl(params: {
   const emulatorBinary = await resolveEmulatorOrThrow();
   const overallDeadline = Date.now() + params.bootTimeoutMs;
 
-  // Stage 0: validate AVD exists. Past this point an empty AVD list really
-  // does mean "user has no AVDs" (the binary is present); the preflight ruled
-  // out the binary-missing case.
+  // Stage 0: validate the AVD exists. The preflight ruled out a missing binary,
+  // so an empty list here really means the user has no AVDs.
   const avds = await listAvds();
   if (avds.length === 0) {
     throw new FailureError(
@@ -1029,17 +920,15 @@ async function bootAndroidImpl(params: {
     );
   }
 
-  // Ensure the adb daemon is running BEFORE we snapshot the serial list.
-  // If the daemon was down, `adb devices` returns [] — without this the
-  // snapshot is empty and every currently-connected emulator later looks
-  // "new", so the tool could hand back an unrelated emulator as "booted".
+  // Start the adb daemon BEFORE snapshotting the serial list: with the daemon
+  // down `adb devices` returns [], every already-connected emulator later looks
+  // "new", and the tool could hand back an unrelated emulator as "booted".
   await runAdb(["start-server"], { timeoutMs: 10_000 }).catch(() => {});
   const existingDevices = await listAndroidDevices().catch(() => []);
 
-  // Fast path: if this exact AVD is already running and ready, reuse it
-  // instead of spawning a second emulator that would collide on AVD locks,
-  // burn the full 90 s hot-boot budget in the probe + spawn failure, and
-  // surface a misleading "Running multiple emulators" error.
+  // Fast path: reuse this AVD when it is already running and ready, instead of
+  // spawning a second emulator that collides on AVD locks and fails with a
+  // misleading "Running multiple emulators" error.
   let hotBootFailureReason: string | null;
   const alreadyRunning = existingDevices.find(
     (d) => d.isEmulator && d.avdName === params.avdName && d.state === "device"
@@ -1050,16 +939,11 @@ async function bootAndroidImpl(params: {
       const refreshed = await listAndroidDevices().catch(() => existingDevices);
       existingDevices.splice(0, existingDevices.length, ...refreshed);
     } else {
-      // BUG GUARD — wedged-framebuffer detection on the reuse path.
       // A long-running emulator can drift into the same sticky-blank
-      // SurfaceFlinger state that `assertScreencapAlive` defends against on a
-      // hot-boot restore (see its docstring): every Android-side readiness
-      // probe still passes, but `screencap` only returns null bytes — meaning
-      // the caller would silently get a serial whose screenshots are all
-      // black. Without this probe the fast-path returns that wedged serial
-      // forever and there is no way back, since `coldBoot` was removed.
-      // On failure the helper kills the wedged emulator; we then fall through
-      // to the snapshot/probe pipeline so the caller still gets a usable boot.
+      // SurfaceFlinger state `assertScreencapAlive` guards against on hot boot:
+      // readiness probes pass but every screenshot is black, and the fast path
+      // would keep handing back that wedged serial. On failure the helper kills
+      // the emulator and we fall through to the boot pipeline below.
       try {
         await assertScreencapAlive(alreadyRunning.serial);
         return {
@@ -1069,10 +953,9 @@ async function bootAndroidImpl(params: {
           booted: true,
         };
       } catch (_err) {
-        // assertScreencapAlive already killed the emulator; refresh the
-        // existing-devices snapshot so the killed serial is included in
-        // serialsBefore (matching the hot-boot catch refresh below) and the
-        // upcoming spawn's "new serial" diff stays correct.
+        // assertScreencapAlive already killed the emulator; refresh the snapshot
+        // so the killed serial is in serialsBefore and the upcoming spawn's
+        // "new serial" diff stays correct.
         const refreshed = await listAndroidDevices().catch(() => existingDevices);
         existingDevices.splice(0, existingDevices.length, ...refreshed);
       }
@@ -1080,31 +963,25 @@ async function bootAndroidImpl(params: {
   }
   const serialsBefore = new Set(existingDevices.map((d) => d.serial));
 
-  // Suppress the emulator's crash-report prompt/uploader on builds that accept
-  // the flag. `-crash-report-mode` is undocumented and only present in newer
-  // emulator releases (~36.x and late 35.x), so feature-detect it via `-help`
-  // rather than pass it blind: an unrecognized flag aborts the launch before
-  // boot. Computed here (after the already-running reuse fast-path returns) so
-  // the `-help` probe is skipped when we are not going to spawn, and shared by
-  // both the hot- and cold-boot arg lists below.
+  // `-crash-report-mode` is undocumented and only present on newer emulator
+  // builds, so feature-detect it via `-help`. Computed after the reuse fast path
+  // so the probe is skipped when we are not going to spawn, and shared by both
+  // arg lists below.
   const crashReportArgs = (await emulatorSupportsFlag("-crash-report-mode"))
     ? ["-crash-report-mode", "never"]
     : [];
 
-  // Decide whether to try a hot boot: only if a default_boot snapshot exists
-  // on disk AND the emulator's own `-check-snapshot-loadable` probe says the
-  // metadata is valid. Probe takes ~1-2 s and catches the two most common
-  // silent-hang causes: renderer/GPU config drift and `snapshot.pb` metadata
-  // corruption. On any hot-boot failure we fall back to cold boot below.
+  // Hot boot only when a default_boot snapshot exists AND the emulator's own
+  // `-check-snapshot-loadable` probe accepts it; the probe catches renderer/GPU
+  // config drift and `snapshot.pb` corruption. Any failure falls back to cold
+  // boot below.
   const hasSnapshot = await hasDefaultBootSnapshot(params.avdName);
   if (!hasSnapshot) {
     hotBootFailureReason = "no default_boot snapshot exists";
   } else {
-    // Probe and boot must share the same renderer-affecting argv — otherwise
-    // the probe resolves a different renderer than the boot and rejects every
-    // valid snapshot with "different renderer configured". RENDERER_ARGS
-    // keeps the two in lockstep. `-gpu` value and the optional `-no-window`
-    // come from `selectGpuMode` / `androidHeadlessFromEnv` (resolved upfront).
+    // Probe and boot must share the same renderer-affecting argv, or the probe
+    // resolves a different renderer and rejects every valid snapshot with
+    // "different renderer configured".
     const RENDERER_ARGS = ["-gpu", gpuMode, ...extraEmulatorArgs];
     const probe = await checkSnapshotLoadable(params.avdName, "default_boot", {
       extraArgs: [...RENDERER_ARGS, ...LAUNCH_HARDENING_ARGS],
@@ -1112,12 +989,10 @@ async function bootAndroidImpl(params: {
     if (!probe.loadable) {
       hotBootFailureReason = `-check-snapshot-loadable: ${probe.reason ?? "unknown"}`;
     } else {
-      // Hot boot attempt. `-force-snapshot-load` flips the emulator's default
-      // "silent fallback to cold boot on load failure" into a loud early exit
-      // so ram.bin corruption (which the probe misses) surfaces in seconds
-      // rather than hanging for the full overall budget. `-no-snapshot-save`
-      // avoids overwriting a working snapshot with state captured after we
-      // later force-kill the child from a failure path.
+      // `-force-snapshot-load` turns the emulator's silent fallback to cold boot
+      // into a loud early exit, so ram.bin corruption the probe misses surfaces
+      // in seconds. `-no-snapshot-save` keeps a force-kill on a failure path from
+      // overwriting a working snapshot.
       const hotArgs = [
         "-avd",
         params.avdName,
@@ -1135,14 +1010,13 @@ async function bootAndroidImpl(params: {
           emulatorArgs: hotArgs,
           attemptDeadline: hotAttemptDeadline,
           serialsBefore,
-          // Snapshot restores register with adb within a couple of seconds;
-          // a minute-long register wait on the hot path would mask the
-          // scenario where load fails and the child silently cold-boots.
+          // Snapshot restores register with adb within seconds; a minute-long
+          // wait here would mask a failed load that silently cold-boots.
           adbRegisterBudgetMs: 30_000,
           deviceReadyBudgetMs: 30_000,
           bootCompletedBudgetMs: 30_000,
-          // Keep the hot path tight: a single ~10 s PM window, and tear down on
-          // failure so we fall through to the cold boot below.
+          // Keep the hot path tight: one ~10 s PM window, tear down on failure so
+          // we fall through to the cold boot below.
           pmProbeBudgetMs: 10_000,
           tearDownIfUnready: true,
         });
@@ -1155,11 +1029,9 @@ async function bootAndroidImpl(params: {
         };
       } catch (err) {
         hotBootFailureReason = err instanceof Error ? err.message : String(err);
-        // Best-effort: if the hot-boot child registered a serial before
-        // failing, it's already been killed inside attemptBoot. If it didn't
-        // register, any detached child was reaped there too. Refresh the
-        // before-set so the cold-boot attempt doesn't misidentify a zombie
-        // serial that has not yet disappeared from `adb devices` as "new".
+        // attemptBoot already killed the failed child. Refresh the before-set so
+        // the cold-boot attempt doesn't mistake a zombie serial still listed by
+        // `adb devices` for a new one.
         const refreshed = new Set(
           (await listAndroidDevices().catch(() => [])).map((d) => d.serial)
         );
@@ -1168,12 +1040,10 @@ async function bootAndroidImpl(params: {
     }
   }
 
-  // Cold boot fallback (either no usable snapshot, or hot-boot attempt failed).
-  // Renderer args mirror the hot-boot path so the snapshot this cold boot
-  // saves matches the renderer the next launch's probe will resolve.
-  // LAUNCH_HARDENING_ARGS likewise — `-noaudio` and `-netfast` change device
-  // topology, so a mismatch between cold-save and hot-load would invalidate
-  // the saved snapshot.
+  // Cold boot fallback. Renderer and hardening args mirror the hot-boot path so
+  // the snapshot this cold boot saves matches what the next launch's probe
+  // resolves — `-noaudio` and `-netfast` change device topology, so a mismatch
+  // between cold-save and hot-load would invalidate the snapshot.
   const coldArgs = [
     "-avd",
     params.avdName,
@@ -1195,9 +1065,9 @@ async function bootAndroidImpl(params: {
       adbRegisterBudgetMs: STAGE_BUDGET.adbRegister,
       deviceReadyBudgetMs: STAGE_BUDGET.deviceReady,
       bootCompletedBudgetMs: STAGE_BUDGET.bootCompleted,
-      // Final attempt: retry PM for longer, and do NOT tear the emulator down
-      // if it stays slow — a guest that reached boot_completed is usable, and
-      // there is no further fallback to justify destroying it.
+      // Final attempt: retry PM for longer and don't tear the emulator down if
+      // it stays slow — a guest that reached boot_completed is usable, and there
+      // is no further fallback to justify destroying it.
       pmProbeBudgetMs: STAGE_BUDGET.pmReady,
       tearDownIfUnready: false,
     });
@@ -1219,12 +1089,11 @@ async function bootAndroidImpl(params: {
     );
   }
 
-  // Cold-boot post-condition: under SwiftShader the lockscreen composite lags
-  // boot_completed by 5–60 s. Without this, a caller chaining boot-device →
-  // screenshot gets a silent all-black PNG. See `awaitFirstRealFrame`.
-  // Clamp against the remaining overallDeadline so the frame-wait stage cannot
-  // push total elapsed time past bootTimeoutMs. Kill and throw on timeout so
-  // the emulator doesn't linger until the next boot-device call.
+  // Cold-boot post-condition: the lockscreen composite lags boot_completed, so
+  // without this a boot-device → screenshot chain gets a silent all-black PNG
+  // (see `awaitFirstRealFrame`). Clamped to the remaining overall deadline so
+  // this stage can't push past bootTimeoutMs; kill on timeout so the emulator
+  // doesn't linger until the next boot-device call.
   const frameWaitBudget = Math.min(
     STAGE_BUDGET.firstRealFrame,
     Math.max(0, overallDeadline - Date.now())
@@ -1245,14 +1114,12 @@ async function bootAndroidImpl(params: {
 }
 
 /**
- * Poll an exit-state getter and reject as soon as it returns non-null.
- * Used to race against a blocking adb call so a detached-emulator crash
- * surfaces as its specific error instead of a generic adb timeout.
+ * Poll an exit-state getter and reject as soon as it returns non-null. Raced
+ * against blocking adb calls so a detached-emulator crash surfaces as its own
+ * error instead of a generic adb timeout.
  *
- * Returns `{ promise, cancel }`: the caller must call `cancel()` once the
- * race resolves, otherwise the recursive `setTimeout` chain keeps firing
- * for the life of the process — a real handle leak across many boot/restart
- * cycles. Always invoke `cancel()` in a `finally` block.
+ * The caller must call `cancel()` in a `finally` once the race resolves, or the
+ * recursive `setTimeout` chain keeps firing for the life of the process.
  */
 function createEarlyExitRacer(getExit: () => Error | null): {
   promise: Promise<never>;
@@ -1285,10 +1152,9 @@ function createEarlyExitRacer(getExit: () => Error | null): {
 }
 
 // boot-device dispatches internally on `udid` vs `avdName` vs `electronAppPath`
-// rather than via `dispatchByPlatform` (the helper assumes a single udid
-// input). Capability is still declared so the HTTP gate rejects an iOS udid
-// on a host without xcrun, etc., and so `list-devices` consumers can rely on
-// uniform metadata.
+// rather than via `dispatchByPlatform`, which assumes a single udid input. The
+// capability is still declared so the HTTP gate rejects e.g. an iOS udid on a
+// host without xcrun.
 type VegaBootResult = { platform: "vega"; serial: string; vvdImage: string; booted: true };
 
 // Coalesce concurrent Vega boots (mirrors `inFlightBoots` for Android): two
@@ -1321,18 +1187,15 @@ async function bootVegaImpl(params: {
   const running = await isVvdRunning();
   if (running && !params.force) {
     // Already up. v1 supports a single running VVD and can't boot a second, so
-    // don't pretend we honored the request: resolve the image that is *actually*
-    // running and label the payload with it. If the caller asked for a different
-    // image, surface that rather than returning the running device mislabeled.
+    // resolve the image that is actually running and label the payload with it
+    // rather than assuming the request was honored.
     const current = await listVegaDevices();
     const runningVvd = current.find((d) => d.kind === "vvd" && d.state === "running" && d.serial);
     const runningImage = runningVvd?.vvdImage ?? null;
-    // Only report the request as already-satisfied when we can POSITIVELY confirm
-    // the running image is the requested one. An unconfirmable running image
-    // (`null` — e.g. an unresolved profile with 2+ installed images, or 2+ running
-    // VVDs) must be treated as a mismatch, not a match: otherwise we'd return
-    // booted:true for `params.vvdImage` while a *different* VVD is actually running
-    // and every later tool would silently drive that other device.
+    // Only report already-satisfied on a POSITIVE match. An unconfirmable running
+    // image (`null` — an unresolved profile with 2+ installed images, or 2+
+    // running VVDs) counts as a mismatch: otherwise we'd return booted:true while
+    // a different VVD is the one every later tool drives.
     if (runningImage !== params.vvdImage) {
       const which = runningImage ? `("${runningImage}")` : "(its image could not be confirmed)";
       throw new FailureError(
@@ -1359,10 +1222,9 @@ async function bootVegaImpl(params: {
     await stopVvd();
   }
 
-  // One shared boot budget across both stages: startVvd consumes part of
-  // bootTimeoutMs, so waitForVvdRunning gets only the time remaining rather than
-  // the full value again. Otherwise the budget is spent twice and the worst-case
-  // wall-clock before a boot failure surfaces is ~2x the requested deadline.
+  // One shared budget across both stages: startVvd consumes part of
+  // bootTimeoutMs, so waitForVvdRunning gets only what remains — otherwise the
+  // worst case before a boot failure surfaces is ~2x the requested deadline.
   const bootDeadline = Date.now() + params.bootTimeoutMs;
   await startVvd({
     timeoutSeconds: Math.ceil(params.bootTimeoutMs / 1_000),
@@ -1383,10 +1245,9 @@ function bootVega(params: {
   bootTimeoutMs: number;
   force?: boolean;
 }): Promise<VegaBootResult> {
-  // Key the coalescing on `force` too: a `force:true` boot does a stop+start
-  // restart, so it must NOT join an in-flight non-force boot (which would skip
-  // the restart and hand back the stale device). Two same-mode boots of the same
-  // image still share one promise.
+  // Key the coalescing on `force` too: a force boot does a stop+start restart, so
+  // it must not join an in-flight non-force boot that would skip the restart and
+  // hand back the stale device.
   const key = `${params.vvdImage}${params.force ? "force" : "normal"}`;
   const existing = inFlightVegaBoots.get(key);
   if (existing) return existing;

@@ -1,13 +1,10 @@
 import type { CDPClient } from "../utils/debugger/cdp-client";
 
 /**
- * Set the renderer's clipboard text. CDP doesn't expose the OS clipboard
- * directly — sim-server has access via NSPasteboard on iOS, but for Chromium
- * we have to go through the renderer's `navigator.clipboard.writeText`.
- *
- * That API requires the document to have user-activation focus (Chromium's
- * security model), so we first force-focus the page via Page.bringToFront and
- * fall back to a document.execCommand("copy") trick if writeText is blocked.
+ * Set the renderer's clipboard text. CDP has no clipboard domain, so the write
+ * goes through the page's `navigator.clipboard.writeText`, which needs a
+ * focused document — hence the Page.bringToFront, and the execCommand
+ * fallback for when the write is rejected anyway.
  */
 export async function setClipboardText(cdp: CDPClient, text: string): Promise<void> {
   try {
@@ -16,9 +13,8 @@ export async function setClipboardText(cdp: CDPClient, text: string): Promise<vo
     /* not always available; non-fatal */
   }
 
-  // Encode the text as a JS string literal so embedded quotes/newlines round-
-  // trip safely through Runtime.evaluate. JSON.stringify is the safest
-  // serializer here — it covers backslashes, quotes, control chars, unicode.
+  // A JSON literal survives embedding in the evaluated source: quotes, newlines,
+  // control chars and unicode all come back intact.
   const literal = JSON.stringify(text);
   const script = `(async () => {
     const text = ${literal};
@@ -51,11 +47,8 @@ export async function setClipboardText(cdp: CDPClient, text: string): Promise<vo
   )) as { result?: { value?: { ok?: boolean; error?: string } }; exceptionDetails?: unknown };
   const result = out.result?.value;
   if (!result?.ok) {
-    // Plain Error, not a classified FailureError: setClipboardText is only
-    // reached via the chromium-server Express route (POST /api/clipboard/text),
-    // which catches this and responds `res.status(500).json({ error })` — the
-    // structured signal is dropped before any registry boundary, so a code here
-    // could never reach telemetry.
+    // Plain Error, not FailureError: the only caller, the POST /api/clipboard/text
+    // route, flattens this to a 500 `{ error }`, so a failure code would be lost.
     throw new Error(
       `Chromium clipboard set failed: ${result?.error ?? "renderer rejected the write"}`
     );
@@ -63,12 +56,9 @@ export async function setClipboardText(cdp: CDPClient, text: string): Promise<vo
 }
 
 /**
- * Sim-server has bidirectional clipboard sync (OS ↔ device). On Chromium the
- * direction that matters is "set the renderer's clipboard from a tool call",
- * which `setClipboardText` covers. A true sync would require the Chromium app
- * to opt in via main-process IPC — outside what CDP can offer. This is a
- * no-op stub that records the desired state so future native-side coordination
- * has a place to hook in.
+ * No-op stub: real OS ↔ device sync would need the Chromium app to opt in via
+ * main-process IPC, which CDP cannot reach, so the requested state is only
+ * recorded for a future native bridge.
  */
 export class ClipboardSyncState {
   private enabled = false;

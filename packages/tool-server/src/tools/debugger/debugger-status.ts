@@ -54,7 +54,7 @@ Use when you need to verify connectivity before using other debugger tools. Neve
     zodSchema,
     capability: DEBUGGER_TOOL_CAPABILITY,
     // Resolved manually in execute so a not-connected precondition becomes a
-    // structured result instead of a service-resolution tool failure.
+    // structured result instead of a tool failure.
     services: () => ({}),
     async execute(_services, params, ctx) {
       try {
@@ -62,13 +62,13 @@ Use when you need to verify connectivity before using other debugger tools. Neve
         await api.sourceMaps.waitForPending();
         if (!api.cdp.isConnected()) {
           // Socket-state gate: never report status:"connected" over a socket
-          // that is no longer OPEN. (An OPEN socket with a hung runtime still
-          // reports connected — see the skill's REQUEST_TIMEOUT guidance.)
+          // that is not OPEN. An OPEN socket with a hung runtime still reports
+          // connected — that case surfaces as DEBUGGER_CDP_REQUEST_TIMEOUT.
           const isChromium = params.device_id?.startsWith(CHROMIUM_ID_PREFIX) ?? false;
           if (isChromium) {
-            // The cdp belongs to the ChromiumCdp dependency (a wrapper dispose
-            // cannot heal it), and the only window where it is not OPEN while
-            // this service is RUNNING is a tab-switch reconnect — transient.
+            // The cdp belongs to the ChromiumCdp dependency, so a wrapper
+            // dispose cannot heal it; the only non-OPEN window while this
+            // service is RUNNING is a transient tab-switch reconnect.
             const result = buildNotConnected(
               "reconnecting",
               new Error("CDP socket is reconnecting (tab switch in progress)"),
@@ -78,20 +78,16 @@ Use when you need to verify connectivity before using other debugger tools. Neve
             return result;
           }
           // Metro path owns its CDPClient: discard the stale node so the next
-          // call reconnects fresh. This branch fires when the WebSocket is
-          // CLOSING but the close event has not dispatched yet (the terminated
-          // cascade otherwise removes the node first). Tradeoff acknowledged:
-          // dispose closes the LogFileWriter, which DELETES the captured log
-          // file from disk — including a path a prior debugger-log-registry
-          // call returned. That loss is the price of a fresh reconnect;
-          // debugger-log-registry itself never triggers it (no socket gate
-          // there, see its comment). The concurrent terminated cascade may win
-          // the race and remove the node first; that end state is what we
-          // wanted, so a failed dispose is absorbed.
+          // call reconnects fresh. Tradeoff: dispose closes the LogFileWriter,
+          // which DELETES the captured log file — including a path a prior
+          // debugger-log-registry call returned (that tool has no socket gate,
+          // so it never triggers this). A concurrent terminated cascade may
+          // remove the node first; that end state is what we wanted, so a
+          // failed dispose is absorbed.
           //
           // Track BEFORE disposing: dispose forgets the device alias, and the
           // outcome's platform classifies through it — tracking after would
-          // misreport a forwarded logicalDeviceId's platform (shape fallback).
+          // misreport a forwarded logicalDeviceId's platform.
           trackDebuggerOutcome("debugger-status", "stale_connection", params, ctx);
           const ref = debuggerServiceRef(params);
           await registry.disposeService(typeof ref === "string" ? ref : ref.urn).catch(() => {});
