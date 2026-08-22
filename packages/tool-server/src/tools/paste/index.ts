@@ -7,21 +7,16 @@ import { makeIosImpl, makeIosRemoteImpl } from "./platforms/ios";
 import { makeAndroidImpl } from "./platforms/android";
 
 const capability: ToolCapability = {
-  // Simulators only. A physical iPhone's pasteboard is reachable through the
-  // same simulator-server endpoint, but the paste keystroke is not verified
-  // over the CoreDevice HID path, so `device` stays off until it is.
   apple: { simulator: true },
-  // A remote simulator pastes through the MoQ transport's existing paste
-  // primitive (device pasteboard + ⌘V on the remote host).
+  // A remote sim pastes over the MoQ transport (`simctl pbcopy` + ⌘V); the HTTP
+  // clipboard route does not exist there.
   appleRemote: { simulator: true },
-  // Emulators only: the clipboard is set through the emulator's gRPC
-  // endpoint, which a physical phone does not have. `unknown` is admitted
-  // because an unresolved serial may still be an emulator — the
-  // simulator-server refuses a phone either way.
+  // Emulators only: the clipboard is set through the emulator's gRPC endpoint,
+  // which a physical phone does not have. `unknown` is admitted because an
+  // unresolved serial may still be an emulator.
   android: { emulator: true, unknown: true },
-  // No `chromium`: the renderer can only reach the HOST clipboard, so a paste
-  // there would overwrite whatever the user has copied. No `vega`: no
-  // clipboard API is exposed by the VVD tooling.
+  // No `chromium`: its only clipboard is the HOST one, so a paste would
+  // overwrite what the user copied. No `vega`: VVD exposes no clipboard API.
   //
   // TV targets are not separate platforms (an Apple TV simulator is
   // `ios`/`simulator`, an Android TV emulator `android`/`emulator`), so each
@@ -29,12 +24,10 @@ const capability: ToolCapability = {
 };
 
 /**
- * Per-device paste queue. A paste is two steps — fill the clipboard, then send
- * the paste keystroke — and neither platform serializes them: two concurrent
- * calls on one device let the second clipboard fill land before the first
- * keystroke, so one text is pasted twice and the other never, while both
- * report success. Chain calls per device id so each clipboard fill is
- * followed by its own keystroke before the next fill starts.
+ * A paste is two unserialized steps — fill the clipboard, then send the
+ * keystroke — so two concurrent calls on one device can let the second fill
+ * land before the first keystroke, pasting one text twice and the other never
+ * while both report success.
  */
 const pasteQueues = new Map<string, Promise<unknown>>();
 
@@ -77,9 +70,9 @@ Supports \`{{secret:<NAME>}}\` placeholders like \`keyboard\`; the value is neve
     capability,
     services: () => ({}),
     execute: async (services, params, options) => {
-      // Secret placeholders resolve here — inside execute, past every logging
-      // boundary and before the platform dispatch — so transcripts, the event
-      // log and recorded sequences only ever see the placeholder form.
+      // Resolve inside `execute`: after every logging boundary (transcript,
+      // event log and recorded sequences see only the placeholder) and before
+      // the dispatch.
       const { text, secrets } = resolveSecretPlaceholders(params.text);
       return serializedPerDevice(params.udid, async () => {
         if (secrets.length === 0) return dispatch(services, params, options);

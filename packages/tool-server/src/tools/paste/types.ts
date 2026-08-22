@@ -8,7 +8,7 @@ export interface PasteResult {
 }
 
 /**
- * Every branch resolves its simulator-server lazily (a TV target must never
- * spawn one), so the tool declares no services.
+ * No declared services: each branch resolves simulator-server lazily, after
+ * rejecting a TV target.
  */
 export type PasteServices = Record<string, never>;
