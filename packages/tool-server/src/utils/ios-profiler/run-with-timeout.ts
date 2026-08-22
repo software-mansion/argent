@@ -4,53 +4,35 @@ import { promisify } from "util";
 export const DEFAULT_EXEC_TIMEOUT_MS = 60_000;
 
 /**
- * `xctrace export` floods stderr with multi-megabyte progress/symbolication
- * noise (observed ~4.4 MB for a single `--toc` on a 122 MB trace, and far more
- * for a host-wide `--all-processes` capture). Node's default `maxBuffer` is
- * only 1 MiB, so the export command throws `ENOBUFS` before xctrace ever
- * evaluates the xpath — which previously masqueraded as a "schema not found"
- * failure. 256 MiB gives ample headroom.
+ * `xctrace export` writes multi-megabyte progress/symbolication noise to stderr,
+ * so Node's default 1 MiB `maxBuffer` kills the export with `ENOBUFS` before
+ * xctrace evaluates the xpath — which surfaced downstream as a bogus
+ * "no CPU schema found" failure.
  */
 export const DEFAULT_EXEC_MAX_BUFFER = 256 * 1024 * 1024;
 
 /**
- * Async wrapper around `execFile` that always supplies a timeout and a generous
- * `maxBuffer`, and never goes through a shell: the command and its arguments are
- * passed as a discrete argv array, so a value like a trace-file path can't be
- * re-parsed by /bin/sh (shell-injection). `exec`/`execSync` build a single
- * `/bin/sh -c` string and must not be used here.
+ * `execFile` wrapper that always supplies a timeout and a generous `maxBuffer`.
+ * Never use `exec`/`execSync` here: they build a `/bin/sh -c` string, so a value
+ * like a trace-file path would be re-parsed by the shell.
  *
- * This MUST stay async (`execFile` + `await`), never `execFileSync`. A single
- * `native-profiler-stop` runs four `xctrace export` passes (TOC discovery, CPU,
- * hangs, leaks); under the host-wide `--all-processes` capture each pass exports
- * tens of MB and the whole stop takes ~30s+. With a sync exec that work freezes
- * the tool-server's event loop for the full duration, so its `/tools` health
- * endpoint stops answering. The MCP client treats a health check that misses
- * its 2s window as a dead server, respawns a replacement tool-server, and
- * rotates the auth token — which 401s the very stop request that was about to
- * succeed. Keeping the export non-blocking leaves the event loop free to answer
- * health checks while xctrace runs.
- *
- * The `timeout` still caps a genuinely-stuck `xctrace` so it cannot hang the
- * stop forever; with async exec that timeout no longer also pins the event loop.
+ * It must also stay async, never `execFileSync`. One `native-profiler-stop` runs
+ * four `xctrace export` passes and takes ~30s+; a sync exec blocks the event loop
+ * for that whole time, so `GET /tools` misses the client's 2s health-check
+ * window, the client respawns the tool-server and rotates the auth token, and the
+ * in-flight stop request 401s.
  */
 export async function execFileAsyncWithTimeout(
   file: string,
   args: readonly string[],
   options: ExecFileOptions = {}
 ): Promise<{ stdout: string; stderr: string }> {
-  // `promisify` is resolved per-call (not at module load) so that test suites
-  // which `vi.doMock("child_process", …)` without an `execFile` export can still
-  // import this module — matching the original lazy `execSync` usage.
   const execFileAsync = promisify(nodeExecFile);
   const { stdout, stderr } = await execFileAsync(file, args as string[], {
     encoding: "utf-8",
     ...options,
-    // The timeout and maxBuffer are this wrapper's whole purpose (the
-    // event-loop-freeze and ENOBUFS guards documented above), so they are
-    // applied AFTER ...options — a caller can never silently weaken them by
-    // passing its own. maxBuffer stays a floor: a caller may raise it for an
-    // even larger capture, but never drop below the 256 MiB guard.
+    // Applied after ...options so a caller cannot weaken the guards; maxBuffer
+    // is a floor, so a caller may still raise it for a larger capture.
     timeout: DEFAULT_EXEC_TIMEOUT_MS,
     maxBuffer: Math.max(options.maxBuffer ?? 0, DEFAULT_EXEC_MAX_BUFFER),
   });
