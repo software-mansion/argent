@@ -10,16 +10,15 @@ export interface ShutdownTimings {
 }
 
 export interface ShutdownResult {
-  /** True if SIGINT alone was enough to bring the child down. */
+  /** No escalation past SIGINT was needed. */
   clean: boolean;
-  /** The signal that ultimately produced the exit (or was last attempted). */
+  /** Furthest signal the ladder reached. */
   signalUsed: "SIGINT" | "SIGTERM" | "SIGKILL";
 }
 
 /**
- * Resolves true if the child has already exited or exits within `ms`.
- * Resolves false on timeout. Driven by the `'exit'` event (delivered straight
- * from `waitpid()`), not by polling — no PID-reuse hazard.
+ * Resolves true if the child has exited within `ms`, false on timeout.
+ * Event-driven rather than PID polling, so a reused PID cannot fool it.
  */
 export function waitForChildExit(child: ChildProcess, ms: number): Promise<boolean> {
   if (child.exitCode !== null || child.signalCode !== null) {
@@ -39,9 +38,8 @@ export function waitForChildExit(child: ChildProcess, ms: number): Promise<boole
 }
 
 /**
- * Bring the child down via the SIGINT → SIGTERM → SIGKILL ladder. Each
- * `child.kill(...)` is sent through the handle, so a kernel-reused PID can
- * never be the recipient. Returns whether SIGINT alone was sufficient.
+ * SIGINT → SIGTERM → SIGKILL ladder. Signals go through the child handle, so a
+ * kernel-reused PID can never be the recipient.
  */
 export async function shutdownChild(
   child: ChildProcess,
@@ -54,7 +52,7 @@ export async function shutdownChild(
   try {
     child.kill("SIGINT");
   } catch {
-    // already dead
+    /* best-effort */
   }
   if (await waitForChildExit(child, t.graceMs)) {
     return { clean: true, signalUsed: "SIGINT" };
@@ -63,7 +61,7 @@ export async function shutdownChild(
   try {
     child.kill("SIGTERM");
   } catch {
-    // already dead
+    /* best-effort */
   }
   if (await waitForChildExit(child, t.termMs)) {
     return { clean: false, signalUsed: "SIGTERM" };
@@ -72,7 +70,7 @@ export async function shutdownChild(
   try {
     child.kill("SIGKILL");
   } catch {
-    // already dead
+    /* best-effort */
   }
   await waitForChildExit(child, t.killMs);
   return { clean: false, signalUsed: "SIGKILL" };

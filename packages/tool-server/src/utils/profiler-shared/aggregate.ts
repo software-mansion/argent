@@ -3,66 +3,61 @@ import type { CpuHotspot } from "./types";
 const MIN_WEIGHT_PERCENTAGE = 3;
 /**
  * Gap (ms) separating two activity bursts of the same (thread, function).
- * Single source of truth for both paths: iOS consumes it here (timestamp-derived
- * bursts below); Android injects `BURST_GAP_MS × 1e6` into cpu-hotspots.sql as
- * the `BURST_GAP_NS` token (pipeline/index.ts) so the two can't drift.
+ * Android injects `BURST_GAP_MS × 1e6` into cpu-hotspots.sql as the
+ * `BURST_GAP_NS` token (pipeline/index.ts) so the two paths can't drift.
  */
 export const BURST_GAP_MS = 500;
 
 /**
- * Generic aggregator input — one row per (thread, leaf-function) cluster.
+ * One row per (thread, leaf-function) cluster.
  *
- * iOS path: a pre-pass over CpuSample[] picks `dominantFunction`, normalises the
- * thread, and emits one row per sample (weightNs = the sample's weight); rows
- * sharing (dominantFunction, thread) are grouped here.
+ * iOS: one row per sample, dominant function picked and thread normalised in a
+ * pre-pass; rows sharing (dominantFunction, thread) are grouped here.
  *
- * Android path: PerfettoSQL returns one row per (thread, leaf_function) with
- * sample_count + SQL-computed bursts, expanded into one row with precomputed
- * burst/first/last/count and an empty `timestampsNs`. When the `precomputed*`
- * fields are set the aggregator skips the timestamp-derived block entirely.
+ * Android: PerfettoSQL already groups by (thread, leaf_function) and computes
+ * bursts, so rows carry `precomputedBursts` and an empty `timestampsNs`, and the
+ * timestamp-derived block is skipped.
  * rationale: utils/android-profiler/PIPELINE_DESIGN.md "2. The shared aggregator hoist"
  */
 export interface AggregatorInputRow {
-  /** Pre-picked dominant function. Caller is responsible for selecting it. */
+  /** Dominant function, picked by the caller. */
   dominantFunction: string;
   /**
    * Android-only: the mapping (loaded object) the dominant leaf lives in
-   * (`/kernel`, `/system/lib64/*.so`, …). Carried through to the emitted
-   * CpuHotspot for classifyNativeFrame. iOS leaves this undefined.
+   * (`/kernel`, `/system/lib64/*.so`, …). Carried to the emitted CpuHotspot for
+   * classifyNativeFrame.
    */
   dominantMapping?: string;
   /** Pre-normalised thread name (Main Thread / JS/Hermes / ...). */
   thread: string;
-  /** CPU weight in nanoseconds. */
   weightNs: number;
-  /** Timestamps of the underlying samples (for burst windowing + hang overlap). */
+  /** Sample timestamps, for burst windowing and hang overlap. */
   timestampsNs: number[];
-  /** App-level call chains observed in this group, with sample counts. */
+  /** App-level call chains, with sample counts. */
   callChains: { chain: string[]; count: number }[];
   /**
-   * Precomputed burst windows (Android, SQL-side), trace-relative ms. When set,
-   * the aggregator uses these instead of deriving bursts from `timestampsNs`.
+   * Burst windows precomputed SQL-side (Android), trace-relative ms. When set,
+   * bursts are not derived from `timestampsNs`.
    */
   precomputedBursts?: { startMs: number; endMs: number; sampleCount: number }[];
-  /** Precomputed first-sample time (trace-relative ms). Pairs with precomputedBursts. */
+  /** First-sample time (trace-relative ms). Pairs with precomputedBursts. */
   firstMs?: number;
-  /** Precomputed last-sample time (trace-relative ms). Pairs with precomputedBursts. */
+  /** Last-sample time (trace-relative ms). Pairs with precomputedBursts. */
   lastMs?: number;
-  /** Precomputed sample count. Pairs with precomputedBursts. */
+  /** Sample count. Pairs with precomputedBursts. */
   sampleCount?: number;
 }
 
 export interface AggregatorOptions {
   platform: "ios" | "android";
-  /** Timestamps that fell inside a UI hang window — used to set `duringHang`. */
+  /** Timestamps that fell inside a UI hang window — set `duringHang`. */
   hangSampleTimestamps?: Set<number>;
 }
 
 /**
- * Group AggregatorInputRow[] by (dominantFunction, thread), apply severity
- * banding (>15% RED, 3-15% YELLOW), drop everything below MIN_WEIGHT_PERCENTAGE,
- * and emit one CpuHotspot per surviving group. Burst windowing operates on the
- * union of all rows in the group.
+ * Group rows by (dominantFunction, thread), band severity (>15% RED, 3-15%
+ * YELLOW) and drop everything below MIN_WEIGHT_PERCENTAGE. Burst windowing
+ * operates on the union of all rows in the group.
  */
 export function aggregateCpuHotspots(
   rows: AggregatorInputRow[],
@@ -77,11 +72,7 @@ export function aggregateCpuHotspots(
     timestamps: number[];
     chainCounts: Map<string, { chain: string[]; count: number }>;
     thread: string;
-    /**
-     * Mapping of the group's dominant leaf (Android). Invariant per
-     * dominantFunction (which is part of the group key), so the first row's
-     * value is the group's value. Undefined on iOS.
-     */
+    /** Mapping of the group's dominant leaf (Android); first row of the group wins. */
     dominantMapping?: string;
     /** True once any contributing row carried precomputed bursts (Android). */
     precomputed: boolean;
@@ -162,8 +153,8 @@ export function aggregateCpuHotspots(
     let burstWindows: { startMs: number; endMs: number; sampleCount: number }[];
 
     if (acc.precomputed) {
-      // Android: bursts/first/last were computed SQL-side. Sort by start so
-      // the display order matches the timestamp-derived path.
+      // Android: bursts/first/last come from SQL. Sort by start so the display
+      // order matches the timestamp-derived path.
       firstMs = acc.firstMs;
       lastMs = acc.lastMs;
       burstWindows = [...acc.precomputedBursts].sort((a, b) => a.startMs - b.startMs);
@@ -216,8 +207,7 @@ export function aggregateCpuHotspots(
       duringHang,
       timeRangeMs: { first: firstMs, last: lastMs },
       burstWindows,
-      // Only emit when present (Android). Omitting the key on iOS keeps the iOS
-      // hotspot object shape byte-identical to before this change.
+      // Omit the key on iOS rather than emitting `dominantMapping: undefined`.
       ...(acc.dominantMapping !== undefined ? { dominantMapping: acc.dominantMapping } : {}),
     });
   }
