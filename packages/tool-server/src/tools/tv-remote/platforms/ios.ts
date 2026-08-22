@@ -4,12 +4,9 @@ import type { RemoteButton } from "../../../utils/vega-input";
 import type { TvRemoteParams, TvRemoteResult } from "../types";
 import { pressFocusRemote } from "./focus-remote";
 
-// Media-transport / volume keys are inert on the tvOS *simulator*: its HID stack
-// honors only the USB keyboard page (0x07, the D-pad/select/back/menu/home core)
-// and the Indigo button channel — Consumer Control (0x0C) events are silently
-// dropped, so injecting them reports success while nothing happens. Reject them
-// up front rather than lie. (playPause survives — it rides the keyboard Space
-// fallback in the daemon. These keys DO work on Android TV via adb keyevents.)
+// The tvOS simulator's HID stack silently drops media-transport / volume keys:
+// injecting them reports success while nothing happens, so reject them up front
+// rather than lie. They do work on Android TV.
 const APPLE_TV_UNSUPPORTED: ReadonlySet<RemoteButton> = new Set([
   "rewind",
   "fastForward",
@@ -20,9 +17,8 @@ const APPLE_TV_UNSUPPORTED: ReadonlySet<RemoteButton> = new Set([
   "mute",
 ]);
 
-// Apple TV (tvOS) simulator. Classifies as platform "ios" by UDID shape; the
-// tv-control daemons inject Siri-remote HID events. Delegates to the shared
-// focus-driven remote (resolveTvApi rejects a non-tvOS simulator).
+// Apple TV: tvOS UDIDs classify as platform "ios" by shape, so this branch takes
+// them and `resolveTvApi` rejects the non-tvOS ones.
 export function makeIosImpl(
   registry: Registry
 ): PlatformImpl<Record<string, unknown>, TvRemoteParams, TvRemoteResult> {
