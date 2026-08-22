@@ -51,9 +51,7 @@ import { bootElectronApp, type ElectronBootResult } from "./boot-electron";
 const execFileAsync = promisify(execFile);
 
 // The exactly-one check over `udid`/`avdName`/`vvdImage`/`electronAppPath` lives in
-// `execute` rather than `.refine()`: refine returns a ZodEffects, and
-// `ToolDefinition.zodSchema` accepts only a ZodObject. Each field's `.describe()`
-// restates the constraint for MCP clients.
+// `execute`, so each field's `.describe()` restates the constraint for MCP clients.
 const zodSchema = z.object({
   udid: z
     .string()
