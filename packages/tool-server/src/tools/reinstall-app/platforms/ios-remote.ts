@@ -4,10 +4,8 @@ import { simctlInstall, simctlUninstall } from "../../../utils/sim-remote";
 import type { ReinstallAppParams, ReinstallAppResult, ReinstallAppServices } from "../types";
 
 /**
- * Remote analogue of the iOS impl. `sim-remote simctl install` uploads the
- * local `.app` to the orchestrator over QUIC, so this works against a remote
- * sim with no extra staging — the developer points at the same on-disk path
- * they'd use locally.
+ * Remote analogue of the iOS impl: `sim-remote simctl install` uploads the local
+ * `.app` to the orchestrator, so the same on-disk path works against a remote sim.
  */
 export const iosRemoteImpl: PlatformImpl<
   ReinstallAppServices,
