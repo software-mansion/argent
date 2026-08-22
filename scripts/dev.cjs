@@ -2,16 +2,7 @@
 "use strict";
 
 /**
- * Full dev mode — no packing, no global install needed.
- *
- * What it does:
- *   1. Builds native devtools dylibs (libArgentInjectionBootstrap, libNativeDevtoolsIos, libKeyboardPatch)
- *   2. Builds the dispatcher TypeScript (tsc only, no esbuild bundles)
- *   3. Sets up packages/argent/bin/ and packages/argent/dist/ for local use
- *   4. Patches supported editor MCP configs to point argent at the local dist
- *   5. Starts the tool-server from source via ts-node (no build needed)
- *   6. Writes ~/.argent/tool-server.json so the local MCP picks it up
- *   7. On exit: restores patched editor configs and stops the tool-server
+ * Full dev mode — runs argent from this checkout: no packing, no global install.
  *
  * Usage:
  *   npm run dev
@@ -33,8 +24,6 @@ const CLAUDE_JSON = path.join(os.homedir(), ".claude.json");
 const CURSOR_DIR = path.join(os.homedir(), ".cursor");
 const CURSOR_MCP_JSON = path.join(CURSOR_DIR, "mcp.json");
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function readJson(filePath) {
   if (!fs.existsSync(filePath)) return {};
@@ -62,18 +51,15 @@ async function waitForHttp(url, timeoutMs = 20_000) {
       const res = await fetch(url, { signal: AbortSignal.timeout(1000) });
       if (res.ok) return true;
     } catch {
-      /* not up yet — keep polling until the deadline */
+      /* not up yet */
     }
     await new Promise((r) => setTimeout(r, 400));
   }
   return false;
 }
 
-// ── Step 1: Build native devtools dylibs (macOS only) ───────────────────────
-
-// Dylibs are macOS-only at runtime (DYLD_INSERT_LIBRARIES into iOS Simulator)
-// and macOS-only at build time (Xcode). Skip on Linux/Windows so a contributor
-// without `argent-private` SSH access can still run `npm run dev`.
+// Dylibs need Xcode to build and DYLD_INSERT_LIBRARIES into the iOS Simulator
+// to run, so non-macOS hosts skip this and still get a usable dev setup.
 if (process.platform === "darwin") {
   const DYLIBS_DIR = path.join(NATIVE_DEVTOOLS_PKG, "dylibs");
   const DYLIBS_EXIST = fs.existsSync(path.join(DYLIBS_DIR, "libNativeDevtoolsIos.dylib"));
@@ -87,13 +73,12 @@ if (process.platform === "darwin") {
     "NativeDevtoolsIos"
   );
 
-  // Try to init the submodule and rebuild. Failure is non-fatal if pre-built
-  // dylibs are already present — developers without argent-private access can
-  // still work on Argent using the committed binaries.
+  // Non-fatal when pre-built dylibs are already present, so contributors
+  // without argent-private access can still run dev.
   let submoduleReady = false;
   try {
-    // Preserve an existing argent-private checkout so local branch switches
-    // are not reset back to the superproject's recorded gitlink on every dev run.
+    // Preserve an existing argent-private checkout so a local branch switch is
+    // not reset to the superproject's recorded gitlink on every dev run.
     if (!fs.existsSync(PRIVATE_NATIVE_DEVTOOLS_SRC)) {
       execSync("git submodule update --init packages/argent-private", {
         cwd: ROOT,
@@ -126,8 +111,6 @@ if (process.platform === "darwin") {
   console.log(`⊘ Skipping native devtools dylibs build (macOS-only on ${process.platform})\n`);
 }
 
-// ── Step 2: Build MCP TypeScript ─────────────────────────────────────────────
-
 console.log("Building dispatcher TypeScript...");
 execSync("npm run build:dispatcher -w @swmansion/argent", {
   cwd: ROOT,
@@ -135,20 +118,13 @@ execSync("npm run build:dispatcher -w @swmansion/argent", {
 });
 console.log("✓ Dispatcher TypeScript built\n");
 
-// ── Step 3: Set up packages/argent/bin/ and skills/rules/agents ──────────────
-
-// Copy the simulator-server binary for the current host platform into the
-// platform-keyed subdir the runtime resolver looks at. Mirrors bundle-tools.cjs
-// but only for the current host's key — dev iterations don't need every
-// host's binary alongside. The key mirrors hostPlatformKey() in
-// @argent/native-devtools-ios (process.platform, except "linux-arm64" on
-// arm64 Linux).
+// Only the current host's key, unlike bundle-tools.cjs which copies every
+// supported host's binary. Mirrors hostPlatformKey() in
+// @argent/native-devtools-ios.
 const HOST_PLATFORM_KEY =
   process.platform === "linux" && process.arch === "arm64" ? "linux-arm64" : process.platform;
 const BIN_DIR = path.join(ARGENT_PKG, "bin", HOST_PLATFORM_KEY);
-// win32 ships a PE `.exe` (simulator-server.exe); every other host an
-// extensionless binary. Mirrors simulatorServerBinaryName() in
-// @argent/native-devtools-ios and bundle-tools.cjs.
+// Mirrors simulatorServerBinaryName() in @argent/native-devtools-ios.
 const BIN_BASENAME = process.platform === "win32" ? "simulator-server.exe" : "simulator-server";
 const BIN_SRC = path.join(NATIVE_DEVTOOLS_PKG, "bin", HOST_PLATFORM_KEY, BIN_BASENAME);
 const BIN_DEST = path.join(BIN_DIR, BIN_BASENAME);
@@ -178,8 +154,8 @@ for (const [srcName, destName] of [
 }
 console.log("✓ Copied skills/rules/agents");
 
-// Stub tool-server.cjs — the launcher won't use it as long as the dev server
-// is registered in the state file, but it needs to exist to avoid a crash.
+// Dev never builds the esbuild bundle, and the launcher errors out when this
+// path is missing.
 const STUB = path.join(ARGENT_PKG, "dist", "tool-server.cjs");
 if (!fs.existsSync(STUB)) {
   fs.mkdirSync(path.dirname(STUB), { recursive: true });
@@ -215,8 +191,6 @@ function restoreMcpEntry(configPath, originalEntry, existedBefore) {
   writeJson(configPath, config);
 }
 
-// ── Step 4: Patch editor MCP configs to use local MCP dist ───────────────────
-
 const LOCAL_MCP_ENTRY = path.join(ARGENT_PKG, "dist", "cli.js");
 const LOG_FILE = path.join(STATE_DIR, "mcp-calls.log");
 
@@ -232,11 +206,9 @@ const devMcpEntry = {
   type: "stdio",
   command: "node",
   args: [LOCAL_MCP_ENTRY, "mcp"],
-  // Point the dev MCP straight at the running dev tool-server. Without this
-  // it calls ensureToolsServer(), which now treats the tokenless dev state
-  // as stale, SIGTERMs the dev server and tries to spawn the throwing dev
-  // stub — breaking `npm run dev`. The dev server runs auth-disabled, so no
-  // ARGENT_AUTH_TOKEN is needed here.
+  // Route the dev MCP at the running dev tool-server; without it the MCP
+  // auto-spawns dist/tool-server.cjs, which in dev is the throwing stub. The
+  // dev server runs auth-disabled, so no ARGENT_AUTH_TOKEN.
   env: { ARGENT_MCP_LOG: LOG_FILE, ARGENT_TOOLS_URL: `http://127.0.0.1:${PORT}` },
 };
 
@@ -250,8 +222,7 @@ if (shouldPatchCursor) {
   cursorConfig.mcpServers.argent = {
     command: "node",
     args: [LOCAL_MCP_ENTRY, "mcp"],
-    // Same env as the Claude entry (incl. ARGENT_TOOLS_URL) so Cursor's dev
-    // MCP also reuses the running dev tool-server instead of killing it.
+    // Same env as the Claude entry, so Cursor's MCP reuses the dev tool-server too.
     env: devMcpEntry.env,
   };
   writeJson(CURSOR_MCP_JSON, cursorConfig);
@@ -260,14 +231,11 @@ if (shouldPatchCursor) {
   console.log("• Skipped Cursor patch (no ~/.cursor directory found)\n");
 }
 
-// ── Cleanup on exit ───────────────────────────────────────────────────────────
-
 let toolServerPid = null;
 
 function cleanup() {
   console.log("\nCleaning up...");
 
-  // Stop tool-server
   if (toolServerPid && isProcessAlive(toolServerPid)) {
     process.kill(toolServerPid, "SIGTERM");
   }
@@ -277,7 +245,6 @@ function cleanup() {
     /* state file already absent — nothing to remove */
   }
 
-  // Restore editor configs
   restoreMcpEntry(CLAUDE_JSON, originalArgentEntry, claudeConfigExists);
   console.log("✓ Restored ~/.claude.json");
   if (shouldPatchCursor) {
@@ -298,8 +265,6 @@ process.on("SIGTERM", () => {
 process.on("exit", cleanup);
 
 async function main() {
-  // ── Step 5: Kill any existing registered tool-server ───────────────────────
-
   fs.mkdirSync(STATE_DIR, { recursive: true });
   const existingState = readJson(STATE_FILE);
   if (existingState.pid && isProcessAlive(existingState.pid)) {
@@ -312,8 +277,6 @@ async function main() {
   } catch {
     /* state file already absent — nothing to remove */
   }
-
-  // ── Step 6: Start tool-server from source ──────────────────────────────────
 
   console.log(`Starting dev tool-server on port ${PORT}...`);
 
@@ -335,8 +298,6 @@ async function main() {
     }
   });
 
-  // ── Step 7: Wait for tool-server to be ready ───────────────────────────────
-
   process.stdout.write("Waiting for tool-server");
   const ready = await waitForHttp(`http://127.0.0.1:${PORT}/tools`);
   if (!ready) {
@@ -346,16 +307,12 @@ async function main() {
   }
   console.log(" ready.");
 
-  // ── Step 8: Write state file ────────────────────────────────────────────────
-
   writeJson(STATE_FILE, {
     port: PORT,
     pid: toolServerPid,
     startedAt: new Date().toISOString(),
     bundlePath: "dev",
   });
-
-  // ── Done ────────────────────────────────────────────────────────────────────
 
   console.log(`
 ✓ Dev environment ready
@@ -371,7 +328,6 @@ async function main() {
 Press Ctrl+C to stop and restore global argent.
 `);
 
-  // Keep alive until tool-server exits or Ctrl+C
   await new Promise((resolve) => {
     toolServer.on("exit", resolve);
   });

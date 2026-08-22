@@ -1,22 +1,18 @@
 #!/usr/bin/env bash
 # End-to-end CI smoke test for argent's Vega (Fire TV) tools, built from THIS
-# branch's source. Runs INSIDE the vega-virtual-device-host container with the
-# VVD already booted and ready — i.e. as the `script:` of
-# finloop/vega-virtual-device-action (see .github/workflows/vega-vvd-e2e.yml).
+# branch's source. Runs as the `script:` of finloop/vega-virtual-device-action,
+# inside its container with the VVD already booted
+# (.github/workflows/vega-vvd-e2e.yml).
 #
-# It drives the tools through the tool-server's HTTP API (the same way
-# wayland-e2e.yml drives the Android path), so it exercises the real code:
+# Drives the tools through the tool-server's HTTP API, so it exercises the real
+# code:
 #   - list-devices       → discovers the VVD and its serial
-#   - screenshot         → `adb emu screenrecord` (host-side, no native binary)
+#   - screenshot         → `adb emu screenrecord` (PNG written host-side)
 #   - tv-remote          → `adb shell inputd-cli` button injection
 #   - describe           → `adb forward` + on-device automation toolkit
 #   - keyboard           → `adb shell inputd-cli send_text`
 #   - restart-app / reinstall-app
 #                        → the `vega`/`kepler` CLI
-#
-# There is intentionally no vega-fast-cli probe anymore: the host binary is gone,
-# so the arch/glibc question it raised is moot. `tv-remote` working here proves the
-# adb/inputd-cli replacement drives the device.
 #
 # Prereq: the workspace is already built (`npm ci` + `tsc --build` on the runner,
 # bind-mounted in at /workspace), so `packages/tool-server/dist/index.js` exists.
@@ -43,17 +39,15 @@ fail() { echo "FAIL: $*"; FAILURES+=("$*"); }
 group() { echo "::group::$*"; }
 endg() { echo "::endgroup::"; }
 
-# Call a tool over HTTP: post_tool <id> <json-args>. Prints the raw response.
+# post_tool <id> <json-args> — prints the raw response.
 post_tool() {
   curl -fsS -m 60 -X POST "${TOOLS_URL}/tools/$1" \
     -H 'Content-Type: application/json' -d "$2" 2>/dev/null
 }
 
-# Dig a dotted field out of a tool response, tolerating the `{data:{…}}` wrapper.
-# The JSON is piped on stdin (not passed as argv) so large responses don't trip
-# "Argument list too long". The program goes via `-c` (stdin is the data), with
-# the dotted path as argv[1].
-# jget '<json>' path.to.field
+# jget <json> path.to.field — dotted lookup, tolerating the `{data:{…}}` wrapper.
+# The JSON is piped on stdin, not passed as argv, so large responses don't trip
+# "Argument list too long".
 jget() {
   printf '%s' "$1" | python3 -c '
 import sys, json
@@ -71,9 +65,8 @@ print(node if not isinstance(node, (dict, list)) else json.dumps(node))
 ' "$2"
 }
 
-# PNG non-black check: a black capture decompresses to ~all-zero bytes (~0.000);
-# the kepler app is a DARK media UI that renders ~0.01+, so the floor is 0.004
-# (matches the action repo's navigation script). Prints WxH + the fraction.
+# PNG non-black check: a black capture decompresses to ~all-zero bytes; the dark
+# kepler media UI renders ~0.01+, so the floor sits at 0.004.
 NONBLACK_MIN_FRAC="${NONBLACK_MIN_FRAC:-0.004}"
 nonblack() {
   python3 - "$1" "$NONBLACK_MIN_FRAC" <<'PY'
@@ -98,7 +91,6 @@ sys.exit(0 if frac > float(sys.argv[2]) else 1)
 PY
 }
 
-# ── Environment ─────────────────────────────────────────────────────────────
 group "Environment"
 echo "node $(node -v 2>/dev/null || echo '<none>')"
 adb version 2>/dev/null | head -1 || echo "adb <none>"
@@ -110,12 +102,10 @@ else
 fi
 endg
 
-# ── Start the tool-server (built from this branch) ──────────────────────────
-# The container's Node (20.x) is older than 22.12, where `require(esm)` is on by
-# default. tool-server compiles to CommonJS but depends on the ESM-only
-# `@argent/configuration-core`, so the raw `tsc` dist needs
-# `--experimental-require-module` (backported to Node 20.17+) to load it. The
-# production esbuild bundle inlines the dep and doesn't need this.
+# The CommonJS `tsc` dist requires the ESM-only `@argent/configuration-core`, so
+# on the container's Node 20 it needs `--experimental-require-module`; that flag
+# is implicit only from Node 22.12. The production esbuild bundle inlines the dep
+# and doesn't need it.
 group "Start tool-server"
 : > /tmp/tool-server.log
 setsid env ARGENT_PORT="$PORT" node --experimental-require-module packages/tool-server/dist/index.js start \
@@ -129,7 +119,6 @@ if [ -z "$ready" ]; then echo "ERROR: tool-server not ready"; cat /tmp/tool-serv
 echo "tool-server up at ${TOOLS_URL}"
 endg
 
-# ── adb + install/launch the kepler app ─────────────────────────────────────
 group "adb sees the VVD"
 adb start-server >/dev/null 2>&1 || true
 timeout 60 adb wait-for-device || { echo "ERROR: adb never saw the device"; exit 1; }
@@ -140,12 +129,10 @@ group "Install + launch kepler video app"
 VPKG_ABS="$(readlink -f "$KEPLER_VPKG" 2>/dev/null || echo "$KEPLER_VPKG")"
 [ -f "$VPKG_ABS" ] || { echo "ERROR: fixture vpkg not found at ${VPKG_ABS}"; exit 1; }
 echo "vpkg: ${VPKG_ABS} ($(stat -c%s "$VPKG_ABS" 2>/dev/null || echo '?') bytes)"
-# `vega device <sub>` targets the single connected VVD (no -d; see vega-cli.ts).
 # adb seeing the device isn't enough: the Vega device agent attaches a beat after
-# adb, and the boot action's non-black-frame gate can report ready before it — so
-# a single `vega device install-app` can hit "No connected Vega devices". Wait for
-# `vega virtual-device status` running:true (the same signal argent's isVvdRunning
-# uses), then retry the install to ride out a late attach.
+# adb, so an early `vega device install-app` hits "No connected Vega devices".
+# Wait for `vega virtual-device status` running:true, then retry the install to
+# ride out a late attach.
 for attempt in $(seq 1 30); do
   if vega virtual-device status 2>/dev/null | grep -qE '"running"[[:space:]]*:[[:space:]]*true'; then
     echo "VVD reports running"; break
@@ -177,7 +164,6 @@ done
 sleep 10
 endg
 
-# ── Discover the Vega serial via list-devices ───────────────────────────────
 group "Discover Vega device"
 SERIAL=""
 for attempt in $(seq 1 12); do
@@ -200,26 +186,22 @@ done
 echo "Vega serial: ${SERIAL}"
 endg
 
-# ── Relaunch through argent so the automation toolkit attaches ───────────────
-# The bootstrap launch above used the raw `vega device launch-app`, which does
-# NOT set the toolkit-enable flag. That flag is only read at app launch, so the
-# on-device introspection server never attaches and TEST 3 (describe) returns an
-# empty tree. argent's restart-app (re)asserts the flag, then terminate+launches
-# — the canonical way to make an app introspectable — so the toolkit attaches.
+# The bootstrap `vega device launch-app` above does NOT set the toolkit-enable
+# flag, which is read only at app launch, so describe would return an empty tree.
+# argent's restart-app asserts the flag, then terminate+launches.
 group "Relaunch via argent (attach automation toolkit)"
 resp="$(post_tool restart-app "$(printf '{"udid":"%s","bundleId":"%s"}' "$SERIAL" "$APP_ID")")" || resp=""
 echo "  restart-app response: ${resp:0:200}"
 sleep 10
 endg
 
-# ── TEST 1: screenshot (adb emu — arch-agnostic baseline) ───────────────────
 group "TEST screenshot"
 SHOT_BEFORE="${OUT_DIR}/kepler-before.png"
 captured=""
 for attempt in 1 2 3 4 5; do
   rm -f "$SHOT_BEFORE"
   resp="$(post_tool screenshot "$(printf '{"udid":"%s","scale":1}' "$SERIAL")")"
-  # The HTTP screenshot result is an image artifact: {data:{image:{hostPath,…}}}.
+  # The screenshot result is an image artifact: {data:{image:{hostPath,…}}}.
   src="$(jget "$resp" image.hostPath)"; [ -n "$src" ] || src="$(jget "$resp" path)"
   [ -n "$src" ] && [ -f "$src" ] && cp "$src" "$SHOT_BEFORE" 2>/dev/null
   if nonblack "$SHOT_BEFORE"; then captured=1; break; fi
@@ -234,10 +216,7 @@ else
 fi
 endg
 
-# ── TEST 2: tv-remote (adb inputd-cli — the headline) ───────────────────────
-# A path of D-pad presses navigates the kepler UI in one round-trip. Success =
-# the tool returns the full press count; failure surfaces the device error
-# (e.g. inputd-cli missing / no focused surface).
+# The whole D-pad path is injected in one adb round-trip.
 group "TEST tv-remote (adb inputd-cli)"
 REMOTE_ARGS="$(printf '{"udid":"%s","button":["down","right","right","select"]}' "$SERIAL")"
 echo "tv-remote args: ${REMOTE_ARGS}"
@@ -249,32 +228,27 @@ if [ -n "$count" ] && [ "$count" -ge 4 ] 2>/dev/null; then
 else
   fail "tv-remote did not inject the expected presses (count='${count}')"
 fi
-# Capture the post-navigation screen (best-effort).
+# Post-navigation screen; best-effort, not gated.
 resp="$(post_tool screenshot "$(printf '{"udid":"%s","scale":1}' "$SERIAL")")"
 src="$(jget "$resp" image.hostPath)"; [ -n "$src" ] || src="$(jget "$resp" path)"
 [ -n "$src" ] && [ -f "$src" ] && cp "$src" "${OUT_DIR}/kepler-after.png" 2>/dev/null && echo "saved ${OUT_DIR}/kepler-after.png"
 endg
 
-# ── TEST 3: describe (adb forward + on-device automation toolkit) ────────────
-# The element tree is the core of the Vega nav loop. The toolkit attaches at app
-# launch; retry to ride out a late attach (an empty tree is the relaunch hint).
+# The toolkit attaches only at app launch, so an empty tree is retried with a
+# relaunch to ride out a late attach.
 group "TEST describe"
 desc_ok=""
 for attempt in 1 2 3 4 5; do
   resp="$(post_tool describe "$(printf '{"udid":"%s"}' "$SERIAL")")" || resp=""
   src="$(jget "$resp" source)"
   desc="$(jget "$resp" description)"
-  # An empty / unreachable describe still returns source:"vega-automation" and a
-  # non-empty `description` (format-tree always emits the Source/Mode/ROOT header
-  # + the relaunch hint), so `src` and `-n desc` alone can't tell a real tree from
-  # a broken one. Require actual element lines *beyond* the ROOT header — i.e. the
-  # toolkit attached and produced on-screen content.
+  # An unreachable toolkit still returns source:"vega-automation" and a non-empty
+  # description (format-tree always emits the Source/Mode/ROOT header + hint), so
+  # only element lines beyond the ROOT header prove a real tree.
   elems="$(printf '%s\n' "$desc" | awk '/^ROOT /{seen=1; next} seen && NF {c++} END{print c+0}')"
   if [ "$src" = "vega-automation" ] && [ "${elems:-0}" -ge 1 ] 2>/dev/null; then desc_ok=1; break; fi
   echo "attempt ${attempt}: describe empty/not ready (element lines beyond header: ${elems:-0}); relaunch + retry..."
   echo "  response: ${resp:0:200}"
-  # describe's own recovery hint: the toolkit attaches only at app launch, so
-  # relaunch via restart-app (re-asserts the enable flag) to (re)attach it.
   post_tool restart-app "$(printf '{"udid":"%s","bundleId":"%s"}' "$SERIAL" "$APP_ID")" >/dev/null 2>&1 || true
   sleep 4
 done
@@ -285,9 +259,8 @@ else
 fi
 endg
 
-# ── TEST 4: keyboard (adb inputd-cli send_text) ─────────────────────────────
-# Smoke: the text path injects via inputd-cli without erroring and reports the
-# per-character count. No focused field is needed to exercise the channel.
+# No focused field is needed: this only checks that the send_text channel accepts
+# the text.
 group "TEST keyboard"
 resp="$(post_tool keyboard "$(printf '{"udid":"%s","text":"argent"}' "$SERIAL")")" || resp=""
 keys="$(jget "$resp" keys)"
@@ -299,7 +272,6 @@ else
 fi
 endg
 
-# ── TEST 5: restart-app (terminate + relaunch) ──────────────────────────────
 group "TEST restart-app"
 restarted=""
 for attempt in 1 2 3; do
@@ -317,9 +289,7 @@ fi
 sleep 5
 endg
 
-# ── TEST 6: reinstall-app (uninstall + install the .vpkg) ────────────────────
-# Runs last: it leaves the app freshly installed (and not running). Uses a longer
-# timeout for the install and retries the vega CLI's occasionally-racy handshake.
+# Runs last: it leaves the app freshly installed and not running.
 group "TEST reinstall-app"
 reinstalled=""
 for attempt in 1 2 3; do
@@ -338,7 +308,6 @@ else
 fi
 endg
 
-# ── Summary ─────────────────────────────────────────────────────────────────
 echo "::group::Summary"
 if [ "${#FAILURES[@]}" -eq 0 ]; then
   echo "PASS: all Vega tool checks passed against the kepler app on the VVD —"

@@ -1,31 +1,14 @@
 #!/usr/bin/env bash
-# Shared library for the full Argent E2E harness.
+# Shared library for the full Argent E2E harness, sourced by run-e2e.sh:
+# logging, the argent CLI wrapper, the tool driver, JSONL result recording and
+# assertion helpers.
 #
-# Sourced by run-e2e.sh and every phase module. Provides:
-#   - logging (log/warn/err/group)
-#   - the argent CLI wrapper (argent_cli) and tool driver (run_tool)
-#   - result recording to a JSONL log (pass/fail/skip) + counters
-#   - assertion helpers built on the proven contract:
-#       `argent run <tool>` exits 0 on success (JSON on stdout),
-#       non-zero on validation error / unknown tool / service failure.
-#   - a private tool-server lifecycle (own port + own HOME so it never
-#     collides with a foreign server on a shared machine)
-#
-# Every phase runs with a sandbox HOME ($E2E_HOME) so ~/.argent, MCP configs,
-# and the npm global prefix land in a throwaway dir, never the real machine.
-#
-# Requires: bash 4+, jq, python3, node, npm. (adb / xvfb / expo are checked
-# per-tier and gate with a recorded skip when absent.)
+# The assertions rest on `argent run <tool>` exiting 0 on success (result on
+# stdout) and non-zero on validation error, unknown tool or service failure.
 
-# ---------------------------------------------------------------------------
-# Strictness. Phases opt into this by sourcing us; we do NOT set -e globally
-# because assertions must keep running after an individual tool call fails.
-# ---------------------------------------------------------------------------
+# No `set -e`: assertions must keep running after an individual tool call fails.
 set -uo pipefail
 
-# ---------------------------------------------------------------------------
-# Colors (respect NO_COLOR / non-tty)
-# ---------------------------------------------------------------------------
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   C_RED=$'\033[31m'; C_GRN=$'\033[32m'; C_YEL=$'\033[33m'
   C_BLU=$'\033[34m'; C_DIM=$'\033[2m'; C_RST=$'\033[0m'
@@ -39,21 +22,14 @@ warn()  { printf '%s\n' "${C_YEL}! $*${C_RST}" >&2; }
 err()   { printf '%s\n' "${C_RED}✗ $*${C_RST}" >&2; }
 group() { printf '\n%s\n' "${C_BLU}==== $* ====${C_RST}" >&2; }
 
-# ---------------------------------------------------------------------------
-# Configuration derived from the environment exported by run-e2e.sh.
-# ---------------------------------------------------------------------------
 : "${E2E_JSONL:?E2E_JSONL must be set by run-e2e.sh}"
-# ARGENT_BIN (e.g. "/sandbox/bin/argent" or "node /path/dist/cli.js") is set by
-# run-e2e.sh AFTER the install decision — resolved lazily at call time below.
+# run-e2e.sh sets ARGENT_BIN only after the install decision, so every call site
+# below resolves it lazily.
 TOOL_TIMEOUT="${TOOL_TIMEOUT:-120}"                       # seconds per tool call
 E2E_OS="${E2E_OS:-$(uname -s | tr '[:upper:]' '[:lower:]')}"
 
-# ---------------------------------------------------------------------------
-# argent_cli — invoke the argent CLI with a timeout. Captures combined output
-# in CLI_OUT and the exit code as the return value. Never aborts the script.
-# The command is rebuilt from ARGENT_BIN each call so it tracks the value
-# run-e2e.sh sets after installing.
-# ---------------------------------------------------------------------------
+# argent_cli <args...> — run the CLI under timeout(1). Combined output lands in
+# CLI_OUT; the CLI's exit code is the return value.
 argent_cli() {
   local out rc cmd
   read -ra cmd <<< "${ARGENT_BIN:?ARGENT_BIN not set yet}"
@@ -62,10 +38,8 @@ argent_cli() {
   return "$rc"
 }
 
-# ---------------------------------------------------------------------------
 # run_tool <tool> [json-args] — drive one tool via `argent run`.
 # Sets: RT_RC (exit code), RT_JSON (stdout only), RT_ERR (stderr), RT_OUT (both).
-# ---------------------------------------------------------------------------
 run_tool() {
   local tool="$1" args="${2:-}"
   local errf cmd; errf=$(mktemp)
@@ -81,11 +55,8 @@ ${RT_ERR}"
   return "$RT_RC"
 }
 
-# ---------------------------------------------------------------------------
-# Result recording. One JSON object per test case appended to $E2E_JSONL, which
-# is the single source of truth: run-e2e.sh derives the totals and the exit code
-# from it with jq, so a phase that dies mid-way still has everything it recorded.
-# ---------------------------------------------------------------------------
+# One JSON object per case appended to $E2E_JSONL: run-e2e.sh derives the totals
+# and the exit code from it, so a phase that dies mid-way keeps what it recorded.
 
 _record() { # phase tool case status detail
   jq -nc \
@@ -111,16 +82,11 @@ skip() { # phase tool case reason
   printf '%s\n' "  ${C_YEL}∼${C_RST} ${C_DIM}$tool ($case): $detail${C_RST}" >&2
 }
 
-# ---------------------------------------------------------------------------
-# One-line summary of the last run_tool call, for a failure detail.
-#
-# timeout(1) kills the CLI before it writes anything, so RT_OUT is empty exactly
-# when the operator most needs to know what happened — a hung tool would
-# otherwise be recorded as a failure with a blank detail, indistinguishable from
-# one that reported nothing. Name the timeout instead. timeout reserves 124 for
-# a timeout, 125 for its own failure, 126 for a command it cannot invoke and 127
-# for one it cannot find.
-# ---------------------------------------------------------------------------
+# One-line summary of the last run_tool call, for a failure detail. A timed-out
+# call often leaves RT_OUT empty, and a blank detail is indistinguishable from a
+# tool that reported nothing — name the timeout instead. timeout(1) reserves 124
+# for a timeout, 125 for its own failure, 126 for a command it cannot invoke and
+# 127 for one it cannot find.
 rt_detail() { # [max-chars]
   local max="${1:-180}" body
   body="$(printf '%s' "$RT_OUT" | tr '\n' ' ' | sed 's/^ *//; s/ *$//' | cut -c1-"$max")"
@@ -135,11 +101,6 @@ rt_detail() { # [max-chars]
   esac
 }
 
-# ---------------------------------------------------------------------------
-# Assertion helpers (all take: phase tool case ...).
-# ---------------------------------------------------------------------------
-
-# The tool call must SUCCEED (rc 0).
 assert_ok() { # phase tool case json-args
   local phase="$1" tool="$2" case="$3" args="${4:-}"
   run_tool "$tool" "$args"
@@ -150,7 +111,7 @@ assert_ok() { # phase tool case json-args
   fi
 }
 
-# The tool call must SUCCEED and a jq filter over stdout must equal `expected`.
+# Succeeds, and a jq filter over stdout equals `expected`.
 assert_field() { # phase tool case json-args jq-filter expected
   local phase="$1" tool="$2" case="$3" args="$4" filter="$5" expected="$6"
   run_tool "$tool" "$args"
@@ -166,7 +127,7 @@ assert_field() { # phase tool case json-args jq-filter expected
   fi
 }
 
-# The tool call must SUCCEED and a jq boolean filter over stdout must be true.
+# Succeeds, and a jq filter over stdout is true.
 assert_true() { # phase tool case json-args jq-filter
   local phase="$1" tool="$2" case="$3" args="$4" filter="$5"
   run_tool "$tool" "$args"
@@ -182,10 +143,8 @@ assert_true() { # phase tool case json-args jq-filter
   fi
 }
 
-# The zod issue array a rejected call produces, or empty if the output holds
-# none. The CLI prints issues on STDERR — stdout carries only successful results
-# and is empty on a rejection — but both streams are searched so a tool that
-# reports on stdout is still checked rather than waved through.
+# Print the last call's zod issue array, searching stderr then stdout; returns 1
+# when neither stream carries one.
 zod_issues() {
   local s
   for s in "$RT_ERR" "$RT_JSON"; do
@@ -197,10 +156,9 @@ zod_issues() {
   return 1
 }
 
-# The tool call must FAIL (rc != 0). If `path` is given and the output carries
-# zod issues, one of them must name that path — a rejection blamed on a
-# different field means the tool refused this input for an unrelated reason and
-# the case proved nothing about the field it was built to exercise.
+# The tool call must FAIL (rc != 0). With `zod-path`, a structured rejection has
+# to name that path — one blamed on a different field proves nothing about the
+# field the case was built to exercise.
 assert_reject() { # phase tool case json-args [zod-path] [zod-code]
   local phase="$1" tool="$2" case="$3" args="$4" zpath="${5:-}" zcode="${6:-}"
   run_tool "$tool" "$args"
@@ -208,11 +166,9 @@ assert_reject() { # phase tool case json-args [zod-path] [zod-code]
     fail "$phase" "$tool" "$case" "expected rejection but tool SUCCEEDED"
     return
   fi
-  # Every call goes through timeout(1), which reserves 124 for a timeout, 125
-  # for its own failure, 126 for a command it cannot invoke and 127 for one it
-  # cannot find. In all four the schema never judged the input, so none is a
-  # rejection — counting them as one lets a hung server or a broken ARGENT_BIN
-  # report a fully green validation tier.
+  # A timeout, or a timeout(1) failure (125-127), means the schema never judged
+  # the input, so it is not a rejection — counting it as one lets a hung server
+  # or a broken ARGENT_BIN report a fully green validation tier.
   case "$RT_RC" in
     124) fail "$phase" "$tool" "$case" "timed out after ${TOOL_TIMEOUT}s — no verdict on the input"; return;;
     125|126|127) fail "$phase" "$tool" "$case" "tool never ran (timeout rc=$RT_RC) — no verdict on the input"; return;;
@@ -236,22 +192,19 @@ assert_reject() { # phase tool case json-args [zod-path] [zod-code]
   fi
 }
 
-# ---------------------------------------------------------------------------
-# Private tool-server lifecycle. Isolation comes from the sandbox HOME alone:
-# the server's state file lands in $E2E_HOME/.argent, so every `argent` call in
-# this run discovers our server and no foreign one. ARGENT_TOOLS_URL is
-# deliberately never set — see ensure_server below.
-# ---------------------------------------------------------------------------
+# Private tool-server lifecycle. Isolation is the sandbox HOME alone: the state
+# file lands in $E2E_HOME/.argent, so every `argent` call in this run discovers
+# our server and no foreign one.
+
 # Is a healthy tool-server discoverable for this install (via ~/.argent state)?
 server_running() {
   argent_cli server status --json || return 1
   printf '%s' "$CLI_OUT" | jq -e '.running==true and (.healthy==true or .alive==true)' >/dev/null 2>&1
 }
 
-# Ensure a tool-server is up. We do NOT pin a port or ARGENT_TOOLS_URL: the CLI
-# auto-spawns on demand and records the port in the sandbox ~/.argent state, so
-# every `argent run`/`tools`/`status` call discovers the same server. On a
-# shared machine this stays isolated because HOME is the sandbox.
+# Ensure a tool-server is up. Neither a port nor ARGENT_TOOLS_URL is pinned: the
+# CLI auto-spawns on demand and records the port in the sandbox ~/.argent state,
+# so every later `argent` call finds the same server.
 ensure_server() {
   server_running && return 0
   log "starting sandbox tool-server (detached, no-auth, auto-port)"
@@ -265,18 +218,18 @@ ensure_server() {
   return 1
 }
 
-# PNG "real pixels" floor, shared with drive-device.sh rationale.
+# Screenshot size floor — an all-zero framebuffer PNG is only ~3-7 KB. Same
+# default as scripts/e2e/drive-device.sh.
 MIN_SHOT_BYTES="${MIN_SHOT_BYTES:-20000}"
 
-# Capture a screenshot straight to a file via `argent run screenshot --out`
-# (the CLI renders screenshot artifacts as a "Saved screenshot: <path>" message
-# rather than JSON, so --out is the deterministic path). Returns 0 and sets
-# SHOT_PATH when the file exists and exceeds the real-pixels floor.
+# Capture a screenshot to a file. The CLI renders an image result as a
+# "Saved screenshot: <path>" line rather than JSON, so --out is the only
+# deterministic path. Returns 0 and sets SHOT_PATH when the file clears the floor.
 capture_screenshot() { # udid outfile
   local udid="$1" out="$2" cmd
   read -ra cmd <<< "${ARGENT_BIN:?}"
-  # Clear the previous call's results, or a capture that produces no file at all
-  # reports the size and path of the last one that succeeded.
+  # Globals persist: without this a capture that produces no file at all would
+  # report the previous success's path and size.
   SHOT_PATH=""; SHOT_SIZE=0; SHOT_RC=0
   rm -f "$out"
   timeout "$TOOL_TIMEOUT" "${cmd[@]}" run screenshot --udid "$udid" --out "$out" >/dev/null 2>&1

@@ -2,19 +2,19 @@
 # Full Argent E2E harness — top-level orchestrator.
 #
 # Starting from ONLY a `swmansion-argent-*.tgz`, this:
-#   0. installs from the tarball (global + local), runs init/uninstall/telemetry
+#   0. installs from the tarball (global + local), runs init/uninstall
 #   1. introspects the CLI (help, a `tools describe` per published tool, flags,
-#      server, link)
+#      telemetry, server, link)
 #   2. validates every tool's argument schema (missing/enum/type rejection)
 #   3. drives a happy-path of every applicable tool against real targets:
 #        - Android emulator      (Linux + Mac)
 #        - Chromium/Electron app (Linux + Mac)
 #        - React-Native debugger/profiler chain against Bluesky (Android)
 #
-# Everything runs under a sandbox HOME + npm prefix, so it never touches the
-# real machine's ~/.argent, MCP configs, or global packages. Results land in
-# scripts/e2e-full/results/ as a JSONL log + a markdown report; the process
-# exits non-zero if any hard assertion failed.
+# Unless --system is given, everything runs under a sandbox HOME + npm prefix
+# and leaves the real ~/.argent, MCP configs and global packages alone. Results
+# land in scripts/e2e-full/results/ as a JSONL log + a markdown report; the
+# process exits non-zero if any hard assertion failed.
 #
 # Usage:
 #   run-e2e.sh [--tgz PATH] [--phase a,b,c] [--skip-install] [--system]
@@ -27,9 +27,6 @@ set -uo pipefail
 E2E_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$E2E_ROOT/../.." && pwd)"
 
-# --------------------------------------------------------------------------
-# Defaults / arg parsing
-# --------------------------------------------------------------------------
 TGZ=""
 PHASES=""
 SKIP_INSTALL=0
@@ -38,13 +35,12 @@ KEEP=0
 export E2E_ANDROID_SERIAL="${E2E_ANDROID_SERIAL:-}"
 export E2E_ANDROID_AVD="${E2E_ANDROID_AVD:-}"
 
-# Print the header comment block, stopping at the first non-comment line, so the
-# help text cannot drift into printing code the way a pinned line range does.
+# Help text is the header block above. Stopping at the first non-comment line
+# means it can never drift into printing code, the way a pinned range would.
 usage() { sed -n '2,${/^#/!q; s/^# \{0,1\}//; p;}' "${BASH_SOURCE[0]}"; exit "${1:-0}"; }
 
-# A value-taking flag given without its value would otherwise read an unset $2
-# and die on "unbound variable" with no usage text — the least helpful response
-# to a plain typo, and the one the `*)` arm below already handles properly.
+# Without this, a value-taking flag given without its value reads an unset $2
+# and dies on "unbound variable" instead of printing usage.
 need_val() { [ "$1" -ge 2 ] || { echo "$2 needs a value" >&2; usage 1; }; }
 
 while [ $# -gt 0 ]; do
@@ -61,9 +57,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# A misspelled phase selects nothing, and a run that executes no phase records
-# no failure — so without this the harness reports "pass:0 fail:0" and exits 0,
-# announcing success for a release it never tested.
+# A misspelled phase would otherwise select nothing, and a run that executes no
+# phase records no failure: "pass:0 fail:0" and exit 0 for an untested release.
 ALL_PHASES="install introspection validation android chromium rn"
 for _p in ${PHASES//,/ }; do
   case " $ALL_PHASES " in
@@ -73,9 +68,6 @@ for _p in ${PHASES//,/ }; do
 done
 unset _p
 
-# --------------------------------------------------------------------------
-# Locate the tgz (default: newest swmansion-argent-*.tgz at the repo root)
-# --------------------------------------------------------------------------
 if [ -z "$TGZ" ]; then
   TGZ="$(ls -t "$REPO_ROOT"/swmansion-argent-*.tgz 2>/dev/null | head -1 || true)"
 fi
@@ -85,9 +77,6 @@ if [ -z "$TGZ" ] || [ ! -f "$TGZ" ]; then
 fi
 TGZ="$(cd "$(dirname "$TGZ")" && pwd)/$(basename "$TGZ")"
 
-# --------------------------------------------------------------------------
-# Sandbox: private HOME, npm prefix, work dir. Nothing escapes here.
-# --------------------------------------------------------------------------
 export E2E_WORK="$(mktemp -d "${TMPDIR:-/tmp}/argent-e2e.XXXXXX")"
 export E2E_HOME="$E2E_WORK/home"
 export E2E_PREFIX="$E2E_WORK/prefix"
@@ -96,43 +85,35 @@ mkdir -p "$E2E_HOME" "$E2E_PREFIX" "$E2E_WORK/unpacked" "$E2E_WORK/ws"
 export E2E_TGZ="$TGZ"
 export E2E_OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 
-# Results
 RESULTS_DIR="$E2E_ROOT/results"
 mkdir -p "$RESULTS_DIR"
-# The pid disambiguates two runs started in the same second, which would
-# otherwise share one results file: the second truncates it, both append, and
-# each run's exit code is then computed over the other's cases too.
+# The pid disambiguates two runs started in the same second: they would share
+# one results file and each compute its exit code over the other's cases too.
 TS="$(date +%Y%m%d-%H%M%S)-$$"
 export E2E_JSONL="$RESULTS_DIR/e2e-$TS.jsonl"
 REPORT_MD="$RESULTS_DIR/report-$TS.md"
 : > "$E2E_JSONL"
 
-# Sourced before the teardown trap below is installed: finish() calls group/warn/err
-# and run_one, so the handler has to be defined against a shell that already has them.
+# Sourced before the EXIT trap below, so finish() has group/warn/err if it fires.
 source "$E2E_ROOT/lib/common.sh"
 source "$E2E_ROOT/lib/discover-tools.sh"
 
-# --------------------------------------------------------------------------
-# Teardown. Installed the moment the sandbox and the results log exist, because
+# Teardown. Installed as soon as the sandbox and the results log exist, because
 # every exit path other than the happy one has to reach it: an unbound variable
-# inside a phase, a Ctrl-C, or the early `exit 3` below all leave behind a
-# ~500MB sandbox and a run whose results were never rendered.
-#
+# inside a phase, a Ctrl-C, or the early `exit 3` below would otherwise leave the
+# sandbox behind with the run's results never rendered.
 # ARGENT_BIN and TGZ_VERSION are read defensively — an abort can happen before
-# either is assigned, and this must not become the thing that fails.
-# --------------------------------------------------------------------------
+# either is assigned.
 E2E_COMPLETED=0
 CLEANUP_RAN=0
 finish() {
   local rc=$?
   trap - EXIT INT TERM
 
-  # Processes first, sandbox second, and both from in here so an abort reaches
-  # them at all. $E2E_HOME holds the detached tool-server's pid file, and
-  # ensure_server starts that server with no idle timeout — so removing the
-  # sandbox before stopping it strands a process that `argent server stop` can
-  # no longer find, along with any Electron, Metro and fixture server the tiers
-  # spawned.
+  # Processes first, sandbox second. The tool-server's state file lives in
+  # $E2E_HOME and ensure_server starts it with no idle timeout, so removing the
+  # sandbox first strands a server `argent server stop` can no longer find,
+  # along with any Electron, Metro and fixture server the tiers spawned.
   # ARGENT_BIN has to be set before cleanup can run: argent_cli resolves it with
   # ${ARGENT_BIN:?}, which exits the shell outright — from in here that would
   # abandon the rest of this handler and leak the sandbox it exists to remove.
@@ -161,8 +142,8 @@ finish() {
   group "DONE — pass:$tp fail:$tf skip:$ts"
   echo "report: $REPORT_MD" >&2
 
-  # A run that stopped early is not a pass, however few failures it recorded:
-  # the phases it never reached cannot have failed.
+  # A run that stopped early is not a pass: the phases it never reached cannot
+  # have failed.
   if [ "$E2E_COMPLETED" -eq 0 ]; then
     err "harness stopped before finishing its phase list — these results are PARTIAL"
     [ "$rc" -ne 0 ] && exit "$rc"
@@ -175,46 +156,34 @@ trap finish EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# Free port for our private tool-server
 export E2E_TOOLS_PORT="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
 
-# Remember the real HOME (the RN tier looks for ~/dev/bluesky there) before we
-# repoint HOME at the sandbox.
+# The RN tier looks for the Bluesky checkout under the real HOME.
 export HOME_REAL="$HOME"
-# Redirect argent state/config into the sandbox for the whole run.
 export HOME="$E2E_HOME"
-# Device state must stay visible through the sandbox HOME, or the android tier
+# Device state must stay visible through the sandbox HOME or the android tier
 # false-fails on every gesture/screenshot: adb auth keys live in ~/.android, and
-# on macOS the emulator writes its gRPC discovery files (avd/running/pid_*.ini)
-# under ~/Library/Caches/TemporaryItems, which simulator-server resolves via
-# $HOME ("emulator not found among running emulators" otherwise). On Linux that
-# discovery uses XDG_RUNTIME_DIR, unaffected by the redirect. Both paths are
-# device state, not the argent/editor config this sandbox exists to isolate —
-# deliberately NOT ~/Library wholesale, which would expose real editor configs.
+# on macOS the emulator writes its gRPC discovery files under
+# ~/Library/Caches/TemporaryItems, which simulator-server resolves via $HOME.
+# Linux uses XDG_RUNTIME_DIR for that discovery and is unaffected. Deliberately
+# not ~/Library wholesale, which would expose the real editor configs.
 [ -d "$HOME_REAL/.android" ] && ln -s "$HOME_REAL/.android" "$E2E_HOME/.android"
 if [ "$E2E_OS" = darwin ] && [ -d "$HOME_REAL/Library/Caches/TemporaryItems" ]; then
   mkdir -p "$E2E_HOME/Library/Caches"
   ln -s "$HOME_REAL/Library/Caches/TemporaryItems" "$E2E_HOME/Library/Caches/TemporaryItems"
 fi
 export PATH="$E2E_PREFIX/bin:$PATH"
-# Confine EVERY `npm install -g` (ours AND the ones `argent init/update` runs
-# internally) to the sandbox prefix — never the real system global.
+# Confine every `npm install -g` — ours and the ones `argent init/update` runs
+# internally — to the sandbox prefix.
 if [ "$SYSTEM_INSTALL" -eq 0 ]; then export npm_config_prefix="$E2E_PREFIX"; fi
-# Keep telemetry silent/off, and force non-interactive so @clack/prompts in
-# `argent init` never blocks on a spinner/TTY probe.
 export DO_NOT_TRACK=1
 export CI=1
 
-# --------------------------------------------------------------------------
-# Unpack the tarball (used for file-level install assertions + skip-install)
-# --------------------------------------------------------------------------
+# The file-level install assertions and --skip-install run off the unpacked copy.
 tar xzf "$E2E_TGZ" -C "$E2E_WORK/unpacked"
 TGZ_VERSION="$(jq -r .version "$E2E_UNPACKED/package.json")"
 export TGZ_VERSION
 
-# --------------------------------------------------------------------------
-# Decide the default phase set for this OS if not specified.
-# --------------------------------------------------------------------------
 if [ -z "$PHASES" ]; then
   case "$E2E_OS" in
     linux)  PHASES="install,introspection,validation,android,chromium,rn";;
@@ -224,11 +193,9 @@ if [ -z "$PHASES" ]; then
 fi
 selected() { case ",$PHASES," in *",$1,"*) return 0;; *) return 1;; esac; }
 
-# The name check above walks the words a phase list splits into, so a list that
-# splits into none — `--phase ,` or `--phase ' '` — passes it while selecting
-# nothing. Count what `selected` actually matches instead: a run that executes
-# no phase records no failure, and reports "pass:0 fail:0" and exit 0 for a
-# release it never tested.
+# The check above walks the words a phase list splits into, so a list that splits
+# into none — `--phase ,` or `--phase ' '` — passes it while selecting nothing.
+# Count what `selected` actually matches instead.
 _selected=0
 for _p in $ALL_PHASES; do selected "$_p" && _selected=$((_selected + 1)); done
 if [ "$_selected" -eq 0 ]; then
@@ -237,24 +204,18 @@ if [ "$_selected" -eq 0 ]; then
 fi
 unset _p _selected
 
-# --------------------------------------------------------------------------
-# Establish the argent CLI we drive with.
-#   default: real sandbox global install (also what phase 0 asserts)
-#   --skip-install: run the unpacked bundle directly (fast, offline phases only)
-# --------------------------------------------------------------------------
 if [ "$SKIP_INSTALL" -eq 1 ]; then
   export ARGENT_BIN="node $E2E_UNPACKED/dist/cli.js"
   read -ra ARGENT_CMD <<< "$ARGENT_BIN"
   warn "skip-install: driving unpacked bundle; phase 'install' will be skipped"
 else
   group "Sandbox install: npm i -g $(basename "$E2E_TGZ") --prefix \$E2E_PREFIX"
-  # Install optional deps (electron) only if a tier needs them; they add a slow
-  # network download and are irrelevant to the offline phases.
+  # The optional deps (electron, node-pty) are a slow network download and only
+  # the device tiers need them.
   OMIT="--omit=optional"
   if selected chromium || selected rn; then OMIT=""; fi
-  # Published so the install phase can put the driver back exactly as it was
-  # after its uninstall test. Restoring with different flags silently changes
-  # what the rest of the run is testing.
+  # The install phase restores the driver with these after its uninstall test;
+  # different flags would silently change what the rest of the run tests.
   export E2E_NPM_OMIT="$OMIT"
   if [ "$SYSTEM_INSTALL" -eq 1 ]; then
     warn "--system: installing to the REAL global prefix (release-machine mode)"
@@ -276,17 +237,14 @@ log "Driving with: $ARGENT_BIN  (v${TGZ_VERSION})"
 log "Sandbox: $E2E_WORK"
 log "Results: $E2E_JSONL"
 
-# --------------------------------------------------------------------------
-# Run phases. Each phase file defines run_phase() and is executed in-process
-# so counters + env accumulate.
-# --------------------------------------------------------------------------
+# Each phase file defines run_phase() and is sourced in-process, so counters and
+# env accumulate across phases.
 run_one() { # phase-name file
   local name="$1" file="$2"
   group "PHASE: $name"
   if [ ! -f "$file" ]; then fail "$name" harness phase-file "missing $file"; return; fi
-  # Drop the previous phase's definition first. `source` on a file with a syntax
-  # error leaves the old run_phase bound, and that phase would run a second time
-  # with its results recorded under this phase's name.
+  # `source` on a file with a syntax error leaves the previous run_phase bound,
+  # and that phase would run again with its results recorded under this name.
   unset -f run_phase
   # shellcheck disable=SC1090
   source "$file"
@@ -304,7 +262,6 @@ if selected android;       then run_one android       "$E2E_ROOT/phases/30-andro
 if selected chromium;      then run_one chromium      "$E2E_ROOT/phases/40-chromium.sh"; fi
 if selected rn;            then run_one rn            "$E2E_ROOT/phases/50-rn-bluesky.sh"; fi
 
-# Every selected phase ran. The EXIT trap runs the cleanup phase, renders the
-# report, tears the sandbox down and decides the exit code — the same path an
-# aborted run takes, so teardown cannot depend on getting here.
+# Every selected phase ran. The EXIT trap does cleanup, report and exit code —
+# the same path an aborted run takes, so teardown cannot depend on getting here.
 E2E_COMPLETED=1
