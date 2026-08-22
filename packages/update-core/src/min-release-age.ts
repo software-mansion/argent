@@ -9,8 +9,7 @@ import {
 
 // Detects the machine's "minimum release age" policy — package managers that
 // refuse to install a version until it has been public for some time — as a
-// duration in ms (0 = no policy). Lets callers hold back updates/reminders for
-// versions the user cannot install yet.
+// duration in ms (0 = no policy).
 
 const PROBE_TIMEOUT_MS = 3_000;
 const OVERRIDE_ENV = "ARGENT_MIN_RELEASE_AGE_DAYS";
@@ -19,16 +18,14 @@ export type PackageManagerName = "npm" | "pnpm" | "yarn" | "bun";
 
 interface PmPolicyProbe {
   command: string;
-  /** Convert the raw config value (in the PM's native unit) to milliseconds. */
+  /** Parse the PM's `config get` stdout into milliseconds. */
   parse: (stdout: string) => number;
 }
 
-// bun also supports this (minimumReleaseAge, seconds) but has no `config get`,
-// so it is covered by the ARGENT_MIN_RELEASE_AGE_DAYS override instead.
+// bun has no `config get`, so only the ARGENT_MIN_RELEASE_AGE_DAYS override
+// covers it.
 const PM_PROBES: Partial<Record<PackageManagerName, PmPolicyProbe>> = {
-  // npm flattens `min-release-age` to an effective `before` cutoff, and some
-  // npm 11.x builds report `min-release-age=null` even while the policy is
-  // active. Probe `before`, which is what the resolver actually uses.
+  // Probe `before`: that is the effective cutoff npm's resolver applies.
   npm: { command: "npm config get before", parse: parseBeforeAgeMs },
   pnpm: {
     command: "pnpm config get minimumReleaseAge",
@@ -37,7 +34,7 @@ const PM_PROBES: Partial<Record<PackageManagerName, PmPolicyProbe>> = {
   yarn: { command: "yarn config get npmMinimalAgeGate", parse: parseYarnAgeGateMs },
 };
 
-// The ARGENT_MIN_RELEASE_AGE_DAYS override, in ms, or null when unset (probe).
+// Override in ms; null when unset, meaning the caller should probe.
 function overrideMs(): number | null {
   const override = process.env[OVERRIDE_ENV];
   if (override === undefined) return null;
@@ -48,10 +45,10 @@ function overrideMs(): number | null {
 function probe(p: PmPolicyProbe): Promise<number> {
   return new Promise((resolve) => {
     // Shell (not execFile) so Windows `.cmd`/`.ps1` shims resolve via PATH;
-    // command is compile-time constants only, no caller input.
+    // commands are compile-time constants, never caller input.
     exec(p.command, { timeout: PROBE_TIMEOUT_MS, windowsHide: true }, (err, stdout) => {
       if (err) {
-        resolve(0); // PM not installed / errored — treat as no policy.
+        resolve(0); // not installed or errored — no policy
         return;
       }
       resolve(p.parse(stdout));
@@ -61,7 +58,7 @@ function probe(p: PmPolicyProbe): Promise<number> {
 
 /**
  * Minimum-release-age policy in ms (0 = none) for a known package manager.
- * Use this when the caller is about to run a specific PM (e.g. `argent update`).
+ * Use when a specific PM is about to run (e.g. `argent update`).
  */
 export async function detectMinReleaseAgeMsForPm(pm: PackageManagerName): Promise<number> {
   const override = overrideMs();
@@ -72,8 +69,8 @@ export async function detectMinReleaseAgeMsForPm(pm: PackageManagerName): Promis
 }
 
 /**
- * Effective minimum-release-age policy in ms (0 = none) when the package
- * manager is unknown: probe every PM and take the most restrictive value. The
+ * Minimum-release-age policy in ms (0 = none) when the package manager is
+ * unknown: the most restrictive value across all PMs. The
  * ARGENT_MIN_RELEASE_AGE_DAYS override wins and skips probing.
  */
 export async function detectMinReleaseAgeMs(): Promise<number> {
