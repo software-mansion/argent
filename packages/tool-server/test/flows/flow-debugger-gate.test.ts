@@ -135,6 +135,69 @@ steps:
     expect(result.ok).toBe(false);
   });
 
+  it("carries the note into the reason line, which is all the CLI renders", async () => {
+    // The guidance a noted answer carries opens with "Read this result's note
+    // first", and `renderStepLine` prints `reason` and nothing else — the CLI
+    // never renders a tool step's result (flow.ts's onStepReport). A note left
+    // only in `result` is a pointer at a field that run never shows.
+    const NOTED = {
+      ...NOT_CONNECTED_RESULT,
+      reason: "no_app_connected",
+      guidance: "Read this result's note first — it explains what became of the console log.",
+      note: "The log file it left at /tmp/argent-logs-8081-1.log is still readable.",
+    };
+    const flowsDir = path.join(PROJECT_ROOT, ".argent", "flows");
+    const file = path.join(flowsDir, "noted.yaml");
+    await fs.mkdir(flowsDir, { recursive: true });
+    await fs.writeFile(
+      file,
+      `executionPrerequisite: ""
+steps:
+  - tool: debugger-log-registry
+    args:
+      port: 8081
+      device_id: X
+`,
+      "utf8"
+    );
+
+    const registry = makeRegistry(async (id) =>
+      id === "debugger-log-registry" ? NOTED : { tapped: true }
+    );
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "noted", project_root: PROJECT_ROOT, flow_file: file, device: "X" }
+      )
+    );
+
+    const gate = result.steps.filter((s) => s.kind === "tool" && s.status !== "skip")[0]!;
+    expect(gate.status).toBe("fail");
+    expect(gate.reason).toContain(NOTED.guidance);
+    expect(gate.reason).toContain(NOTED.note);
+  });
+
+  it("adds nothing to the reason line for an answer that carries no note", async () => {
+    // The `note ? … : ""` arm, so the fix above cannot smuggle an "undefined"
+    // onto every un-noted gate — which is most of them.
+    const flowFile = await writeFlow(GATED_FLOW);
+    const registry = makeRegistry(async (id) =>
+      id === "debugger-status" ? NOT_CONNECTED_RESULT : { tapped: true }
+    );
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile, device: "X" }
+      )
+    );
+
+    const gate = result.steps.filter((s) => s.kind === "tool" && s.status !== "skip")[0]!;
+    expect(gate.reason).toBe(
+      `debugger not connected (${NOT_CONNECTED_RESULT.reason}): ` +
+        `${NOT_CONNECTED_RESULT.detail} — ${NOT_CONNECTED_RESULT.guidance}`
+    );
+  });
+
   it("passes the gate and runs the whole flow on a connected result", async () => {
     const flowFile = await writeFlow(GATED_FLOW);
     const registry = makeRegistry(async (id) => {

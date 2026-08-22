@@ -3,6 +3,9 @@ import {
   rememberDeviceAlias,
   canonicalDeviceId,
   forgetDeviceAlias,
+  rememberLogicalKeyedDevice,
+  isLogicalKeyedDevice,
+  forgetLogicalKeyedDevice,
   resetDeviceAliases,
 } from "../../src/utils/debugger/device-alias";
 import { debuggerServiceRef } from "../../src/tools/debugger/debugger-service-ref";
@@ -56,6 +59,50 @@ describe("debuggerServiceRef — collapses a forwarded logicalDeviceId onto one 
     rememberDeviceAlias(LOGICAL_ID, IOS_UDID);
     const forwardedRef = debuggerServiceRef({ port: 8081, device_id: LOGICAL_ID });
     expect(forwardedRef).toBe(connectRef);
+  });
+
+  it("marks only a session whose connect id IS the logicalDeviceId", () => {
+    // The marker means "no device-scoped teardown can name this session", and
+    // stop-all-simulator-servers reports the marked sessions its scope did NOT
+    // reach as left_running. A udid-keyed session is one a scope could have
+    // named, so marking it would report another agent's ordinary session on a
+    // device this caller never asked about - which that report exists to leave
+    // alone.
+    rememberLogicalKeyedDevice(LOGICAL_ID, IOS_UDID);
+    expect(isLogicalKeyedDevice(IOS_UDID)).toBe(false);
+    expect(isLogicalKeyedDevice(LOGICAL_ID)).toBe(false);
+
+    // Vega and a legacy inspector report no logicalDeviceId at all; nothing to
+    // compare, so nothing to mark.
+    rememberLogicalKeyedDevice(undefined, IOS_UDID);
+    expect(isLogicalKeyedDevice(IOS_UDID)).toBe(false);
+
+    // Recorded in the spelling the connect used, read back in whichever the
+    // teardown holds: an id reaches the two sides from different places, so
+    // both ends fold. Written uppercase here, since the ids these tests use are
+    // already lower.
+    rememberLogicalKeyedDevice(LOGICAL_ID.toUpperCase(), LOGICAL_ID.toUpperCase());
+    expect(isLogicalKeyedDevice(LOGICAL_ID)).toBe(true);
+    expect(isLogicalKeyedDevice(LOGICAL_ID.toUpperCase())).toBe(true);
+
+    // Forgotten in whichever spelling the dispose holds - the third place this
+    // id is folded, and the one that decides whether the marker outlives its
+    // session. Asked here in the spelling the write did NOT store.
+    forgetLogicalKeyedDevice(LOGICAL_ID);
+    expect(isLogicalKeyedDevice(LOGICAL_ID)).toBe(false);
+    rememberLogicalKeyedDevice(LOGICAL_ID, LOGICAL_ID);
+    forgetLogicalKeyedDevice(LOGICAL_ID.toUpperCase());
+    expect(isLogicalKeyedDevice(LOGICAL_ID)).toBe(false);
+  });
+
+  it("clears the logical-keyed markers along with the aliases", () => {
+    // Both halves of this module are module-global, so a reset that emptied
+    // only one would leak a marker into whatever test ran next.
+    rememberLogicalKeyedDevice(LOGICAL_ID, LOGICAL_ID);
+    rememberDeviceAlias(LOGICAL_ID, IOS_UDID);
+    resetDeviceAliases();
+    expect(isLogicalKeyedDevice(LOGICAL_ID)).toBe(false);
+    expect(canonicalDeviceId(LOGICAL_ID)).toBe(LOGICAL_ID);
   });
 
   it("does not disturb Chromium routing", () => {

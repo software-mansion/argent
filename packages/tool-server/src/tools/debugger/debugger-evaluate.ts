@@ -13,7 +13,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices — the SAME id you passed to debugger-connect (iOS simulator UDID, Android serial, Vega serial, or Chromium device id). The logicalDeviceId debugger-connect returns also resolves here, but prefer the stable list-devices id."
+      "Device id from list-devices — the SAME id you passed to debugger-connect (iOS simulator UDID, Android serial, Vega serial, or Chromium device id). On Metro the logicalDeviceId debugger-connect returns also resolves here for as long as that session lives, but prefer the stable list-devices id: once the session ends the alias goes with it, so the same logicalDeviceId then opens a SECOND debugger session for one device. On Chromium the two are one string, and a legacy inspector (Vega) reports no logicalDeviceId at all."
     ),
   expression: z.string().describe("JavaScript expression to evaluate in the app runtime"),
 });

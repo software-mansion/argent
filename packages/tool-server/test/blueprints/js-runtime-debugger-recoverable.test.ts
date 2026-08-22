@@ -16,11 +16,11 @@ import { chromiumJsRuntimeDebuggerBlueprint } from "../../src/blueprints/chromiu
  * then anyway), as is REQUEST_TIMEOUT (request may have taken effect; a hung
  * runtime is not fixed by reconnecting).
  *
- * Chromium: recovery would dispose the wrapper node, whose dispose closes the
- * LogFileWriter and thereby UNLINKS the session's captured console log — and
- * it buys nothing, because a tab-switch reconnect re-points the same client
- * object so the cached node heals for the next call without any dispose. See
- * the blueprint comment.
+ * Chromium: recovery would dispose the wrapper node, which ends the capture
+ * session — the next resolve builds a new writer over a new path, so the
+ * counts and clusters go with it — and it buys nothing, because a tab-switch
+ * reconnect re-points the same client object so the cached node heals for the
+ * next call without any dispose. See the blueprint comment.
  */
 
 function coded(
@@ -70,9 +70,10 @@ describe("chromiumJsRuntimeDebuggerBlueprint has NO recovery", () => {
   it("declares no recoverable() — the registry must never dispose-and-retry this node", () => {
     // Load-bearing absence: Registry._recoverFailedServices treats a missing
     // recoverable() as never-recover, so the wrapper node is never disposed on
-    // a failing call — which is what keeps the captured console log file on
-    // disk (dispose → LogFileWriter.close() → fs.unlinkSync). Reintroducing a
-    // recoverable() here re-opens the log-deletion hole this pin guards.
+    // a failing call — which is what keeps this session's captured history
+    // reachable through the registry, rather than reduced to the breadcrumb a
+    // dispose leaves. Reintroducing a recoverable() here re-opens the hole this
+    // pin guards.
     expect(chromiumJsRuntimeDebuggerBlueprint.recoverable).toBeUndefined();
   });
 });

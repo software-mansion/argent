@@ -249,8 +249,8 @@ export function deviceIdOfUrn(urn: string, namespaces: readonly string[]): strin
  * Metro serving two or more devices that cannot be a UDID or serial:
  * `selectTarget` refuses to guess which target a device id means and instructs
  * the caller to re-target with the `logicalDeviceId` Metro echoed — an opaque
- * per-connection handle `list-devices` never mints, and the only id that then
- * resolves the session. A teardown scoped to real device ids therefore leaves
+ * id the app derives, which `list-devices` never mints, and the only id that
+ * then resolves the session. A teardown scoped to real device ids therefore leaves
  * that session holding its CDP socket to Metro, a bound loopback console
  * server and a log file handle; and because the caller's serial still matches
  * that device's OTHER services, the serial is not reported `unmatched` either,

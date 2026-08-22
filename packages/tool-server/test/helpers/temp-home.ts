@@ -8,10 +8,10 @@ import { afterEach, beforeEach } from "vitest";
  * fresh temp directory around every test in the calling file, then remove it.
  *
  * Whatever reaches `os.homedir()` then resolves inside a directory this run
- * owns. LogFileWriter is the case that matters here: its constructor
- * mkdir -p's `os.homedir()/.argent/tmp`, so a suite that builds one — directly,
- * or through the JS-runtime-debugger blueprints — otherwise creates that
- * directory in the developer's real home.
+ * owns. LogFileWriter is the case that matters here: its constructor mkdir -p's
+ * `os.homedir()/.argent/tmp` and unlinks the day-old log files in it, so a
+ * suite that builds one — directly, or through the JS-runtime-debugger
+ * blueprints — otherwise sweeps the developer's real home for them.
  *
  * Call at file top level, so the hooks it registers run before any
  * describe-scoped hook that builds a writer.

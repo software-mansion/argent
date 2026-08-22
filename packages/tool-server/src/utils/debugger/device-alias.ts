@@ -5,8 +5,8 @@
  * A device is reached through two different id namespaces:
  *   - the stable id the caller connects with — an iOS UDID / Android serial /
  *     Vega serial from `list-devices`;
- *   - the `logicalDeviceId` Metro's inspector-proxy echoes back for that
- *     connection, an opaque per-connection handle.
+ *   - the `logicalDeviceId` Metro's inspector-proxy echoes back, which the app
+ *     derives from the device and its bundle and Metro passes through.
  *
  * These are different strings, and the debugger service is cached by its URN,
  * which embeds `device_id` verbatim (`JsRuntimeDebugger:<port>:<device_id>`).
@@ -21,11 +21,13 @@
  * builds its service ref. No Metro round-trip on the hot path, so the tools'
  * `services()` callbacks stay synchronous.
  *
- * A logicalDeviceId is unique per Metro connection, so the map is 1:1 and never
- * mis-collapses two distinct devices. A stale entry (device reconnected, Metro
- * issued a fresh logicalDeviceId) is harmless: the caller is handed the new
- * logicalDeviceId, so the old key is simply never looked up again — and it is
- * cleared on dispose anyway.
+ * A logicalDeviceId names one device+bundle, so the key is 1:1 and stable
+ * across relaunches — a key that outlives its session still names the same
+ * device, and it is cleared on dispose anyway. The VALUE carries no such
+ * guarantee: it is whatever id the caller connected with, and `selectTarget`'s
+ * one-device fallback answers an unmatched id with the one device left on the port,
+ * so a connect aimed at a device that has gone teaches this map to send that
+ * survivor's own logicalDeviceId to the dead device's id.
  */
 const logicalIdToConnectId = new Map<string, string>();
 
