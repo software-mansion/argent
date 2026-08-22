@@ -257,8 +257,20 @@ export class CDPClient {
           new FailureError(
             `CDP request ${method} (id=${id}) timed out — the runtime accepted the ` +
               `connection but did not answer; it may be frozen, or paused at a breakpoint. ` +
-              `debugger-status can still report "connected" in this state (the socket is open). ` +
-              `Do not retry in a loop — restart the app, then reconnect and retry once.`,
+              `Do not retry in a loop. Nothing here tells the two apart — no tool reports ` +
+              `pausedness, and once the session is established debugger-status reports ` +
+              `"connected" either way — so have the user check the app before choosing. If it is paused, ask them to resume it — quitting ` +
+              `throws the debug session away. If it is hung, get the app restarted (restart-app on ` +
+              `iOS / Android / Vega; on Chromium it is refused, so the user has to quit it and the ` +
+              `relaunch has to wait for the exit — the app is up here, and boot-device only ` +
+              `starts an app, so relaunching a live one duplicates it or dies on its ` +
+              `single-instance lock as \`child process exited with code N before CDP was ` +
+              `ready\`; then ` +
+              `boot-device with electronAppPath relaunches an Electron app and returns the ` +
+              `chromium-cdp-<port> id to reconnect with, while a browser has to be started again ` +
+              `with --remote-debugging-port, where that port is the id — chromium-cdp-<that port> ` +
+              `— since a relaunch on a new port is a new id; launch-app cannot start ` +
+              `one), then reconnect and retry once.`,
             {
               error_code: FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
               failure_stage: "debugger_cdp_send",

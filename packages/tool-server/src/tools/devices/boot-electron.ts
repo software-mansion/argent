@@ -31,7 +31,7 @@ interface BootElectronOptions {
   readyTimeoutMs?: number;
 }
 
-const DEFAULT_READY_TIMEOUT_MS = 30_000;
+export const DEFAULT_READY_TIMEOUT_MS = 30_000;
 
 /**
  * How long a successful readiness probe must hold before boot reports success.

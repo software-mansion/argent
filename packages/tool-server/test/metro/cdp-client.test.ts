@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { WebSocketServer, WebSocket } from "ws";
-import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
+import { FAILURE_CODES, getFailureSignal, type Registry } from "@argent/registry";
+import { createRestartAppTool } from "../../src/tools/restart-app";
+import { expectNoForbiddenAdvice } from "../helpers/forbidden-advice";
+import { pinsOnce } from "../helpers/pins";
+import { platformTag } from "../helpers/platform-tag";
 import { CDPClient } from "../../src/utils/debugger/cdp-client";
 
 let wss: WebSocketServer;
@@ -279,6 +283,97 @@ describe("CDPClient", () => {
       // The server never replies — the per-request timer must fire.
       const err = await rejection(client.send("Runtime.enable", {}, 50));
       expect((err as Error).message).toMatch(/CDP request Runtime\.enable \(id=\d+\) timed out/);
+      // This client is shared with the Chromium path, and its own comment says the
+      // message carries the recovery so skills need not re-explain it. It is also
+      // the ONLY text a paused Chromium renderer reaches: the socket stays OPEN, so
+      // debugger-status answers "connected" and the branching guidance is never
+      // emitted. Both branches, through to their remedies - the message names the
+      // paused state, and quitting there throws the user's session away.
+      const message = (err as Error).message;
+      // The third runtime string, held to the same bar as the two CHROMIUM_GUIDANCE
+      // ones. It is the only text a paused Chromium renderer ever reaches, and it
+      // was the one surface the shared list did not cover.
+      expectNoForbiddenAdvice(message, "the CDP request-timeout message");
+      // The diagnosis itself. Both remedies below are chosen off "reachable but not
+      // answering"; a message that instead reports the runtime as gone sends the
+      // reader straight past them to a relaunch.
+      pinsOnce(
+        message,
+        "the runtime accepted the connection but did not answer; it may be frozen, or " +
+          "paused at a breakpoint."
+      );
+      pinsOnce(
+        message,
+        "If it is paused, ask them to resume it — quitting throws the debug session away."
+      );
+      // The two arms are mutually destructive and this message names no way to choose
+      // between them — nothing in the catalogue reports pausedness. Left unlabelled, an
+      // agent guesses, and guessing "hung" throws the session away. The debugger-status
+      // half has to stay scoped to an established session: this same message is the
+      // detail of a not_connected result when the connect pipeline is what timed out.
+      pinsOnce(
+        message,
+        "Nothing here tells the two apart — no tool reports pausedness, and once the " +
+          'session is established debugger-status reports "connected" either way — so have ' +
+          "the user check the app before choosing."
+      );
+      expect(message, "does not promise connected on the connect surface").not.toMatch(
+        /debugger-status says "connected" either way/i
+      );
+      // The claim the two branches above rest on, and the ONLY copy of it: a
+      // post-connect hang leaves the socket OPEN, so debugger-status reports
+      // "connected" and never reaches the branching guidance. On the connect
+      // surface this message IS the detail of a not_connected result, so an
+      // unscoped second copy asserts a state the payload carrying it disproves.
+      expect(message, "states the debugger-status claim once, scoped").not.toMatch(
+        /debugger-status can still report "connected" in this state/
+      );
+      // Both ends of the retry discipline. Each attempt waits out this full timeout,
+      // so a loosened "unless it looks slow" at one end or a "retry until it answers"
+      // at the other undoes the reason the guidance is in the message at all.
+      pinsOnce(message, "Do not retry in a loop. Nothing here tells the two apart");
+      // The id source sits inside the Chromium parenthetical, and covers BOTH of its
+      // branches: this message is the shared client's, so a Metro reader reaches it
+      // too, and a chromium-cdp id is not a thing on their platform. The browser
+      // branch has no boot-device call to get an id from, so the port it is started
+      // on has to be named as the id.
+      pinsOnce(
+        message,
+        "relaunches an Electron app and returns the chromium-cdp-<port> id to reconnect with"
+      );
+      pinsOnce(
+        message,
+        "started again with --remote-debugging-port, where that port is the id — " +
+          "chromium-cdp-<that port> — since a relaunch on a new port is a new id"
+      );
+      pinsOnce(message, "one), then reconnect and retry once.");
+      expect(
+        message.slice(message.indexOf("one), then reconnect")),
+        "the platform-neutral close may not name a chromium id"
+      ).not.toMatch(/chromium-cdp/);
+      // Derived from restart-app's own capability, not restated: the same tag on the
+      // skill rows is built this way, and a literal here drifts off it silently.
+      const restartApp = createRestartAppTool({} as unknown as Registry).capability;
+      pinsOnce(
+        message,
+        `If it is hung, get the app restarted (restart-app on ${platformTag(restartApp)}; on ` +
+          `Chromium it is refused, so the user has to quit it and the relaunch has to wait ` +
+          `for the exit`
+      );
+      // The Chromium relaunch this message has to carry itself, for the same reason:
+      // the guidance that spells it out is unreachable while the socket is open, and
+      // launch-app is the tool an agent reaches for when restart-app is refused.
+      pinsOnce(message, "boot-device with electronAppPath relaunches an Electron app");
+      pinsOnce(message, "a browser has to be started again with --remote-debugging-port");
+      pinsOnce(message, "launch-app cannot start one");
+      // The duplicate-boot guard its twin on this same fault code carries. Without it
+      // this message sends a reader to boot-device while the app is provably still up.
+      pinsOnce(
+        message,
+        "the app is up here, and boot-device only starts an app, so relaunching a live one " +
+          "duplicates it or dies on its single-instance lock as `child process exited with " +
+          "code N before CDP was ready`"
+      );
       expect(getFailureSignal(err)).toMatchObject({
         error_code: FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
         failure_stage: "debugger_cdp_send",

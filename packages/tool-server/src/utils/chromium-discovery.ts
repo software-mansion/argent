@@ -16,7 +16,7 @@ export interface ChromiumDevice {
   url: string;
   /** Browser version string from /json/version. */
   browser: string | null;
-  /** Always "Running" — list-devices only surfaces Chromium processes whose CDP endpoint is responsive. */
+  /** Always "Running" — list-devices only surfaces Chromium processes whose CDP endpoint answers with a drivable page. */
   state: "Running";
 }
 

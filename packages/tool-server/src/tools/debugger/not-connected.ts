@@ -29,6 +29,17 @@ export interface DebuggerNotConnectedResult {
 }
 
 /**
+ * Both timeout surfaces carry one message, and it names a breakpoint because
+ * debugger-evaluate — which awaits the promise — really can hang on one. The
+ * connect pipeline cannot, so a runtime_unresponsive result contradicts its own
+ * detail unless the guidance says which half of it applies.
+ */
+const DETAIL_NAMES_A_BREAKPOINT =
+  'The detail says "frozen, or paused at a breakpoint" because it is the shared ' +
+  "request-timeout wording, which also covers debugger-evaluate; only the frozen " +
+  "half of it applies here. ";
+
+/**
  * Guidance strings for Metro-backed targets (iOS / Android / Vega). Chromium
  * ids get platform-corrected overrides below — on Chromium, launch-app cannot
  * start anything (its handler is a documented no-op) and it re-resolves the
@@ -52,9 +63,14 @@ const GUIDANCE: Record<DebuggerNotConnectedReason, string> = {
     "(launch-app), then call debugger-connect and retry once.",
   runtime_unresponsive:
     "The runtime accepted the debugger connection but did not answer within the " +
-    "timeout — it is likely frozen, or paused at a breakpoint. Do not retry in a " +
-    "loop (each attempt waits out the full timeout). Check the app; if it is hung, " +
-    "restart it (restart-app), then retry once.",
+    "timeout. A runtime paused at a breakpoint does not reach this reason — every " +
+    "send that can time out here is answered by the inspector rather than by the JS " +
+    "thread, and the two that do wait on the JS thread are both swallowed, so the " +
+    "session resolves and debugger-status reports connected. What timed out is one of " +
+    "those inspector-answered sends, so the inspector itself has stopped answering. " +
+    DETAIL_NAMES_A_BREAKPOINT +
+    "Do not retry in a loop (each attempt waits out the full timeout). Restart it " +
+    "(restart-app), then retry once.",
   stale_connection:
     "The cached debugger connection went stale; it has been discarded. Restart the app " +
     "(restart-app) if it is not running, then call debugger-connect — the next call " +
@@ -72,10 +88,12 @@ const NOT_CONNECTED_CODE_MAP: Record<string, DebuggerNotConnectedReason> = {
   [FAILURE_CODES.DEBUGGER_CDP_SOCKET_CLOSED_BEFORE_OPEN]: "cdp_unreachable",
   [FAILURE_CODES.DEBUGGER_CDP_NOT_CONNECTED]: "cdp_unreachable",
   [FAILURE_CODES.DEBUGGER_CDP_CONNECTION_CLOSED]: "cdp_unreachable",
-  // Reachable from the connect pipeline's enable/binding sends when the target
-  // accepts the socket but its JS runtime never answers (frozen, or paused at a
-  // breakpoint). Post-connect hangs are different: an OPEN socket still reports
-  // status "connected" (see the socket-state gate comment in debugger-status).
+  // Reachable from either connect pipeline when the target accepts the socket and
+  // then stops answering a send. A runtime paused at a breakpoint does not reach it
+  // on either platform, but for different reasons - see the two runtime_unresponsive
+  // guidance strings, which state each. Post-connect hangs are different: an OPEN
+  // socket still reports status "connected" (see the socket-state gate comment in
+  // debugger-status).
   [FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT]: "runtime_unresponsive",
   [FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE]: "cdp_unreachable",
   // "Reached but not CDP / malformed answer" — a non-CDP server squatting the
@@ -98,20 +116,89 @@ export function classifyNotConnected(err: unknown): DebuggerNotConnectedReason |
 }
 
 /**
+ * How both Chromium overrides close. Hoisted because the id and the port are the
+ * same fact: `parseChromiumCdpPort` reads the port straight out of the id with no
+ * check against discovery, while `getCandidateChromiumPorts` probes only 9222, the
+ * env list and the ports `boot-device` opened — so a browser brought back elsewhere
+ * is invisible to `list-devices` and still perfectly drivable.
+ */
+const CHROMIUM_REREAD_ID =
+  "After a relaunch, re-read the chromium-cdp-<port> id from boot-device / " +
+  "list-devices, since a " +
+  "relaunch on a new port is a new id — though list-devices only probes 9222, " +
+  "ARGENT_CHROMIUM_PORTS and the ports boot-device opened, so a browser brought " +
+  "back on any other port is not listed at all, and a boot-device port that has since " +
+  "failed a probe is dropped from that set for good, so an id it listed once may not " +
+  "come back when the app does — if the user names the port, use " +
+  "chromium-cdp-<that port> directly, since the id carries the port and discovery " +
+  "is only how you find one you were not told. Then retry once.";
+
+/**
  * Reason guidance that must read differently on a Chromium target. Keyed
  * sparsely: reasons without an override fall back to GUIDANCE.
  */
 const CHROMIUM_GUIDANCE: Partial<Record<DebuggerNotConnectedReason, string>> = {
   cdp_unreachable:
-    "The app's CDP endpoint could not be reached (or did not answer like CDP — see " +
-    "detail). launch-app cannot start a Chromium app; make sure the app is running " +
-    "with --remote-debugging-port (for an Electron app, boot-device with " +
-    "electronAppPath relaunches it), then retry once.",
+    "No page could be driven: the CDP endpoint was unreachable, answered as something " +
+    "other than CDP, or is up with no usable page. Which one is in the detail, and the " +
+    "phrase it carries is the split — a service tag opens every detail, so read past it. " +
+    "A detail carrying 'Chromium CDP discovery: GET' is the discovery request itself: " +
+    "'could not connect' means the request never got an answer — nothing listening, or " +
+    "something holding the port without answering — while 'failed (HTTP <status>)' " +
+    "or 'returned a body that is not valid JSON' means something answered that is not a " +
+    "CDP endpoint, usually another service holding it. In that second case pass on what " +
+    "the detail says, since nothing here can free a port. That id stays dead while " +
+    "something else holds the port — for an Electron app boot-device takes a free port " +
+    "and returns the new id, and a browser has to come back on a port nothing else " +
+    "holds. After 'could not connect' the port is merely unanswered, so the same id " +
+    "works again if the app comes back on it. " +
+    "A detail carrying 'Chromium CDP on port' means the app answered and has no drivable " +
+    "page (none at all, or only devtools:// ones): it is still running and only lacks a " +
+    "window, so ask the user to bring one back — chromium-tabs cannot open one, since " +
+    "its own resolver needs an existing page. If the detail carrying that phrase closes " +
+    "by asking about --remote-debugging-port, ignore the question: this port answered, so " +
+    "the flag was passed. " +
+    "A detail carrying neither is the CDP socket failing after discovery had already " +
+    "answered, so " +
+    "the app was up moments ago. It may have lost only the page it was driving, which the " +
+    "window remedy above fixes, or exited since — nothing here tells the two apart, so " +
+    "have the user check. " +
+    "Once the app is gone: ask the user to quit it if it is somehow still up, " +
+    "then relaunch once it has exited — list-devices cannot " +
+    "confirm the exit, since it drops an app that is up with no drivable page exactly " +
+    "as it drops an exited one, " +
+    "and relaunching a live app never recovers it: boot-device only starts an app and " +
+    "never stops one, so the relaunch either duplicates the app or dies on its " +
+    "single-instance lock as 'child process exited with code N before CDP was ready' — " +
+    "a string boot-device also emits for a launch that really failed, so it does not " +
+    "tell you which happened. " +
+    "Once it is gone, launch-app cannot " +
+    "start a Chromium app: boot-device with electronAppPath relaunches an Electron " +
+    "app, and for a browser, ask the user to start the browser again on the same CDP " +
+    "port with --remote-debugging-port. " +
+    CHROMIUM_REREAD_ID,
   runtime_unresponsive:
-    "The app accepted the debugger connection but did not answer within the " +
-    "timeout — it is likely frozen. Do not retry in a loop (each attempt waits out " +
-    "the full timeout). Restart the app (for an Electron app, boot-device with " +
-    "electronAppPath and force: true), then retry once.",
+    "The app accepted the debugger connection but did not answer within the timeout: " +
+    "the renderer is frozen. A renderer paused at a breakpoint does not reach this " +
+    "reason — it answers the viewport read, which is the one send on this path that is " +
+    "not swallowed, so the session resolves and debugger-status reports connected. " +
+    DETAIL_NAMES_A_BREAKPOINT +
+    "Do not retry in a loop " +
+    "(each attempt waits out the full timeout). Ask the user to quit the app, then " +
+    "relaunch once it has " +
+    "exited: the app is up, so relaunching it yourself never recovers it — " +
+    "boot-device only starts an app and never stops one, so the relaunch either " +
+    "duplicates the app or dies on its single-instance lock as 'child process exited " +
+    "with code N before CDP was ready' — a string boot-device also emits for a launch " +
+    "that really failed, so it does not tell you which happened. " +
+    "launch-app cannot start a Chromium app. " +
+    "list-devices cannot confirm the exit either: a wedged app keeps its page target " +
+    "and stays listed, so when the entry goes it means the window was closed just as " +
+    "readily as that the app exited. " +
+    "boot-device with electronAppPath relaunches an Electron app, and " +
+    "for a browser, ask the user to start the browser again on the same CDP port " +
+    "with --remote-debugging-port. " +
+    CHROMIUM_REREAD_ID,
 };
 
 export function buildNotConnected(
