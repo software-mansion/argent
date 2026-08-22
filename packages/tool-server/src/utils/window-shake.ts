@@ -1,17 +1,15 @@
 /**
  * Cosmetic amplifier for `shake`: while the guest shake runs, the host window
- * carrying that device wobbles with a damped oscillation, so the cause of a
- * dev menu or undo prompt is visible on screen.
+ * carrying that device wobbles, so the cause of a dev menu or undo prompt is
+ * visible on screen.
  *
- * Decoration only: gated behind the opt-in `microinteractions` flag, iOS
- * simulators on macOS only (AppleScript against System Events), and it never
- * fails a shake. Every failure path warns once and resolves, because moving a
- * window needs Accessibility permission and a denied prompt must not fail a
- * working shake.
+ * Gated behind the opt-in `microinteractions` flag, and iOS simulators on
+ * macOS only (AppleScript against System Events). Every failure path warns and
+ * resolves, because moving a window needs Accessibility permission and a
+ * denied prompt must not fail a working shake.
  *
- * `prepareHostWindowShake(target)` resolves the per-call invariants once and
- * returns a shaker; the caller fires `begin()` per gesture and `settle()` at
- * the end. Local devices only - a `sim-remote` window lives on another host.
+ * The caller fires `begin()` per gesture and `settle()` at the end. Local
+ * devices only - a `sim-remote` window lives on another host.
  */
 
 import { execFile } from "node:child_process";
@@ -23,9 +21,9 @@ import { iosHeadlessFromEnv } from "./no-window-env";
 export const MICROINTERACTIONS_FLAG = "microinteractions";
 
 /**
- * Peak horizontal excursion in points, split across this many window moves. 60
- * moves run roughly 300-500ms, which brackets one gesture (consecutive
- * gestures are spaced 400ms apart).
+ * Peak horizontal excursion in points, split across this many window moves. The
+ * loop runs roughly 300-500ms, bracketing one gesture (consecutive gestures are
+ * spaced 400ms apart).
  */
 const AMPLITUDE = 22;
 const STEPS = 60;
@@ -58,7 +56,6 @@ interface HostWindowShaker {
 }
 
 function warn(detail: string): void {
-  // stdout carries JSON-RPC, so diagnostics go straight to stderr.
   process.stderr.write(`[shake:window] skipped the window animation: ${detail}\n`);
 }
 
@@ -71,9 +68,9 @@ function asStringLiteral(value: string): string {
  * Shared title-match walk: leaves the window in `win`, or `missing value`.
  * `procNamesExpr` yields the candidate process names as plain strings.
  *
- * Collect plain strings and take exactly one window reference at the end: a
- * live "item N of every process …" reference is re-evaluated on each access
- * and raises "Invalid index" (-1719) if the window list shifts mid-walk.
+ * Exactly one window reference is taken, at the end: a live "item N of every
+ * process …" reference is re-evaluated on each access and raises "Invalid
+ * index" (-1719) if the window list shifts mid-walk.
  */
 function titleMatchLookup(procNamesExpr: string, needles: string[]): string {
   return `
@@ -113,8 +110,8 @@ function titleMatchLookup(procNamesExpr: string, needles: string[]): string {
 function windowLookup(needles: string[]): string {
   if (needles.length === 0) {
     // Unknown device name: window 1 of whichever host app is running. With
-    // several booted devices this may wobble a sibling, which is harmless
-    // decoration and beats skipping the animation.
+    // several booted devices this may wobble a sibling - harmless decoration,
+    // and it beats skipping the animation.
     return `
 	set win to missing value
 	repeat with procRef in {"Simulator", "Device Hub"}
@@ -160,8 +157,8 @@ const OFFSETS_LITERAL = WOBBLE_OFFSETS.map(([dx, dy]) => `{${dx}, ${dy}}`).join(
  *
  * The closing position is set twice with a pause between, because a single
  * re-assert can be overtaken by a move still queued in the window server,
- * leaving the window a few points off. The origin is also `log`ged up front
- * (see ORIGIN_MARKER) so a SIGTERMed run can be repaired from outside.
+ * leaving the window a few points off. The origin is `log`ged up front (see
+ * ORIGIN_MARKER) so a SIGTERMed run can be repaired from outside.
  */
 export function animationScript(needles: string[]): string {
   return `on run
@@ -236,7 +233,7 @@ function runOsascript(script: string): Promise<void> {
     );
     child.on("error", (err) => reject(err));
     child.stdin?.on("error", () => {
-      // The close-before-write race is reported through the exec callback.
+      // A broken stdin pipe surfaces through the exec callback instead.
     });
     child.stdin?.end(script);
   });
@@ -253,7 +250,7 @@ async function restoreOriginAfterKill(needles: string[], rawStderr: string): Pro
   try {
     await runOsascript(restoreScript(needles, Number(match[1]), Number(match[2])));
   } catch {
-    // The wobble already failed and warned; a failed repair adds nothing.
+    /* best-effort */
   }
 }
 
@@ -302,7 +299,6 @@ export async function prepareHostWindowShake(target: HostWindowTarget): Promise<
         try {
           run = runOsascript(script);
         } catch (err) {
-          // A synchronously-thrown spawn failure (e.g. EPERM) still counts.
           dead = true;
           warnOnce(err instanceof Error ? err.message : String(err));
           return;

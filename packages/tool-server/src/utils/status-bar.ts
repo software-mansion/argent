@@ -6,21 +6,14 @@ import { simctlArgsForUdid } from "./ios-device-sets";
 
 const execFileAsync = promisify(execFile);
 
-/**
- * Pin the device status bar to fixed values for the duration of a flow run so
- * its clock / battery / signal never drive a screenshot diff. iOS uses
- * `simctl status_bar override`; Android uses SystemUI demo mode. Best-effort:
- * failures are swallowed so a flow never aborts because the status bar could
- * not be normalized.
- */
+/** Pins the status bar to fixed values so its clock / battery / signal never drive a screenshot diff. */
 
 const DEMO_BROADCAST = "am broadcast -a com.android.systemui.demo";
 
 /**
  * Returns whether the caller must schedule a run-end {@link restoreStatusBar}:
- * true when the override applied — and also when a failed pin's partial
- * override could not be undone here, so the teardown restore gets another
- * chance rather than leaving demo mode (frozen clock/battery) on the device.
+ * true when the override applied, and also when a partial override could not be
+ * undone here, so the teardown restore gets another chance.
  */
 export async function pinStatusBar(device: DeviceInfo): Promise<boolean> {
   try {
@@ -59,25 +52,20 @@ export async function pinStatusBar(device: DeviceInfo): Promise<boolean> {
       );
       return true;
     }
-    return false; // chromium / vega: no status bar to normalize
+    return false;
   } catch {
-    // A command may have failed after the override was already partially
-    // applied (e.g. Android demo mode entered but a later broadcast failed).
-    // The caller sees `false` and never restores, so undo here; both cleanup
-    // commands are harmless no-ops when nothing was applied.
+    // The override may already be partially applied, and the caller never
+    // restores after a `false`, so undo here; the cleanup is a no-op when
+    // nothing was applied.
     const restored = await restoreStatusBar(device);
-    // iOS's single override command applies atomically, so a failed pin left
-    // nothing behind. Android may be stuck mid-demo-mode: when even the undo
-    // failed (transient adb), report `true` so the caller's run-end restore
-    // still fires instead of leaving the frozen clock/battery applied.
+    // iOS's single override command leaves nothing behind on failure. Android
+    // may be stuck mid-demo-mode: when even the undo failed, report `true` so
+    // the caller's run-end restore retries.
     return device.platform === "android" && !restored;
   }
 }
 
-/**
- * Clear any status-bar override. Never throws; returns false when a command
- * failed and the override may still be applied.
- */
+/** Clears any override. Never throws; false means it may still be applied. */
 export async function restoreStatusBar(device: DeviceInfo): Promise<boolean> {
   try {
     if (device.platform === "ios") {
@@ -89,13 +77,13 @@ export async function restoreStatusBar(device: DeviceInfo): Promise<boolean> {
       try {
         await adbShell(device.id, `${DEMO_BROADCAST} -e command exit`);
       } finally {
-        // Also undo the pin's settings write — attempted even when the exit
-        // broadcast fails, so demo mode isn't left permitted on the device.
+        // Attempted even when the exit broadcast fails, so demo mode isn't
+        // left permitted on the device.
         await adbShell(device.id, "settings put global sysui_demo_allowed 0");
       }
     }
     return true;
   } catch {
-    return false; // best-effort restore
+    return false;
   }
 }
