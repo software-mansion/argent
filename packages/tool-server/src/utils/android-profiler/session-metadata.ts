@@ -34,12 +34,8 @@ export async function readAndroidNativeProfilerMetadata(
     throw err;
   }
 
-  // The sidecar exists (ENOENT already returned null above) but its bytes are
-  // unusable — corrupt JSON or a structurally invalid payload. Both are the
-  // same "present but invalid" class, distinct from PROFILER_NATIVE_METADATA_
-  // MISSING (no usable appProcess at the profiler-load call site), so they get
-  // their own code rather than falling through to the generic tool-execution
-  // bucket.
+  // Present-but-unusable gets its own code: PROFILER_NATIVE_METADATA_MISSING
+  // means no usable appProcess at the profiler-load call site.
   let parsed: Partial<AndroidNativeProfilerMetadata>;
   try {
     parsed = JSON.parse(raw) as Partial<AndroidNativeProfilerMetadata>;

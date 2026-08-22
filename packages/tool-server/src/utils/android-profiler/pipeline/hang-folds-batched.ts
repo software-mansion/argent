@@ -6,8 +6,8 @@ import { sanitizeProcessName } from "./sql-safety";
 import type { AndroidHangStateRow, AndroidHangGcRow } from "../types";
 
 /**
- * Per-hang annotation data, keyed by the caller-assigned hang index. Hangs with
- * no thread_state rows get an empty `state`; no GC overlap → empty `gc`.
+ * Per-hang annotation rows keyed by the caller's hang index. A hang with no
+ * matching rows has no entry at all.
  */
 export interface HangFoldsBatched {
   state: Map<number, AndroidHangStateRow[]>;
@@ -25,24 +25,23 @@ export interface HangWindowInput {
 
 export interface RunBatchedHangFoldsOptions {
   tracePath: string;
-  /** Sanitised process / package name. Caller validates the alphabet. */
+  /** Process / package name; validated against the package alphabet here. */
   target: string;
   hangs: HangWindowInput[];
 }
 
 /**
- * Compute main-thread state breakdown + GC overlap for ALL hang windows in one
- * batched query, replacing the legacy per-hang loop (the per-hang work moves
- * into a JOIN over a runtime-built `argent_hang_windows` table). On failure the promise rejects and the pipeline degrades every hang
- * to empty folds.
+ * Main-thread state breakdown + GC overlap for ALL hang windows in one query:
+ * the per-hang work becomes a JOIN over a runtime-built `argent_hang_windows`
+ * table. Rejects on failure; the pipeline then degrades every hang to empty folds.
  * rationale: utils/android-profiler/PIPELINE_DESIGN.md "4. The per-hang fold: batched, not looped"
  *
- * Schema invariants:
- *   • Each hang's `startNs`/`endNs` is inlined into SQL as bare digits — not
- *     quoted — so any non-numeric input produces a SQL syntax error rather than
- *     an injection. We assert finite non-negative integers for defence-in-depth.
- *   • `target` must already be validated against the package alphabet; it's
- *     wrapped in single quotes with literal `'` disallowed.
+ * Injection safety:
+ *   • `startNs`/`endNs` are inlined as bare unquoted digits, so non-numeric
+ *     input yields a SQL syntax error rather than an injection;
+ *     `assertSafeWindow` is defence-in-depth.
+ *   • `target` is single-quoted in the template, and the package alphabet
+ *     disallows a literal `'`.
  */
 export async function runBatchedHangFolds(
   opts: RunBatchedHangFoldsOptions
@@ -57,8 +56,6 @@ export async function runBatchedHangFolds(
     valuesTuples.push(`(${hang.hangIndex},${hang.startNs},${hang.endNs})`);
   }
 
-  // SQL lives in queries/hang-folds-batched.sql; we only build the validated
-  // VALUES tuples (bare digits) + already-validated target and fill the template.
   const templatePath = path.join(traceProcessorQueriesDir(), "hang-folds-batched.sql");
   const template = await fs.readFile(templatePath, "utf8");
   const sql = renderSqlTemplate(template, {
