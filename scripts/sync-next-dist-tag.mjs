@@ -102,6 +102,8 @@ function getDistTags(name) {
 function main() {
   const argv = processArgv.slice(2);
   const dryRun = argv.includes("--dry-run") || env.DRY_RUN === "1";
+  // Skip flags, and blank tokens: a whitespace-only arg must not reach `npm view`
+  // as the package name.
   const pkg = argv.find((a) => a.trim() !== "" && !a.startsWith("-")) ?? "@swmansion/argent";
 
   const versions = getVersions(pkg);
