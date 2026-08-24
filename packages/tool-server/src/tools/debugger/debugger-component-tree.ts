@@ -287,18 +287,6 @@ export function buildTextTree(
     }
   }
 
-  // Count visible nodes and identify collapsible single-child wrapper chains
-  // for maxNodes truncation.
-  function countNodes(id: number): number {
-    let n = 1;
-    const ch = childrenOf.get(id);
-    if (ch) for (const cid of ch) n += countNodes(cid);
-    return n;
-  }
-
-  let totalVisible = 0;
-  for (const rid of roots) totalVisible += countNodes(rid);
-
   // A node is a "content-free single-child wrapper" if it has exactly 1 child
   // and carries no text, testID, or accLabel.
   function isWrapper(id: number): boolean {
@@ -312,46 +300,105 @@ export function buildTextTree(
   // When set, the node's single-child chain is replaced with "... via N wrappers".
   const collapsed = new Map<number, number>();
   let collapsedCount = 0;
+  let shortfall = 0;
 
-  if (opts.maxNodes !== undefined && totalVisible > opts.maxNodes) {
-    // Find all maximal single-child wrapper chains: sequences of consecutive
-    // wrapper nodes (each with exactly 1 child and no content).
-    type Chain = { startId: number; length: number };
-    const chains: Chain[] = [];
-
-    function findChains(id: number) {
-      if (isWrapper(id)) {
-        let len = 0;
-        let cur = id;
-        while (isWrapper(cur)) {
-          len++;
-          cur = childrenOf.get(cur)![0];
-        }
-        if (len >= 2) {
-          chains.push({ startId: id, length: len });
-        }
+  /**
+   * How many component lines the renderer will actually emit.
+   *
+   * This has to mirror renderNode exactly — including its same-name sibling
+   * skip — because that skip drops nodes the plain subtree count still counts.
+   * Budgeting against the raw count would shrink a tree that was already within
+   * budget, so the cap is measured against what the caller will really see.
+   */
+  function countRendered(id: number): number {
+    const chainLen = collapsed.get(id);
+    if (chainLen !== undefined) {
+      let cur = id;
+      for (let i = 0; i < chainLen; i++) {
+        const next = childrenOf.get(cur);
+        if (!next || next.length === 0) return 1;
+        cur = next[0]!;
       }
-      const ch = childrenOf.get(id);
-      if (ch) {
-        for (const cid of ch) {
-          if (!collapsed.has(cid)) findChains(cid);
-        }
-      }
+      return 1 + countRendered(cur);
     }
 
-    for (const rid of roots) findChains(rid);
+    let n = 1;
+    const children = childrenOf.get(id);
+    if (children) {
+      let prevSibling: RawEntry | null = null;
+      for (const childId of children) {
+        const child = components[childId];
+        if (
+          prevSibling &&
+          child.name === prevSibling.name &&
+          child.rect &&
+          prevSibling.rect &&
+          rectsOverlap(child.rect, prevSibling.rect)
+        ) {
+          continue;
+        }
+        n += countRendered(childId);
+        prevSibling = child;
+      }
+    }
+    return n;
+  }
 
-    // Sort by chain length descending — collapse longest chains first
-    chains.sort((a, b) => b.length - a.length);
+  function renderedTotal(): number {
+    let n = 0;
+    for (const rid of roots) n += countRendered(rid);
+    return n;
+  }
 
-    const excess = totalVisible - opts.maxNodes;
-    for (const chain of chains) {
-      if (collapsedCount >= excess) break;
-      // Collapsing a chain of N wrappers saves (N - 1) nodes
-      // (we keep the chain start, replace middle with summary, keep the end)
-      // Actually we replace all N wrappers with 1 summary line, saving N - 1.
-      collapsed.set(chain.startId, chain.length);
-      collapsedCount += chain.length - 1;
+  if (opts.maxNodes !== undefined) {
+    // Treat a non-positive budget as 1 rather than rejecting it: 0 currently
+    // means "collapse as hard as possible", which is a usable intent, and an
+    // empty tree would be useless.
+    const budget = Math.max(1, Math.floor(opts.maxNodes));
+    const renderedBefore = renderedTotal();
+
+    if (renderedBefore > budget) {
+      // Maximal single-child wrapper chains: runs of consecutive nodes that each
+      // have exactly one child and carry no text, testID or accLabel.
+      type Chain = { startId: number; length: number; members: number[] };
+      const chains: Chain[] = [];
+
+      function findChains(id: number) {
+        if (isWrapper(id)) {
+          const members: number[] = [];
+          let cur = id;
+          while (isWrapper(cur)) {
+            members.push(cur);
+            cur = childrenOf.get(cur)![0]!;
+          }
+          if (members.length >= 1) {
+            chains.push({ startId: id, length: members.length, members });
+          }
+        }
+        const ch = childrenOf.get(id);
+        if (ch) for (const cid of ch) findChains(cid);
+      }
+
+      for (const rid of roots) findChains(rid);
+
+      // Longest first — each collapse hides the most nodes for one summary line.
+      chains.sort((a, b) => b.length - a.length);
+
+      // A chain's own suffixes are discovered as chains too, so collapsing one
+      // and then a chain nested inside it would count the same nodes twice.
+      // Consuming members as we go keeps every node attributable to one collapse.
+      const consumed = new Set<number>();
+      for (const chain of chains) {
+        if (renderedTotal() <= budget) break;
+        if (chain.members.some((m) => consumed.has(m))) continue;
+        collapsed.set(chain.startId, chain.length);
+        for (const m of chain.members) consumed.add(m);
+      }
+
+      // Measured, not accumulated — the only way this can disagree with the
+      // tree above it is if the renderer itself changes.
+      collapsedCount = renderedBefore - renderedTotal();
+      shortfall = Math.max(0, renderedTotal() - budget);
     }
   }
 
@@ -370,7 +417,12 @@ export function buildTextTree(
     if (c.rect && canNormalize) {
       const tapX = ((c.rect.x + c.rect.w / 2) / screenW).toFixed(2);
       const tapY = ((c.rect.y + c.rect.h / 2) / screenH).toFixed(2);
-      label += ` (tap: ${tapX},${tapY})`;
+      // A centre outside the viewport cannot be tapped — a partially-visible row
+      // scrolled under the top edge is the common case. Keep the numbers (they
+      // still say which way and how far the element is) but drop the `tap:`
+      // affordance, so the coordinate is not handed to gesture-tap verbatim.
+      const offScreen = +tapX < 0 || +tapX > 1 || +tapY < 0 || +tapY > 1;
+      label += offScreen ? ` (off-screen: ${tapX},${tapY})` : ` (tap: ${tapX},${tapY})`;
     }
     return label;
   }
@@ -388,7 +440,12 @@ export function buildTextTree(
       }
       const indent = "  ".repeat(depth);
       lines.push(`${indent}${formatLabel(c)}`);
-      lines.push(`${indent}  ... via ${chainLen} wrapper${chainLen > 1 ? "s" : ""}`);
+      // The chain start is rendered above and the chain end below, so the number
+      // of wrappers actually hidden is one fewer than the chain length.
+      const hidden = chainLen - 1;
+      if (hidden > 0) {
+        lines.push(`${indent}  ... via ${hidden} wrapper${hidden > 1 ? "s" : ""}`);
+      }
       renderNode(cur, depth + 1);
       return;
     }
@@ -423,6 +480,19 @@ export function buildTextTree(
     lines.push("");
     lines.push(
       `... ${collapsedCount} wrapper node${collapsedCount > 1 ? "s" : ""} collapsed. Call without maxNodes to see full tree.`
+    );
+  }
+
+  if (shortfall > 0) {
+    if (collapsedCount === 0) lines.push("");
+    // Say it rather than cutting into the tree. Everything left is either a
+    // named element or a branch point, and dropping those is how a caller ends
+    // up concluding a component does not exist when it was merely trimmed.
+    lines.push(
+      `... maxNodes=${opts.maxNodes} could not be met: ${shortfall} node${shortfall > 1 ? "s" : ""} over budget. ` +
+        `Only structural wrappers are collapsible; the rest carry a name, text, testID or a branch, ` +
+        `so they are kept rather than dropped. Narrow the tree instead — inspect a subtree with ` +
+        `debugger-inspect-element, or raise maxNodes.`
     );
   }
 
@@ -461,7 +531,13 @@ export function buildTextTree(
           .join(", ");
         lines.push(`  Same-name dedup: ${filterStats.sameNameDedup.count} (${detail})`);
       }
-      if (filterStats.offScreen.count > 0) {
+      // Reported even at zero, unlike the other passes: a reader comparing
+      // onScreenOnly true vs false needs to distinguish "the filter removed
+      // nothing because nothing is off-viewport" from "the filter did nothing".
+      // Silence there reads as a broken parameter.
+      if (opts.onScreenOnly) {
+        lines.push(`  Off-screen: ${filterStats.offScreen.count}`);
+      } else if (filterStats.offScreen.count > 0) {
         lines.push(`  Off-screen: ${filterStats.offScreen.count}`);
       }
       if (filterStats.fullScreenWrapper.count > 0) {
@@ -504,8 +580,11 @@ const zodSchema = z.object({
     .number()
     .optional()
     .describe(
-      "Maximum total nodes to include. When exceeded, intermediate single-child " +
-        "wrapper chains are collapsed to preserve both root structure and leaf elements. " +
+      "Target node budget. When the tree is larger, single-child wrapper chains are " +
+        "collapsed to approach it, preserving both root structure and leaf elements. " +
+        "Nodes carrying a name you could target — text, testID, accessibility label — and " +
+        "branch points are never dropped, so a tree made mostly of those can still exceed " +
+        "the budget; the response says so and by how much rather than truncating silently. " +
         "Default: no limit."
     ),
   includeSkipped: z
@@ -538,7 +617,7 @@ This is the preferred element discovery tool for React Native apps. More informa
 Workflow:
   1. Call this tool to get the component tree.
   2. Find the desired element by name, text, testID, or accessibilityLabel.
-  3. Use the (tap: x,y) coordinates directly with the tap tool.
+  3. Use the (tap: x,y) coordinates directly with the tap tool. An element whose centre lies outside the viewport is listed with (off-screen: x,y) instead — those coordinates cannot be tapped, and their sign tells you which way to scroll first.
 
 Call again after navigation or state changes since positions may shift.
 Set includeSkipped=true to see a summary of all filtered components.
