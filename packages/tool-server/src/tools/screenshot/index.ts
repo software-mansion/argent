@@ -1,9 +1,10 @@
 import { execFile } from "node:child_process";
+import { copyFile, mkdtemp } from "node:fs/promises";
 import { promisify } from "node:util";
 import * as os from "node:os";
 import * as path from "node:path";
 import { z } from "zod";
-import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
+import type { ArtifactStore, Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
@@ -22,6 +23,18 @@ const zodSchema = z.object({
     .string()
     .describe(
       "Target device id from `list-devices` (iOS UDID, Android serial, Apple TV UDID, Vega serial, or Chromium id)."
+    ),
+  name: z
+    .string()
+    .trim()
+    .min(1)
+    .max(120)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9 ._-]*$/, {
+      message: "Use letters, numbers, spaces, dots, underscores, or hyphens.",
+    })
+    .optional()
+    .describe(
+      "Optional human-readable screenshot name. Included in event logs and used for the PNG filename; `.png` is appended when omitted."
     ),
   rotation: z
     .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
@@ -63,6 +76,51 @@ interface Result {
    * is remote.
    */
   image: ArtifactHandle;
+}
+
+/**
+ * Turn the human label into a stable, path-safe PNG basename. The schema
+ * rejects separators/control characters, and the replacement here keeps the
+ * filesystem sink safe even if a test or future internal caller bypasses
+ * registry validation. Whitespace becomes hyphens so the same name is pleasant
+ * to use from shells and artifact browsers.
+ */
+function namedScreenshotFilename(name: string): string {
+  const stem = name
+    .trim()
+    .replace(/\.png$/i, "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^[._-]+|[._-]+$/g, "")
+    .slice(0, 120);
+  return `${stem || "screenshot"}.png`;
+}
+
+/**
+ * A filename override on the artifact handle is enough for a remote download,
+ * but a co-located client uses `hostPath` directly. Stage named captures under
+ * their real basename too, so both paths (including EAS Simulator collection)
+ * observe the human filename instead of the backend's timestamp/UUID.
+ */
+async function stageNamedScreenshot(capturedPath: string, name?: string): Promise<string> {
+  if (!name) return capturedPath;
+  const dir = await mkdtemp(path.join(os.tmpdir(), "argent-named-screenshot-"));
+  const namedPath = path.join(dir, namedScreenshotFilename(name));
+  await copyFile(capturedPath, namedPath);
+  return namedPath;
+}
+
+async function registerScreenshotArtifact(
+  artifacts: ArtifactStore,
+  capturedPath: string,
+  name?: string
+): Promise<ArtifactHandle> {
+  const artifactPath = await stageNamedScreenshot(capturedPath, name);
+  return artifacts.register(artifactPath, {
+    mimeType: "image/png",
+    ...(name ? { filename: namedScreenshotFilename(name) } : {}),
+  });
 }
 
 const capability: ToolCapability = {
@@ -129,9 +187,11 @@ export function createScreenshotTool(registry: Registry): ToolDefinition<Params,
   return {
     id: "screenshot",
     interaction: {
-      startedMsg: () => "Capturing screenshot",
+      startedMsg: ({ params }) =>
+        params.name ? `Capturing screenshot ${params.name}` : "Capturing screenshot",
       completedMsg: ({ result }) => `Captured screenshot ${result.image.filename}`,
-      failedMsg: ({ failureSignal }) => `Failed to capture screenshot: ${failureSignal.error_code}`,
+      failedMsg: ({ params, failureSignal }) =>
+        `Failed to capture screenshot${params.name ? ` ${params.name}` : ""}: ${failureSignal.error_code}`,
     },
     description: `Capture a screenshot of the device screen (iOS simulator, Android emulator, Apple TV simulator, Vega, or Chromium app). Returns { image }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
 Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.
@@ -159,7 +219,11 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
           scale: params.scale,
           downscaler: params.downscaler,
         });
-        const image = await requireArtifacts(ctx).register(capturedPath, { mimeType: "image/png" });
+        const image = await registerScreenshotArtifact(
+          requireArtifacts(ctx),
+          capturedPath,
+          params.name
+        );
         return { image };
       }
 
@@ -167,7 +231,7 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
       // tvOS has no simulator-server backend, so capture via xcrun instead.
       if (device.platform === "ios" && (await isTvOsSimulator(params.udid))) {
         const pngPath = await tvScreenshot(params.udid, scale, signal);
-        const image = await requireArtifacts(ctx).register(pngPath, { mimeType: "image/png" });
+        const image = await registerScreenshotArtifact(requireArtifacts(ctx), pngPath, params.name);
         return { image };
       }
 
@@ -176,7 +240,7 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
       // Vega device would throw), so capture directly here.
       if (device.platform === "vega") {
         const pngPath = await captureVegaScreenshotPng({ scale: params.scale });
-        const image = await requireArtifacts(ctx).register(pngPath, { mimeType: "image/png" });
+        const image = await registerScreenshotArtifact(requireArtifacts(ctx), pngPath, params.name);
         return { image };
       }
 
@@ -191,7 +255,11 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
         undefined,
         androidDevtoolsRotationPeek(registry, device)
       );
-      const image = await requireArtifacts(ctx).register(capturedPath, { mimeType: "image/png" });
+      const image = await registerScreenshotArtifact(
+        requireArtifacts(ctx),
+        capturedPath,
+        params.name
+      );
       return { image };
     },
   };
