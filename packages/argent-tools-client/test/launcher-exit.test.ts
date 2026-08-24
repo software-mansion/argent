@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -45,7 +45,11 @@ const fakePaths = (): import("../src/launcher.js").ToolsServerPaths => ({
 
 beforeAll(async () => {
   TEST_HOME = mkdtempSync(join(tmpdir(), "argent-exit-test-"));
+  // os.homedir() — which STATE_DIR and the link file are built from — reads
+  // USERPROFILE on Windows and HOME elsewhere, so pin both or the redirect
+  // is inert there and these tests operate on the real ~/.argent.
   process.env.HOME = TEST_HOME;
+  process.env.USERPROFILE = TEST_HOME;
   vi.resetModules();
   launcher = await import("../src/launcher.js");
   expect(existsSync(FAKE_BUNDLE)).toBe(true);
@@ -56,7 +60,16 @@ afterAll(() => {
 });
 
 const spawnedPids: number[] = [];
+// TTL safety net. The reaper below can only kill a pid that reached
+// `spawnedPids`, and every site records one only after the spawn has already
+// happened — so an assertion throwing in between leaves a real server running
+// while this same hook deletes the record that could find it. Sixty seconds
+// outlasts the longest test here (30s) and expires well before the next run.
+beforeEach(() => {
+  process.env.FAKE_TTL_MS = "60000";
+});
 afterEach(async () => {
+  delete process.env.FAKE_TTL_MS;
   lastChild = null;
   for (const pid of spawnedPids.splice(0)) {
     try {

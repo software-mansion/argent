@@ -25,6 +25,11 @@ const capability: ToolCapability = {
 
 export const rotateTool: ToolDefinition<Params, Result> = {
   id: "rotate",
+  interaction: {
+    startedMsg: ({ params }) => `Rotating device to ${params.orientation}`,
+    completedMsg: ({ params }) => `Rotated device to ${params.orientation}`,
+    failedMsg: ({ failureSignal }) => `Failed to rotate device: ${failureSignal.error_code}`,
+  },
   description: `Set the device orientation to Portrait, LandscapeLeft, LandscapeRight, or PortraitUpsideDown.
 Use to test layout in a different orientation. Re-run \`describe\` afterwards — frame coordinates change with the orientation.
 Returns { orientation }. Fails if the target device is not booted.`,

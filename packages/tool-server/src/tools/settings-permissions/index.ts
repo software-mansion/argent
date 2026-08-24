@@ -37,6 +37,12 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
+const permissionAction = {
+  grant: { started: "Granting", completed: "Granted" },
+  deny: { started: "Denying", completed: "Denied" },
+  reset: { started: "Resetting", completed: "Reset" },
+} as const;
+
 const capability: ToolCapability = {
   // `simctl privacy` edits the simulator's TCC store — physical iPhones have no
   // equivalent host-side switch, so no `device: true` on apple.
@@ -50,6 +56,14 @@ const capability: ToolCapability = {
 
 export const settingsPermissionsTool: ToolDefinition<Params, SettingsPermissionsResult> = {
   id: "settings-permissions",
+  interaction: {
+    startedMsg: ({ params }) =>
+      `${permissionAction[params.action].started} ${params.permission} permission for ${params.bundleId}`,
+    completedMsg: ({ params }) =>
+      `${permissionAction[params.action].completed} ${params.permission} permission for ${params.bundleId}`,
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to ${params.action} ${params.permission} permission for ${params.bundleId}: ${failureSignal.error_code}`,
+  },
   description: `Grant, deny, or reset a runtime permission for an app without navigating the system Settings UI. Use during test setup to pre-authorize (or explicitly deny) a service before the app asks, or \`reset\` so the permission dialog appears again on next use. Always per-app: bundleId is required.
 Permissions: camera, microphone, photos, contacts, notifications, calendar, location, location-always, media-library, motion, reminders.
 iOS simulator: edits the simulator's TCC store, always per-app. \`notifications\` is not supported (no iOS equivalent). \`reset\` is per-app — a device-wide reset is a no-op for existing grants on recent iOS, so it is not offered. \`grant location\`/\`location-always\` needs the app already installed (location auth isn't stored in TCC and isn't applied to a bundle id until the app exists) — enforced on local simulators; a remote simulator can't be probed for install state, so ensure the app is installed there first. Other services can be granted before install.

@@ -1,6 +1,13 @@
+import * as fs from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { SIMCTL_KILL_SIGNAL } from "./simctl-config";
+import {
+  configuredAdditionalDeviceSets,
+  rememberDeviceSet,
+  simctlPrefix,
+  type DeviceSetPath,
+} from "./ios-device-sets";
 
 const execFileAsync = promisify(execFile);
 
@@ -10,6 +17,8 @@ export interface IosSimulator {
   state: string;
   runtime: string;
   runtimeKind?: "mobile" | "tv";
+  /** Owning CoreSimulator device-set directory; absent for the default set. */
+  deviceSet?: string;
 }
 
 interface SimctlDevice {
@@ -24,17 +33,18 @@ interface SimctlOutput {
   devices: Record<string, SimctlDevice[]>;
 }
 
-/**
- * List all available iOS and tvOS simulators via `xcrun simctl list devices --json`.
- * Returns an empty array when xcrun is missing or the call fails so the
- * rest of the tool surface stays usable on non-mac hosts.
- */
-export async function listIosSimulators(): Promise<IosSimulator[]> {
+/** List one device set's iOS/tvOS simulators; [] on any failure. */
+async function listDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSimulator[]> {
+  // Never query a configured set whose directory doesn't exist — simctl would
+  // materialize the set dir as a side effect, turning a config typo into a
+  // stray directory on disk.
+  if (deviceSet && !fs.existsSync(deviceSet)) return [];
   try {
-    const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "devices", "--json"], {
-      timeout: 10_000,
-      killSignal: SIMCTL_KILL_SIGNAL,
-    });
+    const { stdout } = await execFileAsync(
+      "xcrun",
+      [...simctlPrefix(deviceSet), "list", "devices", "--json"],
+      { timeout: 10_000, killSignal: SIMCTL_KILL_SIGNAL }
+    );
     const data: SimctlOutput = JSON.parse(stdout);
     const out: IosSimulator[] = [];
     for (const [runtimeId, devices] of Object.entries(data.devices)) {
@@ -49,6 +59,7 @@ export async function listIosSimulators(): Promise<IosSimulator[]> {
           state: d.state,
           runtime: runtimeId,
           runtimeKind,
+          ...(deviceSet ? { deviceSet } : {}),
         });
       }
     }
@@ -56,6 +67,33 @@ export async function listIosSimulators(): Promise<IosSimulator[]> {
   } catch {
     return [];
   }
+}
+
+/**
+ * List all available iOS and tvOS simulators via `xcrun simctl list devices
+ * --json` — the default device set plus every configured additional set
+ * (`ios.additionalDeviceSets`, e.g. Radon IDE's). Each device is tagged with
+ * its owning set and remembered in the UDID → device-set map, so any later
+ * per-device simctl call targets the right set. Returns an empty array when
+ * xcrun is missing or every set fails, so the rest of the tool surface stays
+ * usable on non-mac hosts.
+ */
+export async function listIosSimulators(): Promise<IosSimulator[]> {
+  const sets: DeviceSetPath[] = [null, ...configuredAdditionalDeviceSets()];
+  const perSet = await Promise.all(sets.map(listDeviceSetSimulators));
+  const out: IosSimulator[] = [];
+  const seen = new Set<string>();
+  for (const simulators of perSet) {
+    for (const sim of simulators) {
+      // A UDID can only live in one set; keep the first sighting (default set
+      // first) as a guard against a set listed twice in the config.
+      if (seen.has(sim.udid)) continue;
+      seen.add(sim.udid);
+      rememberDeviceSet(sim.udid, sim.deviceSet ?? null);
+      out.push(sim);
+    }
+  }
+  return out;
 }
 
 // A simulator's runtime kind is fixed at creation (an iOS sim can't become a

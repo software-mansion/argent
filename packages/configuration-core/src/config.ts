@@ -83,20 +83,32 @@ export function setAtPath(obj: Record<string, unknown>, dottedKey: string, value
 
 /**
  * Delete the leaf at a dotted key. Returns true when something was removed.
- * Intermediate objects are left in place (an emptied parent stays as `{}`),
- * matching how the previous per-key clearers behaved.
+ *
+ * A container left empty by the delete is removed along with it, so unsetting
+ * the last key under a group restores the document to what it was before the
+ * group existed rather than leaving `{ "ios": {} }` behind — noise in a project
+ * config that gets committed. Only containers this delete emptied are removed:
+ * the walk stops at the first ancestor that still holds something, and the root
+ * object always survives (an emptied config is `{}`, never a deleted file).
  */
 export function deleteAtPath(obj: Record<string, unknown>, dottedKey: string): boolean {
   const parts = splitKey(dottedKey);
-  let cur = obj;
+  // Every container on the way to the leaf, so the emptied ones can be unwound
+  // afterwards. chain[i] holds parts[i].
+  const chain: Record<string, unknown>[] = [obj];
   for (let i = 0; i < parts.length - 1; i++) {
-    const next = cur[parts[i]!];
+    const next = chain[i]![parts[i]!];
     if (!isPlainObject(next)) return false;
-    cur = next;
+    chain.push(next);
   }
+  const parent = chain[parts.length - 1]!;
   const leaf = parts[parts.length - 1]!;
-  if (!Object.hasOwn(cur, leaf)) return false;
-  delete cur[leaf];
+  if (!Object.hasOwn(parent, leaf)) return false;
+  delete parent[leaf];
+  for (let i = chain.length - 1; i >= 1; i--) {
+    if (Object.keys(chain[i]!).length > 0) break;
+    delete chain[i - 1]![parts[i - 1]!];
+  }
   return true;
 }
 

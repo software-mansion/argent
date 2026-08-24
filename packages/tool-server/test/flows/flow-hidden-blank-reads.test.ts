@@ -133,6 +133,40 @@ describe("hidden timeout diagnostics", () => {
     expect(result.steps[0].reason).not.toMatch(/still visible/);
   });
 
+  it("does not pass a hidden assert when the element was NEVER seen and the tree source is dark", async () => {
+    // The runner's half of the no-windows fix: a `hidden` assert whose element
+    // is NEVER seen, so `everMatched` never flips and the blind-read guard's
+    // everMatched-only backstop can't catch it — the only defense is the tree
+    // source refusing the read. The rejecting fetch is SCRIPTED here (this
+    // file mocks fetchFlowTree wholesale; the message just mirrors
+    // flow-ios-tree's no-windows guard, which flow-ios-tree-no-windows.test.ts
+    // exercises at the unit level and flow-hidden-no-windows-e2e.test.ts
+    // end-to-end). What this case locks in is the caller's contract with that
+    // upstream throw: when every fetch rejects, the assert fails with the
+    // outage — the /not injectable/ check pins the fetch error's text landing
+    // in the step reason — instead of treating an unreadable screen as a
+    // no-match that satisfies `hidden`.
+    currentFetch = () => {
+      throw new Error(
+        "getFullHierarchy returned no windows for com.apple.Preferences — the app is not injectable"
+      );
+    };
+
+    await writeFlow("never-seen-hidden", {
+      executionPrerequisite: "",
+      steps: [{ kind: "assert", condition: "hidden", selector: { identifier: "General" } }],
+    });
+
+    const result = await run("never-seen-hidden");
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/could not read the UI tree/);
+    expect(result.steps[0].reason).toMatch(/not injectable/);
+    // Must NOT read as a confirmed-hidden pass.
+    expect(result.steps[0].reason).not.toMatch(/still visible/);
+  });
+
   it("still reports a genuinely visible element as still visible", async () => {
     currentFetch = () => ({
       tree: screen([

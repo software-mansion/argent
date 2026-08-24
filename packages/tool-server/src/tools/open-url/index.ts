@@ -23,6 +23,19 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
+// Keep credentials, paths, query parameters, and fragments out of the event log.
+// Web URLs are reduced to their hostname; custom URLs are reduced to their scheme.
+function safeDestination(value: string): string {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:"
+      ? url.hostname
+      : url.protocol.replace(/:$/, "");
+  } catch {
+    return "URL";
+  }
+}
+
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   appleRemote: { simulator: true },
@@ -32,6 +45,12 @@ const capability: ToolCapability = {
 
 export const openUrlTool: ToolDefinition<Params, OpenUrlResult> = {
   id: "open-url",
+  interaction: {
+    startedMsg: ({ params }) => `Opening ${safeDestination(params.url)}`,
+    completedMsg: ({ params }) => `Opened ${safeDestination(params.url)}`,
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to open ${safeDestination(params.url)}: ${failureSignal.error_code}`,
+  },
   description: `Open a URL or URL scheme on the device.
 Use to navigate to a web page or deep-link into an app. On Chromium, this navigates the primary renderer to the given URL.
 Cross-platform schemes: https://, tel:, mailto:. iOS also: messages://, settings://, maps://. Android also: geo:, plus any app-specific deep link.

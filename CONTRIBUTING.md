@@ -18,7 +18,7 @@ Thank you for your interest in contributing to Argent! This guide covers everyth
 ## Requirements
 
 - **macOS** with Xcode installed (required for `xcrun simctl` and iOS simulator support)
-- **Node.js 18+**
+- **Node.js 20.19+** (the lint toolchain's floor; the published package needs 20.12+)
 - The `simulator-server` and `ax-service` binaries in `packages/native-devtools-ios/bin/` (arm64 macOS, installed separately via `npx @swmansion/argent install`)
 
 ---
@@ -54,7 +54,7 @@ Thank you for your interest in contributing to Argent! This guide covers everyth
 
    > **Note:** `packages/argent-private` is a private git submodule that holds the ObjC source for the native devtools dylibs. If you don't have SSH access to it, `npm run dev` will use the pre-built dylibs committed to the repository — everything else works normally.
 
-That's it — no separate install steps per package are needed.
+That's it, no separate install steps per package are needed, except `packages/docs`. It is excluded from the workspace glob and keeps its own lockfile, so `npm run lint` from the root needs `npm install` run inside `packages/docs` first.
 
 ---
 
@@ -171,9 +171,15 @@ npm run test:watch -w @argent/tool-server
    npm run build
    ```
 4. **Ensure tests pass** for the packages you touched.
-5. **Write a clear PR title** — it becomes part of the release changelog. Use the same prefix convention as commit messages (`feat:`, `fix:`, etc.).
-6. **Open the PR** against `main` and fill in the description with context on what changed and why.
-7. A maintainer will review and may request changes. Address feedback with new commits (don't force-push after review starts).
+5. **Check for dead code**, in a tree with no build output:
+   ```bash
+   npx tsc --build --clean
+   npm run knip
+   ```
+   Run it this way round, not straight after step 3. The `--max-issues` ceiling is counted against an unbuilt tree, because that is what CI analyses; with `packages/*/dist` present knip finds fewer issues, so a built-tree run carries phantom headroom and can pass locally while the Dead Code job fails. This leaves the tree unbuilt, so run `npm run build` again before re-running any test suite. If your change legitimately adds an export nothing imports yet, raise the `--max-issues` number in the same commit rather than deleting someone else's backlog — the bump is the part reviewers should see.
+6. **Write a clear PR title** — it becomes part of the release changelog. Use the same prefix convention as commit messages (`feat:`, `fix:`, etc.).
+7. **Open the PR** against `main` and fill in the description with context on what changed and why.
+8. A maintainer will review and may request changes. Address feedback with new commits (don't force-push after review starts).
 
 ---
 

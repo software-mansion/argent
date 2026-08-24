@@ -65,6 +65,12 @@ const capability: ToolCapability = {
 export function createLaunchAppTool(registry: Registry): ToolDefinition<Params, LaunchAppResult> {
   return {
     id: "launch-app",
+    interaction: {
+      startedMsg: ({ params }) => `Launching ${params.bundleId}`,
+      completedMsg: ({ params }) => `Launched ${params.bundleId}`,
+      failedMsg: ({ params, failureSignal }) =>
+        `Failed to launch ${params.bundleId}: ${failureSignal.error_code}`,
+    },
     description: `Open an app by its bundle id (iOS) or package name (Android), or confirm the running renderer (Chromium).
 Use when starting any app — prefer this over tapping home-screen / launcher icons. Also prepares the native-devtools injection before the app starts (the iOS slice on iOS, the tvOS slice on Apple TV); on tvOS, interaction is focus-driven — use the tv-* tools rather than coordinate taps.
 Returns { launched, bundleId }. Fails if the app is not installed on the target device (iOS / Android).

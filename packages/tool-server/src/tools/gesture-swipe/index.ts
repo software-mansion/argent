@@ -49,6 +49,13 @@ const capability: ToolCapability = {
 
 export const gestureSwipeTool: ToolDefinition<Params, Result> = {
   id: "gesture-swipe",
+  interaction: {
+    startedMsg: ({ params }) =>
+      `Swiping from (${Math.round(params.fromX * 100)}%, ${Math.round(params.fromY * 100)}%) to (${Math.round(params.toX * 100)}%, ${Math.round(params.toY * 100)}%)`,
+    completedMsg: ({ params }) =>
+      `Swiped from (${Math.round(params.fromX * 100)}%, ${Math.round(params.fromY * 100)}%) to (${Math.round(params.toX * 100)}%, ${Math.round(params.toY * 100)}%)`,
+    failedMsg: ({ failureSignal }) => `Failed to swipe: ${failureSignal.error_code}`,
+  },
   description: `Execute a smooth swipe / drag touch gesture between two points on the device (iOS simulator or Android emulator). All from/to positions are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same as gesture-tap.
 Generates interpolated Move events for a natural feel (~60fps).
 Swipe up (fromY > toY) to scroll content down.

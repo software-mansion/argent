@@ -11,6 +11,7 @@ import type { ChildProcess } from "child_process";
 import type { CpuSample, UiHang, MemoryLeak, CpuHotspot } from "../utils/ios-profiler/types";
 import { waitForChildExit } from "../utils/profiler-shared/lifecycle";
 import { adbShell } from "../utils/adb";
+import { recordReapedSession } from "../utils/reaped-sessions";
 import { disposeWarmEngine } from "@argent/native-devtools-android";
 
 // Cross-platform session for the `native-profiler-*` tools: iOS uses an xctrace
@@ -86,6 +87,19 @@ export interface NativeProfilerSessionApi {
    * Null when unknown — before any stop, on Android, or after a load.
    */
   mallocStackLogging: boolean | null;
+  /**
+   * Whether this session has been torn down. Set by `dispose()` and never
+   * cleared: `Registry._teardown` nulls the node's instance, so the next
+   * resolve builds a fresh api rather than reviving this one.
+   *
+   * Read by `native-profiler-start`, which spawns its capture child and then
+   * awaits a readiness handshake. A teardown arriving inside that window
+   * destroys the session the start is about to report success for — leaving a
+   * `status: "recording"` against a session the registry no longer has, whose
+   * owner's `native-profiler-stop` then answers "call native-profiler-start
+   * first". Start checks this before returning and fails instead.
+   */
+  disposed: boolean;
   recordingTimeout: NodeJS.Timeout | null;
   recordingTimedOut: boolean;
   recordingExitedUnexpectedly: boolean;
@@ -94,11 +108,53 @@ export interface NativeProfilerSessionApi {
   androidOnDeviceTracePath: string | null;
 }
 
-// Dispose only fires on process shutdown, where an in-flight recording is being
-// abandoned: skip the SIGINT finalise grace (that's the native-profiler-stop
-// contract) and SIGKILL straight away so shutdown isn't held up.
+// Dispose fires on process shutdown, and on `stop-all-simulator-servers` (which
+// reaps every device-owned service, `NativeProfilerSession` among them) — the
+// call every agent makes at session end. Either way an in-flight capture is
+// being abandoned with nobody waiting on the trace, so skip the SIGINT finalise
+// grace (that's the native-profiler-stop contract, and a caller that wants the
+// trace calls that) and SIGKILL straight away rather than holding the caller up.
 const DISPOSE_REAP_MS = 1_000;
 const ANDROID_DISPOSE_ADB_TIMEOUT_MS = 5_000;
+
+/**
+ * What survived an iOS teardown, per arm — see the two flags in `dispose()`.
+ * `midCapture` names the arm that was still recording; the other one had
+ * already stopped, by the 10-minute cap's SIGINT or by xctrace exiting on its
+ * own, so its bundle went through a finalize pass and calling it half-written
+ * would send the owner away from a trace they can still read.
+ */
+function iosSalvage(midCapture: boolean, traceFile: string | null): string | undefined {
+  if (!traceFile) return undefined;
+  return midCapture
+    ? `xctrace was killed without its finalize pass, so the partial bundle at ${traceFile} is ` +
+        `very likely unreadable — re-profile rather than trying to salvage it.`
+    : `The recording had already ended before this teardown (the 10-minute cap, or xctrace ` +
+        `exiting on its own), so the bundle at ${traceFile} was finalized and may well be ` +
+        `readable — but this session was the only thing that could export it, so re-profile ` +
+        `unless you can open that bundle yourself.`;
+}
+
+/** The Android twin of {@link iosSalvage}. */
+function androidSalvage(midCapture: boolean, onDeviceTracePath: string | null): string {
+  if (midCapture) {
+    // The on-device .pftrace is removed by the kill branch, and nothing was
+    // pulled to the host yet, so there is genuinely nothing to point at.
+    return (
+      "The perfetto daemon was killed and its on-device trace removed, so no trace " +
+      "survived — re-profile to capture again."
+    );
+  }
+  // The cap arm sent SIGTERM and cleared `profilingActive`, so the kill branch
+  // does not run and the trace is still on the device — but only this session
+  // knew to pull it.
+  return (
+    `The recording had already ended before this teardown (the 10-minute cap), so the ` +
+    `on-device trace was left in place${onDeviceTracePath ? ` at ${onDeviceTracePath}` : ""} — ` +
+    `but this session was the only thing that could pull it to the host. Re-profile, or ` +
+    `\`adb pull\` it yourself.`
+  );
+}
 
 function clearLiveState(state: NativeProfilerSessionApi): void {
   state.profilingActive = false;
@@ -160,6 +216,7 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
       cpuFilterPid: null,
       recordingMallocStackLogging: null,
       mallocStackLogging: null,
+      disposed: false,
       recordingTimeout: null,
       recordingTimedOut: false,
       recordingExitedUnexpectedly: false,
@@ -172,15 +229,46 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
     return {
       api: state,
       dispose: async () => {
+        // Before anything else, and read by a start still inside its readiness
+        // handshake: from here on this session no longer exists, so a start
+        // that resumes must fail rather than report a recording nothing can
+        // reach. See {@link NativeProfilerSessionApi.disposed}.
+        state.disposed = true;
         if (state.recordingTimeout) {
           clearTimeout(state.recordingTimeout);
           state.recordingTimeout = null;
         }
+        // Read before the teardown below clears it. A capture killed here is
+        // destroyed rather than salvaged — no SIGINT finalize grace, and on
+        // Android the on-device trace is removed outright — so the breadcrumb
+        // exists purely so `native-profiler-stop` stops answering "call
+        // native-profiler-start first" for a session that really did run.
+        const midCapture = state.profilingActive;
+        // …and a capture the 10-minute cap or an unexpected exit already ended
+        // is one that RAN too. Those arms clear `profilingActive` while leaving
+        // the trace recoverable — `native-profiler-stop` has a whole branch for
+        // exporting it — so a teardown here still destroys the owner's only way
+        // to reach it, and gating the breadcrumb on `profilingActive` alone sent
+        // that owner back to "you never started one". It is also destroyed
+        // DIFFERENTLY: that arm already sent SIGINT (or the process exited on
+        // its own), so the salvage text below must not call the bundle a
+        // half-written one.
+        const endedCapture =
+          (state.recordingTimedOut || state.recordingExitedUnexpectedly) &&
+          state.traceFile !== null;
+        const abandonedCapture = midCapture || endedCapture;
+        const abandonedTrace = state.traceFile;
 
         if (state.platform === "ios") {
           const child = state.captureProcess;
           try {
-            if (state.profilingActive && child) {
+            // Whether or not the run has been declared active: `attemptStart`
+            // hands the child over BEFORE awaiting xctrace's readiness
+            // handshake, so a teardown inside that window sees `profilingActive`
+            // still false while a spawned xctrace is very much running. Gating
+            // the kill on the flag left it behind, recording into a trace
+            // nobody would ever stop.
+            if (child) {
               try {
                 child.kill("SIGKILL");
               } catch {
@@ -190,6 +278,13 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
             }
           } finally {
             clearLiveState(state);
+            if (abandonedCapture) {
+              recordReapedSession(
+                "native-profiler",
+                state.deviceId,
+                iosSalvage(midCapture, abandonedTrace)
+              );
+            }
           }
           return;
         }
@@ -211,6 +306,13 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
           }
         } finally {
           clearLiveState(state);
+          if (abandonedCapture) {
+            recordReapedSession(
+              "native-profiler",
+              state.deviceId,
+              androidSalvage(midCapture, onDeviceTracePath)
+            );
+          }
         }
 
         // ANDROID: Free this trace's warm Perfetto engine (trace memory + wasm heap) now

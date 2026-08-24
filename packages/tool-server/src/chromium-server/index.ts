@@ -1,6 +1,6 @@
 import { TypedEventEmitter } from "@argent/registry";
 import type { CDPClient } from "../utils/debugger/cdp-client";
-import { connectCdp, enableCoreDomains } from "./cdp-session";
+import { connectCdp, primePageSession } from "./cdp-session";
 import { ClipboardSyncState, setClipboardText } from "./clipboard";
 import { FpsTracker } from "./fps";
 import { sendButton, sendKey, sendRotate, sendTouch, sendWheel, sendCharInsert } from "./input";
@@ -65,7 +65,7 @@ export async function createChromiumServer(
   opts: CreateChromiumServerOpts
 ): Promise<ChromiumServer> {
   const { cdp, wsUrl, target } = await connectCdp(opts.port);
-  await enableCoreDomains(cdp);
+  await primePageSession(cdp);
 
   let viewport: ViewportSize = await readViewport(cdp);
   const events = new TypedEventEmitter<ServerEvents>();
@@ -91,7 +91,7 @@ export async function createChromiumServer(
     port: opts.port,
     initialTargetId: target.id,
     onActivated: async () => {
-      await enableCoreDomains(cdp);
+      await primePageSession(cdp);
       viewport = await readViewport(cdp);
       await network.reattach();
     },

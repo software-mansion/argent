@@ -22,7 +22,9 @@ export function sleepOrAbort(ms: number, signal?: AbortSignal): Promise<boolean>
 
 export type Settled<T> =
   | { type: "value"; value: T }
-  | { type: "error"; error: string }
+  // `error` is `cause.message`; `cause` keeps the rejection's own Error instance
+  // for a caller that rethrows it rather than just quoting it.
+  | { type: "error"; error: string; cause: Error }
   | { type: "timeout" }
   | { type: "aborted" };
 
@@ -33,9 +35,14 @@ export type Settled<T> =
 // arrives mid-flight. We can't kill the orphaned work, but we stop waiting on
 // it; its eventual settle is consumed here (handlers attached up front) so it
 // can't surface as an unhandled rejection.
+//
+// An undefined `ms` means no time budget: the abort is then the only thing that
+// stops the wait, and `timeout` is never returned. That is for work whose own
+// RPC tier is the bound the caller wants, where a shorter one would fail an
+// operation that was going to succeed.
 export function settleWithin<T>(
   p: Promise<T>,
-  ms: number,
+  ms: number | undefined,
   signal?: AbortSignal
 ): Promise<Settled<T>> {
   return new Promise((resolve) => {
@@ -51,12 +58,16 @@ export function settleWithin<T>(
     // always consumed (no unhandled rejection) even after we've moved on.
     p.then(
       (value) => finish({ type: "value", value }),
-      (err) => finish({ type: "error", error: err instanceof Error ? err.message : String(err) })
+      (err) => {
+        const cause = err instanceof Error ? err : new Error(String(err));
+        finish({ type: "error", error: cause.message, cause });
+      }
     );
     if (signal?.aborted) return finish({ type: "aborted" });
     const onAbort = () => finish({ type: "aborted" });
     signal?.addEventListener("abort", onAbort, { once: true });
     teardown.push(() => signal?.removeEventListener("abort", onAbort));
+    if (ms === undefined) return;
     const timer = setTimeout(() => finish({ type: "timeout" }), Math.max(0, ms));
     teardown.push(() => clearTimeout(timer));
   });

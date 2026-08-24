@@ -17,9 +17,10 @@ import {
 import { normalizeThreadName } from "../../../utils/profiler-shared/thread";
 import { formatBytes, escapeMarkdownTableCell } from "../../../utils/profiler-shared/format";
 import { demangleSymbol } from "../../../utils/profiler-shared/demangle";
+import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
 const zodSchema = z.object({
-  device_id: z.string().describe("iOS Simulator UDID or Android serial."),
+  device_id: metroDeviceIdParam("iOS Simulator UDID or Android serial."),
   mode: z
     .enum(["hang_stacks", "function_callers", "thread_breakdown", "leak_stacks"])
     .describe(
@@ -49,6 +50,15 @@ const zodSchema = z.object({
     .default(15)
     .describe("Max results to return (default 15)"),
 });
+
+type Params = z.infer<typeof zodSchema>;
+
+const stackQueryMode = {
+  hang_stacks: "hang stacks",
+  function_callers: "function callers",
+  thread_breakdown: "thread breakdown",
+  leak_stacks: "leak stacks",
+} satisfies Record<Params["mode"], string>;
 
 function getIosParsedData(api: NativeProfilerSessionApi) {
   if (!api.parsedData) {
@@ -416,8 +426,13 @@ async function executeAndroid(api: NativeProfilerSessionApi, params: z.infer<typ
   });
 }
 
-export const profilerStackQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
+export const profilerStackQueryTool: ToolDefinition<Params, string> = {
   id: "profiler-stack-query",
+  interaction: {
+    startedMsg: ({ params }) => `Querying native stacks by ${stackQueryMode[params.mode]}`,
+    completedMsg: ({ params }) => `Queried native stacks by ${stackQueryMode[params.mode]}`,
+    failedMsg: ({ failureSignal }) => `Failed to query native stacks: ${failureSignal.error_code}`,
+  },
   description: `Query native profiler trace data for iterative investigation of native performance.
 Requires native-profiler-stop → native-profiler-analyze to have been called first.
 Modes:
@@ -441,6 +456,29 @@ Fails if native-profiler-analyze has not been run or no parsed trace data is in 
   }),
   async execute(services, params) {
     const api = services.session as NativeProfilerSessionApi;
+    // A session with no capture state at all was minted by THIS call: the
+    // device_id matched no existing session, so nothing is known about the
+    // device. Say so without naming a platform — classification is shape-based
+    // and falls back to "android" for any opaque id (utils/device-info.ts:52),
+    // so an id this tool cannot place would otherwise be reported as an Android
+    // device (#618). That happens routinely: a forwarded Metro logicalDeviceId
+    // resolves only while a debugger connection is live, and the alias is
+    // dropped when it disposes.
+    if (!api.traceFile && !api.exportedFiles && !api.parsedData) {
+      throw new FailureError(
+        `No native profiler capture is loaded for device \`${params.device_id}\`. Run ` +
+          "native-profiler-start → native-profiler-stop → native-profiler-analyze on this device " +
+          "first. (If that id came from debugger-connect, pass the id from list-devices instead — " +
+          "the simulator UDID or adb serial — since profiler sessions are keyed by that one.)",
+        {
+          error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
+          failure_stage: "profiler_stack_query_load_native_data",
+          failure_area: "tool_server",
+          error_kind: "not_found",
+        }
+      );
+    }
+
     if (api.platform === "android") {
       return executeAndroid(api, params);
     }

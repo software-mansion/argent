@@ -39,6 +39,13 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
+const cookieAction = {
+  get: { started: "Reading", completed: "Read", failure: "read" },
+  set: { started: "Setting", completed: "Set", failure: "set" },
+  delete: { started: "Deleting", completed: "Deleted", failure: "delete" },
+  clear: { started: "Clearing", completed: "Cleared", failure: "clear" },
+} as const;
+
 type Result =
   | { cookies: Cookie[]; count: number }
   | { set: boolean }
@@ -51,6 +58,12 @@ const capability: ToolCapability = {
 
 export const chromiumCookiesTool: ToolDefinition<Params, Result> = {
   id: "chromium-cookies",
+  interaction: {
+    startedMsg: ({ params }) => `${cookieAction[params.action].started} browser cookies`,
+    completedMsg: ({ params }) => `${cookieAction[params.action].completed} browser cookies`,
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to ${cookieAction[params.action].failure} browser cookies: ${failureSignal.error_code}`,
+  },
   description: `Read and write cookies of a Chromium (CDP) app (via the Network domain, so HttpOnly cookies are included).
 - action="get" (url?): list cookies, optionally restricted to given URLs (defaults to the active page).
 - action="set" (name, value, + url OR domain, optional path/secure/httpOnly/sameSite/expires): create or update a cookie.

@@ -95,7 +95,7 @@ describe("flow progress streaming (ctx.emitProgress)", () => {
     await writeFlow("main", {
       executionPrerequisite: "",
       steps: [
-        { kind: "run", flow: "login" },
+        { kind: "run", flow: "login.yaml" },
         { kind: "echo", message: "done" },
       ],
     });

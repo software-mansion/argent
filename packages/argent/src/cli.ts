@@ -79,7 +79,7 @@ argent v${version}
 Usage: argent <command> [options]
 
 Commands:
-  mcp         Start the MCP stdio server (used by editors)
+  mcp         ${installerHelpEntry("mcp")}
   init        ${installerHelpEntry("init")}
   install     ${installerHelpEntry("install")}
   update      ${installerHelpEntry("update")}
@@ -87,7 +87,7 @@ Commands:
   remove      ${installerHelpEntry("remove")}
   tools       List tools exposed by the tool-server
   run         Invoke a tool by name (use \`argent run <tool> --help\` for flags)
-  flow        Run a saved flow (use \`argent flow --help\` for options)
+  flow        Run a flow by name or YAML path (use \`argent flow --help\` for options)
   server      Manage the shared tool-server (start / status / stop / logs)
   lens        Open Argent Lens bound to a fresh coding-agent session (macOS)
   link        Route client requests to a remote tool-server
@@ -96,6 +96,7 @@ Commands:
   disable     Disable a feature flag (global by default, --scope project for project)
   flags       Show current feature-flag state
   config      Manage configuration (list / get / set / unset, project & global)
+  secrets     List the secrets a {{secret:NAME}} placeholder can type, and their sources
   telemetry   Manage opt-out telemetry (status / enable / disable)
 
 Options:
@@ -122,11 +123,12 @@ async function loadCli(): Promise<typeof Cli> {
 }
 
 async function main(): Promise<void> {
-  // The installer subcommands (init / install / update / uninstall / remove)
-  // forward their argv straight to the side-effecting installer functions,
-  // which do not short-circuit on `--help` — so `argent uninstall --help`
-  // would run the real (destructive) command. Intercept help for exactly that
-  // set before dispatching. All other subcommands handle `--help` themselves.
+  // Some subcommands never look at their own argv: the installers forward it
+  // to side-effecting functions that ignore `--help` (so `argent uninstall
+  // --help` would run the real, destructive command), and `mcp` is handed no
+  // argv at all, so a help flag there starts the stdio server and blocks
+  // reading JSON-RPC from stdin. Intercept help for that set before
+  // dispatching. Every other subcommand parses `--help` itself.
   if (installerHelpRequested(command, rest)) {
     // installerHelpRequested only returns true for an InstallerCommand.
     printInstallerHelp(command as Parameters<typeof printInstallerHelp>[0]);
@@ -166,6 +168,8 @@ async function main(): Promise<void> {
       return (await loadCli()).flags(rest);
     case "config":
       return (await loadCli()).config(rest);
+    case "secrets":
+      return (await loadCli()).secrets(rest);
     case "telemetry":
       return (await loadCli()).telemetry(rest);
     case "--version":

@@ -113,6 +113,12 @@ export const networkRequestTool: ToolDefinition<
   NetworkRequestDetails | string
 > = {
   id: "view-network-request-details",
+  interaction: {
+    startedMsg: ({ params }) => `Reading network request ${params.requestId}`,
+    completedMsg: ({ params }) => `Read network request ${params.requestId}`,
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to read network request ${params.requestId}: ${failureSignal.error_code}`,
+  },
   description: `Get full details of a specific network request by its requestId (from view-network-logs).
 Returns request/response headers (sensitive headers redacted), status, timing, and optionally the response body.
 Large response bodies are truncated. Use when you need headers, body, or timing for a specific request after listing logs.

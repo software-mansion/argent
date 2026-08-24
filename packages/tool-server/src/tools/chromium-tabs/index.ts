@@ -32,6 +32,37 @@ interface Result {
   tabs: TabInfo[];
 }
 
+const tabAction = {
+  list: {
+    started: () => "Listing tabs",
+    completed: (_params: Params, result: Result) =>
+      `Listed ${result.tabs.length} ${result.tabs.length === 1 ? "tab" : "tabs"}`,
+    failure: "list",
+  },
+  select: {
+    started: (params: Params) => `Selecting tab ${params.tab}`,
+    completed: (params: Params) => `Selected tab ${params.tab}`,
+    failure: "select",
+  },
+  new: {
+    started: () => "Opening a new tab",
+    completed: () => "Opened a new tab",
+    failure: "open",
+  },
+  close: {
+    started: (params: Params) => `Closing ${params.tab ? `tab ${params.tab}` : "active tab"}`,
+    completed: (params: Params) => `Closed ${params.tab ? `tab ${params.tab}` : "active tab"}`,
+    failure: "close",
+  },
+} satisfies Record<
+  Params["action"],
+  {
+    started: (params: Params) => string;
+    completed: (params: Params, result: Result) => string;
+    failure: string;
+  }
+>;
+
 // Chromium-only: iOS/Android have no tab/window concept, so the capability gate
 // rejects them up-front (no apple/android blocks declared).
 const capability: ToolCapability = {
@@ -40,6 +71,12 @@ const capability: ToolCapability = {
 
 export const chromiumTabsTool: ToolDefinition<Params, Result> = {
   id: "chromium-tabs",
+  interaction: {
+    startedMsg: ({ params }) => tabAction[params.action].started(params),
+    completedMsg: ({ params, result }) => tabAction[params.action].completed(params, result),
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to ${tabAction[params.action].failure} browser tabs: ${failureSignal.error_code}`,
+  },
   description: `List and switch the tabs / windows of a Chromium (CDP) app (an Electron app's BrowserWindows or a Chromium browser's tabs), and open or close them.
 - action="list": enumerate page targets with stable ids (\`t1\`, \`t2\`, …), title, url, and which is active.
 - action="select" (tab=<tabId|label>): make that tab the active one. The active tab is what describe / gesture-tap / screenshot / debugger-evaluate / open-url all operate on, so switch before driving a different tab.

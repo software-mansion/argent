@@ -374,11 +374,23 @@ describe("materializeArtifacts directory bundles", () => {
 // project. These suites drive cwd into a marker-bearing temp dir and redirect
 // HOME so the global-fallback branch never touches the real `~/.argent`.
 
+// Write a `recordings.directory` value into `<rootDir>/.argent/config.json` —
+// `rootDir` being a project root (project scope) or a redirected HOME (global
+// scope), which is how the schema-driven reader finds each scope's document.
+async function writeScopedConfig(rootDir: string, directory: string): Promise<void> {
+  await mkdir(join(rootDir, ".argent"), { recursive: true });
+  await writeFile(
+    join(rootDir, ".argent", "config.json"),
+    JSON.stringify({ recordings: { directory } }, null, 2)
+  );
+}
+
 describe("durableSaveTarget", () => {
   let projectRoot: string;
   let home: string;
   let originalCwd: string;
   let originalHome: string | undefined;
+  let originalUserProfile: string | undefined;
 
   beforeEach(async () => {
     projectRoot = await mkdtemp(join(tmpdir(), "argent-proj-"));
@@ -386,8 +398,11 @@ describe("durableSaveTarget", () => {
     home = await mkdtemp(join(tmpdir(), "argent-home-"));
     originalCwd = process.cwd();
     originalHome = process.env.HOME;
+    originalUserProfile = process.env.USERPROFILE;
     process.chdir(projectRoot);
+    // os.homedir() reads USERPROFILE on Windows, HOME elsewhere — pin both.
     process.env.HOME = home;
+    process.env.USERPROFILE = home;
     projectRoot = process.cwd(); // resolve /var → /private/var for assertions
   });
 
@@ -395,6 +410,8 @@ describe("durableSaveTarget", () => {
     process.chdir(originalCwd);
     if (originalHome === undefined) delete process.env.HOME;
     else process.env.HOME = originalHome;
+    if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = originalUserProfile;
     await rm(projectRoot, { recursive: true, force: true });
     await rm(home, { recursive: true, force: true });
   });
@@ -487,6 +504,74 @@ describe("durableSaveTarget", () => {
     };
     expect(durableSaveTarget(h)).toBeNull();
   });
+
+  // ── `recordings.directory` configuration ────────────────────────────
+  // The wire hint stays `.argent/recordings`; the config redirects where that
+  // hint lands. Scope documents live at `<projectRoot>/.argent/config.json`
+  // (project) and `<HOME>/.argent/config.json` (global) — both sandboxed here.
+
+  const recordingHandle = (): ArtifactHandle => ({
+    ...handle("a", "clip.mp4", "video/mp4"),
+    saveDir: ".argent/recordings",
+  });
+
+  it("redirects to an absolute global-config directory (base = configured dir, rel = '')", async () => {
+    const custom = join(home, "Movies", "argent");
+    await writeScopedConfig(home, custom);
+    const target = durableSaveTarget(recordingHandle())!;
+    expect(target.dir).toBe(custom);
+    expect(target.path).toBe(join(custom, "clip.mp4"));
+    // rel is empty so the post-mkdir realpath check verifies the configured dir
+    // resolves to itself rather than requiring a `.argent/recordings` suffix.
+    expect(target.base).toBe(custom);
+    expect(target.rel).toBe("");
+  });
+
+  it("project config wins over global when both are set", async () => {
+    await writeScopedConfig(home, join(home, "global-recordings"));
+    await writeScopedConfig(projectRoot, join(projectRoot, "project-recordings"));
+    expect(durableSaveTarget(recordingHandle())!.dir).toBe(join(projectRoot, "project-recordings"));
+  });
+
+  it("falls back to the global config when the project scope is unset", async () => {
+    await writeScopedConfig(home, join(home, "global-recordings"));
+    expect(durableSaveTarget(recordingHandle())!.dir).toBe(join(home, "global-recordings"));
+  });
+
+  it("expands a leading ~ to the user's home", async () => {
+    await writeScopedConfig(projectRoot, "~/Movies/argent");
+    expect(durableSaveTarget(recordingHandle())!.dir).toBe(join(home, "Movies", "argent"));
+  });
+
+  it("anchors a relative configured path at the project root", async () => {
+    await writeScopedConfig(projectRoot, "recordings/out");
+    expect(durableSaveTarget(recordingHandle())!.dir).toBe(join(projectRoot, "recordings", "out"));
+  });
+
+  it("anchors a relative global config at home when not inside a project", async () => {
+    await writeScopedConfig(home, "captures");
+    const outside = await mkdtemp(join(tmpdir(), "argent-noproj-"));
+    process.chdir(outside);
+    try {
+      expect(durableSaveTarget(recordingHandle())!.dir).toBe(join(home, "captures"));
+    } finally {
+      process.chdir(projectRoot);
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("a blank configured value reads as unset — default location kept", async () => {
+    await writeScopedConfig(projectRoot, "   ");
+    expect(durableSaveTarget(recordingHandle())!.dir).toBe(join(projectRoot, ".argent/recordings"));
+  });
+
+  it("config never resurrects a hostile wire saveDir — the allowlist still gates first", async () => {
+    await writeScopedConfig(projectRoot, join(projectRoot, "anywhere"));
+    for (const evil of [".git", "..", "/etc", ".argent", "recordings"]) {
+      const h: ArtifactHandle = { ...handle("a", "x.mp4", "video/mp4"), saveDir: evil };
+      expect(durableSaveTarget(h), evil).toBeNull();
+    }
+  });
 });
 
 describe("materializeArtifacts durable destination", () => {
@@ -496,6 +581,7 @@ describe("materializeArtifacts durable destination", () => {
   let home: string; // redirected HOME for the global-fallback branch
   let originalCwd: string;
   let originalHome: string | undefined;
+  let originalUserProfile: string | undefined;
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "argent-artifacts-"));
@@ -506,8 +592,11 @@ describe("materializeArtifacts durable destination", () => {
     process.env.ARGENT_ARTIFACTS_DIR = root;
     originalCwd = process.cwd();
     originalHome = process.env.HOME;
+    originalUserProfile = process.env.USERPROFILE;
     process.chdir(projectRoot);
+    // os.homedir() reads USERPROFILE on Windows, HOME elsewhere — pin both.
     process.env.HOME = home;
+    process.env.USERPROFILE = home;
     // On macOS the temp dir is under a /var → /private/var symlink; the
     // materializer resolves cwd to the real path, so mirror that for assertions.
     projectRoot = process.cwd();
@@ -518,6 +607,8 @@ describe("materializeArtifacts durable destination", () => {
     delete process.env.ARGENT_ARTIFACTS_DIR;
     if (originalHome === undefined) delete process.env.HOME;
     else process.env.HOME = originalHome;
+    if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = originalUserProfile;
     await rm(root, { recursive: true, force: true });
     await rm(hostDir, { recursive: true, force: true });
     await rm(projectRoot, { recursive: true, force: true });
@@ -903,6 +994,54 @@ describe("materializeArtifacts durable destination", () => {
     } finally {
       await rm(hostDir, { recursive: true, force: true });
     }
+  });
+
+  it("honors the recordings.directory config on the remote download path", async () => {
+    const custom = join(projectRoot, "my-videos");
+    await writeScopedConfig(projectRoot, custom);
+    const h: ArtifactHandle = {
+      [ARTIFACT_MARKER]: true,
+      id: "vidcfg",
+      filename: "clip.mp4",
+      mimeType: "video/mp4",
+      size: MP4.length,
+      saveDir: ".argent/recordings",
+    };
+    const { result } = await materializeArtifacts(
+      { video: h },
+      { toolsUrl: "http://remote:3001", fetchImpl: fakeFetch({ vidcfg: MP4 }) }
+    );
+    expect((result as { video: string }).video).toBe(join(custom, "clip.mp4"));
+    expect(Buffer.from(await readFile(join(custom, "clip.mp4")))).toEqual(Buffer.from(MP4));
+    // Nothing under the default location.
+    expect(await absent(join(projectRoot, ".argent/recordings", "clip.mp4"))).toBe(true);
+  });
+
+  it("honors the recordings.directory config on the co-located copy path", async () => {
+    const custom = join(projectRoot, "clips");
+    await writeScopedConfig(projectRoot, custom);
+    const hostPath = join(hostDir, "argent-clip.mp4");
+    await writeFile(hostPath, Buffer.from(MP4));
+    const st = await stat(hostPath);
+    const h: ArtifactHandle = {
+      [ARTIFACT_MARKER]: true,
+      id: "vidcfgl",
+      filename: "clip.mp4",
+      mimeType: "video/mp4",
+      size: st.size,
+      hostPath,
+      mtimeMs: st.mtimeMs,
+      saveDir: ".argent/recordings",
+    };
+    const throwingFetch: typeof fetch = (async () => {
+      throw new Error("fetch must not be called when the file is already local");
+    }) as unknown as typeof fetch;
+    const { result } = await materializeArtifacts(
+      { video: h },
+      { toolsUrl: "http://localhost:3001", fetchImpl: throwingFetch }
+    );
+    expect((result as { video: string }).video).toBe(join(custom, "clip.mp4"));
+    expect(Buffer.from(await readFile(join(custom, "clip.mp4")))).toEqual(Buffer.from(MP4));
   });
 
   it("a non-string saveDir degrades that handle without crashing the whole result", async () => {

@@ -23,6 +23,12 @@ export const gatherWorkspaceDataTool: ToolDefinition<
   WorkspaceSnapshot
 > = {
   id: "gather-workspace-data",
+  interaction: {
+    startedMsg: () => "Gathering workspace data",
+    completedMsg: () => "Gathered workspace data",
+    failedMsg: ({ failureSignal }) =>
+      `Failed to gather workspace data: ${failureSignal.error_code}`,
+  },
   description: `Fetch a structured snapshot of a mobile app project's workspace.
 
 Returns package.json contents, metro/babel config text, app.json, eas.json, tsconfig,

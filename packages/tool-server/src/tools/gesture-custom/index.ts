@@ -56,6 +56,12 @@ const capability: ToolCapability = {
 
 export const gestureCustomTool: ToolDefinition<Params, Result> = {
   id: "gesture-custom",
+  interaction: {
+    startedMsg: () => "Performing custom gesture",
+    completedMsg: () => "Performed custom gesture",
+    failedMsg: ({ failureSignal }) =>
+      `Failed to perform custom gesture: ${failureSignal.error_code}`,
+  },
   description: `Send a sequence of touch events for complex gestures.
 Use for: long press, drag-and-drop, custom scroll, pinch (second touch point).
 For simple taps use the gesture-tap tool. For straight-line scrolling use the gesture-swipe tool.

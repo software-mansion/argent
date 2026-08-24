@@ -1,3 +1,4 @@
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { CDPTarget } from "./discovery";
 
 export interface SelectedTarget {
@@ -91,13 +92,19 @@ export function selectTarget(
               : `${d.name ?? "unknown"} (legacy inspector — no logicalDeviceId)`
           )
           .join(", ");
-        throw new Error(
+        throw new FailureError(
           `No debugger target matches device_id "${deviceId}". ` +
             `${distinctDevices.size} devices are connected to Metro on port ${port}: ` +
             `${listed}. Re-target with the logicalDeviceId in parentheses — that is what ` +
             `debugger-connect returns and what subsequent debugger-* calls must pass. ` +
             `A legacy-inspector device (RN 0.72 / Vega) reports none and cannot be singled ` +
-            `out of a shared Metro: give it its own Metro port.`
+            `out of a shared Metro: give it its own Metro port.`,
+          {
+            error_code: FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH,
+            failure_stage: "debugger_select_target",
+            failure_area: "tool_server",
+            error_kind: "not_found",
+          }
         );
       }
     }

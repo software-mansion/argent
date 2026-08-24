@@ -111,6 +111,25 @@ describe("TabsManager", () => {
     expect(created.label).toBe("docs");
   });
 
+  it("open() explains an Electron refusal instead of passing its bare error through", async () => {
+    // Electron answers Target.createTarget with a bare "Not supported", which
+    // reads as though the whole tool were unavailable.
+    browserSend.mockRejectedValueOnce(new Error("Not supported"));
+
+    const err = await mgr.open({ url: "https://x.test" }).catch((e: Error) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    const message = (err as Error).message;
+    // The cause is kept, so a different failure stays legible...
+    expect(message).toContain("Not supported");
+    // ...alongside what is actually unavailable, why, and what to do instead.
+    expect(message).toContain("Electron");
+    expect(message).toContain("window.open()");
+    expect(message).toContain("chromium-tabs list");
+    // And that the rest of the tool still works, which the bare error hid.
+    expect(message).toMatch(/list, select and close/);
+  });
+
   it("close() closes the target and re-activates a remaining tab when the active one closed", async () => {
     // active is "A" (initialTargetId). Close it; fall back to "B".
     listMock

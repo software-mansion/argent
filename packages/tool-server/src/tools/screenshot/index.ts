@@ -7,8 +7,11 @@ import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry"
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
-import { getScreenshotScale, httpScreenshot } from "../../utils/simulator-client";
+import { getScreenshotScale } from "../../utils/simulator-client";
+import { captureScreenshotUpright } from "../../utils/rotation-aware-capture";
+import { androidDevtoolsRotationPeek } from "../../utils/android-devtools-rotation-peek";
 import { isTvOsSimulator } from "../../utils/ios-devices";
+import { simctlArgsForUdid } from "../../utils/ios-device-sets";
 import { captureVegaScreenshotPng } from "../../utils/vega-screen";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 
@@ -24,7 +27,7 @@ const zodSchema = z.object({
     .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
     .optional()
     .describe(
-      "Orientation override for the screenshot (rotates the captured image after Page.captureScreenshot on Chromium)."
+      "Orientation override for the screenshot (rotates the captured image after Page.captureScreenshot on Chromium). On Android the capture already follows the device's rotation."
     ),
   scale: z
     .number()
@@ -32,7 +35,7 @@ const zodSchema = z.object({
     .max(1.0)
     .optional()
     .describe(
-      "Scale factor (0.01-1.0). Defaults to ARGENT_SCREENSHOT_SCALE env var, or 0.3 if unset for iOS/Android. " +
+      "Scale factor (0.01-1.0). Defaults to ARGENT_SCREENSHOT_SCALE env var, or 0.25 if unset for iOS/Android. " +
         "On Chromium the default is 1.0 (no downscale); pass <1 to opt in. Downscaling on Chromium requires the optional `sharp` dependency."
     ),
   includeImageInContext: z
@@ -74,8 +77,11 @@ const capability: ToolCapability = {
  * tvOS screenshot path. The simulator-server backend does not support tvOS, so
  * capture via `xcrun simctl io <udid> screenshot` instead and (optionally)
  * downscale with `sips` to match the iOS/Android scale behaviour.
+ *
+ * Exported for the flow settle, which captures for motion detection rather than
+ * for an artifact and so cannot go through the tool wrapper above.
  */
-async function tvScreenshot(
+export async function tvScreenshot(
   udid: string,
   scale: number,
   signal: AbortSignal | undefined
@@ -84,7 +90,9 @@ async function tvScreenshot(
     os.tmpdir(),
     `argent-tv-screenshot-${udid.slice(0, 8)}-${process.hrtime.bigint()}.png`
   );
-  await execFileAsync("xcrun", ["simctl", "io", udid, "screenshot", file], { signal });
+  await execFileAsync("xcrun", await simctlArgsForUdid(udid, ["io", udid, "screenshot", file]), {
+    signal,
+  });
   // Downscale in place unless full-res was requested, mirroring the iOS/Android
   // default. `sips -Z` caps the longest *actual* side, and capture size isn't
   // fixed (4K sim is 3840 wide, non-4K is 1920), so scale against the real
@@ -120,6 +128,11 @@ export async function tvTargetLongSide(file: string, scale: number): Promise<num
 export function createScreenshotTool(registry: Registry): ToolDefinition<Params, Result> {
   return {
     id: "screenshot",
+    interaction: {
+      startedMsg: () => "Capturing screenshot",
+      completedMsg: ({ result }) => `Captured screenshot ${result.image.filename}`,
+      failedMsg: ({ failureSignal }) => `Failed to capture screenshot: ${failureSignal.error_code}`,
+    },
     description: `Capture a screenshot of the device screen (iOS simulator, Android emulator, Apple TV simulator, Vega, or Chromium app). Returns { image }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
 Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.
 Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.`,
@@ -181,11 +194,14 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
 
       const ref = simulatorServerRef(device);
       const api = (await registry.resolveService(ref.urn, ref.options)) as SimulatorServerApi;
-      const { path: capturedPath } = await httpScreenshot(
+      const { path: capturedPath } = await captureScreenshotUpright(
         api,
+        device,
         params.rotation,
         signal,
-        params.scale
+        params.scale,
+        undefined,
+        androidDevtoolsRotationPeek(registry, device)
       );
       const image = await requireArtifacts(ctx).register({
         hostPath: capturedPath,

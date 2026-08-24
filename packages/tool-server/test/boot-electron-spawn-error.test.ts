@@ -16,6 +16,23 @@ import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
+import { scopeTempHome } from "./helpers/temp-home";
+
+/**
+ * CDP port for the boots below, which must never reach a live endpoint: when
+ * the readiness probe succeeds, `bootElectronApp` resolves and the synthetic
+ * spawn error under test never becomes its rejection.
+ *
+ * Node's fetch refuses port 1 as a WHATWG "bad port" before it opens a socket,
+ * so `ensureCdpReachable` fails whatever the host happens to be running.
+ * Privilege is not the mechanism and would not be enough on its own: 2 and
+ * 1023 are equally privileged yet dial normally.
+ *
+ * The no-pid boots throw before the probe is reached, so the value is inert
+ * there; they take the constant for uniformity.
+ */
+const UNREACHABLE_CDP_PORT = 1;
 
 const spawnMock = vi.fn();
 
@@ -26,6 +43,15 @@ vi.mock("node:child_process", async () => {
     spawn: (cmd: string, args: string[], opts: unknown) => spawnMock(cmd, args, opts),
   };
 });
+
+// Keep trackChromiumPort from persisting booted ports to on-disk state — the
+// success-path test below completes a boot, and persistPorts writes to
+// os.homedir()/.argent/chromium-cdp-ports.json. Same mock, same reason, as
+// boot-electron-kill and boot-electron-ready-race.
+vi.mock("../src/utils/chromium-discovery", () => ({
+  trackChromiumPort: vi.fn(),
+  untrackChromiumPort: vi.fn(),
+}));
 
 import { bootElectronApp } from "../src/tools/devices/boot-electron";
 
@@ -49,6 +75,8 @@ function makeFakeChild(opts: { pid?: number | undefined } = {}): FakeChild {
   return ee;
 }
 
+scopeTempHome("argent-boot-electron-home-");
+
 let appDir: string;
 beforeAll(() => {
   // resolveLauncher() fs-checks the app path before spawn, so the test needs
@@ -65,6 +93,12 @@ afterAll(() => {
   if (appDir) fs.rmSync(appDir, { recursive: true, force: true });
 });
 
+// Every boot-failure test runs killChildEscalating against a fake child
+// carrying a stand-in pid, and its group sweep signals through process.kill —
+// real signals must never escape onto whatever owns that pid. Never restored:
+// the unref'd 2s escalation timer can fire after the test that armed it.
+vi.spyOn(process, "kill").mockImplementation(() => true);
+
 beforeEach(() => {
   spawnMock.mockReset();
 });
@@ -76,7 +110,7 @@ describe("bootElectronApp — spawn error handling", () => {
 
     const promise = bootElectronApp({
       appPath: appDir,
-      port: 19222,
+      port: UNREACHABLE_CDP_PORT,
       readyTimeoutMs: 100,
     });
     promise.catch(() => {}); // detach so the test doesn't hang after assertion
@@ -107,7 +141,7 @@ describe("bootElectronApp — spawn error handling", () => {
         appPath: appDir,
         // Unreachable port → the readiness race rejects fast; we only care about
         // the spawn env, so detach and swallow the rejection.
-        port: 1,
+        port: UNREACHABLE_CDP_PORT,
         readyTimeoutMs: 50,
       });
       promise.catch(() => {});
@@ -124,13 +158,41 @@ describe("bootElectronApp — spawn error handling", () => {
     }
   });
 
+  it("passes anti-throttling switches so a backgrounded window stays testable", async () => {
+    // Without these, Chromium throttles an unfocused/occluded/minimized
+    // window's compositor: mouse-input acks stall ~5s per event, wheel scrolls
+    // hang, and visibilityState flips to "hidden". Booted apps must stay
+    // drivable wherever the human puts the window.
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child);
+
+    const promise = bootElectronApp({
+      appPath: appDir,
+      port: UNREACHABLE_CDP_PORT,
+      readyTimeoutMs: 50,
+      extraArgs: ["--user-flag"],
+    });
+    promise.catch(() => {});
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const args = spawnMock.mock.calls[0]![1] as string[];
+    expect(args).toContain("--disable-background-timer-throttling");
+    expect(args).toContain("--disable-backgrounding-occluded-windows");
+    expect(args).toContain("--disable-renderer-backgrounding");
+    // User extras survive alongside the defaults.
+    expect(args).toContain("--user-flag");
+    expect(args).toContain(`--remote-debugging-port=${UNREACHABLE_CDP_PORT}`);
+
+    await promise.catch(() => {});
+  });
+
   it("rejects with a clear, actionable message when spawn emits ENOENT", async () => {
     const child = makeFakeChild();
     spawnMock.mockReturnValue(child);
 
     const promise = bootElectronApp({
       appPath: appDir,
-      port: 19223,
+      port: UNREACHABLE_CDP_PORT,
       readyTimeoutMs: 30_000,
     });
 
@@ -152,7 +214,7 @@ describe("bootElectronApp — spawn error handling", () => {
 
     const promise = bootElectronApp({
       appPath: appDir,
-      port: 19224,
+      port: UNREACHABLE_CDP_PORT,
       readyTimeoutMs: 30_000,
     });
     await new Promise((r) => setTimeout(r, 10));
@@ -172,7 +234,7 @@ describe("bootElectronApp — spawn error handling", () => {
     await expect(
       bootElectronApp({
         appPath: appDir,
-        port: 19225,
+        port: UNREACHABLE_CDP_PORT,
         readyTimeoutMs: 100,
       })
     ).rejects.toThrow(/spawn returned without a pid/);
@@ -237,6 +299,14 @@ describe("bootElectronApp — spawn error handling", () => {
         readyTimeoutMs: 5000,
       });
 
+      // A completed boot persists its port. Two guards keep it out of the
+      // developer's real ~/.argent/chromium-cdp-ports.json — the mock above,
+      // and the scoped HOME that makes this about the run's own writes — and
+      // asserting the absence is what fails when either stops working.
+      expect(fs.existsSync(path.join(os.homedir(), ".argent", "chromium-cdp-ports.json"))).toBe(
+        false
+      );
+
       // After successful boot, both boot-time listeners MUST be detached.
       // Exactly one 'exit' listener remains: the kill-registry cleanup hook
       // installed for killChromiumByPort. It only evicts the retained handle —
@@ -280,18 +350,19 @@ describe("bootElectronApp — spawn error handling", () => {
     process.on("unhandledRejection", onUnhandled);
 
     try {
-      // No HTTP server on the port → waitForCdpReady will time out fast,
-      // taking the catch path. earlyExit / spawnError aren't fired by us.
-      await expect(
-        bootElectronApp({
+      // The readiness probe cannot be answered, so waitForCdpReady exhausts
+      // readyTimeoutMs and the boot takes the catch path; earlyExit and
+      // spawnError aren't fired by us. Pin the code: a failure raised before
+      // spawn attaches no listener, so the assertions below go vacuous.
+      const signal = getFailureSignal(
+        await bootElectronApp({
           appPath: appDir,
-          // Pick an unbound port; ensureCdpReachable will fail repeatedly
-          // until readyTimeoutMs elapses. Don't pick 0 — we want a real
-          // unreachable port, not OS-assigned ephemeral.
-          port: 1,
+          port: UNREACHABLE_CDP_PORT,
           readyTimeoutMs: 100,
-        })
-      ).rejects.toBeInstanceOf(Error);
+        }).catch((e: unknown) => e)
+      );
+      expect(signal?.error_code).toBe(FAILURE_CODES.CHROMIUM_ELECTRON_CDP_TIMEOUT);
+      expect(signal?.failure_stage).toBe("electron_cdp_ready");
 
       // Both listeners must be detached in the catch path.
       expect(child.listenerCount("error")).toBe(0);
@@ -330,7 +401,7 @@ describe("bootElectronApp — spawn error handling", () => {
       await expect(
         bootElectronApp({
           appPath: appDir,
-          port: 19226,
+          port: UNREACHABLE_CDP_PORT,
           readyTimeoutMs: 100,
         })
       ).rejects.toThrow(/spawn returned without a pid/);

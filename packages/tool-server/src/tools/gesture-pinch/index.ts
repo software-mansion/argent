@@ -71,6 +71,13 @@ const capability: ToolCapability = {
 
 export const gesturePinchTool: ToolDefinition<Params, Result> = {
   id: "gesture-pinch",
+  interaction: {
+    startedMsg: ({ params }) =>
+      `Pinching ${params.endDistance > params.startDistance ? "out" : "in"} at (${Math.round(params.centerX * 100)}%, ${Math.round(params.centerY * 100)}%)`,
+    completedMsg: ({ params }) =>
+      `Pinched ${params.endDistance > params.startDistance ? "out" : "in"} at (${Math.round(params.centerX * 100)}%, ${Math.round(params.centerY * 100)}%)`,
+    failedMsg: ({ failureSignal }) => `Failed to pinch: ${failureSignal.error_code}`,
+  },
   description: `Execute a pinch-to-zoom gesture by moving two fingers toward or away from a center point to change the scale of on-screen content. All positions and distances are normalized 0.0–1.0 (fractions of screen width/height, not pixels)—same coordinate space as gesture-tap and gesture-swipe.
 startDistance > endDistance = pinch in (zoom out). startDistance < endDistance = pinch out (zoom in).
 Typical values: startDistance 0.2, endDistance 0.6 for a zoom-in pinch at screen center.

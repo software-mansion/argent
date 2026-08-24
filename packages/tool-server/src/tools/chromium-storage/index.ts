@@ -27,6 +27,13 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
+const storageAction = {
+  get: { started: "Reading", completed: "Read", failure: "read" },
+  set: { started: "Updating", completed: "Updated", failure: "update" },
+  remove: { started: "Removing from", completed: "Removed from", failure: "remove from" },
+  clear: { started: "Clearing", completed: "Cleared", failure: "clear" },
+} as const;
+
 type Result =
   | { value: string | null }
   | { entries: Record<string, string>; count: number }
@@ -40,6 +47,13 @@ const capability: ToolCapability = {
 
 export const chromiumStorageTool: ToolDefinition<Params, Result> = {
   id: "chromium-storage",
+  interaction: {
+    startedMsg: ({ params }) => `${storageAction[params.action].started} ${params.store} storage`,
+    completedMsg: ({ params }) =>
+      `${storageAction[params.action].completed} ${params.store} storage`,
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to ${storageAction[params.action].failure} ${params.store} storage: ${failureSignal.error_code}`,
+  },
   description: `Read and write localStorage / sessionStorage of a Chromium (CDP) app's active page.
 - action="get": with \`key\`, returns that value; without \`key\`, returns all entries.
 - action="set" (key, value): write an entry.

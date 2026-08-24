@@ -14,9 +14,28 @@ export {
   type FlagsPathOptions,
 } from "./flags.js";
 
-export { argentHomeDir, configDir, configFilePath, type ConfigPathOptions } from "./paths.js";
+export {
+  argentHomeDir,
+  resolveHomeDir,
+  configDir,
+  configFilePath,
+  type ConfigPathOptions,
+} from "./paths.js";
 
 export { readConfigObject, updateConfig, getAtPath, setAtPath, deleteAtPath } from "./config.js";
+
+// Secret sources: the ordered environment + dotenv-file chain that `{{secret:…}}`
+// placeholders (and `argent secrets`) resolve names through.
+export {
+  secretSources,
+  lookupSecret,
+  secretNames,
+  describeSecretSources,
+  secretPlacementAdvice,
+  SECRET_ENV_PREFIX,
+  type SecretSource,
+  type SecretSourceOptions,
+} from "./secrets.js";
 
 // Merge policies for scoped values.
 export {
@@ -31,6 +50,7 @@ export {
 // The configuration schema: the registry of recognized values + parse helpers.
 export {
   CONFIG_SCHEMA,
+  describeExpectedValue,
   getConfigDefinition,
   asBoolean,
   asString,
@@ -51,6 +71,7 @@ export {
   getRememberedAgent,
   setRememberedAgent,
   clearRememberedAgent,
+  getAdditionalIosDeviceSets,
   UnknownConfigKeyError,
   ConfigScopeError,
   ConfigValidationError,

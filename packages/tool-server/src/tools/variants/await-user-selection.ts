@@ -21,6 +21,12 @@ type Params = z.infer<typeof zodSchema>;
 
 export const awaitUserSelectionTool: ToolDefinition<Params> = {
   id: "await_user_selection",
+  interaction: {
+    startedMsg: () => "Waiting for variant selection",
+    completedMsg: () => "Received variant selection",
+    failedMsg: ({ failureSignal }) =>
+      `Failed while waiting for variant selection: ${failureSignal.error_code}`,
+  },
   featureFlag: "argent-lens",
   // Hidden entirely while an `argent lens` CLI session owns the preview window:
   // there, the user's picks are relayed into the agent's terminal as a normal

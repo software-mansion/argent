@@ -10,6 +10,7 @@ import {
   markScreenRecordingFinalized,
   registerActiveScreenRecording,
 } from "../../utils/screen-recording-reminder";
+import { takeReapedSession } from "../../utils/reaped-sessions";
 import { openMjpegStream, readJpegDimensions, type MjpegStream } from "./mjpeg-stream";
 import {
   assertNoActiveRecording,
@@ -330,8 +331,9 @@ async function startCaptureLocked(
     }
 
     // No await between here and `api.pendingChild = child`: if dispose() ran
-    // (shutdown) while this start was suspended above, abort now rather than
-    // spawn an encoder the teardown can no longer reap.
+    // (shutdown, or a stop-all-simulator-servers teardown of this device) while
+    // this start was suspended above, abort now rather than spawn an encoder the
+    // teardown can no longer reap.
     assertNotDisposed(api, "screen_recording_start");
     child = spawn(ffmpeg, ffmpegArgs({ outputFile, logoFile, graph }), {
       stdio: ["pipe", "ignore", "pipe"],
@@ -392,6 +394,10 @@ async function startCaptureLocked(
   api.wallClockEndMs = null;
   api.timeLimitSeconds = params.timeLimitSeconds;
   registerActiveScreenRecording(api.deviceId, api.wallClockStartMs, params.timeLimitSeconds);
+  // A live capture makes any earlier teardown breadcrumb unreportable: this
+  // recording's own stop will succeed, so nothing would ever consume it, and it
+  // would be left to blame a much later, genuine "no active recording".
+  takeReapedSession("screen-recording", api.deviceId);
   startPump(api, stream);
 
   // Arm the exit handler BEFORE the pointer-enable await below. readiness
@@ -424,7 +430,8 @@ async function startCaptureLocked(
   if (params.pointer) {
     // Arm the touch visualizer before returning, so the very first interaction
     // is already drawn into the recording. Store the teardown first so a
-    // shutdown racing this await still restores the overlay. Best-effort: a
+    // shutdown (or a stop-all-simulator-servers teardown of this device) racing
+    // this await still restores the overlay. Best-effort: a
     // failure only costs the touch markers, surfaced as a warning at stop.
     api.pointerDisable = params.pointer.disable;
     api.pointerFailed = !(await params.pointer.enable());

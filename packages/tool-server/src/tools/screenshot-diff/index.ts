@@ -5,7 +5,9 @@ import path from "path";
 import { z } from "zod";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type {
+  DeviceInfo,
   FileInputSpec,
+  Registry,
   ServiceRef,
   ToolContext,
   ToolCapability,
@@ -14,6 +16,9 @@ import type {
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
 import { httpScreenshot } from "../../utils/simulator-client";
+import { captureScreenshotUpright } from "../../utils/rotation-aware-capture";
+import { androidDevtoolsRotationPeek } from "../../utils/android-devtools-rotation-peek";
+import type { RotationPeek } from "../../utils/device-orientation";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 import { diffPngFiles } from "./screenshot-diff";
 
@@ -83,8 +88,9 @@ const capability: ToolCapability = {
  * The saved PNGs live on the AGENT's machine (typically materialized there by
  * an earlier full-res `screenshot` call), so both path params cross the file
  * boundary as `file` inputs. `outputDir` is only probed: when the agent-chosen
- * directory doesn't exist on this host (remote mode), the tool quietly falls
- * back to its temp default rather than recreating an agent-side path here.
+ * directory doesn't exist on this host, the tool creates it if its parent is
+ * already here (a local agent naming a fresh folder) and otherwise falls back to
+ * its temp default rather than recreating an agent-side path tree here.
  */
 const fileInputs: FileInputSpec[] = [
   { target: "baselinePath", path: "${baselinePath}", kind: "file", optional: true },
@@ -94,6 +100,11 @@ const fileInputs: FileInputSpec[] = [
 
 export const screenshotDiffTool: ToolDefinition<Params, ScreenshotDiffResult> = {
   id: "screenshot-diff",
+  interaction: {
+    startedMsg: () => "Comparing screenshots",
+    completedMsg: () => "Compared screenshots",
+    failedMsg: ({ failureSignal }) => `Failed to compare screenshots: ${failureSignal.error_code}`,
+  },
   description: `Compare two PNG screenshots and return a compact visual-diff summary.
 Accepts saved baseline/current PNG paths, or one saved PNG plus one live full-resolution capture from a device. Always provide udid so the simulator-server dependency can be resolved.
 Use when stable before/after screenshots exist and the expected result is pixel-visible: layout, spacing, color, typography, image/icon rendering, clipping, overflow, or text rendering.
@@ -121,11 +132,31 @@ Fails if the input sources are invalid, PNG files cannot be read, outputDir cann
   },
 };
 
+/**
+ * The registered form: same tool, but live captures can read a rotated Android
+ * device's rotation from the android-devtools helper when it is already running
+ * (~1 ms) instead of probing over adb (~8 ms). `screenshotDiffTool` itself stays
+ * registry-free for callers and tests that have no registry.
+ */
+export function createScreenshotDiffTool(
+  registry: Registry
+): ToolDefinition<Params, ScreenshotDiffResult> {
+  return {
+    ...screenshotDiffTool,
+    async execute(services, params, options) {
+      return executeScreenshotDiffTool(services, params, options, httpScreenshot, (device) =>
+        androidDevtoolsRotationPeek(registry, device)
+      );
+    },
+  };
+}
+
 export async function executeScreenshotDiffTool(
   services: Record<string, unknown>,
   params: Params,
   options?: Partial<ToolContext>,
-  captureScreenshot: CaptureScreenshot = httpScreenshot
+  captureScreenshot: CaptureScreenshot = httpScreenshot,
+  peekFor?: (device: DeviceInfo) => RotationPeek
 ): Promise<ScreenshotDiffResult> {
   const outputDir = await resolveOutputDir(params, options);
 
@@ -134,7 +165,8 @@ export async function executeScreenshotDiffTool(
     params,
     outputDir,
     options,
-    captureScreenshot
+    captureScreenshot,
+    peekFor
   );
 
   const result = await diffPngFiles({
@@ -173,11 +205,31 @@ export async function executeScreenshotDiffTool(
  * not flagged absent by the boundary probe (a remote client's local directory).
  * Everything else gets a per-call temp dir; the diff images travel back as
  * artifacts, so the directory's location no longer matters to the agent.
+ *
+ * The probe only answers "does this path already exist on this host", so a local
+ * agent naming a fresh output directory is indistinguishable from a remote
+ * client's own path — both come back `presentOnHost: false`. Creating the
+ * directory non-recursively separates them: it succeeds only when the parent
+ * already exists here, which is true for a local agent picking a new subfolder
+ * and false for a remote client's unrelated directory tree. Without this, a
+ * perfectly good local `outputDir` was silently swapped for a temp dir and the
+ * caller was never told, so the diffs never appeared where they asked.
  */
 async function resolveOutputDir(params: Params, options?: Partial<ToolContext>): Promise<string> {
   const probe = options?.fileInputs?.outputDir;
   if (params.outputDir && (probe === undefined || probe.presentOnHost)) {
     return params.outputDir;
+  }
+  if (params.outputDir) {
+    try {
+      await fs.mkdir(params.outputDir);
+      return params.outputDir;
+    } catch (err) {
+      // EEXIST means it raced into existence between probe and now — still ours.
+      if ((err as NodeJS.ErrnoException).code === "EEXIST") return params.outputDir;
+      // Anything else (missing parent, not writable) means this path is not
+      // meaningful on this host; fall back to the temp dir below.
+    }
   }
   const dir = path.join(
     os.tmpdir(),
@@ -193,13 +245,16 @@ async function resolveInputPaths(
   params: Params,
   outputDir: string,
   options: Partial<ToolContext> | undefined,
-  captureScreenshot: CaptureScreenshot
+  captureScreenshot: CaptureScreenshot,
+  peekFor?: (device: DeviceInfo) => RotationPeek
 ): Promise<{ baselinePath: string; currentPath: string }> {
   validateInputSources(params);
 
   const baselinePath = params.captureBaseline
     ? await captureLiveInput({
         api: requireSimulatorServer(services),
+        device: resolveDevice(params.udid),
+        peekFor,
         outputDir,
         name: "baseline",
         rotation: params.rotation,
@@ -211,6 +266,8 @@ async function resolveInputPaths(
   const currentPath = params.captureCurrent
     ? await captureLiveInput({
         api: requireSimulatorServer(services),
+        device: resolveDevice(params.udid),
+        peekFor,
         outputDir,
         name: "current",
         rotation: params.rotation,
@@ -282,6 +339,11 @@ async function captureLiveInput(params: {
   // Resolved and validated by requireSimulatorServer at the call site, so it is
   // never undefined here.
   api: SimulatorServerApi;
+  // Needed so a live capture picks up the device's rotation the same way the
+  // `screenshot` tool does. Without it a rotated-Android `captureCurrent` would
+  // come back sideways and diff at ~100% against an upright saved baseline.
+  device: DeviceInfo;
+  peekFor?: (device: DeviceInfo) => RotationPeek;
   outputDir: string;
   name: "baseline" | "current";
   rotation?: Params["rotation"];
@@ -297,9 +359,25 @@ async function captureLiveInput(params: {
   // baseline saved at any scale. Full-res is preserved wherever it works (iOS).
   let capture: Awaited<ReturnType<CaptureScreenshot>>;
   try {
-    capture = await params.captureScreenshot(params.api, params.rotation, params.signal, 1.0);
+    capture = await captureScreenshotUpright(
+      params.api,
+      params.device,
+      params.rotation,
+      params.signal,
+      1.0,
+      params.captureScreenshot,
+      params.peekFor?.(params.device)
+    );
   } catch {
-    capture = await params.captureScreenshot(params.api, params.rotation, params.signal);
+    capture = await captureScreenshotUpright(
+      params.api,
+      params.device,
+      params.rotation,
+      params.signal,
+      undefined,
+      params.captureScreenshot,
+      params.peekFor?.(params.device)
+    );
   }
   const suffix = crypto.randomBytes(4).toString("hex");
   const destination = path.join(params.outputDir, `${params.name}-${suffix}.live.png`);

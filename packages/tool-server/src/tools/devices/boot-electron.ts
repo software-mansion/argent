@@ -33,6 +33,17 @@ interface BootElectronOptions {
 
 const DEFAULT_READY_TIMEOUT_MS = 30_000;
 
+/**
+ * How long a successful readiness probe must hold before boot reports success.
+ * A second instance losing Electron's single-instance lock opens its CDP
+ * listener during startup and only then quits, so the probe can answer a beat
+ * before the child's exit event lands — without the hold, boot would name an
+ * already-dead instance. A lock-quitting app closes the listener and exits
+ * well within this window; every successful boot pays exactly this much
+ * extra latency.
+ */
+const BOOT_CONFIRM_WINDOW_MS = 300;
+
 /** Pick a free localhost port the kernel hands out. */
 async function pickFreePort(): Promise<number> {
   return new Promise<number>((resolve, reject) => {
@@ -165,14 +176,41 @@ function sanitizeExtraArgs(extra: string[]): string[] {
   });
 }
 
+/**
+ * Signal the whole process group led by `pid`, reporting whether anything was
+ * there. The Electron child is spawned detached, so it leads its own group and
+ * every descendant inherits it. A SIGTERM to the leader handle normally
+ * suffices: the npm `electron` launcher forwards it to the real binary and
+ * exits once that child does, so the whole app quits cleanly. The group sweep
+ * covers what that leaves behind — an app that traps SIGTERM or blocks quit
+ * from its `before-quit` handler, and helpers outliving a wedged browser.
+ * Survivors reparent (to launchd on macOS, init/systemd on Linux) but keep
+ * their pgid, which is what lets a group signal still reach them.
+ */
+function signalGroup(pid: number, signal: NodeJS.Signals | 0): boolean {
+  try {
+    process.kill(-pid, signal);
+    return true;
+  } catch (err) {
+    // ESRCH = the group is empty; anything else (EPERM) means it isn't.
+    return (err as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
 function killChildEscalating(child: ChildProcess): void {
-  // SIGTERM lets Electron flush the renderer's GPU buffers and write a clean
-  // exit code; SIGKILL after 2s catches stuck processes (hardware-accelerated
-  // GPU shutdown can deadlock on some Intel drivers).
+  // SIGTERM through the handle lets Electron run its quit sequence and take
+  // its helpers down with it; a group SIGTERM would hit every helper directly
+  // and defeat that, so it is sent only when the handle is already dead and
+  // child.kill reaches nothing — orphaned survivors still get a graceful-quit
+  // request. SIGKILL after 2s catches stuck processes (hardware-accelerated
+  // GPU shutdown can deadlock on some Intel drivers) and sweeps the group.
   try {
     child.kill("SIGTERM");
   } catch {
     /* already gone */
+  }
+  if (child.pid !== undefined && (child.exitCode !== null || child.signalCode !== null)) {
+    signalGroup(child.pid, "SIGTERM");
   }
   setTimeout(() => {
     if (child.exitCode === null && child.signalCode === null) {
@@ -182,6 +220,12 @@ function killChildEscalating(child: ChildProcess): void {
         /* already gone */
       }
     }
+    // The group's own liveness decides this escalation, not the leader's exit
+    // status: the leader routinely exits while a helper lives on. Probe-then-
+    // kill leaves the same recycled-pgid window the raw-pid fallback documents.
+    if (child.pid !== undefined && signalGroup(child.pid, 0)) {
+      signalGroup(child.pid, "SIGKILL");
+    }
   }, 2000).unref();
 }
 
@@ -189,21 +233,29 @@ function killChildEscalating(child: ChildProcess): void {
  * ChildProcess handles for the Electron apps this tool-server booted, keyed by
  * CDP port. Retained so teardown can kill through the handle: its
  * exitCode/signalCode guard lets {@link killChildEscalating} skip the delayed
- * SIGKILL once the child has exited, so the kill can never land on a recycled
- * pid — a raw pid offers no such guard. Entries are dropped when the child
- * exits or a kill consumes them. Holding the handle does not re-ref the
- * unref'd child, so the tool-server's event loop still isn't kept alive by it.
+ * SIGKILL on the leader once the child has exited, so that kill can never land
+ * on a recycled pid. The group SIGKILL is gated only by a group-liveness probe
+ * — see killChildEscalating — so it carries the same residual probe-to-kill
+ * window as any raw-pid signal. Entries are dropped when the child exits or a
+ * kill consumes them. Holding the handle does not re-ref the unref'd child, so
+ * the tool-server's event loop still isn't kept alive by it.
  */
 const liveChildren = new Map<number, ChildProcess>();
 
 /**
  * Terminate a Chromium/Electron app this tool-server booted on `port`.
  * Prefers the retained ChildProcess handle ({@link liveChildren}) and kills it
- * with {@link killChildEscalating}, whose exit-status guard makes the delayed
- * SIGKILL safe against pid recycling. Only when no handle is held (the child
- * already exited, or it was booted by an earlier tool-server process) does it
- * fall back to best-effort raw-pid signalling. An already-exited process is a
+ * with {@link killChildEscalating}: its exit-status guard keeps the delayed
+ * leader SIGKILL off recycled pids, while the group sweep relies on a
+ * liveness probe. Only when no handle is held (the child already exited, or
+ * it was booted by an earlier tool-server process) does it fall back to
+ * best-effort group signalling on the raw pid. An already-exited process is a
  * no-op, not an error.
+ *
+ * `pid` must be a detached-spawn group leader, since every signal this reaches
+ * targets the whole group led by it ({@link signalGroup}) — a pid discovered
+ * some other way (a CDP-reported browser pid, say) names a group the caller
+ * never spawned.
  */
 export function killChromiumByPort(port: number, pid?: number): void {
   const child = liveChildren.get(port);
@@ -215,39 +267,105 @@ export function killChromiumByPort(port: number, pid?: number): void {
   if (pid !== undefined) killChromiumByPidFallback(pid);
 }
 
+/** How long to wait for a killed instance to actually exit before giving up on it. */
+const EXIT_WAIT_TIMEOUT_MS = 5000;
+const EXIT_POLL_MS = 50;
+
 /**
- * Raw-pid fallback: SIGTERM, then SIGKILL after a grace period. Unlike
- * {@link killChildEscalating} there is no exit-status guard here — only a
- * liveness re-probe (signal 0) right before the SIGKILL, which skips it when
- * the process already exited during the grace window. A process exiting
- * between that probe and the kill could still hand its pid to a newcomer
- * (an inherent raw-pid TOCTOU); that residual window is why the handle path in
- * {@link killChromiumByPort} is preferred whenever a handle exists.
+ * Terminate the instance on `port` and wait until the process is actually gone.
+ * {@link killChromiumByPort} only delivers the signal, so a caller that reboots
+ * the same app immediately would race the dying process's single-instance lock
+ * — the replacement quits on startup and its CDP endpoint never comes up.
+ * Best-effort: returns after `timeoutMs` regardless, so a wedged process can't
+ * stall a run (the 2s SIGKILL escalation normally lands well inside it).
+ * `pid` carries {@link killChromiumByPort}'s group-leader requirement, and the
+ * exit poll below probes that same group.
+ */
+export async function killChromiumByPortAndWait(
+  port: number,
+  pid?: number,
+  timeoutMs = EXIT_WAIT_TIMEOUT_MS
+): Promise<void> {
+  const child = liveChildren.get(port);
+  const alive = child && child.exitCode === null && child.signalCode === null;
+  // Attached before the kill so an exit between the two can't be missed.
+  const exited = alive ? new Promise<void>((resolve) => child.once("exit", () => resolve())) : null;
+
+  killChromiumByPort(port, pid);
+
+  if (exited) return Promise.race([exited, sleepUnref(timeoutMs)]);
+  if (!child && pid !== undefined) {
+    // A child this process booted that already exited and was evicted from the
+    // handle registry: no exit event to await, so poll. The probe targets the
+    // group, not the leader — the single-instance lock this wait guards is
+    // held by the browser process, a group member that can outlive the leader.
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (!signalGroup(pid, 0)) return;
+      await sleepUnref(EXIT_POLL_MS);
+    }
+  }
+}
+
+/** Timer-based delay that never holds the event loop open. */
+function sleepUnref(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms).unref();
+  });
+}
+
+/**
+ * Raw-pid fallback: group SIGTERM, then group SIGKILL after a grace period.
+ * Group signalling is safe here because the pid is always a detached-spawn
+ * group leader — every producer ({@link bootElectronApp}) spawns detached, so
+ * pgid=pid names the app's own group, never the caller's — and necessary
+ * because helpers routinely outlive the leader: a leader-only signal would
+ * report "gone" while the rest of the app lives on. The SIGKILL is gated only
+ * on a group-liveness re-probe (signal 0); a group emptying between that probe
+ * and the kill could still hand its pgid to a newcomer — the residual
+ * recycled-pgid window inherent to any raw-pid signal, shared by the group
+ * sweep in {@link killChildEscalating}.
  */
 function killChromiumByPidFallback(pid: number): void {
-  if (signalPid(pid, "SIGTERM") === "gone") return; // already exited, nothing to escalate
+  if (!signalGroup(pid, "SIGTERM")) return; // group already empty, nothing to escalate
   setTimeout(() => {
-    if (signalPid(pid, 0) === "gone") return; // exited during the grace period — don't SIGKILL a recycled pid
-    signalPid(pid, "SIGKILL");
+    if (signalGroup(pid, 0)) signalGroup(pid, "SIGKILL");
   }, 2000).unref();
 }
 
-/** Send a signal (or the 0 liveness probe) to a pid, reporting "gone" on ESRCH (no such process). */
-function signalPid(pid: number, signal: NodeJS.Signals | 0): "sent" | "gone" {
-  try {
-    process.kill(pid, signal);
-    return "sent";
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "ESRCH" ? "gone" : "sent";
-  }
-}
+/**
+ * Chromium switches that keep an argent-booted app fully responsive while its
+ * window is unfocused, occluded, or minimized. Without them the compositor
+ * throttles a hidden window: mouse-input acks stall for seconds per event
+ * (they wait on hit-testing), wheel scrolls hang, and `document.visibilityState`
+ * flips to "hidden".
+ *
+ * Division of labor with primePageSession's focus emulation: emulation keeps
+ * the renderer responsive while a CDP session is attached, but sessions are
+ * created lazily on first tool use and die with the tool-server (which
+ * idle-exits by design while the app outlives it) — these flags cover that
+ * detached lifecycle, plus runtimes where emulation is unavailable. An
+ * agent-driven app must stay testable regardless of where the human puts the
+ * window, so they are unconditional for apps we spawn; externally launched
+ * CDP targets are unaffected.
+ */
+const ANTI_THROTTLING_ARGS = [
+  "--disable-background-timer-throttling",
+  "--disable-backgrounding-occluded-windows",
+  "--disable-renderer-backgrounding",
+];
 
 export async function bootElectronApp(options: BootElectronOptions): Promise<ElectronBootResult> {
   const port = options.port ?? (await pickFreePort());
   const launcher = resolveLauncher(options.appPath);
   const extra = sanitizeExtraArgs(options.extraArgs ?? []);
 
-  const args = [...launcher.args, `--remote-debugging-port=${port}`, ...extra];
+  const args = [
+    ...launcher.args,
+    `--remote-debugging-port=${port}`,
+    ...ANTI_THROTTLING_ARGS,
+    ...extra,
+  ];
 
   let child: ChildProcess;
   try {
@@ -384,6 +502,14 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
       earlyExit,
       spawnError,
     ]);
+    // The probe winning the race does not prove the app is staying up — see
+    // BOOT_CONFIRM_WINDOW_MS. Confirm with the boot listeners still attached:
+    // an exit that already landed has rejected earlyExit (so the race rejects
+    // at once), and one still in flight gets the window to land; either way
+    // the catch below cleans up as an early exit. On a clean window the
+    // unsettled earlyExit is inert — detachBootListeners() nulls its reject
+    // before anything can fire it.
+    await Promise.race([earlyExit, sleepUnref(BOOT_CONFIRM_WINDOW_MS)]);
   } catch (err) {
     // CDP didn't come up — terminate the orphan so we don't leak a process.
     // Detach the boot listeners first so the impending kill→exit doesn't
@@ -397,9 +523,10 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
     killChildEscalating(child);
     throw err;
   }
-  // Happy path: detach the boot-time listeners now that race has resolved.
-  // The child is intentionally long-lived; any later exit / error belongs
-  // to whatever code subsequently manages the session, not to this boot fn.
+  // Happy path: detach the boot-time listeners now that the race and the
+  // confirmation window have both resolved. The child is intentionally
+  // long-lived; any later exit / error belongs to whatever code subsequently
+  // manages the session, not to this boot fn.
   detachBootListeners();
 
   // Retain the handle so a later teardown (killChromiumByPort) can kill via

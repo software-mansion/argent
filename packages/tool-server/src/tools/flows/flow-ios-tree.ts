@@ -1,5 +1,10 @@
-import type { DeviceInfo, Registry } from "@argent/registry";
-import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
+import { FAILURE_CODES, getFailureSignal, type DeviceInfo, type Registry } from "@argent/registry";
+import {
+  buildAppStateMessage,
+  isInjectableBundleId,
+  nativeDevtoolsRef,
+  type NativeDevtoolsApi,
+} from "../../blueprints/native-devtools";
 import { resolveNativeTargetApp } from "../../utils/native-target-app";
 import { flattenHoisting, type FlatNode } from "./flow-tree-flatten";
 import {
@@ -23,8 +28,9 @@ import {
  *
  * This lives under flows/ (not the describe layer) on purpose: it's a flow-only
  * concern, and the describe path is untouched. When native-devtools is
- * unavailable it throws rather than letting the caller degrade to the AX tree —
- * see `fetchFlowTree` for why a silent fallback would flip flow outcomes.
+ * unavailable — or the target returns no windows — it throws rather than
+ * degrade to the AX tree; see `fetchFlowTree` for why a silent fallback would
+ * flip flow outcomes.
  */
 
 // ── getFullHierarchy → DescribeNode adapter ──────────────────────────────────
@@ -197,6 +203,18 @@ function projectIosNode(
  * would otherwise have hidden.
  */
 export function adaptFullHierarchyToDescribeResult(raw: unknown): DescribeNode {
+  return adaptFullHierarchy(raw).tree;
+}
+
+/**
+ * Like {@link adaptFullHierarchyToDescribeResult}, but also reports the screen
+ * size (points) the frames were normalized against — the rotate directive's
+ * physical-circle geometry needs the aspect ratio.
+ */
+export function adaptFullHierarchy(raw: unknown): {
+  tree: DescribeNode;
+  screen?: { width: number; height: number };
+} {
   const windows =
     typeof raw === "object" && raw !== null && Array.isArray((raw as { windows?: unknown }).windows)
       ? (raw as { windows: unknown[] }).windows
@@ -223,11 +241,14 @@ export function adaptFullHierarchyToDescribeResult(raw: unknown): DescribeNode {
     }
   }
 
-  return parseDescribeResult({
+  const tree = parseDescribeResult({
     role: "AXGroup",
     frame: { x: 0, y: 0, width: 1, height: 1 },
     children,
   });
+  return screenW > 0 && screenH > 0
+    ? { tree, screen: { width: screenW, height: screenH } }
+    : { tree };
 }
 
 // ── Fetch ────────────────────────────────────────────────────────────────────
@@ -247,15 +268,70 @@ const FULL_HIERARCHY_FIELDS = [
 ];
 
 /**
+ * Why the app a flow launched serves no view hierarchy, for the case where
+ * nothing at all is connected.
+ *
+ * An app the dylib cannot be relied on to load into is terminal for a selector,
+ * yet every measured state offers a relaunch or a tool-server restart: the
+ * launchd env carrying the bootstrap dylib is simulator-wide, so such a process
+ * inherits the injection tokens the measurement reads and can score as merely
+ * `unregistered`. Selector resolution is where that impossibility bites — the
+ * launch gate lets these apps through so a coordinate-driven flow still runs —
+ * so it is said here, with the remedy that exists at flow level.
+ *
+ * Everything else is measured off the running process; a rejection degrades as
+ * it does for the other consumers, since the call re-applies the launchd env
+ * before measuring and so rejects on a sim that went away mid-run.
+ */
+async function unreadableHierarchyReason(
+  nativeApi: NativeDevtoolsApi,
+  bundleId: string
+): Promise<string> {
+  if (!isInjectableBundleId(bundleId)) {
+    return (
+      `${bundleId} is an Apple system app: it is a platform binary with library validation, so ` +
+      `argent's native devtools cannot be relied on to inject into it, and without them a flow has ` +
+      `no view hierarchy to resolve selectors against. Replace the selector steps with coordinate ` +
+      `ones — \`tap: { x: 0.5, y: 0.35 }\` takes a point directly and reads no tree — or target an app ` +
+      `argent installs.`
+    );
+  }
+  const state = await nativeApi.appConnectionState(bundleId).catch(() => "indeterminate" as const);
+  if (state === "connected") {
+    // Reachable: `appConnectionState` re-reads the live connections map after
+    // its env re-apply and process probe, several simctl round-trips after the
+    // empty list that sent us here. So the connection arrived mid-read, and the
+    // only thing wrong with this attempt is that it was taken too early.
+    return (
+      `native devtools reported no connected app while this tree was being read, but ${bundleId} is ` +
+      `connected now — the connection arrived mid-read. Retry: flows resolve selectors against the ` +
+      `full view hierarchy native devtools serve.`
+    );
+  }
+  // The diagnosis already names the corrective action — for `unregistered` a
+  // tool-server restart, where telling a flow author to relaunch would loop.
+  // The trailing sentence says why a tree read needed one at all.
+  return `${buildAppStateMessage(bundleId, state)} Flows resolve selectors against the full view hierarchy native devtools serve.`;
+}
+
+/**
  * Query the raw UIView tree via native-devtools `getFullHierarchy` and adapt
  * it. Throws — with the reason — when native-devtools is unavailable / not yet
- * connected / errored: flows never degrade to the AX tree (see
+ * connected / errored, or when the resolved target returns no windows (a
+ * non-injectable or backgrounded app): flows never degrade to the AX tree (see
  * `fetchFlowTree`), so the caller's retry loop either rides out a transient
  * failure or surfaces this message as the step's failure reason.
+ *
+ * `launchedNativeApp` is the app this run's `launch:` step started, when it had
+ * one. It serves the two reads auto-targeting cannot, both following from it
+ * resolving only out of the connected list: with that list empty it names the
+ * app whose disconnection needs explaining, and when auto-resolution's own probe
+ * times out mid-stall it arbitrates the target.
  */
 export async function queryFullHierarchyTree(
   registry: Registry,
-  device: DeviceInfo
+  device: DeviceInfo,
+  launchedNativeApp?: string
 ): Promise<DescribeTreeData> {
   let nativeApi: NativeDevtoolsApi;
   try {
@@ -267,14 +343,45 @@ export async function queryFullHierarchyTree(
       { cause: err }
     );
   }
-  // resolveNativeTargetApp's own errors (no connected app / ambiguous frontmost)
-  // already carry the actionable next step, so they propagate unwrapped.
-  const target = await resolveNativeTargetApp(nativeApi, undefined);
-
-  if (await nativeApi.requiresAppRestart(target.bundleId)) {
-    throw new Error(
-      `${target.bundleId} was launched before argent's instrumentation loaded — relaunch it (launch-app, or a flow \`launch\` step) so the full view hierarchy is readable`
-    );
+  // Auto-targeting draws its candidates from `listConnectedBundleIds`, the same
+  // map `appConnectionState` reads, so an empty list is exactly the set of
+  // states that explain a missing connection — and the error it raises there
+  // ("Launch or restart the app first") is the restart loop this measurement
+  // exists to break. The flow's launched id does not come from that map, so it
+  // survives the disconnection auto-targeting could not describe.
+  //
+  // Tested directly rather than by catching the throw: its failure code travels
+  // on a module-local symbol, so a duplicate `@argent/registry` instance would
+  // read it as absent and silently fall back to the stock message.
+  if (launchedNativeApp !== undefined && nativeApi.listConnectedBundleIds().length === 0) {
+    throw new Error(await unreadableHierarchyReason(nativeApi, launchedNativeApp));
+  }
+  // resolveNativeTargetApp's remaining errors already carry the actionable next
+  // step, so they propagate unwrapped — with one exception. Auto-resolution's
+  // `Application.getState` probe hops onto the app's MAIN thread; an app whose
+  // main thread is momentarily pinned (heavy cold start: first Hermes parse,
+  // Lottie decode) times that probe out even though it is exactly the app the
+  // flow launched and is about to read. When that happens — and ONLY on the
+  // timeout failure — fall back to the app this run's `launch:` started,
+  // provided its devtools connection is still up. A resolution that ANSWERS
+  // (including the deliberate "single app but backgrounded" error) is always
+  // preferred: the arbiter never overrides a guard that fired, it only rides out
+  // a probe the stall made unanswerable.
+  let target: { bundleId: string };
+  try {
+    target = await resolveNativeTargetApp(nativeApi, undefined);
+  } catch (err) {
+    const timedOut =
+      getFailureSignal(err)?.error_code === FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT;
+    if (
+      timedOut &&
+      launchedNativeApp !== undefined &&
+      nativeApi.listConnectedBundleIds().includes(launchedNativeApp)
+    ) {
+      target = { bundleId: launchedNativeApp };
+    } else {
+      throw err;
+    }
   }
 
   const rawResult = (await nativeApi.queryViewHierarchy(
@@ -290,7 +397,21 @@ export async function queryFullHierarchyTree(
     throw new Error(`getFullHierarchy failed for ${target.bundleId}: ${rawResult.error}`);
   }
 
-  return { tree: adaptFullHierarchyToDescribeResult(rawResult), source: "native-devtools" };
+  // No windows is an untrustworthy read (non-injectable app, backgrounded, or a
+  // window not yet attached), not a blank screen — and an empty tree is the one
+  // thing a `hidden`/absent check accepts, so trusting it would false-pass.
+  // Key on raw windows, not flattened children: windows-but-no-leaves is a
+  // genuinely sparse, trusted screen.
+  if (!Array.isArray(rawResult.windows) || rawResult.windows.length === 0) {
+    throw new Error(
+      `getFullHierarchy returned no windows for ${target.bundleId} — the app is not injectable ` +
+        `(e.g. an Apple system app) or has no readable foreground window, so flows cannot resolve ` +
+        `selectors against its view hierarchy`
+    );
+  }
+
+  const { tree, screen } = adaptFullHierarchy(rawResult);
+  return { tree, source: "native-devtools", ...(screen ? { screen } : {}) };
 }
 
 function errMsg(err: unknown): string {

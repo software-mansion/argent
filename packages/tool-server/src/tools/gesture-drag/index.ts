@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
+import { assertChromiumWindowVisible } from "../../utils/chromium-visibility";
 import { resolveDevice } from "../../utils/device-info";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -37,6 +38,13 @@ const capability: ToolCapability = {
 
 export const gestureDragTool: ToolDefinition<Params, Result> = {
   id: "gesture-drag",
+  interaction: {
+    startedMsg: ({ params }) =>
+      `Dragging from (${Math.round(params.fromX * 100)}%, ${Math.round(params.fromY * 100)}%) to (${Math.round(params.toX * 100)}%, ${Math.round(params.toY * 100)}%)`,
+    completedMsg: ({ params }) =>
+      `Dragged from (${Math.round(params.fromX * 100)}%, ${Math.round(params.fromY * 100)}%) to (${Math.round(params.toX * 100)}%, ${Math.round(params.toY * 100)}%)`,
+    failedMsg: ({ failureSignal }) => `Failed to drag: ${failureSignal.error_code}`,
+  },
   description: `Press the left mouse button at a start point, move to an end point, and release — a desktop mouse drag in a Chromium app. All positions are normalized 0.0–1.0 (fractions of the window, not pixels), same coordinate space as gesture-tap and describe. Interpolates mouse-move events at ~60fps over durationMs for a natural drag.
 Use for slider thumbs, drag-and-drop, text selection, or draggable UI elements. Dragging never scrolls content on desktop — use gesture-scroll for lists/pages. Chromium only — on iOS/Android use gesture-swipe.
 Returns { dragged: true, timestampMs }. Fails if the Chromium CDP session is not reachable for the given device.`,
@@ -50,6 +58,10 @@ Returns { dragged: true, timestampMs }. Fails if the Chromium CDP session is not
   async execute(services, params) {
     const timestampMs = Date.now();
     const chromium = services.chromium as ChromiumCdpApi;
+    // A drag interpolates ~60fps mouse moves; on a hidden (throttled) window
+    // each one stalls on compositor hit-testing (~5s), turning one drag into
+    // minutes of wall clock — refuse up front like gesture-scroll.
+    await assertChromiumWindowVisible(chromium, "drag", "chromium_drag_window_hidden");
     const vp = chromium.getViewport();
     const startPx = { x: params.fromX * vp.width, y: params.fromY * vp.height };
     const endPx = { x: params.toX * vp.width, y: params.toY * vp.height };

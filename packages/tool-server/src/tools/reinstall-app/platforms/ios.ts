@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { resolve as resolvePath } from "node:path";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
+import { deviceSetForUdid, simctlPrefix } from "../../../utils/ios-device-sets";
 import type { ReinstallAppParams, ReinstallAppResult, ReinstallAppServices } from "../types";
 
 const execFileAsync = promisify(execFile);
@@ -12,13 +13,14 @@ export const iosImpl: PlatformImpl<ReinstallAppServices, ReinstallAppParams, Rei
   handler: async (_services, params) => {
     const { udid, bundleId, appPath } = params;
     const absolute = resolvePath(appPath);
+    const prefix = simctlPrefix(await deviceSetForUdid(udid));
     try {
-      await execFileAsync("xcrun", ["simctl", "uninstall", udid, bundleId]);
+      await execFileAsync("xcrun", [...prefix, "uninstall", udid, bundleId]);
     } catch {
       // App may not be installed — continue to install
     }
     try {
-      await execFileAsync("xcrun", ["simctl", "install", udid, absolute]);
+      await execFileAsync("xcrun", [...prefix, "install", udid, absolute]);
     } catch (err) {
       throw new FailureError(
         `Failed to install iOS app bundle on ${udid}.`,

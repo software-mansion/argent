@@ -14,9 +14,9 @@ import {
 // thing that decides. Asserting against it means a tool that imports the WRONG
 // constant breaks this test instead of shipping.
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
-import { debuggerStatusTool } from "../../src/tools/debugger/debugger-status";
+import { createDebuggerStatusTool } from "../../src/tools/debugger/debugger-status";
 import { debuggerEvaluateTool } from "../../src/tools/debugger/debugger-evaluate";
-import { debuggerLogRegistryTool } from "../../src/tools/debugger/debugger-log-registry";
+import { createDebuggerLogRegistryTool } from "../../src/tools/debugger/debugger-log-registry";
 import { debuggerComponentTreeTool } from "../../src/tools/debugger/debugger-component-tree";
 import { debuggerInspectElementTool } from "../../src/tools/debugger/debugger-inspect-element";
 import { debuggerReloadMetroTool } from "../../src/tools/debugger/debugger-reload-metro";
@@ -45,10 +45,10 @@ const ANDROID_EMU_ID = "emulator-5554";
 
 const vegaVvd = resolveDevice(VEGA_VVD_ID);
 
-// react-profiler-{start,stop,status} are factory-built (they close over the
-// registry to reach the profiler session), so they can only be inspected by
-// constructing them the way setup-registry.ts does. Their capability does not
-// depend on the registry instance.
+// react-profiler-{start,stop,status} and debugger-{status,log-registry} are
+// factory-built (they close over the registry to reach their services), so they
+// can only be inspected by constructing them the way setup-registry.ts does.
+// Their capability does not depend on the registry instance.
 const registry = new Registry();
 
 /**
@@ -60,9 +60,9 @@ const registry = new Registry();
  */
 const VEGA_ENABLED_TOOLS = [
   debuggerConnectTool,
-  debuggerStatusTool,
+  createDebuggerStatusTool(registry),
   debuggerEvaluateTool,
-  debuggerLogRegistryTool,
+  createDebuggerLogRegistryTool(registry),
   networkLogsTool,
   networkRequestTool,
 ];

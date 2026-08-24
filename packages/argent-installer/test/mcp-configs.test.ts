@@ -1644,6 +1644,10 @@ describe("copyRulesAndAgents", () => {
     fs.mkdirSync(agentsDir, { recursive: true });
     fs.writeFileSync(path.join(rulesDir, "argent.md"), "# Rule");
     fs.writeFileSync(path.join(agentsDir, "environment-inspector.md"), "# Agent");
+    // The bundled agents tree is not flat — it carries a references/
+    // subdirectory — so the fixture mirrors that shape.
+    fs.mkdirSync(path.join(agentsDir, "references"), { recursive: true });
+    fs.writeFileSync(path.join(agentsDir, "references", "checklist.md"), "# Checklist");
   });
 
   it("copies rules to .claude/rules for Claude Code adapter (local)", () => {
@@ -1661,6 +1665,14 @@ describe("copyRulesAndAgents", () => {
     expect(fs.existsSync(path.join(tmpDir, ".claude", "agents", "environment-inspector.md"))).toBe(
       true
     );
+  });
+
+  it("names the target plainly when nothing redirects", () => {
+    const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+
+    const results = copyRulesAndAgents([claudeAdapter], tmpDir, "local", rulesDir, agentsDir);
+
+    expect(results.every((r) => !r.includes(" -> "))).toBe(true);
   });
 
   it("copies rules to .cursor/rules for Cursor adapter (local)", () => {
@@ -1697,6 +1709,56 @@ describe("copyRulesAndAgents", () => {
     expect(
       fs.existsSync(path.join(homedirOverride, ".gemini", "agents", "environment-inspector.md"))
     ).toBe(true);
+  });
+
+  // Issue #701: a `.claude/agents -> ../.agents/agents` layout keeps one
+  // canonical copy of the agent definitions and points each harness's path at
+  // it. Before the fix the copy tried to replace the link with a directory and
+  // failed, so argent-environment-inspector never landed even though
+  // rules/argent.md kept referencing it.
+  // Skipped on Windows, where creating symlinks needs admin rights.
+  describe.skipIf(process.platform === "win32")("symlinked targets", () => {
+    it("installs agents into a symlinked .claude/agents, including nested files", () => {
+      const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+      const canonical = path.join(tmpDir, ".agents", "agents");
+      const link = path.join(tmpDir, ".claude", "agents");
+      fs.mkdirSync(canonical, { recursive: true });
+      fs.mkdirSync(path.join(tmpDir, ".claude"), { recursive: true });
+      fs.symlinkSync(path.join("..", ".agents", "agents"), link);
+
+      const results = copyRulesAndAgents([claudeAdapter], tmpDir, "local", rulesDir, agentsDir);
+
+      expect(fs.existsSync(path.join(canonical, "environment-inspector.md"))).toBe(true);
+      expect(fs.existsSync(path.join(canonical, "references", "checklist.md"))).toBe(true);
+      expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+      expect(results.some((r) => r.includes("Could not copy agents"))).toBe(false);
+    });
+
+    it("names both paths when a target redirects through a symlink", () => {
+      const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+      const canonical = path.join(tmpDir, ".agents", "agents");
+      const link = path.join(tmpDir, ".claude", "agents");
+      fs.mkdirSync(canonical, { recursive: true });
+      fs.mkdirSync(path.join(tmpDir, ".claude"), { recursive: true });
+      fs.symlinkSync(path.join("..", ".agents", "agents"), link);
+
+      const results = copyRulesAndAgents([claudeAdapter], tmpDir, "local", rulesDir, agentsDir);
+      const agentsLine = results.find((r) => r.includes("Copied agents"))!;
+
+      expect(agentsLine).toContain(`.claude/agents -> ${path.join(".agents", "agents")}`);
+    });
+
+    it("installs rules into a symlinked .claude/rules", () => {
+      const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+      const canonical = path.join(tmpDir, ".agents", "rules");
+      fs.mkdirSync(canonical, { recursive: true });
+      fs.mkdirSync(path.join(tmpDir, ".claude"), { recursive: true });
+      fs.symlinkSync(path.join("..", ".agents", "rules"), path.join(tmpDir, ".claude", "rules"));
+
+      copyRulesAndAgents([claudeAdapter], tmpDir, "local", rulesDir, agentsDir);
+
+      expect(fs.existsSync(path.join(canonical, "argent.md"))).toBe(true);
+    });
   });
 
   it("injects Codex rules into developer_instructions in config.toml (local)", () => {

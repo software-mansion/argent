@@ -1,0 +1,95 @@
+---
+sidebar_position: 8
+sidebar_label: Lens
+title: Argent Lens
+sidebar_custom_props:
+  icon: swatch-book
+---
+
+Argent Lens is a design review window. The agent stages several design variants for an element of the running app. Lens shows the variants beside a live stream of the device. You pick one variant, add comments, and send the decision back to the agent.
+
+<Video
+  src="/video/lens.mp4"
+  width={1544}
+  height={1080}
+  caption="Lens shows the staged variants for two elements beside the streamed simulator. The reviewer picks one variant per element and submits the round."
+/>
+
+:::note
+Argent Lens is in development. The feature is behind the `argent-lens` flag and is available on macOS only. See [Enable Argent Lens](#enable-argent-lens).
+:::
+
+## How a review round works
+
+1. You ask the agent for a design change with an open design space, for example "restyle the header".
+2. The agent renders each variant in the app and captures a screenshot of it.
+3. The agent stages each variant with the `propose_variant` tool. The agent does not block. The Lens window opens on your screen.
+4. You review the variants in the Lens window. You pick one variant per element, or you leave an element as it is. You can add a comment on each element, a comment on any other element of the screen, and one overall comment.
+5. You press **Complete**. Lens sends your decision to the agent.
+6. The agent applies the chosen variants to the source files. If a comment asks for more changes, the agent makes the change or stages a new round of variants.
+
+## The Lens window
+
+The Lens window streams the device that the agent used for the screenshots. Each element with staged variants has a floating card. A thin line connects the card to the element on the streamed screen. Each card shows the name, the preview image and the summary of every variant. Expand a variant to read its code.
+
+| Control               | Function                                                                  |
+| --------------------- | ------------------------------------------------------------------------- |
+| Variant card          | Pick one variant for the element, or pick none to keep the current design |
+| Comment on an element | Add a note to the decision for one element                                |
+| Comment inspector     | Pin a comment to any element of the screen, also one without variants     |
+| **Show them**         | Reveal the choices for elements that are on a different screen            |
+| Overall comment       | Give one direction for the whole round                                    |
+| **Complete**          | Submit the round to the agent                                             |
+| **Clear**             | Remove all picks and comments of the round                                |
+
+If no device runs, the window offers a picker. The picker boots a simulator for the stream.
+
+## Two ways to run Lens
+
+### From an MCP session
+
+In a normal agent session, the agent stages the variants with `propose_variant` and then calls `await_user_selection` one time. This call blocks until you press **Complete**. The result contains the chosen variants, the comments and the pinned annotations. If the call times out before you submit, the proposals stay live and the agent calls the tool again.
+
+### From the `argent lens` command
+
+The `argent lens` command opens the Lens window and starts one coding agent in the current terminal. Lens owns this agent. When you submit a round, Lens types your decision into the agent session as a message with the prefix `[Argent Lens]`. The agent does not call `await_user_selection` in this mode. Lens ends when you close the agent.
+
+```bash
+argent lens                      # pick the agent in the window
+argent lens --agent codex        # bind a specific agent
+argent lens --forget             # forget the remembered agent
+```
+
+| Option                 | Description                                                        |
+| ---------------------- | ------------------------------------------------------------------ |
+| `-a, --agent <id>`     | Agent to bind: `claude`, `codex`, `gemini`, `opencode` or `cursor` |
+| `-t, --terminal <app>` | Terminal for the new-window fallback: `iterm` or `terminal`        |
+| `--forget`             | Forget the remembered agent, then exit                             |
+
+When more than one agent is installed, the window shows a picker. The picker can remember your choice. Argent stores the choice in the `lens.agent` setting, in the global or in the project configuration.
+
+If the terminal is not iTerm or Terminal.app, for example tmux or VS Code, `argent lens` opens the agent in a new terminal window instead.
+
+## Example instructions
+
+- "Redesign the header of the Favourites screen. Give me three options."
+- "Make the bottom tab bar look more modern. Stage the variants in Lens."
+- "Restyle the primary button. Keep the current colors in one of the variants."
+
+## Limits
+
+- Lens is available on macOS only.
+- Lens stages variants for iOS simulators and Android emulators. Lens does not stage variants for Chromium and Electron apps.
+- The agent stages variants only for an open-ended design request. For a concrete request, for example "move the button 8 px down", the agent makes the edit directly.
+- Argent collects aggregate counts about a review round, for example the number of elements and variants. Argent does not collect the comment text, the element names or the variant code. See [Telemetry](/docs/reference/telemetry).
+
+## Enable Argent Lens
+
+```bash
+argent enable argent-lens                    # global
+argent enable argent-lens --scope project    # this project only
+```
+
+The flag enables the `propose_variant` and `await_user_selection` tools, the Lens window and the `argent lens` command. The [configuration reference](/docs/reference/configuration#feature-flags) lists all flags.
+
+Argent does this with these two tools: `propose_variant` and `await_user_selection`. The [tools reference](/docs/reference/tools) contains all tools.

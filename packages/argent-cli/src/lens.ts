@@ -352,8 +352,17 @@ function parseArgs(argv: string[]): {
   for (let i = 0; i < argv.length; i++) {
     const tok = argv[i];
     if (tok === "--help" || tok === "-h") help = true;
-    else if (tok === "--forget") forget = true;
-    else if (tok === "--terminal" || tok === "-t") {
+    else if (tok === "--forget") {
+      forget = true;
+      // Mirrors the flow parser: `--forget false` would leave forget ON while
+      // the word was silently dropped. `argent run` accepts that syntax, so it
+      // has to be refused here rather than misread.
+      const next = argv[i + 1]?.trim().toLowerCase();
+      if (next === "true" || next === "false") {
+        process.stderr.write(`lens: --forget does not take a value; omit it to keep the state\n`);
+        process.exit(2);
+      }
+    } else if (tok === "--terminal" || tok === "-t") {
       const v = argv[++i];
       if (v === "iterm" || v === "terminal") terminal = v;
       else {

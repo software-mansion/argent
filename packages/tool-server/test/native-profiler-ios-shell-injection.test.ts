@@ -37,6 +37,17 @@ vi.mock("child_process", () => ({
     }
     return "";
   },
+  // `promisify(execFile)`d at module load by ios-device-sets (imported through
+  // the profiler platform module). The sync helpers under test use the cached
+  // device-set view, so this async path must exist but is never called here.
+  execFile: (
+    _file: string,
+    _args: string[],
+    _options: unknown,
+    callback: (err: Error | null, result: { stdout: string; stderr: string }) => void
+  ) => {
+    callback(null, { stdout: "", stderr: "" });
+  },
   // A regression back to shell interpolation would route the command (with the
   // udid baked into the string) through execSync — make that fail loudly.
   execSync: (cmd: string) => {

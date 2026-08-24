@@ -17,8 +17,10 @@ import {
   ServiceInitializationError,
   ToolNotFoundError,
   ToolExecutionError,
+  FailureError,
   getFailureSignalOrFallback,
 } from "./errors";
+import { FAILURE_CODES } from "./failure-codes";
 import { parseURN } from "./urn";
 import { zodObjectToJsonSchema } from "./zod-to-json-schema";
 import { randomUUID } from "node:crypto";
@@ -142,8 +144,12 @@ export class Registry {
 
       // Build the per-invocation context: caller options (e.g. signal) plus the
       // registry-owned artifact store, so any tool can register host files via
-      // `ctx.artifacts` without declaring a per-tool service.
-      const ctx: ToolContext = { ...options, artifacts: this.artifacts };
+      // `ctx.artifacts` without declaring a per-tool service. The invocation id
+      // is always populated — when the caller supplied none, the id minted
+      // above (the one toolInvoked/toolCompleted carry) is exposed here, so an
+      // event a tool emits keyed on ctx.toolInvocationId joins the lifecycle
+      // pair on every dispatch path, not only attributed HTTP requests.
+      const ctx: ToolContext = { ...options, toolInvocationId, artifacts: this.artifacts };
 
       const runOnce = async (): Promise<TResult> => {
         const resolvedServices: Record<string, unknown> = {};
@@ -325,7 +331,9 @@ export class Registry {
 
     if (node.state === ServiceState.TERMINATING) {
       return Promise.reject(
-        new ServiceInitializationError(urn, "Service is currently terminating")
+        new ServiceInitializationError(urn, "Service is currently terminating", {
+          cause: terminatingSignalCause("Service is currently terminating"),
+        })
       );
     }
 
@@ -369,7 +377,9 @@ export class Registry {
           /* ignore */
         }
         node.initPromise = null;
-        throw new ServiceInitializationError(urn, "Service was terminated during initialization");
+        throw new ServiceInitializationError(urn, "Service was terminated during initialization", {
+          cause: terminatingSignalCause("Service was terminated during initialization"),
+        });
       }
 
       this._transition(node, ServiceState.RUNNING);
@@ -437,6 +447,21 @@ export class Registry {
     node.dependents.clear();
     this._transition(node, cause ? ServiceState.ERROR : ServiceState.IDLE, cause);
   }
+}
+
+/**
+ * Cause for the two registry-manufactured ServiceInitializationErrors raised
+ * when a resolve races an in-flight teardown. Without a cause they fall back to
+ * the catch-all REGISTRY_SERVICE_INITIALIZATION_FAILED signal, which hides this
+ * transient window from telemetry and from callers that classify by code.
+ */
+function terminatingSignalCause(message: string): FailureError {
+  return new FailureError(message, {
+    error_code: FAILURE_CODES.REGISTRY_SERVICE_TERMINATING,
+    failure_stage: "registry_service_terminating",
+    failure_area: "registry",
+    error_kind: "unknown",
+  });
 }
 
 function formatInteractionMessage(format: () => string | undefined, fallback: string): string {

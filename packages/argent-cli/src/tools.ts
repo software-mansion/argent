@@ -53,9 +53,32 @@ export async function tools(argv: string[], options: ToolsCommandOptions): Promi
     if (meta.outputHint) console.log(`\nOutput hint: ${meta.outputHint}`);
   }
 
+  function printUsage(): void {
+    console.log(`Usage:
+  argent tools                       List available tools
+  argent tools describe <name>       Show one tool's flags and description
+
+Options:
+  --json                             Print machine-readable JSON
+  --help, -h                         Show this help
+
+Listing tools contacts the argent tool-server, starting one if none is running.
+`);
+  }
+
   const json = argv.includes("--json");
-  const positional = argv.filter((a) => !a.startsWith("--"));
+  // A help flag in the subcommand slot is a request for this command's usage.
+  // It has to be recognised before anything contacts the tool-server, and it
+  // must not swallow a later one: `argent tools describe <name> --help` asks
+  // for that tool's flags, which `describeTool` prints.
+  const isHelpFlag = (a: string) => a === "--help" || a === "-h";
+  const positional = argv.filter((a) => !a.startsWith("--") || isHelpFlag(a));
   const sub = positional[0];
+
+  if (sub !== undefined && isHelpFlag(sub)) {
+    printUsage();
+    return;
+  }
 
   if (!sub) {
     await listTools(json);
@@ -69,17 +92,6 @@ export async function tools(argv: string[], options: ToolsCommandOptions): Promi
       process.exit(1);
     }
     await describeTool(name, json);
-    return;
-  }
-
-  if (sub === "--help" || sub === "-h") {
-    console.log(`Usage:
-  argent tools                       List available tools
-  argent tools describe <name>       Show one tool's flags and description
-
-Options:
-  --json                             Print machine-readable JSON
-`);
     return;
   }
 

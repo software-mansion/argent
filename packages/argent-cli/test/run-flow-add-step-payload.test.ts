@@ -5,11 +5,13 @@ import { run, type RunCommandOptions } from "../src/run.js";
 // End-to-end regression guard for issue #452 at the `run()` layer.
 //
 // The documented per-flag form
-//   argent run flow-add-step --command gesture-tap --args '{"udid":...}'
-// must reach the tool-server with BOTH `command` AND the tool's own `args`
-// field in the payload. The bug shadowed the `args` field with the
-// whole-payload escape hatch, so `args` was consumed as the entire payload and
-// the field arrived `undefined` (with udid/x/y hoisted to the top level).
+//   argent run flow-add-step --name t --project_root /p --command gesture-tap \
+//     --args '{"udid":...}'
+// must reach the tool-server with the recording identity (`name` +
+// `project_root`), the `command`, AND the tool's own `args` field in the
+// payload. The bug shadowed the `args` field with the whole-payload escape
+// hatch, so `args` was consumed as the entire payload and the field arrived
+// `undefined` (with udid/x/y hoisted to the top level).
 //
 // `parseFlags` is unit-tested directly, and `--help` suppression is covered in
 // run-help.test.ts. Neither drives the whole `run()` path through to the wire.
@@ -32,15 +34,38 @@ function startServer(cap: Captured): Promise<{ url: string; close: () => Promise
           tools: [
             {
               name: "flow-add-step",
-              description: "Add a step to the active flow recording",
+              // Leading sentence of the real tool description, verbatim.
+              description:
+                "Execute a tool call and record it as a step in the flow named by `name` + `project_root` (the recording must already be open — see flow-start-recording).",
+              // Mirrors what the registry advertises for the real tool —
+              // zodObjectToJsonSchema over the zod schema in
+              // packages/tool-server/src/tools/flows/flow-add-step.ts. `name`
+              // and `project_root` identify which open recording the step
+              // belongs to and are required alongside `command`.
+              //
+              // Only `properties` is load-bearing here: `parseFlags` reads it
+              // to decide whether `args` belongs to the tool, and reads
+              // `required` nowhere (its one consumer is `formatSchemaUsage`,
+              // the help renderer, which this file never invokes — that is
+              // covered by run-help.test.ts). The array is kept faithful so the
+              // fixture stays readable as the real schema, not because dropping
+              // an entry would fail here.
+              //
+              // Hand-copied because `@argent/cli` does not depend on the
+              // tool-server. The guard that catches drift lives where the schema
+              // does — flow-tools.test.ts's "the flow-add-step schema the CLI
+              // tests hand-copy"; if that fails, this is one of the fixtures it
+              // is telling you to update.
               inputSchema: {
                 type: "object",
                 properties: {
+                  name: { type: "string" },
+                  project_root: { type: "string" },
                   command: { type: "string" },
                   args: { type: "string" },
-                  delayMs: { type: "integer" },
+                  delayMs: { type: "integer", minimum: 0, maximum: 9007199254740991 },
                 },
-                required: ["command"],
+                required: ["name", "project_root", "command"],
               },
             },
           ],
@@ -88,6 +113,11 @@ describe("CLI run — flow-add-step --args reaches the payload (issue #452)", ()
 
   const opts: RunCommandOptions = { paths: {} as never }; // unused: ARGENT_TOOLS_URL is set
 
+  const FLOW = "checkout-e2e";
+  // A path with a space: the shell hands argv already split, so the value must
+  // arrive verbatim rather than being re-split or truncated by the parser.
+  const ROOT = "/Users/dev/My Projects/demo-app";
+
   beforeEach(async () => {
     cap = { path: null, body: null };
     server = await startServer(cap);
@@ -109,10 +139,23 @@ describe("CLI run — flow-add-step --args reaches the payload (issue #452)", ()
     await server.close();
   });
 
-  it("per-flag form: --command X --args '<json>' sends BOTH fields verbatim to the server", async () => {
+  it("per-flag form: every required field plus --args '<json>' reaches the server verbatim", async () => {
     const stepArgs = '{"udid":"SIM-1","x":0.5,"y":0.35}';
 
-    await run(["flow-add-step", "--command", "gesture-tap", "--args", stepArgs], opts);
+    await run(
+      [
+        "flow-add-step",
+        "--name",
+        FLOW,
+        "--project_root",
+        ROOT,
+        "--command",
+        "gesture-tap",
+        "--args",
+        stepArgs,
+      ],
+      opts
+    );
 
     expect(cap.path).toMatch(/^\/tools\/flow-add-step/);
     expect(cap.body).not.toBeNull();
@@ -120,15 +163,68 @@ describe("CLI run — flow-add-step --args reaches the payload (issue #452)", ()
     // The exact regression from #452: `args` survives as the tool's own string
     // field (the raw JSON passed through untouched), and its keys are NOT
     // hoisted to the top level as they were when `--args` was swallowed whole.
-    expect(payload).toEqual({ command: "gesture-tap", args: stepArgs });
+    // The recording identity rides alongside it — without both `name` and
+    // `project_root` the server cannot find the open recording, so a payload
+    // missing either is a failed step, not a mislabelled one.
+    expect(payload).toEqual({
+      name: FLOW,
+      project_root: ROOT,
+      command: "gesture-tap",
+      args: stepArgs,
+    });
   });
 
-  it("inline --args=<json> form also sends both fields", async () => {
+  it("inline --field=<value> form sends the same payload", async () => {
     const stepArgs = '{"udid":"SIM-1","x":0.5,"y":0.35}';
 
-    await run(["flow-add-step", "--command", "gesture-tap", `--args=${stepArgs}`], opts);
+    await run(
+      [
+        "flow-add-step",
+        `--name=${FLOW}`,
+        `--project_root=${ROOT}`,
+        "--command",
+        "gesture-tap",
+        `--args=${stepArgs}`,
+      ],
+      opts
+    );
 
     const payload = JSON.parse(cap.body!) as Record<string, unknown>;
-    expect(payload).toEqual({ command: "gesture-tap", args: stepArgs });
+    expect(payload).toEqual({
+      name: FLOW,
+      project_root: ROOT,
+      command: "gesture-tap",
+      args: stepArgs,
+    });
+  });
+
+  it("coerces --delayMs by its declared integer type and omits absent optionals", async () => {
+    // `delayMs` is the only non-string field in the schema, so it is the one
+    // place the payload can arrive with the wrong JSON type: a string "250"
+    // fails the server's zod validation. `args` is optional — omitting the flag
+    // must leave the key out rather than sending null/"".
+    await run(
+      [
+        "flow-add-step",
+        "--name",
+        FLOW,
+        "--project_root",
+        ROOT,
+        "--command",
+        "screenshot",
+        "--delayMs",
+        "250",
+      ],
+      opts
+    );
+
+    const payload = JSON.parse(cap.body!) as Record<string, unknown>;
+    expect(payload).toEqual({
+      name: FLOW,
+      project_root: ROOT,
+      command: "screenshot",
+      delayMs: 250,
+    });
+    expect(payload).not.toHaveProperty("args");
   });
 });

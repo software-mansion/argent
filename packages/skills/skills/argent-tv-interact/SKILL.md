@@ -21,7 +21,7 @@ description: Control and inspect TV apps via argent — Apple TV (tvOS), Android
 
 - `describe {udid}` — focus view: the focused / `[selected]` element + focusable elements with labels and normalized frames. The discovery tool — call before and after navigating. Empty tree → see the per-platform notes.
 - `tv-remote {udid, button}` — D-pad / remote. `button` is one key **or a whole path** (run in one call). Keys: `up`/`down`/`left`/`right`, `select`, `back`, `menu`, `home`, `playPause`, plus media keys `rewind`/`fastForward`/`next`/`previous`/`volumeUp`/`volumeDown`/`mute`. Single: `{button:"down"}`; repeat: `{button:"down", repeat:3}`; path: `{button:["up","right","select"]}`.
-- `keyboard {udid, text}` — type into the focused field (focus it with `tv-remote` first). Named `key` presses (e.g. `{key:"enter"}`) work on Vega; on Apple TV / Android TV move focus with `tv-remote` instead.
+- `keyboard {udid, text}` — type into the focused field (focus it with `tv-remote` first). One call carries `text` or `key`, never both — to type and then press a key, send two `keyboard` steps in one `run-sequence`. Named `key` presses (e.g. `{key:"enter"}`) work on Vega; on Apple TV / Android TV move focus with `tv-remote` instead.
 - `launch-app` / `restart-app` / `reinstall-app {udid, bundleId}` — `bundleId` from the app manifest. Vega `reinstall-app` takes `appPath` = a `.vpkg`.
 - `screenshot {udid, scale?}` — Apple TV via `xcrun simctl io` (downscaled); Android TV / Vega host-side via `adb` / `screencap`.
 
@@ -61,7 +61,7 @@ Needs a Debug build + Metro running. argent only _connects_ to Metro — start M
 
 ## Debugging the JS runtime (Vega)
 
-Once that same Debug build + Metro setup is in place, the JS-runtime tools work on a Vega VVD: `debugger-connect`, `debugger-status`, `debugger-evaluate`, `debugger-log-registry` (console logs), `view-network-logs`, and `view-network-request-details`. See the `argent-metro-debugger` skill.
+Once that same Debug build + Metro setup is in place, the JS-runtime tools work on a Vega VVD: `debugger-connect`, `debugger-status`, `debugger-evaluate`, `debugger-log-registry` (console logs), `view-network-logs`, and `view-network-request-details`. Verify with `debugger-status`: it returns a status result rather than an error when not connected — `status: "connected"` means the setup works; `status: "not_connected"` carries a `reason` and `guidance` (e.g. `metro_not_running` → Metro itself is not up). Vega-specific: on `no_app_connected`, check `vega device start-port-forwarding` **before** relaunching the app — a down device→host forward is the usual cause, and the generic guidance can't know about it. See the `argent-metro-debugger` skill.
 
 Vega's React Native forks RN 0.72 and serves the legacy Hermes inspector, so three things differ from iOS / Android:
 

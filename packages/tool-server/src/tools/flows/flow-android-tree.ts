@@ -241,5 +241,11 @@ export async function queryAndroidFullHierarchy(
     devtools.getScreenSize(),
   ]);
   const tree = adaptFullAndroidHierarchyToDescribeResult(xml, size.width, size.height);
-  return { tree, source: "android-devtools" };
+  return {
+    tree,
+    source: "android-devtools",
+    ...(size.width > 0 && size.height > 0
+      ? { screen: { width: size.width, height: size.height } }
+      : {}),
+  };
 }

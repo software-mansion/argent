@@ -9,11 +9,12 @@ import { assertSupported } from "../../../utils/capability";
 import { ensureDeps } from "../../../utils/check-deps";
 import { startNativeProfilerIos } from "./platforms/ios";
 import { startNativeProfilerAndroid } from "./platforms/android";
+import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
 const zodSchema = z.object({
-  device_id: z
-    .string()
-    .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+  device_id: metroDeviceIdParam(
+    "Target device id from `list-devices` (iOS UDID or Android serial)."
+  ),
   app_process: z
     .string()
     .optional()
@@ -60,6 +61,12 @@ export const nativeProfilerStartTool: ToolDefinition<
   { status: "recording"; pid: number; traceFile: string }
 > = {
   id: "native-profiler-start",
+  interaction: {
+    startedMsg: () => "Starting native profiler",
+    completedMsg: () => "Started native profiler",
+    failedMsg: ({ failureSignal }) =>
+      `Failed to start native profiler: ${failureSignal.error_code}`,
+  },
   capability,
   description: `Start native profiling on a booted device. iOS: Instruments via xctrace (CPU, hangs, memory). Android: Perfetto (CPU, jank, RSS-growth weak signal).
 Auto-detects the running app process unless app_process is explicitly provided.

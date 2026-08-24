@@ -9,7 +9,7 @@ import type {
 import type { DescribeResult, DescribeTreeData } from "./contract";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { describeAndroid, androidRequires } from "./platforms/android";
-import { iosRequires, describeIos } from "./platforms/ios";
+import { iosRequires, describeIos, withBootCaveatOncePerDevice } from "./platforms/ios";
 import { describeChromium } from "./platforms/chromium";
 import { describeTv } from "./platforms/tv";
 import { describeVega, vegaRequires } from "./platforms/vega";
@@ -105,7 +105,12 @@ function makeDescribeExecute(
         // Probe tvOS once here, then pass the verdict into describeIos.
         (await isTvOsSimulator(device.id))
           ? describeTv(registry, device)
-          : withDescription(await describeIos(registry, device, params, { isTvOs: false })),
+          : withDescription(
+              withBootCaveatOncePerDevice(
+                device.id,
+                await describeIos(registry, device, params, { isTvOs: false })
+              )
+            ),
     },
     iosRemote: {
       // describeIos already handles both ax-service (TCP) and native-devtools
@@ -114,7 +119,12 @@ function makeDescribeExecute(
       // (never tvOS), so the isTvOs verdict is always false.
       requires: ["sim-remote"],
       handler: async (_services, params, device) =>
-        withDescription(await describeIos(registry, device, params, { isTvOs: false })),
+        withDescription(
+          withBootCaveatOncePerDevice(
+            device.id,
+            await describeIos(registry, device, params, { isTvOs: false })
+          )
+        ),
     },
     android: {
       requires: androidRequires,
@@ -139,6 +149,11 @@ function makeDescribeExecute(
 export function createDescribeTool(registry: Registry): ToolDefinition<Params, DescribeResult> {
   return {
     id: "describe",
+    interaction: {
+      startedMsg: () => "Reading screen",
+      completedMsg: () => "Read screen",
+      failedMsg: ({ failureSignal }) => `Failed to read screen: ${failureSignal.error_code}`,
+    },
     description: `Get the accessibility / DOM element tree for the current screen.
 On iOS, uses the AXRuntime accessibility service to inspect whatever is currently visible — including
 system dialogs, permission prompts, and any foreground app content. On Android, runs \`uiautomator dump\`.

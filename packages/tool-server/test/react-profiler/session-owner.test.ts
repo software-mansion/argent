@@ -4,7 +4,11 @@ import {
   DEFAULT_STALE_THRESHOLD_MS,
   type ProfilerSessionOwner,
 } from "../../src/utils/react-profiler/session-ownership";
-import { flattenProfilingData } from "../../src/tools/profiler/react/react-profiler-stop";
+import {
+  flattenProfilingData,
+  createReactProfilerStopTool,
+} from "../../src/tools/profiler/react/react-profiler-stop";
+import { FAILURE_CODES, getFailureSignal, type Registry } from "@argent/registry";
 import { buildHotCommitSummaries } from "../../src/utils/react-profiler/pipeline/00-hot-commits";
 import type {
   DevToolsFiberCommit,
@@ -357,5 +361,39 @@ describe("buildHotCommitSummaries (unattributed threading)", () => {
     const summaries = buildHotCommitSummaries([commit(0, 20)], [0], [[0, 0, 0]]);
     expect(summaries[0]!.unattributedMs).toBeUndefined();
     expect(summaries[0]!.unattributedFiberCount).toBeUndefined();
+  });
+});
+
+// ── The absent-session message ────────────────────────────────────────
+
+/**
+ * A react-profiler session rides on the device's JS-runtime debugger, which
+ * `stop-all-simulator-servers` reaps — so a teardown (commonly another agent's,
+ * since one tool-server serves every agent using an install) is a live cause of
+ * "no active profiling session", alongside the Metro reload that used to be the
+ * only one named. Nothing pinned the wording, so reverting it left the whole
+ * react-profiler suite green.
+ */
+describe("react-profiler-stop with no live session", () => {
+  it("names the teardown as a cause, not just a Metro reload", async () => {
+    const registry = {
+      getSnapshot: () => ({ services: new Map(), namespaces: [], tools: [] }),
+      resolveService: async () => {
+        throw new Error("must not resolve");
+      },
+    } as unknown as Registry;
+
+    const err = await createReactProfilerStopTool(registry).execute!(
+      {},
+      { port: 8081, device_id: "emulator-5554" }
+    ).catch((e: unknown) => e);
+
+    const message = (err as Error).message;
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.REACT_PROFILER_NO_ACTIVE_SESSION);
+    expect(message).toContain("stop-all-simulator-servers");
+    expect(message).toContain("JS-runtime debugger");
+    // The pre-existing cause and the recovery both survive.
+    expect(message).toContain("Metro reload");
+    expect(message).toContain("Call react-profiler-start");
   });
 });

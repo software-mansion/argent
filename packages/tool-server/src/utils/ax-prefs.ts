@@ -4,14 +4,14 @@ import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { SIMCTL_KILL_SIGNAL, SIMCTL_SPAWN_TIMEOUT_MS } from "./simctl-config";
+import { deviceSetForUdid, simctlArgsForUdid } from "./ios-device-sets";
 
 const execFileAsync = promisify(execFile);
 
 export async function ensureAutomationEnabled(udid: string): Promise<void> {
   await execFileAsync(
     "xcrun",
-    [
-      "simctl",
+    await simctlArgsForUdid(udid, [
       "spawn",
       udid,
       "defaults",
@@ -20,7 +20,7 @@ export async function ensureAutomationEnabled(udid: string): Promise<void> {
       "AutomationEnabled",
       "-bool",
       "true",
-    ],
+    ]),
     { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
   );
 }
@@ -37,34 +37,37 @@ export async function ensureAutomationEnabled(udid: string): Promise<void> {
  * happened so describe can surface a degraded-quality hint when it didn't.
  */
 export async function isEntitlementBypassActive(udid: string): Promise<boolean> {
-  return execFileAsync(
-    "xcrun",
-    [
-      "simctl",
-      "spawn",
-      udid,
-      "defaults",
-      "read",
-      "com.apple.Accessibility",
-      "IgnoreAXServerEntitlements",
-    ],
-    { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
-  )
-    .then(({ stdout }) => stdout.trim() === "1")
-    .catch(() => false);
+  try {
+    const { stdout } = await execFileAsync(
+      "xcrun",
+      await simctlArgsForUdid(udid, [
+        "spawn",
+        udid,
+        "defaults",
+        "read",
+        "com.apple.Accessibility",
+        "IgnoreAXServerEntitlements",
+      ]),
+      { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
+    );
+    return stdout.trim() === "1";
+  } catch {
+    return false;
+  }
 }
 
 /**
  * Host-side `com.apple.Accessibility` plist inside the sim's data container.
  * Writeable while Shutdown; in-sim cfprefsd overwrites it once Booted.
+ * The device dir lives under the sim's OWNING device set — for an additional
+ * set (e.g. Radon IDE's) the default `CoreSimulator/Devices` root would point
+ * at a non-existent dir and the pre-boot write would land nowhere.
  */
-function accessibilityPlistPath(udid: string): string {
-  return path.join(
-    os.homedir(),
-    "Library/Developer/CoreSimulator/Devices",
-    udid,
-    "data/Library/Preferences/com.apple.Accessibility.plist"
-  );
+async function accessibilityPlistPath(udid: string): Promise<string> {
+  const deviceSet =
+    (await deviceSetForUdid(udid)) ??
+    path.join(os.homedir(), "Library/Developer/CoreSimulator/Devices");
+  return path.join(deviceSet, udid, "data/Library/Preferences/com.apple.Accessibility.plist");
 }
 
 /**
@@ -85,7 +88,7 @@ function accessibilityPlistPath(udid: string): string {
  * overwrite this file on flush.
  */
 export async function setAccessibilityPrefsPreBoot(udid: string): Promise<void> {
-  const plistPath = accessibilityPlistPath(udid);
+  const plistPath = await accessibilityPlistPath(udid);
   await fsAsync.mkdir(path.dirname(plistPath), { recursive: true });
   const exists = await fsAsync
     .access(plistPath)

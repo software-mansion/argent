@@ -121,6 +121,31 @@ describe("react-profiler-status: server-side ownership", () => {
     expect(res.current_session_id).toBe("uuid-stranger");
   });
 
+  it("names a teardown among the causes of a taken-over session", async () => {
+    // A react-profiler session rides on the device's JS-runtime debugger, which
+    // `stop-all-simulator-servers` reaps — and one tool-server serves every
+    // agent using this install, so the takeover is commonly another agent's
+    // teardown rather than a second tool-server or a restart. The note is the
+    // only place an agent learns that; reverting it to the previous wording
+    // left every react-profiler test green.
+    const api = buildApi({
+      sessionId: "uuid-mine",
+      state: {
+        hookExists: true,
+        rendererInterfaceFound: true,
+        isRunning: true,
+        owner: buildOwner("uuid-stranger"),
+      },
+    });
+    const res = await runStatus(api);
+    expect(res.session_status).toBe("taken_over");
+    expect(res.note).toContain("stop-all-simulator-servers");
+    expect(res.note).toContain("JS-runtime debugger");
+    // The pre-existing causes are still offered, and so is the way out.
+    expect(res.note).toContain("another tool-server instance took over");
+    expect(res.note).toContain("force: true");
+  });
+
   it("returns 'stopped' when no session is running, regardless of api.sessionId", async () => {
     const api = buildApi({
       sessionId: "uuid-mine",

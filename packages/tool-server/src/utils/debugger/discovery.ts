@@ -43,7 +43,10 @@ export async function discoverMetro(port: number): Promise<MetroInfo> {
     // surface as an opaque 500. Report the same "not running" failure the caller
     // (and the metro-debugger skill) already knows how to act on.
     throw new FailureError(
-      `Metro at port ${port} is not running (got: ${err instanceof Error ? err.message : String(err)})`,
+      `Metro at port ${port} is not running (got: ${err instanceof Error ? err.message : String(err)}). ` +
+        `Do not retry in a loop — the result will not change until Metro is started. ` +
+        `Start Metro (e.g. \`npx react-native start\` or \`npx expo start\`) or ask the user, ` +
+        `wait for it to report ready, then retry once.`,
       {
         error_code: FAILURE_CODES.DEBUGGER_METRO_NOT_RUNNING,
         failure_stage: "debugger_discover_metro_status",
@@ -52,10 +55,36 @@ export async function discoverMetro(port: number): Promise<MetroInfo> {
       }
     );
   }
-  const statusText = await statusRes.text();
+  // The same classification applies to every network read in this probe
+  // sequence, not just the initial connect: Metro going down BETWEEN reads
+  // (accepted /status, died before the body or before /json/list) rejects with
+  // a bare fetch/stream error that would otherwise escape as an opaque 500 —
+  // exactly the unclassified failure the guard above exists to prevent.
+  const notRunning = (stage: string, err: unknown) =>
+    new FailureError(
+      `Metro at port ${port} is not running (got: ${err instanceof Error ? err.message : String(err)}). ` +
+        `Do not retry in a loop — the result will not change until Metro is started. ` +
+        `Start Metro (e.g. \`npx react-native start\` or \`npx expo start\`) or ask the user, ` +
+        `wait for it to report ready, then retry once.`,
+      {
+        error_code: FAILURE_CODES.DEBUGGER_METRO_NOT_RUNNING,
+        failure_stage: stage,
+        failure_area: "tool_server",
+        error_kind: "network",
+      }
+    );
+
+  let statusText: string;
+  try {
+    statusText = await statusRes.text();
+  } catch (err) {
+    throw notRunning("debugger_discover_metro_status_body", err);
+  }
   if (!statusText.includes("packager-status:running")) {
     throw new FailureError(
-      `Metro at port ${port} is not running (got: ${statusText.slice(0, 100)})`,
+      `Metro at port ${port} is not running (got: ${statusText.slice(0, 100)}). ` +
+        `Something else is listening on this port — it did not answer like Metro. ` +
+        `Do not retry in a loop; find the port Metro actually runs on (or start it), then retry once.`,
       {
         error_code: FAILURE_CODES.DEBUGGER_METRO_NOT_RUNNING,
         failure_stage: "debugger_discover_metro_status",
@@ -74,7 +103,12 @@ export async function discoverMetro(port: number): Promise<MetroInfo> {
   // console logs and the network inspector, none of which touch source maps.
   const projectRoot = statusRes.headers.get("X-React-Native-Project-Root") ?? "";
 
-  const listRes = await fetch(`http://localhost:${port}/json/list`);
+  let listRes: Response;
+  try {
+    listRes = await fetch(`http://localhost:${port}/json/list`);
+  } catch (err) {
+    throw notRunning("debugger_discover_metro_list", err);
+  }
   // Anything answering "packager-status:running" now reaches this parse, so do
   // not trust the body: a non-array (an HTML error page, a bare JSON string —
   // whose `.length` would sail through the check below) must land on the same
@@ -86,7 +120,11 @@ export async function discoverMetro(port: number): Promise<MetroInfo> {
 
   if (!targets.length) {
     throw new FailureError(
-      `Metro at port ${port} has no CDP targets — is a React Native app connected?`,
+      `Metro at port ${port} has no CDP targets — is a React Native app connected? ` +
+        `Do not retry immediately — this will not change until an app attaches. ` +
+        `Launch or restart the RN app on the target device (launch-app / restart-app), ` +
+        `wait a few seconds for the bundle to load, then retry once. On Android, a missing ` +
+        `port reverse-proxy is the most common cause (see the metro-debugger skill's Android prerequisites).`,
       {
         error_code: FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS,
         failure_stage: "debugger_discover_metro_targets",

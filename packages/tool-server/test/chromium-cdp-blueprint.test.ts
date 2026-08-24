@@ -182,6 +182,11 @@ describe("chromiumCdpBlueprint (smoke)", () => {
       });
       expect(s.recordedMethods).toContain("Input.dispatchMouseEvent");
 
+      // Session priming enabled focus emulation so the page believes it is
+      // focused even when the OS window is not (focus-gated app logic must
+      // keep working while an agent drives an unfocused window).
+      expect(s.recordedMethods).toContain("Emulation.setFocusEmulationEnabled");
+
       // Screenshot — fake server returns a tiny PNG, we expect a real file
       // path in the unified media dir maintained by the chromium-server.
       const shot = await instance.api.captureScreenshot();

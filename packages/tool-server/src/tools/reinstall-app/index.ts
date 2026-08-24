@@ -41,6 +41,12 @@ const capability: ToolCapability = {
 
 export const reinstallAppTool: ToolDefinition<Params, ReinstallAppResult> = {
   id: "reinstall-app",
+  interaction: {
+    startedMsg: ({ params }) => `Reinstalling ${params.bundleId}`,
+    completedMsg: ({ params }) => `Reinstalled ${params.bundleId}`,
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to reinstall ${params.bundleId}: ${failureSignal.error_code}`,
+  },
   description: `Install or reinstall an app on the device. The previous installation (if any) is uninstalled first so app data and runtime permissions are cleared.
 Use for a full reinstall after rebuilding, or to start from a clean app state.
 Returns { reinstalled, bundleId }. Fails if the app path does not exist or the package does not match the platform (.app for iOS, .apk for Android, .vpkg for Vega).`,

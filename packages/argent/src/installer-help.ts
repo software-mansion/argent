@@ -19,8 +19,20 @@
  * and detail lines from `INSTALLER_COMMAND_META` so the two can't drift.
  */
 
-/** Installer subcommands that lack their own `--help` handling. */
-export const INSTALLER_COMMANDS = ["init", "install", "update", "uninstall", "remove"] as const;
+/**
+ * Subcommands whose argv never reaches a `--help` handler. The installers
+ * forward theirs to side-effecting functions that do not check it; `mcp` is
+ * handed no argv at all — `startMcpServer` takes only its paths — so a help
+ * flag there starts the stdio server and blocks reading JSON-RPC from stdin.
+ */
+export const INSTALLER_COMMANDS = [
+  "init",
+  "install",
+  "update",
+  "uninstall",
+  "remove",
+  "mcp",
+] as const;
 
 export type InstallerCommand = (typeof INSTALLER_COMMANDS)[number];
 
@@ -57,6 +69,9 @@ export const VALUE_TAKING_FLAGS: Record<InstallerCommand, readonly string[]> = {
   update: ["--version", "--project-root"],
   uninstall: [],
   remove: [],
+  // `mcp` parses nothing, so no argument can be a flag's value and a bareword
+  // `help` anywhere is unambiguously a help request.
+  mcp: [],
 };
 
 /**
@@ -100,6 +115,12 @@ interface InstallerCommandMeta {
    * the option descriptions instead.
    */
   details?: string[];
+  /**
+   * Prose rendered under the summary in this command's own `--help` only —
+   * the mirror of `details`, which appears only in the top-level table. Used
+   * where the option list cannot carry what the reader needs to know.
+   */
+  notes?: string[];
   /** Usage line, e.g. `argent init [options]`. */
   usage: string;
   /** Real flags this command parses. Empty for aliases (see `aliasOf`). */
@@ -203,6 +224,28 @@ export const INSTALLER_COMMAND_META: Record<InstallerCommand, InstallerCommandMe
     options: [],
     aliasOf: "uninstall",
   },
+  mcp: {
+    // Byte-identical to the row the top-level table printed by hand, so moving
+    // that row onto this meta changes no output.
+    summary: "Start the MCP stdio server (used by editors)",
+    usage: "argent mcp",
+    notes: [
+      "Speaks the Model Context Protocol over stdio: JSON-RPC requests on stdin,",
+      "responses on stdout. Editors launch it themselves — `argent init` writes the",
+      "`argent mcp` entry into the editor's MCP config — and start one server per",
+      "session. Run by hand it waits for JSON-RPC on stdin and looks like it has",
+      "hung; Ctrl-C to quit.",
+      "",
+      "It takes no options and owns stdout, so diagnostics go to stderr. Calls are",
+      "logged to ~/.argent/mcp-calls.log (override with ARGENT_MCP_LOG). Tools are",
+      "served by the argent tool-server, spawned on demand unless ARGENT_TOOLS_URL",
+      "or `argent link` points at one already running.",
+      "",
+      "To drive the same tools from a terminal, use `argent tools` and",
+      "`argent run <tool>`.",
+    ],
+    options: [{ flag: "--help, -h", description: "Show this help." }],
+  },
 };
 
 /**
@@ -213,6 +256,8 @@ export const INSTALLER_COMMAND_META: Record<InstallerCommand, InstallerCommandMe
 export function printInstallerHelp(command: InstallerCommand): void {
   const meta = INSTALLER_COMMAND_META[command];
   const lines: string[] = ["", `Usage: ${meta.usage}`, "", `${meta.summary}.`];
+
+  if (meta.notes) lines.push("", ...meta.notes);
 
   if (meta.aliasOf) {
     lines.push("", `Run \`argent ${meta.aliasOf} --help\` to see its options.`);

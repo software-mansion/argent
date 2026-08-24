@@ -135,11 +135,29 @@ export class CDPClient {
       };
       const onError = (err: Error) => {
         cleanup();
-        reject(err);
+        reject(
+          new FailureError(
+            err.message,
+            {
+              error_code: FAILURE_CODES.DEBUGGER_CDP_CONNECT_FAILED,
+              failure_stage: "debugger_cdp_connect",
+              failure_area: "tool_server",
+              error_kind: "network",
+            },
+            { cause: err }
+          )
+        );
       };
       const onClose = () => {
         cleanup();
-        reject(new Error("WebSocket closed before open"));
+        reject(
+          new FailureError("WebSocket closed before open", {
+            error_code: FAILURE_CODES.DEBUGGER_CDP_SOCKET_CLOSED_BEFORE_OPEN,
+            failure_stage: "debugger_cdp_connect",
+            failure_area: "tool_server",
+            error_kind: "network",
+          })
+        );
       };
       const cleanup = () => {
         ws.removeListener("open", onOpen);
@@ -219,12 +237,36 @@ export class CDPClient {
   ): Promise<unknown> {
     return new Promise((resolve, reject) => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-        return reject(new Error("CDP not connected"));
+        return reject(
+          new FailureError("CDP not connected", {
+            error_code: FAILURE_CODES.DEBUGGER_CDP_NOT_CONNECTED,
+            failure_stage: "debugger_cdp_send",
+            failure_area: "tool_server",
+            error_kind: "network",
+          })
+        );
       }
       const id = this.nextId++;
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`CDP request ${method} (id=${id}) timed out`));
+        reject(
+          // The message carries its own recovery guidance so skills don't have
+          // to re-explain this state: the runtime is reachable but not
+          // answering, which agents otherwise read as a transient worth
+          // retry-looping (each loop iteration waits out this full timeout).
+          new FailureError(
+            `CDP request ${method} (id=${id}) timed out — the runtime accepted the ` +
+              `connection but did not answer; it may be frozen, or paused at a breakpoint. ` +
+              `debugger-status can still report "connected" in this state (the socket is open). ` +
+              `Do not retry in a loop — restart the app, then reconnect and retry once.`,
+            {
+              error_code: FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
+              failure_stage: "debugger_cdp_send",
+              failure_area: "tool_server",
+              error_kind: "timeout",
+            }
+          )
+        );
       }, timeout);
 
       this.pending.set(id, {
@@ -458,15 +500,24 @@ export class CDPClient {
   }
 
   private cleanup(): void {
+    // NOTE: a request rejected here was already delivered to the runtime and may
+    // have taken effect — callers must NOT blindly retry side-effectful sends.
+    const connectionClosed = () =>
+      new FailureError("CDP connection closed", {
+        error_code: FAILURE_CODES.DEBUGGER_CDP_CONNECTION_CLOSED,
+        failure_stage: "debugger_cdp_lifecycle",
+        failure_area: "tool_server",
+        error_kind: "network",
+      });
     for (const [, req] of this.pending) {
       clearTimeout(req.timer);
-      req.reject(new Error("CDP connection closed"));
+      req.reject(connectionClosed());
     }
     this.pending.clear();
 
     for (const [, binding] of this.pendingBindings) {
       clearTimeout(binding.timer);
-      binding.reject(new Error("CDP connection closed"));
+      binding.reject(connectionClosed());
     }
     this.pendingBindings.clear();
 

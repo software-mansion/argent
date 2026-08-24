@@ -18,6 +18,8 @@ import {
   writeToml,
   readYaml,
   writeYaml,
+  copyDir,
+  realpathOrSelf,
   editJsoncFile,
   isYarnPnp,
   getLocalArgentBinRelPath,
@@ -1815,6 +1817,23 @@ export interface ManagedContentTargets {
   skillsLockTargets: ManagedContentTarget[];
 }
 
+// A symlinked target is written through rather than replaced (see copyDir), so
+// the files can land somewhere other than the configured path. Naming both
+// keeps that redirect auditable in the install output instead of silent — in
+// the same shortened form the rest of the managed-content output uses, so a
+// destination that escapes the workspace stays absolute and stands out.
+function formatCopyDestination(
+  target: ManagedContentTarget,
+  writtenPath: string,
+  root: string
+): string {
+  if (writtenPath === target.targetPath) return target.label;
+  // The written path came back from realpath, so shorten it against the same:
+  // a workspace reached through a link (macOS /var, a symlinked home) would
+  // otherwise never look relative to its own root.
+  return `${target.label} -> ${formatManagedPathLabel(writtenPath, realpathOrSelf(root))}`;
+}
+
 function formatManagedPathLabel(targetPath: string, root: string): string {
   const home = homedir();
   if (targetPath === home || targetPath.startsWith(`${home}${path.sep}`)) {
@@ -2014,10 +2033,9 @@ export function copyRulesAndAgents(
 
   for (const target of managedTargets.ruleTargets) {
     try {
-      if (fs.existsSync(rulesDir)) {
-        fs.mkdirSync(target.targetPath, { recursive: true });
-        fs.cpSync(rulesDir, target.targetPath, { recursive: true });
-        results.push(`  Copied rules to ${target.targetPath}`);
+      const written = copyDir(rulesDir, target.targetPath);
+      if (written) {
+        results.push(`  Copied rules to ${formatCopyDestination(target, written, root)}`);
       }
     } catch (err) {
       results.push(`  Could not copy rules to ${target.targetPath}: ${err}`);
@@ -2026,10 +2044,9 @@ export function copyRulesAndAgents(
 
   for (const target of managedTargets.agentTargets) {
     try {
-      if (fs.existsSync(agentsDir)) {
-        fs.mkdirSync(target.targetPath, { recursive: true });
-        fs.cpSync(agentsDir, target.targetPath, { recursive: true });
-        results.push(`  Copied agents to ${target.targetPath}`);
+      const written = copyDir(agentsDir, target.targetPath);
+      if (written) {
+        results.push(`  Copied agents to ${formatCopyDestination(target, written, root)}`);
       }
     } catch (err) {
       results.push(`  Could not copy agents to ${target.targetPath}: ${err}`);

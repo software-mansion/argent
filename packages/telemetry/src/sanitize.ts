@@ -7,11 +7,16 @@ import {
   FAILURE_SPAWN_CODES,
   NETWORK_FAILURES,
 } from "@argent/registry";
-import { PLATFORMS, type EventName, type EventPropertyMap } from "./events.js";
+import {
+  DEBUGGER_TOOL_OUTCOMES,
+  PLATFORMS,
+  type EventName,
+  type EventPropertyMap,
+} from "./events.js";
 import { AI_CLIENTS } from "./ai-identity.js";
 
 // Per-event property allowlist and validators. Unknown keys and invalid values
-// are dropped before anything reaches PostHog.
+// are dropped before anything reaches the OTLP collector.
 
 export type Validator = (v: unknown) => unknown | undefined;
 
@@ -234,8 +239,18 @@ export const ALLOWED: ValidatorMap = {
     tool_invocation_id: UUID,
     platform: PLATFORM,
     duration_ms: DURATION_MS,
+    // Schema-declared parameter names only (emit side filters against the tool's
+    // own zod shape and caps at 16 before this gate); the array validator also
+    // voids anything longer or with a non-identifier element.
+    invalid_params: arrayOf(matches(/^[a-z][a-z0-9_]{0,63}$/i, 64), 16),
     ...FAILURE_SIGNAL,
     ...AI_TELEMETRY,
+  },
+  "debugger:tool_outcome": {
+    tool: oneOf(["debugger-status", "debugger-log-registry"] as const),
+    outcome: oneOf(DEBUGGER_TOOL_OUTCOMES),
+    platform: PLATFORM,
+    tool_invocation_id: UUID,
   },
   "cli:run_fail": {
     tool: TOOL_NAME,

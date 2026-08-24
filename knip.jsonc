@@ -1,0 +1,141 @@
+{
+  // Anti-dead-code gate: unused files, exports and types nothing imports, and
+  // dependencies declared but never used (plus the inverse). Run it with
+  // `npm run knip`; .github/workflows/knip.yml enforces it.
+  //
+  // Every issue type knip reports is an error by default, so this file sets no
+  // `rules`. The pre-existing backlog is bounded instead: `npm run knip` runs
+  // knip twice, first over the classes that must be clean, then over the parked
+  // ones under `--max-issues`. That second pass names `classMembers`,
+  // `nsExports` and `nsTypes` explicitly because they sit in knip's own
+  // `defaultExcludedIssueTypes` — without that neither pass gates them, and a
+  // new unused class member costs nothing. Naming `classMembers` also turns
+  // knip's `isSkipLibs` off, which moves the export and type counts, so a run
+  // that names it is not comparable to one that does not.
+  //
+  // The ceiling is one total across those classes rather than one per class, so
+  // paying off a parked export licences a new one elsewhere in the same PR.
+  //
+  // Count it the way CI does, against a tree with no build output: whether a
+  // workspace resolves `main`/`types` to a file that exists moves the total by
+  // itself, so a run after a local `tsc --build` carries phantom headroom and is
+  // no evidence the job will pass.
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+
+  // Makes a stale exemption here fail the job instead of printing a hint below
+  // the backlog — an `ignoreDependencies` name that suppresses nothing, an
+  // `entry` that matches nothing or is already reached, an `ignoreWorkspaces`
+  // path that does not exist. Mind that last one: if the submodule directory
+  // below goes missing the hint fires advising you to drop the entry, which is
+  // the one thing not to do. Restore the directory instead.
+  "treatConfigHintsAsErrors": true,
+
+  // Ships from its own repo with its own CI, and eslint and prettier skip it the
+  // same way. It becomes a workspace the moment `git submodule update --init`
+  // puts a package.json where the root `packages/*` glob matches it.
+  "ignoreWorkspaces": ["packages/argent-private"],
+
+  "workspaces": {
+    // Knip finds the root scripts on its own — via package.json `scripts`, the
+    // scripts/*.test.mjs files those run, and `run:` steps in .github/workflows.
+    // What its github-actions plugin cannot parse is a PowerShell body, so the
+    // Windows E2E driver, invoked from the windows-latest job where that is the
+    // default shell, is the one entry declared by hand.
+    //
+    // Knip analyzes JS and TS only, so the shell half of scripts/ — the whole
+    // scripts/e2e-full/ harness included — is outside the gate however it runs.
+    ".": {
+      "entry": ["scripts/ci/windows-chromium-e2e.mjs"],
+    },
+
+    // @swmansion/argent is a thin dispatcher whose real payload is an esbuild
+    // bundle of the OTHER workspaces (see this workspace's
+    // scripts/bundle-tools.cjs); the hand-written dispatcher copied into bin/ at
+    // build time is an entry, not dead code.
+    //
+    // Knip cannot follow imports across that esbuild boundary, so a package
+    // consumed only by the bundled-in code reads as unused here. They are named
+    // one by one rather than waved through with a catch-all pattern:
+    // `ignoreDependencies` also suppresses `unlisted`, so a catch-all would take
+    // this workspace's own src/ and scripts/ out of that check — where an import
+    // with no matching declaration is a real bug, not a bundler artifact.
+    "packages/argent": {
+      "entry": ["scripts/argent-simulator-server.cjs"],
+      "ignoreDependencies": [
+        // dependencies
+        "@fails-components/webtransport",
+        // Not bundled-in code reaching it: @fails-components/webtransport
+        // imports this itself at runtime, so nothing first-party imports it.
+        "@fails-components/webtransport-transport-http3-quiche",
+        "@modelcontextprotocol/sdk",
+        "tree-sitter",
+        "tree-sitter-typescript",
+        // devDependencies
+        "@clack/prompts",
+        "@opentelemetry/api-logs",
+        "@opentelemetry/exporter-logs-otlp-http",
+        "@opentelemetry/resources",
+        "@opentelemetry/sdk-logs",
+        "picocolors",
+        "semver",
+        "smol-toml",
+        "yaml",
+      ],
+    },
+
+    // tool-server reaches a few packages in ways knip can't trace statically.
+    // `ignoreDependencies` works in both directions, so this one list silences
+    // two different issue classes; they are kept apart below so each entry's
+    // stated reason matches the finding it actually suppresses. Each entry
+    // exempts the NAME across the whole workspace, not the call site it
+    // documents — while `sharp` is listed, an undeclared import of it from any
+    // file here passes too — so the list holds only packages this workspace
+    // genuinely cannot declare.
+    "packages/tool-server": {
+      "ignoreDependencies": [
+        // --- Declared in package.json, loaded too dynamically to detect.
+        //     Without these: "unused dependencies". ---
+        // Dynamic `_require("tree-sitter")` / `_require("tree-sitter-typescript")`
+        // in react-profiler/pipeline/.../ast-index.ts, behind a one-shot flag.
+        "tree-sitter",
+        "tree-sitter-typescript",
+        // Optional peers of @swmansion/argent-cloud-sdk, which leaves them to
+        // the host to declare. utils/moq-client.ts calls the SDK's
+        // `installNodeWebTransport()`, but the dynamic import of the polyfill
+        // sits inside the SDK's own /node entry, so no first-party file names
+        // it; the transport is a second hop, imported by the polyfill itself.
+        "@fails-components/webtransport",
+        "@fails-components/webtransport-transport-http3-quiche",
+
+        // --- Imported here but deliberately absent from this package.json.
+        //     Without these: "unlisted dependencies". ---
+        // Lazy `require("sharp")` in chromium-server/screenshot.ts. Kept out of
+        // the manifest on purpose so the ~30 MB native binary isn't a cost every
+        // consumer pays; the caller degrades gracefully when it isn't installed.
+        "sharp",
+        // `require("electron")` twice, for two different reasons. In
+        // utils/preview-window.ts it resolves the Electron executable's path
+        // from the install root, where it is an optionalDependency of the
+        // published @swmansion/argent. In test/fixtures/electron-smoke-app it
+        // is the Electron main-process API; that fixture declares electron in
+        // its own package.json and CI installs it there, but knip attributes
+        // the file to this workspace's manifest and never reads the nested one.
+        "electron",
+      ],
+    },
+  },
+
+  // Blind spot in the `files` check: test files are entry points, so a
+  // production module that nothing but its own test imports still counts as
+  // reached — which in this repo is most of them. What `files` reliably catches
+  // is a module with no test at all. A file orphaned inside test/ is invisible
+  // for the same reason, knip's node plugin registering those trees as entries.
+  // `knip --production` is the lens that reports the whole class; the repo is
+  // not clean under it yet, so expect findings there that this gate does not
+  // raise.
+  //
+  // Reachability has a wider hole still: whatever a workspace's entry re-exports
+  // is reached, so one `export { x } from "./dead-module";` in a src/index.ts
+  // takes that module out of `files` altogether. The ceiling bounds what knip
+  // can see, not what is dead.
+}

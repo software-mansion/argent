@@ -96,6 +96,12 @@ type Params = z.infer<typeof zodSchema>;
 export function createProposeVariantTool(registry: Registry): ToolDefinition<Params> {
   return {
     id: "propose_variant",
+    interaction: {
+      startedMsg: () => "Presenting variant options",
+      completedMsg: () => "Presented variant options",
+      failedMsg: ({ failureSignal }) =>
+        `Failed to present variant options: ${failureSignal.error_code}`,
+    },
     featureFlag: "argent-lens",
     description: `Stage ONE design variant for ONE on-screen element, then return immediately (non-blocking).
 

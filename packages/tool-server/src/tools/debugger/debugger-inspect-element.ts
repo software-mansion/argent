@@ -172,6 +172,12 @@ export const debuggerInspectElementTool: ToolDefinition<
   | { error: string }
 > = {
   id: "debugger-inspect-element",
+  interaction: {
+    startedMsg: ({ params }) => `Inspecting element at (${params.x}, ${params.y})`,
+    completedMsg: ({ params }) => `Inspected element at (${params.x}, ${params.y})`,
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to inspect element at (${params.x}, ${params.y}): ${failureSignal.error_code}`,
+  },
   description: `Inspect the React component hierarchy at a screen coordinate (x, y).
 Returns components from the tapped element upward through its parent hierarchy,
 each with its source file:line and a code fragment.
