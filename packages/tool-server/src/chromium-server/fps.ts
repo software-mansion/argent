@@ -3,11 +3,7 @@ import type { ServerEvents } from "./types";
 
 const REPORT_INTERVAL_MS = 1000;
 
-/**
- * Tracks screencast frame arrivals and emits `fpsReport` once per second when
- * reporting is enabled. Mirrors sim-server's behavior — reporting is opt-in so
- * an idle session doesn't generate WS chatter no one cares about.
- */
+/** Opt-in so idle sessions don't push `fpsReport` chatter to WS clients. */
 export class FpsTracker {
   private framesInWindow = 0;
   private interval: NodeJS.Timeout | null = null;

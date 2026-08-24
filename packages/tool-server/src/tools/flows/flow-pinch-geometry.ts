@@ -1,21 +1,20 @@
 import type { DeviceInfo } from "@argent/registry";
 
 /**
- * Pure geometry for the `pinch:` flow directive: ratio decomposition, per-axis
- * candidate construction, and edge-aware candidate selection. Everything here
- * is deterministic data-in/data-out — no device access — so unit tests can
- * drive it with synthetic centers, spans, and {@link EdgeGuards}.
+ * Pure geometry for the `pinch:` flow directive — data-in/data-out, no device
+ * access, so unit tests drive it with synthetic centers, spans and
+ * {@link EdgeGuards}.
  */
 
 /** Reliable separation ratio for ONE pinch gesture; larger scales are chained. */
 export const PINCH_RATIO_PER_GESTURE = 4;
 /** Delay between chained sub-gestures so the recognizer fully resets. */
 export const PINCH_SETTLE_MS = 250;
-/** Down-point fraction of the target span; 0.82 still fits a rotated square's hit area (chord ≥ ~0.828 of its AABB). */
+/** Down-point fraction of the target span; 0.82 fits a rotated square's hit area (chord ≥ ~0.828 of its AABB). */
 export const TARGET_START_FRACTION = 0.82;
 /** No touch point — Down included — lands inside this fraction of a screen edge. */
 export const SCREEN_EDGE_INSET = 0.02;
-/** Below roughly this separation change the platform pinch recognizers won't fire (a guaranteed no-op); demotes candidates in ranking only, never rejects a step. */
+/** Below this separation change the platform pinch recognizers won't fire; demotes candidates in ranking, never rejects a step. */
 export const MIN_VIABLE_TRAVEL = 0.03;
 
 /** Normalized no-start zones per screen edge (left/right as fractions of width, top/bottom of height). */
@@ -27,14 +26,13 @@ export interface EdgeGuards {
 }
 
 /**
- * Prefer-not-reject no-start zones around the OS edge-swipe areas. Constants
- * for now (the real zones are fixed dp scaled by user settings, so these
- * over-guard tablets); this function is the single seam for a future
- * per-device query — geometry only ever receives the resulting EdgeGuards.
+ * Prefer-not-reject no-start zones around the OS edge-swipe areas. Constant for
+ * now — the real zones are fixed dp scaled by user settings, so these over-guard
+ * tablets — and the single seam for a future per-device query.
  */
 export function systemEdgeGuards(device: DeviceInfo): EdgeGuards {
-  // Android's side back-gesture zone reaches ~0.12 of width at the "Highest"
-  // sensitivity (Pixel 8 measurement); every other zone sits under 0.08.
+  // Android's side back-gesture zone reaches ~0.12 of width at "Highest"
+  // sensitivity (Pixel 8); every other zone sits under 0.08.
   return device.platform === "android"
     ? { left: 0.13, right: 0.13, top: 0.08, bottom: 0.08 }
     : { left: 0.08, right: 0.08, top: 0.08, bottom: 0.08 };
@@ -42,14 +40,14 @@ export function systemEdgeGuards(device: DeviceInfo): EdgeGuards {
 
 /**
  * Split a scale into `n` equal-ratio sub-gestures of at most
- * {@link PINCH_RATIO_PER_GESTURE} each. Depends only on the requested ratio —
- * never on target size — and grows logarithmically, so there is no gesture
- * count cap (`scale: 1e6` is 10 gestures).
+ * {@link PINCH_RATIO_PER_GESTURE} each. Depends on the ratio alone, never on
+ * target size, and grows logarithmically — no gesture count cap (`scale: 1e6`
+ * is 10 gestures).
  */
 export function decomposePinch(scale: number): { n: number; per: number } {
   // |log scale| stays finite for subnormal scales, where 1/scale would overflow.
-  // −1e-9: the log division can land epsilon-high on exact ratio powers
-  // (log(4²⁹)/log(4) = 29.000000000000004), which would gain a spurious gesture.
+  // −1e-9: the log division lands epsilon-high on exact ratio powers
+  // (log(4²⁹)/log(4) = 29.000000000000004), gaining a spurious gesture.
   const n = Math.max(
     1,
     Math.ceil(Math.abs(Math.log(scale)) / Math.log(PINCH_RATIO_PER_GESTURE) - 1e-9)
@@ -83,8 +81,8 @@ export interface AxisCandidateInput {
   angle: 0 | 90;
   center: { x: number; y: number };
   /**
-   * The target frame's dimension MATCHING the axis (width for 0, height for
-   * 90 — normalized X and Y are different units, so never the min of both).
+   * The target frame's dimension matching the axis (width for 0, height for 90;
+   * normalized X and Y are different units, so never the min of both).
    * Undefined when the pinch has no selector (screen-center default).
    */
   targetSpan?: number;
@@ -99,10 +97,10 @@ function clamp(v: number, lo: number, hi: number): number {
 
 /**
  * Build one axis candidate: start span sized to the target (Down points must
- * land inside it so it claims the gesture — later moves may leave it), limited
- * by the system-edge guards, with the centroid drifting inward only as much as
- * needed to keep the final pointers inside the screen inset. Returns undefined
- * when the axis yields no positive on-screen motion.
+ * land inside it to claim the gesture — later moves may leave it), limited by
+ * the system-edge guards, centroid drifting inward only as far as needed to keep
+ * the final pointers inside the screen inset. Undefined when the axis yields no
+ * positive on-screen motion.
  */
 export function buildAxisCandidate(input: AxisCandidateInput): PinchCandidate | undefined {
   const { angle, center, targetSpan, per, guards } = input;
@@ -116,9 +114,8 @@ export function buildAxisCandidate(input: AxisCandidateInput): PinchCandidate | 
 
   const screenEndSpan = 1 - 2 * SCREEN_EDGE_INSET; // the centroid may move to use it
   const edgeSafeStartSpan = 2 * Math.max(0, Math.min(c - gLow, 1 - gHigh - c));
-  // Centroid inside the guard: the fallback still clamps Down points to the
-  // screen inset — the full screen span would start exactly where OS edge
-  // swipes begin.
+  // Centroid inside a guard: fall back to the screen inset — the full screen
+  // span would put Down points exactly where OS edge swipes begin.
   const insetStartSpan =
     2 * Math.max(0, Math.min(c - SCREEN_EDGE_INSET, 1 - SCREEN_EDGE_INSET - c));
   const screenStartLimit =
@@ -162,17 +159,15 @@ export function buildAxisCandidate(input: AxisCandidateInput): PinchCandidate | 
  * Pick the candidate to dispatch:
  * 1. viable candidates (travel ≥ {@link MIN_VIABLE_TRAVEL}) before sub-floor
  *    ones — an edge-risky but perceptible gesture beats a safe one the
- *    recognizer is guaranteed to ignore;
- * 2. the fully edge-safe candidate with the greatest separation travel;
- * 3. otherwise one whose motion runs parallel to the violated edge (axis-safe
- *    but perpendicular-violated) — OS edge swipes need motion away from the
- *    edge, so a parallel start is the least likely to be captured;
+ *    recognizer ignores;
+ * 2. fully edge-safe, then greatest separation travel;
+ * 3. otherwise motion parallel to the violated edge (axis-safe,
+ *    perpendicular-violated) — OS edge swipes need motion away from the edge,
+ *    so a parallel start is least likely to be captured;
  * 4. then greater starting clearance, then greater travel.
  * Travel compares raw normalized units across axes (DeviceInfo carries no
- * viewport to equalize them) — an accepted marginal bias. When every candidate
- * is sub-floor the safety ranking still decides — the least-bad candidate is
- * dispatched. Undefined only when no candidate has positive motion — a
- * violated guard is accepted (attempted), never rejected.
+ * viewport to equalize them) — an accepted marginal bias. A violated guard is
+ * only ever demoted, never rejected, so the least-bad candidate still ships.
  */
 export function selectPinchCandidate(candidates: PinchCandidate[]): PinchCandidate | undefined {
   if (candidates.length === 0) return undefined;

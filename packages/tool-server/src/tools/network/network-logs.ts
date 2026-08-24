@@ -14,7 +14,7 @@ import {
 
 const ITEMS_PER_PAGE = 50;
 
-// `bytes` (base-1024) so a download above 1 GB shows `1.4 GB`, not `1433.6 MB`.
+// Auto-scaled base-1024 units: a big download reads `1.4 GB`, not `1433.6 MB`.
 function formatBytes(bytes: number): string {
   return bytesUtil(bytes, { decimalPlaces: 1, unitSeparator: " " }) ?? `${bytes} B`;
 }
@@ -60,7 +60,6 @@ function formatEntry(entry: LogEntry): string {
   return `{id: ${entry.requestId}} "${method} ${name}" ${status} ${type} ${size} ${duration}`.trim();
 }
 
-/** Map a Chromium CDP record into the shared LogEntry shape used by formatEntry. */
 function recordToLogEntry(r: NetworkRequestRecord, id: number): LogEntry {
   return {
     id,
@@ -78,7 +77,7 @@ function recordToLogEntry(r: NetworkRequestRecord, id: number): LogEntry {
   };
 }
 
-/** Render one page of Chromium records in the same format as the RN path. */
+/** Same output format as the RN path. */
 function renderChromiumPage(
   records: NetworkRequestRecord[],
   pageIndexParam: number | "latest"
@@ -132,8 +131,6 @@ On React Native (iOS / Android / Vega) interception is injected into the JS runt
 Use when inspecting outbound HTTP traffic or debugging API calls in the running app.
 Fails if the app is not connected (RN) or the device is not reachable (Chromium).`,
   zodSchema,
-  // Works on RN (Metro-injected interceptor) and Chromium (native CDP Network
-  // domain), dispatched on the device id in `services` / `execute`.
   capability: DEBUGGER_TOOL_CAPABILITY,
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.device_id);
@@ -143,7 +140,6 @@ Fails if the app is not connected (RN) or the device is not reachable (Chromium)
     return { inspector: `NetworkInspector:${params.port}:${canonicalDeviceId(params.device_id)}` };
   },
   async execute(services, params) {
-    // Chromium: read the server-side CDP Network recording (no in-app injection).
     if (resolveDevice(params.device_id).platform === "chromium") {
       const chromium = services.chromium as ChromiumCdpApi;
       return renderChromiumPage(chromium.server.network.requests(), params.pageIndex);
@@ -151,11 +147,10 @@ Fails if the app is not connected (RN) or the device is not reachable (Chromium)
 
     const api = services.inspector as NetworkInspectorApi;
 
-    // Ensure the interceptor is installed (idempotent).
+    // Idempotent: a second install is a no-op.
     await api.cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).catch(() => {});
 
-    // First get the total count for pagination by running the read script with a
-    // zero-length slice — same filtering logic, no duplication.
+    // Zero-length slice: reuses the read script's Metro filtering just to get the total.
     const countRaw = await api.cdp.evaluate(makeNetworkLogReadScript(0, 0, api.port));
     const { total } = JSON.parse(countRaw as string) as { total: number };
 

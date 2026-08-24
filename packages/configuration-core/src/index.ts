@@ -24,8 +24,8 @@ export {
 
 export { readConfigObject, updateConfig, getAtPath, setAtPath, deleteAtPath } from "./config.js";
 
-// Secret sources: the ordered environment + dotenv-file chain that `{{secret:…}}`
-// placeholders (and `argent secrets`) resolve names through.
+// Ordered environment + dotenv-file chain that `{{secret:…}}` placeholders and
+// `argent secrets` resolve names through.
 export {
   secretSources,
   lookupSecret,
@@ -37,7 +37,6 @@ export {
   type SecretSourceOptions,
 } from "./secrets.js";
 
-// Merge policies for scoped values.
 export {
   applyMergePolicy,
   MERGE_PRESETS,
@@ -47,7 +46,6 @@ export {
   type MergeInputs,
 } from "./merge.js";
 
-// The configuration schema: the registry of recognized values + parse helpers.
 export {
   CONFIG_SCHEMA,
   describeExpectedValue,
@@ -59,7 +57,6 @@ export {
   type ConfigDefinition,
 } from "./config-schema.js";
 
-// Schema-driven read/write, plus the migrated lens getters.
 export {
   getConfigValue,
   getConfigValueByKey,

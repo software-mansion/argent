@@ -1,8 +1,4 @@
-/**
- * Convert raw tool results into MCP content blocks (text / image).
- *
- * Extracted so it can be tested independently of the MCP server wiring.
- */
+/** Convert raw tool results into MCP content blocks (text / image). */
 
 import { readFile } from "node:fs/promises";
 import {
@@ -16,9 +12,8 @@ export type ContentBlock =
   | { type: "image"; data: string; mimeType: string };
 
 /**
- * Context for resolving artifact handles in a result. When omitted, content
- * rendering falls back to the legacy `{ url, path }` screenshot shape (used by
- * older tool-servers and by unit tests that don't exercise the artifact path).
+ * Context for resolving artifact handles. Omitted ⇒ rendering falls back to the
+ * legacy `{ url, path }` screenshot shape of older tool-servers.
  */
 export type ContentContext = MaterializeContext;
 
@@ -28,14 +23,13 @@ function imageBlock(data: Buffer, mimeType: string): ContentBlock {
   return { type: "image", data: data.toString("base64"), mimeType };
 }
 
-// Fetch image bytes and confirm they actually start with a PNG signature.
-// Without this check, a 404 (file missing), an HTML error page, or any other
-// non-PNG response would be base64'd and labelled `image/png`, which the
-// model API rejects with "Image could not be processed" (issue #255).
+// Without the signature check a 404 or an HTML error page would be base64'd
+// and labelled `image/png`, which the model API rejects with "Image could not
+// be processed" (issue #255).
 //
-// `file://` URLs are handled directly via the fs module — Node's built-in
-// `fetch` only supports `http(s)://`, and the ios-remote screenshot path
-// writes PNGs to a temp dir and returns a `file://` URL.
+// `file://` needs fs — Node's `fetch` only supports `http(s)://`, and the
+// ios-remote screenshot transport writes PNGs to a temp dir under a `file://`
+// URL.
 async function fetchPngBytes(url: string): Promise<Buffer | null> {
   try {
     let buf: Buffer;
@@ -65,10 +59,9 @@ export async function toMcpContent(
   // `includeImageInContext: false` asks for the saved-path text only — no inline image.
   const suppressImage = isRecord(args) && args.includeImageInContext === false;
 
-  // Artifact path: when a context is available, resolve handles to local files.
   // Tools producing files (screenshots, profiler exports) return artifact
-  // handles instead of host paths, so this works regardless of where the
-  // tool-server runs.
+  // handles rather than host paths, so resolving them here works regardless of
+  // where the tool-server runs.
   if (ctx) {
     const { result: rewritten, images } = await materializeArtifacts(result, ctx);
 
@@ -80,8 +73,7 @@ export async function toMcpContent(
         blocks.push(saved);
         return blocks;
       }
-      // No image artifact present — fall back to the legacy `{ url, path }`
-      // shape for older tool-servers.
+      // No image artifact — fall back to older tool-servers' `{ url, path }`.
       return legacyImageContent(rewritten, suppressImage);
     }
 
@@ -99,16 +91,15 @@ export async function toMcpContent(
 }
 
 /**
- * JSON.stringify(undefined) returns undefined, which would produce an invalid
- * MCP content block ({ type: "text", text: undefined }). Coerce to "null" so a
- * result with no value still serializes to a valid text block.
+ * JSON.stringify(undefined) returns undefined, which would make an invalid MCP
+ * text block; coerce to "null".
  */
 function stringifyForText(value: unknown): string {
   return JSON.stringify(value ?? null, null, 2);
 }
 
 /**
- * Legacy screenshot rendering for older tool-servers that return `{ url, path }`
+ * Screenshot rendering for older tool-servers that return `{ url, path }`
  * instead of an artifact handle: fetch the media URL directly, validating it is
  * a real PNG (issue #255) before shipping it as an image.
  */
@@ -139,12 +130,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
 }
 
-// ── screenshot-diff adapter ──────────────────────────────────────────
-
-/**
- * `diffPath` / `contextDiffPath` are artifact handles on current tool-servers
- * and raw host-path strings on older ones; both shapes render here.
- */
+/** `diffPath` / `contextDiffPath`: artifact handles now, raw host paths on older tool-servers. */
 export interface ScreenshotDiffResult {
   summary: string;
   diffPath?: unknown;
@@ -156,17 +142,14 @@ export function isScreenshotDiffResult(value: unknown): value is ScreenshotDiffR
   return typeof value.summary === "string";
 }
 
-// Render a screenshot-diff tool result as MCP content blocks: the downscaled
-// context-diff image inline, then the textual summary.
 export async function screenshotDiffToMcpContent(
   result: ScreenshotDiffResult,
   ctx?: ContentContext
 ): Promise<ContentBlock[]> {
   const blocks: ContentBlock[] = [];
 
-  // Resolve artifact handles to local files first; the context diff's bytes
-  // come back in `images` whether the file was already on this machine or was
-  // downloaded from a remote tool-server.
+  // The context diff's bytes come back in `images` whether the file was already
+  // on this machine or had to be downloaded from a remote tool-server.
   let contextDiffPath = result.contextDiffPath;
   let materializedImages: { localPath: string; data: Buffer; mimeType: string }[] = [];
   if (ctx) {
@@ -184,8 +167,8 @@ export async function screenshotDiffToMcpContent(
         mimeType: fromMaterializer.mimeType,
       });
     } else {
-      // Legacy tool-server: a raw host path the materializer passed through.
-      // Only readable when co-located — exactly the old behavior.
+      // Older tool-server: a raw host path the materializer passed through,
+      // readable only when co-located.
       try {
         const buf = await readFile(contextDiffPath);
         blocks.push({
@@ -203,21 +186,14 @@ export async function screenshotDiffToMcpContent(
   return blocks;
 }
 
-// ── flow-execute adapter ─────────────────────────────────────────────
-
 export type FlowStepResult = {
   index?: number;
   kind: string;
   status?: "pass" | "fail" | "skip" | "error";
   reason?: string;
   /**
-   * A step that passed in a way that weakens it as proof — raised today by
-   * `await: { idle: true }`, which never fails a run and says here what its
-   * green actually bought (see StepReport.warning in the tool-server's
-   * flow-run). Also carries the caveat older tool-servers put on a snapshot
-   * that adopted a missing baseline, which now fails the step instead. Live
-   * either way: dropping the field would silently delete the only thing the
-   * readiness check reports.
+   * The step passed, but the WAY it passed weakens it as proof; rendered as a
+   * "⚠" suffix (see StepReport.warning in the tool-server's flow-run).
    */
   warning?: string;
   tool?: string;
@@ -229,15 +205,14 @@ export type FlowStepResult = {
   /** Human-readable step target (selector / snapshot name), set by the runner. */
   target?: string;
   /**
-   * Nesting depth: absent/0 at top level, +1 inside each nesting step
-   * (`when:` guarded steps, `run:` fragment steps). The label is indented by
-   * it; a pre-depth tool-server sends none and the report renders flat.
+   * Nesting depth: absent/0 at top level, +1 inside each nesting step (`when:`
+   * guarded steps, `run:` fragment steps). Pre-depth tool-servers send none and
+   * the report renders flat.
    */
   depth?: number;
   /**
-   * Snapshot-step artifacts keyed by role (baseline/current/diff). Values are
-   * artifact handles on current tool-servers; treated as untrusted wire data
-   * here, so anything else renders as text or is skipped.
+   * Snapshot-step artifacts keyed by role (baseline/current/diff). Untrusted
+   * wire data: a non-handle value renders as text or is skipped.
    */
   artifacts?: Record<string, unknown>;
   /** Legacy field from pre-report flow-execute results. */
@@ -264,12 +239,10 @@ const STATUS_GLYPH: Record<string, string> = {
 };
 
 /**
- * Display cap on the nesting indent — not a producer bound. The tool-server's
- * run-chain and per-file when-nesting limits accumulate, so legitimate depth
- * can exceed this; such steps keep the maximum indent rather than flattening.
- * Depth is also untrusted wire data, so the clamp doubles as a guard: a buggy
- * or malicious server must not drive `repeat()` with a huge (multi-GB string)
- * or negative (throwing) count.
+ * Display cap on the nesting indent — not a producer bound: the tool-server's
+ * run-chain and per-file block-nesting limits accumulate, so legitimate depth
+ * can exceed it and such steps keep the maximum indent. Depth is untrusted wire
+ * data, so the cap also keeps a huge value out of `repeat()`.
  */
 const MAX_RENDER_DEPTH = 20;
 
@@ -285,7 +258,7 @@ function stepLabel(step: FlowStepResult): string {
   // A run step's target is the as-written path — `run ios/login.yaml` and
   // `run android/login.yaml` must render distinctly, not as one stem.
   if (step.target) return `${step.kind} ${step.target}`;
-  // Legacy: a pre-target tool-server sends only the fragment stem in `flow`.
+  // A pre-target tool-server sends only the fragment stem, in `flow`.
   if (step.kind === "run") return `run ${step.flow ?? ""}`.trim();
   return step.kind;
 }
@@ -293,9 +266,7 @@ function stepLabel(step: FlowStepResult): string {
 /**
  * Unpack flow-execute's structured step report into MCP content blocks. Only
  * steps that carry a tool result surface their (image-bearing) content inline;
- * directive steps (tap/assert/expect/run/skip) render as a status line. This
- * never calls toMcpContent on an undefined result, which would serialize to an
- * invalid (text: undefined) content block.
+ * directive steps render as a status line.
  */
 export async function flowRunToMcpContent(
   result: FlowExecuteResult,
@@ -315,10 +286,9 @@ export async function flowRunToMcpContent(
   for (let i = 0; i < result.steps.length; i++) {
     const step = result.steps[i]!;
     const num = step.index !== undefined ? step.index + 1 : i + 1;
-    // Glyph only when a status is present (the new report). Legacy status-less
-    // results render without one.
+    // Status-less results (older tool-servers) render without a glyph.
     const glyph = step.status ? `${STATUS_GLYPH[step.status] ?? "•"} ` : "";
-    // `reason` is the new field; `error` is the legacy one.
+    // `error` is the legacy spelling of `reason`.
     const reason = step.reason ?? step.error;
     const suffix = reason ? ` — ${reason}` : "";
     const warning = step.warning ? ` ⚠ ${step.warning}` : "";
@@ -327,21 +297,18 @@ export async function flowRunToMcpContent(
       text: `[${num}] ${glyph}${stepIndent(step.depth)}${stepLabel(step)}${suffix}${warning}`,
     });
 
-    // Surface a step's own content (e.g. a screenshot) only when it actually
-    // returned one.
     if (step.result !== undefined) {
       blocks.push(...(await toMcpContent(step.result, step.outputHint, ctx, step.args)));
     }
 
-    // Snapshot steps carry artifacts instead of a result — list their paths,
-    // and inline the annotated diff image when the assertion failed.
+    // Snapshot steps carry artifacts instead of a result.
     if (isRecord(step.artifacts)) {
       blocks.push(...(await stepArtifactBlocks(step.artifacts, step.status, ctx, step.depth)));
     }
   }
 
   if (result.ok !== undefined) {
-    // Narration steps are not counted, so a flow of only narration counts
+    // Echo steps are narration and go uncounted, so an all-echo flow counts
     // nothing — say so rather than reporting four zeros on a passing run.
     const counted =
       (result.passed ?? 0) + (result.failed ?? 0) + (result.errored ?? 0) + (result.skipped ?? 0);
@@ -357,16 +324,12 @@ export async function flowRunToMcpContent(
 }
 
 /**
- * Render a step's artifacts (snapshot baseline/current/diff): one text block
- * listing each artifact, plus the annotated diff image inline when the step
- * failed — otherwise the agent has no way to see WHAT differed. Only that
- * inlined diff is materialized (local read or remote download); baseline and
- * current are full-res PNGs nobody renders, so their handles print as
- * tool-server paths (or filenames) without pulling the bytes over the wire —
- * the same economy flow-visual.ts applies by omitting artifacts on a clean
- * pass. A legacy string[] (pre-handle tool-servers) renders its paths as
- * plain text. Lines shift with the step's depth indent so they stay attached
- * to a nested step's label, matching the CLI renderer.
+ * One text block listing a step's artifacts, plus the annotated diff image
+ * inline when the step failed — otherwise the agent cannot see WHAT differed.
+ * Only that diff is materialized; baseline and current are full-res PNGs nobody
+ * renders, so their handles print as paths without pulling bytes over the wire.
+ * Lines carry the step's depth indent so they stay attached to a nested step's
+ * label, matching the CLI renderer.
  */
 async function stepArtifactBlocks(
   artifacts: Record<string, unknown>,
@@ -380,11 +343,9 @@ async function stepArtifactBlocks(
 
   for (const [k, v] of Object.entries(artifacts)) {
     if (ctx && failed && k === "diff" && isArtifactHandle(v)) {
-      // The one artifact rendered inline: materialize it so the image works
-      // against a remote tool-server too.
+      // Materialize so the inline image also works against a remote tool-server.
       const { result, images } = await materializeArtifacts(v, ctx);
-      // A null means the handle couldn't be fetched; say so rather than
-      // rendering a dangling reference.
+      // null ⇒ the handle couldn't be fetched; say so, don't dangle a reference.
       entries.push([k, typeof result === "string" ? result : "(unavailable)"]);
       const img = images.find((i) => i.localPath === result);
       if (img) diffImage = imageBlock(img.data, img.mimeType);

@@ -1,8 +1,6 @@
 /**
- * Pure helpers for React profiler session ownership.
- *
- * Kept separate from the tool files so they can be unit-tested without CDP /
- * vitest mocking. See `argent-react-profiler-session-plan.md` §§5–7.
+ * Kept separate from the tool files so these helpers can be unit-tested without
+ * CDP mocking.
  */
 
 export interface ProfilerSessionOwner {
@@ -26,13 +24,9 @@ interface StalenessResult {
 }
 
 /**
- * Classify an active profiling session as fresh / stale / reclaimable.
- *
- * - No owner metadata → takeover is safe (previous tool-server died mid-session,
- *   or the session was started by a foreign DevTools client).
- * - `stale = true` when the owner's `lastHeartbeatEpochMs` is older than
- *   `staleThresholdMs`. Takeover is safe without `force`.
- * - Otherwise the caller must pass `{ force: true }` to reclaim.
+ * Missing owner metadata means the session is unattributable (e.g. a foreign
+ * DevTools client), so takeover is safe. A fresh owner can only be reclaimed by
+ * a caller passing `force`.
  */
 
 export function classifyStaleness({

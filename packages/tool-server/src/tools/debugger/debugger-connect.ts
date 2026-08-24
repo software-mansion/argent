@@ -47,18 +47,15 @@ Use when starting a debug session or before calling other debugger-* tools. Fail
   }),
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
-    // Drop any teardown breadcrumb for this device, the way the screen-recording
-    // and native-profiler starts drop theirs. Its only consumer,
-    // `debugger-log-registry`, is gated on an EMPTY registry, so one left here
-    // survives every read that finds entries — and then attaches "a teardown ate
-    // your logs" to some later, unrelated empty read, which the tool description
-    // tells the agent to trust. An explicit connect makes it wrong anyway: from
-    // here the capture is this session's, so an empty registry honestly means
-    // this app has logged nothing since.
+    // Drop this device's teardown breadcrumb: its only consumer,
+    // `debugger-log-registry`, reads it only on an EMPTY registry, so one left
+    // here outlives every read that finds entries and later blames an unrelated
+    // empty read on a teardown. An explicit connect makes it wrong anyway —
+    // from here the capture is this session's.
     //
-    // Not in the blueprint's factory: that runs for an IMPLICIT resolve too —
-    // `debugger-log-registry` reconnects through it — and clearing there would
-    // consume the breadcrumb one line before the read that exists to report it.
+    // Not in the blueprint's factory: that also runs for the implicit resolve
+    // `debugger-log-registry` reconnects through, which would consume the
+    // breadcrumb just before the read that exists to report it.
     for (const id of new Set(
       [params.device_id, api.logicalDeviceId].filter((v): v is string => v !== undefined)
     )) {

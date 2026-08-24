@@ -1,5 +1,4 @@
 import { zodObjectToJsonSchema, type Registry, type ToolDefinition } from "@argent/registry";
-import { pasteTool } from "../../src/tools/paste";
 import { createProposeVariantTool } from "../../src/tools/variants/propose-variant";
 import { awaitUserSelectionTool } from "../../src/tools/variants/await-user-selection";
 
@@ -7,10 +6,9 @@ import { awaitUserSelectionTool } from "../../src/tools/variants/await-user-sele
 export const EXPECTED_TOOL_COUNT = 77;
 
 /**
- * The full catalog, keyed by id. Two groups never reach `registry.registerTool`
- * on every platform, so they are added by hand and CI covers one catalog
- * everywhere: the Lens tools register only on macOS, and `paste` is not
- * registered at all.
+ * The full catalog, keyed by id. The Lens tools never reach
+ * `registry.registerTool` off macOS, so they are added by hand and CI covers
+ * one catalog everywhere.
  */
 export function definitionsById(registry: Registry): Map<string, ToolDefinition<any, any>> {
   const definitions = new Map<string, ToolDefinition<any, any>>();
@@ -20,9 +18,6 @@ export function definitionsById(registry: Registry): Map<string, ToolDefinition<
 
   definitions.set("propose_variant", createProposeVariantTool(registry));
   definitions.set("await_user_selection", awaitUserSelectionTool);
-
-  // This definition intentionally exists outside createRegistry.
-  definitions.set("paste", pasteTool);
   return definitions;
 }
 

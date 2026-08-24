@@ -8,10 +8,8 @@ import {
 } from "@argent/registry";
 
 /**
- * Thrown when a tool is invoked against a device whose platform/kind it does
- * not declare in its `capability` field. The HTTP dispatcher maps this to
- * `400 Bad Request`; the message names the tool and the device so the agent
- * sees a clear "wrong target" error instead of a deeper failure.
+ * Thrown when a device's platform/kind isn't in the tool's `capability`
+ * declaration. The HTTP dispatcher maps this to `400 Bad Request`.
  */
 export class UnsupportedOperationError extends Error {
   readonly toolId: string;
@@ -32,26 +30,15 @@ export class UnsupportedOperationError extends Error {
 }
 
 /**
- * Thrown by per-platform stub handlers (typically `platforms/android.ts`)
- * when the cross-platform architecture is wired up but the impl is missing.
+ * Thrown when cross-platform dispatch has no branch for the device's platform:
+ * the architecture is wired up but the impl is missing.
  *
- * Distinct from `UnsupportedOperationError`:
- *   - UnsupportedOperationError: capability says no, this device class is not
- *     a target for the tool (e.g. pinch on Android — adb has no multi-touch).
- *   - NotImplementedOnPlatformError: capability *could* say yes once filled
- *     in; the work just hasn't happened. The agent should report this back
- *     to the user verbatim instead of retrying.
+ * Distinct from `UnsupportedOperationError`, where the capability declaration
+ * deliberately excludes this device class. Here the capability *could* say yes
+ * once the work is done, so the agent should report it back instead of
+ * retrying.
  *
- * The HTTP dispatcher maps this to `501 Not Implemented` and surfaces the
- * `hint` field so the agent (and contributor) can see exactly what to wire.
- *
- * Usage in a stub at `tools/<your-tool>/platforms/<platform>.ts`:
- *
- *   throw new NotImplementedOnPlatformError({
- *     toolId: "<your-tool>",
- *     platform: "android",
- *     hint: "Optional one-line nudge — e.g. which adb / xcrun command to wrap.",
- *   });
+ * The HTTP dispatcher maps this to `501 Not Implemented` and surfaces `hint`.
  */
 export class NotImplementedOnPlatformError extends Error {
   readonly toolId: string;
@@ -80,24 +67,20 @@ export class NotImplementedOnPlatformError extends Error {
 }
 
 /**
- * Thrown when a tool rejects the *arguments* the caller passed — input that is
- * well-typed for the zod schema but that this tool/platform cannot carry out
- * (e.g. an unknown named key on any keyboard backend, a newline in Android/Vega
- * `keyboard` text that the on-device `input`/`send_text` can't represent, or a
- * character with no keycode on iOS/chromium). The HTTP dispatcher maps this to
- * `400 Bad Request`, matching the zod-validation path: it is a client input
- * error, not an internal fault, so it must not surface as a `500`. The
- * `.message` is the human-friendly reason, safe to bubble straight to the agent.
+ * Thrown when a tool rejects the caller's *arguments* — input that is well-typed
+ * for the zod schema but that this tool/platform cannot carry out (an unknown
+ * named key, a newline in Android/Vega `keyboard` text, a character with no
+ * keycode on iOS/chromium). A client input error, not an internal fault, so the
+ * HTTP dispatcher maps it to `400 Bad Request` like the zod-validation path
+ * rather than a `500`. The `.message` is safe to bubble straight to the agent.
  */
 export class InvalidToolInputError extends Error {
   /**
-   * @param signal Optional telemetry-signal overrides. The HTTP 400 mapping keys
-   *   off the error *class* (see http.ts), not the `error_code`, so a caller can
-   *   pass a more granular `error_code` / `failure_stage` / `error_kind` — e.g.
-   *   the keyboard backends' `KEYBOARD_KEY_UNSUPPORTED` /
-   *   `KEYBOARD_CHARACTER_UNSUPPORTED` / `VEGA_TEXT_INVALID` classifications
-   *   (from #420) — and keep both the granular telemetry bucket AND the 400
-   *   status. Defaults to the generic `TOOL_INPUT_INVALID` / validation signal.
+   * @param signal Telemetry-signal overrides. The HTTP 400 mapping keys off the
+   *   error *class* (see http.ts), not the `error_code`, so a caller can pass a
+   *   more granular code (e.g. the keyboard backends'
+   *   `KEYBOARD_CHARACTER_UNSUPPORTED`) and keep both the granular telemetry
+   *   bucket and the 400 status.
    */
   constructor(message: string, signal?: Partial<FailureSignal>) {
     super(message);
@@ -132,8 +115,8 @@ function platformMatrix(
 
 /**
  * Throws if the tool's `capability` declaration doesn't include the given
- * device. A tool with no `capability` is treated as universally supported —
- * useful for system / workspace tools that don't touch a device.
+ * device. No `capability` means universally supported — for system / workspace
+ * tools that don't touch a device.
  */
 export function assertSupported(
   toolId: string,

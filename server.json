@@ -9,12 +9,12 @@
     "id": "1164885639"
   },
   "websiteUrl": "https://argent.swmansion.com",
-  "version": "0.20.0",
+  "version": "0.22.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@swmansion/argent",
-      "version": "0.20.0",
+      "version": "0.22.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

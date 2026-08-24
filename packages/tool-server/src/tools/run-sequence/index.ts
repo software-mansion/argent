@@ -16,13 +16,13 @@ const ALLOWED_TOOLS = new Set([
   "gesture-rotate",
   "button",
   "keyboard",
+  // Sequenceable for the same reason `keyboard` is: the focus tap, the paste
+  // and the submit are one user action.
+  "paste",
   "rotate",
-  // Sequencing matters for shake: the interesting cases are races (shake while
-  // a sheet is dismissing, shake right after typing), which need the steps
-  // dispatched back-to-back rather than across separate round-trips.
+  // Shake's interesting cases are races (shake while a sheet is dismissing,
+  // shake right after typing), which need back-to-back dispatch.
   "shake",
-  // `tv-remote` drives the D-pad on a TV target (Apple TV / Android TV / Vega);
-  // `keyboard` types into the focused field there.
   "tv-remote",
   AWAIT_UI_ELEMENT_TOOL_ID,
 ]);
@@ -39,7 +39,7 @@ const zodSchema = z.object({
         tool: z
           .string()
           .describe(
-            "Tool name — one of: gesture-tap, gesture-swipe, gesture-scroll, gesture-drag, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, rotate, shake, tv-remote, await-ui-element. On a TV target (Apple TV / Android TV / Vega) use tv-remote (remote presses) and keyboard (text)."
+            "Tool name — one of: gesture-tap, gesture-swipe, gesture-scroll, gesture-drag, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, paste, rotate, shake, tv-remote, await-ui-element. On a TV target (Apple TV / Android TV / Vega) use tv-remote (remote presses) and keyboard (text)."
           ),
         args: z
           .record(z.string(), z.unknown())
@@ -66,20 +66,16 @@ type RunSequenceResult = {
   steps: StepResult[];
 };
 
-// run-sequence is platform-neutral by construction: every step is dispatched
-// through `registry.invokeTool`, and each step's tool runs its own
-// `dispatchByPlatform` against `params.udid`. The capability here just gates
-// the *outer* invocation, mirroring the inner tools' support matrix so the
-// failure mode is consistent.
+// Gates only the *outer* invocation: every step resolves its own platform from
+// `params.udid` and is gated separately in `execute`.
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
   // Vega (Fire TV) is a valid target: its `tv-remote` / `keyboard` steps are
-  // supported, and the description advertises it. Without this key the outer
-  // capability gate (HTTP layer's assertSupported) would reject a Vega udid
-  // before any step runs — each step's own capability is still enforced below.
+  // supported. Without this key the HTTP layer's `assertSupported` would reject
+  // a Vega udid before any step runs.
   vega: { vvd: true },
 };
 
@@ -117,6 +113,7 @@ Allowed tools and their args (udid is auto-injected, do NOT include it in args):
   button:         { button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton" }                  [ios/android]
   keyboard:       { text?: string, key?: string, delayMs?: number }  (text OR key per step, never both; TV: text only)  [ios/android/chromium/vega/tv]
                   text supports {{secret:<NAME>}} placeholders, resolved server-side from ARGENT_SECRET_<NAME> env vars or an argent secrets file — credentials never enter agent context
+  paste:          { text: string }  (device clipboard + paste shortcut; only where a user would paste, e.g. an OTP — keyboard otherwise)   [ios sim/android emu]
   rotate:         { orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown" }                     [ios/android]
   shake:          { count?: number }                                                                                    [ios sim/android emu]
   tv-remote:      { button: <remote button | array of them>, repeat?: number }                                          [apple tv/android tv/vega]
@@ -156,26 +153,19 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
     searchHint: "batch sequence multiple gesture steps sequentially",
     zodSchema,
     capability,
-    // No eagerly-declared service: each step resolves its own services through
-    // `invokeSubTool` below (simulator-server for iOS/Android, CDP for
-    // Chromium), so run-sequence itself needs none. An eager resolver can't be
-    // used here because a tvOS udid shape-classifies as `ios` (there is no
-    // `tvos` platform) — declaring simulator-server for it would spawn a
-    // controller it can't drive and hang on the ready timeout before any tv-*
-    // step could run. The sub-tool invocations still pay only their own
-    // first-step spawn cost, and `ctx` is threaded through so nested steps keep
-    // the outer request's telemetry attribution.
+    // Each step resolves its own services. An eager resolver can't be used
+    // because a tvOS udid shape-classifies as `ios` (there is no `tvos`
+    // platform), so declaring simulator-server would spawn a controller it
+    // can't drive and hang on the ready timeout before any tv-remote step runs.
     services: () => ({}),
     async execute(_services, params, ctx?: ToolContext) {
       const { udid, steps } = params;
       const device = resolveDevice(udid);
       const results: StepResult[] = [];
-      // The HTTP layer aborts `signal` when the client disconnects. run-sequence
-      // is `longRunning` (and a single `tv-remote` step can fire dozens of
-      // daemon/adb round-trips), so the MCP adapter won't abort it for us — honour
-      // the signal between steps and on the inter-step delay so a cancelled
-      // request stops promptly instead of running the rest of the sequence at the
-      // device. Each sub-tool also receives `signal` via `ctx`.
+      // The HTTP layer aborts `signal` on client disconnect, and `longRunning`
+      // drops the MCP adapter's own fetch timeout — so honour the signal between
+      // steps and on the inter-step delay instead of running the rest of the
+      // sequence at the device.
       const signal = ctx?.signal;
 
       for (const step of steps) {
@@ -189,11 +179,10 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
           break;
         }
 
-        // Pre-flight the sub-tool's capability gate. Registry.invokeTool does
-        // NOT call assertSupported (the HTTP layer does), so without this
-        // check a mobile-only step like `button` on a Chromium device would
-        // descend into the simulator-server blueprint factory and surface as
-        // a generic 500 instead of a clean "not supported on chromium".
+        // `Registry.invokeTool` does not call `assertSupported` (only the HTTP
+        // layer does), so pre-flight here: otherwise a mobile-only step like
+        // `button` on a Chromium device fails inside the simulator-server
+        // service factory instead of with a clean "not supported" error.
         const subTool = registry.getTool(step.tool);
         if (subTool?.capability) {
           try {

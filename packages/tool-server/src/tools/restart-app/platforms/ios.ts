@@ -17,10 +17,9 @@ import type { RestartAppParams, RestartAppResult } from "../types";
 
 const execFileAsync = promisify(execFile);
 
-// native-devtools is resolved lazily (through `registry`) rather than declared
-// as an eager service. It is iOS *and* tvOS capable: the blueprint's ensureEnv
-// picks the platform-matched DYLD_INSERT_LIBRARIES slice (the TVOSSIMULATOR
-// bootstrap for Apple TV sims), so resolving it here injects correctly on both.
+// native-devtools is resolved lazily here instead of via `services()`. tvOS sims
+// also classify as platform "ios"; the blueprint's ensureEnv picks the
+// TVOSSIMULATOR dylib slice, so injection is correct for both.
 export function makeIosImpl(
   registry: Registry
 ): PlatformImpl<Record<string, unknown>, RestartAppParams, RestartAppResult> {
@@ -38,7 +37,7 @@ export function makeIosImpl(
       try {
         await execFileAsync("xcrun", await simctlArgsForUdid(udid, ["terminate", udid, bundleId]));
       } catch {
-        // App may not be running — ignore
+        // App may not be running
       }
       try {
         await execFileAsync("xcrun", await simctlArgsForUdid(udid, ["launch", udid, bundleId]));

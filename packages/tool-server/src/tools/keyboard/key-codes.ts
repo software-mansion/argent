@@ -1,5 +1,5 @@
 // USB HID Keyboard Usage Page (0x07) keycodes.
-// Reference: https://gist.github.com/MightyPork/6da26e382a7ad91b5496ee55fdc73db2
+// https://gist.github.com/MightyPork/6da26e382a7ad91b5496ee55fdc73db2
 
 export const SHIFT_KEYCODE = 225;
 
@@ -77,7 +77,7 @@ export interface KeyPress {
   withShift: boolean;
 }
 
-/** Resolve a single character into the HID keycode + shift modifier required to type it. */
+/** HID keycode + shift modifier needed to type `char`. */
 export function charToKeyPress(char: string): KeyPress | undefined {
   if (char.length !== 1) return undefined;
   const c = char.charCodeAt(0);
@@ -88,8 +88,7 @@ export function charToKeyPress(char: string): KeyPress | undefined {
   // 1–9 → 30–38, 0 → 39
   if (c >= 0x31 && c <= 0x39) return { keyCode: c - 0x31 + 30, withShift: false };
   if (char === "0") return { keyCode: 39, withShift: false };
-  // Shifted punctuation (!@#$ …) — resolve the unshifted base char, then add shift.
-  // The base may be a digit (1–9, 0), so recurse rather than looking up SYMBOL_KEYCODES directly.
+  // Base may be a digit, which SYMBOL_KEYCODES omits — hence the recursion.
   const base = SHIFTED_SYMBOLS[char];
   if (base !== undefined) {
     const basePress = charToKeyPress(base);

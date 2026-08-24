@@ -4,16 +4,13 @@ import type { ShellCommand } from "./package-manager.js";
 export interface TrustDiskOutcome {
   /** The caller's on-disk probe found the desired outcome. */
   landed: boolean;
-  /** The command's non-zero-exit error, or null when it exited cleanly. */
   exitError: Error | null;
 }
 
-// Run a package-manager command whose exit code can lie, and decide success
-// from the disk instead: pnpm 10+ exits non-zero (ERR_PNPM_IGNORED_BUILDS)
-// when it blocks a dependency's postinstall scripts even though the package
-// installed fine, and argent works without those scripts. A non-zero exit is
-// captured (never thrown); callers branch on `landed` — typically fatal only
-// when `!landed`, a dim warning when both are set.
+// Decide a package-manager command's success from the disk, not its exit code:
+// pnpm 10+ exits non-zero (ERR_PNPM_IGNORED_BUILDS) when it blocks a
+// dependency's build scripts, which argent does not need. The error is captured
+// rather than thrown, so callers branch on `landed`.
 export async function runTrustingDisk(
   execute: () => void | Promise<void>,
   landedOnDisk: () => boolean
@@ -27,13 +24,11 @@ export async function runTrustingDisk(
   return { landed: landedOnDisk(), exitError };
 }
 
-// Synchronous package-manager run with inherited stdio, for interactive flows
-// where the user should see the package manager's own output. On Windows the
-// BARE bin name runs through a shell: npm-installed managers are .cmd shims
-// Node (post-CVE-2024-27980) refuses to spawn shell-less, while bun/pnpm from
-// native installers are real .exe files — cmd.exe's PATHEXT resolves both,
-// where a hardcoded `.cmd` suffix would break the .exe-based managers.
-// Throws the execFileSync error on non-zero exit.
+// Inherited stdio, so the user sees the package manager's own output. On
+// Windows the BARE bin name runs through a shell: Node refuses to spawn
+// npm-installed .cmd shims shell-less (post-CVE-2024-27980), and cmd.exe's
+// PATHEXT also resolves native .exe managers (bun, standalone pnpm) that a
+// hardcoded `.cmd` suffix would break. Throws on non-zero exit.
 export function execShellCommandSync(
   cmd: ShellCommand,
   opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}
@@ -46,12 +41,10 @@ export function execShellCommandSync(
   });
 }
 
-// Non-zero exit from runShellCommand. Carries the exit code and terminating
-// signal alongside the captured stderr, because the message alone can't be
-// classified reliably: cmd.exe's "is not recognized" text is localized (its
-// locale-independent equivalent is exit code 9009), and a signal-terminated
-// child closes with `code null` — which callers must tell apart from an
-// ordinary failure (an interrupted install must not be retried).
+// Carries the exit code and signal because the message alone can't be
+// classified: cmd.exe's "is not recognized" text is localized (exit code 9009
+// is its locale-independent equivalent), and a signal-terminated child closes
+// with `code null` — an interrupted install must not be retried.
 export class ShellCommandError extends Error {
   constructor(
     message: string,
@@ -63,12 +56,9 @@ export class ShellCommandError extends Error {
   }
 }
 
-// Run a package-manager command, capturing stderr for the rejection message.
-// Windows handling mirrors execShellCommandSync: the BARE bin name through a
-// shell, so PATHEXT resolves both .cmd shims (npm/yarn) and native .exe
-// managers (bun, standalone pnpm) — a hardcoded `.cmd` suffix breaks the
-// latter. Local-install commands require `opts.cwd` so they mutate the
-// project's manifest, not whatever cwd argent runs in.
+// Captures stderr for the rejection message; Windows shell handling mirrors
+// execShellCommandSync. Local-install commands must pass `opts.cwd` so they
+// mutate the project's manifest, not whatever cwd argent runs in.
 export function runShellCommand(cmd: ShellCommand, opts: { cwd?: string } = {}): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd.bin, cmd.args, {

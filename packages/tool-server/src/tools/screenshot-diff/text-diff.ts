@@ -77,10 +77,8 @@ export interface AnalyzeScreenshotTextOptions {
   baselineImage?: FontGeometryImage;
   currentImage?: FontGeometryImage;
   /**
-   * Multipliers that map the baseline image's OCR bounds into the common
-   * coordinate space the pixel diff uses. Supply when the inputs were
-   * normalized to a different resolution; omit (or pass 1/1) when they already
-   * share dimensions.
+   * Multipliers that map the baseline image's OCR bounds into the pixel diff's
+   * coordinate space. Omit (or pass 1/1) when the inputs share dimensions.
    */
   baselineRegionScale?: RegionScale;
   /** Same as {@link baselineRegionScale}, for the current image's OCR bounds. */
@@ -139,9 +137,8 @@ export async function analyzeScreenshotTextChanges(
     };
   }
 
-  // OCR ran on each original file, so baseline and current bounds come back in
-  // their own image's coordinate space. Rescale both into the common space the
-  // pixel diff already uses so the cross-image geometry compares like with like.
+  // OCR ran on the original files, so each side's bounds are in its own image's
+  // coordinate space; rescale both into the space the pixel diff uses.
   return analyzeTextRegions({
     baselineRegions: rescaleTextRegions(baselineOcr.blocks, options.baselineRegionScale),
     currentRegions: rescaleTextRegions(currentOcr.blocks, options.currentRegionScale),
@@ -153,11 +150,8 @@ export async function analyzeScreenshotTextChanges(
 }
 
 /**
- * Map OCR text regions (and their per-word bounds) from one image's coordinate
- * space into another by multiplying every bound by `scale`. Used to bring
- * baseline and current OCR output into the common, normalized coordinate space
- * the pixel diff compares in. Returns the regions untouched when `scale` is
- * absent or an identity (1/1) scale, so same-size inputs are unaffected.
+ * Rebase OCR region and per-word bounds onto the normalized coordinate space
+ * the pixel diff compares in.
  */
 export function rescaleTextRegions(regions: TextRegion[], scale?: RegionScale): TextRegion[] {
   if (!scale || (scale.x === 1 && scale.y === 1)) return regions;

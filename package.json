@@ -2,7 +2,8 @@
   "name": "argent-workspace",
   "private": true,
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "!packages/docs"
   ],
   "scripts": {
     "build": "tsc --build",
@@ -29,6 +30,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "eslint": "^10.5.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.7.0",
     "knip": "^5.88.1",
     "prettier": "^3.8.5",

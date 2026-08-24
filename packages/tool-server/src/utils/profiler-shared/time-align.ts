@@ -1,12 +1,7 @@
 /**
- * Cross-tool time alignment utilities.
- *
- * React Profiler uses performance.now() milliseconds with a monotonic origin.
- * iOS Instruments uses trace-relative nanoseconds from xctrace.
- * Both tools record Date.now() (wall clock) at start time, providing a shared anchor.
- *
- * Wall clock is imprecise (~15ms jitter) but sufficient for correlating events
- * at the 100ms+ granularity where hangs and slow commits overlap.
+ * React Profiler timestamps are performance.now() ms; native traces (xctrace,
+ * perfetto) are trace-relative ns. The only value both record in a common clock
+ * is Date.now() at start, so all conversions go through that wall-clock anchor.
  */
 
 export interface TimeAnchor {
@@ -14,25 +9,16 @@ export interface TimeAnchor {
   monotonicStartMs: number;
 }
 
-/**
- * Convert a React profiler timestamp (performance.now ms) to wall clock ms.
- */
 export function reactTimeToWallClock(reactMs: number, reactAnchor: TimeAnchor): number {
   const elapsed = reactMs - reactAnchor.monotonicStartMs;
   return reactAnchor.wallClockMs + elapsed;
 }
 
-/**
- * Convert iOS Instruments nanoseconds to wall clock ms.
- */
 export function instrumentsNsToWallClock(instrumentsNs: number, iosAnchor: TimeAnchor): number {
   const elapsedMs = instrumentsNs / 1_000_000 - iosAnchor.monotonicStartMs;
   return iosAnchor.wallClockMs + elapsedMs;
 }
 
-/**
- * Check if two time windows overlap, with an optional tolerance in ms.
- */
 export function windowsOverlap(
   aStartMs: number,
   aEndMs: number,
@@ -43,10 +29,6 @@ export function windowsOverlap(
   return aStartMs - toleranceMs <= bEndMs && aEndMs + toleranceMs >= bStartMs;
 }
 
-/**
- * Build a TimeAnchor for the React profiler from session data.
- * monotonicStartMs is the first commit timestamp or the CPU profile start time.
- */
 export function buildReactAnchor(
   wallClockStartMs: number,
   cpuProfileStartTimeUs: number
@@ -57,10 +39,7 @@ export function buildReactAnchor(
   };
 }
 
-/**
- * Build a TimeAnchor for iOS Instruments.
- * monotonicStartMs is 0 since xctrace timestamps are trace-relative (start at 0).
- */
+/** monotonicStartMs is 0 because xctrace timestamps are trace-relative. */
 export function buildIosAnchor(wallClockStartMs: number): TimeAnchor {
   return {
     wallClockMs: wallClockStartMs,
@@ -69,9 +48,8 @@ export function buildIosAnchor(wallClockStartMs: number): TimeAnchor {
 }
 
 /**
- * Build a TimeAnchor for an Android Perfetto recording. Like buildIosAnchor,
- * perfetto timestamps are trace-relative (start at 0), so monotonicStartMs=0;
- * kept as a named entry point so the platform branches read symmetrically.
+ * Same shape as buildIosAnchor (perfetto ts are normalised to trace-relative),
+ * kept separate so the platform branches read symmetrically.
  */
 export function buildPerfettoAnchor(wallClockStartMs: number): TimeAnchor {
   return {

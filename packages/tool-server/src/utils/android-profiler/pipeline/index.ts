@@ -26,19 +26,17 @@ import type {
   AndroidHangMainThreadSampleRow,
 } from "../types";
 
-// Sampling at 100 Hz (see argent.tracecfg.pbtxt). Each sample represents
-// ~10ms of CPU time on the sampled thread. weightNs is sample_count × this.
+// 100 Hz sampling (argent.tracecfg.pbtxt): each sample is ~10ms of thread CPU time.
 const SAMPLE_PERIOD_NS = 10_000_000;
 
-// Burst-gap threshold injected into cpu-hotspots.sql as BURST_GAP_NS. Derived
-// from BURST_GAP_MS so SQL-side (Android) and JS-side (iOS) bursts can't drift.
+// Derived from BURST_GAP_MS so the SQL-side (Android) and JS-side (iOS) burst
+// thresholds can't drift.
 const BURST_GAP_NS = String(BURST_GAP_MS * 1_000_000);
 
 /**
- * Query the trace's CLOCK_MONOTONIC start so every other `ts` can be normalised
- * to trace-relative ns: raw monotonic ts is tens-of-billions of ns on a booted
- * device and would otherwise alias as a wall-clock date years in the future in
- * `instrumentsNsToWallClock`.
+ * Trace start in CLOCK_MONOTONIC ns, so every other `ts` can be normalised to
+ * trace-relative ns: raw monotonic ts on a booted device would otherwise alias
+ * as a wall-clock date years in the future in `instrumentsNsToWallClock`.
  * rationale: queries/README.md "Timestamps are CLOCK_MONOTONIC nanoseconds"
  */
 async function getTraceStartNs(tracePath: string): Promise<number> {
@@ -48,10 +46,8 @@ async function getTraceStartNs(tracePath: string): Promise<number> {
       query: "trace-bounds.sql",
       substitutions: {},
     });
-    // Coerce-then-validate: `Number.isFinite("5000000000000")` returns false
-    // because it checks the input *type*, not the value. A future
-    // trace-processor engine that emits start_ts as a JSON string would
-    // silently disable the normalisation if we validated first.
+    // Coerce before validating: Number.isFinite checks the *type*, so a numeric
+    // string start_ts would silently disable the normalisation.
     const startTs = Number(rows[0]?.start_ts);
     return Number.isFinite(startTs) ? startTs : 0;
   } catch {
@@ -65,25 +61,29 @@ export interface AndroidPipelineResult {
   uiHangs: UiHang[];
   rssGrowth: MemoryRssGrowth[];
   exportErrors: Record<string, string>;
+  /**
+   * Set when CPU samples exist but none carry a usable stack. Not an
+   * exportErrors entry: no query failed, and the renderer counts those as
+   * failures ("N of 3 queries errored").
+   */
+  cpuDiagnostic?: string;
 }
 
 /**
  * Drive the in-process Perfetto WASM engine against an Android .pftrace and
- * produce the platform-agnostic Bottleneck[] the render layer consumes. CPU +
- * hangs + RSS run as parallel top-level queries; all per-hang folds are batched
- * into one more query, so the worst case is fixed-cost (~4 queries end-to-end).
+ * produce the platform-agnostic Bottleneck[] the render layer consumes. CPU,
+ * hangs and RSS run as parallel queries and every per-hang fold is batched into
+ * one more, so the query count is fixed regardless of hang count.
  * rationale: utils/android-profiler/PIPELINE_DESIGN.md "4. The per-hang fold: batched, not looped"
  */
 export async function runAndroidProfilerPipeline(
   tracePath: string,
   appPackage: string
 ): Promise<AndroidPipelineResult> {
-  // Boot the in-process WASM engine and load the trace up front. A
-  // TraceProcessorUnavailableError (the rare wasm-load failure) propagates to the
-  // analyze handler (which renders the actionable banner) — deliberately NOT
-  // folded into exportErrors, where it would read as three identical per-query
-  // "Export warnings". This also pre-warms the engine so the queries below reuse
-  // it (load the trace once).
+  // Load the trace up front so every query below reuses one warm engine. A
+  // TraceProcessorUnavailableError propagates to the analyze handler, which
+  // renders its own banner — folding it into exportErrors would read as three
+  // identical per-query "Export warnings".
   await ensureTraceProcessorReady(tracePath);
 
   const target = sanitizeProcessName(appPackage);
@@ -124,27 +124,39 @@ export async function runAndroidProfilerPipeline(
   if (cpuRows.length === 0 && hangRows.length === 0 && !exportErrors.cpu) {
     exportErrors.cpu =
       `No CPU samples were captured for cmdline \`${appPackage}\`. ` +
-      `The most common cause is the target app being non-debuggable (release build) ` +
-      `without a \`<profileable shell="true">\` entry in its AndroidManifest.xml. ` +
-      `Without that, Perfetto silently drops the linux.perf data source. ` +
-      `Add \`<profileable android:shell="true"/>\` to the \`<application>\` element ` +
-      `and rebuild, or run a debug variant of the app.`;
+      `The trace contains no perf_sample rows for a process with that name, so no CPU ` +
+      `analysis is possible. Either the name never matched a running process (it must equal ` +
+      `the process cmdline exactly), or the app was never scheduled on-CPU during the ` +
+      `recording. If it was running, it must be a debug build or declare ` +
+      `\`<profileable android:shell="true"/>\` under \`<application>\` in its ` +
+      `AndroidManifest.xml — then re-record.`;
   }
+
+  // Distinct from the no-rows case above: rows exist, but cpuRowsToAggregatorRows
+  // drops every one for having no leaf function. Without this diagnostic the
+  // report would read as "the app did no CPU work".
+  const stacklessSamples = cpuRows.reduce(
+    (sum, r) => (r.leaf_function ? sum : sum + Number(r.sample_count)),
+    0
+  );
+  const cpuDiagnostic =
+    cpuRows.length > 0 && !cpuRows.some((r) => r.leaf_function) && stacklessSamples > 0
+      ? describeStacklessSamples(appPackage, cpuRows, stacklessSamples)
+      : undefined;
 
   const cpuHotspots = aggregateCpuHotspots(cpuRowsToAggregatorRows(cpuRows, traceStartNs), {
     platform: "android",
   });
-  // Tag each hotspot as app code vs system/emulator overhead so the render
-  // layer can label goldfish/QEMU/kernel frames and avoid giving them
-  // app-flavoured advice.
+  // Tag app code vs system/emulator overhead so the render layer doesn't give
+  // goldfish/QEMU/kernel frames app-flavoured advice.
   for (const hotspot of cpuHotspots) {
     hotspot.frameClass = classifyNativeFrame(hotspot.dominantFunction, hotspot.dominantMapping);
   }
 
   const uiHangsBase = hangRowsToBottlenecks(hangRows, traceStartNs);
 
-  // Single batched call replaces the legacy 2N per-hang loop. On failure,
-  // degrade to empty folds rather than aborting the pipeline (same as the top-level queries).
+  // On failure, degrade to empty folds rather than aborting the pipeline (same
+  // as the top-level queries).
   const hangFolds = await runBatchedHangFolds({
     tracePath,
     target,
@@ -163,8 +175,8 @@ export async function runAndroidProfilerPipeline(
 
   const uiHangs: UiHang[] = uiHangsBase.map((hang, hangIndex) => {
     const stateRows = hangFolds.state.get(hangIndex) ?? [];
-    // Normalise gc rows into trace-relative ns so foldHangAnnotations can do
-    // the overlap math against trace-relative hang.startNs/endNs.
+    // gc rows arrive in native ns; foldHangAnnotations does its overlap math
+    // against trace-relative hang bounds.
     const gcRowsNative = hangFolds.gc.get(hangIndex) ?? [];
     const gcRows = gcRowsNative.map((r) => ({ ...r, ts_ns: r.ts_ns - traceStartNs }));
     return foldHangAnnotations(hang, stateRows, gcRows);
@@ -173,13 +185,19 @@ export async function runAndroidProfilerPipeline(
   const rssGrowth = rssRowsToBottlenecks(rssRows);
 
   const bottlenecks: Bottleneck[] = [...cpuHotspots, ...uiHangs, ...rssGrowth];
-  return { bottlenecks, cpuHotspots, uiHangs, rssGrowth, exportErrors };
+  return {
+    bottlenecks,
+    cpuHotspots,
+    uiHangs,
+    rssGrowth,
+    exportErrors,
+    ...(cpuDiagnostic ? { cpuDiagnostic } : {}),
+  };
 }
 
 /**
- * Light-weight variant for profiler-combined-report: fetches only the UI hangs
- * (with start/end ns) the cross-tool correlation needs — skips CPU/RSS queries
- * and the per-hang folds.
+ * Light-weight variant for profiler-combined-report: only the UI hangs the
+ * cross-tool correlation needs — no CPU/RSS queries, no per-hang folds.
  */
 export async function loadAndroidCombinedData(
   tracePath: string,
@@ -195,9 +213,7 @@ export async function loadAndroidCombinedData(
   return { uiHangs: hangRowsToBottlenecks(hangRows, traceStartNs) };
 }
 
-// ---------------------------------------------------------------------------
 // Drill-down (profiler-stack-query Android branch)
-// ---------------------------------------------------------------------------
 
 export type AndroidStackQueryMode =
   | "hang_stacks"
@@ -217,9 +233,8 @@ export interface AndroidStackQueryOptions {
 
 /**
  * Drill-down entry point for the Android branch of profiler-stack-query.
- * Re-queries the .pftrace per call instead of caching parsed data in memory —
- * the warm WASM engine makes per-query drill-down fast enough that caching isn't
- * worth it.
+ * Re-queries the .pftrace per call instead of caching parsed rows — the warm
+ * WASM engine is the cache.
  * rationale: utils/android-profiler/PIPELINE_DESIGN.md "3. Drill-down: re-query, don't cache"
  */
 export async function runAndroidStackQuery(opts: AndroidStackQueryOptions): Promise<string> {
@@ -243,10 +258,9 @@ async function renderHangStacksAndroid(
   target: string
 ): Promise<string> {
   if (opts.hangIndex == null) {
-    // Mirrors the iOS twin in profiler-stack-query (executeIos): the same
-    // missing-param condition gets the same classified code rather than
-    // falling through to REGISTRY_TOOL_FAILURE_UNCLASSIFIED. hang_index is
-    // zod-optional, so this is reachable user input, not an internal invariant.
+    // Mirrors the iOS twin (executeIos): the same missing-param condition gets
+    // the same classified code rather than REGISTRY_TOOL_FAILURE_UNCLASSIFIED.
+    // hang_index is zod-optional, so this is reachable input, not an invariant.
     throw new FailureError("hang_stacks mode requires the hang_index parameter.", {
       error_code: FAILURE_CODES.PROFILER_QUERY_REQUIRED_PARAM_MISSING,
       failure_stage: "profiler_stack_query_params",
@@ -263,10 +277,9 @@ async function renderHangStacksAndroid(
     return `_Invalid hang_index ${opts.hangIndex}. There are ${hangRows.length} hangs (0-indexed)._`;
   }
   const hang = hangRows[opts.hangIndex]!;
-  // ts_ns is absolute CLOCK_MONOTONIC ns and can decode as bigint on long-uptime
-  // devices (> 2^53; see readCell). dur_ns is a bounded duration, but readCell
-  // still hands back any > 2^53 cell as bigint, so coerce both once here before
-  // the arithmetic to avoid "Cannot mix BigInt and other types".
+  // readCell hands back any > 2^53 cell as bigint, and absolute CLOCK_MONOTONIC
+  // ts_ns crosses that on a long-uptime device — coerce before the arithmetic to
+  // avoid "Cannot mix BigInt and other types".
   const startNs = Number(hang.ts_ns);
   const durNs = Number(hang.dur_ns);
   const endNs = startNs + durNs;
@@ -294,12 +307,9 @@ async function renderHangStacksAndroid(
 
   const durationMs = Math.round(durNs / 1_000_000);
 
-  // Coerce total_dur_ns once here (readCell keeps a > 2^53 cell as bigint, and
-  // mixing it with the Number divisor throws) and reuse the derived breakdown
-  // for both the rendered table and the summarizeHangBlocking fallback below —
-  // a single guarded coercion site instead of two. total_dur_ns is a
-  // hang-window-clipped SUM that stays well under 2^53 in practice; coercing is
-  // defensive and keeps every duration read in this file uniform.
+  // Reused by both the rendered table and the summarizeHangBlocking fallback
+  // below. total_dur_ns is hang-window-clipped and stays well under 2^53; the
+  // Number() is uniformity with the other duration reads, not a live risk.
   const stateBreakdown = stateRows.map((r) => ({
     state: r.state,
     blockedFunction: r.blocked_function,
@@ -326,7 +336,6 @@ async function renderHangStacksAndroid(
   const uniqueStacks = new Map<string, { stack: string; count: number }>();
   for (const row of sampleRows) {
     if (!row.callstack_text) continue;
-    // Demangle for display; identical demangled stacks fold together.
     const demangled = demangleCallstackText(row.callstack_text);
     const ex = uniqueStacks.get(demangled);
     if (ex) ex.count++;
@@ -343,11 +352,8 @@ async function renderHangStacksAndroid(
       lines.push("```");
     }
   } else {
-    // No on-CPU samples landed in the hang window. This is expected when the
-    // main thread was OFF the CPU (sleeping/blocked) for the stall: there is no
-    // CPU call stack to show, and the hang is a *wait*, not CPU-bound work.
-    // Spell that out so the empty result doesn't read as a tool failure, and
-    // point the reader at the state breakdown above (which says what it waited on).
+    // An empty hang window is expected when the main thread was off-CPU for the
+    // stall; spell that out so it doesn't read as a tool failure.
     const blocking = summarizeHangBlocking(stateBreakdown);
     lines.push("### Main-thread Samples During Hang", "");
     if (blocking && blocking.kind === "blocked") {
@@ -371,8 +377,7 @@ async function renderHangStacksAndroid(
           `breakdown above._`
       );
     } else {
-      // No samples *and* no state rows: there is no "breakdown above" to point
-      // at, so don't dangle a reference to it.
+      // No state rows either, so there is no "breakdown above" to point at.
       lines.push(
         `_No on-CPU stack samples were captured during this hang, and no main-thread state was ` +
           `captured for this window either. The main thread was likely off-CPU (sleeping/blocked) or ` +
@@ -385,11 +390,10 @@ async function renderHangStacksAndroid(
 }
 
 /**
- * Resolve the user-facing `thread` argument to the sentinel/raw token that
- * function-callers.sql understands. The Android main thread's raw perf `comm`
- * is the truncated package, not "main", so the common aliases map to the
- * `__MAIN__` sentinel (matched via thread.is_main_thread). An absent thread
- * means "search every thread" (`__ALL__`) rather than guessing one.
+ * Resolve the user-facing `thread` argument to the token function-callers.sql
+ * understands. The Android main thread's raw perf `comm` is the truncated
+ * package, not "main", so aliases map to the `__MAIN__` sentinel (matched via
+ * thread.is_main_thread); an absent thread means "search every thread".
  */
 function resolveFunctionCallersThread(thread: string | undefined): {
   token: string;
@@ -437,12 +441,9 @@ async function renderFunctionCallersAndroid(
     `## Callers of \`${opts.functionName}\` on ${allThreads ? "all threads" : `\`${label}\``}`,
     "",
   ];
-  // Frame names are stored mangled, so the query is matched as a substring.
-  // When nothing matched verbatim, spell out the real leaf symbols that did, so
-  // an unexpected (or over-broad) match is obvious rather than silent. Dedup on
-  // the DEMANGLED name so overloads (`_ZN3foo3barEv`/`_ZN3foo3barEi`, both
-  // `foo::bar` once args are dropped) collapse to a single bullet and the count
-  // matches what's printed.
+  // Frame names are stored mangled, so the SQL matches a substring; listing the
+  // real leaf symbols makes an over-broad match obvious. Dedup on the DEMANGLED
+  // name so overloads collapse to one bullet and the count matches.
   const distinctMatched = [...new Set(rows.map((r) => demangleSymbol(r.matched_function)))];
   if (!rows.some((r) => r.is_exact) || distinctMatched.length > 1) {
     lines.push(
@@ -455,12 +456,11 @@ async function renderFunctionCallersAndroid(
   lines.push(`**Unique callsites:** ${rows.length}`, "");
   for (const row of rows.slice(0, opts.topN)) {
     lines.push("```");
-    // In all-threads mode the same callstack can appear on several threads, so
-    // tag each block with its owning thread (raw name — copy it back as a filter).
+    // The same callstack can appear on several threads; the raw name can be
+    // copied straight back as a `thread` filter.
     const tag = allThreads ? ` [${row.thread_name}${row.is_main_thread ? " (main)" : ""}]` : "";
     lines.push(`(${row.occurrences}×)${tag}`);
-    // Demangle each frame for readability; matching upstream is still done on the
-    // raw mangled names in SQL, so this is display-only.
+    // Display-only: the SQL still matches on the raw mangled names.
     lines.push(row.callstack_text ? demangleCallstackText(row.callstack_text) : "<no callstack>");
     lines.push("```");
   }
@@ -468,9 +468,8 @@ async function renderFunctionCallersAndroid(
 }
 
 /**
- * Zero-result fallback for function_callers: list the process's threads so a
- * wrong/empty filter is self-correcting (the raw names are what the SQL matches
- * on, and aren't discoverable from the normalised analyze output).
+ * Zero-result fallback for function_callers: the raw thread names are what the
+ * SQL matches on and are not recoverable from the normalised analyze output.
  */
 async function renderFunctionCallersMiss(
   opts: AndroidStackQueryOptions,
@@ -532,9 +531,37 @@ async function renderThreadBreakdownAndroid(
   return lines.join("\n");
 }
 
-// ---------------------------------------------------------------------------
 // Row → Bottleneck transformers
-// ---------------------------------------------------------------------------
+
+/**
+ * Explain a trace whose perf samples carry no usable stack. `leaf_mapping` comes
+ * from the same LEFT JOIN chain as `leaf_function`, so a mapping without a name
+ * means the stack was unwound and only the symbol is missing, while neither
+ * means nothing was ever unwound.
+ */
+function describeStacklessSamples(
+  appPackage: string,
+  cpuRows: AndroidCpuHotspotRow[],
+  stacklessSamples: number
+): string {
+  const unwound = cpuRows.some((r) => r.leaf_mapping);
+  const head =
+    `${stacklessSamples} CPU sample${stacklessSamples === 1 ? "" : "s"} were captured for ` +
+    `\`${appPackage}\`, but none carry a usable call stack, so no CPU hotspots could be ` +
+    `computed and \`profiler-stack-query\` mode=\`function_callers\` / mode=\`hang_stacks\` ` +
+    `will find nothing. The app was running — this is a capture limitation, not an idle app. ` +
+    `mode=\`thread_breakdown\` still works, since it counts samples and needs no stacks.`;
+
+  return unwound
+    ? `${head} The stacks were unwound but no frame resolved to a symbol, which points at ` +
+        `stripped native libraries. Profile a build that keeps its symbols (a debug build, or a ` +
+        `release build with unstripped \`.so\`s).`
+    : `${head} No stack was unwound at all: Perfetto only unwinds a process it can read ` +
+        `\`/proc/<pid>/mem\` for. Profile a debug build, or add ` +
+        `\`<profileable android:shell="true"/>\` to \`<application>\` and rebuild — verify with ` +
+        `\`adb shell dumpsys package ${appPackage}\`, which shows \`DEBUGGABLE\` for a profileable ` +
+        `target. Platform packages such as \`com.android.settings\` are never profileable.`;
+}
 
 function cpuRowsToAggregatorRows(
   rows: AndroidCpuHotspotRow[],
@@ -549,20 +576,18 @@ function cpuRowsToAggregatorRows(
     const thread = normaliseAndroidThread(row.thread_name, row.is_main_thread === 1);
     out.push({
       dominantFunction: dominant,
-      // Mapping of the leaf frame (from cpu-hotspots.sql's MIN(spm.name)) —
-      // threaded through so classifyNativeFrame can recognise `/kernel` leaves.
+      // Threaded through so classifyNativeFrame can recognise `/kernel` leaves.
       ...(row.leaf_mapping != null ? { dominantMapping: row.leaf_mapping } : {}),
       thread,
       weightNs: row.sample_count * SAMPLE_PERIOD_NS,
-      // Android ships SQL-precomputed bursts, no raw timestamps. Empty array
-      // keeps the aggregator's duringHang check false (Android never passes hangSampleTimestamps).
+      // Bursts are precomputed in SQL, so no raw timestamps ship; the aggregator's
+      // duringHang stays false (Android never passes hangSampleTimestamps).
       timestampsNs: [],
       callChains: [{ chain: [dominant], count: row.sample_count }],
       precomputedBursts: parseBurstWindows(row.burst_windows, traceStartMs),
-      // first/last_ts_ns are absolute CLOCK_MONOTONIC ns: they exceed 2^53 after
-      // ~104 days of device uptime, so the WASM decoder hands them back as bigint
-      // (see readCell). traceStartNs is already a plain Number, so coerce here to
-      // avoid "Cannot mix BigInt and other types" — values stay integral.
+      // Absolute CLOCK_MONOTONIC ns passes 2^53 after ~104 days of uptime and
+      // readCell hands those back as bigint — coerce before mixing with the
+      // plain-Number traceStartNs.
       firstMs: Math.round((Number(row.first_ts_ns) - traceStartNs) / 1_000_000),
       lastMs: Math.round((Number(row.last_ts_ns) - traceStartNs) / 1_000_000),
       sampleCount: row.sample_count,
@@ -573,9 +598,8 @@ function cpuRowsToAggregatorRows(
 
 function hangRowsToBottlenecks(rows: AndroidJankRow[], traceStartNs: number): UiHang[] {
   return rows.map((row) => {
-    // ts_ns is an absolute CLOCK_MONOTONIC ns value that can arrive as bigint on a
-    // long-uptime device (> 2^53 ns ≈ 104 days; see readCell). traceStartNs is a
-    // plain Number, so coerce ts_ns and dur_ns once before the arithmetic.
+    // Same bigint coercion as cpuRowsToAggregatorRows: readCell keeps a > 2^53
+    // ts_ns as bigint and traceStartNs is a plain Number.
     const durNs = Number(row.dur_ns);
     const startNs = Number(row.ts_ns) - traceStartNs;
     return {
@@ -607,14 +631,10 @@ function rssRowsToBottlenecks(rows: AndroidRssRow[]): MemoryRssGrowth[] {
     }));
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 function normaliseAndroidThread(threadName: string | null, isMainThread: boolean): string {
   if (isMainThread) return "Main Thread";
   if (!threadName) return "Unknown";
-  // Hermes JS threads — render-target names vary across RN versions.
+  // Hermes JS thread names vary across RN versions.
   if (/hermes|jsthread|js_/i.test(threadName)) return "JS/Hermes";
   return threadName;
 }
@@ -653,19 +673,14 @@ function formatTraceTime(ns: number): string {
 
 function classifyAndroidHangSeverity(row: AndroidJankRow): "RED" | "YELLOW" {
   if (row.kind === "anr") return "RED";
-  // ui-hangs.sql only emits frames whose jank_type GLOB-matches "App Deadline
-  // Missed", so every jank row here is app-relevant. The reason string is
-  // Perfetto's space-separated jank_type (e.g. "App Deadline Missed" or the
-  // comma-combined "Prediction Error, App Deadline Missed").
-  //
-  // A *pure* "App Deadline Missed" means the app's own work alone blew the
-  // frame budget → RED. Combined forms share blame with the scheduler /
-  // SurfaceFlinger pipeline, so they stay RED only when the stall is long
-  // enough to be user-perceptible (duration check below). Exact === is
-  // deliberate — it isolates the standalone case from the combined ones.
+  // reason is Perfetto's jank_type, which ui-hangs.sql has already filtered to
+  // rows containing "App Deadline Missed". Exact === isolates the pure form (the
+  // app's own work alone blew the frame budget → RED) from comma-combined forms
+  // like "Prediction Error, App Deadline Missed", which share blame with the
+  // scheduler/SurfaceFlinger pipeline and stay RED only when the stall is long
+  // enough to be user-perceptible.
   if (row.reason === "App Deadline Missed") return "RED";
-  // Same bigint risk as the other dur_ns/ts_ns usages in this file (see
-  // readCell) — coerce before dividing.
+  // Same bigint risk as the other dur_ns reads (see readCell).
   const durationMs = Number(row.dur_ns) / 1_000_000;
   if (durationMs > 500) return "RED";
   return "YELLOW";

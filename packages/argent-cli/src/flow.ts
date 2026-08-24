@@ -24,36 +24,25 @@ export interface StepReport {
   kind: string;
   status: "pass" | "fail" | "skip" | "error";
   reason?: string;
-  /**
-   * A step that passed in a way that weakens it as proof — raised today by
-   * `await: { idle: true }`, which never fails a run and says here what its
-   * green actually bought (see StepReport.warning in the tool-server's
-   * flow-run). Also carries the caveat older tool-servers put on a snapshot
-   * that adopted a missing baseline, which now fails the step instead. Live
-   * either way: dropping the field would silently delete the only thing the
-   * readiness check reports.
-   */
+  /** Set by the tool-server on a step that PASSED in a way that weakens it as proof. */
   warning?: string;
   tool?: string;
   flow?: string;
   message?: string;
-  /** Human-readable step target (selector / snapshot name), set by the runner. */
+  /** Human-readable step target (selector / snapshot name). */
   target?: string;
   /**
-   * Nesting depth: absent/0 at top level, +1 inside each nesting step
-   * (`when:` guarded steps, `run:` fragment steps). Renderers indent by it; a
-   * pre-depth tool-server sends none and the report renders flat, as before.
+   * Nesting depth: absent/0 at top level, +1 inside each nesting step (`when:`
+   * guarded steps, `run:` fragment steps). Renderers indent by it.
    */
   depth?: number;
-  /** Baseline key stem (`<name>__<platform>-WxH`) on artifact-bearing snapshot steps. */
+  /** Baseline key stem, on artifact-bearing snapshot steps. */
   snapshotKey?: string;
   /**
-   * Snapshot-step artifacts keyed by role (baseline/current/diff). The wire
-   * value is an artifact handle (or a plain path string from a legacy
-   * tool-server); by render time each has been rewritten to a string — a
-   * durable local copy for the failed snapshots `--output` exports, otherwise
-   * the handle's server-side hostPath/filename — or null when a needed
-   * download failed.
+   * Snapshot-step artifacts keyed by role (baseline/current/diff). Arrives as
+   * artifact handles; by render time each is a string — a durable local copy
+   * for the failed snapshots `--output` exports, otherwise the handle's
+   * server-side hostPath/filename — or null when a download failed.
    */
   artifacts?: Record<string, unknown>;
 }
@@ -78,27 +67,23 @@ const STATUS_GLYPH: Record<StepReport["status"], string> = {
 };
 
 /**
- * Display cap on the nesting indent — not a producer bound. The tool-server's
- * run-chain and per-file when-nesting limits accumulate, so legitimate depth
- * can exceed this; such steps keep the maximum indent rather than flattening.
- * Depth also arrives over the wire, so the clamp doubles as a guard: a buggy
- * or malicious server must not drive `repeat()` with a huge (multi-GB string)
- * or negative (throwing) count.
+ * Display cap on the nesting indent, not a producer bound: the tool-server's
+ * run-chain and block-nesting limits accumulate, so legitimate depth can exceed
+ * it and such steps keep the maximum indent. Depth also arrives over the wire,
+ * so the clamp doubles as a guard against a server driving `repeat()` with a
+ * huge or negative count.
  */
 const MAX_RENDER_DEPTH = 20;
 
-/**
- * Indentation for a step's nesting depth, applied to the label so the
- * glyph/number columns stay aligned. Absent depth (a pre-depth tool-server)
- * renders flat.
- */
+/** Indent for a step's depth, applied to the label so the glyph/number columns stay aligned. */
 function stepIndent(depth: number | undefined): string {
   if (typeof depth !== "number" || !Number.isInteger(depth) || depth <= 0) return "";
   return "  ".repeat(Math.min(depth, MAX_RENDER_DEPTH));
 }
 
-function printHelp(): void {
-  console.log(`Usage: argent flow <subcommand> [options]
+function printHelp(toStderr = false): void {
+  const print = toStderr ? console.error : console.log;
+  print(`Usage: argent flow <subcommand> [options]
 
 Run a YAML flow without an LLM in the loop. \`run\` takes any of these forms:
 
@@ -148,6 +133,7 @@ Options (run):
                          overwritten
   -r, --recursive        With a directory path, also run flows in subdirectories
   --json                 Print the raw JSON report
+  --json-stream          Print progress and the final report as NDJSON (single flow only)
   --help, -h             Show this help
   --                     End of options — only needed for a flow whose name
                          starts with "-" (\`argent flow run -- -nightly\`)
@@ -162,10 +148,9 @@ Examples:
 
 export function parseRunArgs(argv: string[]): {
   /**
-   * The positional argument exactly as supplied — a saved-flow name, a YAML
-   * path, or a directory path. Which of the three it is, is resolveFlowRef's
-   * and the directory stat's call; this parser only shuffles tokens and never
-   * inspects one.
+   * The positional argument exactly as supplied. Which of name, YAML path, or
+   * directory it is, is resolveFlowRef's and the directory stat's call; this
+   * parser never inspects it.
    */
   flowRef?: string;
   device?: string;
@@ -174,14 +159,16 @@ export function parseRunArgs(argv: string[]): {
   updateBaselines: boolean;
   recursive: boolean;
   json: boolean;
+  jsonStream: boolean;
 } {
   const out = {
     updateBaselines: false,
     recursive: false,
     json: false,
+    jsonStream: false,
   } as ReturnType<typeof parseRunArgs>;
-  // Positionals are collected through one helper so the end-of-options marker
-  // below cannot drift from the ordinary path in what it accepts.
+  // One helper for both positional paths, so the end-of-options marker below
+  // cannot drift from the ordinary one in what it accepts.
   const takePositional = (tok: string): void => {
     if (out.flowRef !== undefined) {
       throw new FlagParseException(
@@ -192,11 +179,10 @@ export function parseRunArgs(argv: string[]): {
   };
   for (let i = 0; i < argv.length; i++) {
     const tok = argv[i]!;
-    // End of options, as flag-parser.ts (`argent run` / `argent tools`) already
-    // honors it. The flow-name charset admits a leading "-", so `-dash` is a
-    // legal saved-flow name that every argv parser reads as a flag; without
-    // this marker such a flow would be addressable by path only, and the "a
-    // name is exactly what the contract accepts" promise would have a hole.
+    // End of options, as flag-parser.ts (`argent run`) already honors it. The
+    // flow-name charset admits a leading "-", so `-dash` is a legal saved-flow
+    // name that every argv parser reads as a flag; without this marker such a
+    // flow would be addressable by path only.
     if (tok === "--") {
       for (const rest of argv.slice(i + 1)) takePositional(rest);
       break;
@@ -205,16 +191,14 @@ export function parseRunArgs(argv: string[]): {
       takePositional(tok);
       continue;
     }
-    // Accept `--flag=value` alongside `--flag value`, like the `argent run` /
-    // `argent tools` parser (flag-parser.ts) does.
+    // Accept `--flag=value` alongside `--flag value`, like the `argent run`
+    // parser (flag-parser.ts) does.
     const eq = tok.startsWith("--") ? tok.indexOf("=") : -1;
     const flag = eq === -1 ? tok : tok.slice(0, eq);
     const inline = eq === -1 ? undefined : tok.slice(eq + 1);
-    // A value-taking flag must consume a real value. A missing one (`--flag=`
-    // with nothing after the `=`, the flag as the final token, or a next token
-    // that is itself a flag) would otherwise be dropped silently and the run
-    // would fall back to device auto-detection — running against whatever
-    // happens to be booted instead of erroring.
+    // A value-taking flag must consume a real value: a missing one would be
+    // dropped silently and the run would fall back to device auto-detection,
+    // running against whatever happens to be booted instead of erroring.
     const takeValue = (name: string): string => {
       if (inline !== undefined) {
         if (inline === "") throw new FlagParseException(`${name} requires a value`);
@@ -230,10 +214,9 @@ export function parseRunArgs(argv: string[]): {
     const noValue = (name: string): void => {
       if (inline !== undefined) throw new FlagParseException(`${name} does not take a value`);
       // `argent run` consumes a `true`/`false` word after a boolean flag, so a
-      // user who learned that syntax there will try it here. This parser has no
-      // per-flag values to give, and staying silent would leave the switch on
-      // while `false` was quietly taken as the flow name (the first bare token)
-      // — worse than the #586 case it echoes. Say so instead.
+      // user who learned that syntax there will try it here — where staying
+      // silent would leave the switch on while `false` was quietly taken as the
+      // flow name (the first bare token). Say so instead.
       const next = argv[i + 1]?.trim().toLowerCase();
       if (next === "true" || next === "false") {
         throw new FlagParseException(
@@ -247,6 +230,9 @@ export function parseRunArgs(argv: string[]): {
     } else if (flag === "--json") {
       noValue("--json");
       out.json = true;
+    } else if (flag === "--json-stream") {
+      noValue("--json-stream");
+      out.jsonStream = true;
     } else if (flag === "--recursive" || flag === "-r") {
       // Bare `-r` never carries an inline value (the `=` split applies to
       // `--` tokens only), so noValue guards just the long form.
@@ -255,22 +241,21 @@ export function parseRunArgs(argv: string[]): {
     } else if (flag === "--device") out.device = takeValue("--device");
     else if (flag === "--platform") out.platform = takeValue("--platform");
     else if (flag === "--output") out.output = takeValue("--output");
-    // Any other flag-shaped token is an error — a typo like --platfrom must
-    // not silently fall back to device auto-detection. --help/-h never reach
-    // this parser: flow() intercepts them before calling parseRunArgs.
+    // A typo like --platfrom must not silently fall back to device
+    // auto-detection. --help/-h never reach here: flow() intercepts them.
     else throw new FlagParseException(`unknown flag ${tok}`);
+  }
+  if (out.json && out.jsonStream) {
+    throw new FlagParseException("--json and --json-stream cannot be combined");
   }
   return out;
 }
 
 /**
- * Render an echo step. Echo is narration, not a pass/fail step — one that RAN
- * prints as a plain `› message` header with no index or glyph. A SKIPPED echo
- * (its `when:` block didn't run, or a hard stop / cancellation reached it) must
- * not print identically to one that ran, so it carries the skip glyph and its
- * reason: one honest line per authored step, still unindexed so it keeps
- * reading as narration rather than a numbered step. Returns undefined when
- * there is no message to show.
+ * Render an echo step. Echo is narration, not a pass/fail step: one that RAN
+ * prints as a plain `› message` with no index or glyph, while a SKIPPED one
+ * carries the skip glyph and its reason so it cannot read as having run.
+ * Returns undefined when there is no message.
  */
 export function renderEchoLine(s: StepReport): string | undefined {
   if (!s.message) return undefined;
@@ -292,10 +277,9 @@ export function renderStepLine(s: StepReport, n: number, topFlow: string): strin
 }
 
 /**
- * A line printed under a step (warning, artifact path), padded so it sits
- * under the step's label: the width of renderStepLine's `  ✓ NN ` prefix —
- * which grows with the step number past 99 — then the step's depth indent.
- * Shared by the buffered and live renderers so the two can't drift.
+ * A line printed under a step (warning, artifact path), padded to the width of
+ * renderStepLine's `  ✓ NN ` prefix — which grows past step 99 — plus the
+ * step's depth indent. Shared by the buffered and live renderers.
  */
 export function renderUnderStepLine(s: StepReport, n: number, text: string): string {
   return `${" ".repeat(5 + Math.max(2, String(n).length))}${stepIndent(s.depth)}${text}`;
@@ -304,16 +288,14 @@ export function renderUnderStepLine(s: StepReport, n: number, text: string): str
 export function renderSummary(report: FlowReport, opts: { withDevice?: boolean } = {}): string {
   const warnings = report.steps.filter((s) => s.warning).length;
   const warningsNote = warnings ? `, ${warnings} warning${warnings === 1 ? "" : "s"}` : "";
-  // The live renderer prints its header before the runner has resolved a
-  // device, so its summary carries the device instead — the one the run
-  // STARTED on: a chromium run can move onto runner-booted instances, each
-  // move marked on its launch step's reason, so "on <id>" would blame the
-  // wrong instance for any step that ran after a move. Empty when the flow
-  // needed no device.
+  // The live renderer prints its header before the device is resolved, so its
+  // summary carries the device instead — the one the run STARTED on: a chromium
+  // run can move onto runner-booted instances (each move marked on its launch
+  // step's reason), so "on <id>" would blame the wrong instance for steps after
+  // a move. Empty when the flow needed no device.
   const where = opts.withDevice && report.device ? ` (started on ${report.device})` : "";
-  // Four zeros on a passing run read as though nothing happened. Say why:
-  // narration is not counted, so a flow of only narration counts nothing.
-  // Only on a pass — on a failure the counts are not what needs explaining.
+  // Four zeros on a passing run read as though nothing happened: narration is
+  // not counted, so a flow of only narration counts nothing. Only on a pass.
   const nothingCounted =
     report.ok && report.passed + report.failed + report.errored + report.skipped === 0;
   const note = nothingCounted ? " (no test steps)" : "";
@@ -345,10 +327,9 @@ export function renderArtifactLines(report: FlowReport): string[] {
  * under-lines, numbered by walking the full step list so the numbers match a
  * single-mode rerun of the same flow.
  *
- * A PASSING step carrying a warning needs attention too. `await: { idle: true }`
- * only ever warns on a step that passed, and renderSummary counts every warning
- * whatever its status — so skipping those here printed "1 warning" with the
- * text nowhere on screen, which is the whole of what the step reports.
+ * A PASSING step carrying a warning needs attention too: renderSummary counts
+ * every warning whatever its status, so skipping those printed "1 warning" with
+ * the text nowhere on screen.
  */
 export function renderFailedSteps(report: FlowReport): string[] {
   const lines: string[] = [];
@@ -379,40 +360,34 @@ export function renderBatchSummary(counts: {
 }
 
 /**
- * Names spliced into artifact-export destinations. The shared
- * FLOW_NAME_PATTERN, which every legitimate flow filename stem and
- * `snapshotKey` (`<name>__<platform>-WxH`) already satisfies. Re-checked here
- * because the destination root is an operator-chosen filesystem path
- * (`--output`): the snapshot key still arrives over the wire — a malicious or
- * buggy server must not steer the copy outside that directory — while the
- * flow stem is derived CLI-side from the resolved YAML path (never from the
- * wire report's `flow` field) and re-validated so the export stays contained
- * even when called outside the CLI's own pre-validated path.
+ * Names spliced into artifact-export destinations. Re-checked here because the
+ * destination root is an operator-chosen filesystem path (`--output`): the
+ * snapshot key arrives over the wire, so a buggy or malicious server must not
+ * steer the copy outside that directory, while the flow stem is derived
+ * CLI-side from the resolved YAML path (never from the wire report's `flow`
+ * field) and re-validated so the export stays contained even when called
+ * outside the CLI's own pre-validated path.
  */
 const SAFE_ARTIFACT_NAME = FLOW_NAME_PATTERN;
 
 /** The filename stem becomes the runner's internal flow/report name. */
 const SAFE_FLOW_NAME = FLOW_NAME_PATTERN;
 
-/**
- * Where flows are saved, relative to the current directory: what `flow list`
- * walks, and what a bare name on `flow run` resolves against.
- */
+/** Where flows are saved, relative to the current directory. */
 const FLOWS_DIR = path.join(".argent", "flows");
 
 /**
  * Charset every POSIX shell passes through unquoted (shlex.quote's set).
- * Anything outside it — a space above all — would be word-split or
- * interpreted if pasted into a terminal.
+ * Anything outside it — a space above all — would be word-split or interpreted
+ * if pasted into a terminal.
  */
 const SHELL_SAFE_ARG = /^[A-Za-z0-9_@%+=:,./-]+$/;
 
 /**
- * Quote a path for splicing into a "Did you mean: argent flow run …" hint.
- * The hint's whole value is being copy-pasteable, so a path a shell would
- * mangle is wrapped in single quotes — the one POSIX quoting form with no
- * further escapes inside (embedded single quotes are spliced as '\''). The
- * common all-safe path stays bare so the hint reads like what the user typed.
+ * Quote a path for splicing into a "Did you mean: argent flow run …" hint,
+ * whose whole value is being copy-pasteable. Single quotes are the one POSIX
+ * form with no further escapes inside; an all-safe path stays bare so the hint
+ * reads like what the user typed.
  */
 function shellQuoteArg(arg: string): string {
   if (SHELL_SAFE_ARG.test(arg)) return arg;
@@ -420,27 +395,23 @@ function shellQuoteArg(arg: string): string {
 }
 
 /**
- * Marker dropped inside each per-flow export directory, recording the
- * resolved YAML path whose run produced it. Flow paths may live anywhere, so
- * two different files can share a filename stem (`suiteA/checks.yaml`,
- * `suiteB/checks.yaml`) while a CI suite funnels every run into one
- * `--output` dir — the marker is how a later invocation (a separate process
- * with no memory of earlier runs) tells "my own previous run, overwrite in
- * place" apart from "a different flow's evidence, keep out". Creating this
- * file with O_EXCL is also the act of claiming (see takeExportDir), so the
- * marker can never end up naming one flow while the directory holds another's
- * bytes.
+ * Marker dropped inside each per-flow export directory, recording the resolved
+ * YAML path whose run produced it. Two different files can share a filename
+ * stem while a CI suite funnels every run into one `--output` dir, so the
+ * marker is how a later invocation — a separate process with no memory of
+ * earlier runs — tells "my own previous run, overwrite in place" apart from "a
+ * different flow's evidence, keep out". Creating this file with O_EXCL is also
+ * the act of claiming (see takeExportDir).
  */
 const EXPORT_SOURCE_MARKER = ".argent-flow-source";
 
 /**
- * An O_EXCL create publishes the marker's path one syscall before its
- * contents, so a reader arriving inside that window sees an existing but empty
- * file. That is the only way a freshly written marker reads as empty, and
- * concluding "names nobody" there would send a concurrent run of the *same*
- * flow off to a hash-suffixed sibling for no reason. So an empty read is
- * retried a handful of times — ~20ms, paid only inside that window — before
- * the marker is written off as illegible.
+ * An O_EXCL create publishes the marker's path one syscall before its contents,
+ * so a reader inside that window sees an existing but empty file — the only way
+ * a freshly written marker reads as empty. Concluding "names nobody" there
+ * would send a concurrent run of the *same* flow off to a hash-suffixed sibling
+ * for no reason, so an empty read is retried a handful of times before the
+ * marker is written off as illegible.
  */
 const MARKER_READ_RETRIES = 4;
 const MARKER_READ_DELAY_MS = 5;
@@ -448,8 +419,7 @@ const MARKER_READ_DELAY_MS = 5;
 /**
  * Read a directory's ownership marker: the resolved flow path that claimed it,
  * `undefined` when there is no readable marker file (an absent directory
- * included — the caller tells those apart), or null when the file is there but
- * names nobody.
+ * included — the caller tells those apart), or null when the file names nobody.
  */
 async function readExportMarker(dir: string): Promise<string | null | undefined> {
   const marker = path.join(dir, EXPORT_SOURCE_MARKER);
@@ -468,18 +438,16 @@ async function readExportMarker(dir: string): Promise<string | null | undefined>
 
 /**
  * How a candidate export directory related to this flow at the instant it was
- * read: free to claim (absent, or pre-created but empty — `mkdir -p` before
- * the run is an ordinary CI step, and an empty directory holds nothing to
- * protect), already this flow's own (the marker names `flowPath`), or foreign
- * — owned by a different YAML path (`owner` is that path) or holding content
- * that proves no owner (`owner` is null: operator files, an export from a
- * pre-marker CLI, an illegible marker, or a directory that cannot even be
- * listed — emptiness can't be proven, and redirecting is the safe direction).
- * One classifier serves the pretty stem directory and every hash-suffixed
- * fallback alike, so the two can never drift apart in what they refuse to
- * overwrite. "free" is a snapshot, never a reservation: two processes reading
- * at the same instant both get it, so taking the directory is a second,
- * atomic step (takeExportDir) and only its verdict is binding.
+ * read: free to claim (absent, or pre-created but empty — `mkdir -p` before the
+ * run is an ordinary CI step), already this flow's own (the marker names
+ * `flowPath`), or foreign — owned by a different YAML path (`owner` is that
+ * path) or holding content that proves no owner (`owner` is null: operator
+ * files, an illegible marker, or a directory that cannot even be listed, where
+ * emptiness can't be proven). One classifier serves the stem directory and
+ * every hash-suffixed fallback alike, so the two can never drift apart in what
+ * they refuse to overwrite. "free" is a snapshot, never a reservation: two
+ * processes reading at the same instant both get it, so taking the directory is
+ * a second, atomic step (takeExportDir) and only its verdict is binding.
  */
 type ExportDirClaim =
   | { state: "free" }
@@ -495,17 +463,15 @@ async function classifyExportDir(dir: string, flowPath: string): Promise<ExportD
       }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        return { state: "free" }; // no directory yet — free to claim
+        return { state: "free" };
       }
       // Unlistable (permissions, or a plain file squatting on the name):
       // emptiness can't be proven, so fall through to the foreign path.
     }
     owner = null;
   }
-  // Identity is the resolved path string: the CLI resolved it against cwd, so
-  // one file always maps to one spelling within a checkout. (Two symlink
-  // spellings of one file would split into two directories — a redirect, not
-  // a loss.)
+  // Identity is the resolved path string, so two symlink spellings of one file
+  // split into two directories — a redirect, not a loss.
   return owner === flowPath ? { state: "mine" } : { state: "foreign", owner };
 }
 
@@ -517,45 +483,40 @@ function occupiedBy(owner: string | null): string {
 }
 
 /**
- * Take `dir` for `flowPath`. Creating the marker with O_EXCL *is* the claim,
- * so however many processes race for one directory, exactly one wins the
- * create. Returns null once the directory is this flow's (it then exists and
- * holds the marker), or the clause explaining why it isn't.
+ * Take `dir` for `flowPath`. Creating the marker with O_EXCL *is* the claim, so
+ * however many processes race for one directory, exactly one wins the create.
+ * Returns null once the directory is this flow's (it then exists and holds the
+ * marker), or the clause explaining why it isn't.
  *
  * Classification alone cannot decide this: between `classifyExportDir` reading
  * "free" and the first artifact landing there sits a window in which another
- * process classifies the same directory "free" too — both the pre-created-empty
- * and the ENOENT branch race — and both then write into it. The loser's bytes
- * end up under the winner's marker, which is worse than a plain overwrite: a
- * later, perfectly ordinary run of the flow the marker names classifies that
- * directory "mine" and overwrites it without a warning, destroying evidence it
- * never produced.
+ * process classifies the same directory "free" too, and both write into it. The
+ * loser's bytes end up under the winner's marker, which is worse than a plain
+ * overwrite: a later, perfectly ordinary run of the flow the marker names
+ * classifies that directory "mine" and overwrites it without a warning,
+ * destroying evidence it never produced.
  *
  * EEXIST means the create lost — either to a racing process or to this flow's
- * own marker from an earlier run (the expected `mine` path). Judge the marker
- * that is actually there now: our own path is genuinely ours, anything else is
- * reported exactly like a classify-time `foreign` verdict so the caller
- * escalates to the next candidate.
+ * own marker from an earlier run (the expected `mine` path) — so judge the
+ * marker that is actually there now.
  *
  * Any other error (unwritable directory, full or read-only filesystem) leaves
- * the claim unproven, and an unproven claim must never be written into — it is
+ * the claim unproven, and an unproven claim must never be written into: it is
  * reported like an occupant so the caller steps past to a candidate it can
- * actually take. The pre-claim code wrote the marker best-effort and copied in
- * regardless, which was tolerable only while the marker was a hint; now that it
- * is the claim, a silent failure would put unowned bytes in a shared directory.
+ * actually take.
  */
 async function takeExportDir(dir: string, flowPath: string): Promise<string | null> {
   try {
     await fsp.mkdir(dir, { recursive: true });
     await fsp.writeFile(path.join(dir, EXPORT_SOURCE_MARKER), `${flowPath}\n`, { flag: "wx" });
-    return null; // won the create — the directory is ours
+    return null; // won the create
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
       return `could not be claimed (${err instanceof Error ? err.message : String(err)})`;
     }
   }
-  // undefined = the marker vanished under us, or `dir` is a plain file (which
-  // is what made mkdir itself EEXIST): unprovable either way, so foreign.
+  // undefined = the marker vanished under us, or `dir` is a plain file (what
+  // made mkdir itself EEXIST): unprovable either way, so foreign.
   const owner = await readExportMarker(dir);
   return owner === flowPath ? null : occupiedBy(owner ?? null);
 }
@@ -564,31 +525,24 @@ async function takeExportDir(dir: string, flowPath: string): Promise<string | nu
  * Claim the subdirectory under `--output` for this flow's artifacts and return
  * its name, or null when nothing can be claimed without destroying someone
  * else's. The filename stem when it is free or already claimed by this same
- * YAML file; otherwise `<stem>-<prefix>` where the prefix is a growing slice
+ * YAML file; otherwise `<stem>-<prefix>`, where the prefix is a growing slice
  * (8, then 16, … up to all 64 hex chars) of the sha256 of the resolved flow
  * path. Every candidate — fallbacks included — passes the same occupancy check
- * as the stem (see classifyExportDir) and is then taken atomically (see
- * takeExportDir): a foreign directory, or one another process wins first, is
- * stepped past to the next longer prefix, never written into. On return the
- * chosen directory exists and holds this flow's marker, so the caller only has
- * to copy. The ladder is a pure function of the flow path, so a re-run walks
- * the same rungs and lands back in the directory its previous run claimed (CI
- * references survive) — unless an earlier rung's foreign occupant was deleted
- * in between, in which case the re-run claims that now-free earlier rung and
- * its old directory goes stale (a redirect, never an overwrite). Two distinct
- * paths can never share the full 64-char hash, so escalation terminates without
- * randomness. If even the full-hash directory cannot be taken (only possible
- * when something else squats on it), returns null after a warning: the caller
- * skips this flow's export, because losing one export beats destroying another
- * flow's evidence. Each warning names the directory actually being avoided and
- * the directory the artifacts actually land in (or that nothing is written at
- * all). Both name forms are single FLOW_NAME_PATTERN-charset segments
- * (validated stem + hex), so containment under outputDir is preserved for every
- * candidate. What it creates: the directory it returns, holding this flow's
- * marker — plus, only where the filesystem refused the marker after the mkdir
- * had succeeded, an empty directory it then stepped past. Creating is the whole
- * point (the marker *is* the claim), so this must be reached only once a byte
- * is certain to be copied — see the lazy claim in exportFailureArtifacts.
+ * (classifyExportDir) and is then taken atomically (takeExportDir): a foreign
+ * directory, or one another process wins first, is stepped past to the next
+ * longer prefix, never written into. On return the chosen directory exists and
+ * holds this flow's marker, so the caller only has to copy. The ladder is a
+ * pure function of the flow path, so a re-run lands back in the directory its
+ * previous run claimed — unless an earlier rung's foreign occupant was deleted
+ * in between, in which case the re-run claims that now-free rung and its old
+ * directory goes stale (a redirect, never an overwrite). Two distinct paths can
+ * never share the full 64-char hash, so escalation terminates without
+ * randomness; if even that directory cannot be taken, returns null after a
+ * warning, because losing one export beats destroying another flow's evidence.
+ * Both name forms are single FLOW_NAME_PATTERN-charset segments, so containment
+ * under outputDir is preserved for every candidate. Creating is the whole point
+ * (the marker *is* the claim), so this must be reached only once a byte is
+ * certain to be copied — see the lazy claim in exportFailureArtifacts.
  */
 async function claimExportDirName(
   outputDir: string,
@@ -605,8 +559,8 @@ async function claimExportDirName(
     const dir = path.join(outputDir, name);
     const claim = await classifyExportDir(dir, flowPath);
     // Reading "free"/"mine" only earns the right to *try* the atomic take;
-    // losing it reads exactly like a classify-time foreign verdict, so both
-    // escalate — and warn — through the same path.
+    // losing it reads exactly like a foreign verdict, so both escalate — and
+    // warn — through the same path.
     const reason =
       claim.state === "foreign" ? occupiedBy(claim.owner) : await takeExportDir(dir, flowPath);
     if (reason !== null) {
@@ -634,36 +588,28 @@ async function claimExportDirName(
 /**
  * Copy each failed snapshot's artifacts into a durable, globbable location —
  * `<outputDir>/<flow>/<key>-<role>.png`, where `<flow>` is the YAML filename
- * stem (derived from the CLI-resolved `flowPath`, never from the wire
- * report) and `<key>` is the snapshot's baseline key (`name__platform-WxH`),
- * so a run that hits several flows/snapshots can't clobber itself. Stems are
- * unique only per directory, not globally, so when a different flow file
- * already owns `<flow>/` (see EXPORT_SOURCE_MARKER) this run lands in the
- * deterministic `<flow>-<pathhash>/` instead — one suite's CI evidence must
- * never silently replace another's, while a re-run of the same file still
- * overwrites in place. The fallback gets the same occupancy check as the
- * stem, escalating to longer hash prefixes when it too is taken — and when
- * nothing at all can be claimed, this flow's export is skipped with a
- * warning rather than ever overwriting. The destination is claimed atomically
- * (claimExportDirName) before a single byte is copied, so two suites racing
- * into one `--output` cannot both take one directory — and never earlier than
- * that first byte, so a run that copies nothing (a clean pass, an unusable
- * key, every download failed) leaves `--output` exactly as it was: no
- * directory, no marker, no collision warning about a write that never happens.
- * What that does NOT fix, by design: two parallel runs of the *same* flow file
- * into one `--output` still overwrite each other's identical-key artifacts,
- * exactly as before any of this ownership machinery existed — one file's runs
- * are indistinguishable to a separate process, and the directory's marker names
- * them truthfully either way. This is the only place the CLI needs artifact
- * bytes, so materialization happens here, scoped to each failed snapshot's
- * artifacts — a co-located tool-server resolves them in place, a remote one
- * downloads just these files. Rewrites each copied role's path in the report
- * so the renderers and `--json` print the durable location instead of a temp
- * path. Failure-only: a clean pass carries no artifacts, and a seeded
- * baseline is already durable under `__baselines__/`. Best-effort per file —
- * a copy error warns on stderr and leaves the source path in place; artifact
- * export must never change a run's verdict. Server-supplied names that fail
- * `SAFE_ARTIFACT_NAME` are skipped the same way — before any
+ * stem (derived from the CLI-resolved `flowPath`, never from the wire report)
+ * and `<key>` is the snapshot's baseline key, so a run that hits several
+ * flows/snapshots can't clobber itself. Stems are unique only per directory, so
+ * when a different flow file already owns `<flow>/` (see EXPORT_SOURCE_MARKER)
+ * this run lands in the deterministic `<flow>-<pathhash>/` instead, and when
+ * nothing at all can be claimed the export is skipped with a warning rather
+ * than ever overwriting (claimExportDirName). The destination is claimed
+ * atomically before a single byte is copied — and never earlier, so a run that
+ * copies nothing leaves `--output` exactly as it was.
+ *
+ * NOT fixed, by design: two parallel runs of the *same* flow file into one
+ * `--output` still overwrite each other's identical-key artifacts, since one
+ * file's runs are indistinguishable to a separate process.
+ *
+ * This is the only place the CLI needs artifact bytes, so materialization
+ * happens here, scoped to each failed snapshot's artifacts. Rewrites each
+ * copied role's path in the report so the renderers and `--json` print the
+ * durable location instead of a temp path. Failure-only: a clean pass carries
+ * no artifacts, and a seeded baseline is already durable under
+ * `__baselines__/`. Best-effort per file — a copy error warns on stderr and
+ * leaves the source path in place; artifact export must never change a run's
+ * verdict. Names that fail `SAFE_ARTIFACT_NAME` are skipped before any
  * materialization, so nothing is downloaded for a step that won't be written.
  */
 export async function exportFailureArtifacts(
@@ -679,29 +625,23 @@ export async function exportFailureArtifacts(
     );
     return;
   }
-  // Claimed lazily, at the first byte actually about to be copied — null until
-  // then, because nothing earlier proves a byte will land at all: a clean pass
-  // carries no failed snapshot, a failed snapshot can carry no usable key, and
-  // a step past both of those filters still writes nothing when its artifacts
-  // object is empty or every role came back null (the realistic one: the
-  // downloads failed). Claiming for any of them would leave a directory and a
-  // marker behind for a run holding no artifacts — and the marker is not inert:
-  // it makes the stem foreign to every *other* flow file from then on, so the
-  // next one redirects itself to a hash sibling, and a reused --output collects
-  // one more empty directory per zero-byte run. Claiming late is exactly as
-  // race-free as claiming early: the atomicity is O_EXCL's, not the ordering's,
-  // and the marker still precedes the first byte.
+  // Claimed lazily, at the first byte actually about to be copied, because
+  // nothing earlier proves a byte will land at all: no failed snapshot, no
+  // usable key, an empty artifacts object, or every role null after a failed
+  // download. Claiming for any of them would leave a directory and a marker
+  // behind for a run holding no artifacts — and the marker is not inert: it
+  // makes the stem foreign to every *other* flow file from then on. Claiming
+  // late is exactly as race-free: the atomicity is O_EXCL's, not the
+  // ordering's, and the marker still precedes the first byte.
   let dir: string | null = null;
   for (const s of report.steps) {
     if (s.kind !== "snapshot" || s.status !== "fail" || !s.artifacts) continue;
-    // Key first: a legacy tool-server sends plain path strings, and
-    // keyFromBaselinePath needs that original baseline path, not a rewrite.
-    // The pattern check also hardens the fallback, whose basename can still
-    // be ".." for a path ending in "/..".
+    // Key first: keyFromBaselinePath needs the original baseline path, not a
+    // materialized rewrite. The pattern check also hardens that fallback, whose
+    // basename can still be ".." for a path ending in "/..".
     const key = s.snapshotKey ?? keyFromBaselinePath(s.artifacts);
     if (!key || !SAFE_ARTIFACT_NAME.test(key)) continue;
-    // Materialize only this snapshot's artifacts (local read or remote
-    // download) — never the whole report.
+    // Materialize only this snapshot's artifacts — never the whole report.
     const { result } = await materializeArtifacts(s.artifacts, ctx);
     s.artifacts = result as Record<string, unknown>;
     for (const [role, value] of Object.entries(s.artifacts)) {
@@ -709,20 +649,17 @@ export async function exportFailureArtifacts(
       if (dir === null) {
         const dirName = await claimExportDirName(outputDir, flowPath, stem);
         if (dirName === null) return; // warned already; sources stay in place, verdict unchanged
-        // Claimed: the directory exists and holds this flow's marker. Nothing
-        // below re-creates it — if it is deleted mid-run the copies fail and
-        // warn, rather than resurrecting it unmarked for the next run to
-        // redirect away from.
+        // Nothing below re-creates the directory: if it is deleted mid-run the
+        // copies fail and warn, rather than resurrecting it unmarked for the
+        // next run to redirect away from.
         dir = path.join(outputDir, dirName);
       }
       const dest = path.join(dir, `${key}-${role}.png`);
-      // Same resolved-path check as the server's getFlowPath: even if the key
-      // and stem patterns are ever weakened, the copy stays inside --output. Also
-      // covers `role`, the remaining server-supplied piece of the destination.
-      // It judges the real destination, so it can only run once `dir` is known,
-      // i.e. after the claim: a `role` hostile enough to escape is the single
-      // way a claim can still precede zero bytes — a broken or malicious
-      // tool-server, never an ordinary run.
+      // Even if the key and stem patterns are ever weakened, the copy stays
+      // inside --output. Also covers `role`, the remaining server-supplied piece
+      // of the destination. It judges the real destination, so it can only run
+      // after the claim: a `role` hostile enough to escape is the single way a
+      // claim can still precede zero bytes.
       const rel = path.relative(outputDir, dest);
       if (rel.startsWith("..") || path.isAbsolute(rel)) continue;
       try {
@@ -738,9 +675,9 @@ export async function exportFailureArtifacts(
 }
 
 /**
- * Fallback for a pre-`snapshotKey` tool-server: the baseline artifact is the
- * baseline file itself (or a download named after it), so its basename IS the
- * key.
+ * Fallback when the report carries no `snapshotKey`: the baseline artifact is
+ * the baseline file itself (or a download named after it), so its basename IS
+ * the key.
  */
 function keyFromBaselinePath(artifacts: Record<string, unknown>): string | null {
   const baseline = artifacts.baseline;
@@ -750,14 +687,12 @@ function keyFromBaselinePath(artifacts: Record<string, unknown>): string | null 
 
 /**
  * Rewrite any artifact handle left in the report to a printable string — the
- * tool-server's hostPath, or the bare filename — with zero fetches. The CLI
- * renders artifact paths as text only (never inline images), so downloading
- * the bytes just to print a path would be pure waste against a remote
- * tool-server — the same economy the MCP renderer applies to baseline/current.
- * The renderers and `--json` expect string values; a raw handle object would
- * fail their `typeof v === "string"` filter and vanish from the output. Runs
- * after the optional `--output` export, which has already replaced the failed
- * snapshots' handles with durable local copies.
+ * tool-server's hostPath, or the bare filename — with zero fetches: the CLI
+ * renders artifact paths as text only, so downloading the bytes just to print a
+ * path would be pure waste against a remote tool-server. The renderers and
+ * `--json` filter on `typeof v === "string"`, so a raw handle object would
+ * vanish from the output. Runs after the optional `--output` export, which has
+ * already replaced the failed snapshots' handles with durable local copies.
  */
 export function resolveArtifactDisplayPaths(report: FlowReport): void {
   for (const s of report.steps) {
@@ -771,19 +706,16 @@ export function resolveArtifactDisplayPaths(report: FlowReport): void {
 /**
  * Flush stdout/stderr, then exit with `code`.
  *
- * `console.log` is synchronous only when stdout is a file or a TTY. On a pipe
- * — every CI capture (`argent flow run … --json | jq`, `$(…)`, `| tee`) —
- * writes are asynchronous, and a bare `process.exit()` right after printing a
- * large report tears the process down with everything beyond the OS pipe
- * buffer (~64KB) still queued inside Node, truncating a big `--json` report
- * mid-string. Stream writes complete in FIFO order, so waiting on a
- * zero-length sentinel write guarantees every previously queued chunk has
- * reached the fd first.
+ * `console.log` is synchronous only when stdout is a file or a TTY. On a pipe —
+ * every CI capture — writes are asynchronous, and a bare `process.exit()` right
+ * after printing a large report tears the process down with everything beyond
+ * the OS pipe buffer still queued inside Node, truncating a big `--json` report
+ * mid-string. Stream writes complete in FIFO order, so waiting on a zero-length
+ * sentinel write guarantees every previously queued chunk reached the fd first.
  *
- * This cannot hang: it waits only on the std streams' own write queues (a
- * stalled pipe reader would block `console.log` the same way), never on other
- * open handles (tool-server sockets, timers) — and a destroyed/EPIPE'd stream
- * still invokes its write callback, so the exit always fires.
+ * This cannot hang: it waits only on the std streams' own write queues, never
+ * on other open handles (tool-server sockets, timers) — and a
+ * destroyed/EPIPE'd stream still invokes its write callback.
  */
 export function exitAfterFlush(
   code: number,
@@ -797,15 +729,12 @@ export function exitAfterFlush(
 export function renderReport(report: FlowReport): string {
   const lines: string[] = [];
   lines.push(`Flow "${report.flow}"${report.device ? ` on ${report.device}` : ""}`);
-  // Remind the operator what the flow assumes was already set up.
   if (report.executionPrerequisite) {
     lines.push(`  assumes: ${report.executionPrerequisite}`);
   }
   // Number only real steps so echo narration doesn't leave gaps in the sequence.
   let n = 0;
   for (const s of report.steps) {
-    // Echo is narration, not a pass/fail step — render it as a header between
-    // steps (a skipped one is marked so it can't be mistaken for having run).
     if (s.kind === "echo") {
       const line = renderEchoLine(s);
       if (line) lines.push(line);
@@ -827,7 +756,7 @@ export function renderReport(report: FlowReport): string {
 /**
  * `flow run`'s filesystem acceptance test — stat (following symlinks, as run
  * does) plus a readability probe — so `list` never advertises a path `run`
- * rejects. Any per-entry failure (broken symlink, race, EACCES) just omits it.
+ * rejects. Any failure (broken symlink, race, EACCES) just omits the entry.
  */
 async function isRunnableFlowFile(filePath: string): Promise<boolean> {
   try {
@@ -846,20 +775,16 @@ async function isRunnableFlowFile(filePath: string): Promise<boolean> {
  * unconstrained — so a YAML at any depth is runnable and a non-recursive
  * listing would hide paths `run` accepts. Two deliberate exclusions:
  *
- * - `__baselines__` directories (at any depth: nested flows keep their
- *   baselines beside themselves) are machine-managed snapshot storage, not a
- *   place flows live. `run` would technically execute a YAML dropped in one,
- *   but advertising the inside of an output directory invites keying
- *   baselines of baselines — the one spot where "list what run accepts"
- *   yields to "list what is a flow".
- * - Symlinked directories are not entered: a link cycle would walk forever
- *   (Node's own recursive readdir refuses to follow them for the same
- *   reason). A symlinked flow FILE is still listed — the runnability probe
- *   stats through it, exactly as `flow run` does.
+ * - `__baselines__` directories at any depth are machine-managed snapshot
+ *   storage, not a place flows live. `run` would technically execute a YAML
+ *   dropped in one, but advertising the inside of an output directory invites
+ *   keying baselines of baselines.
+ * - Symlinked directories are not entered: a link cycle would walk forever. A
+ *   symlinked flow FILE is still listed — the runnability probe stats through
+ *   it, exactly as `flow run` does.
  *
- * An unreadable subdirectory omits its subtree like any other per-entry
- * failure; only the top-level readdir's error propagates, so a missing
- * `.argent/flows` still gets its own message.
+ * An unreadable subdirectory omits its subtree; only the top-level readdir's
+ * error propagates, so a missing `.argent/flows` still gets its own message.
  */
 async function collectRunnableFlowPaths(dir: string, relDir = ""): Promise<string[]> {
   const found: string[] = [];
@@ -888,43 +813,33 @@ async function collectRunnableFlowPaths(dir: string, relDir = ""): Promise<strin
  * `.argent/flows/<name>.yaml`, anything else is already a path and is handed
  * back untouched.
  *
- * The two forms cannot collide, so nothing here has to guess. A name is
- * exactly what the flow-name contract accepts (SAFE_FLOW_NAME — a charset with
- * no separator and no dot, so a name can carry no directory and no extension),
- * while a runnable path must end in `.yaml`. The token that looks ambiguous,
- * `checkout.yaml`, carries an extension and is therefore a path, resolved from
- * the current directory like every other one — it does NOT fall back to the
- * flows directory.
+ * The two forms cannot collide. A name is exactly what SAFE_FLOW_NAME accepts —
+ * a charset with no separator and no dot, so a name can carry no directory and
+ * no extension — while a runnable path must end in `.yaml`. The token that
+ * looks ambiguous, `checkout.yaml`, carries an extension and is therefore a
+ * path; it does NOT fall back to the flows directory.
  *
  * Deciding this lexically rather than by probing the filesystem is deliberate:
  * an argument's meaning must not depend on which files happen to exist, or a
  * stray `./checkout.yaml` appearing next to a CI checkout would silently
  * re-point a `run checkout` that had been reading `.argent/flows` for months.
  *
- * What contains this join is the charset itself, not the guards below: no
- * string SAFE_FLOW_NAME admits can carry a separator or a dot, so the joined
- * path cannot leave `.argent/flows` however the guards are later edited. The
- * rewrite is nevertheless relative and placed before all of them, so a name
- * takes no shortcut past a check a typed-out path faces. Four of those checks
- * ("..", trailing separator, extension, stem charset) a name satisfies
- * vacuously; the two that bite are the filesystem ones — the file must exist
- * and be readable, and its basename must appear in the directory listing
- * byte-for-byte, so a name is refused on a case-insensitive filesystem exactly
- * where a path is (see savedFlowHint, which owes its on-disk spelling to that
- * same rule).
+ * What contains the join is the charset itself, not the guards downstream: no
+ * string SAFE_FLOW_NAME admits can carry a separator or a dot. The rewrite is
+ * nevertheless relative and placed before all of them, so a name takes no
+ * shortcut past a check a typed-out path faces — the ones that bite being the
+ * filesystem ones (the file must exist, and its basename must appear in the
+ * directory listing byte-for-byte).
  *
  * Relative also keeps downstream messages quoting something the user can paste
  * back, and leaves `path.resolve(projectRoot, …)` landing on the very same
- * absolute file the spelled-out path resolves to. That last part is the point:
- * the absolute path keys the report, `__baselines__/`, and the `--output`
- * export directory, so `run checkout` and `run .argent/flows/checkout.yaml`
- * are one run under one identity, not two that split their baselines and CI
- * evidence.
+ * absolute file the spelled-out path resolves to — which keys the report,
+ * `__baselines__/`, and the `--output` export directory, so `run checkout` and
+ * `run .argent/flows/checkout.yaml` are one run under one identity.
  *
  * One name shape the CLI cannot address, though the contract admits it: a
  * leading "-" makes the token a flag to any argv parser, so `-dash` is
- * reachable only as `-- -dash` (parseRunArgs honors the end-of-options marker)
- * or by path.
+ * reachable only as `-- -dash` or by path.
  */
 function resolveFlowRef(ref: string): { suppliedPath: string; fromName: boolean } {
   if (!SAFE_FLOW_NAME.test(ref)) return { suppliedPath: ref, fromName: false };
@@ -934,30 +849,22 @@ function resolveFlowRef(ref: string): { suppliedPath: string; fromName: boolean 
 /**
  * Recovery for a path that named nothing while a flow of that very stem IS
  * saved — `argent flow run checkout.yaml` typed at the project root, where the
- * file actually lives a directory down. It is the mistake the two-form
- * interface invites, and the one an implicit fallback would have hidden: a
- * lookup that silently reached into `.argent/flows` would make an argument's
- * meaning depend on which files exist (see resolveFlowRef), so the fallback
- * stays refused and only the message improves.
+ * file actually lives a directory down. An implicit fallback into
+ * `.argent/flows` would make an argument's meaning depend on which files exist
+ * (see resolveFlowRef), so it stays refused and only the message improves.
  *
  * The name it suggests comes from the directory listing, never from the user's
- * spelling, and that is the whole subtlety here. A stat-based probe would
- * match `Checkout.yaml` against an on-disk `checkout.yaml` on any
- * case-insensitive filesystem (APFS, NTFS — the common dev machines) and hand
- * back a command `run` itself then refuses at its byte-exact spelling check:
- * a hint that costs the operator a second failure and pushes them to the path
- * form for a flow that is perfectly addressable by name. Reading the entry
- * settles the spelling once, so `run Checkout.yaml` offers `run checkout` and
- * that command works first try. An entry whose own stem the flow-name contract
- * refuses (`Upper.YAML`) is no hint at all — it needs a rename, not a command
- * — and the runnability probe still runs, so the hint can never name something
- * `run` would reject downstream. A name that clears SAFE_FLOW_NAME is inside
- * SHELL_SAFE_ARG, so the suggestion needs no quoting.
+ * spelling: a stat-based probe would match `Checkout.yaml` against an on-disk
+ * `checkout.yaml` on a case-insensitive filesystem and hand back a command
+ * `run` itself then refuses at its byte-exact spelling check. An entry whose
+ * own stem the flow-name contract refuses (`Upper.YAML`) is no hint at all — it
+ * needs a rename — and the runnability probe still runs, so the hint can never
+ * name something `run` would reject downstream. A name that clears
+ * SAFE_FLOW_NAME is inside SHELL_SAFE_ARG, so it needs no quoting.
  *
- * Empty when the missing path already points inside the flows directory: the
- * operator plainly knows where flows live, and a same-stem sibling elsewhere
- * in the tree (`sub/checkout.yaml` missing, top-level `checkout.yaml` present)
- * is a different flow, not the one they asked for.
+ * Empty when the missing path already points inside the flows directory: a
+ * same-stem sibling elsewhere in the tree is a different flow, not the one they
+ * asked for.
  */
 async function savedFlowHint(projectRoot: string, missingPath: string): Promise<string> {
   const dir = path.resolve(projectRoot, FLOWS_DIR);
@@ -980,7 +887,7 @@ async function savedFlowHint(projectRoot: string, missingPath: string): Promise<
 }
 
 /**
- * Discover runnable flows under `dir`, as paths relative to it, sorted for a
+ * Runnable flows under `dir`, as paths relative to it, sorted for a
  * deterministic run order. Same acceptance rules as `flow list`, so `list` and
  * a directory `run` can never disagree. The recursive walk skips
  * dot-directories and node_modules and never follows a directory symlink (its
@@ -993,9 +900,8 @@ async function collectFlowFiles(dir: string, recursive: boolean): Promise<string
       const entryRel = rel ? path.join(rel, entry.name) : entry.name;
       if (entry.isDirectory()) {
         if (recursive && !entry.name.startsWith(".") && entry.name !== "node_modules") {
-          // Best-effort like isRunnableFlowFile: an unreadable subtree is
-          // skipped so the rest of the walk still runs — only the top-level
-          // readdir failure (thrown by the outer walk call) aborts discovery.
+          // An unreadable subtree is skipped so the rest of the walk still
+          // runs; only the top-level readdir failure aborts discovery.
           await walk(path.join(current, entry.name), entryRel).catch(() => {});
         }
         continue;
@@ -1010,24 +916,21 @@ async function collectFlowFiles(dir: string, recursive: boolean): Promise<string
 }
 
 /**
- * CLI runs rely on the caller and tool-server sharing a filesystem: the
- * runner resolves `run:` targets against each containing flow file's
- * directory (fragments may live across directories) and reads/writes
- * `__baselines__` beside the canonicalized root YAML — all on the tool
- * server's disk, so a remote server would resolve every one of those paths
- * on its own filesystem, not this one. Keep the flow-execute tool itself
- * remotely callable, but reject CLI routing that cannot guarantee the
- * shared filesystem. This deliberately rejects even single-file flows that
- * could run remotely — the CLI cannot tell them apart without parsing the
- * flow. Prints the recovery hint and returns false when remote routing is
- * configured.
+ * CLI runs rely on the caller and tool-server sharing a filesystem: the runner
+ * resolves `run:` targets against each containing flow file's directory and
+ * reads/writes `__baselines__` beside the canonicalized root YAML — all on the
+ * tool server's disk. The flow-execute tool stays remotely callable; only CLI
+ * routing that cannot guarantee the shared filesystem is refused, deliberately
+ * including single-file flows that could run remotely, since the CLI cannot
+ * tell them apart without parsing the flow. Returns the refusal with its
+ * recovery hint when remote routing is configured.
  */
-async function requireLocalToolServer(): Promise<boolean> {
+async function requireLocalToolServer(): Promise<string | undefined> {
   const routing = await getResolvedToolsUrl();
-  if (routing.source === "none") return true;
+  if (routing.source === "none") return undefined;
   // With ARGENT_TOOLS_URL set over an existing link file, unsetting only the
   // env var re-routes through the shadowed link — the same refusal with the
-  // other source. Name both steps up front.
+  // other source, so name both steps up front.
   const recovery =
     routing.source === "env"
       ? routing.shadowedLink
@@ -1035,10 +938,7 @@ async function requireLocalToolServer(): Promise<boolean> {
           `a link to ${routing.shadowedLink.url} is also configured and takes over once the env var is unset.`
         : "Unset ARGENT_TOOLS_URL and try again."
       : "Run `argent unlink` and try again.";
-  console.error(
-    `argent flow run requires the auto-started local tool server; ${routing.source} routing is configured.\n${recovery}`
-  );
-  return false;
+  return `argent flow run requires the auto-started local tool server; ${routing.source} routing is configured.\n${recovery}`;
 }
 
 /** One flow-execute payload builder so single and batch runs cannot drift. */
@@ -1059,13 +959,28 @@ function buildRunPayload(
   return payload;
 }
 
+/** One NDJSON record — exactly one line. */
+function writeJsonStreamRecord(record: Record<string, unknown>): void {
+  console.log(JSON.stringify(record));
+}
+
+/** Mirror a tool invocation failure without putting human text on stdout. */
+function writeJsonStreamError(err: unknown): void {
+  const message = err instanceof Error ? err.message : String(err);
+  writeJsonStreamRecord({
+    event: "error",
+    error: message,
+    ...(err instanceof ToolInvocationError && err.errorCode ? { error_code: err.errorCode } : {}),
+    ...(err instanceof ToolInvocationError && err.errorKind ? { error_kind: err.errorKind } : {}),
+  });
+}
+
 /**
  * Durable diff output: copy failed-snapshot images out of the tool-server's
  * cache before any renderer prints paths, so every output mode shows the
  * durable location. The only artifact bytes the CLI ever fetches; baseUrl is
- * resolved lazily so a run without --output makes no extra round-trip.
- * Whatever handles remain (all of them without --output; passing snapshots
- * and unexported roles with it) print as server-side paths.
+ * resolved lazily so a run without --output makes no extra round-trip. Whatever
+ * handles remain print as server-side paths.
  */
 async function exportAndResolveArtifacts(
   report: FlowReport,
@@ -1090,10 +1005,10 @@ interface BatchFlowResult {
 
 /**
  * Run every discovered flow in `dir` sequentially. Reports failures only (no
- * live step lines), then a flow-level summary; a flow failing its steps — or
- * one the tool-server rejects as invalid (a bad YAML, an unparseable step) —
- * lets the batch continue, while an infra error (transport throw, unclassified
- * failure, non-report result) stops it and counts the remaining flows skipped.
+ * live step lines), then a flow-level summary. A flow failing its steps — or
+ * one the tool-server rejects as invalid — lets the batch continue, while an
+ * infra error (transport throw, unclassified failure, non-report result) stops
+ * it and counts the remaining flows skipped.
  */
 async function runFlowDirectory(
   dir: string,
@@ -1114,15 +1029,19 @@ async function runFlowDirectory(
     return exitAfterFlush(2);
   }
 
-  if (!(await requireLocalToolServer())) return exitAfterFlush(2);
+  const refusal = await requireLocalToolServer();
+  if (refusal) {
+    console.error(refusal);
+    return exitAfterFlush(2);
+  }
   const { callTool, baseUrl } = createToolsClient({ paths: options.paths });
 
   const outputBase = args.output ? path.resolve(args.output) : undefined;
   const results: BatchFlowResult[] = [];
   // A validation rejection is specific to one flow file, so the batch keeps
   // going. Anything else — transport death, or a failure the server didn't
-  // classify (including one from a pre-signal server) — could make every
-  // remaining flow burn a device run against the same wall, so stop.
+  // classify — could make every remaining flow burn a device run against the
+  // same wall, so stop.
   let stopped = false;
   for (const [i, rel] of flows.entries()) {
     if (!args.json) console.log(`[${i + 1}/${flows.length}] ${rel}`);
@@ -1199,8 +1118,8 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     const dir = path.join(process.cwd(), FLOWS_DIR);
     try {
       // One final sort over full relative paths, not per-directory: the
-      // ordering must be a pure function of the set of paths, never of the
-      // walk order.
+      // ordering must be a pure function of the set of paths, never of the walk
+      // order.
       const paths = (await collectRunnableFlowPaths(dir))
         .sort()
         .map((rel) => path.join(FLOWS_DIR, rel));
@@ -1217,55 +1136,63 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     return exitAfterFlush(2);
   }
 
+  // Once streaming is requested stdout belongs exclusively to NDJSON, so help
+  // goes to stderr as the diagnostic it is.
+  const jsonStream = rest.some(
+    (tok) => tok === "--json-stream" || tok.startsWith("--json-stream=")
+  );
   // Checked before parseRunArgs so --help wins even when it trails a
   // value-taking flag (`--device --help` would otherwise throw "requires a
   // value" instead of printing help).
   if (rest.includes("--help") || rest.includes("-h")) {
-    printHelp();
+    printHelp(jsonStream);
     return;
   }
+  const fail = (message: string, code: number, err: unknown = message): Promise<never> => {
+    if (jsonStream) writeJsonStreamError(err);
+    console.error(message);
+    return exitAfterFlush(code);
+  };
 
   let args: ReturnType<typeof parseRunArgs>;
   try {
     args = parseRunArgs(rest);
   } catch (err) {
     if (err instanceof FlagParseException) {
+      if (jsonStream) writeJsonStreamError(err);
       console.error(`Error: ${err.message}\n`);
-      printHelp();
+      printHelp(jsonStream);
       return exitAfterFlush(2);
     }
     throw err;
   }
   if (!args.flowRef) {
-    console.error(
-      "argent flow run <flow|flow.yaml|dir> requires a flow name, a YAML file path, or a directory path."
-    );
-    printHelp();
+    const message =
+      "argent flow run <flow|flow.yaml|dir> requires a flow name, a YAML file path, or a directory path.";
+    if (jsonStream) writeJsonStreamError(message);
+    console.error(message);
+    printHelp(jsonStream);
     return exitAfterFlush(2);
   }
 
   const projectRoot = process.cwd();
-  // A saved-flow name is turned into its `.argent/flows` path here and is
-  // otherwise indistinguishable from a path the user typed: one set of guards,
-  // one resolved identity, one run (see resolveFlowRef). `fromName` survives
-  // only to aim the not-found recovery, since a name resolves somewhere the
-  // user never spelled out.
+  // From here a name is indistinguishable from a path the user typed: one set
+  // of guards, one resolved identity, one run (see resolveFlowRef). `fromName`
+  // survives only to aim the not-found recovery, since a name resolves
+  // somewhere the user never spelled out.
   const { suppliedPath, fromName } = resolveFlowRef(args.flowRef);
   // path.resolve collapses ".." lexically, without consulting symlinks, so a
   // ".." following a symlinked directory would make the CLI stat and run a
   // different file than the one the kernel opens for this string. Rejected
-  // before path.resolve — same predicate as the tool-server's
-  // flow_path_dotdot guard, and ordered before the extension/stem arms the
-  // way the server orders it, so the dishonest-path cause wins over a
-  // basename complaint. The hint names the file the shell would actually
-  // open, when one exists: the parent directory is realpath'd (that is where
-  // ".." and symlinks interact, resolving against cwd the way the kernel
-  // does) but the supplied basename is kept — realpath'ing the final
-  // component would rewrite a symlinked flow to its target's name, and the
-  // basename is the flow's identity (report name, __baselines__/ key,
-  // --output dir), so the hint would quietly rename the run. A basename of
-  // ".." or "." names no flow file, so no per-component split is needed —
-  // such a path gets the generic recovery.
+  // before path.resolve — same predicate as the tool-server's flow_path_dotdot
+  // guard, and ordered before the extension/stem arms the way the server orders
+  // it, so the dishonest-path cause wins over a basename complaint. The hint
+  // realpath's the parent directory (that is where ".." and symlinks interact)
+  // but keeps the supplied basename: realpath'ing the final component would
+  // rewrite a symlinked flow to its target's name, and the basename is the
+  // flow's identity (report name, __baselines__/ key, --output dir), so the
+  // hint would quietly rename the run. A basename of ".." or "." names no flow
+  // file and gets the generic recovery.
   if (suppliedPath.split(/[\\/]+/).includes("..")) {
     let recovery = "Pass the fully resolved path to the flow's YAML.";
     const suppliedBase = path.basename(suppliedPath);
@@ -1277,177 +1204,166 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
         await fsp.stat(resolved);
         recovery = `Did you mean: argent flow run ${shellQuoteArg(resolved)}`;
       } catch {
-        // Parent unresolvable, or nothing at the reassembled path — the
-        // generic recovery stands.
+        // Parent unresolvable, or nothing at the reassembled path.
       }
     }
-    console.error(
+    return fail(
       `Flow path must not contain ".." segments — they are collapsed without following symlinks, ` +
         `so the path can name a different file than the one your shell opens: ${suppliedPath}\n` +
-        recovery
+        recovery,
+      2
     );
-    return exitAfterFlush(2);
   }
   const resolvedPath = path.resolve(projectRoot, suppliedPath);
   // Stat-first so a directory named `foo.yaml` still batches; on a failed stat
-  // without -r, fall through so the single-file messages stay identical. A
-  // name is not exempt: resolveFlowRef has already made it a path, and running
-  // both spellings of the same target through one dispatch is what keeps `run
-  // checkout` and `run .argent/flows/checkout.yaml` one run under one identity.
+  // without -r, fall through so the single-file messages stay identical. A name
+  // is not exempt: resolveFlowRef has already made it a path, and one dispatch
+  // for both spellings is what keeps them one run under one identity.
   let isDirectory = false;
   try {
     isDirectory = (await fsp.stat(resolvedPath)).isDirectory();
   } catch {
-    // Only a spelled-out path can be missing a directory the user meant; a
-    // name resolves to a .yaml file it never named, so "directory not found"
-    // would quote a path they never typed. That form falls through instead.
+    // Only a spelled-out path can be missing a directory the user meant; for a
+    // name, "directory not found" would quote a path they never typed, so that
+    // form falls through instead.
     if (args.recursive && !fromName) {
-      console.error(`Flow directory not found: ${resolvedPath}`);
-      return exitAfterFlush(2);
+      return fail(`Flow directory not found: ${resolvedPath}`, 2);
     }
   }
   if (isDirectory) {
+    if (args.jsonStream) {
+      return fail("--json-stream supports a single flow; directory runs are not supported.", 2);
+    }
     return runFlowDirectory(resolvedPath, args, projectRoot, options);
   }
   if (args.recursive) {
-    console.error(
+    return fail(
       fromName
         ? `flow run --recursive requires a directory path; "${args.flowRef}" is a saved-flow name, ` +
             `which always addresses the single file ${suppliedPath}.`
-        : `flow run --recursive requires a directory path: ${suppliedPath}`
+        : `flow run --recursive requires a directory path: ${suppliedPath}`,
+      2
     );
-    return exitAfterFlush(2);
   }
-  // A trailing separator asserts the path names a directory. When it does —
-  // the directory dispatch above already ran — that assertion is honest (a
-  // shell-completed "flows/" batches, and a path of nothing but separators
-  // names the filesystem root). From here the path is a file's, so the
-  // kernel would refuse to open "ok.yaml/" (ENOTDIR), yet path.resolve
-  // drops the separator lexically — without this guard the CLI would stat
-  // and run a file its own argument does not name — the same dishonest-path
-  // class as the ".." guard above, and like it ordered before the
-  // extension/stem arms so the dishonesty wins over a shape complaint.
-  // Ordered after the ".." guard: when a path carries both flaws, that
-  // guard's recovery (a fully resolved path) also cures the trailing
-  // separator, while stripping the separator here would leave the ".."
-  // standing and demand a second correction. Stripping is always the right
-  // hint (unlike realpath, nothing needs to exist on disk).
+  // A trailing separator asserts the path names a directory; the honest case
+  // already went to the directory dispatch above. From here the path is a
+  // file's, so the kernel would refuse to open "ok.yaml/" (ENOTDIR), yet
+  // path.resolve drops the separator lexically — without this guard the CLI
+  // would stat and run a file its own argument does not name. Same
+  // dishonest-path class as the ".." guard above, and like it ordered before
+  // the extension/stem arms. Ordered after that guard because its recovery (a
+  // fully resolved path) also cures a trailing separator, while stripping here
+  // would leave the ".." standing and demand a second correction.
   const separatorTrimmedPath = suppliedPath.replace(/[\\/]+$/, "");
   if (separatorTrimmedPath !== suppliedPath && separatorTrimmedPath !== "") {
     // Trimming "checkout/" leaves a token that now reads as a saved-flow name,
     // and offering it bare would hand back a command for a DIFFERENT file —
     // `.argent/flows/checkout.yaml` rather than the `./checkout` this argument
-    // names — which, unlike the error being explained, would run. Keep the
-    // hint in the form the argument was written in; the flows directory is
-    // reached by asking for it, never by a recovery quietly re-pointing there.
+    // names. Keep the hint in the form the argument was written in.
     const hint = SAFE_FLOW_NAME.test(separatorTrimmedPath)
       ? `.${path.sep}${separatorTrimmedPath}`
       : separatorTrimmedPath;
-    console.error(
+    return fail(
       `Flow path must not end in a path separator — the separator claims a directory, ` +
         `which the kernel would refuse to open as a file, so the CLI would run a file ` +
         `this string does not name: ${suppliedPath}\n` +
-        `Did you mean: argent flow run ${shellQuoteArg(hint)}`
+        `Did you mean: argent flow run ${shellQuoteArg(hint)}`,
+      2
     );
-    return exitAfterFlush(2);
   }
   if (path.extname(suppliedPath) !== ".yaml") {
     // A valid name never reaches here — resolveFlowRef already rewrote it to a
     // .yaml path — so a token still carrying neither a separator nor an
     // extension is a name the charset refused. Complain about the name it was
     // meant to be, not about a ".yaml" suffix the user never intended to type.
-    // A bare ".yaml" satisfies this too (path.extname reads it as an
-    // extensionless dotfile), so that arm goes first: naming the missing stem
-    // is the more precise of the two complaints.
+    // The bare ".yaml" arm goes first: naming the missing stem is the more
+    // precise of the two complaints.
     const looksLikeName =
       !suppliedPath.includes("/") &&
       !suppliedPath.includes("\\") &&
       path.extname(suppliedPath) === "";
     if (path.basename(suppliedPath).toLowerCase() === ".yaml") {
       // path.extname treats a bare ".yaml" as an extensionless dotfile, so name the missing stem.
-      console.error(
-        `Flow filename must have a non-empty name containing only letters, numbers, "_", or "-": ${suppliedPath}`
+      return fail(
+        `Flow filename must have a non-empty name containing only letters, numbers, "_", or "-": ${suppliedPath}`,
+        2
       );
-    } else if (looksLikeName) {
-      console.error(
-        `Flow name must contain only letters, numbers, "_", or "-": ${suppliedPath}\n` +
-          `Names run \`${FLOWS_DIR}/<name>.yaml\`; pass a path ending in .yaml to run a flow file kept elsewhere.`
-      );
-    } else if (path.extname(suppliedPath).toLowerCase() === ".yaml") {
-      // On case-insensitive filesystems the path looks valid to the user, so name the real problem.
-      console.error(
-        `Flow extension must be lowercase .yaml, not ${path.extname(suppliedPath)}: ${suppliedPath}`
-      );
-    } else {
-      console.error(`Flow path must end in .yaml: ${suppliedPath}`);
     }
-    return exitAfterFlush(2);
+    if (looksLikeName) {
+      return fail(
+        `Flow name must contain only letters, numbers, "_", or "-": ${suppliedPath}\n` +
+          `Names run \`${FLOWS_DIR}/<name>.yaml\`; pass a path ending in .yaml to run a flow file kept elsewhere.`,
+        2
+      );
+    }
+    if (path.extname(suppliedPath).toLowerCase() === ".yaml") {
+      // On case-insensitive filesystems the path looks valid to the user, so name the real problem.
+      return fail(
+        `Flow extension must be lowercase .yaml, not ${path.extname(suppliedPath)}: ${suppliedPath}`,
+        2
+      );
+    }
+    return fail(`Flow path must end in .yaml: ${suppliedPath}`, 2);
   }
 
   const flowName = path.basename(suppliedPath, ".yaml");
   if (!SAFE_FLOW_NAME.test(flowName)) {
-    console.error(
-      `Flow filename must have a non-empty name containing only letters, numbers, "_", or "-": ${suppliedPath}`
+    return fail(
+      `Flow filename must have a non-empty name containing only letters, numbers, "_", or "-": ${suppliedPath}`,
+      2
     );
-    return exitAfterFlush(2);
   }
 
   const flowPath = resolvedPath;
   try {
     const stat = await fsp.stat(flowPath);
     if (!stat.isFile()) {
-      console.error(`Flow path is not a file: ${flowPath}`);
-      return exitAfterFlush(2);
+      return fail(`Flow path is not a file: ${flowPath}`, 2);
     }
     await fsp.access(flowPath, fsConstants.R_OK);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     const detail = code === "ENOENT" ? "Flow file not found" : "Could not read flow file";
-    // Each form misses for its own reason, so each gets its own recovery. A
-    // name is the one form whose file the user never spelled out, so a bare
-    // "not found" leaves them unsure whether the flow is missing or the lookup
-    // went somewhere unexpected: the resolved path in the message settles that,
-    // and the listing enumerates what a name can address. A path that missed
-    // may instead be a saved flow the operator addressed as if it sat in the
-    // current directory — say so when it is.
+    // Each form misses for its own reason. A name is the one form whose file
+    // the user never spelled out, so the resolved path plus `flow list` settles
+    // whether the flow is missing or the lookup went somewhere unexpected. A
+    // path that missed may instead be a saved flow the operator addressed as if
+    // it sat in the current directory — say so when it is.
     let recovery = "";
     if (code === "ENOENT") {
       recovery = fromName
         ? `\nNo flow named "${args.flowRef}" is saved there — run \`argent flow list\` to see the saved flows.`
         : await savedFlowHint(projectRoot, flowPath);
     }
-    console.error(`${detail}: ${flowPath}${recovery}`);
-    return exitAfterFlush(2);
+    return fail(`${detail}: ${flowPath}${recovery}`, 2);
   }
 
   // The stat above matched the basename by the filesystem's rules, which on a
-  // case-insensitive filesystem (APFS, NTFS) finds a file really named
-  // "Upper.YAML" for "upper.yaml" — every name guard above would then have
-  // validated a spelling that exists nowhere on disk, and the flow name that
-  // keys the report, __baselines__/, and --output would be one no file
-  // carries. Require the supplied basename to appear in the parent directory
-  // byte-for-byte. readdir, not realpath: realpath rewrites a symlinked flow
-  // to its target's name, and `run` deliberately accepts a symlink under the
-  // link's own name. The basename is pure ASCII by this point (stem charset +
-  // ".yaml"), so Unicode-normalizing filesystems cannot make the comparison
-  // lie. A readdir failure (an execute-only parent directory lets stat
-  // through while refusing the listing) skips the check rather than refusing
-  // a file the exact-named contract may well be honoring.
+  // case-insensitive filesystem finds a file really named "Upper.YAML" for
+  // "upper.yaml" — every name guard above would then have validated a spelling
+  // that exists nowhere on disk, and the flow name that keys the report,
+  // __baselines__/, and --output would be one no file carries. readdir, not
+  // realpath: realpath rewrites a symlinked flow to its target's name, and
+  // `run` deliberately accepts a symlink under the link's own name. The
+  // basename is pure ASCII by this point (stem charset + ".yaml"), so
+  // Unicode-normalizing filesystems cannot make the comparison lie. A readdir
+  // failure (an execute-only parent directory lets stat through while refusing
+  // the listing) skips the check rather than refusing a file the exact-named
+  // contract may well be honoring.
   const suppliedBase = path.basename(flowPath);
   const siblings = await fsp.readdir(path.dirname(flowPath)).catch(() => null);
   if (siblings !== null && !siblings.includes(suppliedBase)) {
     const actual = siblings.find((name) => name.toLowerCase() === suppliedBase.toLowerCase());
-    // Hint the real name only when `run` would accept it (a stem-case slip
-    // like Checkout.yaml); an invalid real name (Upper.YAML) needs a rename,
-    // and suggesting a command that will itself be refused helps no one.
+    // Hint the real name only when `run` would accept it (a stem-case slip like
+    // Checkout.yaml); an invalid real name (Upper.YAML) needs a rename, and
+    // suggesting a command that will itself be refused helps no one.
     const actualRunnable =
       actual !== undefined &&
       path.extname(actual) === ".yaml" &&
       SAFE_FLOW_NAME.test(path.basename(actual, ".yaml"));
     // Answer in the form the operator used: someone who typed a name gets the
-    // name that works, not a path into a directory they never spelled out.
-    // Both are `run`-accepted spellings of the same file, and the name is
-    // inside SHELL_SAFE_ARG by the check above, so neither needs quoting.
+    // name that works, not a path into a directory they never spelled out. The
+    // name is inside SHELL_SAFE_ARG by the check above, so it needs no quoting.
     const recovery = actualRunnable
       ? fromName
         ? `Did you mean: argent flow run ${path.basename(actual!, ".yaml")}`
@@ -1455,30 +1371,34 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
       : actual !== undefined
         ? `Rename ${actual} to ${suppliedBase} to run it — flow files must be lowercase .yaml.`
         : "Pass the flow file's name exactly as it appears on disk.";
-    console.error(
+    return fail(
       `Flow path must name the file as it appears on disk — this filesystem matched ` +
         `${JSON.stringify(suppliedBase)} case-insensitively` +
         `${actual !== undefined ? ` to ${JSON.stringify(actual)}` : ""}, so the flow name ` +
         `(which keys the report, __baselines__/, and --output) would be one no file carries: ` +
-        `${suppliedPath}\n${recovery}`
+        `${suppliedPath}\n${recovery}`,
+      2
     );
-    return exitAfterFlush(2);
   }
 
-  if (!(await requireLocalToolServer())) return exitAfterFlush(2);
+  const refusal = await requireLocalToolServer();
+  if (refusal) return fail(refusal, 2);
 
   const { callTool, baseUrl } = createToolsClient({ paths: options.paths });
 
   const payload = buildRunPayload(flowPath, projectRoot, args);
 
-  // Live rendering: with a streaming server each step line prints the moment
-  // the step completes. A pre-streaming server ignores the request and no
-  // events fire, so `liveSteps` doubles as the mode detector — zero means the
-  // buffered renderer below owns the whole report.
+  // Live rendering: each step line prints the moment the step completes. When
+  // no progress events fire, `liveSteps` stays zero and the buffered renderer
+  // below owns the whole report.
   let liveSteps = 0;
   let liveIndex = 0;
   const onStepReport = (event: unknown): void => {
     const s = event as StepReport;
+    if (args.jsonStream) {
+      writeJsonStreamRecord({ event: "progress", data: s });
+      return;
+    }
     if (liveSteps === 0) console.log(`Flow "${flowName}"`);
     liveSteps++;
     if (s.kind === "echo") {
@@ -1498,35 +1418,38 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
       payload,
       args.json ? undefined : { onProgress: onStepReport }
     );
-    // Deliberately NOT materialized here: the CLI prints artifact paths as
-    // text and renders no images (StepReport has no `result` field, so
-    // tool-step results are never displayed). Deep-walking the report would
-    // download every tool-step screenshot and all three PNGs of each failed
-    // snapshot just to show a path. Only the failed-snapshot artifacts that
-    // --output copies are fetched, below.
+    // Deliberately NOT materialized here: the CLI prints artifact paths as text
+    // and renders no images, so deep-walking the report would download every
+    // tool-step screenshot and all three PNGs of each failed snapshot just to
+    // show a path. Only what --output copies is fetched, below.
     report = resp.data as FlowReport;
   } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
-    return exitAfterFlush(1);
+    return fail(err instanceof Error ? err.message : String(err), 1, err);
   }
 
-  if (!report || !("steps" in report)) {
-    console.error(`"${flowName}" did not produce a run report.`);
-    return exitAfterFlush(2);
+  if (!report || typeof report !== "object" || !("steps" in report)) {
+    return fail(`"${flowName}" did not produce a run report.`, 2);
   }
 
-  await exportAndResolveArtifacts(
-    report,
-    args.output ? path.resolve(args.output) : undefined,
-    flowPath,
-    baseUrl
-  );
+  try {
+    await exportAndResolveArtifacts(
+      report,
+      args.output ? path.resolve(args.output) : undefined,
+      flowPath,
+      baseUrl
+    );
+  } catch (err) {
+    if (!args.jsonStream) throw err;
+    return fail(err instanceof Error ? err.message : String(err), 2, err);
+  }
 
-  if (args.json) {
+  if (args.jsonStream) {
+    writeJsonStreamRecord({ event: "result", data: report });
+  } else if (args.json) {
     console.log(JSON.stringify(report, null, 2));
   } else if (liveSteps > 0) {
-    // Steps already printed live — emit only what the final report knows:
-    // the prerequisite note, materialized artifact paths, and the summary.
+    // Steps already printed live — emit only what the final report knows: the
+    // prerequisite note, materialized artifact paths, and the summary.
     if (report.executionPrerequisite) console.log(`  assumes: ${report.executionPrerequisite}`);
     for (const line of renderArtifactLines(report)) console.log(line);
     console.log(`\n${renderSummary(report, { withDevice: true })}`);

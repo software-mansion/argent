@@ -25,10 +25,8 @@ const capability = {
 } as const;
 
 /**
- * Wire shape: `reportFile` leaves as an artifact handle (not a host path) so
- * the client can materialize the full markdown report locally and the inline
- * report's "Read the reportFile" instruction works wherever the tool-server
- * runs — the exact pattern react-profiler-analyze already uses.
+ * `reportFile` is an artifact handle rather than a host path so the client can materialize the
+ * report locally wherever the tool-server runs, as react-profiler-analyze does.
  */
 type NativeProfilerAnalyzeToolResult = Omit<NativeProfilerAnalyzeResult, "reportFile"> & {
   reportFile: ArtifactHandle | null;
@@ -76,7 +74,10 @@ Fails if native-profiler-stop has not been called first to export trace data.`,
     return {
       ...result,
       reportFile: result.reportFile
-        ? await requireArtifacts(ctx).register(result.reportFile)
+        ? await requireArtifacts(ctx).register({
+            hostPath: result.reportFile,
+            kind: "native-profile-report",
+          })
         : null,
     };
   },

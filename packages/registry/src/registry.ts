@@ -26,22 +26,19 @@ import { zodObjectToJsonSchema } from "./zod-to-json-schema";
 import { randomUUID } from "node:crypto";
 
 export class Registry {
-  /** Single map: URN -> ServiceNode (all instances). */
   private services = new Map<string, ServiceNode>();
   private blueprints = new Map<string, ServiceBlueprint>();
   private tools = new Map<string, ToolRecord>();
   /**
-   * Predicate that decides whether a feature-flagged tool is currently enabled.
-   * Injected (rather than importing `@argent/cli` here) so the registry stays
-   * free of a CLI dependency. The default treats every flag as enabled, so
-   * existing `new Registry()` call sites (tests, non-flag deployments) keep
-   * their previous behavior. The tool-server wires the real `isFlagEnabled`.
+   * Injected so the registry needs no dependency on the flag store; the
+   * tool-server wires the real check. The default enables every flag, so a
+   * plain `new Registry()` (tests, non-flag deployments) gates nothing.
    */
   private readonly isFlagEnabled: (flag: string) => boolean;
   /**
-   * Host files produced by tools, registered during `execute` and served by the
-   * `/artifacts/:id` route. Owned here (one per registry/process) so the tool
-   * path and the HTTP route resolve the same instance — no module singleton.
+   * Host files produced by tools, served by the tool-server's `/artifacts/:id`
+   * route. Owned per registry rather than as a module singleton, so the tool
+   * path and the HTTP route see the same store.
    */
   public readonly artifacts = new ArtifactStore();
   public readonly events = new TypedEventEmitter<RegistryEvents>();
@@ -67,8 +64,8 @@ export class Registry {
   }
 
   /**
-   * Resolve a service by URN. JIT-instantiates from blueprint if not yet created.
-   * Optional options are passed to the blueprint's factory (e.g. token for SimulatorServer).
+   * Resolve a service by URN, JIT-instantiating from its blueprint on first use.
+   * `options` reach the blueprint factory only on that first instantiation.
    */
   resolveService<T = unknown>(urn: URN, options?: Record<string, unknown>): Promise<T> {
     return this._resolve<T>(urn, [], options);
@@ -80,7 +77,6 @@ export class Registry {
     if (this.tools.has(definition.id)) {
       throw new Error(`Tool "${definition.id}" already registered`);
     }
-    // Auto-derive inputSchema from zodSchema if not explicitly provided
     if (definition.zodSchema && !definition.inputSchema) {
       definition.inputSchema = zodObjectToJsonSchema(definition.zodSchema);
     }
@@ -98,10 +94,9 @@ export class Registry {
 
     const { definition } = record;
 
-    // Feature-flag gate, enforced for EVERY dispatch path (HTTP, flow-execute,
-    // flow-add-step, run-sequence) — not just the HTTP edge. A flag-gated tool
-    // whose flag is off is treated as "not found", mirroring the HTTP 404, so a
-    // flow can't smuggle an invocation of a disabled tool through the registry.
+    // Gated on every dispatch path, not just the HTTP edge: a disabled tool
+    // reads as "not found" (mirroring the HTTP 404) so a flow can't smuggle an
+    // invocation of it through the registry.
     if (definition.featureFlag && !this.isFlagEnabled(definition.featureFlag)) {
       throw new ToolNotFoundError(id);
     }
@@ -117,13 +112,11 @@ export class Registry {
     this.events.emit("toolInvoked", id, toolInvocationId, startedMsg);
 
     try {
-      // Validate params against the tool's zod schema for EVERY dispatch path,
-      // not just the HTTP layer. Internal callers (flow-execute, flow-add-step,
-      // run-sequence) previously reached `execute` with raw, unvalidated args,
-      // which let a flow YAML smuggle a string into a `z.number()` port or
-      // shell metacharacters past a tool's regex (→ injection at the sink).
-      // `params ?? {}` mirrors the HTTP layer (express.json yields {} for an
-      // empty body) so no-arg internal invokes still validate cleanly.
+      // Validated here, not just at the HTTP layer: internal callers
+      // (flow-execute, flow-add-step, run-sequence) would otherwise reach
+      // `execute` with raw args, letting a flow YAML smuggle a string into a
+      // `z.number()` port or shell metacharacters past a tool's regex.
+      // `params ?? {}` mirrors express.json's {} for an empty body.
       if (definition.zodSchema) {
         const parsed = definition.zodSchema.safeParse(params ?? {});
         if (!parsed.success) {
@@ -132,9 +125,8 @@ export class Registry {
         effectiveParams = parsed.data;
       }
 
-      // The alias→URN mapping is pure (derived from params), so compute it once
-      // up front — we need the URNs to know which services to recover if the
-      // tool fails against a dead-but-cached instance.
+      // Computed up front because the URNs are needed to know which services to
+      // recover if the tool fails against a dead-but-cached instance.
       const aliasToRef = definition.services(effectiveParams);
       const refs = Object.entries(aliasToRef).map(([alias, ref]) => ({
         alias,
@@ -142,13 +134,10 @@ export class Registry {
         options: typeof ref === "string" ? undefined : ref.options,
       }));
 
-      // Build the per-invocation context: caller options (e.g. signal) plus the
-      // registry-owned artifact store, so any tool can register host files via
-      // `ctx.artifacts` without declaring a per-tool service. The invocation id
-      // is always populated — when the caller supplied none, the id minted
-      // above (the one toolInvoked/toolCompleted carry) is exposed here, so an
-      // event a tool emits keyed on ctx.toolInvocationId joins the lifecycle
-      // pair on every dispatch path, not only attributed HTTP requests.
+      // `toolInvocationId` falls back to the id minted above, so events a tool
+      // emits keyed on it join the toolInvoked/toolCompleted pair on every
+      // dispatch path, not only attributed HTTP requests. `artifacts` lets any
+      // tool register host files without declaring a per-tool service.
       const ctx: ToolContext = { ...options, toolInvocationId, artifacts: this.artifacts };
 
       const runOnce = async (): Promise<TResult> => {
@@ -163,11 +152,9 @@ export class Registry {
       try {
         result = await runOnce();
       } catch (execError) {
-        // Self-heal a cached-but-dead service: if any service this tool resolved
-        // declares this error recoverable (its underlying process is gone even
-        // though the handle was still cached), dispose it and retry the tool
-        // once against a freshly re-created instance. Bounded to a single retry
-        // so a genuinely broken service can't spin.
+        // Self-heal a cached-but-dead service: dispose the resolved services
+        // that call this error recoverable and retry against fresh ones.
+        // Bounded to a single retry so a genuinely broken service can't spin.
         const recovered = await this._recoverFailedServices(refs, execError);
         if (!recovered) throw execError;
         result = await runOnce();
@@ -244,14 +231,10 @@ export class Registry {
   }
 
   /**
-   * After a tool failed, ask each service it resolved whether the error means
-   * that service's instance is dead (`blueprint.recoverable(error)`). Dispose
-   * every one that says yes so the next `resolveService` re-creates it, and
-   * report whether anything was disposed (i.e. whether a retry is worthwhile).
-   *
-   * Only currently-RUNNING nodes are considered: a service that already
-   * errored/torn down during resolution needs no recovery here, and a URN this
-   * tool never resolved must not be touched.
+   * Dispose every service in `refs` whose blueprint calls `error` recoverable, so
+   * the next `resolveService` re-creates it; returns whether anything was
+   * disposed, i.e. whether retrying the tool is worthwhile. Only RUNNING nodes
+   * qualify — one that already errored or tore down needs no recovery.
    */
   private async _recoverFailedServices(
     refs: ReadonlyArray<{ urn: URN }>,
@@ -272,10 +255,7 @@ export class Registry {
     return recoveredAny;
   }
 
-  /**
-   * Tear down a single service by URN (and cascade to its dependents).
-   * After disposal the service returns to IDLE and can be re-resolved.
-   */
+  /** Tear down a service and its dependents; it returns to IDLE and can be re-resolved. */
   async disposeService(urn: URN): Promise<void> {
     const node = this.services.get(urn);
     if (!node) throw new ServiceNotFoundError(urn);
@@ -289,8 +269,6 @@ export class Registry {
       }
     }
   }
-
-  // ── Private: Resolution ──
 
   private _resolve<T>(
     urn: URN,
@@ -369,7 +347,7 @@ export class Registry {
 
       const instance = await blueprint.factory(resolvedDeps, payload, options);
 
-      // Guard: if the node was terminated while factory was running, discard the new instance
+      // Terminated while the factory was awaited: discard the fresh instance.
       if (node.state !== ServiceState.STARTING) {
         try {
           await instance.dispose();
@@ -430,7 +408,7 @@ export class Registry {
       try {
         await node.instance.dispose();
       } catch {
-        /* logged but not thrown */
+        /* ignore */
       }
     }
 
@@ -450,10 +428,10 @@ export class Registry {
 }
 
 /**
- * Cause for the two registry-manufactured ServiceInitializationErrors raised
- * when a resolve races an in-flight teardown. Without a cause they fall back to
- * the catch-all REGISTRY_SERVICE_INITIALIZATION_FAILED signal, which hides this
- * transient window from telemetry and from callers that classify by code.
+ * Cause for the ServiceInitializationErrors raised when a resolve races an
+ * in-flight teardown. Without it they fall back to the catch-all
+ * REGISTRY_SERVICE_INITIALIZATION_FAILED signal, hiding this transient window
+ * from telemetry and from callers that classify by code.
  */
 function terminatingSignalCause(message: string): FailureError {
   return new FailureError(message, {

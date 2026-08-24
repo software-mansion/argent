@@ -47,8 +47,8 @@ export interface ReactProfilerSessionApi {
   hotCommitIndices: number[] | null;
   totalReactCommits: number | null;
   profileStartWallMs: number | null;
-  sessionId: string | null; // mirrors __ARGENT_PROFILER_OWNER__.sessionId when we own; null otherwise
-  ownerToolServerPid: number | null; // process.pid when this tool-server owns; null otherwise
+  sessionId: string | null; // mirrors __ARGENT_PROFILER_OWNER__.sessionId while we own the run
+  ownerToolServerPid: number | null; // process.pid while this tool-server owns the run
   disposeSession: () => void;
 }
 
@@ -117,10 +117,8 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
       disposeSession: () => events.emit("terminated"),
     };
 
-    // Enable Profiler domain
     await cdp.send("Profiler.enable").catch(warnOnError("Profiler.enable"));
 
-    // Track script sources for source map resolution in analyze_profile
     cdp.events.on("scriptParsed", (script) => {
       if (script.sourceMapURL) {
         state.scriptSources.set(script.scriptId, {
@@ -130,10 +128,9 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
       }
     });
 
-    // Inject fiber root tracker (idempotent — guarded in JS)
+    // Idempotent — guarded in JS
     await cdp.evaluate(FIBER_ROOT_TRACKER_SCRIPT).catch(warnOnError("FIBER_ROOT_TRACKER_SCRIPT"));
 
-    // Detect RN architecture
     try {
       const archJson = (await cdp.evaluate(
         `JSON.stringify({
@@ -163,7 +160,6 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
       warnOnError("architecture detection")(err);
     }
 
-    // Get Hermes version
     try {
       const propsJson = (await cdp.evaluate(
         "JSON.stringify(HermesInternal.getRuntimeProperties())"
@@ -178,8 +174,7 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
     }
 
     cdp.events.on("disconnected", (error) => {
-      // Only clear cache if profiling was in progress — preserves data from a completed session
-      // that survived app restart, while preventing stale in-flight data from being returned.
+      // Clear only mid-run, so a completed session's cached paths survive the disconnect.
       if (state.profilingActive) {
         clearCachedProfilerPaths(state.port, state.deviceId);
       }
@@ -198,23 +193,13 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
     return {
       api: state,
       dispose: async () => {
-        // A dispose reached from `react-profiler-stop` arrives with the run
-        // already ended — that tool clears `profilingActive`, calls
-        // `Profiler.stop` and runs STOP_AND_READ_SCRIPT (which stops every
-        // renderer) before disposing. A dispose reached from
-        // `stop-all-simulator-servers` does not: this session is in that
-        // teardown's namespace set, so it arrives mid-run, with nothing having
-        // stopped the in-app backend.
-        //
-        // Left alone, the React DevTools backend keeps recording every commit
-        // into a buffer only an app or bundle reload frees, and argent's
-        // patched commit hook keeps re-serializing that whole accumulated
-        // buffer synchronously on React's commit path — inside the user's app,
-        // outliving the argent session that started it. Stop it here while the
-        // CDP session is still up: `Registry._teardown` disposes dependents
-        // before their dependency, so the JsRuntimeDebugger this rides on has
-        // not disconnected yet, and this is the last moment anything can reach
-        // the app.
+        // `react-profiler-stop` stops the renderers and the sampler before
+        // disposing; a dispose from `stop-all-simulator-servers` arrives
+        // mid-run instead, leaving the in-app DevTools backend recording every
+        // commit and argent's commit hook re-serializing its buffer on React's
+        // commit path, inside the user's app. `Registry._teardown` disposes
+        // dependents before their dependency, so the JsRuntimeDebugger is
+        // still connected — the last moment anything can reach the app.
         if (state.profilingActive) {
           state.profilingActive = false;
           await cdp
@@ -223,8 +208,8 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
               returnByValue: true,
             })
             .catch(warnOnError("STOP_FOR_TAKEOVER_SCRIPT"));
-          // And the Hermes CPU sampler `react-profiler-start` enabled, which
-          // `Profiler.disable` alone is not documented to end.
+          // `Profiler.disable` is not documented to end the Hermes sampler
+          // `react-profiler-start` started.
           await cdp.send("Profiler.stop").catch(ignore);
         }
         await cdp.send("Profiler.disable").catch(ignore);

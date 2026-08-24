@@ -49,7 +49,7 @@ describe("sanitize", () => {
     it("accepts every telemetry platform, including the TV variants", () => {
       // The TV variants (`tvos`, `android-tv`) are telemetry-only refinements of
       // `ios` / `android`; the sanitizer must let them through so the split
-      // survives to PostHog.
+      // survives to the collector.
       for (const platform of PLATFORMS) {
         expect(sanitize("tool:invoke", { tool: "describe", platform })).toEqual({
           tool: "describe",

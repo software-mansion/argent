@@ -33,8 +33,8 @@ async function getBootedUdidsInSet(deviceSet: DeviceSetPath): Promise<Set<string
     for (const device of devices) {
       if (device.state === "Booted") {
         udids.add(device.udid);
-        // Warm the UDID → device-set map so the injection path (ios-host's
-        // simctl spawn family) targets the right set for this device.
+        // Warm the UDID → device-set map so ios-host's simctl spawns — including
+        // the cache-only ax-daemon one — target the right set.
         rememberDeviceSet(device.udid, deviceSet);
       }
     }
@@ -43,11 +43,10 @@ async function getBootedUdidsInSet(deviceSet: DeviceSetPath): Promise<Set<string
 }
 
 /**
- * Booted simulators across the default set and every configured additional
- * set. Any queryable set failing throws (the poll skips the tick rather than
- * mistaking a transient error for "everything shut down"); a configured set
- * whose directory doesn't exist reads as empty — querying it would make
- * simctl materialize the directory.
+ * Booted simulators across the default set and every configured additional set.
+ * Throws if any set fails, so the caller skips the tick instead of reading a
+ * transient error as "everything shut down". A configured set whose directory is
+ * missing is not queried — querying would make simctl materialize it.
  */
 async function getBootedUdids(): Promise<Set<string>> {
   const sets: DeviceSetPath[] = [
@@ -63,9 +62,9 @@ async function initUdid(
   udid: string,
   trackedServices: Map<string, NativeDevtoolsApi>
 ): Promise<void> {
-  // A tvOS sim classifies as platform "ios" by UDID shape. native-devtools is
-  // iOS *and* tvOS capable — its ensureEnv injects the platform-matched dylib
-  // slice (TVOSSIMULATOR bootstrap for Apple TV) — so it is resolved for both.
+  // tvOS sims are also platform "ios" (classified by UDID shape) and
+  // native-devtools covers them: its ensureEnv picks the TVOSSIMULATOR dylib
+  // slice.
   const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
   try {
     const service = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
@@ -114,9 +113,8 @@ export function startSimulatorWatcher(registry: Registry): {
     }
   }
 
-  // First poll is awaited so server startup blocks until ensureEnv has been
-  // attempted for all currently-booted simulators — eliminates the launch-app
-  // race on the success path.
+  // Awaited: the server does not bind until ensureEnv has been attempted for
+  // every booted simulator, so launch-app cannot race it.
   const ready = poll(true);
 
   const interval = setInterval(() => poll(false).catch(() => {}), POLL_INTERVAL_MS);

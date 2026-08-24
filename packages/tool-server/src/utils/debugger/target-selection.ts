@@ -9,23 +9,12 @@ export interface SelectedTarget {
 }
 
 /**
- * Pick the most appropriate CDP target from the Metro /json/list response.
+ * Identify the device a target belongs to.
  *
- * Selection priority (matches Argent's DebuggerTarget.ts):
- * 1. prefersFuseboxFrontend === true (RN >= 0.76 new debugger)
- * 2. description ends with "[C++ connection]"
- * 3. title starts with "React Native Bridge" (legacy)
- * 4. Fallback: first target
- */
-/**
- * Identify the DEVICE a target belongs to.
- *
- * Modern (Fusebox) targets carry a logicalDeviceId. Legacy ones (RN 0.72, which
- * is what Vega/Kepler serves) carry no `reactNative` block at all, so fall back
- * to the `device` index the proxy puts in the debugger URL — that is unique per
- * attached device. deviceName is only a last resort because it names a device
- * *class*, not an instance ("kepler-device" for every VVD), so two identical
- * devices would collapse into one and defeat the guard below.
+ * Legacy targets (RN 0.72 / Vega) carry no `reactNative` block, so fall back to
+ * the `device` index the proxy puts in the debugger URL — unique per attached
+ * device. deviceName is last resort: it names a device *class* ("kepler-device"
+ * for every VVD), so two identical devices would collapse into one.
  */
 function deviceKey(target: CDPTarget): string | undefined {
   const logicalId = target.reactNative?.logicalDeviceId;
@@ -44,8 +33,8 @@ export function selectTarget(
   port: number,
   options?: Record<string, unknown>
 ): SelectedTarget {
-  // discoverMetro has already dropped the legacy proxy's unusable
-  // `vm: "don't use"` page, so every target here is a real runtime.
+  // discoverMetro already dropped the legacy proxy's `vm: "don't use"` decoy,
+  // so every target here is a real runtime.
   const pool = targets;
   let candidates = pool;
 
@@ -55,22 +44,13 @@ export function selectTarget(
     if (filtered.length) {
       candidates = filtered;
     } else {
-      // No target matches the requested device. Silently falling back to the
-      // first/priority target here would route EVERY unmatched device_id to the
-      // same device — so two debugger sessions opened with different device_ids
-      // would both land on whichever device Metro happens to list first. Only
-      // fall back when there is a single device to fall back to; with multiple
-      // distinct devices connected, refuse to guess and report the valid ids so
-      // the caller can re-target (the logicalDeviceId is what debugger-connect
-      // returns and what subsequent debugger-* calls must pass).
+      // Falling back to the priority target would route every unmatched
+      // device_id to whichever device Metro lists first, so only fall back when
+      // there is a single device; otherwise refuse to guess and report the ids.
       //
-      // Count devices via deviceKey, NOT logicalDeviceId alone: a legacy device
-      // has none, so keying on it made those devices invisible here. A Vega
-      // device_id would then match no target, count zero devices, look like
-      // "nothing to disambiguate" and fall through to the priority target — i.e.
-      // straight into another device's runtime (a Fusebox iOS/Android app on the
-      // same Metro wins the priority list), so debugger-evaluate would run JS in
-      // the wrong app.
+      // Count via deviceKey, not logicalDeviceId alone: a legacy device has
+      // none, so a Vega device_id would count zero devices, look like "nothing
+      // to disambiguate" and fall through into another device's runtime.
       const distinctDevices = new Map<string, { name?: string; logicalId?: string }>();
       for (const t of pool) {
         const key = deviceKey(t);
@@ -82,9 +62,8 @@ export function selectTarget(
         }
       }
       if (distinctDevices.size > 1) {
-        // Only a logicalDeviceId is a usable device_id, so never print the
-        // internal key for a legacy device — it would read like an id the caller
-        // could pass back, and it is not one.
+        // Only a logicalDeviceId is a usable device_id; a legacy device's
+        // internal key would read like one without being one.
         const listed = [...distinctDevices.values()]
           .map((d) =>
             d.logicalId
@@ -138,9 +117,8 @@ function makeResult(target: CDPTarget, port: number, isNewDebugger: boolean): Se
 }
 
 /**
- * Normalize the WebSocket URL from Metro:
- * - Rewrite hostname to localhost (Android emulator returns 10.0.2.2)
- * - Rewrite port to the known Metro port (proxy may return wrong port)
+ * Force the host to localhost (Android emulator returns 10.0.2.2) and the port
+ * to the known Metro port (the proxy may report a wrong one).
  */
 function normalizeWsUrl(wsUrl: string, port: number): string {
   const url = new URL(wsUrl);

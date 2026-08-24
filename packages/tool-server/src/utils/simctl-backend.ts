@@ -5,11 +5,6 @@ import { simctlLaunch, simctlTerminate } from "./sim-remote";
 
 const execFileAsync = promisify(execFile);
 
-/**
- * Strategy for the simctl verbs that a tool handler shells out to. Lets a
- * single iOS handler serve both local sims (`xcrun simctl`) and remote sims
- * (`sim-remote simctl`) without an `isRemote` branch inside the handler body.
- */
 export interface SimctlBackend {
   launch(udid: string, bundleId: string): Promise<void>;
   terminate(udid: string, bundleId: string): Promise<void>;

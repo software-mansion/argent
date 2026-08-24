@@ -1,29 +1,17 @@
 /**
- * Terminal-agnostic agent takeover for `argent lens`, via a pseudo-terminal that
- * `argent lens` owns.
+ * Terminal-agnostic agent takeover for `argent lens`: the agent runs inside a
+ * PTY this process proxies, and Lens feedback is written on the SAME channel as
+ * the user's keystrokes, so the agent can't tell it from typing.
  *
- * The AppleScript path (`lens-terminal.ts`) can only take over and write into
- * iTerm/Terminal, because injecting a queued prompt into a running TUI needs the
- * terminal app's own scripting (`write text` / `do script`) — macOS locks down
- * TIOCSTI, and Warp / VS Code / tmux expose no such scripting. This module
- * sidesteps that entirely: it runs the agent inside a PTY that `argent lens`
- * controls and becomes a thin passthrough proxy in the middle —
+ * The AppleScript path (`lens-terminal.ts`) needs the terminal app's own
+ * scripting (`write text` / `do script`) because macOS locks down TIOCSTI, so it
+ * only works in iTerm/Terminal — not Warp / VS Code / tmux. The cost here is that
+ * `argent lens` forwards stdin/stdout and tracks window-resize for one child,
+ * like `tmux`/`ssh` do.
  *
- *   you (real tty) ─stdin──► pty master ──► agent
- *   you (real tty) ◄─stdout─ pty master ◄── agent
- *   Lens feedback  ─────────► pty master ──► agent   (SAME channel as your keys)
- *
- * Because feedback travels the exact channel as your keystrokes, the agent can't
- * tell it from typing — so it works in ANY terminal (Warp included), not just the
- * scriptable ones. The cost is that `argent lens` now forwards stdin/stdout and
- * tracks window-resize for one child, exactly like `tmux`/`ssh` do.
- *
- * `node-pty` is a native module and an OPTIONAL dependency of @swmansion/argent
- * (like `electron`): it's loaded lazily via `loadNodePty()` so an absent or
- * broken install degrades to the AppleScript new-window fallback instead of
- * crashing. It's resolved through `createRequire` (not a static import) so the
- * esbuild publish bundle leaves it as a runtime require against the installed
- * package — there's nothing for esbuild to inline.
+ * `node-pty` is a native OPTIONAL dependency of @swmansion/argent, loaded lazily
+ * via `loadNodePty()` so an absent or broken install degrades to the AppleScript
+ * new-window fallback instead of crashing.
  */
 
 import { chmodSync, readdirSync } from "node:fs";
@@ -31,14 +19,12 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { flattenLine } from "./lens-terminal.js";
 
-// Resolve node-pty at runtime from the installed package, not at bundle time.
 // Named `nodeRequire` (not `require`) so esbuild doesn't treat it as a bundling
-// require AND so it can't collide with the ESM bundle's `createRequire` banner.
+// require and it can't collide with the ESM bundle's `createRequire` banner.
 const nodeRequire = createRequire(import.meta.url);
 
-// ── Minimal node-pty surface ────────────────────────────────────────────────
-// We declare just what we use so the `tsc` build needs no node-pty types (the
-// dependency lives only on the published @swmansion/argent, not @argent/cli).
+// Only what we use, so the `tsc` build needs no node-pty types: the dependency
+// lives on the published @swmansion/argent, not on @argent/cli.
 
 interface IDisposable {
   dispose(): void;
@@ -68,12 +54,10 @@ export interface NodePty {
 }
 
 /**
- * node-pty's macOS prebuilds ship `spawn-helper` WITHOUT the executable bit,
- * so the very first pty.spawn() fails with "posix_spawnp failed". Restore +x
- * on every prebuild's helper before use. Best-effort: any failure (req seam
- * without `resolve`, package layout change, read-only store) leaves the
- * AppleScript new-window fallback intact. This ran in the npm postinstall
- * before — it lives at load time so installs that never run install scripts
+ * node-pty's macOS prebuilds ship `spawn-helper` WITHOUT the executable bit, so
+ * the first pty.spawn() fails with "posix_spawnp failed". Best-effort: any
+ * failure leaves the AppleScript new-window fallback intact. Runs at load time
+ * rather than in an npm postinstall, so installs that skip install scripts
  * (pnpm's build gate, --ignore-scripts, Yarn PnP) still get a working PTY.
  */
 export function ensureSpawnHelperExecutable(req: NodeRequire = nodeRequire): void {
@@ -84,18 +68,18 @@ export function ensureSpawnHelperExecutable(req: NodeRequire = nodeRequire): voi
       try {
         chmodSync(join(prebuilds, entry, "spawn-helper"), 0o755);
       } catch {
-        /* no helper for this arch — ignore */
+        /* no helper for this arch */
       }
     }
   } catch {
-    /* node-pty missing or layout changed — lens falls back gracefully */
+    /* node-pty missing or layout changed — lens falls back */
   }
 }
 
 /**
- * Load the native `node-pty` module, or null when it isn't installed / fails to
- * load (so the caller can fall back to the AppleScript new-window path). The
- * `req` seam keeps this unit-testable without the real native addon.
+ * Null when node-pty isn't installed / fails to load, so the caller can fall back
+ * to the AppleScript new-window path. The `req` seam keeps this testable without
+ * the native addon.
  */
 export function loadNodePty(req: NodeRequire = nodeRequire): NodePty | null {
   try {
@@ -108,7 +92,7 @@ export function loadNodePty(req: NodeRequire = nodeRequire): NodePty | null {
   }
 }
 
-// ── Minimal stream surfaces (so tests can pass fakes) ───────────────────────
+// Minimal stream surfaces, so tests can pass fakes.
 
 export interface ProxyInput {
   isTTY?: boolean;
@@ -128,60 +112,53 @@ export interface ProxyOutput {
 
 /** A live agent running under a PTY this process proxies. */
 export interface PtyProxy {
-  /** node-pid of the agent's shell (diagnostics / tests). */
+  /** PID of the `/bin/sh` wrapping the agent, not of the agent itself. */
   readonly pid: number;
   /**
-   * Inject one line into the agent as if typed: Esc (interrupt any in-flight
-   * turn / clear the composer), the flattened text, then a separate Enter to
-   * submit. First waits for a brief pause in the user's own typing so the
-   * leading Esc doesn't clobber an in-progress keystroke burst. Beats are spaced
-   * and serialized so concurrent rounds don't interleave. Returns false once the
-   * proxy is disposed.
+   * Inject one line as if typed: Esc (interrupt an in-flight turn / clear the
+   * composer), the flattened text, then a separate Enter to submit. Waits for a
+   * pause in the user's own typing first, and serializes concurrent rounds.
+   * False once disposed.
    */
   inject(text: string): boolean;
-  /** Write raw bytes straight to the agent (no Esc/Enter framing) — e.g. a lone
-   * Enter to confirm a first-run prompt. Returns false once disposed. */
+  /** Raw bytes to the agent, no Esc/Enter framing — e.g. a lone Enter to confirm
+   * a first-run prompt. False once disposed. */
   write(data: string): boolean;
-  /** Observe the agent's output stream (in addition to the screen) — used to
-   * watch for a first-run "trust this folder?" prompt. */
+  /** Observe the agent's output in addition to the screen — used to watch for a
+   * first-run "trust this folder?" prompt. */
   onData(cb: (chunk: string) => void): void;
-  /** Run `cb` when the agent exits (with its exit code). */
   onExit(cb: (code: number) => void): void;
   /** Synchronously restore the terminal (raw mode off, listeners removed) and
-   * kill the agent. Idempotent; safe to call from a signal handler before exit. */
+   * kill the agent. Idempotent; safe from a signal handler before exit. */
   dispose(): void;
 }
 
 export interface InjectBeat {
-  /** Milliseconds to wait BEFORE writing `data` (0 for the first beat). */
   delayBeforeMs: number;
   data: string;
 }
 
-// Spacing between the Esc / text / Enter beats — lets a TUI composer register
-// each before the next lands (mirrors the AppleScript path's 0.15s / 0.2s).
+// Beat spacing lets a TUI composer register each write before the next lands
+// (mirrors the AppleScript path's 0.15s / 0.2s delays).
 const ESC = "\x1b";
 const ENTER = "\r";
 const BEAT_AFTER_ESC_MS = 150;
 const BEAT_AFTER_TEXT_MS = 200;
 
-// Feedback is pushed (an SSE outcome can land at any instant), and the first
-// beat is an Esc that clears the composer. Firing that mid-keystroke would wipe
-// what the user is actively typing to the agent. So before injecting, wait for a
-// brief pause in the user's OWN input — long enough to tell "still typing" from
-// "stopped" — capped so feedback is never delayed indefinitely. This can't help
-// a draft the user typed and then left sitting (that's fundamentally
-// indistinguishable from an idle composer), but it stops the common case of
-// interrupting an in-progress keystroke burst.
+// Feedback arrives unpredictably and its first beat is an Esc that clears the
+// composer, so wait for a pause in the user's OWN input before injecting —
+// capped so feedback is never delayed indefinitely. This only saves an
+// in-progress keystroke burst, not a draft left sitting (indistinguishable from
+// an idle composer).
 const QUIET_BEFORE_INJECT_MS = 600;
 const MAX_QUIET_WAIT_MS = 3_000;
 const QUIET_POLL_MS = 100;
 
 /**
- * The keystroke beats that queue one feedback line to the agent. Pure +
- * exported for testing. Mirrors `buildWriteScript`'s three-beat sequence: a
- * leading Esc, the flattened text (no embedded newline, so the composer doesn't
- * submit early), then a standalone Enter that submits.
+ * The keystroke beats that queue one feedback line to the agent. Mirrors
+ * `buildWriteScript`'s three beats: a leading Esc, the flattened text (no
+ * embedded newline, so the composer doesn't submit early), then a standalone
+ * Enter that submits.
  */
 export function ptyInjectBeats(text: string): InjectBeat[] {
   return [
@@ -196,16 +173,16 @@ function sleep(ms: number): Promise<void> {
 }
 
 export interface StartPtyProxyOptions {
-  /** The loaded node-pty module (from `loadNodePty`). */
+  /** From `loadNodePty()`. */
   pty: NodePty;
-  /** Shell command run in the PTY (the agent launch line). */
+  /** The agent launch line, run via `/bin/sh -c` inside the PTY. */
   command: string;
   cwd: string;
   env?: NodeJS.ProcessEnv;
   /** Defaults to process.stdin / process.stdout — overridable for tests. */
   stdin?: ProxyInput;
   stdout?: ProxyOutput;
-  /** SIGWINCH source; defaults to `process`. Overridable for tests. */
+  /** SIGWINCH source; defaults to `process` (test seam). */
   signals?: {
     on(event: "SIGWINCH", listener: () => void): void;
     off(event: "SIGWINCH", listener: () => void): void;
@@ -218,8 +195,7 @@ const DEFAULT_ROWS = 24;
 /**
  * Spawn the agent under a PTY and wire `argent lens` as its terminal proxy:
  * raw-mode stdin → PTY, PTY output → stdout, window resize → PTY, plus the
- * `inject` channel the feedback relay uses. Returns a handle; the agent runs
- * until it exits or `dispose()` is called.
+ * `inject` channel the feedback relay uses.
  */
 export function startPtyProxy(opts: StartPtyProxyOptions): PtyProxy {
   const stdin = opts.stdin ?? (process.stdin as unknown as ProxyInput);
@@ -241,16 +217,15 @@ export function startPtyProxy(opts: StartPtyProxyOptions): PtyProxy {
   const observers: Array<(chunk: string) => void> = [];
   const exitCbs: Array<(code: number) => void> = [];
 
-  // PTY output → screen (and any observers, e.g. the trust-prompt watcher).
+  // Observers are the trust-prompt watcher's window onto the agent's output.
   const dataSub = term.onData((d) => {
     stdout.write(d);
     for (const cb of observers) cb(d);
   });
 
-  // Real stdin → PTY, byte-for-byte. Raw mode disables the host tty's line
-  // discipline so keystrokes (incl. Ctrl-C as 0x03) pass straight to the agent.
-  // Each keystroke also stamps `lastUserInputAt` so `inject` can wait for a
-  // typing pause before it fires its composer-clearing Esc.
+  // Raw mode disables the host tty's line discipline so keystrokes (incl. Ctrl-C
+  // as 0x03) reach the agent byte-for-byte. Each one stamps `lastUserInputAt` so
+  // `inject` can wait for a typing pause before its composer-clearing Esc.
   const wasRaw = Boolean(stdin.isRaw);
   if (stdin.isTTY && stdin.setRawMode) stdin.setRawMode(true);
   stdin.resume();
@@ -261,7 +236,6 @@ export function startPtyProxy(opts: StartPtyProxyOptions): PtyProxy {
   };
   stdin.on("data", onStdin);
 
-  // Window resize → PTY, so the agent's TUI reflows correctly.
   const onResize = (): void => {
     if (stdout.columns && stdout.rows) term.resize(stdout.columns, stdout.rows);
   };
@@ -287,9 +261,8 @@ export function startPtyProxy(opts: StartPtyProxyOptions): PtyProxy {
     for (const cb of exitCbs) cb(exitCode ?? 0);
   });
 
-  // Hold off the inject until the user has paused typing (see the QUIET_*
-  // constants), so the leading Esc doesn't clobber an in-progress keystroke
-  // burst. No-op when the user hasn't typed at all (lastUserInputAt still 0).
+  // See the QUIET_* constants. No-op when the user hasn't typed at all
+  // (`lastUserInputAt` still 0).
   const waitForTypingPause = async (): Promise<void> => {
     const started = Date.now();
     while (
@@ -320,7 +293,7 @@ export function startPtyProxy(opts: StartPtyProxyOptions): PtyProxy {
           }
         })
         .catch(() => {
-          /* a write after the agent vanished — swallow */
+          /* a write after the agent vanished */
         });
       return true;
     },

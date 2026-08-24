@@ -21,8 +21,7 @@ describe("base-props", () => {
       const props = getBaseProps("cli");
       expect(Object.keys(props).sort()).toEqual(
         [
-          "$process_person_profile",
-          "$session_id",
+          "session_id",
           "arch",
           "cloud_agent",
           "cli_version",
@@ -33,15 +32,14 @@ describe("base-props", () => {
           "runtime",
         ].sort()
       );
-      expect(props.$process_person_profile).toBe(false);
       expect(props.cli_version).toBe("0.0.0");
       expect(typeof props.is_tty).toBe("boolean");
       expect(props.is_ci).toBe(false);
       expect(typeof props.node_version_major).toBe("string");
       expect(typeof props.arch).toBe("string");
       expect(props.runtime).toBe("cli");
-      expect(typeof props.$session_id).toBe("string");
-      expect(props.$session_id).toMatch(UUID_V4);
+      expect(typeof props.session_id).toBe("string");
+      expect(props.session_id).toMatch(UUID_V4);
       expect(props).not.toHaveProperty("ci_provider");
       expect(props).not.toHaveProperty("is_container");
       expect(props).not.toHaveProperty("container_runtime");
@@ -61,10 +59,30 @@ describe("base-props", () => {
   });
 
   it("sets cloud_agent when a cloud/remote agent runtime is detected", () => {
-    // REPLIT_AGENT is an env-only signal (no filesystem check) and is not the
-    // ambient env of this test process, so it resolves deterministically.
-    const restore = snapshotEnv(["REPLIT_AGENT"]);
+    // REPLIT_AGENT is an env-only signal (no filesystem check). detectCloudAgent
+    // ranks claude_code, cursor and copilot ahead of it, and those are the
+    // literal ambient env of a Claude Code / Cursor / Copilot cloud runner — so
+    // clear every higher-ranked signal to pin the replit branch.
+    const restore = snapshotEnv([
+      "REPLIT_AGENT",
+      "CLAUDE_CODE_ENVIRONMENT_KIND",
+      "CLAUDE_CODE_ENTRYPOINT",
+      "CLAUDE_CODE_REMOTE_SESSION_ID",
+      "CURSOR_AGENT_WORKER_ID",
+      "CURSOR_WORKER_POOL_NAME",
+      "GITHUB_ACTIONS",
+      "GITHUB_ACTOR",
+      "GITHUB_WORKFLOW_REF",
+    ]);
     try {
+      delete process.env.CLAUDE_CODE_ENVIRONMENT_KIND;
+      delete process.env.CLAUDE_CODE_ENTRYPOINT;
+      delete process.env.CLAUDE_CODE_REMOTE_SESSION_ID;
+      delete process.env.CURSOR_AGENT_WORKER_ID;
+      delete process.env.CURSOR_WORKER_POOL_NAME;
+      delete process.env.GITHUB_ACTIONS;
+      delete process.env.GITHUB_ACTOR;
+      delete process.env.GITHUB_WORKFLOW_REF;
       process.env.REPLIT_AGENT = "1";
       expect(getBaseProps("cli").cloud_agent).toBe("replit");
     } finally {
@@ -84,11 +102,11 @@ describe("base-props", () => {
     expect(props.arch).toBe(process.arch);
   });
 
-  describe("$session_id", () => {
+  describe("session_id", () => {
     it("is stable within a process across calls and across runtimes", () => {
-      const a = getBaseProps("cli").$session_id;
-      const b = getBaseProps("tool_server").$session_id;
-      const c = getBaseProps("installer").$session_id;
+      const a = getBaseProps("cli").session_id;
+      const b = getBaseProps("tool_server").session_id;
+      const c = getBaseProps("installer").session_id;
       expect(a).toBe(b);
       expect(b).toBe(c);
       expect(a).toBe(getSessionId());
@@ -105,7 +123,7 @@ describe("base-props", () => {
       expect(after).not.toBe(before);
       expect(after).toMatch(UUID_V4);
       // Subsequent getBaseProps calls reflect the new id immediately.
-      expect(getBaseProps("cli").$session_id).toBe(after);
+      expect(getBaseProps("cli").session_id).toBe(after);
     });
   });
 });

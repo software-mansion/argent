@@ -9,6 +9,12 @@ packages/argent-private/
 package-lock.json
 pnpm-lock.yaml
 
+# Docs site — Docusaurus output and generated files.
+packages/docs/build/
+packages/docs/.docusaurus/
+packages/docs/skills-lock.json
+packages/docs/static/
+
 # Generated.
 **/tsconfig.tsbuildinfo
 scripts/e2e-full/results/

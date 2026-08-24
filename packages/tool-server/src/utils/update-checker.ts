@@ -11,7 +11,7 @@ import {
 
 const PACKAGE_NAME = "@swmansion/argent";
 const REGISTRY_URL = `https://registry.npmjs.org/${PACKAGE_NAME}`;
-const CHECK_INTERVAL_MS = 60 * 60 * 1000 * 24; // 24 hour
+const CHECK_INTERVAL_MS = 60 * 60 * 1000 * 24;
 
 function getSuppressionFilePath(): string {
   return path.join(os.homedir(), ".argent", "update-suppression.json");
@@ -24,7 +24,6 @@ function loadSuppressUntil(): number {
     const value = parsed.suppressUntil;
     return typeof value === "number" && Number.isFinite(value) ? value : 0;
   } catch {
-    // Missing file, parse error, or read error — treat as "no suppression".
     return 0;
   }
 }
@@ -36,18 +35,16 @@ function persistSuppressUntil(value: number): void {
 }
 
 export interface UpdateState {
-  /** A newer stable version exists on npm (latest tag vs. current). */
+  /** A newer stable version exists on npm (`latest` tag vs. current). */
   updateAvailable: boolean;
   /**
-   * A newer version is installable now — newer AND aged past the
-   * minimum-release-age policy. The reminder gates on this, not
-   * `updateAvailable`. Equals `updateAvailable` when no policy is in effect.
+   * Newer AND aged past the minimum-release-age policy. The reminder gates on
+   * this, not `updateAvailable`. Equal to `updateAvailable` with no policy.
    */
   updateInstallable: boolean;
   /**
-   * The version the reminder advertises — the newest stable release the
-   * resolver would install under the policy. Not necessarily `latestVersion`:
-   * the latest publish may be held back while an older version is eligible.
+   * The version the reminder advertises. Can lag `latestVersion`: the newest
+   * publish may be held back while an older version is already eligible.
    */
   installableVersion: string | null;
   /** The latest version on npm (the `latest` dist-tag), or `null` if unknown. */
@@ -73,20 +70,17 @@ let state: UpdateState = {
 let interval: ReturnType<typeof setInterval> | null = null;
 let suppressUntil = loadSuppressUntil();
 
-/** Returns the current update state (read-only snapshot). */
 export function getUpdateState(): Readonly<UpdateState> {
   return { ...state };
 }
 
-/** Returns true if the update notification is currently suppressed. */
 export function isUpdateNoteSuppressed(): boolean {
   return Date.now() < suppressUntil;
 }
 
 /**
- * Suppress update notifications for the given duration (milliseconds).
- * Persists across tool-server restarts. Throws if the suppression file
- * cannot be written.
+ * Suppress update notifications for `durationMs`, persisted across restarts.
+ * @throws if the suppression file cannot be written.
  */
 export function suppressUpdateNote(durationMs: number): void {
   const next = Date.now() + durationMs;
@@ -96,17 +90,15 @@ export function suppressUpdateNote(durationMs: number): void {
 
 function isNewerVersion(latest: string, current: string): boolean {
   if (!semver.valid(latest) || !semver.valid(current)) return false;
-  // Never push prereleases — only notify when a stable version is newer.
-  // This still flags correctly when `current` is a prerelease (e.g. 0.6.0-next.0
-  // → 0.6.0) because semver.gt treats stable as greater than its prereleases.
+  // Only stable releases are ever offered. A prerelease `current` still gets
+  // flagged (0.6.0-next.0 → 0.6.0): semver.gt ranks stable above its prereleases.
   if (semver.prerelease(latest)) return false;
   return semver.gt(latest, current);
 }
 
-/** Run a single check and update the runtime state. */
 async function check(): Promise<void> {
   const info = await fetchRegistryInfo(REGISTRY_URL);
-  if (info === null) return; // network issue — keep previous state
+  if (info === null) return;
 
   const minReleaseAgeMs = await detectMinReleaseAgeMs();
   const updateAvailable = isNewerVersion(info.latest.version, currentVersion);
@@ -125,8 +117,6 @@ async function check(): Promise<void> {
   if (target !== null) {
     process.stderr.write(`[argent] Update available: ${currentVersion} -> ${target.version}\n`);
   } else if (updateAvailable && minReleaseAgeMs > 0) {
-    // Newer version exists but none is installable yet under the policy — log
-    // once to explain the silence; no reminder is surfaced to the agent.
     process.stderr.write(
       `[argent] Update ${currentVersion} -> ${info.latest.version} is held by a minimum-release-age policy; ` +
         `reminder deferred until an eligible version ages past the gate.\n`
@@ -134,10 +124,7 @@ async function check(): Promise<void> {
   }
 }
 
-/**
- * Run an immediate check, then recheck every 24h. Returns a dispose fn for the
- * timer.
- */
+/** Checks immediately, then every 24h. Returns a dispose fn for the timer. */
 export function startUpdateChecker(): { dispose(): void } {
   // Clear any leaked interval from a prior call.
   if (interval) {
@@ -150,7 +137,7 @@ export function startUpdateChecker(): { dispose(): void } {
   interval = setInterval(() => {
     check().catch(() => {});
   }, CHECK_INTERVAL_MS);
-  interval.unref(); // don't keep the process alive for update checks
+  interval.unref();
 
   return {
     dispose() {

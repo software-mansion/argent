@@ -40,14 +40,10 @@ const zodSchema = z
     }
   });
 
-// Mirror of flow-execute's specs, field for field: the documented pre-flight is
-// "read the prerequisite, then run", so both tools must resolve the same source
-// under the same boundary rules. A spec that diverged — e.g. one that silently
-// dropped flow_path — would have this tool answer for the saved flow of the
-// same stem while flow-execute runs the explicit file: same flow identity, two
-// contracts. See flow-run.ts for why a dual-source wire is unwrapped
-// (caller-authored flow_path beside name) or dropped (client-derived flow_file
-// beside flow_path) rather than resolved.
+// Must stay field-for-field identical to flow-execute's specs, or the same
+// params resolve to different files here and there — e.g. dropping flow_path
+// would answer for the saved flow of the same stem. flow-run.ts explains the
+// unwrapWhenSet/skipWhenSet choices.
 const fileInputs: FileInputSpec[] = [
   {
     target: "flow_path",
@@ -86,12 +82,9 @@ Address the flow exactly as you will address it in flow-execute: name or flow_pa
   fileInputs,
   services: () => ({}),
   async execute(_services, params, ctx?: ToolContext) {
-    // The same resolver flow-execute uses, gates included: the prerequisite
-    // reported here must be the contract of exactly the file flow-execute
-    // would run for these params — flow_path clears the statVerified
-    // co-location boundary (never uploads, never raw server paths) and reports
-    // its basename-derived logical name, while the name branch keeps the
-    // flow_file containment under project_root.
+    // The same resolver flow-execute uses, gates included, so the prerequisite
+    // reported is the contract of exactly the file flow-execute would run for
+    // these params.
     const { filePath, flowName } = await resolveFlowSource(
       params,
       ctx?.fileInputs?.flow_file,

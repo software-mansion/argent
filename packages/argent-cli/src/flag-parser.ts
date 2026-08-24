@@ -1,5 +1,5 @@
-// Convert a tool's JSON Schema (the input shape produced by zodObjectToJsonSchema
-// in @argent/registry) plus argv into the JSON args object the tool-server expects.
+// Convert a tool's JSON Schema (produced by zodObjectToJsonSchema in @argent/registry)
+// plus argv into the JSON args object the tool-server expects.
 //
 // Supported flag forms:
 //   --name value          (string / number / integer)
@@ -12,15 +12,12 @@
 //   --args '<json>'       (whole-payload escape hatch; merges with parsed flags)
 //   --args -              (read whole-payload JSON from stdin)
 //
-// Exception: when the tool's own schema declares a property named `args` (e.g.
-// flow-add-step, whose `args` is a JSON string of the step's tool arguments),
-// `--args <value>` is treated as that per-field value — coerced by its declared
-// type, exactly like any other field — NOT the whole-payload escape hatch. Such
-// a tool has no whole-payload shortcut; use individual flags / --<field>-json.
+// Exception: a tool whose own schema declares an `args` property (e.g. flow-add-step)
+// has no whole-payload hatch — `--args <value>` is that field, coerced by its declared
+// type; use individual flags / --<field>-json instead.
 //
-// Scalar field types come from JSON Schema: string, number, integer, boolean, enum.
-// Array fields: items.type must be a scalar to get a repeatable flag.
-// Object fields and arrays of objects fall through to --field-json.
+// Array fields need a scalar items.type to get a repeatable flag; object fields and
+// arrays of objects fall through to --field-json.
 
 export interface JsonSchema {
   type?: string;
@@ -35,7 +32,7 @@ export interface FlagParseResult {
   args: Record<string, unknown>;
   positional: string[];
   helpRequested: boolean;
-  rawArgs: string | null; // value passed to --args, if any (for stdin handling)
+  rawArgs: string | null; // raw --args value, if any; "-" means stdin
 }
 
 export interface FlagParseError {
@@ -56,22 +53,21 @@ function isJsonField(prop: JsonSchema | undefined): boolean {
 /**
  * The flag a field is named by, with no value placeholder — for use in prose.
  *
- * The single source of truth for the `-json` suffix, so a message about a field and the help line
- * for that same field can never disagree. Tolerates an unknown field, which a malformed schema can
- * produce by listing a name it has no property for.
+ * Single source of truth for the `-json` suffix, so a message about a field and its help line
+ * cannot disagree. Tolerates an unknown field: a schema may list a required name it declares no
+ * property for.
  */
 export function flagNameFor(name: string, prop: JsonSchema | undefined): string {
   return isJsonField(prop) ? `--${name}-json` : `--${name}`;
 }
 
 /**
- * A token that can only have been meant as a boolean value: `true`/`false` or
- * `1`/`0`, case-insensitive and whitespace-tolerant. `undefined` for anything
- * else, so an ambiguous token is left alone rather than guessed at.
+ * `true`/`false` or `1`/`0`, case-insensitive and whitespace-tolerant; `undefined`
+ * for anything else, so an ambiguous token is left alone rather than guessed at.
  *
- * The single source of truth for every form — the `--flag <value>` lookahead,
- * `--flag=<value>`, boolean array items, and the `--no-flag` contradiction
- * guard — so the same word cannot mean different things one call site apart.
+ * Single source of truth for every form — the `--flag <value>` lookahead,
+ * `--flag=<value>`, boolean array items and the `--no-flag` guard — so the same
+ * word cannot mean two things one call site apart.
  */
 function booleanLiteral(raw: string): boolean | undefined {
   const value = raw.trim().toLowerCase();
@@ -99,8 +95,6 @@ function coerceScalar(raw: string, type: string | undefined, field: string): unk
     return n;
   }
   if (type === "boolean") {
-    // Shares booleanLiteral with the bare-token lookahead, so `--flag=True` and
-    // `--flag True` cannot disagree about the same word.
     const value = booleanLiteral(raw);
     if (value !== undefined) return value;
     throw new FlagParseException(`--${field} expected true/false (or 1/0), got "${raw}"`);
@@ -121,33 +115,24 @@ function parseJsonOrThrow(raw: string, label: string): unknown {
 
 /**
  * Parses argv against the given schema. Throws FlagParseException on bad input.
- * Returned `args` contains parsed fields; the caller is responsible for merging
- * `--args` JSON (if given). Whether the required fields are present is checked
- * against the merged payload in `run-validation`; their types and constraints
- * are validated server-side.
+ * The caller merges `--args` JSON; required fields are then checked against the
+ * merged payload in `run-validation`, and their types and constraints server-side.
  */
 export function parseFlags(argv: string[], schema: JsonSchema | undefined): FlagParseResult {
   const properties = schema?.properties ?? {};
-  // The whole-payload `--args '<json>'` escape hatch only exists when the tool
-  // does NOT declare its own `args` field. When it does (e.g. flow-add-step),
-  // `--args` is that per-field flag, so the "or --args '<json>'" fallback the
-  // error messages suggest would be a dead end — that form re-enters per-field
-  // handling instead of the hatch, and only `--<field>-json` works. Emit the
-  // suggestion only when the hatch is actually available.
+  // A tool declaring its own `args` field has no whole-payload hatch, so suggesting
+  // "or --args '<json>'" there would be a dead end: that form re-enters per-field
+  // handling, and only `--<field>-json` works.
   const argsHatchHint = properties.args === undefined ? " or --args '<json>'" : "";
   const args: Record<string, unknown> = {};
   const positional: string[] = [];
   let helpRequested = false;
   let rawArgs: string | null = null;
 
-  // Track which fields have already received a scalar value. A second value for
-  // an array field appends; a second value for a scalar field overwrites
-  // (with a warning would be nice but we keep it silent to avoid stderr noise).
   const seenArrayFields = new Set<string>();
-  // Track which fields were set via `--field-json`, independent of order: a
-  // field touched by BOTH `--field` (scalar-array form) and `--field-json` is
-  // ambiguous no matter which came first, so both directions must throw rather
-  // than one silently overwriting/discarding the other's value.
+  // Order-independent: a field touched by BOTH `--field` (scalar-array form) and
+  // `--field-json` is ambiguous whichever came first, so both directions throw
+  // rather than one silently discarding the other's value.
   const jsonFields = new Set<string>();
 
   function takeNext(i: number, flag: string): { value: string; nextIndex: number } {
@@ -166,7 +151,6 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
     }
 
     if (tok === "--") {
-      // Treat the rest as positional.
       for (let j = i + 1; j < argv.length; j++) positional.push(argv[j]!);
       break;
     }
@@ -176,7 +160,6 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
       continue;
     }
 
-    // Strip leading "--" and split "--name=value" into name + inline value.
     const eq = tok.indexOf("=");
     let flag: string;
     let inlineValue: string | undefined;
@@ -187,11 +170,8 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
       flag = tok.slice(2);
     }
 
-    // ── Whole-payload escape hatch ──
-    //
-    // Skipped when the tool declares its own `args` field: then `--args` is a
-    // normal per-field flag (handled below) and wins over the escape hatch, so
-    // the field's value isn't silently swallowed as the whole payload.
+    // Skipped when the tool declares its own `args` field, so that field's value
+    // isn't silently swallowed as the whole payload.
     if (flag === "args" && properties.args === undefined) {
       const { value, nextIndex } =
         inlineValue !== undefined ? { value: inlineValue, nextIndex: i } : takeNext(i, "args");
@@ -200,7 +180,6 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
       continue;
     }
 
-    // ── Per-field JSON escape hatch: --foo-json '<json>' ──
     if (flag.endsWith("-json")) {
       const fieldName = flag.slice(0, -"-json".length);
       const { value, nextIndex } =
@@ -218,7 +197,6 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
       continue;
     }
 
-    // ── --no-foo: explicit false for boolean flags ──
     if (flag.startsWith("no-")) {
       const fieldName = flag.slice(3);
       const propSchema = properties[fieldName];
@@ -226,10 +204,9 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
         if (inlineValue !== undefined) {
           throw new FlagParseException(`--no-${fieldName} does not take a value`);
         }
-        // Now that a boolean value after a flag is consumed as its value,
-        // `--no-flag false` would read as a double negative and `--no-flag true`
-        // would contradict itself. Neither can be a typo for anything but the
-        // positive form, so name that form rather than silently picking one.
+        // A boolean literal after a flag is consumed as its value, so `--no-flag false`
+        // reads as a double negative and `--no-flag true` contradicts itself. Name the
+        // positive form rather than silently picking one.
         const following = i + 1 < argv.length ? booleanLiteral(argv[i + 1]!) : undefined;
         if (following !== undefined) {
           throw new FlagParseException(
@@ -239,24 +216,16 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
         args[fieldName] = false;
         continue;
       }
-      // Not a known boolean field; fall through to be treated as a normal flag
-      // (so users can still pass an unknown --no-foo if the tool wants it).
+      // Not a known boolean field; fall through and treat it as a normal flag.
     }
 
     const propSchema = properties[flag];
 
-    // ── Boolean: bare flag means true; allow --foo=true|false explicitly ──
     if (propSchema?.type === "boolean") {
       if (inlineValue !== undefined) {
         args[flag] = coerceScalar(inlineValue, "boolean", flag);
         continue;
       }
-      // A bare boolean flag is true — unless the next token is `true`/`false`
-      // or `1`/`0`, which can only have been meant as this flag's value.
-      // An earlier comment here declined to look ahead, to avoid stealing a
-      // following positional; `argent run` is the sole caller and never reads
-      // `positional`, so there is nothing to steal. Only those four tokens are
-      // taken, and `--flag -- false` still keeps `false` positional.
       const next = i + 1 < argv.length ? booleanLiteral(argv[i + 1]!) : undefined;
       if (next !== undefined) {
         args[flag] = next;
@@ -267,8 +236,6 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
       continue;
     }
 
-    // ── Array: repeatable. items.type must be scalar; otherwise tell the user
-    //    to use --field-json. ──
     if (propSchema?.type === "array") {
       const itemType = propSchema.items?.type;
       if (!isScalarType(itemType)) {
@@ -279,13 +246,9 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
       const { value, nextIndex } =
         inlineValue !== undefined ? { value: inlineValue, nextIndex: i } : takeNext(i, flag);
       if (jsonFields.has(flag)) {
-        // --${flag}-json already set this field (in either order relative to
-        // this occurrence); mixing the two forms is ambiguous and one would
-        // silently clobber or corrupt the other's value. Checked BEFORE
-        // coerceScalar so a mixed --field/--field-json with an also-invalid
-        // plain value surfaces this (more actionable) mixing error rather than
-        // a scalar-coercion error — matching the --field-json branch above,
-        // which checks mixing before parsing the JSON.
+        // Mixing the two forms is ambiguous in either order. Checked BEFORE
+        // coerceScalar so an also-invalid plain value surfaces this (more actionable)
+        // mixing error, matching the --field-json branch above.
         throw new FlagParseException(
           `--${flag} and --${flag}-json cannot be mixed for the same field; pass it entirely as --${flag}-json '<json>'${argsHatchHint}`
         );
@@ -301,16 +264,14 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
       continue;
     }
 
-    // ── Object field: must use --field-json ──
     if (propSchema?.type === "object") {
       throw new FlagParseException(
         `--${flag} is an object; pass it as --${flag}-json '<json>'${argsHatchHint}`
       );
     }
 
-    // ── Scalar (string / number / integer / enum) or unknown field. We still
-    //    accept unknown flags so tools can evolve their schemas without
-    //    breaking the CLI; tool-server will return a 400 if invalid. ──
+    // Unknown flags are accepted too, so tools can evolve their schemas without
+    // breaking the CLI; tool-server answers 400 if the payload is invalid.
     const { value, nextIndex } =
       inlineValue !== undefined ? { value: inlineValue, nextIndex: i } : takeNext(i, flag);
     args[flag] = coerceScalar(value, propSchema?.type, flag);
@@ -321,9 +282,8 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
 }
 
 /**
- * Render a tool's schema as a human-readable usage block: one line per field
- * showing flag, type, required flag, and (if present) enum values. Used by
- * both `tools describe` and the auto-help fallback in `run --help`.
+ * Render a tool's schema as a usage block: one line per field showing flag, type,
+ * required marker and enum values. Used by both `tools describe` and `run` help.
  */
 export function formatSchemaUsage(schema: JsonSchema | undefined): string {
   if (!schema || !schema.properties) return "  (no parameters)";
@@ -332,7 +292,6 @@ export function formatSchemaUsage(schema: JsonSchema | undefined): string {
   const entries = Object.entries(schema.properties);
   if (entries.length === 0) return "  (no parameters)";
 
-  // Determine column width for flag names so types align.
   let maxFlagLen = 0;
   for (const [name, prop] of entries) {
     const display = renderFlagName(name, prop);
@@ -347,15 +306,13 @@ export function formatSchemaUsage(schema: JsonSchema | undefined): string {
     lines.push(`  ${flag}  ${typeLabel}${req}${desc}`);
   }
 
-  // One legend rather than widening every flag row: the value syntax is the
-  // same for all of them, and the flag column is padded across every field of
-  // every tool.
+  // One legend rather than widening every flag row: the value syntax is the same
+  // for all of them.
   //
-  // It must NOT start with `--` after the indent. scripts/e2e-full/lib/
-  // discover-tools.sh treats any line in the Flags: section matching
-  // /^[[:space:]]*--/ as a flag row and takes the first --token as its name, so
-  // a legend beginning with a flag would inject a phantom flag into every
-  // tool model it builds.
+  // It must NOT start with `--` after the indent: scripts/e2e-full/lib/discover-tools.sh
+  // treats any line in the Flags: section matching /^[[:space:]]*--/ as a flag row and
+  // takes its first --token as a flag name, so a legend beginning with a flag would
+  // inject a phantom flag into every tool model it builds.
   if (entries.some(([, prop]) => prop.type === "boolean")) {
     lines.push(
       "",

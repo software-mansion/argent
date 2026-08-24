@@ -17,10 +17,9 @@ import type { LaunchAppParams, LaunchAppResult } from "../types";
 
 const execFileAsync = promisify(execFile);
 
-// native-devtools is resolved lazily (through `registry`) rather than declared
-// as an eager service. It is iOS *and* tvOS capable: the blueprint's ensureEnv
-// picks the platform-matched DYLD_INSERT_LIBRARIES slice (the TVOSSIMULATOR
-// bootstrap for Apple TV sims), so resolving it here injects correctly on both.
+// tvOS sims classify as platform "ios" and land in this branch too;
+// native-devtools covers them — its env setup picks the TVOSSIMULATOR dylib
+// slice for Apple TV sims.
 export function makeIosImpl(
   registry: Registry
 ): PlatformImpl<Record<string, unknown>, LaunchAppParams, LaunchAppResult> {

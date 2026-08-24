@@ -13,8 +13,7 @@ import {
 } from "@argent/registry";
 import { pickIosHost, type IosEndpoint } from "../utils/ios-host";
 
-// Re-export AX-pref helpers that used to live here so existing callers
-// (boot-device, simulator-server) keep their import paths.
+// Moved to ../utils/ax-prefs; re-exported so existing import paths keep working.
 export {
   ensureAutomationEnabled,
   isEntitlementBypassActive,
@@ -25,16 +24,14 @@ export const AX_SERVICE_NAMESPACE = "AXService";
 
 export type AXServiceTransport = "unix" | "tcp";
 
-// Same DeviceInfo-via-options pattern as the other iOS-only blueprints.
 type AxServiceFactoryOptions = Record<string, unknown> & {
   device: DeviceInfo;
   transport?: AXServiceTransport;
 };
 
 /**
- * Build the `ServiceRef` for the AX service keyed by an already-resolved
- * `DeviceInfo`. The factory's iOS-only check uses the caller's classification
- * rather than running its own.
+ * `ServiceRef` keyed by an already-resolved `DeviceInfo` — the factory's
+ * iOS-only check trusts that classification instead of re-running it.
  */
 export function axServiceRef(
   device: DeviceInfo,
@@ -66,7 +63,7 @@ export interface AXDescribeResponse {
 }
 
 export interface AXServiceApi {
-  /** True when AX prefs were written but SB hasn't picked them up yet (sim booted outside argent). */
+  /** Entitlement bypass isn't active (sim booted outside argent) — AX reads may come back empty. */
   degraded: boolean;
   describe(): Promise<AXDescribeResponse>;
   alertCheck(): Promise<boolean>;
@@ -83,10 +80,9 @@ interface PendingRpc {
   timer: ReturnType<typeof setTimeout>;
 }
 
-// Listen on the chosen transport. Unix: pre-unlink stale socket from previous
-// runs so listen() doesn't EADDRINUSE. TCP: when `endpoint.port` is undefined,
-// bind on an OS-assigned ephemeral port and write the realized port back into
-// `endpoint.port` so each per-device instance gets its own non-colliding port.
+// Unix: pre-unlink a stale socket so listen() doesn't EADDRINUSE. TCP: an
+// undefined `endpoint.port` binds an ephemeral port, written back into
+// `endpoint.port` so per-device instances don't collide.
 function startListener(
   endpoint: IosEndpoint,
   onConnection: (socket: net.Socket) => void
@@ -125,8 +121,6 @@ function startListener(
   });
 }
 
-// Wait for either the daemon's TCP/UDS connection or an early exit.
-// Resolves with the connected socket; rejects on timeout or daemon failure.
 function waitForDaemonConnection(
   server: net.Server,
   proc: ChildProcess,
@@ -235,10 +229,6 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
         }
       );
     }
-    // Reject before spawning. An undefined `device.id` slips through when an
-    // inner tool is invoked via a wrapper that doesn't re-validate the inner
-    // schema. Without this guard `getSocketPath(undefined).slice` would crash
-    // and `udid.slice` in the stderr handler below would later be fatal.
     if (typeof device.id !== "string" || device.id.length === 0) {
       throw new FailureError(
         `${AX_SERVICE_NAMESPACE}.factory requires a non-empty device.id; got ${JSON.stringify(device.id)}.`,
@@ -253,8 +243,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
 
     const udid = device.id;
     const host = pickIosHost(device);
-    // Force TCP on remote — unix sockets do not bridge across the QUIC tunnel
-    // sim-remote sets up between the orchestrator and the dev's machine.
+    // Unix sockets don't bridge the sim-remote tunnel, so remote is TCP-only.
     const transport: AXServiceTransport = host.requiresTcp ? "tcp" : (opts.transport ?? "unix");
     const endpoint: IosEndpoint =
       transport === "tcp"
@@ -277,10 +266,10 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
 
     const { entitlementBypassActive } = await host.bootstrapAx(udid);
 
-    // Host listens first, then we spawn the daemon and wait for it to dial in.
+    // Listen before spawning; the daemon dials in.
     const server = await startListener(endpoint, (socket) => {
       if (daemonSocket && !daemonSocket.destroyed) {
-        // A second connection (e.g. respawned daemon) replaces the previous one.
+        // Respawned daemon: the newest connection wins.
         daemonSocket.destroy();
       }
       daemonSocket = socket;
@@ -338,10 +327,9 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     });
 
     if (endpoint.transport === "tcp") {
-      // Wire the reverse tunnel BEFORE asking the orchestrator to start the
-      // daemon — the daemon will dial 127.0.0.1:<port> inside the simulator
-      // and that dial gets QUIC-forwarded back to our host listener above.
-      // No-op on local. `port` was populated by startListener.
+      // Tunnel before spawn: the daemon dials 127.0.0.1:<port> inside the sim and
+      // the tunnel forwards it back to the listener above. No-op on local;
+      // `port` was populated by startListener.
       await host.startProxy(udid, endpoint.port!);
     }
 
@@ -377,14 +365,14 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     try {
       daemonSocket = await waitForDaemonConnection(server, proc, 10_000);
     } catch (err) {
-      // Tear down whatever started so we don't leak a server or process.
+      // Don't leak the listener or the daemon.
       if (!proc.killed) proc.kill("SIGTERM");
       server.close();
       if (endpoint.transport === "unix") {
         try {
           fs.unlinkSync(endpoint.socketPath);
         } catch {
-          /* best-effort socket cleanup; ignore errors */
+          /* best-effort socket cleanup */
         }
       }
       if (endpoint.transport === "tcp") {
@@ -478,7 +466,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           try {
             fs.unlinkSync(endpoint.socketPath);
           } catch {
-            /* best-effort socket cleanup; ignore errors */
+            /* best-effort socket cleanup */
           }
         }
         if (endpoint.transport === "tcp") {

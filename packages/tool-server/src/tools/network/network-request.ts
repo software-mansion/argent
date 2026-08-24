@@ -10,9 +10,6 @@ import {
   makeNetworkDetailReadScript,
 } from "../../utils/debugger/scripts/network-interceptor";
 
-/**
- * Header names (lowercase) that should be redacted to avoid leaking secrets.
- */
 const SENSITIVE_HEADER_PATTERNS = [
   "auth",
   "cookie",
@@ -41,7 +38,7 @@ function redactHeaders(headers: Record<string, string> | undefined): Record<stri
   return result;
 }
 
-/** Max response body content size shown to AI to avoid context bloat. */
+/** Response body chars kept; the rest is truncated to limit context. */
 const MAX_BODY_SIZE = 1000;
 
 const zodSchema = z.object({
@@ -124,8 +121,6 @@ Returns request/response headers (sensitive headers redacted), status, timing, a
 Large response bodies are truncated. Use when you need headers, body, or timing for a specific request after listing logs.
 Returns an error message string if the requestId is not found — use view-network-logs to get valid requestId values.`,
   zodSchema,
-  // Companion to view-network-logs: RN via the injected interceptor, Chromium
-  // via the native CDP Network recording. Dispatched on the device id.
   capability: DEBUGGER_TOOL_CAPABILITY,
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.device_id);
@@ -135,8 +130,6 @@ Returns an error message string if the requestId is not found — use view-netwo
     return { inspector: `NetworkInspector:${params.port}:${canonicalDeviceId(params.device_id)}` };
   },
   async execute(services, params) {
-    // Chromium: build details from the server-side CDP Network recording, and
-    // fetch the response body on demand via Network.getResponseBody.
     if (resolveDevice(params.device_id).platform === "chromium") {
       const chromium = services.chromium as ChromiumCdpApi;
       const rec = chromium.server.network.get(params.requestId);
@@ -182,7 +175,7 @@ Returns an error message string if the requestId is not found — use view-netwo
                   : body;
             }
           } catch {
-            // Body not retained (page navigated, evicted, or never had one).
+            // Body not retained: navigated away, evicted, or never had one.
           }
         }
         details.response = resp;
@@ -192,7 +185,7 @@ Returns an error message string if the requestId is not found — use view-netwo
 
     const api = services.inspector as NetworkInspectorApi;
 
-    // Ensure the interceptor is installed (idempotent).
+    // Idempotent — the script no-ops if already installed.
     await api.cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).catch(() => {});
 
     const script = makeNetworkDetailReadScript(params.requestId);

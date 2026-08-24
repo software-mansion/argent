@@ -2,23 +2,19 @@
  * Server-side resolution of file-input wrappers — the INPUT half of the
  * remote file boundary (the OUTPUT half is `artifacts.ts`).
  *
- * The client replaces args declared in a tool's `fileInputs` with
- * {@link FileInputWire} wrappers (path + stat + optional base64 content). This
- * module turns each wrapper back into a plain server-readable string *before*
- * zod validation, so tools always execute against a local path:
+ * Turns each {@link FileInputWire} the client sent back into a plain
+ * server-readable string *before* zod validation, so tools always execute
+ * against a local path:
  *
- * - co-located client (the common, unlinked case): the wrapper's path matches
- *   on this host's own filesystem and is used in place — zero copies, exactly
- *   mirroring the artifact materializer's gate on the client side.
+ * - co-located client: the wrapper's path matches on this host's own
+ *   filesystem and is used in place — zero copies.
  * - remote client: `kind: "file"` content is materialized into a temp file;
  *   `kind: "directory"` fails with remote-mode guidance (a tree can't ride in
- *   a tool call); `kind: "tar-upload"` is extracted from a streamed tar when
- *   `uploadId` is set (always, even if the path also exists on this host);
+ *   a tool call); `kind: "tar-upload"` is extracted from a streamed tar
+ *   whenever `uploadId` is set, even if the path also exists on this host;
  *   `kind: "probe"` passes through and only reports presence.
  *
- * Plain string args (older clients, direct invocations) pass through untouched,
- * which is what keeps both halves of the version-skew matrix on today's
- * behavior.
+ * Plain string args (older clients, direct invocations) pass through untouched.
  */
 
 import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
@@ -35,17 +31,15 @@ import {
 } from "@argent/registry";
 
 /**
- * Decoded upload ceiling. Large enough for full-resolution PNG baselines and
- * any flow YAML; small enough that a misbehaving client can't fill the temp
- * dir through a single call. Must stay below the express.json body limit in
- * `http.ts` (which bounds the base64-encoded request as a whole).
+ * Decoded per-file upload ceiling. Must stay below the express.json body limit
+ * in `http.ts`, which bounds the base64-encoded request as a whole.
  */
 const MAX_UPLOAD_BYTES = 32 * 1024 * 1024;
 
 /** Typed so the HTTP layer can map it to a 422 instead of a generic 500. */
 export class FileInputError extends Error {}
 
-/** Resolved tar-upload entry, keyed by uploadId. */
+/** Pending tar-upload archive, keyed by uploadId. */
 export interface UploadEntry {
   tarPath: string;
   /** SHA-256 hex digest of the tarball bytes, computed while receiving POST /upload. */
@@ -55,29 +49,27 @@ export interface UploadEntry {
 export type UploadLookup = (uploadId: string) => UploadEntry | undefined;
 
 export interface ResolveFileInputsResult {
-  /** The request body with every wrapper replaced by a plain path string. */
+  /** The request body, with file-input wrappers resolved away. */
   args: Record<string, unknown>;
-  /** Per-target outcomes, forwarded to the tool via `InvokeToolOptions.fileInputs`. */
+  /** Per-target outcomes, forwarded via `InvokeToolOptions.fileInputs`. */
   fileInputs: Record<string, ResolvedFileInput> | undefined;
   /**
-   * Removes every temp file this call materialized. Uploads are call-scoped —
-   * the tool reads them during execution and nothing may reference them after
-   * the response, so the caller must invoke this once the call settles.
-   * Always safe: a no-op when everything resolved in place, and removal
-   * failures are swallowed (cleanup must never affect the call's outcome).
+   * Removes the temp files this call materialized. Uploads are call-scoped —
+   * nothing may reference them after the response — so the caller must invoke
+   * this once the call settles. A no-op when everything resolved in place;
+   * removal failures are swallowed.
    */
   cleanup: () => Promise<void>;
 }
 
 /**
- * `present`: the wrapper's path is usable on THIS host. `directory` only needs
- * to exist as a directory and `probe` to exist at all (size/mtime are
- * meaningless there); `file` and `tar-upload` must match the client-recorded
- * stat so a stale or unrelated file at the same path falls through to the
- * upload path instead of being read by accident. `statVerified` is the strong
- * form — the wire carried both stat fields and the host file matched both —
- * because presence alone is satisfiable by a hand-crafted stat-less wrapper
- * and must not serve as containment.
+ * `present`: the wrapper's path is usable on THIS host. `directory` and `probe`
+ * only need to exist (size/mtime are meaningless there); `file` and
+ * `tar-upload` must match the client-recorded stat, so a stale or unrelated
+ * file at the same path falls through to the upload path instead of being read
+ * by accident. `statVerified` is the strong form — the wire carried both stat
+ * fields and the host file matched both — because presence alone is satisfiable
+ * by a hand-crafted stat-less wrapper and must not serve as containment.
  */
 async function probeHostPath(
   wire: FileInputWire,
@@ -104,12 +96,12 @@ async function probeHostPath(
 }
 
 /**
- * `skipWhenSet` / `unwrapWhenSet` gate: a param counts as set whenever the caller provided it —
- * matching the `=== undefined` presence checks a tool's own dual-source
- * validation uses, so a degenerate value ("", null) still routes the call to
- * that validation instead of having the boundary vouch for a file the call is
- * not using. A wrapper also counts: a wrapped source param may not be resolved
- * yet when a later spec reads it.
+ * `skipWhenSet` / `unwrapWhenSet` gate: a param counts as set whenever the
+ * caller provided it — matching the `=== undefined` checks a tool's own
+ * dual-source validation uses, so a degenerate value ("", null) still routes
+ * the call to that validation instead of having the boundary vouch for a file
+ * the call is not using. A wrapper also counts: a wrapped source param may not
+ * be resolved yet when a later spec reads it.
  */
 function isParamSet(value: unknown): boolean {
   return value !== undefined;
@@ -134,9 +126,9 @@ async function materializeUpload(wire: FileInputWire): Promise<{ filePath: strin
         `${MAX_UPLOAD_BYTES}-byte file-input limit.`
     );
   }
-  // Integrity: a size recorded client-side that disagrees with the decoded
-  // bytes means the upload was truncated or mangled in transit — fail loudly
-  // rather than handing the tool a corrupt file.
+  // A client-recorded size disagreeing with the decoded bytes means the upload
+  // was truncated or mangled in transit — fail rather than hand the tool a
+  // corrupt file.
   if (wire.size != null && data.length !== wire.size) {
     throw new FileInputError(
       `Uploaded content for "${wire.path}" is ${data.length} bytes but the client ` +
@@ -264,9 +256,8 @@ async function resolveOne(
 /**
  * Replace every declared file-input wrapper in `body` with a plain
  * server-readable path string. Returns the rewritten args plus per-target
- * resolution metadata. Wrappers are only honored on declared targets — a
- * wrapper anywhere else simply fails the tool's own schema validation, so
- * clients can't smuggle uploads through undeclared params.
+ * resolution metadata. Only declared targets are honored, so clients can't
+ * smuggle uploads through undeclared params.
  */
 export async function resolveFileInputs(
   def: Pick<ToolDefinition<unknown, unknown>, "fileInputs">,
@@ -298,9 +289,8 @@ export async function resolveFileInputs(
         // call — not this wrapper's resolution (whose outcome hinges on
         // whether the unused file exists), and not a drop (which would
         // rewrite the mistake into a valid single-source call and silently
-        // run the other source). Hand zod the plain client path; no
-        // resolution metadata is recorded because nothing was probed or
-        // vouched for.
+        // run the other source). No resolution metadata is recorded because
+        // nothing was probed.
         args[spec.target] = value.path;
         continue;
       }

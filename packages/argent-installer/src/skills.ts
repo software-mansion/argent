@@ -18,11 +18,11 @@ export type SkillScope = "project" | "global";
 
 export interface SkillScopeResult {
   scope: SkillScope;
-  /** Number of bundled skills that were re-synced into this scope. */
+  /** Count of bundled skills re-synced into this scope. */
   synced: number;
   /** First line of the sync error, or null on success. */
   syncError: string | null;
-  /** Names of argent-owned skills that were pruned from this scope. */
+  /** Argent-owned skills pruned from this scope. */
   pruned: string[];
   /** First line of the prune error, or null on success. */
   pruneError: string | null;
@@ -59,34 +59,24 @@ function getScopeSpecs(projectRoot: string): ScopeSpec[] {
   ];
 }
 
-// Re-syncs bundled argent skills into every scope that already tracks at
-// least one argent-owned skill, and prunes any argent-prefixed entry that is
-// no longer part of the bundled set. Safe to call from any command — a scope
-// with nothing tracked is skipped, so this never creates a
+// Re-syncs bundled argent skills into every scope that already tracks an
+// argent-owned skill, and prunes argent-prefixed entries no longer in the
+// bundled set. A scope tracking nothing is skipped, so this never creates a
 // `skills-lock.json` in an unrelated working directory.
 //
-// Sync prefers the GitHub-pinned source (`<repo>/packages/skills/skills#v<ver>`)
-// so the lockfile entry stays portable across machines. If the
-// network install fails, it retries with the bundled SKILLS_DIR so offline
-// users still get re-synced.
-//
-// The choice of `skills add` rather than `skills update` is deliberate:
-// `skills update` silently skips any entry with sourceType="local", so a
-// previous-version lock written from SKILLS_DIR would never refresh. `skills
-// add` rewrites the entry from the source we pass, which is exactly the
-// behavior we want after `npm i -g @swmansion/argent@new`.
+// Sync prefers the GitHub-pinned source so the lockfile entry stays portable
+// across machines, and retries with the bundled SKILLS_DIR when that fails.
 export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
   const bundled = new Set(listBundledSkills());
-  // An empty bundled set means THIS package's skills dir is unreadable — a
-  // pruned pnpm store dir mid-update, a broken install — never "argent ships
-  // no skills". Acting on it would classify every tracked skill as orphaned
-  // and prune them all from both scopes; skip the refresh entirely instead.
+  // An empty bundled set means this package's skills dir is unreadable (broken
+  // or mid-update install), not that argent ships no skills — acting on it
+  // would prune every tracked skill from both scopes.
   if (bundled.size === 0) return [];
   const results: SkillScopeResult[] = [];
   const primarySource = buildArgentSkillsSource(getInstalledVersion());
-  // Project-scope `skills` commands act on their cwd, and this can run as a
-  // detached updater whose inherited cwd is the tool-server's editor-chosen
-  // one (often `/` or `$HOME`) — pin every run to the project.
+  // Project-scope `skills` commands act on their cwd, and this can run from a
+  // detached updater that inherited the tool-server's editor-chosen cwd (often
+  // `/` or `$HOME`) — pin every run to the project.
   const execOpts = { stdio: ["ignore", "pipe", "pipe"] as const, cwd: projectRoot } as {
     stdio: ["ignore", "pipe", "pipe"];
     cwd: string;
@@ -138,9 +128,8 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
   return results;
 }
 
-// Renders a `refreshArgentSkills` summary as a multiline string suitable for
-// `p.note(...)`. Returns null when nothing happened so the caller can skip
-// printing an empty block.
+// Returns null when nothing happened, so the caller can skip printing an empty
+// block.
 export function formatSkillRefreshSummary(results: readonly SkillScopeResult[]): string | null {
   const lines: string[] = [];
   for (const r of results) {
@@ -175,12 +164,8 @@ export function summarizeSkillRefreshForTelemetry(
   };
 }
 
-// ── Refresh + report ──────────────────────────────────────────────────────────
-
-// Single owner of the "Skills Updated" note, the skill_refresh_result event,
-// and the INSTALL_SKILLS_REFRESH_FAILED signal for both post-bump re-sync
-// flows — init-triggered update and `argent update` — which differ only in
-// the failure_stage naming the flow.
+// The two post-bump re-sync flows — init-triggered update and `argent update` —
+// differ only in this stage name.
 export type SkillRefreshStage = "installer_skills_refresh" | "installer_update_skills_refresh";
 
 export function reportSkillRefresh(projectRoot: string, stage: SkillRefreshStage): void {

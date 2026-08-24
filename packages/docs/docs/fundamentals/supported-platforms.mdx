@@ -1,0 +1,60 @@
+---
+sidebar_position: 3
+sidebar_label: Supported platforms
+title: Supported platforms
+sidebar_custom_props:
+  icon: layers
+---
+
+Argent drives a growing set of targets through a single toolkit, each with the right interaction model.
+
+| Platform          | Targets                                                                 | Interaction      |
+| ----------------- | ----------------------------------------------------------------------- | ---------------- |
+| **iOS**           | Simulators                                                              | Touch / gesture  |
+| **Android**       | Emulators (AVDs) and physical devices over adb                          | Touch / gesture  |
+| **TV**            | Apple TV (tvOS), Android TV / Google TV, Amazon Fire TV (Vega)          | D-pad / remote   |
+| **Desktop & web** | Electron and Chromium apps (incl. React Native Web / Expo web) over CDP | Mouse / keyboard |
+
+<Video
+  src="/video/ios-android-web.mp4"
+  width={1624}
+  height={900}
+  caption="One agent working across an iOS simulator, an Android emulator and the web build of the same app"
+/>
+
+## Touch targets
+
+iOS simulators and Android emulators or devices are driven with taps, swipes, pinches, rotations, hardware buttons and typed text. Coordinates always come from a discovery pass over the accessibility or component tree, never from a screenshot.
+
+<Video
+  src="/video/physical-android.mp4"
+  width={1376}
+  height={900}
+  caption="The same interaction model on a physical Pixel connected over adb"
+/>
+
+## TV targets
+
+A TV UI is focus-driven rather than touch-driven. Argent reads which element currently holds focus, then moves the cursor with directional remote presses and confirms with select.
+
+<Video
+  src="/video/tv.mp4"
+  width={1598}
+  height={900}
+  caption="Walking a tvOS app with remote presses, checking focus state at every step"
+/>
+
+## Desktop and web targets
+
+Electron apps and Chromium browsers exposing the Chrome DevTools Protocol are driven with mouse clicks, wheel scrolling and drags. Argent can also walk the DOM, manage tabs, read and write cookies and storage, and inspect network traffic.
+
+<Video
+  src="/video/electron.mp4"
+  width={1796}
+  height={900}
+  caption="Testing an issue-creation flow in an Electron app over CDP"
+/>
+
+## React Native
+
+Argent works with React Native apps out of the box, so your agent can build, launch and iterate on a React Native project the same way it would any native app, with no extra setup.

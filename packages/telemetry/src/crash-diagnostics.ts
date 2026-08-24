@@ -1,34 +1,20 @@
 // Anonymous crash diagnostics for the tool server's fatal-error path.
 //
-// Today every `toolserver:stop` with `reason:"crash"` collapses into a single
-// bucket (`TOOLSERVER_UNCAUGHT_EXCEPTION`) — we learn *that* the process died on
-// a top-level throw, never *which* throw. This turns an opaque crash into three
-// coded, non-identifying signals plus a startup/serving phase, so crashes can be
-// clustered and root-caused without ever transmitting free text.
-//
-// Anonymity is the hard constraint. We deliberately never emit the error message
-// or a raw stack: those routinely embed absolute paths (`/Users/<name>/…`),
-// URLs, hostnames, argv, and interpolated values — the highest-PII surface and
-// impossible to reliably scrub. Instead:
-//   • `error_name`      — the error's class name (a code identifier, e.g. TypeError)
-//   • `error_syscall`   — the Node system-error code (e.g. EADDRINUSE) when present
-//   • `crash_fingerprint` — a hash over the *de-identified* top stack frames
-// The sanitizer (sanitize.ts) is the final gate: any value that doesn't match a
-// strict coded shape is dropped before it can reach PostHog. Everything here is
-// belt-and-suspenders on top of that.
+// Anonymity is the hard constraint: the error message and the raw stack are never
+// emitted, because they routinely embed absolute paths, URLs, hostnames, argv and
+// interpolated values that cannot be reliably scrubbed. Only coded signals go out
+// — error class name, Node error code, and a hash over de-identified top frames.
+// sanitize.ts is the final gate: anything not matching a strict coded shape is
+// dropped before it can reach the OTLP collector.
 
 import { createHash } from "node:crypto";
 
 export type CrashPhase = "startup" | "serving";
 
 export interface CrashDiagnostics {
-  /** Error class name, e.g. "TypeError". Omitted when it can't be determined. */
+  /** Error class name, e.g. "TypeError". */
   error_name?: string;
-  /**
-   * Node's system-error `code` string, e.g. "EADDRINUSE" / "ECONNREFUSED".
-   * (This is `err.code`, the errno name — not `err.syscall`, which would be the
-   * bare operation like "listen".) Omitted when absent.
-   */
+  /** Node's system-error `code`, e.g. "EADDRINUSE" — `err.code`, not `err.syscall`. */
   error_syscall?: string;
   /** 16 hex chars: first 64 bits of a SHA-256 over the de-identified top frames. */
   crash_fingerprint?: string;
@@ -36,26 +22,22 @@ export interface CrashDiagnostics {
   crash_phase: CrashPhase;
 }
 
-// Top frames are the discriminating part of a stack; deeper frames are shared
-// runtime plumbing that only dilutes the fingerprint. Bounded so a pathological
-// stack can't blow up the hash input.
+// Top frames discriminate; deeper frames are shared runtime plumbing that only
+// dilutes the fingerprint. Bounded so a pathological stack can't blow up the hash.
 const MAX_FRAMES = 8;
 
-// A single V8 stack frame line. Handles the two shapes V8 emits:
+// One V8 stack frame line, in both shapes V8 emits:
 //   "    at Server.<anonymous> (/abs/path/index.js:12:34)"
 //   "    at /abs/path/index.js:12:34"
-// Group 1 (optional) = function label, 2 = file, 3 = line, 4 = column.
+// Groups: 1 = function label (optional), 2 = file, 3 = line, 4 = column.
 const FRAME_RE = /^\s*at\s+(?:(.*?)\s+\()?(.+?):(\d+):(\d+)\)?\s*$/;
 
 /**
- * Reduce a source path to a token that is identical across machines for the same
- * build, and that carries no user-identifying prefix:
- *   • `node:*` internal modules are kept verbatim (no PII, high signal).
- *   • node_modules frames keep only the package-relative tail (drops the
- *     `/Users/<name>/project/` prefix, keeps which dependency threw).
- *   • Anything else (our own bundled code) is reduced to its basename.
- * This runs on the hash *input*; the output is a hash regardless, so this is
- * about cross-user determinism as much as defense-in-depth.
+ * Reduce a source path to a token identical across machines for the same build:
+ * `node:*` verbatim, node_modules frames to the package-relative tail (last marker
+ * wins, so pnpm's nested layout matches npm's), anything else to its basename.
+ * The result is hashed regardless, so this is about cross-user determinism as much
+ * as PII.
  */
 function deidentifyPath(file: string): string {
   const unified = file.replace(/\\/g, "/");
@@ -68,9 +50,9 @@ function deidentifyPath(file: string): string {
 }
 
 /**
- * Normalize one stack line to `functionLabel@deidentifiedFile:line`, or null if
- * the line isn't a frame. The column is dropped (it shifts more readily than the
- * line across minor edits, which would fragment the fingerprint).
+ * Normalize one stack line to `functionLabel@deidentifiedFile:line`, or null if it
+ * isn't a frame. The column is dropped: it shifts across minor edits and would
+ * fragment the fingerprint.
  */
 function normalizeFrame(line: string): string | null {
   const m = FRAME_RE.exec(line);
@@ -89,10 +71,7 @@ function stackOf(err: unknown): string | undefined {
   return undefined;
 }
 
-/**
- * Deterministic 64-bit fingerprint of the de-identified top stack frames, or
- * undefined when there is no usable stack (e.g. a thrown non-Error primitive).
- */
+/** 64-bit fingerprint of the de-identified top frames; undefined without a usable stack. */
 function fingerprintStack(err: unknown): string | undefined {
   const stack = stackOf(err);
   if (!stack) return undefined;
@@ -133,18 +112,15 @@ function syscallCode(err: unknown): string | undefined {
 }
 
 /**
- * Build the anonymous crash record for a fatal error. Values here are best-effort
- * and intentionally un-truncated/un-validated beyond the coarse shape checks
- * above — the sanitizer's coded allowlist is the authority that decides what
- * actually leaves the machine, so a malformed `error_name`/`error_syscall` is
- * dropped there rather than leaking.
+ * Build the anonymous crash record. Values are best-effort and not truncated or
+ * validated here — the sanitizer's coded allowlist is what decides what actually
+ * leaves the machine, so a malformed value is dropped there rather than leaking.
  */
 export function describeCrash(err: unknown, phase: CrashPhase): CrashDiagnostics {
   const diagnostics: CrashDiagnostics = { crash_phase: phase };
-  // A crashing error is untrusted input: any of these fields could be a getter
-  // that throws (or recurses). Each extraction is isolated so a hostile error
-  // still yields the phase and whatever else could be read — describeCrash is
-  // total by construction and never itself becomes a second crash.
+  // A crashing error is untrusted input: any field could be a getter that throws.
+  // Isolating each extraction keeps the record total — the phase plus whatever else
+  // was readable — instead of turning into a second crash.
   const name = safe(() => errorName(err));
   if (name !== undefined) diagnostics.error_name = name;
   const syscall = safe(() => syscallCode(err));
