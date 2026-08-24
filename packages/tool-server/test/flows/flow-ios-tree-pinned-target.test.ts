@@ -19,9 +19,11 @@ import { queryFullHierarchyTree } from "../../src/tools/flows/flow-ios-tree";
 // The second describe covers the other confidence level: an UNPINNED target
 // (what a foreground-neutral `tool:` step leaves behind). Auto-resolution
 // still decides, and the target is consulted solely as a TIMEOUT ARBITER -
-// only when the fan-out times out AND the target's connection is still up.
-// Every answered resolution, including the deliberate "single app but
-// backgrounded" error, wins over it, so no foreground guard is ever bypassed.
+// only when the fan-out times out, the target names an injectable app, and
+// its connection is still up. Every answered resolution, including the
+// deliberate "single app but backgrounded" error, wins over it, so no
+// foreground guard is ever bypassed - and a com.apple.* hint gets the pinned
+// gate's terminal refusal rather than a read.
 
 const IOS_DEVICE = {
   id: "00000000-0000-0000-0000-0000000000ab",
@@ -511,6 +513,65 @@ describe("queryFullHierarchyTree - an unpinned target arbitrates a timed-out fan
     expect(tree.children.length).toBeGreaterThan(0);
     expect(probed).toContain(POISONER); // the fan-out really did run
     expect(queried).toEqual([APP]);
+  });
+
+  it("refuses a com.apple.* hint with the terminal policy verdict instead of arbitrating toward it", async () => {
+    // A raw `tool:` step after `launch: com.apple.*` demotes the pin to this
+    // hint, and the launched system app's own wedged getState sinks the
+    // fan-out - so without a gate the arbiter re-targets the very id the
+    // pinned gate refuses, and reads a hosting view that carries none of the
+    // app's labels (the reviewer's false-green `hidden:` asserts).
+    const { api, probed, queried } = poisonedApi();
+    const err: unknown = await queryFullHierarchyTree(
+      registryFor(api),
+      IOS_DEVICE,
+      hint(POISONER)
+    ).then(
+      () => {
+        throw new Error("expected the system-app hint to be refused");
+      },
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(Error);
+    const message = (err as Error).message;
+    expect(message).toContain(`${POISONER} is an Apple system app`);
+    expect(message).toContain("never a valid flow target");
+    // The same terminal verdict and coordinate remedy the pinned gate gives -
+    // whether a `tool:` step ran must not soften the refusal.
+    expect(message).toContain(
+      "`tap: { x: 0.5, y: 0.35 }` takes a point directly and reads no tree"
+    );
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE);
+    // Its own stage: the pinned gate refuses before any RPC, this one after a
+    // fan-out the hint could not rescue - the preserved cause carries it.
+    expect(getFailureSignal(err)?.failure_stage).toBe("flow_tree_unpinned_hint");
+    expect((err as Error).cause).toBeInstanceOf(Error);
+    expect(probed).toContain(POISONER); // the fan-out really did run
+    // The substance of the refusal: the system app is never read.
+    expect(queried).toEqual([]);
+  });
+
+  it("refuses a disconnected com.apple.* hint before consulting the connections list", async () => {
+    // Ordering twin of the pinned "refuses a system-app pin that is not
+    // connected": check connections first and this state rethrows the raw
+    // fan-out timeout instead, hiding the terminal verdict behind an error
+    // that invites a retry.
+    const { api, queried } = poisonedApi([APP, OTHER], {}, { [OTHER]: rpcTimeout() });
+    const err: unknown = await queryFullHierarchyTree(
+      registryFor(api),
+      IOS_DEVICE,
+      hint(POISONER)
+    ).then(
+      () => {
+        throw new Error("expected the disconnected system-app hint to be refused");
+      },
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain(`${POISONER} is an Apple system app`);
+    expect((err as Error).message).not.toMatch(/RPC timed out/i);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE);
+    expect(queried).toEqual([]);
   });
 
   it("rethrows the timeout when the hinted app is no longer connected", async () => {

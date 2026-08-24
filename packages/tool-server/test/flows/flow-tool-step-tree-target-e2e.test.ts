@@ -234,6 +234,40 @@ describe("a tool step's tree target against a wedged sibling (end-to-end)", () =
     expect(result.steps[3].warning).toBeUndefined();
   }, 20_000);
 
+  it("keeps the system-app refusal terminal after a tool step demotes the pin", async () => {
+    // The reviewer's false green: `launch: com.apple.*` + `tool: screenshot` +
+    // asserts came back ok=true, because the demoted read arbitrated toward
+    // the system app and read its hosting view. The policy verdict must
+    // survive the demote: the pinned read refuses (the tap's settle warning),
+    // and the post-demote read refuses the same way instead of reading - zero
+    // hierarchy reads, where the on-device repro recorded six.
+    const hierarchyReads: string[] = [];
+    await writeFlow("system-app-demote", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: POISONER },
+        { kind: "tap", x: 0.5, y: 0.5 },
+        { kind: "tool", name: "screenshot", args: {} },
+        { kind: "assert", condition: "visible", selector: { identifier: "ready" } },
+      ],
+    });
+    const result = await runFlow("system-app-demote", hierarchyReads);
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "launch:pass",
+      "tap:pass",
+      "tool:pass",
+      "assert:fail",
+    ]);
+    expect(result.ok).toBe(false);
+    expect(result.steps[1].warning).toMatch(/is an Apple system app/);
+    expect(result.steps[3].reason).toMatch(/could not read the UI tree/);
+    expect(result.steps[3].reason).toMatch(/is an Apple system app/);
+    // The remedy a system-app flow can still act on rides along.
+    expect(result.steps[3].reason).toMatch(/tap: \{ x: 0\.5, y: 0\.35 \}/);
+    expect(hierarchyReads).toEqual([]);
+  }, 20_000);
+
   it("drops the target across a foreground-changing tool step - the read fails instead", async () => {
     // `launch-app` can put another app on screen, so the launched app is not
     // even a hint: the read auto-resolves, the fan-out times out on the

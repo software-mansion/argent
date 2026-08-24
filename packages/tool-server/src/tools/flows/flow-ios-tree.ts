@@ -296,6 +296,16 @@ async function unreadableHierarchyReason(
 }
 
 /**
+ * The terminal policy refusal for a `com.apple.*` flow target, shared verbatim
+ * by the pinned gate and the unpinned arbiter: both refuse the id the run's own
+ * `launch:` step supplied, so a raw `tool:` step demoting the pin must not
+ * soften the verdict or lose the coordinate remedy.
+ */
+function systemAppFlowTargetRefusal(bundleId: string): string {
+  return `${bundleId} is an Apple system app (com.apple.*) - never a valid flow target: it is not the app under test, and argent's native devtools refuse to read one (a system process either never services the read, or describes offscreen UI as if it were the launched app), so this flow has no view hierarchy to resolve selectors against and no relaunch or retry changes this verdict. Replace the selector steps with coordinate ones - \`tap: { x: 0.5, y: 0.35 }\` takes a point directly and reads no tree - or point this flow's \`launch\` step at the app under test.`;
+}
+
+/**
  * Query the raw UIView tree via native-devtools `getFullHierarchy` and adapt
  * it. Flows never degrade to the AX tree (see `fetchFlowTree`), so every
  * failure throws with its reason: the caller's poll rides out a transient one,
@@ -318,13 +328,16 @@ async function unreadableHierarchyReason(
  *
  * UNPINNED — auto-resolve picks the target and its own errors (no connected
  * app, ambiguous frontmost, a single backgrounded app) propagate unwrapped;
- * `target` decides only when that fan-out times out AND its own connection is
- * still up. With nothing connected at all it is the app the disconnection is
- * measured and explained for, ahead of auto-resolve's own "Launch or restart
- * the app first" — the restart loop that measurement exists to break. No
- * injectability gate applies here: auto-resolve ranks whatever connected, so a
- * system app the simulator spawned can be resolved and read. Filtering those
- * connections is the follow-up the pinned gate does not cover.
+ * `target` decides only when that fan-out times out AND it names an injectable
+ * app whose connection is still up - a `com.apple.*` hint gets the pinned
+ * gate's terminal refusal instead, since it is the id this run's own `launch:`
+ * step supplied and a `tool:` step's demote must not soften that verdict. With
+ * nothing connected at all it is the app the disconnection is measured and
+ * explained for, ahead of auto-resolve's own "Launch or restart the app first"
+ * — the restart loop that measurement exists to break. What auto-resolve
+ * itself ranks stays ungated: a system app the simulator spawned can still be
+ * resolved and read, and filtering those connections is the follow-up the
+ * pinned gate does not cover.
  *
  * Both paths end in the same read. It throws on an explicit getFullHierarchy
  * error and on a target that returns no windows (backgrounded, or a first window
@@ -359,15 +372,12 @@ export async function queryFullHierarchyTree(
     // stays terminal AND free, instead of costing a 5s probe plus a 15s
     // getFullHierarchy timeout to arrive at "RPC timed out".
     if (!isInjectableBundleId(bundleId)) {
-      throw new FailureError(
-        `${bundleId} is an Apple system app (com.apple.*) - never a valid flow target: it is not the app under test, and argent's native devtools refuse to read one (a system process either never services the read, or describes offscreen UI as if it were the launched app), so this flow has no view hierarchy to resolve selectors against and no relaunch or retry changes this verdict. Replace the selector steps with coordinate ones - \`tap: { x: 0.5, y: 0.35 }\` takes a point directly and reads no tree - or point this flow's \`launch\` step at the app under test.`,
-        {
-          error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE,
-          failure_stage: "flow_tree_pinned_target",
-          failure_area: "tool_server",
-          error_kind: "validation",
-        }
-      );
+      throw new FailureError(systemAppFlowTargetRefusal(bundleId), {
+        error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE,
+        failure_stage: "flow_tree_pinned_target",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      });
     }
     // The pin was proven connected at launch, but the app can crash or be
     // killed later - the socket close removes it from the connections map. Gate
@@ -495,22 +505,36 @@ export async function queryFullHierarchyTree(
     // every connection at once, and each probe hops onto that app's MAIN
     // thread: one process whose main thread is pinned (a suspended system app,
     // or the launched app mid-cold-start) times the whole resolution out, and
-    // leaves the read no target at all. ONLY then, and only while the target's
-    // own devtools connection is still up, read it instead - it is the app this
-    // run launched. A resolution that ANSWERS (including the deliberate "single
-    // app but backgrounded" error) always wins: the arbiter never overrides a
-    // guard that fired, it only rides out a probe the stall made unanswerable.
+    // leaves the read no target at all. ONLY then, and only while the target
+    // names an injectable app whose devtools connection is still up, read it
+    // instead - it is the app this run launched. A resolution that ANSWERS
+    // (including the deliberate "single app but backgrounded" error) always
+    // wins: the arbiter never overrides a guard that fired, it only rides out
+    // a probe the stall made unanswerable.
     let resolved: { bundleId: string };
     try {
       resolved = await resolveNativeTargetApp(nativeApi, undefined);
     } catch (err) {
       const timedOut =
         getFailureSignal(err)?.error_code === FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT;
-      if (timedOut && target && nativeApi.listConnectedBundleIds().includes(target.bundleId)) {
-        resolved = { bundleId: target.bundleId };
-      } else {
-        throw err;
+      if (!timedOut || !target) throw err;
+      // The hint is the id this run's own `launch:` step supplied, so the
+      // pinned policy verdict survives the demote; checked before the
+      // connections list to keep the refusal terminal either way.
+      if (!isInjectableBundleId(target.bundleId)) {
+        throw new FailureError(
+          systemAppFlowTargetRefusal(target.bundleId),
+          {
+            error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE,
+            failure_stage: "flow_tree_unpinned_hint",
+            failure_area: "tool_server",
+            error_kind: "validation",
+          },
+          err instanceof Error ? { cause: err } : undefined
+        );
       }
+      if (!nativeApi.listConnectedBundleIds().includes(target.bundleId)) throw err;
+      resolved = { bundleId: target.bundleId };
     }
     bundleId = resolved.bundleId;
   }
@@ -534,9 +558,10 @@ export async function queryFullHierarchyTree(
   // Key on raw windows, not flattened children: windows-but-no-leaves is a
   // genuinely sparse, trusted screen.
   //
-  // A `com.apple.*` bundle id can only reach here UNPINNED (the pinned path
-  // refuses it above): the dylib did load and answer, so the message names the
-  // wrong-target diagnosis rather than a failed injection.
+  // A `com.apple.*` bundle id can only reach here via auto-resolve's own
+  // ranking (the pinned gate and the unpinned hint both refuse one above): the
+  // dylib did load and answer, so the message names the wrong-target diagnosis
+  // rather than a failed injection.
   if (!Array.isArray(rawResult.windows) || rawResult.windows.length === 0) {
     throw new Error(
       `getFullHierarchy returned no windows for ${bundleId} - it has no window attached to read ` +
