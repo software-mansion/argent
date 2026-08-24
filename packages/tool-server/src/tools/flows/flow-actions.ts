@@ -89,8 +89,9 @@ export interface FlowTreeTarget {
    * as a cold start and pays both RPC timeouts - and not separable here, since
    * the launch gate waits only for the connect, which precedes the startup work
    * the ride-out exists for. A later `launch` builds a fresh target, since a
-   * re-pinned app cold-starts again. Meaningless while unpinned: those reads
-   * auto-resolve and never probe the target.
+   * re-pinned app cold-starts again. Meaningless while unpinned: an
+   * arbitrated read probes the hint for itself but neither consults nor arms
+   * this - a demoted target never re-pins.
    */
   probeAnswered: boolean;
 }

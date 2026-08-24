@@ -40,6 +40,16 @@ function appState(bundleId: string): NativeAppState {
   };
 }
 
+/** What the wedged sibling's `Application.getState` really rejects with. */
+function rpcTimeout(): FailureError {
+  return new FailureError("ViewInspector RPC timed out: Application.getState", {
+    error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT,
+    failure_stage: "native_devtools_rpc_request",
+    failure_area: "tool_server",
+    error_kind: "timeout",
+  });
+}
+
 /** One spanning window carrying the `ready` marker both asserts look for. */
 function readyWindow() {
   return {
@@ -65,12 +75,7 @@ function nativeApi(hierarchyReads: string[]): NativeDevtoolsApi {
     isConnected: (id: string) => id === APP || id === POISONER,
     getAppState: async (id: string) => {
       if (id === POISONER) {
-        throw new FailureError("ViewInspector RPC timed out: Application.getState", {
-          error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT,
-          failure_stage: "native_devtools_rpc_request",
-          failure_area: "tool_server",
-          error_kind: "timeout",
-        });
+        throw rpcTimeout();
       }
       return appState(id);
     },
@@ -99,6 +104,48 @@ function backgroundedAppApi(hierarchyReads: string[]): NativeDevtoolsApi {
     queryViewHierarchy: async (id: string) => {
       hierarchyReads.push(id);
       return { windows: [readyWindow()] };
+    },
+  } as unknown as NativeDevtoolsApi;
+}
+
+/** A spanning window with no identified views - the shell a backgrounded app serves. */
+function bareWindow() {
+  return {
+    className: "UIWindow",
+    frame: { x: 0, y: 0, width: 400, height: 800 },
+    windowFrame: { x: 0, y: 0, width: 400, height: 800 },
+    children: [],
+  };
+}
+
+/**
+ * The reviewer's measured device: the launched app answers getState from the
+ * background, the healthy subject is active, and the wedged sibling's getState
+ * never answers. Only the subject's hierarchy carries the `ready` marker - the
+ * backgrounded app serves a bare window, which is what made the old arbiter's
+ * read of it a false `hidden:` green.
+ */
+function backgroundedAppWedgedSiblingApi(hierarchyReads: string[]): NativeDevtoolsApi {
+  return {
+    listConnectedBundleIds: () => [APP, OTHER, POISONER],
+    isConnected: (id: string) => id === APP || id === OTHER || id === POISONER,
+    getAppState: async (id: string) => {
+      if (id === POISONER) {
+        throw rpcTimeout();
+      }
+      return id === APP
+        ? {
+            ...appState(id),
+            applicationState: "background",
+            foregroundActiveSceneCount: 0,
+            backgroundSceneCount: 1,
+            isFrontmostCandidate: false,
+          }
+        : appState(id);
+    },
+    queryViewHierarchy: async (id: string) => {
+      hierarchyReads.push(id);
+      return { windows: [id === OTHER ? readyWindow() : bareWindow()] };
     },
   } as unknown as NativeDevtoolsApi;
 }
@@ -265,6 +312,83 @@ describe("a tool step's tree target against a wedged sibling (end-to-end)", () =
     expect(result.steps[3].reason).toMatch(/is an Apple system app/);
     // The remedy a system-app flow can still act on rides along.
     expect(result.steps[3].reason).toMatch(/tap: \{ x: 0\.5, y: 0\.35 \}/);
+    expect(hierarchyReads).toEqual([]);
+  }, 20_000);
+
+  it("keeps the foreground refusal across a tool step demoting a backgrounded pin", async () => {
+    // The reviewer's scenario B: the pinned foreground guard refuses the
+    // backgrounded app (the tap's settle warning), the flow follows the old
+    // remedy with a raw `tool:` step, and the wedged sibling sinks the demoted
+    // read's fan-out - the old arbiter then handed the read back to the app
+    // the guard had just refused (six hierarchy reads of it on device, ending
+    // in "no element matched selector"). The arbiter's probe keeps the
+    // verdict: the assert fails naming the observed state, and the
+    // backgrounded app is never read.
+    const hierarchyReads: string[] = [];
+    await writeFlow("backgrounded-demote", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: APP },
+        { kind: "tap", x: 0.5, y: 0.5 },
+        { kind: "tool", name: "screenshot", args: {} },
+        { kind: "assert", condition: "visible", selector: { identifier: "ready" } },
+      ],
+    });
+    const result = await runFlow(
+      "backgrounded-demote",
+      hierarchyReads,
+      [],
+      backgroundedAppWedgedSiblingApi(hierarchyReads)
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "launch:pass",
+      "tap:pass",
+      "tool:pass",
+      "assert:fail",
+    ]);
+    expect(result.ok).toBe(false);
+    expect(result.steps[1].warning).toMatch(/no foreground presence/);
+    expect(result.steps[3].reason).toMatch(/could not read the UI tree/);
+    expect(result.steps[3].reason).toMatch(/no foreground presence at all/);
+    expect(result.steps[3].reason).toMatch(/applicationState=background/);
+    // The refusal, not a verdict decided against the off-screen hierarchy.
+    expect(result.steps[3].reason).not.toMatch(/no element matched/);
+    expect(hierarchyReads).toEqual([]);
+  }, 20_000);
+
+  it("fails a hidden: assert after the demote instead of false-passing on the backgrounded app", async () => {
+    // Scenario B's `hidden:` twin, the worse failure mode (the reviewer's C):
+    // the old arbiter read the backgrounded app's bare window, the subject's
+    // marker was absent from it, and the assert went GREEN against a screen
+    // that is not on screen. The refusal leaves `hidden:` indeterminate, which
+    // must report as a failure, never as gone-ness.
+    const hierarchyReads: string[] = [];
+    await writeFlow("backgrounded-demote-hidden", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: APP },
+        { kind: "tap", x: 0.5, y: 0.5 },
+        { kind: "tool", name: "screenshot", args: {} },
+        { kind: "assert", condition: "hidden", selector: { identifier: "ready" } },
+      ],
+    });
+    const result = await runFlow(
+      "backgrounded-demote-hidden",
+      hierarchyReads,
+      [],
+      backgroundedAppWedgedSiblingApi(hierarchyReads)
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "launch:pass",
+      "tap:pass",
+      "tool:pass",
+      "assert:fail",
+    ]);
+    expect(result.ok).toBe(false);
+    expect(result.steps[3].reason).toMatch(/could not read the UI tree/);
+    expect(result.steps[3].reason).toMatch(/no foreground presence at all/);
     expect(hierarchyReads).toEqual([]);
   }, 20_000);
 

@@ -2347,12 +2347,12 @@ async function execLeafStep(
       // honest target after it. A tool OUTSIDE FOREGROUND_CHANGING_TOOLS still
       // leaves the launched app worth remembering as an unpinned hint, which
       // decides nothing while auto-resolve answers and arbitrates only a
-      // getState fan-out no connection could answer (a wedged sibling, or the
-      // target's own stalled main thread) - the state that would otherwise sink
-      // every later read. The nesting tools (`flow-execute`, `run-sequence`)
-      // are not in that set and can launch an app inside, so their hint can go
-      // stale; it costs nothing until the fan-out is already unanswerable, and
-      // narrowing it would need this list to see through a nested flow. Applied
+      // getState fan-out a wedged sibling sank, by answering a probe of its
+      // own - the state that would otherwise sink every later read. The
+      // nesting tools (`flow-execute`, `run-sequence`) are not in that set and
+      // can launch an app inside, so their hint can go stale; it costs nothing
+      // until the fan-out is already unanswerable, and narrowing it would need
+      // this list to see through a nested flow. Applied
       // BEFORE invoking, since a tool that throws mid-way may still have
       // switched apps. The next `launch` step re-pins.
       if (FOREGROUND_CHANGING_TOOLS.has(step.name)) {

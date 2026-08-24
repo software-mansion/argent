@@ -19,11 +19,12 @@ import { queryFullHierarchyTree } from "../../src/tools/flows/flow-ios-tree";
 // The second describe covers the other confidence level: an UNPINNED target
 // (what a foreground-neutral `tool:` step leaves behind). Auto-resolution
 // still decides, and the target is consulted solely as a TIMEOUT ARBITER -
-// only when the fan-out times out, the target names an injectable app, and
-// its connection is still up. Every answered resolution, including the
-// deliberate "single app but backgrounded" error, wins over it, so no
-// foreground guard is ever bypassed - and a com.apple.* hint gets the pinned
-// gate's terminal refusal rather than a read.
+// only when the fan-out times out, the target names an injectable app, its
+// connection is still up, and its own probe answers foreground-like. Every
+// answered resolution, including the deliberate "single app but backgrounded"
+// error, wins over it, so no foreground guard is ever bypassed - and a
+// com.apple.* hint gets the pinned gate's terminal refusal rather than a
+// read.
 
 const IOS_DEVICE = {
   id: "00000000-0000-0000-0000-0000000000ab",
@@ -201,10 +202,14 @@ describe("queryFullHierarchyTree - pinned target vs poisoned auto-resolve", () =
     expect(message).toContain("applicationState=background");
     // The message must not advertise a refusal the guard does not deliver: it
     // is as lenient as auto-resolve over one app (an `inactive` app, or a
-    // lingering foreground-inactive scene, still reads), so it says so and
-    // names the escape hatch for a flow whose subject IS another app.
+    // lingering foreground-inactive scene, still reads), so it says so. Its
+    // primary escape hatch is a `launch:` step - no wedged sibling can sink a
+    // pinned read - with the demote-to-auto-resolve `tool:` step named as the
+    // alternative that a wedged sibling sinks.
     expect(message).toContain("Transitional states are NOT refused here");
-    expect(message).toContain("clears the pin");
+    expect(message).toContain("give the flow a `launch:` step for that app");
+    expect(message).toContain("demotes the pin and returns reads to frontmost auto-resolve");
+    expect(message).not.toContain("clears the pin");
     expect(getFailureSignal(err)?.error_code).toBe(
       FAILURE_CODES.NATIVE_TARGET_SINGLE_APP_NOT_FOREGROUND
     );
@@ -337,14 +342,19 @@ describe("queryFullHierarchyTree - pinned target vs poisoned auto-resolve", () =
     const message = (err as Error).message;
     expect(message).toContain(`${APP} (the launched app) stopped answering Application.getState`);
     expect(message).toContain("an earlier one in this run answered");
-    // The escape hatch for a flow whose subject genuinely IS the other app is a
-    // `launch:` step - NOT the raw `tool:` step the answered-state refusal
-    // offers. Demoting the pin sends reads back to auto-resolve, whose
-    // Promise.all fan-out this same still-connected, still-silent app sinks;
-    // the arbiter then targets it again and pays the 15s getFullHierarchy, i.e.
-    // exactly the generic timeout this refusal exists to avoid.
+    // The escape hatch for a flow whose subject genuinely IS the other app is
+    // a `launch:` step, or the `tool: launch-app`/`tool: restart-app` spelling
+    // the recorder emits for an app switch - each re-targets reads at the app
+    // it starts. Only a foreground-NEUTRAL `tool:` step is ruled out: it
+    // demotes the pin to a fallback auto-resolve cannot reach, because this
+    // same still-connected, still-silent app sinks the Promise.all fan-out and
+    // then the arbiter's own probe of the hint.
     expect(message).toContain("give the flow a `launch:` step for that app");
-    expect(message).toContain("a raw `tool:` step does not work here");
+    expect(message).toContain(
+      "`tool: launch-app` or `tool: restart-app` naming that app works too"
+    );
+    expect(message).toContain("how a recorded flow switches apps");
+    expect(message).toContain("A foreground-NEUTRAL raw `tool:` step does not work here");
     expect(message).not.toContain("clears the pin");
     expect(message).not.toContain("returns reads to frontmost auto-resolve");
     // The timeout's own classification, kept because no app state was observed
@@ -513,6 +523,108 @@ describe("queryFullHierarchyTree - an unpinned target arbitrates a timed-out fan
     expect(tree.children.length).toBeGreaterThan(0);
     expect(probed).toContain(POISONER); // the fan-out really did run
     expect(queried).toEqual([APP]);
+  });
+
+  it("refuses a hint that answers the arbiter's probe from the background", async () => {
+    // The reviewer's false read: a foreground-neutral `tool:` step demoted a
+    // pin the foreground guard had just refused, the wedged sibling sank the
+    // demoted read's fan-out, and the arbiter handed the read back to the
+    // refused, backgrounded app - the pinned branch's four gates are all
+    // upstream of it. The arbiter now probes the hint alone, as a pinned read
+    // would, and an answer with no foreground presence is refused with the
+    // observed state instead of read.
+    const backgrounded: NativeAppState = {
+      ...appState(APP),
+      applicationState: "background",
+      foregroundActiveSceneCount: 0,
+      backgroundSceneCount: 1,
+      isFrontmostCandidate: false,
+    };
+    const { api, probed, queried } = poisonedApi([APP, POISONER], { [APP]: backgrounded });
+    const target = hint(APP);
+    const err: unknown = await queryFullHierarchyTree(registryFor(api), IOS_DEVICE, target).then(
+      () => {
+        throw new Error("expected the backgrounded-hint read to be refused");
+      },
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(Error);
+    const message = (err as Error).message;
+    expect(message).toContain(`${APP} (the launched app) has no foreground presence at all`);
+    expect(message).toContain("applicationState=background");
+    // The diagnosis names both halves of what happened: the timed-out fan-out,
+    // and a fallback that answered from the background.
+    expect(message).toContain("auto-resolve's probe of every connection timed out");
+    expect(message).toContain("give the flow a `launch:` step for that app");
+    // Honest classification: a state WAS observed here, unlike the silent-hint
+    // rethrow below - and the arbiter's own stage keeps the sites apart.
+    expect(getFailureSignal(err)?.error_code).toBe(
+      FAILURE_CODES.NATIVE_TARGET_SINGLE_APP_NOT_FOREGROUND
+    );
+    expect(getFailureSignal(err)?.failure_stage).toBe("flow_tree_unpinned_hint");
+    expect((err as Error).cause).toBeInstanceOf(Error);
+    expect(probed).toContain(POISONER); // the fan-out really did run
+    // The substance of the refusal: the backgrounded hint is never read.
+    expect(queried).toEqual([]);
+    // The arbiter's probe must not arm the pinned ride-out discriminator - a
+    // demoted target never re-pins.
+    expect(target.probeAnswered).toBe(false);
+  });
+
+  it("rethrows the fan-out timeout when the hint cannot answer the arbiter's probe", async () => {
+    // The hint's own main thread is silent - it may be the wedge itself. A
+    // probe it cannot answer is nothing the arbiter can vouch for, so the
+    // fan-out's own timeout stands, and the 15s getFullHierarchy that would
+    // park on the same silent queue is never spent.
+    const { api, probed, queried } = poisonedApi([APP, POISONER], {}, { [APP]: rpcTimeout() });
+    const err: unknown = await queryFullHierarchyTree(registryFor(api), IOS_DEVICE, hint(APP)).then(
+      () => {
+        throw new Error("expected the silent-hint read to rethrow the fan-out timeout");
+      },
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/RPC timed out/i);
+    // The ORIGINAL fan-out error, not a new refusal: its stage is the raw
+    // RPC's, so no foreground verdict is claimed for a state never observed.
+    expect(getFailureSignal(err)?.failure_stage).toBe("native_devtools_rpc_request");
+    expect(probed).toEqual([APP, POISONER, APP]); // the fan-out, then the arbiter's own probe
+    expect(queried).toEqual([]);
+  });
+
+  it("propagates an arbiter probe failure that is not a timeout", async () => {
+    // Only a stall lets the fan-out's timeout stand; anything the probe
+    // actually reports is a failure the read must not paper over.
+    const queried: string[] = [];
+    let hintProbes = 0;
+    const api = {
+      listConnectedBundleIds: () => [APP, POISONER],
+      isConnected: () => true,
+      getAppState: async (id: string) => {
+        if (id === POISONER) throw rpcTimeout();
+        // The first call is the fan-out's, sunk by the sibling; the second is
+        // the arbiter's own probe.
+        hintProbes += 1;
+        if (hintProbes > 1) {
+          throw new FailureError("boom", {
+            error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_ERROR,
+            failure_stage: "native_devtools_rpc_response",
+            failure_area: "tool_server",
+            error_kind: "subprocess",
+          });
+        }
+        return appState(id);
+      },
+      queryViewHierarchy: async (id: string) => {
+        queried.push(id);
+        return { windows: [windowSpanning()] };
+      },
+    } as unknown as NativeDevtoolsApi;
+    await expect(queryFullHierarchyTree(registryFor(api), IOS_DEVICE, hint(APP))).rejects.toThrow(
+      /boom/
+    );
+    expect(hintProbes).toBe(2);
+    expect(queried).toEqual([]);
   });
 
   it("refuses a com.apple.* hint with the terminal policy verdict instead of arbitrating toward it", async () => {
