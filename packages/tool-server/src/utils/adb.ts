@@ -73,7 +73,10 @@ const emulatorFlagSupportCache = new Map<string, boolean>();
  * on this before adding such a flag to the launch args.
  *
  * Best-effort: returns false if the binary cannot be resolved or `-help` cannot
- * be run, and never throws.
+ * be run, and never throws. A `-help` run that captures no listing counts as a
+ * failed probe rather than a verdict (whatever the exit code), so it is reported
+ * to stderr and not memoized — the next call retries instead of inheriting the
+ * false for the process lifetime.
  */
 export async function emulatorSupportsFlag(
   flag: string,
@@ -90,7 +93,8 @@ export async function emulatorSupportsFlag(
   const cached = emulatorFlagSupportCache.get(cacheKey);
   if (cached !== undefined) return cached;
 
-  let output: string;
+  let output = "";
+  let failure: string | null = null;
   try {
     const { stdout, stderr } = await execFileAsync(emulatorPath, ["-help"], {
       timeout: options.timeoutMs ?? 10_000,
@@ -102,6 +106,18 @@ export async function emulatorSupportsFlag(
     // attached to the error. Inspect whatever was captured before giving up.
     const e = err as { stdout?: string; stderr?: string };
     output = (e.stdout ?? "") + (e.stderr ?? "");
+    failure = err instanceof Error ? err.message : String(err);
+  }
+  if (output === "") {
+    // The probe learned nothing (timeout under load, transient spawn failure,
+    // silent exit), so leave the verdict uncached: the next boot retries
+    // instead of pinning a permanent false.
+    process.stderr.write(
+      `[argent] \`${emulatorPath} -help\` produced no output ` +
+        (failure ? `(${failure})` : "but exited successfully") +
+        `; assuming "${flag}" unsupported for this boot and retrying on the next one\n`
+    );
+    return false;
   }
 
   const supported = output.includes(flag);

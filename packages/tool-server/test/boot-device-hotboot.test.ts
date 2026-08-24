@@ -862,6 +862,26 @@ describe("boot-device Android — `-crash-report-mode` feature gate", () => {
     expectFlagOccurrences(coldArgs, 1);
   });
 
+  it("keeps exactly one flag occurrence on the probe-reject cold fallback when supported", async () => {
+    // The gate result must survive the hot path bailing out: a regression that
+    // recomputes or drops crashReportArgs inside the loadable:false branch
+    // would leave the cold fallback (the spawn that actually runs) unguarded
+    // and aborting on builds that reject the flag.
+    supportsFlagMock.mockResolvedValue(true);
+    hasSnapshotMock.mockResolvedValue(true);
+    probeMock.mockResolvedValue({ loadable: false, reason: "different renderer configured" });
+    mockHappyBootChain();
+
+    const tool = createBootDeviceTool(registry);
+    await tool.execute!({}, { avdName: "Pixel_7_API_34" });
+
+    expect(probeMock).toHaveBeenCalledTimes(1);
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const coldArgs = spawnMock.mock.calls[0]![1] as string[];
+    expect(coldArgs).toContain("-no-snapshot-load");
+    expectFlagOccurrences(coldArgs, 1);
+  });
+
   it("skips the `-help` feature probe entirely when an already-running AVD is reused", async () => {
     // The detection costs an `emulator -help` spawn; the reuse fast-path never
     // launches an emulator, so it must return before the probe runs.
