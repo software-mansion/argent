@@ -84,7 +84,7 @@ import { flowReadPrerequisiteTool } from "../tools/flows/flow-read-prerequisite"
 import { gatherWorkspaceDataTool } from "../tools/workspace/gather-workspace-data";
 import { updateArgentTool } from "../tools/system/update-argent";
 import { dismissUpdateTool } from "../tools/system/dismiss-update";
-import { screenshotDiffTool } from "../tools/screenshot-diff";
+import { createScreenshotDiffTool } from "../tools/screenshot-diff";
 import { createProposeVariantTool } from "../tools/variants/propose-variant";
 import { awaitUserSelectionTool } from "../tools/variants/await-user-selection";
 import { chromiumTabsTool } from "../tools/chromium-tabs";
@@ -119,7 +119,7 @@ export function createRegistry(): Registry {
   registry.registerTool(settingsPermissionsTool);
   registry.registerTool(openUrlTool);
   registry.registerTool(createScreenshotTool(registry));
-  registry.registerTool(screenshotDiffTool);
+  registry.registerTool(createScreenshotDiffTool(registry));
   registry.registerTool(createScreenRecordingStartTool(registry));
   registry.registerTool(screenRecordingStopTool);
   registry.registerTool(gestureTapTool);

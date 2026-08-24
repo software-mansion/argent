@@ -118,7 +118,9 @@ export interface DirectiveOutcome {
    * read after the element had matched. The `when:` guard probe errors on it
    * rather than silently skipping a block a broken tree source can't vouch for;
    * a plain `assert` reports it as an ordinary failure; `idle`, which has no
-   * condition to fall back on, is scored `error`.
+   * condition to fall back on, is scored `error`; the recorder's cross-tree
+   * re-probe keeps the step and warns that the conversion is UNKNOWN, not
+   * known-bad.
    */
   indeterminate?: boolean;
   /**
@@ -289,10 +291,14 @@ const DEFAULT_ASSERT_TIMEOUT_MS = 1000;
 const CONDITION_DARK_TAIL_TOLERANCE_MS = POLL_INTERVAL_MS * 2;
 
 /**
- * Evaluate a `when:` block's UI guard — the same engine as `assert`, on the same
- * grace window, so a skipped block adds no await-sized dead wait to a clean
- * run. `indeterminate` distinguishes an unreadable tree (the caller errors —
- * unknown is not false) from a plainly unmet condition (the caller skips).
+ * Evaluate a UI condition on the assert grace window — the same engine as
+ * `assert`, deliberately not an await-sized wait. `indeterminate` distinguishes
+ * an unreadable tree (unknown, not false) from a plainly unmet condition.
+ *
+ * Both callers want exactly that window: the `when:` block guard, where a
+ * skipped block must not add a dead wait to every clean run (unknown → error,
+ * unmet → skip), and the recorder's cross-tree re-probe, because that is the
+ * window an `assert:` conversion would get.
  */
 export function probeWhenCondition(
   env: ActionEnv,

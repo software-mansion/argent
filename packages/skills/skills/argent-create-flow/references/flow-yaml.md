@@ -59,16 +59,16 @@ Use single quotes for anchored, case-sensitive regexes:
 
 Flow selectors and live discovery use different screen projections:
 
-| Platform | Runner tree                                               | `describe` / `await-ui-element` | Important difference                                                  |
-| -------- | --------------------------------------------------------- | ------------------------------- | --------------------------------------------------------------------- |
-| iOS      | native UIView hierarchy                                   | accessibility tree              | Each contains elements the other lacks; roles are derived differently |
-| Android  | full accessibility hierarchy                              | trimmed interactables           | Discovery can omit testID-only containers or merge nodes              |
-| Chromium | filtered DOM nodes with id, label, value, click, or focus | full DOM walk                   | The runner tree is a strict subset                                    |
-| Vega     | toolkit page source                                       | same source                     | Same elements, different shape                                        |
+| Platform | Runner tree                                               | `describe` / `await-ui-element` | Important difference                                   |
+| -------- | --------------------------------------------------------- | ------------------------------- | ------------------------------------------------------ |
+| iOS      | projected UIView hierarchy                                | accessibility tree              | `native-full-hierarchy` is raw; nodes and roles differ |
+| Android  | full accessibility hierarchy                              | trimmed interactables           | Discovery can omit testID containers or merge nodes    |
+| Chromium | filtered DOM nodes with id, label, value, click, or focus | shorter DOM walk                | Projections and node limits differ (12,000 vs. 5,000)  |
+| Vega     | toolkit page source                                       | same source                     | Same elements, different shape                         |
 
-On iOS and Android, an id absent from `describe` can still resolve in a flow. Prefer the stable id and verify it in a scratch fragment. On Chromium, an element absent from `describe` cannot resolve. Add a test id instead.
+On iOS, Android, and Chromium, an id absent from `describe` can still resolve in a flow. Verify it in a scratch fragment. Chromium exposes password fields to the runner as `[password]`; select them by id or role.
 
-A live wait can pass against its tree while the converted directive cannot resolve. Replay after conversion. Treat failure there as a polish blocker, not a recording failure.
+The recorder rechecks each successful `await-ui-element` against the runner tree. Follow any `message` warning and replay each conversion. On Vega, a mismatch usually means the screen changed. A `text` check can also select different elements from the same source. See [Live waits and checks](live-authoring.md#live-waits-and-checks).
 
 **On iOS, never copy a `role` from `describe` into a flow selector.** The runner derives iOS roles from the UIView class name and `describe` from accessibility traits, so a React Native `Pressable` (class `RCTView`) is `AXGroup` to the runner and `AXButton` to `describe`. Select on `id`/`text`, or confirm the role against the runner's own tree.
 

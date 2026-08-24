@@ -233,7 +233,7 @@ Instead of polling `screenshot`/`describe` in a loop, use `await-ui-element` to 
 - `hidden` passes when the selector matches nothing. If `note` says it never matched, treat the check as failed and fix the selector. On iOS, a degraded empty tree does not report `hidden` success; the note gives the recovery hint.
 - Optional `timeoutMs` (default 5000) and `pollIntervalMs` (default 400).
 
-Returns `{ success, elapsed }`; on a timeout `success` is `false` and a `note` explains what was seen.
+Returns `{ success, elapsed, note?, cause? }`. On failure, `note` describes the result. `cause` is `unmet`, `unreadable`, or `cancelled`. Only `unmet` means the tree was readable and the condition was false.
 
 ### await-screen-idle — Block until the screen stops changing
 
