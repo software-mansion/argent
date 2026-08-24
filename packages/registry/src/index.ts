@@ -17,6 +17,11 @@ export type {
   DeviceInfo,
   ToolCapability,
   ToolDependency,
+  ToolLookup,
+  ToolInvoker,
+  ExternalToolExecutionContextV1,
+  ExternalToolDefinitionV1,
+  ExternalToolRegistryModuleV1,
 } from "./types";
 export { ArtifactStore, ARTIFACT_MARKER } from "./artifacts";
 export type {

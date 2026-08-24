@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Registry, ToolContext } from "@argent/registry";
+import type { ToolContext, ToolInvoker } from "@argent/registry";
 
 /**
  * Dispatch a tool as a child of the current orchestrator invocation.
@@ -26,7 +26,7 @@ import type { Registry, ToolContext } from "@argent/registry";
  * timeout.
  */
 export async function invokeSubTool<T = unknown>(
-  registry: Registry,
+  registry: ToolInvoker,
   ctx: ToolContext | undefined,
   toolId: string,
   args: unknown

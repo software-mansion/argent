@@ -17,6 +17,7 @@ import type {
   ResolvedFileInput,
   ToolContext,
   ToolDefinition,
+  ToolInvoker,
 } from "@argent/registry";
 import {
   appIdForPlatform,
@@ -43,6 +44,7 @@ import {
 import type { TextMatchMode, WaitCondition } from "../../utils/ui-tree-match";
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
+import { loadExternalToolRegistry } from "../../utils/external-tool-registry";
 import { isUnmetUiWaitResult } from "../await-ui-element";
 import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
 import {
@@ -134,6 +136,12 @@ const zodSchema = z
       .describe(
         "Set to true to confirm the execution prerequisite has been met. Required (LLM path) when a fragment defines an executionPrerequisite."
       ),
+    tool_registry_path: z
+      .string()
+      .optional()
+      .describe(
+        "Canonical absolute path to a trusted local TypeScript external-tool registry for this flow invocation. Internal — argent flow run supplies it through the file-input boundary."
+      ),
   })
   .superRefine((params, ctx) => {
     if ((params.name === undefined) === (params.flow_path === undefined)) {
@@ -168,6 +176,12 @@ const fileInputs: FileInputSpec[] = [
     path: "${project_root}/.argent/flows/${name}.yaml",
     kind: "file",
     skipWhenSet: "flow_path",
+  },
+  {
+    target: "tool_registry_path",
+    path: "${tool_registry_path}",
+    kind: "file",
+    optional: true,
   },
 ];
 
@@ -914,6 +928,8 @@ function noChromiumAppReason(device: DeviceInfo): string {
 // (via `deviceEnv`) and the compiler can find the ones that don't.
 interface ExecState extends Omit<ActionEnv, "device"> {
   device: DeviceInfo | null;
+  /** Tool lookup/dispatch scoped to this flow invocation. */
+  toolInvoker: ToolInvoker;
   /**
    * Whether {@link device} is the one the CALLER named, rather than one
    * auto-detected from what happens to be booted. Only a named device may
@@ -1078,6 +1094,51 @@ function assertUploadSelfContained(flow: FlowFile): void {
   }
 }
 
+/**
+ * Resolve the optional trusted-code boundary and create the one composite used
+ * for this run. A registry upload is never executable: v1 requires the caller
+ * and tool server to share a local filesystem, and the CLI rejects linked
+ * routing before it sends the call.
+ */
+async function resolveFlowToolInvoker(
+  registry: Registry,
+  registryPath: string | undefined,
+  fileInput: ResolvedFileInput | undefined
+): Promise<ToolInvoker> {
+  if (registryPath === undefined) return registry;
+  if (fileInput?.viaUpload) {
+    throw new FailureError(
+      `Invalid tool_registry_path "${fileInput.clientPath}": external tool registries are ` +
+        `trusted local code and cannot be uploaded to or executed by a remote tool server.`,
+      {
+        error_code: FAILURE_CODES.FLOW_EXTERNAL_REGISTRY_INVALID,
+        failure_stage: "flow_external_registry_local_only",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+  const isVerifiedHostPath =
+    fileInput?.presentOnHost === true &&
+    fileInput.statVerified === true &&
+    path.isAbsolute(registryPath) &&
+    path.resolve(registryPath) === path.resolve(fileInput.clientPath);
+  if (!isVerifiedHostPath) {
+    throw new FailureError(
+      `Invalid tool_registry_path "${registryPath}": external tool registries must be supplied ` +
+        `through the local tool_registry_path file-input boundary. Pass the client-local path ` +
+        `with argent flow run --tool-registry.`,
+      {
+        error_code: FAILURE_CODES.FLOW_EXTERNAL_REGISTRY_INVALID,
+        failure_stage: "flow_external_registry_boundary",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+  return loadExternalToolRegistry(registryPath, registry);
+}
+
 export function createRunFlowTool(
   registry: Registry
 ): ToolDefinition<Params, FlowRunResult | FlowPrerequisiteNotice> {
@@ -1155,6 +1216,14 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
     services: () => ({}),
     async execute(_services, params, ctx?: ToolContext) {
       const signal = ctx?.signal;
+      // Load + validate once, before resolving a flow or device and before any
+      // authored step can run. The composite remains local to this invocation;
+      // nested run: fragments share it through ExecState.
+      const toolInvoker = await resolveFlowToolInvoker(
+        registry,
+        params.tool_registry_path,
+        ctx?.fileInputs?.tool_registry_path
+      );
       const { filePath, flowName, viaUpload } = await resolveFlowSource(
         params,
         ctx?.fileInputs?.flow_file,
@@ -1235,6 +1304,7 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
       // resolveRunDevice). Any instance it booted is torn down in the finally.
       const resolved = await resolveRunDevice(
         registry,
+        toolInvoker,
         ctx,
         flow,
         params,
@@ -1264,6 +1334,7 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
 
       const state: ExecState = {
         registry,
+        toolInvoker,
         ctx,
         device,
         deviceIsExplicit: Boolean(params.device),
@@ -1343,6 +1414,7 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
  */
 async function resolveRunDevice(
   registry: Registry,
+  toolInvoker: ToolInvoker,
   ctx: ToolContext | undefined,
   flow: FlowFile,
   params: Params,
@@ -1366,8 +1438,8 @@ async function resolveRunDevice(
     }
     // Checked after the chromium boot path, which only applies to a flow led by
     // a `launch` step — and a launch needs a device, so the two never compete.
-    if (!flowRequiresDevice(registry, flow.steps)) {
-      if (!flowScopesDevice(registry, flow.steps)) return { device: null, booted: null };
+    if (!flowRequiresDevice(toolInvoker, flow.steps)) {
+      if (!flowScopesDevice(toolInvoker, flow.steps)) return { device: null, booted: null };
       // A flow that only SCOPES to a device (a cleanup flow) takes one when one
       // is unambiguous, so the teardown stays narrowed to the run device and
       // cannot reap what another agent is mid-session on. When resolution has
@@ -1929,7 +2001,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
     // blockSteps, so no nesting hides a step: under `true` a device is resolved
     // and `!state.device` is false; under `false` this guard's own
     // stepRequiresDevice conjunct fails. The expansion below stays regardless.
-    if (!state.device && stepRequiresDevice(state.registry, step)) {
+    if (!state.device && stepRequiresDevice(state.toolInvoker, step)) {
       state.stopped = true;
       pushReport(state, {
         index,
@@ -2334,7 +2406,7 @@ async function execLeafStep(
     target: stepTarget(step),
     ...depthOf(scope),
   } as const;
-  const { registry, ctx, device, signal } = state;
+  const { toolInvoker, ctx, device, signal } = state;
 
   switch (step.kind) {
     case "echo":
@@ -2431,13 +2503,13 @@ async function execLeafStep(
       // recording scoped — and, when the run device was only auto-detected, it
       // keeps that even with a device resolved.
       const args = bindDeviceArgs(
-        registry,
+        toolInvoker,
         step.name,
         device?.id ?? "",
         step.args,
         state.deviceIsExplicit
       );
-      const outputHint = registry.getTool(step.name)?.outputHint;
+      const outputHint = toolInvoker.getTool(step.name)?.outputHint;
       if (step.delayMs && !(await sleepOrAbort(step.delayMs, signal))) {
         return { ...base, status: "skip", tool: step.name, reason: "run aborted during delay" };
       }
@@ -2461,7 +2533,7 @@ async function execLeafStep(
         if (isNestedOrchestratorTool(step.name) && state.treeOutage) {
           state.treeOutage.proven = undefined;
         }
-        const result = await invokeSubTool(registry, ctx, step.name, args);
+        const result = await invokeSubTool(toolInvoker, ctx, step.name, args);
         if (isUnmetUiWaitResult(step.name, result)) {
           const note = (result as { note?: string }).note;
           return {
