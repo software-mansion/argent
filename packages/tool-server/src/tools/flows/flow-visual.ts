@@ -252,7 +252,9 @@ export async function runSnapshot(
     // a remote client materializes downloads by filename — defaulting to the
     // basename would land `current` on the same cache path as `baseline` and
     // clobber it (the diff artifact below disambiguates the same way).
-    return store.register(currentPath, {
+    return store.register({
+      hostPath: currentPath,
+      kind: "screenshot",
       mimeType: "image/png",
       filename: `${snapshotKey}-current.png`,
     });
@@ -285,7 +287,11 @@ export async function runSnapshot(
     if (opts.updateBaselines) {
       await fs.mkdir(dir, { recursive: true });
       await fs.copyFile(currentPath, baselinePath);
-      const baseline = await store.register(baselinePath, { mimeType: "image/png" });
+      const baseline = await store.register({
+        hostPath: baselinePath,
+        kind: "screenshot",
+        mimeType: "image/png",
+      });
       return {
         status: "pass",
         reason: exists ? `baseline updated (${key})` : `baseline written (${key})`,
@@ -351,7 +357,11 @@ export async function runSnapshot(
               : ""),
           snapshotKey,
           artifacts: {
-            baseline: await store.register(baselinePath, { mimeType: "image/png" }),
+            baseline: await store.register({
+              hostPath: baselinePath,
+              kind: "screenshot",
+              mimeType: "image/png",
+            }),
             current: await currentArtifact(),
           },
         };
@@ -364,13 +374,19 @@ export async function runSnapshot(
       }
 
       const artifacts: SnapshotArtifacts = {
-        baseline: await store.register(baselinePath, { mimeType: "image/png" }),
+        baseline: await store.register({
+          hostPath: baselinePath,
+          kind: "screenshot",
+          mimeType: "image/png",
+        }),
         current: await currentArtifact(),
       };
       // The annotated context diff — the image a client renders inline so the
       // agent can see WHAT differed. Absent when the diff bailed early.
       if (result.contextDiffPath) {
-        artifacts.diff = await store.register(result.contextDiffPath, {
+        artifacts.diff = await store.register({
+          hostPath: result.contextDiffPath,
+          kind: "screenshot-diff-context",
           mimeType: "image/png",
           filename: `${snapshotKey}-diff.png`,
         });

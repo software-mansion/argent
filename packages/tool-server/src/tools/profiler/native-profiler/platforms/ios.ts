@@ -14,7 +14,7 @@ import {
 import { waitForXctraceReady } from "../../../../utils/ios-profiler/startup";
 import { DEFAULT_EXEC_MAX_BUFFER } from "../../../../utils/ios-profiler/run-with-timeout";
 import { exportIosTraceData } from "../../../../utils/ios-profiler/export";
-import type { ExportDiagnostics } from "../../../../utils/ios-profiler/export";
+import type { ExportDiagnostics, IosExportKey } from "../../../../utils/ios-profiler/export";
 import { shutdownChild } from "../../../../utils/profiler-shared/lifecycle";
 import { runIosProfilerPipeline } from "../../../../utils/ios-profiler/pipeline/index";
 import {
@@ -798,7 +798,7 @@ export async function startNativeProfilerIos(
 
 export interface IosStopResult {
   traceFile: string;
-  exportedFiles: Record<string, string | null>;
+  exportedFiles: Record<IosExportKey, string | null>;
   exportDiagnostics: ExportDiagnostics;
   warning?: string;
 }

@@ -195,6 +195,7 @@ describe("runSnapshot baselines", () => {
     // The baseline travels as an artifact handle, not a raw host path.
     expect(r.artifacts?.baseline).toMatchObject({
       __argentArtifact: true,
+      kind: "screenshot",
       hostPath: baselinePath(),
       mimeType: "image/png",
     });
@@ -266,6 +267,7 @@ describe("runSnapshot baselines", () => {
     expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
     expect(r.artifacts?.diff).toMatchObject({
       __argentArtifact: true,
+      kind: "screenshot-diff-context",
       hostPath: h.contextDiffPath,
       filename: "home__ios-390x844-diff.png",
     });

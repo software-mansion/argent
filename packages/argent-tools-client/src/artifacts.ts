@@ -31,9 +31,38 @@ import { argentHomeDir, findProjectRoot, getConfigValueByKey } from "@argent/con
 /** Must match the tool-server's wire contract (`tool-server/src/artifacts.ts`). */
 export const ARTIFACT_MARKER = "__argentArtifact" as const;
 
+/**
+ * Semantic artifact categories the tool-server emits today. Must match the
+ * server-side union (`registry/src/artifacts.ts`). Kept separate on purpose:
+ * this client may talk to a tool-server that is older (no `kind` at all) or
+ * newer (kinds this build has never heard of), so consumers read `kind`
+ * through {@link ArtifactHandle.kind}'s widened, optional type and treat
+ * anything unrecognized as opaque.
+ */
+export type ArtifactKind =
+  | "screenshot"
+  | "screenshot-diff"
+  | "screenshot-diff-context"
+  | "screen-recording"
+  | "native-profile-trace"
+  | "native-profile-cpu"
+  | "native-profile-hangs"
+  | "native-profile-leaks"
+  | "native-profile-report"
+  | "react-profile-cpu"
+  | "react-profile-commits"
+  | "react-profile-report";
+
 export interface ArtifactHandle {
   [ARTIFACT_MARKER]: true;
   id: string;
+  /**
+   * Semantic category of the artifact, distinct from MIME type. Absent when
+   * the tool-server predates artifact kinds; may hold a value outside
+   * {@link ArtifactKind} when the server is newer than this client — the
+   * `string & {}` arm keeps that honest while preserving autocomplete.
+   */
+  kind?: ArtifactKind | (string & {});
   filename: string;
   mimeType: string;
   size: number;
