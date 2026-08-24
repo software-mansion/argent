@@ -75,6 +75,10 @@ function execFileFails(message: string): void {
 // Default adb behavior: the `pm list packages` existence preflight finds the
 // package (it prints a `package:<name>` line and exits 0), and every mutating pm
 // command succeeds silently (pm's real success shape).
+//
+// `dumpsys package` also falls through to "", which parses to "nothing could be
+// read" — so verification stays neutral and every pre-#616 assertion here keeps
+// its original meaning. Tests that care about verification must supply a dump.
 function adbDefaults(overrides?: (cmd: string) => string | Promise<string> | undefined): void {
   mockAdbShell.mockImplementation(async (_serial, cmd) => {
     const overridden = overrides?.(cmd);
@@ -566,6 +570,9 @@ describe("settings-permissions Android branch", () => {
       "pm list packages 'com.example.app'",
       "pm revoke 'com.example.app' android.permission.CAMERA",
       "pm clear-permission-flags 'com.example.app' android.permission.CAMERA user-set user-fixed",
+      // One read back for the whole call: the command exiting 0 no longer proves
+      // anything happened, so the result is checked against real state (#616).
+      "dumpsys package 'com.example.app'",
     ]);
   });
 
@@ -890,6 +897,9 @@ describe("settings-permissions Android branch", () => {
       "pm list packages 'com.example.app'",
       "pm revoke 'com.example.app' android.permission.ACCESS_BACKGROUND_LOCATION",
       "pm clear-permission-flags 'com.example.app' android.permission.ACCESS_BACKGROUND_LOCATION user-set user-fixed",
+      // One read back for the whole call: the command exiting 0 no longer proves
+      // anything happened, so the result is checked against real state (#616).
+      "dumpsys package 'com.example.app'",
     ]);
   });
 });
@@ -983,5 +993,208 @@ describe("settings-permissions dispatch wiring (through tool.execute)", () => {
     const [cmd, args] = execFileMock.mock.calls[0]!;
     expect(cmd).toBe("sim-remote");
     expect((args as string[]).slice(0, 2)).toEqual(["simctl", "privacy"]);
+  });
+});
+
+/**
+ * Verification of Android permission changes (#616).
+ *
+ * Recent Android accepts a request for a permission an app never declared and
+ * does nothing — exit 0, no state written — so the exit code stopped being
+ * evidence and the result is now checked against the package manager's state.
+ */
+describe("settings-permissions Android verification (#616)", () => {
+  function params(overrides: Partial<SettingsPermissionsParams>): SettingsPermissionsParams {
+    return {
+      udid: ANDROID_SERIAL,
+      action: "grant",
+      permission: "camera",
+      bundleId: "com.example.app",
+      ...overrides,
+    } as SettingsPermissionsParams;
+  }
+
+  /**
+   * Renders the dump the verifier reads. Models the two facts that decide a
+   * verdict: what the manifest declares, and the runtime grant state.
+   */
+  function dumpFor(opts: { declared?: string[]; granted?: Record<string, boolean> }): string {
+    const declared = opts.declared ?? [];
+    const granted = opts.granted ?? {};
+    const rows = Object.entries(granted).map(
+      ([perm, value]) => `        ${perm}: granted=${value}, flags=[ USER_SET]`
+    );
+    return [
+      "Packages:",
+      "  Package [com.example.app] (abc1234):",
+      "    userId=10123",
+      "    requested permissions:",
+      ...declared.map((perm) => `      ${perm}`),
+      "    User 0: ceDataInode=1 installed=true",
+      ...(rows.length > 0 ? ["      runtime permissions:", ...rows] : []),
+    ].join("\n");
+  }
+
+  const withDump = (dump: string) => (cmd: string) =>
+    cmd.startsWith("dumpsys package") ? dump : undefined;
+
+  it("reports undeclared permissions as skipped rather than applied", async () => {
+    // `photos` fans out to four permissions; this app declares one of them. The
+    // other three exit 0 and do nothing, and used to be reported as applied.
+    adbDefaults(
+      withDump(
+        dumpFor({
+          declared: ["android.permission.READ_EXTERNAL_STORAGE"],
+          granted: { "android.permission.READ_EXTERNAL_STORAGE": true },
+        })
+      )
+    );
+
+    const result = await androidImpl.handler(
+      {},
+      params({ action: "grant", permission: "photos" }),
+      androidDevice
+    );
+
+    expect(result.applied).toEqual(["android.permission.READ_EXTERNAL_STORAGE"]);
+    expect(result.skipped).toEqual([
+      "android.permission.READ_MEDIA_IMAGES",
+      "android.permission.READ_MEDIA_VIDEO",
+      "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+    ]);
+  });
+
+  it("keeps a mixed result mixed — the real change applied, the phantom one skipped", async () => {
+    // The reported case: one call where READ_EXTERNAL_STORAGE genuinely flipped
+    // and READ_MEDIA_AUDIO does not exist on the package. Reporting either
+    // wholesale — all applied, or a hard failure — would be wrong.
+    adbDefaults(
+      withDump(
+        dumpFor({
+          declared: ["android.permission.READ_EXTERNAL_STORAGE"],
+          granted: { "android.permission.READ_EXTERNAL_STORAGE": false },
+        })
+      )
+    );
+
+    const result = await androidImpl.handler(
+      {},
+      params({ action: "deny", permission: "media-library" }),
+      androidDevice
+    );
+
+    expect(result.applied).toEqual(["android.permission.READ_EXTERNAL_STORAGE"]);
+    expect(result.skipped).toEqual(["android.permission.READ_MEDIA_AUDIO"]);
+  });
+
+  it("still reports a genuine change as applied, reading state once for the whole fan-out", async () => {
+    const declared = [
+      "android.permission.READ_MEDIA_IMAGES",
+      "android.permission.READ_MEDIA_VIDEO",
+      "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+      "android.permission.READ_EXTERNAL_STORAGE",
+    ];
+    adbDefaults(
+      withDump(dumpFor({ declared, granted: Object.fromEntries(declared.map((x) => [x, true])) }))
+    );
+
+    const result = await androidImpl.handler(
+      {},
+      params({ action: "grant", permission: "photos" }),
+      androidDevice
+    );
+
+    expect(result.applied).toEqual(declared);
+    expect(result.skipped).toBeUndefined();
+    // One read per call, not per permission.
+    const reads = mockAdbShell.mock.calls.filter((c) => String(c[1]).startsWith("dumpsys package"));
+    expect(reads).toHaveLength(1);
+  });
+
+  it("trusts the command when the state cannot be read, and says so", async () => {
+    // Older devices, unfamiliar layouts and failed reads must not turn into a
+    // refusal — but the caller has to be able to tell this from a confirmed
+    // change, which is the complaint that motivated the issue.
+    adbDefaults(withDump("Unable to find package: com.example.app"));
+
+    const result = await androidImpl.handler(
+      {},
+      params({ action: "grant", permission: "camera" }),
+      androidDevice
+    );
+
+    expect(result.applied).toEqual(["android.permission.CAMERA"]);
+    expect(result.unverified).toEqual(["android.permission.CAMERA"]);
+    expect(result.skipped).toBeUndefined();
+  });
+
+  it("does not fail a landed change when the verification read itself dies", async () => {
+    adbDefaults((cmd) => {
+      if (cmd.startsWith("dumpsys package")) throw new Error("adb: device 'x' not found");
+      return undefined;
+    });
+
+    const result = await androidImpl.handler(
+      {},
+      params({ action: "grant", permission: "camera" }),
+      androidDevice
+    );
+
+    expect(result.applied).toEqual(["android.permission.CAMERA"]);
+    expect(result.unverified).toEqual(["android.permission.CAMERA"]);
+  });
+
+  it("errors when a grant took effect nowhere", async () => {
+    adbDefaults(withDump(dumpFor({ declared: ["android.permission.INTERNET"] })));
+
+    const err = await androidImpl
+      .handler({}, params({ action: "grant", permission: "camera" }), androidDevice)
+      .then(() => null)
+      .catch((e: Error) => e);
+
+    expect(getFailureSignal(err!)?.error_code).toBe("ANDROID_SETTINGS_PERMISSION_FAILED");
+    expect(err!.message).toMatch(/manifest/);
+    // Nothing was rejected — the change was silently dropped.
+    expect(err!.message).not.toMatch(/was rejected/);
+  });
+
+  it("treats denying an undeclared permission as already satisfied", async () => {
+    // The app cannot hold a permission it does not declare, so "make sure this
+    // app has no camera access" is met. Erroring would break the most natural
+    // setup call there is on any app that simply doesn't use the camera.
+    adbDefaults(withDump(dumpFor({ declared: ["android.permission.INTERNET"] })));
+
+    const result = await androidImpl.handler(
+      {},
+      params({ action: "deny", permission: "camera" }),
+      androidDevice
+    );
+
+    expect(result.applied).toEqual([]);
+    expect(result.skipped).toEqual(["android.permission.CAMERA"]);
+  });
+
+  it("keeps the package manager's own reason when it rejected the change outright", async () => {
+    // Below the API level where the silent no-op appears, the package manager
+    // still refuses — and its wording is the more actionable one, so
+    // verification must neither overwrite it nor promote the permission back.
+    adbDefaults((cmd) => {
+      if (cmd.startsWith("pm grant")) throw new Error("Security exception: not requested");
+      if (cmd.startsWith("dumpsys package")) {
+        return dumpFor({
+          declared: ["android.permission.CAMERA"],
+          granted: { "android.permission.CAMERA": true },
+        });
+      }
+      return undefined;
+    });
+
+    const err = await androidImpl
+      .handler({}, params({ action: "grant", permission: "camera" }), androidDevice)
+      .then(() => null)
+      .catch((e: Error) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err!.message).toMatch(/not requested/);
   });
 });
