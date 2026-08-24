@@ -73,11 +73,11 @@ const emulatorFlagSupportCache = new Map<string, boolean>();
  * on this before adding such a flag to the launch args.
  *
  * Best-effort: returns false if the binary cannot be resolved or `-help` cannot
- * be run, and never throws. A `-help` run that captures no complete listing —
- * empty output, or a killed run with only a partial capture — counts as a
- * failed probe rather than a verdict, so it is reported to stderr and not
- * memoized; the next call retries instead of inheriting the verdict for the
- * process lifetime.
+ * be run, and never throws. Any killed `-help` run — whatever it managed to
+ * capture before dying — counts as a failed probe rather than a verdict, as
+ * does an empty capture from any other failure; both are reported to stderr
+ * and not memoized, so the next call retries instead of inheriting the verdict
+ * for the process lifetime.
  */
 export async function emulatorSupportsFlag(
   flag: string,
@@ -99,6 +99,10 @@ export async function emulatorSupportsFlag(
   try {
     const { stdout, stderr } = await execFileAsync(emulatorPath, ["-help"], {
       timeout: options.timeoutMs ?? 10_000,
+      // Same hazard runAdb guards against: a SIGTERM-immune child (emulator
+      // wedged in Qt/graphics init) leaves execFile unsettled forever, and
+      // this await has no deadline of its own.
+      killSignal: "SIGKILL",
       maxBuffer: 8 * 1024 * 1024,
     });
     output = stdout + stderr;
@@ -716,7 +720,10 @@ export async function listAvds(): Promise<AvdInfo[]> {
   const emulatorPath = await resolveAndroidBinary("emulator");
   if (!emulatorPath) return [];
   try {
-    const { stdout } = await execFileAsync(emulatorPath, ["-list-avds"], { timeout: 5_000 });
+    const { stdout } = await execFileAsync(emulatorPath, ["-list-avds"], {
+      timeout: 5_000,
+      killSignal: "SIGKILL",
+    });
     return stdout
       .split("\n")
       .map((l) => l.trim())
@@ -759,6 +766,7 @@ export async function checkSnapshotLoadable(
     ];
     const { stdout } = await execFileAsync(emulatorPath, args, {
       timeout: options.timeoutMs ?? 10_000,
+      killSignal: "SIGKILL",
       maxBuffer: 4 * 1024 * 1024,
     });
     const tail = stdout.split("\n").slice(-6).join("\n");

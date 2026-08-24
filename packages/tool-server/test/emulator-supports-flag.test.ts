@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const execFileMock = vi.fn();
+const execFileOpts: Record<string, unknown>[] = [];
 
 // Callback-style double, matching the pattern in adb-binary-failure-buffer.test.ts:
 // adb.ts builds `promisify(execFile)` at module-eval time, so the mock must be a
@@ -16,6 +17,7 @@ vi.mock("node:child_process", async () => {
       opts: unknown,
       cb?: (err: Error | null, out: { stdout: string; stderr: string }) => void
     ) => {
+      execFileOpts.push(opts as Record<string, unknown>);
       const callback = typeof opts === "function" ? opts : cb!;
       const result = execFileMock(cmd, args);
       if (result instanceof Error) {
@@ -44,6 +46,7 @@ import { emulatorSupportsFlag } from "../src/utils/adb";
 
 beforeEach(() => {
   execFileMock.mockReset();
+  execFileOpts.length = 0;
 });
 
 describe("emulatorSupportsFlag — failed `-help` probes are not memoized", () => {
@@ -139,6 +142,16 @@ describe("emulatorSupportsFlag — failed `-help` probes are not memoized", () =
     expect(await emulatorSupportsFlag("-captured-ok-flag")).toBe(true);
     expect(await emulatorSupportsFlag("-captured-ok-flag")).toBe(true);
     expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("kills a hung probe with SIGKILL so the timeout cannot be ignored", async () => {
+    // Node's default kill signal is SIGTERM; an emulator wedged in init can
+    // ignore it and the probe promise never settles, hanging boot-device.
+    execFileMock.mockImplementation(() => ({ stdout: " -sigkill-flag never\n", stderr: "" }));
+
+    await emulatorSupportsFlag("-sigkill-flag");
+
+    expect(execFileOpts[0]?.killSignal).toBe("SIGKILL");
   });
 
   it("warns on stderr when a probe fails without producing a verdict", async () => {
