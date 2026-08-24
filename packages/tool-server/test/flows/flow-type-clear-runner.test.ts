@@ -471,12 +471,26 @@ const textInputLayoutWrapperXml = () =>
 
 function mockRegistry(
   calls: Call[],
-  getHierarchy: () => { xml: string } | Promise<{ xml: string }>
+  getHierarchy: () => { xml: string } | Promise<{ xml: string }>,
+  /**
+   * What the `keyboard` tool answers. Only the clear-carrying call is worth
+   * varying: it is the one that can succeed in a weaker way than asked and say
+   * so in a `note`.
+   */
+  keyboardResult?: (args: Record<string, unknown>) => unknown,
+  /**
+   * What any OTHER tool answers, keyed by tool id. Needed because several tools
+   * return a `note` on a perfectly healthy result, and a step report must not
+   * read those as a weakened pass.
+   */
+  otherResults?: Record<string, unknown>
 ): Registry {
   return {
     invokeTool: vi.fn(async (id: string, args: Record<string, unknown>) => {
       calls.push({ id, args });
       if (id === "list-devices") return { devices: [] };
+      if (id === "keyboard" && keyboardResult) return keyboardResult(args);
+      if (otherResults && Object.hasOwn(otherResults, id)) return otherResults[id];
       return { ok: true };
     }),
     getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
@@ -550,6 +564,375 @@ describe("type directive — clear dispatch", () => {
       .filter((c) => c.id === "gesture-tap" || c.id === "keyboard")
       .map((c) => c.id);
     expect(order[0]).toBe("gesture-tap");
+  });
+
+  it("carries the keyboard's `note` into the step report instead of dropping it", async () => {
+    // The step still PASSES — the clear was carried out — but on Android it may
+    // have been carried out by a path nothing can verify, and the note is the
+    // only thing that says which. A QA flow's value is knowing what its green
+    // bought, so dropping it here is the one place it matters most.
+    const calls: Call[] = [];
+    const NOTE = "keyboard clear: the atomic accessibility replace was not used (…).";
+    const registry = mockRegistry(
+      calls,
+      () => ({ xml: fieldXml("old.remembered.login") }),
+      (args) =>
+        args.clear === true ? { typed: "x", keys: 1, cleared: true, note: NOTE } : { ok: true }
+    );
+
+    await writeFlow("f", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "type", into: { identifier: "email" }, text: "new@example.com", clear: true },
+      ],
+    });
+
+    const result = asRun(await run(registry));
+    expect(result.steps.map((s) => s.status)).toEqual(["pass"]);
+    expect(result.steps[0]!.warning).toBe(NOTE);
+  });
+
+  it("leaves the step warning-free when the clear reported none", async () => {
+    // The counterpart: a verified clear says nothing, and a step report that
+    // warned anyway would train the reader to ignore the field.
+    const calls: Call[] = [];
+    const registry = mockRegistry(
+      calls,
+      () => ({ xml: fieldXml("old.remembered.login") }),
+      () => ({
+        typed: "x",
+        keys: 1,
+        cleared: true,
+      })
+    );
+
+    await writeFlow("f", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "type", into: { identifier: "email" }, text: "new@example.com", clear: true },
+      ],
+    });
+
+    const result = asRun(await run(registry));
+    expect(result.steps[0]!.status).toBe("pass");
+    expect(result.steps[0]!.warning).toBeUndefined();
+  });
+
+  it("carries the note of a clear recorded as a RAW tool step too", async () => {
+    // `flow-add-step` has no `keyboard` → `type` rewrite, so a recorded clear
+    // replays as a raw tool step. Its report used to carry the note inside
+    // `result` and no warning at all — and `argent-cli`'s own `StepReport` has no
+    // `result` field, so the CLI printed a clean pass over an unverified clear.
+    const calls: Call[] = [];
+    const NOTE = "keyboard clear: the atomic accessibility replace was not used (…).";
+    const registry = mockRegistry(
+      calls,
+      () => ({ xml: fieldXml("old.remembered.login") }),
+      (args) =>
+        args.clear === true ? { typed: "x", keys: 1, cleared: true, note: NOTE } : { ok: true }
+    );
+
+    await writeFlow("f", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tool", name: "keyboard", args: { clear: true, text: "new@example.com" } }],
+    });
+
+    const result = asRun(await run(registry));
+    expect(result.steps.map((s) => s.status)).toEqual(["pass"]);
+    expect(result.steps[0]!.warning).toBe(NOTE);
+  });
+
+  it("leaves a raw tool step warning-free when its result carries no note", async () => {
+    const calls: Call[] = [];
+    const registry = mockRegistry(
+      calls,
+      () => ({ xml: fieldXml("old.remembered.login") }),
+      () => ({ typed: "x", keys: 1, cleared: true })
+    );
+
+    await writeFlow("f", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tool", name: "keyboard", args: { clear: true, text: "new@example.com" } }],
+    });
+
+    const result = asRun(await run(registry));
+    expect(result.steps[0]!.status).toBe("pass");
+    expect(result.steps[0]!.warning).toBeUndefined();
+  });
+
+  it("reads a clear that returned nothing as a pass, not as a cancelled run", async () => {
+    // `dispatchForResult` signals an ABORT by resolving `undefined`, so a tool
+    // that simply returns nothing must be coerced to `null` on the way out.
+    // Without that coercion the step becomes the skip a hang-up produces — with
+    // "run aborted" as its reason and the rest of the flow skipped behind it —
+    // on a clear the device actually carried out.
+    const calls: Call[] = [];
+    const registry = mockRegistry(
+      calls,
+      () => ({ xml: fieldXml("old.remembered.login") }),
+      () => undefined
+    );
+
+    await writeFlow("f", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "type", into: { identifier: "email" }, text: "new@example.com", clear: true },
+      ],
+    });
+
+    const result = asRun(await run(registry));
+    expect(result.steps.map((s) => s.status)).toEqual(["pass"]);
+    // A skip would carry "run aborted" here; a pass carries no reason at all.
+    expect(result.steps[0]!.reason).toBeUndefined();
+  });
+
+  it("leaves a tool step warning-free when its `note` describes a HEALTHY call", async () => {
+    // `note` is not a shared "this went badly" channel. `open-url` attaches a
+    // constant caveat to every http(s) URL, `react-profiler-status` declares the
+    // field REQUIRED and fills it on the running-session path, and
+    // `await-ui-element` explains a `hidden` wait met at once. Reading the key
+    // structurally marked each of those steps ⚠ on every run, for good: the
+    // glyph, the run summary's warning count, and the "only what needs
+    // attention" list all followed — which left the QA-flow rule "resolve every
+    // passing-step warning before completion" impossible to satisfy.
+    const calls: Call[] = [];
+    const WEB_URL_NOTE = "This is a web URL — it opens the native app only if …";
+    const registry = mockRegistry(calls, () => ({ xml: fieldXml("x") }), undefined, {
+      "open-url": { opened: true, url: "https://example.com", note: WEB_URL_NOTE },
+    });
+
+    await writeFlow("f", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tool", name: "open-url", args: { url: "https://example.com" } }],
+    });
+
+    const result = asRun(await run(registry));
+    expect(result.steps[0]!.status).toBe("pass");
+    expect(result.steps[0]!.warning).toBeUndefined();
+    // Nothing is dropped — the note still rides along where the caller can read it.
+    expect((result.steps[0]!.result as { note?: string }).note).toBe(WEB_URL_NOTE);
+  });
+
+  it("carries a clear's note out of a `run-sequence` step, where it sits one level down", async () => {
+    // `argent-device-interact` prescribes this spelling for a clear that types:
+    // `{ clear: true, text }`, then `{ key: "enter" }`. The note then lands at
+    // `result.steps[i].result.note`, which a top-level read cannot see — so the
+    // step reported a clean green over a clear nothing verified, and the CLI
+    // printed only `✓ 01 tool run-sequence`.
+    const calls: Call[] = [];
+    const NOTE = "keyboard clear: the atomic accessibility replace was not used (…).";
+    const registry = mockRegistry(calls, () => ({ xml: fieldXml("x") }), undefined, {
+      "run-sequence": {
+        completed: 1,
+        total: 1,
+        steps: [{ tool: "keyboard", result: { typed: "x", keys: 1, cleared: true, note: NOTE } }],
+      },
+    });
+
+    await writeFlow("f", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "tool",
+          name: "run-sequence",
+          args: { steps: [{ tool: "keyboard", args: { clear: true, text: "new@example.com" } }] },
+        },
+      ],
+    });
+
+    const result = asRun(await run(registry));
+    expect(result.steps[0]!.status).toBe("pass");
+    expect(result.steps[0]!.warning).toBe(NOTE);
+  });
+
+  it("keeps every clear's note when a `run-sequence` holds more than one", async () => {
+    const calls: Call[] = [];
+    const registry = mockRegistry(calls, () => ({ xml: fieldXml("x") }), undefined, {
+      "run-sequence": {
+        completed: 2,
+        total: 2,
+        steps: [
+          { tool: "keyboard", result: { cleared: true, note: "first clear was weak." } },
+          { tool: "keyboard", result: { cleared: true, note: "second clear was weak." } },
+        ],
+      },
+    });
+
+    await writeFlow("f", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tool", name: "run-sequence", args: { steps: [] } }],
+    });
+
+    const result = asRun(await run(registry));
+    expect(result.steps[0]!.warning).toBe("first clear was weak. second clear was weak.");
+  });
+
+  it("leaves a `run-sequence` step warning-free when only its other tools carry notes", async () => {
+    // The same scope rule one level down: `await-ui-element` is in
+    // run-sequence's allowed tools and notes a `hidden` condition met at once.
+    const calls: Call[] = [];
+    const registry = mockRegistry(calls, () => ({ xml: fieldXml("x") }), undefined, {
+      "run-sequence": {
+        completed: 2,
+        total: 2,
+        steps: [
+          {
+            tool: "await-ui-element",
+            result: { success: true, elapsed: 1, note: "condition met immediately — …" },
+          },
+          { tool: "keyboard", result: { typed: "x", keys: 1, cleared: true } },
+        ],
+      },
+    });
+
+    await writeFlow("f", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tool", name: "run-sequence", args: { steps: [] } }],
+    });
+
+    const result = asRun(await run(registry));
+    expect(result.steps[0]!.status).toBe("pass");
+    expect(result.steps[0]!.warning).toBeUndefined();
+  });
+
+  it("carries a clear's warning out of a composed `flow-execute` step", async () => {
+    // The third registered nested orchestrator, and the one whose weak pass had
+    // nowhere to surface: `flow-execute` keeps its sub-run's reports inside
+    // `result`, a green sub-run has no outcome of its own, and the CLI's
+    // `StepReport` has no `result` field — so the outer step reported a clean
+    // green over a clear nothing verified. `flow-add-step` records a raw
+    // `tool: flow-execute` step on four branches, so flows really carry this.
+    const calls: Call[] = [];
+    const NOTE = "keyboard clear: the atomic accessibility replace was not used (…).";
+    const registry = mockRegistry(calls, () => ({ xml: fieldXml("x") }), undefined, {
+      "flow-execute": {
+        flow: "inner",
+        ok: true,
+        passed: 1,
+        failed: 0,
+        errored: 0,
+        steps: [{ index: 0, kind: "tool", tool: "keyboard", status: "pass", warning: NOTE }],
+      },
+    });
+
+    await writeFlow("f", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tool", name: "flow-execute", args: { name: "inner" } }],
+    });
+
+    const result = asRun(await run(registry));
+    expect(result.steps[0]!.status).toBe("pass");
+    expect(result.steps[0]!.warning).toBe(NOTE);
+  });
+
+  it("says a composed flow's repeated warning once, not once per step", async () => {
+    // A flow that clears five fields the same weak way has one thing to say
+    // about it, and the report is read by a human.
+    const calls: Call[] = [];
+    const NOTE = "keyboard clear: the atomic accessibility replace was not used (…).";
+    const registry = mockRegistry(calls, () => ({ xml: fieldXml("x") }), undefined, {
+      "flow-execute": {
+        flow: "inner",
+        ok: true,
+        steps: [
+          { index: 0, kind: "type", status: "pass", warning: NOTE },
+          { index: 1, kind: "type", status: "pass", warning: NOTE },
+        ],
+      },
+    });
+
+    await writeFlow("f", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tool", name: "flow-execute", args: { name: "inner" } }],
+    });
+
+    expect(asRun(await run(registry)).steps[0]!.warning).toBe(NOTE);
+  });
+
+  it("carries a warning up from a flow composed inside the composed flow", async () => {
+    // Depth needs no rule of its own: the sub-run applied this same promotion at
+    // its own level, so its step report already carries the warning by the time
+    // the outer run reads it.
+    const calls: Call[] = [];
+    const NOTE = "keyboard clear: the atomic accessibility replace was not used (…).";
+    const registry = mockRegistry(calls, () => ({ xml: fieldXml("x") }), undefined, {
+      "flow-execute": {
+        flow: "middle",
+        ok: true,
+        steps: [{ index: 0, kind: "tool", tool: "flow-execute", status: "pass", warning: NOTE }],
+      },
+    });
+
+    await writeFlow("f", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tool", name: "flow-execute", args: { name: "middle" } }],
+    });
+
+    expect(asRun(await run(registry)).steps[0]!.warning).toBe(NOTE);
+  });
+
+  it("leaves a composed `flow-execute` step warning-free when its sub-run had none", async () => {
+    const calls: Call[] = [];
+    const registry = mockRegistry(calls, () => ({ xml: fieldXml("x") }), undefined, {
+      "flow-execute": {
+        flow: "inner",
+        ok: true,
+        steps: [{ index: 0, kind: "tap", status: "pass" }],
+      },
+    });
+
+    await writeFlow("f", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tool", name: "flow-execute", args: { name: "inner" } }],
+    });
+
+    const result = asRun(await run(registry));
+    expect(result.steps[0]!.status).toBe("pass");
+    expect(result.steps[0]!.warning).toBeUndefined();
+  });
+
+  it("does not raise a warning out of a tool that answered with an EMPTY note", async () => {
+    // `resultNote` guards on length, not on the key being there: an empty string
+    // is a tool saying nothing, and `warning: ""` would mark the step ⚠ while
+    // printing no reason for it.
+    const calls: Call[] = [];
+    const registry = mockRegistry(
+      calls,
+      () => ({ xml: fieldXml("x") }),
+      () => ({
+        typed: "x",
+        keys: 1,
+        cleared: true,
+        note: "",
+      })
+    );
+
+    await writeFlow("f", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tool", name: "keyboard", args: { clear: true, text: "new@example.com" } }],
+    });
+
+    const result = asRun(await run(registry));
+    expect(result.steps[0]!.status).toBe("pass");
+    expect(result.steps[0]!.warning).toBeUndefined();
+  });
+
+  it("leaves a `run-sequence` step warning-free when its result has no steps to read", async () => {
+    // The report crossed the registry boundary as `unknown`. A shape this does
+    // not recognise must leave the step exactly as the runner would report it.
+    const calls: Call[] = [];
+    const registry = mockRegistry(calls, () => ({ xml: fieldXml("x") }), undefined, {
+      "run-sequence": { completed: 0, total: 0 },
+    });
+
+    await writeFlow("f", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tool", name: "run-sequence", args: { steps: [] } }],
+    });
+
+    const result = asRun(await run(registry));
+    expect(result.steps[0]!.status).toBe("pass");
+    expect(result.steps[0]!.warning).toBeUndefined();
   });
 
   it("refuses to clear when the focus wait never sees focus reach the target", async () => {

@@ -53,7 +53,11 @@ import {
   stepRequiresDevice,
   type FlowPlatform,
 } from "./flow-device";
-import { isNestedOrchestratorTool, nestedOrchestratorOutcome } from "./flow-nested-outcome";
+import {
+  isNestedOrchestratorTool,
+  nestedOrchestratorOutcome,
+  toolStepWarning,
+} from "./flow-nested-outcome";
 import {
   runDirective,
   invokeOnDevice,
@@ -195,6 +199,20 @@ export interface StepReport {
    * `pinch`/`rotate`) that a tree-source outage left unsettled: it is dispatched
    * regardless, and the warning is the only thing separating it from one that
    * waited.
+   *
+   * Raised by a THIRD family too: a `keyboard` clear that could not take the
+   * verified path and said so in its own `note`. It reaches a step report four
+   * ways — from the `type` directive, from a raw `keyboard` tool step, and from
+   * either nested orchestrator carrying one (`run-sequence` holds the tool's own
+   * result, `flow-execute` a whole sub-run's reports) — whose result would
+   * otherwise keep the note where no CLI renders it. Only Android produces one;
+   * see `KeyboardResult.note`.
+   *
+   * `keyboard` is the ONLY tool whose `note` is read this way. Several others put
+   * one on a healthy result, and a step that warns on every run is a step nobody
+   * reads — see `KEYBOARD_TOOL_ID`. A nested run's `warning` is different and is
+   * taken whole: that field already means a weakened pass, whatever raised it.
+   * `toolStepWarning` holds the enumeration.
    */
   warning?: string;
   /** Underlying tool id for `tool` steps. */
@@ -990,6 +1008,12 @@ relaunch the app so the instrumentation loads), or accept the warning where the 
 the first such gesture proves the outage and later ones spend that verdict without paying the settle
 window again. A tree read that comes back, or a relaunch, retires that verdict — which only makes the
 next gesture pay a fresh window, and it warns again if the source is still down.
+A clear PASSES carrying a \`warning\` of its own when Android could not take its verified accessibility
+path — from a \`type\` step, a raw \`keyboard\` step, or one nested inside \`run-sequence\` or a composed
+\`flow-execute\`, whose warnings come up with it. The note says which weaker path ran and what it cannot
+promise about the field. A helper that is missing, too old, or that could not start is environment: let
+it start on the device and rerun. Otherwise gate the next action on an app result rather than on the
+field.
 A \`when:\` block (condition + \`steps:\`, no else) runs its steps only if the condition holds —
 checked once with the short assert grace — for one-sided divergences like interstitials and coach
 marks; a skipped block reports distinctly and failures inside an entered block are real failures.
@@ -2378,7 +2402,29 @@ async function execLeafStep(
             args,
           };
         }
-        return { ...base, status: "pass", tool: step.name, result, outputHint, args };
+        // A tool can pass in a WEAKER way than asked, and say so in its result:
+        // the Android `keyboard` clear does, when the verified accessibility
+        // replace was unavailable. The `type` directive surfaces that as the
+        // step's warning; a raw tool step carrying the same clear would
+        // otherwise report a clean pass with the note buried in `result` — which
+        // no CLI renders, since `StepReport` there has no `result` field at all.
+        // The two nested orchestrators bury it one level deeper still, inside
+        // the reports they hold.
+        //
+        // Keyed on the TOOL, not on the presence of a `note`. Other tools return
+        // one on a perfectly healthy result — see KEYBOARD_TOOL_ID for the list —
+        // and a step that warns on every run is a step nobody reads. The three
+        // that do answer are enumerated in `toolStepWarning`.
+        const note = toolStepWarning(step.name, result);
+        return {
+          ...base,
+          status: "pass",
+          tool: step.name,
+          result,
+          outputHint,
+          args,
+          ...(note === undefined ? {} : { warning: note }),
+        };
       } catch (err) {
         return { ...base, status: "error", tool: step.name, reason: errMsg(err) };
       }

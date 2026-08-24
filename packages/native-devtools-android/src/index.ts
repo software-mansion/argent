@@ -56,6 +56,22 @@ interface HelperManifest {
   instrumentationRunner: string;
   versionName: string;
   versionCode: number;
+  /**
+   * The JSON-RPC protocol the bundled helper answers `ping` with.
+   *
+   * It is not the `versionCode`, and it must not be inferred from one: the
+   * versionCode is the install bar (a rebuild for a plain bug fix moves it and
+   * leaves the protocol alone), while this is the contract the tool-server's
+   * protocol gates ask for — `SET_TEXT_MIN_PROTOCOL` is the first of them.
+   *
+   * Recorded here because the APK is COMPILED from the `packages/argent-private`
+   * submodule and STAMPED from this file, and nothing else ties those two
+   * together: a manifest bumped for a helper change the submodule pointer did
+   * not follow would otherwise mint an APK that claims the new versionCode and
+   * runs the old code. `scripts/build.sh` compares this against the source's own
+   * `PROTOCOL_VERSION` and refuses to build when they disagree.
+   */
+  protocolVersion: number;
   installFlags: string[];
 }
 

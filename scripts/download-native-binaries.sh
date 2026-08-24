@@ -177,6 +177,51 @@ gh release download "${TAG}" \
 # bundledHelperApkPath()'s expectation.
 ANDROID_VERSION_NAME="$(node -p "require('$PWD/${ANDROID_MANIFEST_FILE}').versionName")"
 ANDROID_TARGET="${ANDROID_BIN_DIR}/argent-android-devtools-${ANDROID_VERSION_NAME}.apk"
+
+# Verify the downloaded APK carries the versionCode the manifest promises.
+#
+# Three numbers must move together, and only one of them lives in this repo: the
+# manifest `versionCode` (the bar `ensureAndroidDevtoolsInstalled` installs to),
+# the helper's own `PROTOCOL_VERSION` (what the tool-server's protocol gates ask
+# for, e.g. SET_TEXT_MIN_PROTOCOL), and the `aapt2 --version-code` the APK is
+# linked with in argent-private's build-native-binaries.yml. A release that lags
+# a manifest bump fails SILENTLY on every device: the install gate
+# (device >= manifest) can never be satisfied, so each tool-server process
+# reinstalls the helper once per device, and every protocol-gated call falls back
+# to its weaker path while the build itself looks healthy. Fail here instead.
+#
+# Checked on the TEMP file, before the move below. The target path is the one
+# `bundledHelperApkPath()` reads, so verifying after the move aborts having
+# installed the bad state it just diagnosed — and having cleared the EXIT trap,
+# so the download is kept twice over. Failing here leaves the previous APK in
+# place and the trap removes the temp.
+#
+# aapt2 ships with the Android build-tools. Hosts without it (no Android SDK)
+# skip the check, like the vtool and apksigner checks around it.
+AAPT2="$(command -v aapt2 || true)"
+if [ -z "${AAPT2}" ]; then
+  # Globs sort lexicographically, so the last match is the newest build-tools.
+  for candidate in "${ANDROID_HOME:-${HOME}/Library/Android/sdk}"/build-tools/*/aapt2; do
+    [ -x "${candidate}" ] && AAPT2="${candidate}"
+  done
+fi
+if [ -n "${AAPT2}" ]; then
+  ANDROID_VERSION_CODE="$(node -p "require('$PWD/${ANDROID_MANIFEST_FILE}').versionCode")"
+  BADGING="$("${AAPT2}" dump badging "${TMP_APK}")"
+  APK_VERSION_CODE="$(printf '%s\n' "${BADGING}" | sed -n "1s/.*versionCode='\([0-9]*\)'.*/\1/p")"
+  if [ "${APK_VERSION_CODE}" != "${ANDROID_VERSION_CODE}" ]; then
+    echo "Error: argent-android-devtools.apk on release '${TAG}' is versionCode" >&2
+    echo "       '${APK_VERSION_CODE:-<unreadable>}', but ${ANDROID_MANIFEST_FILE} requires" >&2
+    echo "       ${ANDROID_VERSION_CODE}. The helper release lags this repo's manifest." >&2
+    echo "       Land the argent-private helper change, re-run build-native-binaries," >&2
+    echo "       then retry — or lower the manifest versionCode to match." >&2
+    exit 1
+  fi
+  echo "Android helper versionCode OK (${APK_VERSION_CODE})."
+else
+  echo "  Skipping Android helper versionCode check: aapt2 not found." >&2
+fi
+
 mv -f "${TMP_APK}" "${ANDROID_TARGET}"
 trap - EXIT
 

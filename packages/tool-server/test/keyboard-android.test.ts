@@ -5,16 +5,27 @@ import { Registry, type DeviceInfo } from "@argent/registry";
 // Keep `shellQuote` real (android-input relies on it) — only stub the transport
 // and the `isAndroidTv` runtime probe (so the phone/TV branch is deterministic).
 // `vi.hoisted` so the mock fns exist when the hoisted `vi.mock` factory runs.
-const { adbShell, isAndroidTv } = vi.hoisted(() => ({
+// `adbExecOutBinary` is mocked alongside `adbShell` because the hierarchy dump
+// the clear reads back does NOT go through `adbShell` — it rides `exec-out`,
+// hence the Buffer-shaped mock (see keyboard-clear.test.ts for why). Leaving it
+// real makes `SERIAL` below address whatever emulator happens to be attached:
+// these tests then dump a live device, and a clear's outcome depends on what is
+// on its screen — locally a rescue run appears in the middle of the asserted
+// command stream, while CI, with no emulator, sees none.
+const { adbShell, adbExecOutBinary, isAndroidTv } = vi.hoisted(() => ({
   // Typed params so `adbShell.mock.calls[0]` is a `[serial, cmd, opts?]` tuple
   // (an untyped `vi.fn(async () => "")` infers a zero-arg call and TS2493s on
   // destructuring — vitest transforms tests with esbuild, so only `tsc` catches it).
   adbShell: vi.fn(async (_serial: string, _cmd: string, _opts?: unknown): Promise<string> => ""),
+  adbExecOutBinary: vi.fn(
+    async (_serial: string, _cmd: string, _opts?: unknown): Promise<Buffer> => Buffer.from("")
+  ),
   isAndroidTv: vi.fn(async (_serial: string): Promise<boolean> => false),
 }));
 vi.mock("../src/utils/adb", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/adb")>()),
   adbShell,
+  adbExecOutBinary,
   isAndroidTv,
 }));
 
@@ -47,7 +58,10 @@ import {
 } from "../src/utils/android-input";
 import { NAMED_KEYS } from "../src/tools/keyboard/key-codes";
 import { InvalidToolInputError } from "../src/utils/capability";
-import { makeAndroidImpl } from "../src/tools/keyboard/platforms/android";
+import {
+  makeAndroidImpl,
+  __resetAtomicClearCooldown,
+} from "../src/tools/keyboard/platforms/android";
 import { createKeyboardTool } from "../src/tools/keyboard";
 import { DependencyMissingError } from "../src/utils/check-deps";
 import type { KeyboardParams } from "../src/tools/keyboard/types";
@@ -350,7 +364,19 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     // real failure. `mockReset` also restores the `async () => ""` given to
     // `vi.fn`, so the default transport still resolves. Matches `isAndroidTv`
     // on the next line.
+    // The atomic path marks a device whose helper refused to start, and the mark
+    // is module state keyed by serial — which every test here shares. Without
+    // this reset the first clear to fail leaves every LATER test on the injected
+    // path by a different route, and the file stops comparing like with like.
+    __resetAtomicClearCooldown();
     adbShell.mockReset();
+    // An empty dump: `readHierarchy` finds no `<hierarchy>` tag, so the clear's
+    // read-back measures nothing and never redirects to the delete run. That is
+    // the shape these tests want — they assert the modern clear's own command
+    // stream. The rescue itself is covered in keyboard-clear.test.ts, where the
+    // dump is given real XML.
+    adbExecOutBinary.mockReset();
+    adbExecOutBinary.mockImplementation(async () => Buffer.from(""));
     typeTv.mockClear();
     isAndroidTv.mockReset();
     isAndroidTv.mockResolvedValue(false);
@@ -443,11 +469,11 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
   });
 
   it("chains two overlapping calls on one device rather than interleaving their adb writes", async () => {
-    // The clear holds a SELECTION across awaits: the modern path sends the
-    // select-all and the delete as two separate `adb` invocations, so between
-    // them the field is fully selected, and the text is a third. A concurrent
-    // call landing in there types over that selection and destroys the value —
-    // while BOTH calls return 200 with their own text as `typed`.
+    // The clear holds a SELECTION across awaits: the select-all is its own `adb`
+    // invocation and the text that consumes it is another, so between them the
+    // field is fully selected. A concurrent call landing in there types over that
+    // selection and destroys the value — while BOTH calls return 200 with their
+    // own text as `typed`.
     //
     // Measured on API 36 before the chain covered this backend, `{clear,
     // text:"AAAA"}` against `{clear, text:"BBBB"}` at 10/20/30/50ms: 4 of 4
@@ -462,16 +488,15 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     await Promise.all([a, b]);
 
     // The exact ordered stream, not a grouping predicate: each run is
-    // select-all, delete, text, and the second run's first write must come
-    // after the first run's last. Unchained, the two runs suspend on alternate
-    // `adbShell` awaits and this comes back interleaved
-    // (keycombination, keycombination, keyevent, keyevent, text, text).
+    // select-all then text — the delete is skipped because the text replaces the
+    // selection (see `keepSelection`) — and the second run's first write must
+    // come after the first run's last. Unchained, the two runs suspend on
+    // alternate `adbShell` awaits and this comes back interleaved
+    // (keycombination, keycombination, text, text).
     expect(adbShell.mock.calls.map((c) => c[1])).toEqual([
       "input keycombination 113 29 2>&1",
-      "input keyevent 67",
       "input text 'AAAA'",
       "input keycombination 113 29 2>&1",
-      "input keyevent 67",
       "input text 'BBBB'",
     ]);
   });
@@ -499,7 +524,9 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
 describe("keyboard tool — android adb preflight (via dispatchByPlatform)", () => {
   beforeEach(() => {
     // Same reason as the describe above — this one also has to survive a
-    // one-shot value left behind by the last test to run there.
+    // one-shot value left behind by the last test to run there, and the atomic
+    // path's per-serial mark left behind with it.
+    __resetAtomicClearCooldown();
     adbShell.mockReset();
     ensureDeps.mockClear();
     ensureDeps.mockResolvedValue(undefined);

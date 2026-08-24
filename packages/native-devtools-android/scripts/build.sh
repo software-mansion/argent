@@ -50,6 +50,33 @@ if [[ ! -d "${SRC_DIR}" ]]; then
   exit 1
 fi
 
+# The APK is COMPILED from the submodule and STAMPED from manifest.json, and
+# nothing else ties those two together. A manifest bumped for a helper change the
+# submodule pointer did not follow mints an APK that claims the new versionCode
+# and runs the old code — and that fails SILENTLY once it is installed:
+# `ensureAndroidDevtoolsInstalled` compares device >= manifest, is satisfied, and
+# never replaces it, so every protocol-gated call falls back to its weaker path
+# for the life of that install with `adb uninstall` as the only recovery.
+#
+# `protocolVersion` is what this repo promises the helper answers with;
+# `PROTOCOL_VERSION` in the source is what it really answers with. Disagreement
+# in either direction is a release-coordination bug: one way ships a helper too
+# old for the gates the tool-server asserts, the other leaves the manifest
+# describing a helper that no longer exists.
+MANIFEST_PROTOCOL="$(node -p "require('${PKG_DIR}/assets/manifest.json').protocolVersion")"
+SRC_PROTOCOL="$(sed -n 's/.*PROTOCOL_VERSION = "\([0-9][0-9]*\)".*/\1/p' \
+  "${SRC_DIR}/SnapshotInstrumentation.java" | head -1)"
+if [[ "${SRC_PROTOCOL}" != "${MANIFEST_PROTOCOL}" ]]; then
+  echo "Error: the pinned helper source answers protocol '${SRC_PROTOCOL:-<unreadable>}', but" >&2
+  echo "       ${PKG_DIR}/assets/manifest.json declares protocolVersion ${MANIFEST_PROTOCOL}." >&2
+  echo "       Building anyway would stamp versionCode ${VERSION_CODE} onto that source, and an" >&2
+  echo "       installed APK whose versionCode satisfies the install gate is never replaced." >&2
+  echo "       Move the packages/argent-private pointer to the helper commit that carries" >&2
+  echo "       protocol ${MANIFEST_PROTOCOL} and commit it, or lower protocolVersion (and" >&2
+  echo "       versionCode with it) to match the pinned source." >&2
+  exit 1
+fi
+
 if [[ -z "${ANDROID_HOME:-}" ]]; then
   if [[ -d "${HOME}/Library/Android/sdk" ]]; then
     export ANDROID_HOME="${HOME}/Library/Android/sdk"
