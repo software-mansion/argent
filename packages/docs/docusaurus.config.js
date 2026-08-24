@@ -38,6 +38,16 @@ const config = {
     locales: ["en"],
   },
 
+  headTags: [
+    {
+      tagName: "meta",
+      attributes: {
+        name: "google-site-verification",
+        content: "U0xic78Z5DjD9r0wrxOYQrLZPuSF_DZidnZeXPR4D0k",
+      },
+    },
+  ],
+
   stylesheets: [
     "https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap",
   ],
