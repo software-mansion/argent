@@ -24,10 +24,18 @@ import type { ChromiumCdpApi } from "../blueprints/chromium-cdp";
  * the try: test fakes and mid-navigation contexts may lack `cdp`, and neither
  * says anything about visibility.
  */
+/**
+ * The guarded mouse tools. `failure_stage` is derived as
+ * `chromium_<action>_window_hidden` — "chromium_scroll_window_hidden" is
+ * frozen in telemetry (pre-migration rows join on it), so the stage must
+ * never be hand-written per call site where a typo or transposed argument
+ * would compile and silently land rows in an unqueried bucket.
+ */
+type ChromiumMouseAction = "tap" | "drag" | "scroll";
+
 export async function assertChromiumWindowVisible(
   chromium: ChromiumCdpApi,
-  action: string,
-  failureStage: string
+  action: ChromiumMouseAction
 ): Promise<void> {
   let value: unknown;
   try {
@@ -44,7 +52,7 @@ export async function assertChromiumWindowVisible(
       `Cannot ${action}: the Chromium window is hidden (minimized or fully occluded), so the renderer will not process mouse input. Bring the window to the foreground and retry.`,
       {
         error_code: FAILURE_CODES.CHROMIUM_WINDOW_HIDDEN,
-        failure_stage: failureStage,
+        failure_stage: `chromium_${action}_window_hidden`,
         failure_area: "tool_server",
         error_kind: "validation",
       }
