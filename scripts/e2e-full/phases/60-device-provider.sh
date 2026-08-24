@@ -21,6 +21,14 @@
 # The device is injected the same way the android tier takes one
 # (E2E_ANDROID_SERIAL), or booted from E2E_ANDROID_AVD by the android tier
 # before this one runs. Without a device the whole tier skips with a reason.
+#
+# What a green run here does not prove: the simulator watcher
+# (`utils/simulator-watcher.ts`) arms devtools injection on every booted sim it
+# finds, by raw UDID and with no tool call behind it. This tier cannot see it,
+# every phase runs under the sandbox $E2E_HOME, which hides CoreSimulator's
+# default set, so a provider-claimed simulator the watcher must leave alone
+# cannot be staged here at all. That path is covered only by
+# `packages/tool-server/test/simulator-watcher-external-claim.test.ts`.
 
 PROVIDER_ID="e2eprov"
 

@@ -34,6 +34,7 @@ import {
   type ExternalDevice,
   externalProviderId,
   isExternalId,
+  isProcessAlive,
   parseExternalId,
   type ProviderRecord,
   readProviderDevices as readDeclaredDevices,
@@ -240,6 +241,40 @@ export function findExternalDevice(id: string): ExternalDevice | undefined {
 }
 
 /**
+ * The provider claiming `nativeId`, if any; what {@linkcode findExternalDevice}
+ * does for an `ext:` id.
+ *
+ * The simulator watcher and `boot-device` only ever see a device's real UDID,
+ * so a gate keyed on the `ext:` spelling never fires for them. Looking the
+ * claim up by native id is what binds a grant to the device rather than to one
+ * of its names.
+ *
+ * A claim whose `pid` is dead is ignored, so a provider that crashed without
+ * unlinking cannot keep Argent off a device it owns. No `pid` at all still
+ * binds.
+ */
+export function externalClaimForNativeId(nativeId: string): ExternalDevice | undefined {
+  /**
+   * First, with nothing published this returns after one `readdirSync`, which
+   * is what keeps the per-argv call in `adbArgv` sub-millisecond.
+   */
+  const providers = discoverProviders();
+  if (providers.length === 0) return undefined;
+
+  /** The `ext:` spelling has its own path, and no provider declares one. */
+  if (isExternalId(nativeId)) return undefined;
+
+  for (const record of providers) {
+    if (record.pid !== undefined && !isProcessAlive(record.pid)) continue;
+
+    const device = readProviderDevices(record).find((device) => device.nativeId === nativeId);
+    if (device) return device;
+  }
+
+  return undefined;
+}
+
+/**
  * Provider attribution is deliberately not added here. The HTTP dispatch edge
  * appends it to every `ext:` failure, so spelling out the provider's name and
  * support URL would print them twice.
@@ -327,9 +362,15 @@ export function assertExternalCapabilitySync(
 ): void {
   const id = typeof device === "string" ? device : device.id;
 
-  if (!isExternalId(id)) return;
+  /**
+   * Either spelling. A withdrawn `ext:` id is an error, not an ungated device.
+   * A raw udid nobody claims is Argent's own and passes straight through.
+   */
+  const externalDevice = isExternalId(id)
+    ? lookupExternalDeviceNow(id)
+    : externalClaimForNativeId(id);
 
-  const externalDevice = lookupExternalDeviceNow(id);
+  if (!externalDevice) return;
 
   if (externalDevice.capabilities.has(capability)) return;
 

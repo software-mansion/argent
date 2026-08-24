@@ -7,6 +7,7 @@ import {
   nativeDevtoolsRef,
   type NativeDevtoolsApi,
 } from "../blueprints/native-devtools";
+import { externalClaimForNativeId } from "./external-devices";
 import {
   configuredAdditionalDeviceSets,
   rememberDeviceSet,
@@ -80,11 +81,51 @@ export function startSimulatorWatcher(registry: Registry): {
   ready: Promise<void>;
 } {
   const trackedServices = new Map<string, NativeDevtoolsApi>();
+  /**
+   * Skipped UDIDs, so the reason is logged once per boot rather than per tick.
+   */
+  const reportedSkips = new Set<string>();
+
+  /**
+   * Drop simulators a provider owns but did not grant `native-devtools` on.
+   *
+   * The capability gate would refuse them anyway, but resolving a service that
+   * throws on every tick would fill the registry with error entries. This way
+   * the watcher never asks. Skipped UDIDs never enter `trackedServices`, so the
+   * dispose-on-unboot loop below is unaffected.
+   */
+  function withoutForeignSimulators(booted: Set<string>): Set<string> {
+    const ours = new Set<string>();
+
+    for (const udid of booted) {
+      const claim = externalClaimForNativeId(udid);
+
+      if (!claim || claim.capabilities.has("native-devtools")) {
+        reportedSkips.delete(udid);
+        ours.add(udid);
+        continue;
+      }
+
+      if (!reportedSkips.has(udid)) {
+        reportedSkips.add(udid);
+        process.stderr.write(
+          `[simulator-watcher] skipping ${udid}: ${claim.provider.name} offers it without the ` +
+            `'native-devtools' capability, so argent leaves its devtools environment alone\n`
+        );
+      }
+    }
+
+    for (const udid of reportedSkips) {
+      if (!booted.has(udid)) reportedSkips.delete(udid);
+    }
+
+    return ours;
+  }
 
   async function poll(shouldBlockUntilSettled: boolean): Promise<void> {
     let booted: Set<string>;
     try {
-      booted = await getBootedUdids();
+      booted = withoutForeignSimulators(await getBootedUdids());
     } catch {
       // xcrun unavailable or transient error — skip this tick
       return;

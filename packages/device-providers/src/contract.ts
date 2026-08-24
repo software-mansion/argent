@@ -336,10 +336,14 @@ export const providerRecordSchema = z.object({
   /** Human-readable, shown to the agent and in every error attributed here. */
   name: z.string().min(1).max(64),
   /**
-   * The process offering these devices. Argent's runtime ignores it, its only
-   * job is to let `argent providers prune` remove descriptors left behind by a
-   * provider that died without withdrawing. Omit it and a crashed instance's
-   * descriptor has to be deleted by hand.
+   * The process offering these devices.
+   *
+   * `argent providers prune` uses it to remove descriptors left behind by a
+   * provider that died without withdrawing. The runtime uses it when matching a
+   * device by its real udid: a claim from a dead pid does not bind, so a
+   * crashed provider cannot keep Argent off a device it owns.
+   *
+   * Omitting it is safe, the claim binds and nothing cleans up after you.
    */
   pid: z.number().int().min(1).optional(),
   schemaVersion: z.number().int(),

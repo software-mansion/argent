@@ -20,6 +20,7 @@ import {
   externalNativeId,
   externalProviderId,
   externalProviderLabel,
+  externalClaimForNativeId,
   externalSupportHint,
   isExternalDeviceUrn,
   isExternalId,
@@ -45,6 +46,8 @@ import {
 } from "../src/utils/ios-device-sets";
 
 const ANDROID_SERIAL = "emulator-5554";
+/** A pid nothing can be running under, so `kill(0)` fails with ESRCH. */
+const DEAD_PID = 0x7fffffff;
 const IOS_UDID = "1A2B3C4D-5E6F-7081-92A3-B4C5D6E7F809";
 
 function androidDevice(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -583,6 +586,63 @@ describe("lookupExternalDevice", () => {
   });
 });
 
+/**
+ * The raw-udid half of the lookup. Argent's own discovery paths — the simulator
+ * watcher, `boot-device` — never see an `ext:` id, so without this a provider's
+ * grant would bind to one spelling of a device rather than to the device.
+ */
+describe("externalClaimForNativeId", () => {
+  it("finds the provider claiming a device by its real udid", async () => {
+    useDescriptors(await liveDescriptor());
+
+    const claim = externalClaimForNativeId(IOS_UDID);
+
+    expect(claim?.id).toBe(makeExternalId("acme-3f2a9c", IOS_UDID));
+    expect(claim?.provider.name).toBe("Acme IDE");
+  });
+
+  it("returns nothing for a device no provider claims", async () => {
+    useDescriptors(await liveDescriptor());
+
+    expect(externalClaimForNativeId("99999999-9999-9999-9999-999999999999")).toBeUndefined();
+    expect(externalClaimForNativeId(ANDROID_SERIAL)).toBeUndefined();
+  });
+
+  it("returns nothing when no provider is registered at all", () => {
+    expect(externalClaimForNativeId(IOS_UDID)).toBeUndefined();
+  });
+
+  /** The `ext:` spelling has `findExternalDevice`; no provider declares one. */
+  it("returns nothing for an ext: id", async () => {
+    useDescriptors(await liveDescriptor());
+
+    expect(externalClaimForNativeId(makeExternalId("acme-3f2a9c", IOS_UDID))).toBeUndefined();
+  });
+
+  /**
+   * A provider killed without unlinking must not keep argent off a simulator it
+   * legitimately owns. The claim is only as live as the process behind it.
+   */
+  it("ignores a claim whose provider process is gone", async () => {
+    useDescriptors(await liveDescriptor({ pid: DEAD_PID }));
+
+    expect(externalClaimForNativeId(IOS_UDID)).toBeUndefined();
+  });
+
+  it("honors a claim from a live provider process", async () => {
+    useDescriptors(await liveDescriptor({ pid: process.pid }));
+
+    expect(externalClaimForNativeId(IOS_UDID)?.provider.name).toBe("Acme IDE");
+  });
+
+  /** Absent pid is no evidence of death, so the claim binds. */
+  it("honors a claim from a provider that published no pid", async () => {
+    useDescriptors(await liveDescriptor());
+
+    expect(externalClaimForNativeId(IOS_UDID)?.provider.name).toBe("Acme IDE");
+  });
+});
+
 describe("assertExternalCapability", () => {
   it("is a no-op for a device argent booted itself", async () => {
     await expect(
@@ -641,6 +701,58 @@ describe("assertExternalCapability", () => {
     for (const capability of EXTERNAL_CAPABILITIES) {
       await expect(assertExternalCapability("Any", deviceId, capability)).rejects.toThrow();
     }
+  });
+
+  /**
+   * The gate authorises the device, not the id it arrived under. Every path
+   * that reaches a provider's simulator by its real udid — the watcher,
+   * `boot-device`, anything `additionalDeviceSets` surfaces — walks past a gate
+   * keyed on the `ext:` spelling alone.
+   */
+  it("denies every mechanism on the raw udid of a claimed device", async () => {
+    useDescriptors(await liveDescriptor({}, { capabilities: [], simulatorServer: undefined }));
+
+    for (const capability of EXTERNAL_CAPABILITIES) {
+      await expect(assertExternalCapability("Any", IOS_UDID, capability)).rejects.toThrow(
+        /Acme IDE did not grant/
+      );
+    }
+  });
+
+  it("allows a declared mechanism on the raw udid too", async () => {
+    useDescriptors(await liveDescriptor());
+
+    await expect(
+      assertExternalCapability("AXService", IOS_UDID, "ax-service")
+    ).resolves.toBeUndefined();
+
+    await expect(
+      assertExternalCapability(
+        "AXService",
+        { id: IOS_UDID, platform: "ios", kind: "simulator" },
+        "ax-service"
+      )
+    ).resolves.toBeUndefined();
+  });
+
+  it("denies an undeclared mechanism on a DeviceInfo carrying the raw udid", async () => {
+    useDescriptors(await liveDescriptor());
+
+    await expect(
+      assertExternalCapability(
+        "NativeDevtools",
+        { id: IOS_UDID, platform: "ios", kind: "simulator" },
+        "native-devtools"
+      )
+    ).rejects.toThrow(/Acme IDE did not grant the 'native-devtools' capability/);
+  });
+
+  it("leaves the raw udid ungated once its provider's process is gone", async () => {
+    useDescriptors(await liveDescriptor({ pid: DEAD_PID }, { capabilities: [] }));
+
+    await expect(
+      assertExternalCapability("NativeDevtools", IOS_UDID, "native-devtools")
+    ).resolves.toBeUndefined();
   });
 });
 
