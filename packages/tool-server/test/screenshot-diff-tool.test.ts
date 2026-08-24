@@ -88,11 +88,13 @@ describe("screenshotDiffTool", () => {
     expect(result.summary).toContain("Screenshot diff summary");
     expect(result.diffPath).toMatchObject({
       __argentArtifact: true,
+      kind: "screenshot-diff",
       hostPath: path.join(dir, "current-diff.png"),
       mimeType: "image/png",
     });
     expect(result.contextDiffPath).toMatchObject({
       __argentArtifact: true,
+      kind: "screenshot-diff-context",
       hostPath: path.join(dir, "current-context-diff.png"),
       mimeType: "image/png",
     });
@@ -243,6 +245,96 @@ describe("screenshotDiffTool", () => {
         }
       )
     ).rejects.toThrow("Provide either currentPath or captureCurrent, not both.");
+  });
+
+  // The boundary probe reports `presentOnHost: false` for ANY path that does not
+  // already exist here, so a local agent naming a fresh output directory looked
+  // exactly like a remote client's own directory and was silently redirected to
+  // a temp dir. A directory we can create next to an existing parent is ours.
+  it("creates and honors an outputDir that does not exist yet on this host", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-fresh-"));
+    const baselinePath = path.join(parent, "baseline.png");
+    const currentPath = path.join(parent, "current.png");
+    await writePng(baselinePath, 2, 2, { r: 10, g: 20, b: 30 });
+    await writePng(currentPath, 2, 2, { r: 200, g: 20, b: 30 });
+
+    const outputDir = path.join(parent, "diff-out");
+
+    const result = await executeScreenshotDiffTool(
+      {},
+      { baselinePath, currentPath, udid: "ABC", outputDir },
+      {
+        artifacts: new ArtifactStore(),
+        fileInputs: {
+          outputDir: { clientPath: outputDir, presentOnHost: false, viaUpload: false },
+        },
+      }
+    );
+
+    expect(result.diffPath).toMatchObject({
+      hostPath: path.join(outputDir, "current-diff.png"),
+    });
+    await expect(fs.stat(path.join(outputDir, "current-diff.png"))).resolves.toBeTruthy();
+  });
+
+  // The probe runs before the create, so a directory that appears in between —
+  // a concurrent diff on the same outputDir, or the agent creating it itself —
+  // reaches mkdir as EEXIST. That is the directory the caller asked for, not a
+  // reason to redirect them to a temp dir.
+  it("honors an outputDir that raced into existence after the probe", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-race-"));
+    const baselinePath = path.join(parent, "baseline.png");
+    const currentPath = path.join(parent, "current.png");
+    await writePng(baselinePath, 2, 2, { r: 10, g: 20, b: 30 });
+    await writePng(currentPath, 2, 2, { r: 200, g: 20, b: 30 });
+
+    // Exists on disk, but the probe captured the earlier state.
+    const outputDir = path.join(parent, "diff-out");
+    await fs.mkdir(outputDir);
+
+    const result = await executeScreenshotDiffTool(
+      {},
+      { baselinePath, currentPath, udid: "ABC", outputDir },
+      {
+        artifacts: new ArtifactStore(),
+        fileInputs: {
+          outputDir: { clientPath: outputDir, presentOnHost: false, viaUpload: false },
+        },
+      }
+    );
+
+    expect(result.diffPath).toMatchObject({
+      hostPath: path.join(outputDir, "current-diff.png"),
+    });
+    await expect(fs.stat(path.join(outputDir, "current-diff.png"))).resolves.toBeTruthy();
+  });
+
+  // The remote case must still fall back: a client-side path whose parent does
+  // not exist here cannot be created, so diffs go to a temp dir as before.
+  it("falls back to a temp dir when outputDir is not creatable on this host", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-remote-"));
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    await writePng(baselinePath, 2, 2, { r: 10, g: 20, b: 30 });
+    await writePng(currentPath, 2, 2, { r: 200, g: 20, b: 30 });
+
+    // Parent does not exist on this host — a remote client's own directory.
+    const outputDir = path.join(dir, "no-such-parent", "nested", "diff-out");
+
+    const result = await executeScreenshotDiffTool(
+      {},
+      { baselinePath, currentPath, udid: "ABC", outputDir },
+      {
+        artifacts: new ArtifactStore(),
+        fileInputs: {
+          outputDir: { clientPath: outputDir, presentOnHost: false, viaUpload: false },
+        },
+      }
+    );
+
+    const diffHostPath = (result.diffPath as { hostPath: string }).hostPath;
+    expect(diffHostPath.startsWith(outputDir)).toBe(false);
+    expect(diffHostPath).toContain("argent-screenshot-diff");
   });
 });
 

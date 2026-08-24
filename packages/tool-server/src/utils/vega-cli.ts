@@ -18,26 +18,19 @@ import { commandOnPath } from "./command-on-path";
 const execFileAsync = promisify(execFile);
 
 /**
- * Resolve the Vega CLI binary (`vega`, or its `kepler` alias). Mirrors how
- * `android-binary.ts` resolves `adb`: prefer whatever is on PATH, then fall
- * back to the SDK's default install location so a host that ran the Vega
- * installer but never sourced `~/vega/env` still works.
+ * Resolve the Vega CLI binary: `vega` on PATH, then its legacy `kepler` alias, then
+ * `~/vega/bin/vega` (SDK default), so a host that ran the installer but never sourced
+ * `~/vega/env` still works.
  *
- *   1. `vega` on PATH            — the common case after `source ~/vega/env`
- *   2. `kepler` on PATH          — legacy alias (symlink to the same binary)
- *   3. `~/vega/bin/vega`         — SDK default install location
- *
- * Result is memoized with a short TTL (mirroring `android-binary.ts`): a positive
- * result effectively never expires within a session, but a *negative* one must
- * not stick for the process lifetime — a user who sources `~/vega/env` or installs
- * the SDK mid-session should recover without restarting the long-lived tool-server.
+ * Memoized with a short TTL, as in `android-binary.ts`: a *negative* result must not
+ * stick for the process lifetime — sourcing `~/vega/env` or installing the SDK
+ * mid-session should recover without restarting the long-lived tool-server.
  */
 const VEGA_BINARY_TTL_MS = 60_000;
 let cachedVegaBinary: { path: string | null; checkedAt: number } | undefined;
 
-// X_OK, not F_OK (mirrors android-binary.ts): a present-but-non-executable file at
-// the canonical `~/vega/bin/vega` path is a partial/corrupt SDK install. Returning
-// it would only produce an opaque EACCES at spawn, so prefer the not-found message.
+// X_OK, not F_OK: a non-executable file at the canonical `~/vega/bin/vega` is a partial
+// SDK install; returning it would only produce an opaque EACCES at spawn.
 async function isExecutable(p: string): Promise<boolean> {
   try {
     await access(p, fsConstants.X_OK);
@@ -67,13 +60,11 @@ export function __resetVegaBinaryCacheForTests(): void {
 async function resolveVegaOrThrow(): Promise<string> {
   const path = await resolveVegaBinary();
   if (!path) {
-    // A genuinely missing `vega`/`kepler` binary is always classified upstream as
-    // TOOL_DEPENDENCY_MISSING, never here: every tool path into runVega goes through the
-    // dependency preflight first (boot-device's ensureDep("vega"); the
-    // reinstall/launch/restart Vega branches' requires:["vega"]), and the only non-tool
-    // caller, listVegaDevices, guards with resolveVegaBinary() and degrades to []. So this
-    // throw can never reach the telemetry boundary as its own code — keep the helpful
-    // message as a plain Error (a code here could never bucket a real failure).
+    // A missing binary is classified upstream as TOOL_DEPENDENCY_MISSING: every tool path
+    // preflights it (boot-device's ensureDep("vega"); the reinstall/launch/restart Vega
+    // branches' requires:["vega"]) and the one non-tool caller, listVegaDevices, guards
+    // with resolveVegaBinary() and degrades to []. So this throw never reaches the
+    // telemetry boundary — a plain Error is enough.
     throw new Error(
       "`vega` (or `kepler`) not found on PATH or under `~/vega/bin`. " +
         "Install the Vega SDK and run `source ~/vega/env`, then retry."
@@ -94,49 +85,36 @@ const VEGA_KILL_SIGNAL = "SIGKILL" as const;
 /**
  * Reap a spawned `vega`/`kepler` child AND its worker tree when the timeout fires.
  *
- * The CLI is a thin launcher that forks a `python3 dutyfree-vega → node → vda`
- * worker tree to talk to the device agent; against a wedged agent that tree hangs.
- * `runVega` spawns the launcher with `detached: true`, making it a process-group
- * leader, so a single SIGKILL to the *negative* pid reaps the launcher and every
- * descendant that stayed in its group — instead of orphaning the `dutyfree-vega`/
- * `vda` workers the way a bare `child.kill()` (which reaches only the direct child)
- * did.
+ * The CLI is a thin launcher that forks a `python3 dutyfree-vega → node → vda` worker
+ * tree to talk to the device agent; against a wedged agent that tree hangs. `runVega`
+ * spawns the launcher `detached`, making it a process-group leader, so one SIGKILL to the
+ * *negative* pid reaps it and every descendant still in its group — instead of orphaning
+ * the workers the way a bare `child.kill()` (only the direct child) does.
  *
- * Belt-and-suspenders for a worker that `setsid()`s out of the launcher's group
- * (its pgid then differs, so the group SIGKILL can't reach it — the failure mode an
- * earlier investigation reported against a wedged VVD): BEFORE killing, snapshot the
- * launcher's descendants from the process table. A setsid'd worker keeps its *ppid*
- * pointing at the launcher until the launcher dies, so a ppid tree-walk still reaches
- * it while the launcher is alive; we SIGKILL those pids individually *first* — before
- * the group kill brings the launcher down — so the snapshot is acted on while it is
- * freshest (minimizing any pid-reuse window), then group-kill the launcher. The
- * snapshot is precise — only this launcher's own descendants, identified by pid, so a
- * concurrent `vega` call's workers are never touched (no `pkill`-style pattern match)
- * — and bounded, and the group kill runs regardless of whether the snapshot succeeds.
+ * A worker that `setsid()`s out of that group is unreachable by the group kill, but keeps
+ * its *ppid* pointing at the launcher until the launcher dies. So snapshot the launcher's
+ * descendants from the process table first and SIGKILL them individually — by pid, so a
+ * concurrent `vega` call's workers are never touched. The group kill runs regardless of
+ * whether the snapshot succeeds.
  *
- * We also destroy our ends of the stdio pipes first: a worker that inherited a dup
- * of the stdout write end could otherwise keep our read side from EOF-ing, leaving
- * the `close` await pending past the deadline (the observed "blocks for the full
- * timeout even though the data was ready" freeze).
+ * We also destroy our ends of the stdio pipes first: a worker that inherited a dup of the
+ * stdout write end would otherwise keep our read side from EOF-ing, leaving the `close`
+ * await pending past the deadline.
  */
 async function reapVegaGroup(child: ChildProcess): Promise<void> {
   child.stdout?.destroy();
   child.stderr?.destroy();
   const pid = child.pid;
-  // pid is a real OS pid (>1) for any spawned child; a missing pid means spawn
-  // itself failed, so there's nothing to reap. Guard so we never pass -0 / -1 to
-  // process.kill (which would broadcast to the whole process group / every process).
+  // A missing pid means spawn itself failed. The >1 guard keeps -0 / -1 out of
+  // process.kill, which would broadcast to our own group / every process.
   if (pid == null || pid <= 1) return;
-  // Snapshot descendants while the launcher is still alive (see above); best-effort
-  // and bounded so a slow/failed `ps` can't delay the kills below.
+  // Snapshot while the launcher is still alive (see above); bounded so a slow or failed
+  // `ps` can't delay the kills below.
   const descendants = await collectDescendantPids(pid).catch(() => [] as number[]);
-  // Sweep the snapshotted descendants FIRST — before the group kill brings the
-  // launcher down. This reaps a worker that setsid'd out of the launcher's group (the
-  // group SIGKILL can't reach it), and doing it now — launcher still alive, pids just
-  // read, no `await` between the snapshot and these kills — keeps the pid-reuse window
-  // to a synchronous burst rather than spanning the group-kill cascade, during which a
-  // same-group descendant could exit and have its pid recycled. A pid that already
-  // exited just throws ESRCH.
+  // Sweep the snapshot FIRST, before the group kill brings the launcher down: this is the
+  // only way to reach a worker that setsid'd out of the group, and with no `await` between
+  // the snapshot and these kills the pid-reuse window stays a synchronous burst rather
+  // than spanning the group-kill cascade. A pid that already exited just throws ESRCH.
   for (const descendant of descendants) {
     if (descendant <= 1 || descendant === pid) continue;
     try {
@@ -145,15 +123,11 @@ async function reapVegaGroup(child: ChildProcess): Promise<void> {
       // Already gone.
     }
   }
-  // Then SIGKILL the whole process group led by the detached launcher — reaps the
-  // launcher itself and any same-group worker the descendant sweep didn't cover.
-  // Skip it once the launcher has already exited (exitCode/signalCode set by Node):
-  // the descendant snapshot above already swept its tree, and once the launcher is
-  // gone its pid (== pgid) can be recycled, so a `-pid` group kill could land on an
-  // unrelated process group. While the launcher is alive its pgid is still ours.
+  // Then SIGKILL the launcher's whole process group — itself plus any same-group worker
+  // the sweep didn't cover. Skip it once the launcher has exited: its pid (== pgid) can
+  // then be recycled, so `-pid` could land on an unrelated group.
   if (child.exitCode === null && child.signalCode === null) {
     try {
-      // Negative pid → signal the whole process group led by the detached launcher.
       process.kill(-pid, VEGA_KILL_SIGNAL);
     } catch {
       // Group already gone; fall back to the bare child in case it outlived its group.
@@ -167,10 +141,10 @@ async function reapVegaGroup(child: ChildProcess): Promise<void> {
 }
 
 /**
- * Descendant pids of `rootPid` from the OS process table (`ps` ppid edges), via a
- * bounded breadth-first walk. Lets reapVegaGroup reach a worker that escaped the
- * launcher's process group. Returns [] if `ps` is unavailable or times out (the
- * group kill is the primary mechanism; this is insurance).
+ * Descendant pids of `rootPid` from the OS process table (`ps` ppid edges), via a bounded
+ * breadth-first walk. Lets reapVegaGroup reach a worker that escaped the launcher's
+ * process group. Returns [] if `ps` is unavailable or times out — the group kill is the
+ * primary mechanism; this is insurance.
  */
 async function collectDescendantPids(rootPid: number): Promise<number[]> {
   let stdout: string;
@@ -180,8 +154,7 @@ async function collectDescendantPids(rootPid: number): Promise<number[]> {
       maxBuffer: 16 * 1024 * 1024,
     }));
   } catch {
-    // `ps` unavailable / timed out — honor the documented [] contract (the group
-    // kill is the primary mechanism; this walk is only insurance).
+    // `ps` unavailable / timed out — honor the documented [] contract.
     return [];
   }
   const childrenByParent = new Map<number, number[]>();
@@ -210,8 +183,8 @@ async function collectDescendantPids(rootPid: number): Promise<number[]> {
 }
 
 /**
- * Live pids whose process-group id equals `pgid` (excluding the group-leader pid
- * itself). Used by reapLingeringGroupMembers; returns [] if `ps` is unavailable.
+ * Live pids whose process-group id equals `pgid`, excluding the group-leader pid itself.
+ * Returns [] if `ps` is unavailable.
  */
 async function pgidMembers(pgid: number): Promise<number[]> {
   let stdout: string;
@@ -235,43 +208,34 @@ async function pgidMembers(pgid: number): Promise<number[]> {
 }
 
 /**
- * Reap a worker still holding our stdout pipe open after the launcher's *own clean
- * exit* — the exit-drain path (see VEGA_EXIT_DRAIN_GRACE_MS). reapVegaGroup can't help
- * once the launcher is gone: its ppid descendant sweep returns nothing (an outliving
- * worker is immediately reparented to init — its ppid is 1, verified empirically), and
- * its group kill is gated on the launcher still being alive.
+ * Reap a worker still holding our stdout pipe open after the launcher's own *clean exit* —
+ * the drain path (see VEGA_EXIT_DRAIN_GRACE_MS). reapVegaGroup can't help once the
+ * launcher is gone: an outliving worker is reparented to init, so the ppid sweep finds
+ * nothing, and the group kill is gated on the launcher being alive.
  *
- * But a worker that merely *inherited* our pipe (the common case) stayed in the
- * launcher's process group, so its pgid still equals the launcher pid — and it is
- * reapable here. The safety guarantee is the *call-site invariant*, not the snapshot in
- * isolation: this runs ONLY from the drain timer, which fires precisely because `close`
- * never arrived within the grace; had the pipe-holding worker exited, the pipe would have
- * EOF'd and `close` would have settled + cleared this timer. So when we run, that worker
- * is still alive — and POSIX does not recycle a pid as a pgid while any member of its
- * group lives, so the launcher pid cannot have been recycled into an unrelated group's
- * pgid: `-pid` provably targets only our own group. SIGKILLing it reaps the worker
- * (verified empirically). The membership snapshot is a best-effort secondary check that
- * skips a pointless `-pid` when the worker raced to exit just before it; the only residual
- * is the snapshot→kill window (tens of ms, no `await` between), the same pid-reuse class
- * collectDescendantPids' sweep already accepts.
+ * A worker that merely *inherited* the pipe (the common case) stayed in the launcher's
+ * process group, so its pgid still equals the launcher pid. Safety comes from the
+ * call-site invariant: this runs ONLY from the drain timer, which fires precisely because
+ * `close` never arrived — had the pipe-holder exited, the pipe would have EOF'd and
+ * `close` would have cleared this timer. So the worker is still alive, and POSIX does not
+ * recycle a pid as a pgid while any group member lives, so `-pid` provably targets our own
+ * group. The membership snapshot is only a best-effort check that skips a pointless kill
+ * when the worker raced to exit.
  *
- * A worker that `setsid()`d into its OWN group escaped here (group `pid` is empty); having
- * outlived the launcher it has no live handle and is left to exit on its own. That case
- * is rare — a clean exit whose grandchild both escaped the group AND outlived it — and
- * bounded (one leftover per finished call, not the accumulating wedged tree the timeout
- * path reaps). Best-effort throughout: a slow/failed `ps` just skips the reap.
+ * A worker that `setsid()`d into its OWN group is out of reach here and left to exit on
+ * its own: rare, and bounded at one leftover per finished call rather than the
+ * accumulating wedged tree the timeout path reaps.
  */
 async function reapLingeringGroupMembers(pid: number | undefined): Promise<void> {
-  // pid > 1 guard mirrors reapVegaGroup: never pass -0 / -1 to process.kill (which would
-  // broadcast to the whole process group / every process).
+  // As in reapVegaGroup: never pass -0 / -1 to process.kill.
   if (pid == null || pid <= 1) return;
   let members: number[];
   try {
     members = await pgidMembers(pid);
   } catch {
-    return; // `ps` unavailable — best-effort, skip.
+    return;
   }
-  if (members.length === 0) return; // group empty (escaped/already gone) — nothing to reap.
+  if (members.length === 0) return; // escaped the group, or already gone
   try {
     process.kill(-pid, VEGA_KILL_SIGNAL);
   } catch {
@@ -280,18 +244,16 @@ async function reapLingeringGroupMembers(pid: number | undefined): Promise<void>
 }
 
 /**
- * Resolve a guaranteed-live working directory for the spawned `vega`/`kepler`
- * child. The tool-server is a long-lived singleton; if it was started from a
- * directory that is later removed (e.g. a git worktree torn down mid-session),
- * `process.cwd()` itself throws ENOENT and any child inherits that dead cwd —
- * the `vega` Python CLI then crashes in `config.py find_workspace -> os.getcwd()`
- * with "getcwd: cannot access parent directories". adb-channel tools are immune
- * (adb never calls getcwd), which is why only the CLI-backed Vega tools hit this.
+ * A guaranteed-live working directory for the spawned `vega`/`kepler` child. The
+ * tool-server is a long-lived singleton; if its start directory is later removed (e.g. a
+ * git worktree torn down mid-session), `process.cwd()` throws ENOENT and any child
+ * inherits that dead cwd — the `vega` Python CLI then crashes in
+ * `config.py find_workspace -> os.getcwd()`. adb-channel tools are immune (adb never
+ * calls getcwd).
  *
- * Validate the server's cwd and fall back to the OS temp dir (always present) so
- * device-level `vega` commands — which don't need the project workspace — keep
- * working without a full tool-server restart. Dependencies are injected so a unit
- * test can simulate a missing cwd.
+ * Falls back to the OS temp dir so device-level `vega` commands, which don't need the
+ * project workspace, keep working without a tool-server restart. Dependencies are
+ * injected so a unit test can simulate a missing cwd.
  */
 export function resolveSpawnCwd(
   getCwd: () => string = () => process.cwd(),
@@ -308,50 +270,44 @@ export function resolveSpawnCwd(
 }
 
 function describeVegaFailure(args: string[], err: unknown, kindOverride?: FailureKind): Error {
-  // Shares the message format with adb (stderr/stdout first, then a
-  // signal/killed/code fallback) via formatSubprocessFailure, and — like adb —
-  // attaches a FailureSignal so `vega`/`kepler` CLI failures are classified for
-  // telemetry rather than surfacing as unclassified 500s.
+  // Message format shared with adb via formatSubprocessFailure; the attached
+  // FailureSignal keeps `vega`/`kepler` CLI failures classified for telemetry rather than
+  // surfacing as unclassified 500s.
   const e = err as { signal?: string | null; killed?: boolean };
   const signal: FailureSignal = {
     error_code: FAILURE_CODES.VEGA_CLI_COMMAND_FAILED,
     failure_stage: "vega_cli_command",
     failure_area: "tool_server",
-    // A timeout/overflow reap shapes the error with killed=true so the message reads
-    // correctly, but only a genuine *timeout* should classify as `error_kind:
-    // "timeout"` — listVegaDevices keys its skip-the-recovery-call decision off that,
-    // so an overflow (or other forced kill) must NOT masquerade as a wedged-agent
-    // timeout. Those callers pass an explicit kind; everything else uses the heuristic.
+    // A forced reap shapes the error with killed=true so the message reads correctly, but
+    // only a genuine *timeout* may classify as `error_kind: "timeout"` — listVegaDevices
+    // keys its skip-the-recovery-call decision off that, so an overflow must not
+    // masquerade as a wedged agent. Those callers pass an explicit kind.
     error_kind: kindOverride ?? (e.killed || e.signal ? "timeout" : "subprocess"),
     ...subprocessFailureMetadata(err, "vega"),
   };
   return new FailureError(formatSubprocessFailure("vega", args, err), signal);
 }
 
-/**
- * Run the `vega`/`kepler` CLI directly. Callers that target a specific device
- * must pass `-d <serial>` (or `--device <serial>`) themselves via `args` — like
- * `runAdb`, this does not inject a serial; a serial-less call hits the single
- * connected device or fails if there are several.
- */
-// Cap collected output (mirrors the old execFile `maxBuffer`) so a runaway child
-// can't exhaust memory; overflow reaps the group and rejects. Applied per stream —
-// like execFile, exceeding the cap on *either* stdout or stderr trips it. Measured in
-// real UTF-8 bytes (not string length / UTF-16 code units) so the cap means what it says.
+// Cap collected output (mirrors execFile's `maxBuffer`) so a runaway child can't exhaust
+// memory; overflow reaps the group and rejects. Applied per stream — like execFile,
+// exceeding the cap on *either* stdout or stderr trips it. Measured in real UTF-8 bytes,
+// not UTF-16 code units, so the cap means what it says.
 const VEGA_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 
-// After the child *exits*, `close` normally follows at once (its stdio EOFs) and we
-// finish there with fully-drained output. But a grandchild that inherited a dup of
-// our stdout pipe keeps it open, delaying `close` even though the child already wrote
-// everything — the pipe-inheritance freeze. So once the child has exited we give the
-// buffered output this short grace to flush, then finish from the exit code anyway
-// (destroying our read ends so the lingering worker can't hold us open). Without it a
-// finished-but-pipe-held call would wait out the full `timeoutMs` and reject as a
-// timeout, discarding the output it already had. The child has stopped writing by
-// then, so the pending bytes are already in the OS pipe buffer and flush in well under
-// this window.
+// After the child *exits*, `close` normally follows at once (its stdio EOFs). But a
+// grandchild that inherited a dup of our stdout pipe keeps it open, delaying `close` even
+// though the child already wrote everything. So give the buffered output this short grace
+// to flush, then finish from the exit code anyway (destroying our read ends so the
+// lingering worker can't hold us open). Without it a finished-but-pipe-held call would
+// wait out the full `timeoutMs` and reject as a timeout, discarding output it already had.
 const VEGA_EXIT_DRAIN_GRACE_MS = 1_000;
 
+/**
+ * Run the `vega`/`kepler` CLI directly. Callers that target a specific device must pass
+ * `-d <serial>` (or `--device <serial>`) themselves via `args` — like `runAdb`, this does
+ * not inject a serial; a serial-less call hits the single connected device or fails if
+ * there are several.
+ */
 export async function runVega(
   args: string[],
   options: { timeoutMs?: number; maxOutputBytes?: number } = {}
@@ -361,12 +317,10 @@ export async function runVega(
   const maxOutputBytes = options.maxOutputBytes ?? VEGA_MAX_OUTPUT_BYTES;
 
   return new Promise<VegaRunResult>((resolve, reject) => {
-    // `spawn` (not execFile) specifically so we can pass `detached: true` —
-    // execFile silently drops it. detached makes the child its own process-group
-    // leader, which is what lets reapVegaGroup SIGKILL the entire
-    // `python3 → node → vda` worker tree on timeout rather than orphaning it.
-    // cwd is pinned to a guaranteed-live dir so a since-deleted server cwd doesn't
-    // crash the `vega` CLI in os.getcwd() (see resolveSpawnCwd).
+    // `spawn`, not execFile, specifically for `detached: true` (execFile silently drops
+    // it): it makes the child its own process-group leader, which is what lets
+    // reapVegaGroup SIGKILL the entire `python3 → node → vda` worker tree on timeout.
+    // cwd is pinned to a guaranteed-live dir (see resolveSpawnCwd).
     let child: ChildProcess;
     try {
       child = spawn(vegaPath, args, {
@@ -387,20 +341,18 @@ export async function runVega(
     let reaped = false;
     let exitTimer: ReturnType<typeof setTimeout> | undefined;
 
-    // reapVegaGroup is async (it snapshots the process tree before killing); fire it
-    // at most once and don't await it here. Guarding prevents the timer and an
-    // overflow burst from launching redundant reaps.
+    // reapVegaGroup is async (it snapshots the process tree before killing); fire it at
+    // most once — the timer and an overflow burst would otherwise stack redundant reaps —
+    // and don't await it here.
     const reapOnce = (): void => {
       if (reaped) return;
       reaped = true;
       void reapVegaGroup(child);
     };
 
-    // `settle` reads `timer`/`exitTimer` (declared/assigned below): the bindings are
-    // captured by closure and only ever read from async callbacks, which fire after
-    // this executor's synchronous body has assigned `timer`, so there's no
-    // temporal-dead-zone access. `exitTimer` may still be undefined (no exit yet) —
-    // clearTimeout(undefined) is a no-op.
+    // `timer`/`exitTimer` are declared below but only read from async callbacks, which
+    // fire after this executor's synchronous body assigned `timer` — no temporal-dead-zone
+    // access. `exitTimer` may still be undefined; clearTimeout(undefined) is a no-op.
     const settle = (run: () => void): void => {
       if (settled) return;
       settled = true;
@@ -409,15 +361,14 @@ export async function runVega(
       run();
     };
 
-    // The two forced-kill paths settle the promise *the moment the condition is
-    // detected*, rather than waiting for the child's later `close`. `close` only
-    // fires once reapVegaGroup has snapshotted the process tree (`ps`) and brought
-    // the launcher down, so settling on it would make a timed-out/overflowed call
-    // linger by the reap's duration. The reap still runs in the background; the
+    // The two forced-kill paths settle *the moment the condition is detected* rather than
+    // on the child's later `close`, which only fires once reapVegaGroup has snapshotted the
+    // process tree and brought the launcher down — settling on it would make a timed-out
+    // call linger by the reap's duration. The reap still runs in the background; the
     // eventual `close` is a guarded no-op. stdout/stderr carry whatever arrived so far.
     const rejectTimeout = (): void =>
       // Shape like an execFile timeout rejection (killed=true) so it classifies as a
-      // timeout downstream — listVegaDevices keys its skip-the-recovery decision off it.
+      // timeout downstream.
       settle(() =>
         reject(
           describeVegaFailure(
@@ -440,9 +391,9 @@ export async function runVega(
               new Error(`vega ${args.join(" ")} output exceeded ${maxOutputBytes} bytes`),
               { killed: true, signal: VEGA_KILL_SIGNAL, stdout, stderr }
             ),
-            // Force "subprocess": an overflow is a misbehaving child, not a wedged
-            // agent. Without this the killed=true shape would classify as "timeout"
-            // and wrongly suppress the listVegaDevices recovery call.
+            // Force "subprocess": an overflow is a misbehaving child, not a wedged agent.
+            // The killed=true shape would otherwise classify as "timeout" and wrongly
+            // suppress the listVegaDevices recovery call.
             "subprocess"
           )
         )
@@ -458,11 +409,9 @@ export async function runVega(
         rejectOverflow();
       }
     });
-    // Cap stderr the same way as stdout: execFile's `maxBuffer` killed the child when
-    // *either* stream exceeded it, so a child that floods stderr (rather than stdout)
-    // must also reap+reject instead of growing this buffer unbounded — otherwise a
-    // misbehaving CLI could exhaust the long-lived tool-server's memory before the
-    // timeout fires.
+    // Cap stderr like stdout: execFile's `maxBuffer` killed the child when *either* stream
+    // exceeded it, so a child that floods stderr must also reap+reject instead of growing
+    // this buffer until it exhausts the long-lived tool-server's memory.
     child.stderr?.on("data", (chunk: string) => {
       stderr += chunk;
       stderrBytes += Buffer.byteLength(chunk, "utf-8");
@@ -478,29 +427,23 @@ export async function runVega(
     }, timeoutMs);
 
     child.on("error", (err) => {
-      // Spawn-level failure (e.g. ENOENT); err carries .code/.message so
-      // describeVegaFailure / subprocessFailureMetadata classify it correctly.
+      // Spawn-level failure (e.g. ENOENT); err carries .code/.message for classification.
       settle(() => reject(describeVegaFailure(args, err)));
     });
 
-    // Finish a child that ended on its own (NOT a forced timeout/overflow kill — those
-    // settle before we get here): resolve on a clean exit, reject otherwise. Reached
-    // from `close` (the normal, fully-drained path) and — if a pipe-holding grandchild
-    // delays `close` past the exit grace — from the `exit` fallback below.
+    // Finish a child that ended on its own — a forced timeout/overflow kill settles before
+    // we get here. Reached from `close` (the normal, fully-drained path) and, if a
+    // pipe-holding grandchild delays `close` past the exit grace, from `exit` below.
     const finish = (code: number | null, signal: NodeJS.Signals | null): void => {
       if (code === 0) {
         settle(() => resolve({ stdout, stderr }));
       } else {
-        // Non-zero exit (or a terminating signal) — mirror execFile's reject-on-
-        // failure so callers (e.g. listVegaDevices' try/catch) see a failure, with
-        // code/signal/io attached for the message. Classify "subprocess" explicitly:
-        // this path is reached only when WE didn't force the kill (timeout/overflow
-        // settle first), so a terminating `signal` here is external and must NOT
-        // masquerade as a wedged-agent "timeout" (which would wrongly suppress the
-        // listVegaDevices recovery call). `finish` itself does no reaping: on the normal
-        // `close` path none is needed (`close` means every stdio end EOF'd, so no worker
-        // still holds the pipe), and on the exit-drain fallback the caller already kicked
-        // off reapLingeringGroupMembers before invoking us.
+        // Mirror execFile's reject-on-failure so callers (e.g. listVegaDevices' try/catch)
+        // see a failure. Classify "subprocess" explicitly: we reach here only when WE
+        // didn't force the kill, so a terminating `signal` is external and must NOT
+        // masquerade as a wedged-agent "timeout". No reaping needed here: `close` means
+        // every stdio end EOF'd, and the exit-drain path already fired
+        // reapLingeringGroupMembers.
         settle(() =>
           reject(
             describeVegaFailure(
@@ -521,32 +464,27 @@ export async function runVega(
       }
     };
 
-    // The forced-kill paths (timeout / overflow) settle the promise themselves, so by
-    // the time `close`/`exit` fire for them they're guarded no-ops. We prefer `close`
-    // (stdout/stderr fully drained) but fall back to `exit` + a short drain grace so a
-    // grandchild holding our stdout pipe open can't stall a finished call into the
-    // timeout (see VEGA_EXIT_DRAIN_GRACE_MS).
+    // Prefer `close` (stdout/stderr fully drained), but fall back to `exit` plus a short
+    // drain grace so a grandchild holding our stdout pipe open can't stall a finished call
+    // into the timeout (see VEGA_EXIT_DRAIN_GRACE_MS).
     child.on("close", (code, signal) => finish(code, signal));
     child.on("exit", (code, signal) => {
       if (settled || exitTimer) return;
-      // The child has terminated, so the wall-clock timeout is now moot — only draining
-      // its already-written output remains. Disarm the main timer so a clean exit whose
-      // `close` is delayed past the deadline (a grandchild holding the stdout pipe open)
-      // can't be rejected AS A TIMEOUT before the drain grace below fires — which would
-      // discard valid output and mis-classify it `error_kind: "timeout"`, suppressing
-      // listVegaDevices' recovery. From here `exitTimer` (bounded) is the sole backstop.
+      // The child has terminated, so the wall-clock timeout is moot — only draining its
+      // already-written output remains. Disarm the main timer so a clean exit whose `close`
+      // is delayed past the deadline can't be rejected as a timeout, which would discard
+      // valid output and suppress listVegaDevices' recovery. `exitTimer` is the sole
+      // backstop from here.
       clearTimeout(timer);
       exitTimer = setTimeout(() => {
-        // `close` didn't follow the exit within the grace — a worker is holding our
-        // stdout pipe open. The child already wrote everything, so finish with what we
-        // have and destroy our read ends so the lingering worker can't keep us pending.
+        // `close` didn't follow the exit within the grace — a worker is holding our stdout
+        // pipe open. The child already wrote everything, so finish with what we have and
+        // destroy our read ends so the worker can't keep us pending.
         child.stdout?.destroy();
         child.stderr?.destroy();
-        // Reap that worker if it stayed in the launcher's process group (the common
-        // pipe-inheritance case — still safely reapable post-exit because a live group
-        // member pins the pgid; see reapLingeringGroupMembers). Fire-and-forget so it
-        // can't delay resolution; a worker that escaped into its own group is left to
-        // exit on its own (rare, bounded — see the function doc).
+        // Reap that worker if it stayed in the launcher's process group — the common
+        // pipe-inheritance case, still safely reapable post-exit (see
+        // reapLingeringGroupMembers). Fire-and-forget so it can't delay resolution.
         void reapLingeringGroupMembers(child.pid);
         finish(code, signal);
       }, VEGA_EXIT_DRAIN_GRACE_MS);
@@ -554,18 +492,16 @@ export async function runVega(
   });
 }
 
-// `-d emulator-<port>` selector for the single running VVD, resolved from the OS
-// process table (the authoritative running-VVD signal, shared with the adb channel).
+// `-d emulator-<port>` selector for the single running VVD, resolved from the OS process
+// table (the authoritative running-VVD signal, shared with the adb channel).
 //
-// The `vega` CLI selects a device by its adb-transport serial (`emulator-<port>`),
-// NOT by the `amazon-…` serial it prints in `device list`/`info` — passing the latter
-// yields an empty "unknown" device (verified on a live VVD). With no selector the CLI
-// targets the sole connected device, but a stray `adb connect 127.0.0.1:<port+1>` adds
-// a SECOND adb transport for the same VVD, after which an un-targeted call errors
-// "Too many devices connected" (launch/terminate/install) or returns an empty device
-// (info). Pinning `-d emulator-<port>` is correct in both the single- and dual-transport
-// states. Returns [] when there isn't exactly one running VVD, so a no-VVD / multi-VVD
-// call falls back to the CLI's own selection (or its own erroring).
+// The `vega` CLI selects a device by its adb-transport serial (`emulator-<port>`), NOT by
+// the `amazon-…` serial it prints in `device list`/`info` — passing the latter yields an
+// empty "unknown" device. With no selector the CLI targets the sole connected device, but
+// a stray `adb connect 127.0.0.1:<port+1>` adds a SECOND adb transport for the same VVD,
+// after which an un-targeted call errors "Too many devices connected"
+// (launch/terminate/install) or returns an empty device (info). Returns [] when there
+// isn't exactly one running VVD, falling back to the CLI's own selection.
 async function singleVvdSelector(): Promise<string[]> {
   let ports: Set<number>;
   try {
@@ -578,9 +514,9 @@ async function singleVvdSelector(): Promise<string[]> {
 
 /**
  * Run `vega device <subcommand…>` against the single running VVD, pinned with
- * `-d emulator-<port>` so the call is unambiguous even when a stray `adb connect`
- * has added a second adb transport for the same device. `device list` is the one
- * subcommand that rejects `-d` — callers that need it use `runVega` directly.
+ * `-d emulator-<port>` so the call is unambiguous even when a stray `adb connect` added a
+ * second adb transport for the same device. `device list` is the one subcommand that
+ * rejects `-d` — callers that need it use `runVega` directly.
  */
 export async function runVegaDevice(
   subcommand: string[],
@@ -591,20 +527,19 @@ export async function runVegaDevice(
 }
 
 /**
- * Run `vega device <subcommand…>` against a device. `serial` is validated non-empty
- * to catch a caller that forgot to thread the udid; the actual target is resolved by
- * `runVegaDevice` (the running VVD's adb-transport serial), since the `vega` CLI does
- * not select by the `amazon-…` serial the udid carries.
+ * Run `vega device <subcommand…>` against a device. `serial` is validated non-empty to
+ * catch a caller that forgot to thread the udid; the actual target is resolved by
+ * `runVegaDevice` (the running VVD's adb-transport serial), since the `vega` CLI does not
+ * select by the `amazon-…` serial the udid carries.
  */
 export async function vegaDevice(
   serial: string,
   subcommand: string[],
   options: { timeoutMs?: number } = {}
 ): Promise<VegaRunResult> {
-  // Defensive: every real caller threads a non-empty `amazon-…` serial (Vega
-  // device classification requires that prefix), so `!serial` can only trip a
-  // direct caller that forgot the udid — never the registry/telemetry path. It
-  // stays a plain Error without a code, which could never bucket a real failure.
+  // Every real caller threads a non-empty `amazon-…` serial (Vega device classification
+  // requires that prefix), so this can only trip a direct caller that forgot the udid —
+  // never the registry/telemetry path, hence a plain Error without a code.
   if (!serial) throw new Error("vegaDevice requires a non-empty device serial");
   return runVegaDevice(subcommand, options);
 }

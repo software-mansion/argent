@@ -1,22 +1,15 @@
 /**
- * Client half of the INPUT-side file boundary (the OUTPUT side is
- * `artifacts.ts`'s materializer).
+ * Client half of the INPUT-side file boundary (`artifacts.ts` is the OUTPUT side).
  *
- * Tools that read caller-local files declare them as `fileInputs` in their
- * `GET /tools` metadata: `{ target, path-template, kind }`. Before sending a
- * call, {@link prepareFileInputs} interpolates each template from the args,
- * stats the file on THIS machine, and replaces the target arg with a
- * `__argentFileInput` wrapper. The tool-server resolves the wrapper back to a
- * path on ITS filesystem — in place when co-located, or materialized from the
- * inlined base64 content when remote. Content is inlined only when the client
- * is routed to an external tool-server, so plain local sessions never pay for
- * encoding.
+ * {@link prepareFileInputs} interpolates each `fileInputs` spec advertised by
+ * `GET /tools`, stats the file on THIS machine, and replaces the target arg
+ * with a `__argentFileInput` wrapper. The tool-server resolves it against ITS
+ * filesystem — in place when co-located, else from the inlined base64, which
+ * is sent only for remote tool-servers so local sessions skip the encoding.
  *
- * {@link applyClientFileDirectives} is the reverse direction: a tool whose
- * output belongs in the agent's project (e.g. a recorded flow YAML) returns a
- * `__argentClientFile` directive, and this client writes the content to the
- * directive's path — constrained to `.argent/flows/*.yaml` so a misbehaving
- * tool-server cannot direct writes anywhere else on the client machine.
+ * {@link applyClientFileDirectives} is the reverse: a `__argentClientFile`
+ * directive (e.g. a recorded flow YAML) is written here, constrained to
+ * `.argent/flows/*.yaml` so a misbehaving tool-server cannot write elsewhere.
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -28,7 +21,7 @@ import * as path from "node:path";
 import { createTarGzFile } from "@argent/archive";
 import { FLOW_FILE_NAME_PATTERN } from "@argent/registry";
 
-/** Must match the tool-server's wire contract (`@argent/registry` file-inputs.ts). */
+/** Must match the wire contract in `@argent/registry`'s file-inputs.ts. */
 export const FILE_INPUT_MARKER = "__argentFileInput" as const;
 export const CLIENT_FILE_MARKER = "__argentClientFile" as const;
 
@@ -41,10 +34,9 @@ export interface FileInputSpec {
   kind: FileInputKind;
   optional?: boolean;
   /**
-   * Skip this spec whenever the named param is set (non-empty string) — it is
-   * an alternate source that supersedes this template, so `target` must not be
-   * derived alongside it (the tool's own validation diagnoses dual-source
-   * calls). Mirrors `@argent/registry`'s FileInputSpec.
+   * Skip this spec when the named param is set — it is an alternate source
+   * that supersedes this template, so `target` must not be derived alongside
+   * it (the tool's own validation diagnoses dual-source calls).
    */
   skipWhenSet?: string;
 }
@@ -55,10 +47,10 @@ export interface FileInputWire {
   size?: number;
   mtimeMs?: number;
   content?: string;
-  /** Why readable content was deliberately not inlined ("size-limit" = over MAX_CONTENT_BYTES). */
+  /** Readable content deliberately not inlined; "size-limit" = over MAX_CONTENT_BYTES. */
   contentOmitted?: "size-limit";
   uploadId?: string;
-  /** SHA-256 hex digest of the streamed tarball, for server-side integrity check. */
+  /** SHA-256 hex digest of the streamed tarball; the server verifies it before extracting. */
   contentHash?: string;
 }
 
@@ -69,33 +61,32 @@ export interface ClientFileDirective {
 }
 
 /**
- * Hard ceiling on inlined content, mirroring the server's decoded-upload
- * limit. A larger file is sent as a stat-only wrapper marked
- * `contentOmitted: "size-limit"`: it still resolves in place co-located, and
- * a remote server without the file answers with a precise "exceeds the
- * transfer limit" error instead of this client dying on a huge encode.
+ * Mirrors the server's decoded-upload limit. A larger file is sent as a
+ * stat-only wrapper marked `contentOmitted: "size-limit"`: it still resolves
+ * in place co-located, and a remote server without the file reports the
+ * transfer limit instead of this client dying on a huge encode.
  */
 const MAX_CONTENT_BYTES = 32 * 1024 * 1024;
 
 export interface PrepareFileInputsOptions {
   /**
-   * Inline file bytes for `kind: "file"` wrappers. True when the client is
-   * routed to an external tool-server (link / ARGENT_TOOLS_URL); false keeps
-   * the wrapper path-only for the co-located fast path.
+   * Inline file bytes for `kind: "file"` wrappers. True when routed to an
+   * external tool-server (`argent link` / ARGENT_TOOLS_URL); false keeps the
+   * wrapper path-only for the co-located fast path.
    */
   includeContent: boolean;
   /**
-   * When set, `kind: "tar-upload"` inputs are tarballed and streamed to
-   * `POST <url>/upload` before the tool call. Only populated when routed to a
-   * remote tool-server; absent for co-located sessions (server reads in place).
+   * Set only when routed to a remote tool-server: `kind: "tar-upload"` inputs
+   * are tarballed and streamed to `POST <url>/upload` before the tool call.
+   * Absent for co-located sessions (the server reads the path in place).
    */
   uploadEndpoint?: { url: string; token: string };
 }
 
 /**
- * Interpolate a spec's `${param}` path template from string args. Returns
- * null when any referenced param is absent — the spec simply doesn't apply
- * to this call (required-param errors belong to the tool's own validation).
+ * Interpolate a spec's `${param}` path template from string args. Null when a
+ * referenced param is absent — the spec doesn't apply to this call
+ * (required-param errors belong to the tool's own validation).
  */
 function interpolatePath(template: string, args: Record<string, unknown>): string | null {
   let missing = false;
@@ -131,7 +122,7 @@ async function uploadTar(
   endpoint: { url: string; token: string }
 ): Promise<string> {
   // `duplex: "half"` is required to stream a Node Readable request body via
-  // undici's fetch, but it isn't in the DOM RequestInit type yet.
+  // undici's fetch, but it isn't in the DOM RequestInit type.
   const init: RequestInit & { duplex: "half" } = {
     method: "POST",
     headers: {
@@ -150,9 +141,8 @@ async function uploadTar(
 }
 
 /**
- * Replace declared file-path args with boundary wrappers. Returns the args
- * untouched (same reference) when no spec applies, so callers can cheaply
- * pass everything through here.
+ * Replace declared file-path args with boundary wrappers. Returns the same
+ * args reference when no spec applies, so callers can pass everything through.
  */
 export async function prepareFileInputs(
   specs: FileInputSpec[] | undefined,
@@ -166,21 +156,17 @@ export async function prepareFileInputs(
   let out: Record<string, unknown> | null = null;
 
   for (const spec of specs) {
-    // A set skipWhenSet param names the alternate source the caller chose —
-    // deriving this target too would have the boundary vouch for a file the
-    // call is not using, letting its existence (or absence) preempt the
-    // tool's own dual-source validation. Any provided value counts, matching
-    // the `=== undefined` presence checks that validation uses, so a
-    // degenerate value ("") is still diagnosed by the tool, not the boundary.
+    // Deriving this target too would have the boundary vouch for a file the
+    // call is not using, letting its existence preempt the tool's dual-source
+    // validation. Any provided value counts, matching the `=== undefined`
+    // presence checks that validation uses, so a degenerate value ("") is
+    // still diagnosed by the tool, not by the boundary.
     if (spec.skipWhenSet && record[spec.skipWhenSet] !== undefined) continue;
-    // A target the agent already filled in (e.g. an explicit server-side
-    // flow_file override) is respected — wrapping it would second-guess the
-    // caller with a client-side path that may not exist.
     if (spec.target in record && typeof record[spec.target] !== "string") continue;
     const filePath = interpolatePath(spec.path, record);
     if (filePath === null) continue;
-    // When the target IS a source param, the interpolated path equals its
-    // value; when it's a derived param (flow_file), only wrap if unset.
+    // When the target IS a source param the interpolated path equals its
+    // value; a derived target (flow_file) is wrapped only when unset.
     if (spec.target in record && record[spec.target] !== filePath) continue;
 
     const wire: FileInputWire = { [FILE_INPUT_MARKER]: true, path: filePath };
@@ -193,16 +179,15 @@ export async function prepareFileInputs(
           if (opts.includeContent && st.size <= MAX_CONTENT_BYTES) {
             wire.content = (await readFile(filePath)).toString("base64");
           } else if (opts.includeContent) {
-            // Too big to ride in the call — say so instead of sending a bare
-            // wrapper, so an absent-on-server path gets a "transfer limit"
-            // error rather than misleading "file not found" guidance. The
-            // stat fields stay, so a co-located copy still resolves in place.
+            // Say so instead of sending a bare wrapper, so an absent-on-server
+            // path errors with the transfer limit rather than misleading "file
+            // not found" guidance. Stat fields stay for in-place resolution.
             wire.contentOmitted = "size-limit";
           }
         }
       } catch {
-        // Unreadable here — send the path-only wrapper; the server may still
-        // find it on its own filesystem, and otherwise errors precisely.
+        // Unreadable here — the path-only wrapper still resolves if the
+        // server has the file, and errors precisely otherwise.
       }
     }
 
@@ -216,7 +201,7 @@ export async function prepareFileInputs(
       if (opts.uploadEndpoint && st) {
         let tarPath: string | null = null;
         try {
-          // stderr (not stdout — MCP uses stdout) so a slow upload isn't silent.
+          // stderr, not stdout (MCP owns it), so a slow upload isn't silent.
           process.stderr.write(
             `Uploading ${path.basename(filePath)} to the remote tool-server...\n`
           );
@@ -236,8 +221,6 @@ export async function prepareFileInputs(
   return out ?? args;
 }
 
-// ── Client-write directives ──────────────────────────────────────────
-
 export interface AppliedClientFiles {
   /** The result with every directive replaced by the written path (or null). */
   result: unknown;
@@ -246,11 +229,10 @@ export interface AppliedClientFiles {
 }
 
 /**
- * Trust boundary: the directive path is authored by the tool-server. Today
- * the only producer is flow recording, so writes are constrained to flow
- * files — an absolute path whose final segments are `.argent/flows/<name>.yaml`
- * with a conservative name charset and no `..` anywhere. Widen deliberately
- * (and equally conservatively) if another tool ever needs this channel.
+ * Trust boundary: the directive path is authored by the tool-server. Flow
+ * recording is the only producer today, so writes are confined to an absolute
+ * path ending `.argent/flows/<name>.yaml`, with no `..` anywhere. Widen
+ * deliberately (and equally conservatively) if another tool needs this channel.
  */
 function isAllowedClientFilePath(p: string): boolean {
   if (!path.isAbsolute(p)) return false;
@@ -275,7 +257,7 @@ function isClientFileDirective(value: unknown): value is ClientFileDirective {
  * Deep-walk a tool result, writing every client-file directive to disk and
  * rewriting it to the written path. A directive that fails validation or the
  * write resolves to null, mirroring how the artifact materializer signals a
- * missing file. Results without directives pass through untouched.
+ * missing file.
  */
 export async function applyClientFileDirectives(result: unknown): Promise<AppliedClientFiles> {
   const written: string[] = [];

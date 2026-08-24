@@ -1,67 +1,87 @@
-import { z } from "zod";
-import type { ToolCapability, ToolDefinition } from "@argent/registry";
-import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
-import { resolveDevice } from "../../utils/device-info";
+import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
+import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { redactSecretsFromError, resolveSecretPlaceholders } from "../../utils/secrets";
-import { sendCommand } from "../../utils/simulator-client";
+import { pasteZodSchema } from "./schema";
+import type { PasteParams, PasteResult, PasteServices } from "./types";
+import { makeIosImpl, makeIosRemoteImpl } from "./platforms/ios";
+import { makeAndroidImpl } from "./platforms/android";
 
-const zodSchema = z.object({
-  udid: z.string().min(1).describe("iOS simulator UDID — paste is iOS-only."),
-  text: z
-    .string()
-    .describe(
-      "Text to paste into the focused field. To paste a credential without its plaintext ever " +
-        "entering your context, use `{{secret:<NAME>}}` — resolved server-side from the " +
-        "`ARGENT_SECRET_<NAME>` environment variable or an argent secrets file (`.argent/secrets.env` " +
-        "in the project, `~/.argent/secrets.env`, or an `ARGENT_SECRET_`-prefixed key in the project's " +
-        "`.env`/`.env.local`). If the secret is not set, the failure lists every source it looked in — ask " +
-        "the user to add it to one — NEVER ask the user to paste the secret value into the conversation."
-    ),
-});
+const capability: ToolCapability = {
+  apple: { simulator: true },
+  // A remote sim pastes over the MoQ transport (`simctl pbcopy` + ⌘V); the HTTP
+  // clipboard route does not exist there.
+  appleRemote: { simulator: true },
+  // Emulators only: the clipboard is set through the emulator's gRPC endpoint,
+  // which a physical phone does not have. `unknown` is admitted because an
+  // unresolved serial may still be an emulator.
+  android: { emulator: true, unknown: true },
+  // No `chromium`: its only clipboard is the HOST one, so a paste would
+  // overwrite what the user copied. No `vega`: VVD exposes no clipboard API.
+  //
+  // TV targets are not separate platforms (an Apple TV simulator is
+  // `ios`/`simulator`, an Android TV emulator `android`/`emulator`), so each
+  // handler probes the runtime kind and rejects a TV itself.
+};
 
-type Params = z.infer<typeof zodSchema>;
+/**
+ * A paste is two unserialized steps — fill the clipboard, then send the
+ * keystroke — so two concurrent calls on one device can let the second fill
+ * land before the first keystroke, pasting one text twice and the other never
+ * while both report success.
+ */
+const pasteQueues = new Map<string, Promise<unknown>>();
 
-interface Result {
-  pasted: boolean;
+function serializedPerDevice<T>(deviceId: string, task: () => Promise<T>): Promise<T> {
+  const previous = pasteQueues.get(deviceId) ?? Promise.resolve();
+  const next = previous.then(task, task);
+  pasteQueues.set(deviceId, next);
+  void next.then(
+    () => {
+      if (pasteQueues.get(deviceId) === next) pasteQueues.delete(deviceId);
+    },
+    () => {
+      if (pasteQueues.get(deviceId) === next) pasteQueues.delete(deviceId);
+    }
+  );
+  return next;
 }
 
-// Capability gate (HTTP layer + dispatchByPlatform-style consumers) rejects
-// Android serials with "Tool 'paste' is not supported on android". The handler
-// itself is iOS-only — no platforms/ split needed.
-const capability: ToolCapability = {
-  apple: { simulator: true, device: true },
-  appleRemote: { simulator: true },
-};
-
-export const pasteTool: ToolDefinition<Params, Result> = {
-  id: "paste",
-  interaction: {
-    startedMsg: () => "Pasting clipboard contents",
-    completedMsg: () => "Pasted clipboard contents",
-    failedMsg: ({ failureSignal }) =>
-      `Failed to paste clipboard contents: ${failureSignal.error_code}`,
-  },
-  description: `Fill the focused field on the iOS simulator by pasting text (fastest text entry).
-Use when you need to fill a text input with a long string faster than character-by-character typing.
-Returns { pasted: true }. Fails if no field is focused or the simulator server is not running.
-Tap the text field first to focus it, then call paste.
-Supports \`{{secret:<NAME>}}\` placeholders resolved server-side from \`ARGENT_SECRET_<NAME>\` env vars or an argent secrets file, so credentials never enter agent context.
-If paste doesn't work for a particular field, use the keyboard tool instead.`,
-  zodSchema,
-  capability,
-  services: (params) => ({
-    simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
-  }),
-  async execute(services, params) {
-    const api = services.simulatorServer as SimulatorServerApi;
-    // Secret placeholders resolve here — inside execute, past every logging
-    // boundary — so only the placeholder form appears in transcripts and logs.
-    const { text, secrets } = resolveSecretPlaceholders(params.text);
-    try {
-      sendCommand(api, { cmd: "paste", text });
-    } catch (err) {
-      throw redactSecretsFromError(err, secrets);
-    }
-    return { pasted: true };
-  },
-};
+export function createPasteTool(registry: Registry): ToolDefinition<PasteParams, PasteResult> {
+  const dispatch = dispatchByPlatform<PasteServices, PasteServices, PasteParams, PasteResult>({
+    toolId: "paste",
+    capability,
+    ios: makeIosImpl(registry),
+    iosRemote: makeIosRemoteImpl(registry),
+    android: makeAndroidImpl(registry),
+  });
+  return {
+    id: "paste",
+    interaction: {
+      startedMsg: () => "Pasting text",
+      completedMsg: () => "Pasted text",
+      failedMsg: ({ failureSignal }) => `Failed to paste text: ${failureSignal.error_code}`,
+    },
+    description: `Paste text into the focused field: puts \`text\` on the DEVICE clipboard (the host clipboard is untouched), then triggers the platform's paste shortcut (iOS simulator, Android emulator).
+Do NOT use this in place of \`keyboard\`. \`keyboard\` types as a user would and is the default for all text entry; use \`paste\` only where a real user would paste — a 2FA/OTP code copied from another app, a long link or token, or when testing the app's own paste handling.
+Tap the field first so it has focus. Returns { pasted: true }. Fails on a TV target, when the device clipboard cannot be set, or when the simulator-server build lacks clipboard support.
+Supports \`{{secret:<NAME>}}\` placeholders like \`keyboard\`; the value is never echoed back.`,
+    searchHint: "paste clipboard pasteboard otp 2fa code fill field",
+    zodSchema: pasteZodSchema,
+    capability,
+    services: () => ({}),
+    execute: async (services, params, options) => {
+      // Resolve inside `execute`: after every logging boundary (transcript,
+      // event log and recorded sequences see only the placeholder) and before
+      // the dispatch.
+      const { text, secrets } = resolveSecretPlaceholders(params.text);
+      return serializedPerDevice(params.udid, async () => {
+        if (secrets.length === 0) return dispatch(services, params, options);
+        try {
+          return await dispatch(services, { ...params, text }, options);
+        } catch (err) {
+          throw redactSecretsFromError(err, secrets);
+        }
+      });
+    },
+  };
+}

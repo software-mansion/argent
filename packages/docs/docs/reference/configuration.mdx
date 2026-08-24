@@ -1,0 +1,211 @@
+---
+sidebar_position: 4
+sidebar_label: Configuration
+title: Configuration
+sidebar_custom_props:
+  icon: settings-2
+---
+
+Argent reads its settings from four places: configuration keys, feature flags, secrets and environment variables. This page lists all of them.
+
+## Configuration keys
+
+A configuration key is a named value with a fixed schema. Argent recognizes a fixed set of keys. You cannot add your own key.
+
+### Commands
+
+| Command                               | Description                                            |
+| ------------------------------------- | ------------------------------------------------------ |
+| `argent config list`                  | Show every key with its effective value and its source |
+| `argent config list --json`           | Print the same list as JSON                            |
+| `argent config get <key>`             | Print the effective value of one key                   |
+| `argent config get <key> --scope <s>` | Print the value stored at one scope                    |
+| `argent config set <key> <value>`     | Write a value                                          |
+| `argent config unset <key>`           | Remove a value at one scope                            |
+
+Add `--scope project` to `set` or `unset` to change the key for the current project only. The default scope is global.
+
+```bash
+argent config set recordings.directory ~/Movies/argent
+argent config set lens.agent codex --scope project
+argent config get ios.additionalDeviceSets
+```
+
+### Available keys
+
+| Key                        | Scopes          | Merge            | Description                                                                                                                           |
+| -------------------------- | --------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `telemetry.enabled`        | global          | restrictive wins | Whether anonymous telemetry is on. Default `true`. Read-only here: use `argent telemetry` to change it                                |
+| `lens.agent`               | project, global | project wins     | The coding agent that `argent lens` starts without the picker, for example `claude` or `codex`                                        |
+| `ios.additionalDeviceSets` | project, global | union            | Additional CoreSimulator device-set directories. Argent lists the simulators in these sets next to the default set. An array of paths |
+| `recordings.directory`     | project, global | project wins     | The directory where Argent saves a finished screen recording. Default `.argent/recordings` under the project root                     |
+
+A path value is absolute, starts with `~`, or is relative. For `ios.additionalDeviceSets`, Argent resolves a relative entry against the scope that set it: the project root for the project file, the home directory for the global file.
+
+Argent resolves `recordings.directory` on the client host, the machine that receives the mp4. A relative value always resolves against the project root, or the home directory when there is no project, regardless of which file set the value.
+
+### Storage
+
+Argent stores the keys as JSON in two files:
+
+| Scope   | Path                                 |
+| ------- | ------------------------------------ |
+| Global  | `~/.argent/config.json`              |
+| Project | `<project-root>/.argent/config.json` |
+
+The two files share the shape of the key. `ios.additionalDeviceSets` lives at `{ "ios": { "additionalDeviceSets": [...] } }`.
+
+Argent reads both files at each request. Thus a change takes effect immediately. The merge column above decides the effective value when both files set the same key:
+
+| Merge            | Result                                                                        |
+| ---------------- | ----------------------------------------------------------------------------- |
+| project wins     | The project value replaces the global value                                   |
+| union            | The global entries come first, then the project entries, without duplicates   |
+| restrictive wins | The more restrictive value wins. Thus a project file cannot turn telemetry on |
+
+Argent finds the project root at the nearest parent directory that contains `.argent`, `.git` or `package.json`. The feature flags below use the same two directories and the same project root.
+
+## Feature flags
+
+A feature flag is a boolean switch. Each flag turns one behavior of Argent on or off. Argent recognizes a fixed set of flags. You cannot add your own flag.
+
+### Commands
+
+| Command                 | Description                                     |
+| ----------------------- | ----------------------------------------------- |
+| `argent flags`          | List the flags with their description and state |
+| `argent flags --json`   | Print the same list as JSON                     |
+| `argent enable <name>`  | Turn a flag on                                  |
+| `argent disable <name>` | Turn a flag off                                 |
+
+Add `--scope project` to `enable` or `disable` to change the flag for the current project only. The default scope is global.
+
+```bash
+argent enable argent-lens                    # global
+argent enable argent-lens --scope project    # this project only
+```
+
+### Available flags
+
+| Flag                      | Default | Description                                                                                                                   |
+| ------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `argent-lens`             | Off     | Enable Argent Lens: the `propose_variant` and `await_user_selection` tools, the preview window, and the `argent lens` command |
+| `disable-auto-screenshot` | Off     | Stop the automatic screenshot that Argent captures after each interaction tool                                                |
+| `artifacts-list-endpoint` | Off     | Expose the `GET /artifacts` endpoint of the tool-server for remote artifact consumers                                         |
+| `tool-server-event-log`   | Off     | Write the lifecycle events of the tool-server to a JSONL file                                                                 |
+| `boot-sound`              | Off     | Default the `sound` argument of `boot-device` to true, so Android emulators boot with audio output instead of muted           |
+| `microinteractions`       | Off     | Animate the host window to match device actions. Cosmetic only, macOS only                                                    |
+| `video-watermark`         | On      | Put the Argent watermark in the corner of a recorded screen video                                                             |
+
+The tool-server writes the event log to `~/.argent/tool-server-events.jsonl`. Set the `ARGENT_EVENT_LOG` environment variable to select a different path.
+
+### Storage
+
+Argent stores the flags as JSON in two files:
+
+| Scope   | Path                                |
+| ------- | ----------------------------------- |
+| Global  | `~/.argent/flags.json`              |
+| Project | `<project-root>/.argent/flags.json` |
+
+Argent reads the project file first, then the global file. Thus a value in the project file replaces the value in the global file. If neither file contains the flag, Argent uses the default of the flag.
+
+To turn a globally enabled flag off in one project only, write the value in the project file:
+
+```json
+{
+  "flags": {
+    "argent-lens": false
+  }
+}
+```
+
+### Effect of a change
+
+Argent reads the flag files at each request. Thus `argent enable` and `argent disable` take effect immediately. You do not restart the tool-server.
+
+A tool that a flag controls is available to the agent only while the flag is on. If the flag is off, the tool is absent from the tool list and the agent cannot call it.
+
+### Removed flags
+
+Argent can remove a flag from the recognized set. `argent flags` shows a flag that is still in your files but no longer recognized in a separate section. Run `argent disable <name>` to remove such an entry.
+
+## Secrets
+
+A flow step or a `keyboard` call can type a credential without the credential in the file or in the agent context. The step contains a placeholder:
+
+```yaml
+- type: { into: { id: password }, text: "{{secret:APP_PASSWORD}}" }
+```
+
+The tool-server replaces the placeholder when the step runs. The tool-server resolves the name on the machine that runs the tool-server. It takes the first source that defines the name:
+
+| Order | Source                                                  | Accepted keys                              |
+| ----- | ------------------------------------------------------- | ------------------------------------------ |
+| 1     | Environment variable `ARGENT_SECRET_<NAME>`             | Prefixed variables only                    |
+| 2     | `<project-root>/.argent/secrets.env`                    | Every key. Add this file to `.gitignore`   |
+| 3     | `<project-root>/.env.local`, then `<project-root>/.env` | Keys with the `ARGENT_SECRET_` prefix only |
+| 4     | `~/.argent/secrets.env`                                 | Every key, for every project               |
+
+A bare `NAME=value` line in `.env` or `.env.local` stays unresolved. Write `ARGENT_SECRET_NAME=value` in these files.
+
+A change in a secrets file applies to the next tool call. An environment variable reaches only a tool-server that started after you exported the variable.
+
+A name that no source defines fails the step at run time. Argent redacts each resolved value in the reports and logs. Thus do not use a placeholder for content that a report must show.
+
+### Commands
+
+| Command                 | Description                                                      |
+| ----------------------- | ---------------------------------------------------------------- |
+| `argent secrets`        | List the names that a placeholder can resolve, and their sources |
+| `argent secrets list`   | Same as `argent secrets`                                         |
+| `argent secrets --json` | Print the same list as JSON                                      |
+
+The command prints names only. It never prints a value. When two sources define the same name, the command marks the later copy as shadowed.
+
+```bash
+echo 'APP_PASSWORD=...' >> ~/.argent/secrets.env
+argent secrets
+```
+
+## Environment variables
+
+An environment variable changes the behavior of the process that reads it. Export the variable before you start that process. Most variables apply to the tool-server. Restart the tool-server with `argent server stop` after a change.
+
+### Tool-server
+
+| Variable                      | Default                              | Description                                                                                         |
+| ----------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `ARGENT_PORT`                 | `3001`                               | The port the tool-server listens on                                                                 |
+| `ARGENT_HOST`                 | `127.0.0.1`                          | The address the tool-server binds to                                                                |
+| `ARGENT_IDLE_TIMEOUT_MINUTES` | `0`                                  | Minutes without a request after which the tool-server exits. `0` disables the timeout               |
+| `ARGENT_EVENT_LOG`            | `~/.argent/tool-server-events.jsonl` | Path of the event log that the `tool-server-event-log` flag writes                                  |
+| `ARGENT_SCREENSHOT_SCALE`     | `0.3`                                | Scale factor of a captured screenshot, between `0` and `1`. A smaller value returns a smaller image |
+| `ARGENT_CHROMIUM_PORTS`       | empty                                | Comma-separated CDP ports that Argent probes for Chromium apps, in addition to `9222`               |
+| `ARGENT_CHROMIUM_PORTS_FILE`  | `~/.argent/chromium-cdp-ports.json`  | Path of the file that remembers the CDP ports of apps that Argent started                           |
+
+### Devices
+
+| Variable                                               | Default                                 | Description                                                                                       |
+| ------------------------------------------------------ | --------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `ARGENT_SIMULATOR_NO_WINDOW`                           | unset                                   | Set `1`, `true` or `yes` to boot an iOS simulator without the Simulator window                    |
+| `ARGENT_EMULATOR_NO_WINDOW`                            | unset                                   | Set `1` to boot an Android emulator without a window, for CI, containers or Wayland-only sessions |
+| `ARGENT_EMULATOR_GPU_MODE`                             | `auto` on macOS, `swiftshader` on Linux | The value of the emulator `-gpu` option, for example `host`                                       |
+| `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `ANDROID_AVD_HOME` | SDK defaults                            | The standard Android SDK locations. Argent reads them to find `adb`, the emulator and the AVDs    |
+
+### MCP server
+
+| Variable                                  | Default                    | Description                                                                                                                                                            |
+| ----------------------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ARGENT_TOOLS_URL`                        | unset                      | URL of the tool-server that the MCP server and the CLI use. Takes precedence over `argent link`                                                                        |
+| `ARGENT_MCP_LOG`                          | `~/.argent/mcp-calls.log`  | Path of the log of tool calls that the MCP server writes                                                                                                               |
+| `ARGENT_AUTO_SCREENSHOT_DELAY_MS`         | per tool, `1400` otherwise | Minimum milliseconds between an interaction tool and its automatic screenshot. Raises the per-tool default; it cannot lower it. See the `disable-auto-screenshot` flag |
+| `ARGENT_TOOL_SERVER_SHUTDOWN_ON_MCP_EXIT` | unset                      | Set `1` to stop the tool-server when the editor closes the MCP server                                                                                                  |
+
+### Telemetry
+
+| Variable       | Description                                                                                |
+| -------------- | ------------------------------------------------------------------------------------------ |
+| `DO_NOT_TRACK` | Set `1` to turn telemetry off for this process. `argent telemetry status` shows the result |
+
+See [Telemetry and privacy](/docs/reference/telemetry) for the opt-out command.

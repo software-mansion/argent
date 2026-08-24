@@ -6,10 +6,8 @@ import { sendCommand } from "../../utils/simulator-client";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// Ease-out exponent for a `settle` swipe. The finger follows 1-(1-t)^n rather
-// than a straight line, so it decelerates into the end point and lifts at ~0
-// velocity — the scroll view then skips its fling. Cubic gives a fast glide that
-// flattens over the final frames; a higher exponent would linger longer at rest.
+// Ease-out exponent for a `settle` swipe: cubic glides fast then flattens over
+// the final frames; a higher exponent would linger longer at rest.
 const SETTLE_EASE_EXPONENT = 3;
 
 const zodSchema = z.object({
@@ -37,10 +35,8 @@ interface Result {
   timestampMs: number;
 }
 
-// Touch platforms only. A desktop renderer has no touch swipe: a mouse drag
-// selects text instead of scrolling, so Chromium callers use the dedicated
-// `gesture-scroll` tool (wheel-based) and the capability gate rejects this
-// one with a clear error rather than silently doing the wrong thing.
+// Touch platforms only: on a desktop renderer a mouse drag selects text instead
+// of scrolling, so Chromium callers use `gesture-scroll` (wheel-based) instead.
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   appleRemote: { simulator: true },
@@ -77,14 +73,10 @@ Pass settle:true for a momentum-free swipe that lands exactly where the finger l
 
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
-      // A plain swipe advances linearly; a `settle` swipe eases-out so the finger
-      // decelerates into the end point and lifts at ~0 velocity (no fling). The
-      // shrinking end-of-curve steps stay distinct, non-coalescible moves whose
-      // dx/dt genuinely decays — unlike a train of identical "hold" samples,
-      // which UIKit coalesces away, leaving the fast pre-hold velocity to fling.
-      // Ease-out also keeps every sample between the start and end point, so it
-      // never runs off-screen the way a beyond-the-end hold would for a swipe
-      // that already finishes at an edge.
+      // `settle` lifts at ~0 velocity, so the OS applies no fling. Ease-out
+      // beats a train of identical "hold" samples: those get coalesced away,
+      // leaving the fast pre-hold velocity to fling, and a beyond-the-end hold
+      // would run off-screen for a swipe that already finishes at an edge.
       const progress = settle ? 1 - Math.pow(1 - t, SETTLE_EASE_EXPONENT) : t;
       const x = params.fromX + (params.toX - params.fromX) * progress;
       const y = params.fromY + (params.toY - params.fromY) * progress;

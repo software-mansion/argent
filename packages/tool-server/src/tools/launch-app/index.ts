@@ -11,16 +11,13 @@ import { androidImpl } from "./platforms/android";
 import { chromiumImpl, type LaunchAppChromiumServices } from "./platforms/chromium";
 import { vegaImpl } from "./platforms/vega";
 
-// Android package grammar is `[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+`;
-// iOS bundle ids use the same reverse-DNS shape with dashes allowed. The union
-// is letters, digits, underscore, dot, hyphen — but the head must be a letter
-// or underscore so a bundleId like `--user` can't masquerade as a flag inside
-// `am start -n …` / `cmd package resolve-activity …`.
+// Union of the Android package and iOS bundle-id (dashes allowed) alphabets.
+// The head is restricted so a bundleId like `--user` can't masquerade as a flag
+// inside `am start -n …` / `cmd package resolve-activity …`.
 const BUNDLE_ID_PATTERN = /^[A-Za-z_][A-Za-z0-9._-]*$/;
-// Activity names can be `.Foo`, `com.x.y/.Foo`, or `com.x/com.x.Foo`. Same alphabet
-// plus `/` as the package/activity separator. `$` and other shell metacharacters
-// are deliberately excluded. Leading `-` is also forbidden for flag-injection
-// reasons; `.` is allowed as the head so dot-prefixed activities still work.
+// Same alphabet plus `/` as the package/activity separator, with `.` allowed as
+// the head so `.MainActivity` works. Leading `-` and shell metacharacters like
+// `$` are excluded for the same flag-injection reason.
 const ACTIVITY_PATTERN = /^[A-Za-z_.][A-Za-z0-9._/-]*$/;
 
 const zodSchema = z.object({
@@ -53,15 +50,12 @@ const capability: ToolCapability = {
   vega: { vvd: true },
 };
 
-// `launch-app` resolves native-devtools through `registry` inside the iOS
-// handler (closed over below) rather than via the registry's `services()`
-// declaration — the same pattern as `describe` / `screenshot`. A tvOS sim
-// classifies as platform "ios" by UDID shape; native-devtools is iOS *and*
-// tvOS capable, so the handler resolves it for both. Its ensureEnv picks the
-// platform-matched DYLD_INSERT_LIBRARIES slice (the TVOSSIMULATOR bootstrap
-// for Apple TV sims), so injection is prepared correctly on tvOS too — not
-// skipped. Lazy resolution keeps this aligned with the other iOS tools that
-// branch on the resolved device inside their handler.
+// native-devtools is resolved through `registry` inside the iOS handler rather
+// than declared in `services()` — the same pattern as `describe` / `screenshot`.
+// A tvOS sim classifies as platform "ios" by UDID shape, and native-devtools
+// covers both: its ensureEnv picks the platform-matched DYLD_INSERT_LIBRARIES
+// slice (the TVOSSIMULATOR bootstrap for Apple TV sims), so injection is
+// prepared on tvOS too.
 export function createLaunchAppTool(registry: Registry): ToolDefinition<Params, LaunchAppResult> {
   return {
     id: "launch-app",
@@ -84,11 +78,8 @@ Common Android packages: com.android.settings, com.android.chrome, com.google.an
       "open start app bundle id package simulator emulator chromium vega launch tvos apple tv fire tv",
     zodSchema,
     capability,
-    // Chromium declares an eager CDP service; ios-remote declares an eager
-    // native-devtools service (its handler shares the local iOS launch path,
-    // which reads `services.nativeDevtools`). Local iOS resolves native-devtools
-    // lazily in its handler so a tvOS udid never spins up the iOS-only injection
-    // (see header comment); Android and Vega need no service.
+    // ios-remote's handler reads `services.nativeDevtools`; local iOS resolves
+    // it lazily instead (see header comment).
     services: (params): Record<string, ServiceRef> => {
       const device = resolveDevice(params.udid);
       if (device.platform === "ios-remote") return { nativeDevtools: nativeDevtoolsRef(device) };

@@ -1,24 +1,18 @@
 /**
- * Error type raised when the in-process Perfetto trace-processor WASM engine the
- * Android profiler needs can't be loaded or initialized. Distinct from a generic
- * Error so callers (the tool-server analyze path) can branch on it and surface a
- * prominent, actionable banner — instead of folding the failure into the
- * per-query "Export warnings" list, where it would read like a SQL hiccup.
- *
- * Since the engine is now a single ~13 MB `.wasm` vendored into the package (no
- * per-platform binary, no download), this is a rare path: the only ways it fires
- * are a corrupt/missing vendored asset or an `ARGENT_TRACE_PROCESSOR_WASM`
- * override pointing at a bad file.
+ * Raised when the in-process Perfetto trace-processor WASM engine can't be
+ * loaded. Distinct from a generic Error so the tool-server analyze path can
+ * branch on it and render a prominent banner, instead of folding the failure
+ * into the per-query "Export warnings" list.
  */
 
 export type TraceProcessorUnavailableKind = "wasm_load_failed" | "wasm_path_invalid";
 
 export interface TraceProcessorUnavailableDetails {
-  /** Pinned Perfetto version the engine is built against, when known. */
+  /** Perfetto version of the engine, when known. */
   version?: string;
   /** Offending path for the `wasm_path_invalid` case. */
   path?: string;
-  /** Underlying error (e.g. an instantiation failure from emscripten). */
+  /** Underlying failure that was wrapped. */
   cause?: unknown;
 }
 
@@ -58,8 +52,6 @@ export class TraceProcessorUnavailableError extends Error {
     this.version = details.version;
     this.path = details.path;
     this.cause = details.cause;
-    // Restore the prototype chain — `extends Error` + transpilation to ES5/CJS
-    // otherwise breaks `instanceof`, which the tool-server analyze path relies on.
     Object.setPrototypeOf(this, TraceProcessorUnavailableError.prototype);
   }
 }

@@ -8,22 +8,19 @@ export interface WaitForXctraceReadyOptions {
 }
 
 export interface WaitForXctraceReadyResult {
-  /** stderr accumulated during startup; empty once we reach ready. */
+  /** stderr accumulated while waiting for ready. */
   stderrBuffer: string;
 }
 
 /**
- * Wait for `xctrace record` to reach the recording state. Resolves on either
- * the Darwin notification (preferred) or the localised stdout substring
- * fallback. Rejects on early child exit, spawn error, or startup timeout —
- * and on timeout sends SIGKILL so the child cannot leak.
+ * Wait for `xctrace record` to reach the recording state, signalled by whichever
+ * comes first: the Darwin notification or a stdout substring match. Rejects on
+ * early child exit, spawn error, or startup timeout; the timeout SIGKILLs the
+ * child so it cannot leak.
  *
- * Listeners installed here stay attached for the lifetime of the child: late
- * events (notably the async `'error'` Node emits if a `kill()` syscall fails)
- * would crash the process if there were no `'error'` listener at all. They
- * become no-ops after settle because (a) `settle()` short-circuits and (b)
- * `resolve()` / `reject()` on an already-settled promise is a no-op. The
- * caller is free to attach its own post-ready listeners alongside.
+ * Listeners stay attached for the lifetime of the child: without an `'error'`
+ * listener, the async error Node emits when a `kill()` syscall fails would crash
+ * the process. They are no-ops after settle, so the caller may attach its own.
  */
 export function waitForXctraceReady(
   child: ChildProcess,
@@ -102,7 +99,7 @@ export function waitForXctraceReady(
         try {
           child.kill("SIGKILL");
         } catch {
-          // already dead
+          /* best-effort */
         }
         reject(
           new FailureError(
@@ -125,7 +122,7 @@ export function waitForXctraceReady(
       notify.fired
         .then(() => settle(() => resolve({ stderrBuffer })))
         .catch(() => {
-          // notify failures fall through to stdout substring match
+          /* ignore */
         });
     }
   });

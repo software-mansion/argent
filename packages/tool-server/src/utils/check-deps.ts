@@ -4,10 +4,9 @@ import { resolveVegaBinary } from "./vega-cli";
 import { commandOnPath } from "./command-on-path";
 
 /**
- * Thrown when a tool declares a host-binary dependency (e.g. `adb`, `xcrun`)
- * that is not on PATH. The HTTP dispatcher maps this to `424 Failed
- * Dependency` with the message as the body; `.message` is the human-friendly
- * install hint, safe to bubble straight to the agent.
+ * Thrown when a declared host-binary dependency (e.g. `adb`, `xcrun`) can't be
+ * resolved. The HTTP dispatcher maps it to 424; `.message` is the install hint,
+ * safe to bubble straight to the agent.
  */
 export class DependencyMissingError extends Error {
   readonly missing: ToolDependency[];
@@ -24,16 +23,14 @@ export class DependencyMissingError extends Error {
   }
 }
 
-// Cache for CACHE_TTL_MS so a burst of tool calls pays at most one `command -v`
-// per dep, but an install mid-session (e.g. the user runs `xcode-select
-// --install` after a missing-dep error) recovers on its own within a minute
-// without needing a tool-server restart.
+// Short TTL: a burst of tool calls pays for at most one probe per dep, yet an
+// install mid-session recovers without a tool-server restart.
 const CACHE_TTL_MS = 60_000;
 type CacheEntry = { available: boolean; checkedAt: number };
 const cache = new Map<ToolDependency, CacheEntry>();
 
-// Short per-dep hints — the message is what the LLM sees on a missing-dep
-// error, so it should tell it how to unblock the user.
+// This text is what the LLM sees on a missing-dep failure, so each hint says
+// how to unblock the user.
 const INSTALL_HINTS: Record<ToolDependency, string> = {
   "xcrun":
     "Xcode command-line tools are not installed. Run `xcode-select --install` (or install Xcode from the App Store) and retry. Only required for iOS simulators.",
@@ -48,25 +45,19 @@ const INSTALL_HINTS: Record<ToolDependency, string> = {
 };
 
 async function probe(dep: ToolDependency): Promise<boolean> {
-  // Android binaries support an `$ANDROID_HOME` fallback in addition to PATH
-  // (Android Studio sets ANDROID_HOME but does NOT add `$ANDROID_HOME/emulator`
-  // to PATH on macOS — the most common state for users coming from Studio).
-  // Funnel the lookup through `resolveAndroidBinary` so the dep check sees an
-  // SDK install even when the binary is off PATH; otherwise a host with a
-  // working SDK would 424 with an "install adb"-style hint that doesn't
-  // describe the actual problem.
+  // Android Studio sets ANDROID_HOME but leaves the SDK subdirs off PATH, so
+  // resolve through the SDK-aware resolver — a PATH-only check would 424 on a
+  // host whose SDK works fine.
   if (dep === "adb" || dep === "emulator") {
     return (await resolveAndroidBinary(dep)) !== null;
   }
-  // `vega`/`kepler` may live only under `~/vega/bin` when the user hasn't sourced
-  // `~/vega/env`, so resolve through the SDK-aware resolver rather than PATH alone.
+  // `vega`/`kepler` is only on PATH after `source ~/vega/env`, so also let the
+  // resolver check the SDK's default install location.
   if (dep === "vega") {
     return (await resolveVegaBinary()) !== null;
   }
-  // `commandOnPath` probes existence without invoking the dep itself — a bare
-  // `xcrun` call would fork the tool just to check existence, which is both
-  // slower and (for xcrun) can prompt the license agreement dialog on first
-  // use. It uses `command -v` on POSIX and `where` on Windows.
+  // Probe existence without invoking the dep: a bare `xcrun` can pop the Xcode
+  // license dialog on first use.
   return (await commandOnPath(dep)) !== null;
 }
 
@@ -80,10 +71,10 @@ async function isAvailable(dep: ToolDependency): Promise<boolean> {
 }
 
 /**
- * Throws DependencyMissingError if any declared dep isn't on PATH. All deps
- * are probed in parallel; the error message lists every missing one so the
- * agent sees the complete picture on the first failure instead of being
- * prompted twice for the same tool.
+ * Probes all deps in parallel.
+ *
+ * @throws DependencyMissingError listing every missing dep, so the agent isn't
+ * sent back for the same tool twice.
  */
 export async function ensureDeps(deps: readonly ToolDependency[]): Promise<void> {
   if (deps.length === 0) return;
@@ -96,9 +87,9 @@ export async function ensureDeps(deps: readonly ToolDependency[]): Promise<void>
 
 /**
  * Single-dep convenience over `ensureDeps`. `dispatchByPlatform` already
- * preflights the matched branch's `requires`; this is for tools that pick
- * a platform path internally (e.g. `boot-device`, where there is no udid to
- * classify yet) and want the same 424-with-install-hint failure mode.
+ * preflights the matched branch's `requires`; this is for tools that pick a
+ * platform path internally (e.g. `boot-device`, which has no udid to classify
+ * yet).
  */
 export async function ensureDep(dep: ToolDependency): Promise<void> {
   return ensureDeps([dep]);
@@ -110,10 +101,8 @@ export function __resetDepCacheForTests(): void {
 }
 
 /**
- * Test-only: pre-populate the cache so `ensureDep(dep)` is a no-op without
- * shelling out. Needed by tool dispatch tests that assert on `execFile` call
- * shapes / counts — without this, the `command -v <dep>` probe appears as an
- * extra first call and breaks `mock.calls[0]` expectations.
+ * Test-only: mark deps available so the preflight doesn't reach the probe and
+ * show up in tests' `execFile` mocks.
  */
 export function __primeDepCacheForTests(deps: ToolDependency[]): void {
   const now = Date.now();

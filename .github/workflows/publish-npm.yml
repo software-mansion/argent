@@ -1,41 +1,25 @@
 name: Publish npm package
 
-# Unified npm publishing workflow — successor to publish.yml ("Publish to npm")
-# and publish-next.yml ("Publish prerelease to npm (next)"). Merging them into
-# one file is a prerequisite for npm trusted publishing, which registers a
-# single workflow filename as the package's trusted publisher.
+# One file, because npm trusted publishing registers a single workflow filename
+# as the package's trusted publisher.
 #
-# Modes (derived from the trigger + the ref's version, never spelled twice):
+# Modes (derived from the trigger + the ref's version):
 #
 #   push to main       → canary: version derived + stamped (<base>-next.<k>),
 #                        published under the `next` dist-tag. Gated behind the
-#                        PUBLISH_NPM_UNIFIED repository variable (=1 since the
-#                        2026-07 cutover; unsetting it is the canary
-#                        kill-switch — manual dispatches keep working).
-#   workflow_dispatch  → publishes the ref's package.json version verbatim.
-#                        The dist-tag is derived from the version itself:
-#                          prerelease (has a "-IDENTIFIER" suffix) → `next`
-#                          stable                                  → `latest`
-#                        The optional `channel` input is an assertion, not a
-#                        selector: the run fails if the ref's version doesn't
-#                        land on the channel you expected. `dry_run` exercises
-#                        the full build + bundle verification without publishing.
-#                        Note dry_run only rehearses the dispatch path — the
-#                        canary machinery (version stamping, --version check,
-#                        collision retry) was copied verbatim from the retired
-#                        publish-next.yml.
+#                        PUBLISH_NPM_UNIFIED repository variable.
+#   workflow_dispatch  → publishes the ref's package.json version verbatim, on
+#                        the dist-tag derived from that version. `dry_run`
+#                        rehearses only this path — the canary machinery
+#                        (stamping, --version check, collision retry) is never
+#                        exercised by it.
 #
-# Provenance / trusted publishing:
-#   THIS file (publish-npm.yml) is registered on npmjs.com as the npm Trusted
-#   Publisher for @swmansion/argent (registered 2026-07-24, verified with the
-#   v0.17.1-next.1 publish): npm's OIDC exchange authenticates the publish —
-#   no npm token is involved. The job has `id-token: write` and publishes with
-#   --provenance, so every release carries a provenance attestation (the repo
-#   is public and package.json's `repository.url` matches, which is what the
-#   registry verifies). NPM_TOKEN remains as a repo secret only for
-#   sync-next-tag.yml, which mutates dist-tags — OIDC only covers publishing.
-#   Renaming or moving this file breaks publishing until the trusted-publisher
-#   registration on npmjs.com is updated to match.
+# Trusted publishing: THIS file is registered on npmjs.com as the npm Trusted
+# Publisher for @swmansion/argent, so the OIDC exchange authenticates the
+# publish and no npm token is involved. Renaming or moving it breaks publishing
+# until that registration is updated to match. NPM_TOKEN survives as a repo
+# secret only for sync-next-tag.yml, which mutates dist-tags — OIDC covers
+# publishing only.
 
 on:
   push:
@@ -63,19 +47,18 @@ on:
         type: boolean
 
 concurrency:
-  # Serialize canary publishes: the per-base counter is derived from the
-  # registry (next index after the highest published `<base>-next.<k>`), so two
-  # overlapping runs could otherwise read the same index and collide on npm.
-  # Manual dispatches get their own lane. Never cancel an in-flight publish.
+  # Serialize canary publishes: the per-base counter is the next index after the
+  # highest published `<base>-next.<k>`, so overlapping runs would read the same
+  # index and collide on npm. Manual dispatches get their own lane, and an
+  # in-flight publish is never cancelled.
   group: publish-npm-${{ github.event_name }}
   cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-latest
-    # PUBLISH_NPM_UNIFIED originally kept canary-on-push dormant while this
-    # workflow coexisted with the old publish-next.yml; post-cutover it serves
-    # as the canary kill-switch. Manual dispatches always run.
+    # Unsetting PUBLISH_NPM_UNIFIED is the canary kill-switch; manual dispatches
+    # always run.
     if: github.event_name == 'workflow_dispatch' || vars.PUBLISH_NPM_UNIFIED == '1'
     permissions:
       contents: read
@@ -84,7 +67,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # push → the pushed commit; dispatch → the requested ref.
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
 
       - uses: actions/setup-node@v6
@@ -93,15 +75,13 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           scope: "@swmansion"
 
-      # Trusted publishing needs npm >= 11.5.1; pin the major instead of
-      # trusting whatever Node 24 happens to bundle on the runner image.
+      # Trusted publishing needs npm >= 11.5.1; don't rely on whatever the
+      # runner image bundles.
       - name: Ensure npm supports trusted publishing
         run: |
           npm install -g npm@^11.5.1
           npm --version
 
-      # One derivation point for everything mode-dependent: the publish mode,
-      # the dist-tag, and which signed-binaries release tag to download from.
       # inputs.ref reaches the script through env, never template interpolation —
       # this file is the trusted publisher, so a crafted ref name must stay data.
       - name: Resolve publish mode
@@ -111,8 +91,7 @@ jobs:
           CHANNEL: ${{ inputs.channel }}
         run: |
           if [ "${{ github.event_name }}" = "push" ]; then
-            # Canary builds source the floating main build of the signed
-            # binaries; the version is derived + stamped later, at publish time.
+            # argent-main is the floating main build of the signed binaries.
             echo "mode=canary" >> "$GITHUB_OUTPUT"
             echo "dist_tag=next" >> "$GITHUB_OUTPUT"
             echo "binaries_tag=argent-main" >> "$GITHUB_OUTPUT"
@@ -153,16 +132,31 @@ jobs:
 
       - run: npx tsc --build
 
-      - run: npm run build -w @swmansion/argent
+      # Sequenced after `npm ci` (the checked-out lockfile still matches the
+      # original version at install time) and before the bundle build, which
+      # bakes the version into the telemetry payload as a string literal — a
+      # build that ran first would stamp every canary's events with the previous
+      # release's version.
+      - name: Compute and stamp canary version
+        if: steps.mode.outputs.mode == 'canary'
+        id: canary
+        run: |
+          VERSION="$(node scripts/next-canary-version.mjs --write)"
+          echo "Canary version: ${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
-      # Per-platform bundle layout (commit 80e724a). darwin is always required;
-      # both Linux keys (x86_64 "linux" and arm64 "linux-arm64") are gated by
-      # ARGENT_REQUIRE_LINUX_BINARY so the existing release pipeline keeps
-      # working until radon's Linux artifacts are reliably present — flip the
-      # env var to "1" once that lands. win32 is gated the same way: it needs
-      # radon's Windows argent build (radon PR #134) merged plus one
-      # build-sim-server dispatch to publish the asset. The inventory always
-      # logs every platform so a silently-missing binary shows up in the run.
+      - run: npm run build -w @swmansion/argent
+        env:
+          # Release-only: build-package-artifact.yml omits it so test tarballs
+          # stay inert. An unset secret bakes in an empty token, which disables
+          # telemetry rather than failing the build.
+          ARGENT_OTEL_INGEST_TOKEN: ${{ secrets.ARGENT_OTEL_INGEST_TOKEN }}
+
+      # darwin is always required; the Linux keys (x86_64 "linux", arm64
+      # "linux-arm64") and win32 stay gated until radon's artifacts for them are
+      # reliably present — flip the matching env var to "1" then. The inventory
+      # always logs every platform so a silently-missing binary shows up in the
+      # run.
       - name: Verify per-platform simulator-server binaries
         env:
           ARGENT_REQUIRE_LINUX_BINARY: "0"
@@ -190,8 +184,8 @@ jobs:
       - run: test -f packages/argent/dylibs/libNativeDevtoolsIos.dylib
       - run: test -f packages/argent/dylibs/libKeyboardPatch.dylib
       - run: test -f packages/argent/dylibs/libArgentInjectionBootstrap.dylib
-      # tvOS (Apple TV) binaries — fail the publish if any is missing rather
-      # than silently shipping a package where tv-* tools crash at runtime.
+      # tvOS (Apple TV) binaries — missing ones would silently ship a package
+      # whose TV tooling crashes at runtime.
       - run: test -x packages/argent/bin/darwin/tvos-ax-service
       - run: test -x packages/argent/bin/darwin/tvos-hid-daemon
       - run: test -f packages/argent/dylibs/tvos/libNativeDevtoolsIos.dylib
@@ -199,10 +193,9 @@ jobs:
       - run: test -f packages/argent/dylibs/tvos/libArgentInjectionBootstrap.dylib
       # TCP-transport (sim-remote / ios-remote) binaries — the ax-service and
       # native-devtools variants the remote code path spawns/injects over a
-      # sim-remote-tunnelled TCP socket. Absent from 0.15.0 because the release
-      # never built them; gate the publish so they can't silently regress again.
-      # (bin/tcp is platform-NEUTRAL — axServiceBinaryPathTcp() resolves
-      # bin/tcp on every host, never a bin/<platform>/tcp subdir.)
+      # sim-remote-tunnelled TCP socket. bin/tcp is platform-NEUTRAL:
+      # axServiceBinaryPathTcp() resolves bin/tcp on every host, never a
+      # bin/<platform>/tcp subdir.
       - run: test -x packages/argent/bin/tcp/ax-service
       - run: test -f packages/argent/dylibs/tcp/libNativeDevtoolsIos.dylib
       - run: test -f packages/argent/dylibs/tcp/libKeyboardPatch.dylib
@@ -217,24 +210,8 @@ jobs:
       - run: head -c4 packages/argent/assets/trace-processor/trace_processor.wasm | grep -q $'\x00asm'
       - run: ls packages/argent/bin/argent-android-devtools-*.apk
 
-      # Canary version: <patch-bump of highest published>-next.<counter>, where
-      # the counter resets to 0 per base and increments per publish (derived
-      # from the registry). Stamped into package.json so the published build
-      # reports it. Done after `npm ci` (the checked-out lockfile still matches
-      # the original version at install time) and after the build (the CLI reads
-      # its version from package.json at runtime — nothing bakes it in), but
-      # before pack/publish.
-      - name: Compute and stamp canary version
-        if: steps.mode.outputs.mode == 'canary'
-        id: canary
-        run: |
-          VERSION="$(node scripts/next-canary-version.mjs --write)"
-          echo "Canary version: ${VERSION}"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-
       # The shipped CLI reads its version from package.json at runtime, so this
-      # is exactly what `argent --version` prints after install. Fail loudly if
-      # they ever diverge.
+      # is exactly what `argent --version` prints after install.
       - name: Verify argent --version reports the canary version
         if: steps.mode.outputs.mode == 'canary'
         run: |
@@ -242,6 +219,45 @@ jobs:
           EXPECTED="${{ steps.canary.outputs.version }}"
           echo "argent --version → ${REPORTED} (expected ${EXPECTED})"
           [ "${REPORTED}" = "${EXPECTED}" ] || { echo "::error::argent --version (${REPORTED}) != published version (${EXPECTED})"; exit 1; }
+
+      # `argent --version` reads package.json at runtime, so it stays correct
+      # however the build is sequenced and cannot catch a stale *baked* version.
+      # Telemetry's cli_version is substituted into each bundle at build time, so
+      # it is only right while the stamp precedes the build — assert the literal
+      # every bundle actually carries.
+      - name: Verify the bundled telemetry version matches the canary version
+        if: steps.mode.outputs.mode == 'canary'
+        env:
+          EXPECTED: ${{ steps.canary.outputs.version }}
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const expected = process.env.EXPECTED;
+            const dir = "packages/argent/dist";
+            // esbuild folds the ARGENT_CLI_VERSION define into readCliVersion.
+            const re = /function readCliVersion\(\)\s*\{[^}]*?return\s*"([^"]*)"/s;
+            let checked = 0;
+            let failed = false;
+            for (const file of fs.readdirSync(dir).filter((f) => /\.(mjs|cjs)$/.test(f))) {
+              const m = re.exec(fs.readFileSync(path.join(dir, file), "utf8"));
+              // Bundles that do not carry telemetry (e.g. mcp-server) bake no version.
+              if (!m) continue;
+              checked++;
+              const ok = m[1] === expected;
+              console.log(`${ok ? "ok  " : "FAIL"} ${file}: baked cli_version ${m[1]} (expected ${expected})`);
+              if (!ok) failed = true;
+            }
+            if (checked === 0) {
+              console.log(`::error::no bundle in ${dir} bakes a telemetry cli_version — the check can no longer see what ships`);
+              process.exit(1);
+            }
+            if (failed) {
+              console.log("::error::bundled telemetry cli_version != published version — the canary stamp must run before the bundle build");
+              process.exit(1);
+            }
+            console.log(`Verified the baked telemetry version in ${checked} bundle(s).`);
+          '
 
       - run: npm pack --dry-run -w @swmansion/argent
 
@@ -252,17 +268,16 @@ jobs:
           echo "dry_run: would have published ${VERSION} under dist-tag '${{ steps.mode.outputs.dist_tag }}'"
           echo "Dry run — **not** published: \`@swmansion/argent@${VERSION}\` (dist-tag \`${{ steps.mode.outputs.dist_tag }}\`)" >> "$GITHUB_STEP_SUMMARY"
 
-      # Dispatch publishes the ref's verbatim version on its derived dist-tag.
       - name: Publish
         if: steps.mode.outputs.mode == 'dispatch' && !inputs.dry_run
         run: npm publish -w @swmansion/argent --tag "$DIST_TAG" --provenance
         env:
           DIST_TAG: ${{ steps.mode.outputs.dist_tag }}
 
-      # Canary publish. Serialization makes concurrent index collisions
-      # impossible, but npm's read-after-write lag could still hand a back-to-back
-      # run a stale version list, so retry a version-exists collision by
-      # recomputing + restamping. Any other publish failure is real and fails fast.
+      # Serialization makes concurrent index collisions impossible, but npm's
+      # read-after-write lag can still hand a back-to-back run a stale version
+      # list, so retry a version-exists collision by recomputing + restamping.
+      # Any other publish failure is real and fails fast.
       - name: Publish canary
         if: steps.mode.outputs.mode == 'canary'
         env:
@@ -293,7 +308,7 @@ jobs:
           VERSION=$(node -p "require('./packages/argent/package.json').version")
           echo "Published \`@swmansion/argent@${VERSION}\` under dist-tag \`${{ steps.mode.outputs.dist_tag }}\` (with provenance)" >> "$GITHUB_STEP_SUMMARY"
 
-      # `npm publish --tag` already tags this release. Re-pointing `next` at
-      # the highest published version (and self-healing it if it was left
-      # stale) is handled by the "Sync 'next' dist-tag" workflow, which runs
-      # automatically once this workflow succeeds.
+      # `npm publish --tag` already tags this release. Re-pointing `next` at the
+      # highest published version (and repairing it if stale) is the
+      # "Sync 'next' dist-tag" workflow, which runs automatically once this one
+      # succeeds.

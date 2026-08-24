@@ -111,7 +111,7 @@ Never tap the on-screen keyboard through the recorder. Some platforms expose it 
 
 ### Typing
 
-Record the focus tap, then record `keyboard`. Verify the complete value with `describe` or an app validation marker.
+Record the focus tap, then record `keyboard` with `text`. A `keyboard` call carries `text` or `key`, never both. To submit, record a second `keyboard` step with `key: "enter"`. Verify the complete value with `describe` or an app validation marker.
 
 **Never `describe` or `screenshot` a non-secure field you just filled from `{{secret:…}}`.** Only a password field is redacted; a plain text input hands the resolved value back into your context, and an API key or token typed into one is the ordinary case. Submit or navigate away first, then verify the resulting screen.
 
@@ -130,11 +130,27 @@ For every retained raw gesture, add an echo and a recorded result check.
 
 ### Live waits and checks
 
-Record `await-ui-element` through `flow-add-step`. An unmet condition is not an error: the tool returns normally, `message` reports the step was added, and the only sign of failure is `toolResult.success: false` with a `note`. **The step is in the flow file.** Read `toolResult.success` after every recorded check.
+Record `await-ui-element` through `flow-add-step`. The recorder writes the step even when `toolResult.success` is false. Read `success` and `cause` after each check:
 
-When it is false, fix the selector or justified timeout, record the check again, and delete the failed step after `flow-finish-recording`. Do not leave both. A stale `hidden` whose selector matches nothing replays as a silent pass — the unfalsifiable gate that [Record absence in three steps](#record-absence-in-three-steps) exists to prevent. Never proceed as though the gate passed. See the `await-ui-element` section of `argent-device-interact` for the full live condition and selector reference.
+- `unmet`: The tree was readable, but the condition was false. Restore the expected state or correct the selector or timeout. Record the check again, then delete the failed step after `flow-finish-recording`.
+- `unreadable`: The wait ended without a trustworthy read. Restore the tree source and record the check again. Keep the failed step: the condition is unknown, not false.
+- `cancelled`: The caller stopped the wait. Record the check again. Keep the failed step: the condition is unknown, not false.
 
-The live tool and flow runner use different trees. A live wait can pass while its converted directive cannot resolve. Replay every conversion. Keep the raw tool only when its `pollIntervalMs` or `bundleId` is required. Live tools use `identifier`. Flow YAML uses `id`.
+Only `unmet` disproves the condition. Never delete a step during the recording.
+
+A stale `hidden` whose selector matches nothing replays as a silent pass — the unfalsifiable gate that [Record absence in three steps](#record-absence-in-three-steps) exists to prevent. Never proceed as though the gate passed. See the `await-ui-element` section of `argent-device-interact` for the full live condition and selector reference.
+
+A wait inside `run-sequence` gets no recorder warning. Inspect the nested result. Any `success: false` fails the sequence during replay.
+
+The live tool and flow runner use [different trees](flow-yaml.md#the-runner-tree-is-not-the-discovery-tree). After a successful wait, the recorder checks the same condition on the runner tree:
+
+- No warning: The condition holds on both trees.
+- Mismatch: For `text`, first rule out a selector that matches more than one element. Then rule out a changed screen. If the trees really differ, use a runner-tree selector and replay.
+- Unreadable, slow, or cancelled check: The conversion is unknown. Restore the source or re-record before conversion.
+
+A warning does not reject the step. `flow-finish-recording` repeats each warning below its step and reports dropped warnings.
+
+Do not edit YAML before finishing because edits can drop recorded verdicts. If the finish reports drops, record the waits again. Replay every conversion. Keep a raw tool only for `pollIntervalMs` or `bundleId`.
 
 ### Wrong turns
 
@@ -144,16 +160,18 @@ Stop immediately. Restore the last valid screen with direct MCP calls, not `flow
 
 Call `flow-finish-recording`, then read the saved YAML. Apply only meaning-preserving conversions:
 
-| Recorded form                | Finished form                                                      |
-| ---------------------------- | ------------------------------------------------------------------ |
-| focus tap + `tool: keyboard` | `type:`                                                            |
-| keyboard ending in Enter     | submitted `type:` without Enter in its text                        |
-| `tool: await-ui-element`     | `await:` or `assert:`                                              |
-| element-seeking movement     | `scroll-to:`                                                       |
-| coordinate tap or long-press | strict selector after the fallback gate                            |
-| `tool: gesture-pinch`        | selector-based `pinch:` with `scale = endDistance / startDistance` |
-| `tool: gesture-rotate`       | selector-based `rotate:` with `by = endAngle - startAngle`         |
-| sibling `tool: flow-execute` | recorder-captured `run:`                                           |
+| Recorded form                             | Finished form                                                      |
+| ----------------------------------------- | ------------------------------------------------------------------ |
+| focus tap + `tool: keyboard`              | `type:`                                                            |
+| text `keyboard` + `key: enter` `keyboard` | submitted `type:` without Enter in its text                        |
+| `tool: await-ui-element`                  | `await:` or `assert:`                                              |
+| element-seeking movement                  | `scroll-to:`                                                       |
+| coordinate tap or long-press              | strict selector after the fallback gate                            |
+| `tool: gesture-pinch`                     | selector-based `pinch:` with `scale = endDistance / startDistance` |
+| `tool: gesture-rotate`                    | selector-based `rotate:` with `by = endAngle - startAngle`         |
+| sibling `tool: flow-execute`              | recorder-captured `run:`                                           |
+
+Copy the recorded `selector:` map when you convert a wait. Do not use the loose bare-string form. Flow YAML accepts `identifier`; rename it to `id` only for style. Convert `textMatch: equals` to `equals:` and other text checks to `contains:`.
 
 Only these unrecorded insertions are allowed, at states observed live:
 

@@ -27,11 +27,6 @@ interface Result {
   timestampMs: number;
 }
 
-// Chromium only. Touch platforms express a drag through gesture-swipe's
-// touch sequence; on a desktop renderer the equivalent is a left-button
-// mouse drag. Note a desktop drag never scrolls content — that's
-// gesture-scroll's job — it moves things: slider thumbs, drag-and-drop
-// payloads, text selections, window-content widgets.
 const capability: ToolCapability = {
   chromium: { app: true },
 };
@@ -58,9 +53,8 @@ Returns { dragged: true, timestampMs }. Fails if the Chromium CDP session is not
   async execute(services, params) {
     const timestampMs = Date.now();
     const chromium = services.chromium as ChromiumCdpApi;
-    // A drag interpolates ~60fps mouse moves; on a hidden (throttled) window
-    // each one stalls on compositor hit-testing (~5s), turning one drag into
-    // minutes of wall clock — refuse up front like gesture-scroll.
+    // A drag's ~60fps mouse moves each wait on compositor hit-testing, which a
+    // hidden window services at ~5s per event — minutes per drag.
     await assertChromiumWindowVisible(chromium, "drag", "chromium_drag_window_hidden");
     const vp = chromium.getViewport();
     const startPx = { x: params.fromX * vp.width, y: params.fromY * vp.height };

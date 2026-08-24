@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { secrets } from "../src/secrets.js";
+import { SECRET_ENV_PREFIX } from "@argent/configuration-core";
 
 // Real-filesystem integration test, mirroring config-command.test.ts: drives the
 // actual `secrets()` entry point against a sandboxed global home (HOME) and
@@ -21,6 +22,7 @@ let projectDir: string;
 let originalHome: string | undefined;
 let originalUserProfile: string | undefined;
 let originalCwd: string;
+let clearedSecretEnv: [string, string][];
 let logSpy: ReturnType<typeof vi.spyOn>;
 let errSpy: ReturnType<typeof vi.spyOn>;
 
@@ -47,6 +49,16 @@ beforeEach(() => {
   process.env.HOME = homeDir;
   process.env.USERPROFILE = homeDir;
   process.chdir(projectDir);
+  // The environment is a secret source in its own right, ranked above every
+  // file this test writes. An ARGENT_SECRET_<NAME> exported in the developer's
+  // shell — argent's own documented way to supply one — therefore joins the
+  // listings below as an extra name, and shadows a fixture that shares its
+  // name. This package has no ARGENT_*-stripping setup file, so clear them
+  // here.
+  clearedSecretEnv = Object.entries(process.env)
+    .filter((e): e is [string, string] => e[0].startsWith(SECRET_ENV_PREFIX) && e[1] !== undefined)
+    .map(([k, v]) => [k, v]);
+  for (const [k] of clearedSecretEnv) delete process.env[k];
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
@@ -60,6 +72,7 @@ afterEach(() => {
   else process.env.HOME = originalHome;
   if (originalUserProfile === undefined) delete process.env.USERPROFILE;
   else process.env.USERPROFILE = originalUserProfile;
+  for (const [k, v] of clearedSecretEnv) process.env[k] = v;
   vi.restoreAllMocks();
   fs.rmSync(homeDir, { recursive: true, force: true });
   fs.rmSync(projectDir, { recursive: true, force: true });

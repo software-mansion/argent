@@ -86,7 +86,7 @@ export class LogFileWriter {
       this.ready = true;
       this.flushBuffer();
     } catch {
-      // Will retry on next write or buffer until ready
+      // ignore
     }
   }
 
@@ -110,21 +110,16 @@ export class LogFileWriter {
       marker: `[L:${entry.id}]`,
     };
 
-    // Extract source from stackTrace at write time
     const sourceUrl = entry.stackTrace?.callFrames?.[0]?.url;
     const sourceLine = entry.stackTrace?.callFrames?.[0]?.lineNumber;
     const sourceFile = sourceUrl ? (cleanSourceUrl(sourceUrl) ?? undefined) : undefined;
     const source =
       sourceFile !== undefined && sourceLine !== undefined ? `${sourceFile}:${sourceLine}` : "-";
 
-    // Collapse newlines in message for flat format
+    // The flat format is one line per entry
     const flatMessage = entry.message.replace(/\n/g, " ");
-    // Pad to 5 for column alignment but NEVER truncate: the level must round-trip
-    // exactly through parseFlatLine for levels of any length. CDP emits levels
-    // longer than 5 chars (e.g. "warning" from console.warn, "assert" from
-    // console.assert); slicing to 5 would persist "warni"/"asser" and break
-    // readFiltered({ level: "warning" }). LINE_RE captures the level as \S+, so a
-    // non-truncated, whitespace-free level survives the write→read round-trip.
+    // Pad for alignment but never truncate: CDP types such as "warning" and
+    // "assert" exceed 5 chars and must round-trip back through parseFlatLine.
     const levelDisplay = LEVEL_DISPLAY[entry.level] ?? entry.level.toUpperCase().padEnd(5);
     const line = `[L:${entry.id}] ${entry.timestamp} ${levelDisplay} ${source} | ${flatMessage}\n`;
 
@@ -138,10 +133,9 @@ export class LogFileWriter {
     this.bytesWritten += Buffer.byteLength(line);
     this.entryCount++;
 
-    // Update level counts
     this.levelCounts[entry.level] = (this.levelCounts[entry.level] || 0) + 1;
 
-    // Update clusters (in-memory, uses full stackTrace for source attribution)
+    // Clusters are in-memory only, never persisted to the log file
     const key = entry.message.slice(0, CLUSTER_KEY_LENGTH);
     const existing = this.clusters.get(key);
     if (existing) {

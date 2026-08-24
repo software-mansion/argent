@@ -14,34 +14,23 @@ import type {
 
 const execFileAsync = promisify(execFile);
 
-// Tool action → `simctl privacy` action. Only the deny/revoke name differs;
-// the tool says "deny" because that's the vocabulary of the permission dialog
-// the agent is replacing.
+// The tool says "deny" — the permission dialog's vocabulary — where simctl
+// says "revoke".
 const SIMCTL_ACTION: Record<PermissionAction, "grant" | "revoke" | "reset"> = {
   grant: "grant",
   deny: "revoke",
   reset: "reset",
 };
 
-// Tool permission → the `simctl privacy` service(s) it covers. A LIST because a
-// single tool permission can span more than one TCC service, and the first
-// entry is the primary one (its failure fails the action); later entries are
-// best-effort refinements.
-// - `photos` covers both full-library access (`photos`, kTCCServicePhotos) and
-//   add-only access (`photos-add`, kTCCServicePhotosAdd), which simctl lists as
-//   separate services. A deny/reset that touched only `photos` would leave a
-//   surviving add-only grant, so photos fans out to both; `photos-add` is
-//   best-effort since some runtimes may not model it.
-// - `notifications` is empty: notification authorization lives outside TCC, so
-//   it surfaces a clear unsupported error instead of a bogus simctl call.
-// - `camera` support varies by simruntime (simulators have no camera hardware,
-//   and some runtimes don't model the service — independent of whether `simctl
-//   privacy`'s usage text lists it). It is passed through rather than
-//   pre-rejected so a runtime that accepts it works; a runtime that rejects it
-//   fails with a generic NSError (NSPOSIXErrorDomain, "Failed to set access" /
-//   "Operation not permitted") that carries no reliable "unsupported service"
-//   text, so the handler below keys a list-services hint off the service name
-//   rather than the message wording.
+// Tool permission → `simctl privacy` service(s). A list because one permission
+// can span several TCC services; the first is primary (its failure fails the
+// action), later ones are best-effort.
+// - `photos` fans out to add-only `photos-add` too, or a deny/reset would leave
+//   a surviving add-only grant.
+// - `notifications` is empty: it lives outside TCC, so the handler reports it as
+//   unsupported instead of making a bogus simctl call.
+// - `camera` is modeled only by some simruntimes, so it is passed through rather
+//   than pre-rejected.
 const IOS_SERVICES: Record<PermissionName, string[]> = {
   "camera": ["camera"],
   "microphone": ["microphone"],
@@ -56,35 +45,25 @@ const IOS_SERVICES: Record<PermissionName, string[]> = {
   "reminders": ["reminders"],
 };
 
-// Permissions whose authorization does NOT live in TCC.db. `location` /
-// `location-always` are tracked by locationd's clients.plist, keyed on an
-// *installed* app: `simctl privacy grant location <bundleId>` against a
-// not-yet-installed app exits 0 but records nothing, and — unlike a TCC service
-// — the grant is not persisted to be applied on a later install. So a grant of
-// one of these must verify the app is installed first, or the tool would report
-// a success that never happened. TCC-backed services are exempt: a pre-install
-// grant there is legitimately stored and applied once the app installs.
+// Location auth lives in locationd's clients.plist, keyed on an *installed* app:
+// a pre-install grant exits 0, records nothing and is never replayed on install,
+// so it must verify installation first. TCC-backed grants are stored and applied
+// once the app installs, so they are exempt.
 const NON_TCC_GRANT_NEEDS_INSTALL: ReadonlySet<PermissionName> = new Set([
   "location",
   "location-always",
 ]);
 
-// Runs one `simctl privacy` mutation (throwing on failure) plus an optional
-// install probe. Lets a single handler serve local sims (`xcrun simctl`) and
-// remote sims (`sim-remote simctl`) without an `isRemote` branch in the body.
-// Only the local backend can probe install state (`simctl get_app_container`);
-// sim-remote has no app-container verb, so the remote backend omits it and the
-// location pre-grant guard is skipped there.
+// Lets one handler serve local (`xcrun simctl`) and remote (`sim-remote`) sims
+// without an `isRemote` branch. Only local can probe install state
+// (`get_app_container`); sim-remote has no such verb, so it omits the probe and
+// the location pre-grant guard is skipped there.
 interface IosPrivacyBackend {
   run(udid: string, simctlAction: string, service: string, bundleId: string): Promise<void>;
   /**
-   * Whether `bundleId` is installed on `udid`, when the backend can tell:
-   * `true` installed, `false` definitively not installed, `undefined` when the
-   * probe couldn't answer (e.g. a shutdown/booting simulator, where the probe
-   * fails for installed and missing apps alike). Omitted entirely by backends
-   * that can't probe (sim-remote). The location grant guard only rejects on a
-   * definitive `false`, so an `undefined` verdict falls through to the privacy
-   * call, which then surfaces the real cause (e.g. the boot-device hint).
+   * `false` only for a definitive "not installed"; `undefined` when the probe
+   * couldn't answer (e.g. a shutdown simulator, where it fails for installed and
+   * missing apps alike). The location guard rejects only on `false`.
    */
   isInstalled?(udid: string, bundleId: string): Promise<boolean | undefined>;
 }
@@ -99,7 +78,7 @@ const localBackend: IosPrivacyBackend = {
   },
   async isInstalled(udid, bundleId) {
     try {
-      // Exits 0 and prints the container path for an installed app.
+      // Exits 0 for an installed app.
       await execFileAsync(
         "xcrun",
         await simctlArgsForUdid(udid, ["get_app_container", udid, bundleId]),
@@ -108,15 +87,10 @@ const localBackend: IosPrivacyBackend = {
       return true;
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      // A definitive "not installed" verdict only for the shapes
-      // `get_app_container` actually emits for a missing app ("No such file or
-      // directory" / "... is not installed"). Every other failure is the probe
-      // failing to answer, not the app being absent — a shutdown/booting sim
-      // ("Unable to lookup in current state: Shutdown", which fails for
-      // installed AND missing apps alike), a stale/deleted UDID ("Invalid
-      // device"), a killed probe at its timeout — so return undefined: the
-      // guard is skipped and the privacy call surfaces the real cause (e.g.
-      // the boot hint) instead of misdirecting the agent to install the app.
+      // Only the shapes `get_app_container` emits for a missing app are a
+      // verdict. Anything else (shutdown sim, stale UDID, timeout) is the probe
+      // failing to answer, so the guard is skipped and the privacy call
+      // surfaces the real cause instead of a wrong "install the app" steer.
       if (/no such file or directory|is not installed/i.test(detail)) return false;
       return undefined;
     }
@@ -152,14 +126,12 @@ function buildIosHandler(
       );
     }
 
-    // Location auth isn't stored in TCC and doesn't persist for a not-yet-
-    // installed app, so a pre-install grant silently records nothing. Reject it
-    // up front with an actionable error instead of returning a false success.
+    // A pre-install location grant silently records nothing, so reject it up
+    // front instead of reporting a success that never happened.
     if (action === "grant" && NON_TCC_GRANT_NEEDS_INSTALL.has(permission) && backend.isInstalled) {
       const installed = await backend.isInstalled(udid, bundleId);
-      // Only reject on a definitive "not installed"; an undefined verdict (probe
-      // couldn't answer, e.g. shutdown sim) falls through so the privacy call
-      // reports the real cause rather than a wrong "install the app" steer.
+      // An undefined verdict falls through so the privacy call reports the real
+      // cause.
       if (installed === false) {
         throw new FailureError(
           `Cannot grant '${permission}' to ${bundleId} on ${udid}: the app is not installed. ` +
@@ -183,23 +155,18 @@ function buildIosHandler(
         await backend.run(udid, SIMCTL_ACTION[action], service, bundleId);
         applied.push(service);
       } catch (err) {
-        // A secondary service (e.g. `photos-add`) that this runtime doesn't
-        // model must not fail the whole action — the primary already succeeded
-        // or will report its own failure. Skip it silently.
+        // A secondary service (e.g. `photos-add`) this runtime doesn't model
+        // must not fail the whole action.
         if (!isPrimary) continue;
         const detail = err instanceof Error ? err.message : String(err);
-        // simctl privacy requires a booted device; its "Unable to lookup in
-        // current state: Shutdown" doesn't tell an agent what to do about it.
+        // simctl's "Unable to lookup in current state: Shutdown" doesn't tell
+        // an agent to boot the device.
         const shutdownHint = /current state:\s*shutdown/i.test(detail)
           ? " The simulator must be booted first — use boot-device."
           : "";
-        // `camera` is the one service some simruntimes don't model (simulators
-        // have no camera hardware). simctl rejects an unsupported service with a
-        // generic NSError (NSPOSIXErrorDomain, "Failed to set access" /
-        // "Operation not permitted") that is indistinguishable from any other
-        // failure, so there is no reliable text to classify it as unsupported —
-        // key the hint off the service we know can be missing instead of
-        // parsing simctl's wording.
+        // simctl rejects an unsupported service with a generic NSError that is
+        // indistinguishable from any other failure, so the hint keys off the
+        // one service that can be missing rather than simctl's wording.
         const cameraHint =
           service === "camera" && !shutdownHint
             ? " The 'camera' service isn't modeled by every simulator runtime (it varies by simruntime, not by the installed Xcode); try a different iOS runtime, or run `xcrun simctl privacy` to list the services it supports."
@@ -211,8 +178,8 @@ function buildIosHandler(
             failure_stage: "ios_settings_permission_simctl_privacy",
             failure_area: "tool_server",
             error_kind: "subprocess",
-            // Both backends run the `simctl privacy` verb (local via xcrun,
-            // remote via sim-remote), so it's the same subprocess for telemetry.
+            // Both backends run the same `simctl privacy` verb, so telemetry
+            // uses one subprocess name.
             ...subprocessFailureMetadata(err, "xcrun_simctl"),
           },
           { cause: err instanceof Error ? err : new Error(String(err)) }
@@ -238,9 +205,8 @@ export const iosImpl: PlatformImpl<
   handler: buildIosHandler(localBackend),
 };
 
-// Remote analogue of `iosImpl`: routes `simctl privacy` through `sim-remote`
-// instead of `xcrun`. The install probe is unavailable remotely, so the
-// location pre-grant guard is skipped (the backend omits `isInstalled`).
+// Routes `simctl privacy` through `sim-remote` instead of `xcrun`; no install
+// probe remotely, so the location pre-grant guard is skipped.
 export const iosRemoteImpl: PlatformImpl<
   SettingsPermissionsServices,
   SettingsPermissionsParams,

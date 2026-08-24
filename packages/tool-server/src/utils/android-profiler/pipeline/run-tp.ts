@@ -9,8 +9,7 @@ export interface RunTpQueryOptions {
   query: string;
   /**
    * `{{NAME}}` → replacement map for `renderSqlTemplate`. Values are interpolated
-   * into SQL (not parameterised), so callers must validate them first.
-   * rationale: queries/README.md "`{{NAME}}` template tokens"
+   * into SQL, not parameterised, so callers must validate them first.
    */
   substitutions: Record<string, string>;
 }
@@ -23,9 +22,8 @@ export interface RunTpInlineOptions {
 }
 
 /**
- * Run a SQL query file against a .pftrace via the in-process Perfetto WASM
- * engine, returning decoded rows. For multi-statement scripts the engine returns
- * the final statement's result set, so callers needn't demultiplex blocks.
+ * Run a SQL query file from queries/ against a .pftrace. For multi-statement
+ * scripts the engine returns only the final statement's result set.
  */
 export async function runTpQuery<Row = Record<string, unknown>>(
   opts: RunTpQueryOptions
@@ -37,13 +35,10 @@ export async function runTpQuery<Row = Record<string, unknown>>(
 }
 
 /**
- * Resolve `{{NAME}}` placeholders in a SQL template against a substitution map.
- * Validates both directions: a placeholder with no substitution throws (with the
- * token name, clearer than the downstream SQLite error), and a substitution the
- * template never references also throws (catching a stale/renamed token).
- *
- * Values are inserted via a function replacer, so `$`-sequences in a value are
- * NOT treated as `String.replace` special patterns.
+ * Resolve `{{NAME}}` placeholders in a SQL template. Throws both ways: an
+ * unsubstituted placeholder (clearer than the downstream SQLite error) and an
+ * unreferenced substitution (catches a stale/renamed token). The function
+ * replacer keeps `$`-sequences in values out of `String.replace` expansion.
  * rationale: queries/README.md "`{{NAME}}` template tokens"
  */
 export function renderSqlTemplate(template: string, substitutions: Record<string, string>): string {
@@ -66,10 +61,9 @@ export function renderSqlTemplate(template: string, substitutions: Record<string
 }
 
 /**
- * Run a fully-rendered SQL string against a .pftrace using the in-process WASM
- * engine. The engine is kept warm per trace path (loaded once, reused across the
- * whole pipeline + drill-downs), so batching many statements into one script is
- * no longer required for performance — but still works.
+ * Run a fully-rendered SQL string against a .pftrace. The WASM engine is kept
+ * warm per trace path (reused across pipeline queries and drill-downs), so
+ * batching statements into one script is not needed for performance.
  * rationale: utils/android-profiler/PIPELINE_DESIGN.md "4. The per-hang fold: batched, not looped"
  */
 export async function runTpInline<Row = Record<string, unknown>>(

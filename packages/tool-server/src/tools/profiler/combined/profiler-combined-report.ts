@@ -60,9 +60,8 @@ Call this tool when both profilers were run in parallel on the same session.
 Returns a markdown report correlating hangs with React commits, memory leaks, and investigation hints.
 Fails if either react-profiler-analyze or native-profiler-analyze has not been called first.`,
   zodSchema,
-  // Combines React (Hermes) + native traces. iOS reads xctrace output;
-  // Android re-queries the Perfetto .pftrace via loadAndroidCombinedData. The
-  // capture half exists on neither platform's Chromium.
+  // iOS reads xctrace output; Android re-queries the Perfetto .pftrace via
+  // loadAndroidCombinedData. Chromium has no native trace capture.
   capability: {
     apple: { simulator: true, device: true },
     android: { emulator: true, device: true, unknown: true },
@@ -73,18 +72,10 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
   async execute(services, params) {
     const nativeApi = services.nativeSession as NativeProfilerSessionApi;
 
-    // Freshness gate: once a newer capture is recording (or ended and pending
-    // recovery), the frozen iOS parsedData this report renders is stale relative
-    // to what the user is now capturing. Refuse and point them at a fresh analyze
-    // so they get the current capture's correlations, not the previous one's.
-    // (Numeric correctness is handled independently by freezing the wall-clock
-    // anchor into parsedData at analyze — see nativeWallStart below — so even if
-    // this gate is bypassed the report stays self-consistent rather than mixing
-    // one capture's hangs with another's clock.) The retryAction must include
-    // native-profiler-analyze: unlike analyze/profiler-load, which re-derive
-    // their data on retry, this report consumes the frozen parsedData that ONLY
-    // native-profiler-analyze rewrites, so "stop then re-run" alone would render
-    // the previous capture again.
+    // A newer capture in flight makes the frozen iOS parsedData this report
+    // renders stale. The retryAction names native-profiler-analyze because stop
+    // alone does not rewrite parsedData, so "stop then re-run" would render the
+    // previous capture again.
     if (isCaptureInFlight(nativeApi)) {
       throw new FailureError(
         inFlightGuardMessage(
@@ -100,9 +91,6 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
       );
     }
 
-    // For iOS, the analyze step cached uiHangs + memoryLeaks in parsedData.
-    // For Android, drill-down re-queries the .pftrace, so we load the same
-    // shape on demand here.
     // A session with no capture state at all was minted by THIS call: the
     // device_id matched no existing session, so nothing is known about the
     // device. Say so without naming a platform — classification is shape-based
@@ -128,11 +116,13 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
 
     let uiHangs: UiHang[];
     let memoryLeaks: MemoryLeak[];
+    // iOS froze uiHangs + memoryLeaks into parsedData at analyze; Android
+    // re-queries the .pftrace on demand here.
     if (nativeApi.platform === "android") {
       // Gate on the exported .pftrace (set at stop), not just traceFile (set at
-      // start) -- otherwise a session that started native profiling but never ran
-      // stop/analyze would silently render an empty "0 hangs" report instead of
-      // this clear error. Mirrors profiler-stack-query's Android gate.
+      // start): a session that started native profiling but never ran
+      // stop/analyze would otherwise render an empty "0 hangs" report. Mirrors
+      // profiler-stack-query's Android gate.
       if (!nativeApi.exportedFiles?.pftrace || !nativeApi.traceFile) {
         throw new FailureError(
           "No Android trace loaded. Run native-profiler-stop → native-profiler-analyze first.",
@@ -160,7 +150,7 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
       memoryLeaks = nativeApi.parsedData.memoryLeaks;
     }
 
-    // Read-only: resolve react paths from cache only — no live CDP connection needed.
+    // Cache lookup only — this report needs no live CDP connection.
     const sessionPaths = getCachedProfilerPaths(params.port, params.device_id);
     if (!sessionPaths?.commitsPath) {
       throw new FailureError("No React commit data. Run react-profiler-analyze first.", {
@@ -189,10 +179,10 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
 
     const reactWallStart = onDisk.meta?.profileStartWallMs ?? null;
     // iOS anchors the FROZEN parsedData hangs, so it must use the anchor frozen
-    // WITH them (at analyze), not the live session field — a later
-    // native-profiler-start re-stamps the live field to a different capture and
-    // would shift every hang. Android re-derives hangs from the live traceFile
-    // (loadAndroidCombinedData above), so its live anchor stays consistent.
+    // with them at analyze, not the live session field — a later
+    // native-profiler-start re-stamps that field and would shift every hang.
+    // Android re-derives hangs from the live traceFile, so its live anchor
+    // stays consistent.
     const nativeWallStart =
       nativeApi.platform === "android"
         ? nativeApi.wallClockStartMs
@@ -233,7 +223,6 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
       );
     }
 
-    // Build time anchors
     const cpuStartUs = cpuProfile?.startTime ?? 0;
     const reactAnchor = buildReactAnchor(reactWallStart, cpuStartUs);
     const nativeAnchor: TimeAnchor =
@@ -241,17 +230,14 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
         ? buildPerfettoAnchor(nativeWallStart)
         : buildIosAnchor(nativeWallStart);
 
-    // Build hot commit summaries from raw data
     const preprocessed = preprocess(commitTree.commits);
     const hotIndices = sessionPaths.hotCommitIndices ?? [];
     const hotCommits = buildHotCommitSummaries(preprocessed, hotIndices);
     const nonMarginCommits = hotCommits.filter((c) => !c.isMargin);
 
-    // Tolerance for time alignment: wall clock jitter + the fact that
-    // instruments hang detection and React commit timing may not perfectly align
+    // Absorbs wall-clock jitter between native hang detection and React commit timing.
     const TOLERANCE_MS = 200;
 
-    // Correlate hangs with React commits
     const correlations: HangCommitCorrelation[] = [];
 
     for (const hang of uiHangs) {
@@ -283,7 +269,6 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
       });
     }
 
-    // Render the combined report
     const lines: string[] = [
       "# Combined Profiling Report",
       "",
@@ -296,7 +281,6 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
       "",
     ];
 
-    // Hang-Commit Correlations
     if (correlations.length > 0) {
       lines.push("---");
       lines.push("## Hang ↔ Commit Correlations");
@@ -315,7 +299,6 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
           );
           lines.push("");
 
-          // Explain the ratio
           const ratio = hang.durationMs > 0 ? topCommit.commit.totalRenderMs / hang.durationMs : 0;
           if (ratio > 2) {
             lines.push(
@@ -325,7 +308,6 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
             lines.push("");
           }
 
-          // What caused it
           if (topCommit.commit.isInitialRender) {
             lines.push(
               `**Cause:** Initial mount of ${topCommit.commit.totalComponentCount} components`
@@ -337,7 +319,6 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
             );
           }
 
-          // Top components
           if (topCommit.commit.components.length > 0) {
             lines.push("");
             lines.push("Top components in this commit:");
@@ -347,7 +328,6 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
             }
           }
 
-          // CPU from both sides
           if (topCommit.commit.cpuHotspots && topCommit.commit.cpuHotspots.length > 0) {
             lines.push("");
             lines.push("JS CPU (Hermes) during this commit:");
@@ -391,9 +371,7 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
       }
     }
 
-    // Memory leaks section
     if (memoryLeaks.length > 0) {
-      // Try to correlate with React mount/unmount patterns
       const mountComponents = new Set(
         commitTree.commits
           .filter((c) => c.changeDescription?.isFirstMount)
@@ -405,13 +383,12 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
           memoryLeaks,
           mountComponents,
           // From parsedData, not the live session field: a recording started
-          // after the analyze must not re-label the data being rendered here.
+          // after analyze must not re-label the data rendered here.
           nativeApi.parsedData?.mallocStackLogging ?? null
         )
       );
     }
 
-    // Summary of opportunities
     lines.push("---");
     lines.push("## Investigation Hints");
     lines.push("");
@@ -443,17 +420,15 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
 };
 
 /**
- * Render the combined report's Memory Leaks section, mirroring the attribution
- * split used by the iOS analyze report (`utils/ios-profiler/render.ts`).
- * Attributed leaks (a resolved responsible frame) are listed individually and
- * heuristically tied to recently-mounted React components; unattributed leaks
- * (`<Call stack limit reached>` under `xctrace --attach`) are collapsed into one
- * low-confidence YELLOW caveat so the simulator's benign system-allocation noise
- * can't masquerade as a wall of confirmed leaks. The caveat line comes from
- * render.ts's shared renderUnattributedLeaksNote, so its capture-mode handling
- * (and wording) cannot drift from the analyze report. `mallocStackLogging` is
- * the session's actual capture mode when known; null/undefined falls back to
- * inferring it from the attributed count. Exported for unit testing.
+ * Memory Leaks section of the combined report, mirroring the attribution split
+ * of the iOS analyze report (`utils/ios-profiler/render.ts`). Attributed leaks
+ * are listed individually and heuristically tied to recently-mounted React
+ * components; unattributed ones collapse into one low-confidence caveat so
+ * benign system-allocation noise can't masquerade as a wall of confirmed leaks.
+ * That caveat comes from render.ts's shared `renderUnattributedLeaksNote`, so
+ * its wording and capture-mode handling cannot drift from the analyze report.
+ * A null/undefined `mallocStackLogging` makes it infer the capture mode from
+ * the attributed count. Exported for unit testing.
  */
 export function renderCombinedMemoryLeaks(
   memoryLeaks: MemoryLeak[],

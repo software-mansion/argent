@@ -1,9 +1,6 @@
 /**
- * Auto-screenshot configuration and helpers.
- *
- * After a successful simulator interaction tool call, the MCP layer
- * automatically captures a screenshot and appends it to the response.
- * All tunables live in this module so they can be tested in isolation.
+ * Tunables and predicates for the screenshot the MCP layer appends after a
+ * successful interaction tool call.
  */
 
 import { isFlagEnabled, type FlagsPathOptions } from "@argent/configuration-core";
@@ -18,6 +15,7 @@ export const AUTO_SCREENSHOT_TOOLS = new Set([
   "gesture-rotate",
   "button",
   "keyboard",
+  "paste",
   "rotate",
   "launch-app",
   "restart-app",
@@ -27,11 +25,9 @@ export const AUTO_SCREENSHOT_TOOLS = new Set([
 ]);
 
 /**
- * Per-tool cap (ms) on how long the auto-screenshot waits for the screen to
- * settle before capturing (via the `await-screen-idle` tool). The readiness
- * poll usually returns well under this; the cap only bounds a screen that never
- * settles. Values sit ~1 000 ms above baseline research figures to stay safe on
- * slow devices/transitions.
+ * Per-tool cap (ms) on the `await-screen-idle` wait before capturing; the poll
+ * usually returns well under it. Doubles as a blind sleep when the tool-server
+ * offers no `await-screen-idle`.
  */
 export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
   "launch-app": 3000,
@@ -48,41 +44,37 @@ export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
   "button": 1500,
   "rotate": 1000,
   "keyboard": 300,
+  "paste": 300,
   "describe": 100,
 };
 
 const DEFAULT_DELAY_MS = 1400;
 
-// Auto-screenshot is on by default; the opt-out is the off-by-default
-// `disable-auto-screenshot` flag. `options` mirrors isFlagEnabled so tests can
-// point storage at a temp dir.
+// Opt-out only: the `disable-auto-screenshot` flag is off by default.
+// `options` lets tests point flag storage at a temp dir.
 export function autoScreenshotEnabled(options?: FlagsPathOptions): boolean {
   return !isFlagEnabled("disable-auto-screenshot", options);
 }
 
 /**
  * Marker of a server-side secret placeholder (`{{secret:NAME}}`, resolved by
- * the tool-server from `ARGENT_SECRET_*` env vars). Mirrors
- * SECRET_PLACEHOLDER_MARKER in the tool-server's secrets util — duplicated
- * rather than imported because argent-mcp must keep working against older
- * tool-servers and shares no runtime package with it.
+ * the tool-server before typing). Copy of SECRET_PLACEHOLDER_MARKER in
+ * packages/tool-server/src/utils/secrets.ts, which argent-mcp does not depend
+ * on.
  */
 export const SECRET_PLACEHOLDER_MARKER = "{{secret:";
 
 /**
- * Deep-scan tool args for a secret placeholder. When one is present the
- * auto-screenshot must be skipped: the tool-server types the *resolved* value,
- * and for a non-secure-entry field the follow-up screenshot would hand the
- * plaintext straight back to the model as pixels. JSON.stringify covers nested
- * shapes (run-sequence steps, flow-execute args) without knowing each tool's
- * schema.
+ * Deep-scan tool args for a secret placeholder; when one is present the
+ * auto-screenshot must be skipped, because a non-secure-entry field would hand
+ * the resolved plaintext back to the model as pixels. JSON.stringify reaches
+ * nested shapes (run-sequence steps) without knowing each tool's schema.
  */
 export function containsSecretPlaceholder(args: unknown): boolean {
   try {
     return JSON.stringify(args)?.includes(SECRET_PLACEHOLDER_MARKER) ?? false;
   } catch {
-    // Unserializable args can't have come from an MCP request — be safe and
-    // treat them as secret-bearing rather than risk screenshotting a secret.
+    // Unserializable args can't have come from an MCP request; fail safe.
     return true;
   }
 }
@@ -99,10 +91,7 @@ export function getUdidFromArgs(args: unknown): string | undefined {
   return undefined;
 }
 
-/**
- * Strip known MCP prefix so the allow-list matches canonical names.
- * Cursor sends `mcp__argent__tap`; we need `tap`.
- */
+/** Strip the client's `mcp__server__` prefix so the allow-list sees canonical names. */
 export function normalizeToolName(name: string): string {
   const idx = name.lastIndexOf("__");
   return idx === -1 ? name : name.slice(idx + 2);

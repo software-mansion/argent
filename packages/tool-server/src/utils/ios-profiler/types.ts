@@ -1,9 +1,3 @@
-/**
- * iOS-specific raw row types (`StackFrame`, `CpuSample`, `RawHang`, `RawLeak`)
- * plus re-exports of the shared `Bottleneck` family. The cross-platform types
- * live in profiler-shared/types.ts (the iOS/Android symmetry home).
- */
-
 export type {
   CpuHotspot,
   UiHang,
@@ -22,9 +16,7 @@ export interface ProfilerStartStatus {
   traceFile: string;
 }
 
-// ---------------------------------------------------------------------------
-// iOS pipeline-internal raw types (xctrace XML parser output)
-// ---------------------------------------------------------------------------
+// Raw rows produced by pipeline/xml-parser.ts from the xctrace XML export.
 
 export interface StackFrame {
   name: string;

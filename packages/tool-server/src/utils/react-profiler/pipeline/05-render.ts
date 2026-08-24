@@ -1,13 +1,11 @@
 /**
- * Stage 05-render: Renders HotCommitSummary[] + ComponentFinding[] into markdown.
+ * Stage 05-render: HotCommitSummary[] + ComponentFinding[] -> markdown.
  *
- * Output is LLM-optimized: structured prose with emoji tier indicators.
- * Writes the full report to debugDir/react-profiler-report.md.
- * Returns a capped version (top 10 hot commits by totalRenderMs) for inline response.
+ * Writes the full report to debugDir/react-profiler-report.md; returns a copy capped to
+ * the top 10 hot commits by totalRenderMs for the inline response.
  *
- * Annotation matching: for each commit, find the annotation with highest offsetMs
- * that is <= commit's relative timestamp. No time-limit cutoff — always show the
- * most recent prior annotation so the developer/LLM can reason about causality.
+ * Commits are labeled with the most recent prior annotation, with no time cutoff, so a
+ * long gap still shows causality.
  */
 import { promises as fs } from "fs";
 import { join } from "path";
@@ -68,23 +66,19 @@ export async function renderProfilingReport(input: RenderInput): Promise<RenderO
     };
   }
 
-  // Sort annotations by offsetMs for binary search
   const annotations = (input.annotations ?? []).slice().sort((a, b) => a.offsetMs - b.offsetMs);
 
-  // Full report: all commits
   const fullMarkdown = buildFullMarkdown(input, annotations, hotCommitsTotal);
 
-  // Capped report: top MAX_INLINE_COMMITS hot commits by totalRenderMs
   const topHotByMs = hotCommits
     .slice()
     .sort((a, b) => b.totalRenderMs - a.totalRenderMs)
     .slice(0, MAX_INLINE_COMMITS);
   const topHotIndices = new Set(topHotByMs.map((s) => s.commitIndex));
 
-  // For the capped version, include margin commits adjacent to shown hot commits
+  // Keep a margin commit only when it neighbours a hot commit that is shown
   const cappedSummaries = input.hotCommitSummaries.filter((s) => {
     if (!s.isMargin) return topHotIndices.has(s.commitIndex);
-    // Include margin if adjacent to a shown hot commit
     return topHotIndices.has(s.commitIndex - 1) || topHotIndices.has(s.commitIndex + 1);
   });
 
@@ -103,10 +97,6 @@ export async function renderProfilingReport(input: RenderInput): Promise<RenderO
 
   return { report, reportFile: wroteFile ? reportFile : null, hotCommitsTotal, hotCommitsShown };
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function renderAllClear(input: RenderInput, maxMs: number): string {
   const durationS = (input.recordingMs / 1000).toFixed(1);
@@ -172,7 +162,6 @@ function buildFullMarkdown(
     lines.push("");
   }
 
-  // Top components table
   if (input.componentFindings.length > 0) {
     lines.push("---");
     lines.push("## Top Components by Total Render Cost");
@@ -191,7 +180,6 @@ function buildFullMarkdown(
       );
     }
 
-    // Compiler note (only if static detection says yes but runtime didn't detect)
     if (sessionContext.reactCompilerEnabled && !anyRuntimeCompilerDetected) {
       lines.push("");
       lines.push(
@@ -201,7 +189,6 @@ function buildFullMarkdown(
     }
   }
 
-  // Suggested improvements
   const suggestionsSection = renderSuggestedImprovements(
     input.componentFindings,
     sessionContext.reactCompilerEnabled
@@ -210,7 +197,6 @@ function buildFullMarkdown(
     lines.push(suggestionsSection);
   }
 
-  // Dev mode note
   if (sessionContext.buildMode === "dev") {
     lines.push("");
     lines.push(
@@ -218,7 +204,6 @@ function buildFullMarkdown(
     );
   }
 
-  // Next steps guidance for the agent
   lines.push("");
   lines.push("---");
   lines.push("## Next Steps");
@@ -273,21 +258,18 @@ function renderCommit(
 
   const lines: string[] = [header];
 
-  // Annotation: find the annotation with highest offsetMs <= commit relative timestamp
   const annotation = findPriorAnnotation(annotations, relativeMs);
   if (annotation) {
     const deltaSec = ((relativeMs - annotation.offsetMs) / 1000).toFixed(1);
     lines.push(`> After: "${annotation.label}" (${deltaSec}s prior)`);
   }
 
-  // Warm tier note
   if (summary.tier === "warm" && !summary.isMargin) {
     lines.push("> 🟡 May be acceptable in production (dev mode is ~3× slower)");
   }
 
   lines.push("");
 
-  // Header line: root cause for re-renders, initial render label for mount-dominated commits
   if (!summary.isMargin) {
     if (summary.isInitialRender) {
       const mountCount = summary.components.filter((c) => c.isFirstMount).length;
@@ -308,7 +290,6 @@ function renderCommit(
     }
   }
 
-  // Render component entries (mix of re-renders and mounts)
   for (const comp of summary.components) {
     const ann = annotateComponentName(comp.name);
     const countSuffix = comp.count > 1 ? ` ×${comp.count}` : "";
@@ -325,15 +306,12 @@ function renderCommit(
     );
   }
 
-  // "... and N more" if component list was capped
   if (summary.totalComponentCount > summary.components.length) {
     const remaining = summary.totalComponentCount - summary.components.length;
     lines.push(`- _... and ${remaining} more_`);
   }
 
-  // Coverage line: how much of the commit's wall-clock time is explained by the
-  // self-times above. Helps the agent decide whether to drill into the truncated
-  // tail before concluding.
+  // Coverage tells the agent whether the truncated tail is worth drilling into
   const shownSelfMs = summary.components.reduce((s, c) => s + c.selfDurationMs, 0);
   const roundedShown = Math.round(shownSelfMs * 10) / 10;
   const coveragePct =
@@ -353,9 +331,6 @@ function renderCommit(
     );
   }
 
-  // Unattributed duration: fibers that rendered in this commit but unmounted
-  // before react-profiler-stop ran, so their display names could not be resolved.
-  // The breakdown above is missing this much work — not silent, just not named.
   if (summary.unattributedMs !== undefined && summary.unattributedMs >= 1) {
     const fiberCount = summary.unattributedFiberCount ?? 0;
     const fiberLabel = fiberCount === 1 ? "fiber" : "fibers";
@@ -364,7 +339,7 @@ function renderCommit(
     );
   }
 
-  // CPU hotspots during this commit (from Hermes CPU profile correlation)
+  // Correlated from the Hermes CPU profile in stage 00-cpu-correlate
   if (summary.cpuHotspots && summary.cpuHotspots.length > 0) {
     lines.push("");
     lines.push("**CPU during this commit:**");
@@ -421,7 +396,7 @@ function findPriorAnnotation(
   annotations: Array<{ offsetMs: number; label: string }>,
   relativeMs: number
 ): { offsetMs: number; label: string } | undefined {
-  // Annotations are sorted by offsetMs. Find the last one with offsetMs <= relativeMs.
+  // Requires annotations sorted by offsetMs
   let result: { offsetMs: number; label: string } | undefined;
   for (const ann of annotations) {
     if (ann.offsetMs <= relativeMs) {
@@ -528,7 +503,6 @@ function renderSuggestedImprovements(
       }
     }
 
-    // Embed source snippet in a collapsible block if available
     if (f.sourceSnippet && f.sourceLocation) {
       const snippetPath = `${shortenPath(f.sourceLocation.file)}:${f.sourceLocation.line}`;
       lines.push("");
@@ -548,7 +522,6 @@ function renderSuggestedImprovements(
 }
 
 function shortenPath(file: string): string {
-  // Keep last 2 path segments for readability
   const parts = file.replace(/\\/g, "/").split("/");
   return parts.slice(-2).join("/");
 }

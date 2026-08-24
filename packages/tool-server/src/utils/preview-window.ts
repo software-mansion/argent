@@ -6,24 +6,21 @@ import { electronGuiChildEnv } from "./electron-env";
 
 /**
  * macOS only. Build (and cache) a thin `.app` wrapper around the installed
- * Electron.app whose Info.plist `CFBundleName` is "Argent Lens", so the OS names
- * the window — menu bar, Cmd-Tab, Dock — "Argent Lens" instead of "Electron"
- * (the framework default, which `app.setName()` at runtime cannot override).
+ * Electron.app whose Info.plist names it "Argent Lens", so the OS labels the
+ * window — menu bar, Cmd-Tab, Dock — "Argent Lens" instead of "Electron"
+ * (`app.setName()` at runtime cannot override that).
  *
- * The wrapper SYMLINKS Electron's heavy Frameworks/Resources — there is no
- * ~270MB copy — and supplies only its own Info.plist + a symlinked executable.
- * The catch: a symlinked bundle with a modified Info.plist no longer matches the
- * signed Helper apps inside Frameworks, so the OS sandbox cannot initialise and
- * the helper processes crash unless the app is launched with `--no-sandbox`
- * (the caller adds it). That is an acceptable trade-off for THIS window: it only
- * ever loads the tool-server's own localhost preview UI — never untrusted or
- * remote content — and the renderer still runs with contextIsolation +
- * sandbox:true at the Electron level. The full alternative (a renamed, deeply
- * re-signed copy of Electron.app, à la @electron/packager) is what avoids
- * `--no-sandbox`, at the cost of that ~270MB copy.
+ * The wrapper symlinks Electron's Frameworks/Resources instead of copying
+ * ~270MB, but a symlinked bundle with a modified Info.plist no longer matches
+ * the signed Helper apps inside, so the OS sandbox cannot initialise and the
+ * helpers crash unless launched with `--no-sandbox` (the caller adds it).
+ * Acceptable here: the window only loads the tool-server's own localhost
+ * preview UI, and the renderer still runs with contextIsolation + sandbox:true.
+ * Avoiding `--no-sandbox` would need a re-signed copy of Electron.app (à la
+ * @electron/packager) and that ~270MB.
  *
  * Returns the wrapper's executable path, or null to fall back to plain Electron
- * (non-macOS, or any failure — the window still opens, just named "Electron").
+ * (non-macOS, or any failure).
  */
 function ensureLensAppBundle(electronBin: string): string | null {
   if (process.platform !== "darwin") return null;
@@ -38,12 +35,12 @@ function ensureLensAppBundle(electronBin: string): string | null {
       "Contents"
     );
     const wrapperExec = path.join(wrapperContents, "MacOS", "Electron");
-    // Reuse the cached wrapper unless it's missing or points at a different
+    // Rebuild only if the cached wrapper is missing or points at a different
     // Electron install (e.g. an upgrade moved the binary).
     try {
       if (fs.realpathSync(wrapperExec) === fs.realpathSync(electronBin)) return wrapperExec;
     } catch {
-      /* not built yet — fall through and build it */
+      /* not built yet */
     }
     fs.rmSync(path.dirname(wrapperContents), { recursive: true, force: true });
     fs.mkdirSync(path.join(wrapperContents, "MacOS"), { recursive: true });
@@ -52,9 +49,8 @@ function ensureLensAppBundle(electronBin: string): string | null {
     fs.symlinkSync(electronBin, wrapperExec);
     const pkgInfo = path.join(realContents, "PkgInfo");
     if (fs.existsSync(pkgInfo)) fs.copyFileSync(pkgInfo, path.join(wrapperContents, "PkgInfo"));
-    // Custom Info.plist: copy Electron's, rename the display fields. PlistBuddy
-    // is a macOS system tool (handles binary or XML plists), so no new dep. Keep
-    // CFBundleExecutable = "Electron" so the signed Helper apps still resolve.
+    // PlistBuddy is a macOS system tool and handles binary plists, so no new
+    // dep. CFBundleExecutable stays "Electron" so the Helper apps still resolve.
     const plist = path.join(wrapperContents, "Info.plist");
     fs.copyFileSync(path.join(realContents, "Info.plist"), plist);
     const setPlist = (entry: string, value: string): void => {
@@ -78,15 +74,11 @@ function ensureLensAppBundle(electronBin: string): string | null {
 }
 
 /**
- * Tool-server side of the Electron preview window. A single Electron child
- * is spawned on demand when `await_user_selection` parks and quits (with an
- * animated squeeze) when the user submits — same window is reused across
- * multiple await cycles within one tool-server lifetime.
+ * Tool-server side of the Electron preview window: one child, spawned on demand
+ * and reused across rounds for the tool-server's lifetime.
  *
- * No ports: communication with the child is line-delimited JSON over stdin.
- * The child loads the tool-server's HTTP `/preview/` URL directly; the
- * tool-server's port is already ephemeral in production
- * (`argent-tools-client/src/launcher.ts` uses `findFreePort`).
+ * No IPC port — commands go to the child as line-delimited JSON over stdin, and
+ * the child loads the tool-server's own `/preview/` HTTP URL.
  */
 export interface PreviewWindowManager {
   /** Spawn the window if not running; foreground + (re)load otherwise. */
@@ -100,17 +92,15 @@ export interface PreviewWindowManager {
 export interface PreviewWindowManagerOptions {
   /** Override for tests / unusual installs (default: `require("electron")`). */
   electronBinaryPath?: string;
-  /** Override for tests (default: `@argent/preview-window/dist/main.js`). */
+  /** Override for tests. */
   mainScript?: string;
   /** Optional error sink — defaults to stderr. */
   onError?: (err: Error) => void;
   /**
-   * Called specifically when the window FAILS TO LAUNCH — either the
-   * synchronous electron/main-script resolve throws (the common
-   * electron-absent case, since `electron` is an optionalDependency) or the
-   * spawned child emits `error` (ENOENT / EACCES). NOT called for failures
-   * after the window is already up. Lets callers fail fast with actionable
-   * guidance instead of leaving a parked `await_user_selection` to time out.
+   * Called when the window fails to LAUNCH — the synchronous resolve throws
+   * (commonly: `electron` is an optionalDependency and absent) or the child
+   * emits `error`. Lets callers fail fast instead of leaving a parked
+   * `await_user_selection` to time out.
    */
   onLaunchFailure?: (err: Error) => void;
 }
@@ -119,12 +109,9 @@ export function createPreviewWindowManager(
   opts: PreviewWindowManagerOptions = {}
 ): PreviewWindowManager {
   let child: ChildProcess | null = null;
-  // True between `requestClose()` and the child actually exiting — the window
-  // is playing its close animation and will quit shortly. A child in this state
-  // must NOT be reused: foregrounding it would hand a doomed window to a fresh
-  // round, which then quits under the user (the round is left windowless until
-  // its await times out). `ensureOpen` treats a still-alive-but-closing child as
-  // not-reusable and respawns. Cleared on a fresh spawn and on child `exit`.
+  // True between `requestClose()` and the child's exit: it is playing the close
+  // animation and will quit, so `ensureOpen` must respawn rather than foreground
+  // a doomed window that would then quit under the next round.
   let closing = false;
 
   const reportError = (err: Error): void => {
@@ -150,14 +137,9 @@ export function createPreviewWindowManager(
 
   const resolveMainScript = (): string => {
     if (opts.mainScript) return opts.mainScript;
-    // Two layouts to support:
-    //   1) Published @swmansion/argent bundle. The bundler drops the
-    //      preview-window's compiled main next to the tool-server bundle
-    //      at <install>/dist/preview-window/main.cjs. The workspace pkg
-    //      `@argent/preview-window` isn't a sibling install at that
-    //      point, so require.resolve would fail.
-    //   2) Workspace dev (ts-node from packages/tool-server/src). The
-    //      sibling package IS resolvable; fall through to that.
+    // The published @swmansion/argent bundle drops the compiled main next to
+    // the tool-server bundle, where `@argent/preview-window` is not a sibling
+    // install and require.resolve would fail. In workspace dev it is.
     const bundled = path.join(__dirname, "preview-window", "main.cjs");
     if (fs.existsSync(bundled)) return bundled;
     return require.resolve("@argent/preview-window/dist/main.js");
@@ -167,9 +149,8 @@ export function createPreviewWindowManager(
     c !== null && c.exitCode === null && !c.killed;
 
   const ensureOpen = (url: string): void => {
-    // Reuse the window only if it is alive AND not mid-close. A closing child is
-    // about to quit, so foregrounding it would strand this round — spawn a fresh
-    // one instead. The closing child quits on its own (it already got `close`).
+    // A mid-close child would strand this round, so respawn instead; it quits on
+    // its own, having already been sent `close`.
     if (isAlive(child) && !closing) {
       send({ cmd: "foreground", url });
       return;
@@ -185,24 +166,19 @@ export function createPreviewWindowManager(
       opts.onLaunchFailure?.(e);
       return;
     }
-    // On macOS, launch through the "Argent Lens" wrapper bundle so the OS names
-    // the window correctly. The wrapper needs `--no-sandbox` (see
-    // ensureLensAppBundle); both fall back to plain Electron when the wrapper
-    // can't be built, so the window always opens.
+    // The wrapper bundle names the window, and needs `--no-sandbox` to run (see
+    // ensureLensAppBundle). Falls back to plain Electron off macOS or on failure.
     const wrapperBin = ensureLensAppBundle(electronBin);
     const launchBin = wrapperBin ?? electronBin;
     const launchArgs = wrapperBin ? ["--no-sandbox", mainScript] : [mainScript];
     const next = spawn(launchBin, launchArgs, {
-      // Strip ELECTRON_RUN_AS_NODE so the child boots as a GUI Electron app, not
-      // a bare Node runtime (see electronGuiChildEnv). An Electron-based MCP
-      // host puts it in our env, and inheriting it makes main.cjs crash at
-      // app.setName() with `app` undefined — the window never opens.
+      // Strips ELECTRON_RUN_AS_NODE, which an Electron-based MCP host leaves in
+      // our env, so the child boots as a GUI app instead of bare Node.
       env: electronGuiChildEnv({ ARGENT_PREVIEW_URL: url }),
       stdio: ["pipe", "ignore", "pipe"],
     });
-    // `spawn` does not throw synchronously for ENOENT / EACCES — the error
-    // arrives asynchronously. Clear `child` here too so a follow-up
-    // `ensureOpen` retries cleanly instead of no-oping against a dead handle
+    // `spawn` reports ENOENT / EACCES asynchronously. Clear `child` so a
+    // follow-up `ensureOpen` retries instead of no-oping against a dead handle
     // that hasn't yet emitted `exit`.
     next.on("error", (err) => {
       if (child === next) {
@@ -213,9 +189,8 @@ export function createPreviewWindowManager(
       opts.onLaunchFailure?.(err);
     });
     next.on("exit", () => {
-      // Only the CURRENT child's exit resets state. If a respawn already
-      // replaced this handle (a new round opened while this one was closing),
-      // `child` points at the newer child and its `closing` is its own.
+      // A respawn may already have replaced this handle, and the newer child
+      // owns its own state.
       if (child === next) {
         child = null;
         closing = false;
@@ -225,14 +200,11 @@ export function createPreviewWindowManager(
       process.stderr.write(`[preview-window] ${chunk}`);
     });
     child = next;
-    // This is a freshly-spawned, live window — not closing.
     closing = false;
   };
 
   const requestClose = (): void => {
     if (!isAlive(child)) return;
-    // Mark the window as closing so a round that parks during the close
-    // animation respawns instead of reusing this about-to-quit child.
     closing = true;
     send({ cmd: "close" });
   };

@@ -1,14 +1,7 @@
 import { runAdb, adbShell } from "./adb";
 import { bundledHelperApkPath, helperManifest } from "@argent/native-devtools-android";
 
-/**
- * Manifest-driven install of the argent-android-devtools helper APK.
- *
- * Cached in-process so subsequent calls for the same serial skip the
- * `cmd package list packages --show-versioncode` probe. The cache key
- * includes `versionCode` so an upgrade build invalidates entries even if
- * the serial is reused across process restarts.
- */
+/** Manifest-driven install of the argent-android-devtools helper APK. */
 
 const installedHelpers = new Map<string, true>();
 
@@ -22,9 +15,8 @@ interface InstalledVersionProbe {
 }
 
 /**
- * Probe the installed version code via `cmd package list packages
- * --show-versioncode` — faster than `pm path` and returns the version in
- * the same round-trip, avoiding a second `dumpsys package` call.
+ * `--show-versioncode` returns the version in the same round-trip; `pm path`
+ * would need a follow-up `dumpsys package`.
  */
 async function probeInstalledVersion(
   serial: string,
@@ -36,7 +28,7 @@ async function probeInstalledVersion(
       timeoutMs: 5_000,
     });
   } catch {
-    // `cmd package` only exists on API 24+. Fall back to `pm list packages`.
+    // `cmd package` is missing on older API levels.
     try {
       out = await adbShell(serial, `pm list packages ${packageName}`, { timeoutMs: 5_000 });
     } catch {
@@ -54,13 +46,7 @@ async function probeInstalledVersion(
   return { installed: false, versionCode: null };
 }
 
-/**
- * Ensure the helper APK is installed on the device with at least the
- * bundled versionCode. On `INSTALL_FAILED_UPDATE_INCOMPATIBLE` we
- * `pm uninstall` and retry once — that path fires when the local debug
- * keystore differs from whatever was last installed (e.g. the developer
- * rotated their keystore).
- */
+/** Install the helper APK unless the device already has at least the bundled versionCode. */
 export async function ensureAndroidDevtoolsInstalled(serial: string): Promise<void> {
   const manifest = helperManifest();
   const key = cacheKey(serial, manifest.versionCode);
@@ -80,13 +66,12 @@ export async function ensureAndroidDevtoolsInstalled(serial: string): Promise<vo
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (/INSTALL_FAILED_UPDATE_INCOMPATIBLE/.test(message)) {
-      // Signature mismatch — the device has a same-package APK signed by a
-      // different key. Uninstall the old one and retry.
+      // Same package installed under a different signing key (e.g. a rotated
+      // local debug keystore); Android only allows the update after uninstall.
       try {
         await runAdb(["-s", serial, "uninstall", manifest.packageName], { timeoutMs: 30_000 });
       } catch {
-        // If uninstall itself fails we still want the original install
-        // error to be the surfaced message — fall through.
+        // Let the retried install report the failure.
       }
       await runAdb(args, { timeoutMs: 60_000 });
     } else {
@@ -97,7 +82,6 @@ export async function ensureAndroidDevtoolsInstalled(serial: string): Promise<vo
   installedHelpers.set(key, true);
 }
 
-/** Test-only helper to reset the install cache between unit tests. */
 export function __resetAndroidDevtoolsInstallCache(): void {
   installedHelpers.clear();
 }

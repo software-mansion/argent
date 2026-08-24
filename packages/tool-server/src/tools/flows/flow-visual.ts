@@ -15,17 +15,14 @@ import { describeSelector, type FlowSelector } from "./flow-utils";
 import { diffPngFiles } from "../screenshot-diff/screenshot-diff";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 
-/** Default visual tolerance (percent of pixels) when a flow/step sets none. */
+/** Default visual tolerance (percent of pixels) when a step sets none. */
 export const DEFAULT_MAX_MISMATCH = 0.5;
 
 /**
  * Files a snapshot step produced, keyed by role so a renderer can pick what to
  * surface (e.g. inline only `diff` on failure). Artifact handles — not host
- * paths — so a client on another machine can materialize them. Present only
- * when there is something to look at: a failed comparison (all roles), a
- * missing-baseline failure (`current` only), or a baseline write (`baseline`
- * only) — a clean pass carries none, so renderers never fetch full-res PNGs
- * just to print paths nobody needs.
+ * paths — so a client on another machine can materialize them. Absent on a
+ * clean pass, so renderers never fetch full-res PNGs nobody needs.
  */
 export interface SnapshotArtifacts {
   baseline?: ArtifactHandle;
@@ -39,9 +36,9 @@ export interface VisualOutcome {
   reason?: string;
   /**
    * Baseline key stem (`<name>__<platform>-WxH`, plus `-crop-<hash>` for
-   * cropOn snapshots) — present whenever `artifacts` is, so a consumer
-   * exporting the files to a durable location (the CLI's `--output`) can name
-   * them by the same collision-free key the baseline store uses.
+   * cropOn) — present whenever `artifacts` is, so a consumer exporting the
+   * files (the CLI's `--output`) can name them by the same collision-free key
+   * the baseline store uses.
    */
   snapshotKey?: string;
   artifacts?: SnapshotArtifacts;
@@ -60,10 +57,9 @@ async function pngDimensions(file: string): Promise<{ w: number; h: number }> {
 }
 
 /**
- * Canonical crop identity for a selector: fixed field order, so the key is
- * immune to YAML key order and to describeSelector's human-readable format
- * (owned by failure prose). `loose` is included because it changes resolution
- * (identifier-first fallback).
+ * Crop identity for a selector's own fields, in fixed order: the key is immune
+ * to YAML key order, and to describeSelector's format (owned by failure prose).
+ * `loose` counts — it changes resolution (identifier-first fallback).
  */
 function cropIdentity(s: FlowSelector): string {
   return JSON.stringify([
@@ -80,10 +76,9 @@ function baselineDir(flowsDir: string, flowName: string): string {
 }
 
 /**
- * Remove the differ's scratch directory, sparing only `keep` — the file
- * registered as an artifact, whose host path must stay readable for a client
- * to materialize it later. Best-effort: a failed cleanup never fails the
- * snapshot itself.
+ * Remove a scratch directory, sparing only `keep` — the file registered as an
+ * artifact, whose host path must stay readable for a client to materialize it
+ * later. Best-effort: a failed cleanup never fails the snapshot.
  */
 async function cleanupDiffDir(dir: string, keep?: string): Promise<void> {
   try {
@@ -102,12 +97,12 @@ async function cleanupDiffDir(dir: string, keep?: string): Promise<void> {
 
 /**
  * Crop `src` to the pixel rect of a normalized frame and write it to `dest`.
- * Frames are fractions of the capture, so the rect is just frame × capture
+ * Frames are fractions of the capture, so the rect is frame × capture
  * dimensions — DPR never enters. Edges are rounded independently (not
  * left + rounded width) so the rect tracks the element as closely as sub-pixel
- * frames allow, then clamped to the capture — Android trees can report frames
- * that overhang the screen. Returns null for a degenerate (sub-pixel) region
- * instead of writing an invalid zero-extent PNG.
+ * frames allow, then clamped — Android trees can report frames that overhang
+ * the screen. Returns null for a degenerate (sub-pixel) region instead of
+ * writing a zero-extent PNG.
  */
 async function cropPngFile(
   src: string,
@@ -139,8 +134,7 @@ async function cropPngFile(
  * `cropOn` narrows the comparison to one element's region: the selector
  * resolves to a frame before the capture (settle + auto-wait, like the
  * directives), and the CROPPED image is what gets compared, stored as the
- * baseline, and registered as the `current` artifact — the artifact must be
- * what was actually compared.
+ * baseline, and registered as the `current` artifact.
  */
 export async function runSnapshot(
   env: ActionEnv,
@@ -148,9 +142,9 @@ export async function runSnapshot(
     flowsDir: string;
     /**
      * The `__baselines__/<segment>` key, NOT necessarily the name the run
-     * reports under: it is the ROOT flow's canonical stem (`baselineKeyFor` in
-     * flow-run.ts), because it must identify the same file `flowsDir` does —
-     * a key and an anchor that disagree let two distinct flows share a store.
+     * reports under: the ROOT flow's canonical stem (`baselineKeyFor` in
+     * flow-run.ts), so the key and `flowsDir` identify the same file — a
+     * disagreement lets two distinct flows share a store.
      */
     flowName: string;
     name: string;
@@ -163,17 +157,14 @@ export async function runSnapshot(
     seenKeys: Map<string, string>;
   }
 ): Promise<VisualOutcome> {
-  // Wait for the UI to settle (a transition/reflow finished) so the capture is
-  // stable run-to-run, rather than guessing a fixed delay. `settleTree` returns
-  // undefined only on abort and throws only on a sustained tree-source outage
-  // (e.g. native devtools disconnected). The capture reads pixels, not the
-  // describe tree — so short of an explicit abort, proceed best-effort; a
-  // genuinely dead device still surfaces via the screenshot invoke below.
-  //
-  // The throw is swallowed, not lost: the same window records the outage on the
-  // run (ActionEnv.treeOutage) for a later gesture to spend. A gesture that
-  // swallows one warns; a capture has no `warning` channel, which makes this
-  // the one settle that passes silently.
+  // Settle so the capture is stable run-to-run rather than timed by a guess.
+  // `settleTree` returns undefined only on abort and throws only on a sustained
+  // tree-source outage; the capture reads pixels, not the describe tree, so
+  // proceed best-effort — a dead device still surfaces via the screenshot
+  // invoke below. The throw is swallowed, not lost: the settle records the
+  // outage on `ActionEnv.treeOutage` for a later gesture to spend. A gesture
+  // that swallows one warns; a capture has no `warning` channel, which makes
+  // this the one settle that passes silently.
   if (opts.cropOn === undefined) {
     try {
       await settleTree(env);
@@ -185,10 +176,10 @@ export async function runSnapshot(
     return { status: "skip", reason: "run aborted during snapshot settle" };
   }
 
-  // `cropOn`: resolve the crop element's frame BEFORE capturing, so the pixels
-  // captured are the state the frame was resolved from. `waitForFrame` settles
+  // Resolve the crop element's frame BEFORE capturing, so the pixels captured
+  // are the state the frame was resolved from. `waitForFrame` settles
   // internally (the plain settle above is skipped) and auto-waits like the
-  // directives, with their standard not-found reason. Unlike the best-effort
+  // directives, with their standard not-found reason. Unlike that best-effort
   // settle, a tree-source outage propagates as a step error here: without a
   // tree there is no frame, and degrading to a full-screen capture would
   // "compare" the whole screen against a cropped baseline.
@@ -207,8 +198,8 @@ export async function runSnapshot(
   const store = requireArtifacts(env.ctx);
 
   // Full-resolution capture, not attached to any agent context — a baseline.
-  // The screenshot tool already registers the capture, so `shot.image` is a
-  // ready-made handle for the `current` artifact.
+  // The screenshot tool already registers it, so `shot.image` is a ready-made
+  // handle for the `current` artifact.
   const shot = (await invokeOnDevice(env, "screenshot", {
     scale: 1.0,
     includeImageInContext: false,
@@ -217,8 +208,8 @@ export async function runSnapshot(
   // The key stays on the FULL capture's dimensions even under cropOn: its job
   // is device-class identity (wrong-simulator/rotation detection), which
   // cropped dimensions — a function of layout — would destroy. A cropOn key
-  // additionally hashes the selector, so same-name snapshots cropping
-  // different elements never share a baseline file.
+  // additionally hashes the selector's own fields, so same-name snapshots
+  // cropping different elements do not share a baseline file.
   const { w, h } = await pngDimensions(shot.image.hostPath);
   const cropSuffix =
     opts.cropOn === undefined
@@ -229,10 +220,10 @@ export async function runSnapshot(
   const dir = baselineDir(opts.flowsDir, opts.flowName);
   const baselinePath = path.join(dir, key);
 
-  // The key deliberately carries no app component (it names a committed,
-  // machine-portable baseline file), so a run that moved onto another app can
-  // recompute a key it already captured — refuse that before any compare or
-  // baseline write, instead of silently sharing one file between two apps.
+  // The key carries no app component (it names a committed, machine-portable
+  // baseline file), so a run that moved onto another app can recompute a key it
+  // already captured — refuse before any compare or baseline write, instead of
+  // silently sharing one file between two apps.
   const priorApp = opts.seenKeys.get(snapshotKey);
   if (priorApp !== undefined && priorApp !== opts.appIdentity) {
     return {
@@ -248,9 +239,9 @@ export async function runSnapshot(
 
   // Under cropOn everything downstream (compare, baseline write, `current`
   // artifact) operates on the cropped image, written to its own scratch dir.
-  // It is registered lazily, only in branches that return it — the finally
-  // sweeps whatever was not registered, and a registered file's host path must
-  // outlive this call (same contract as the context diff below).
+  // Registered lazily, only in branches that return it — the finally sweeps
+  // whatever was not registered, and a registered file's host path must outlive
+  // this call (same contract as the context diff below).
   let currentPath = shot.image.hostPath;
   let cropDir: string | undefined;
   let keepCropped = false;
@@ -261,7 +252,9 @@ export async function runSnapshot(
     // a remote client materializes downloads by filename — defaulting to the
     // basename would land `current` on the same cache path as `baseline` and
     // clobber it (the diff artifact below disambiguates the same way).
-    return store.register(currentPath, {
+    return store.register({
+      hostPath: currentPath,
+      kind: "screenshot",
       mimeType: "image/png",
       filename: `${snapshotKey}-current.png`,
     });
@@ -294,7 +287,11 @@ export async function runSnapshot(
     if (opts.updateBaselines) {
       await fs.mkdir(dir, { recursive: true });
       await fs.copyFile(currentPath, baselinePath);
-      const baseline = await store.register(baselinePath, { mimeType: "image/png" });
+      const baseline = await store.register({
+        hostPath: baselinePath,
+        kind: "screenshot",
+        mimeType: "image/png",
+      });
       return {
         status: "pass",
         reason: exists ? `baseline updated (${key})` : `baseline written (${key})`,
@@ -318,11 +315,11 @@ export async function runSnapshot(
       };
     }
 
-    // Scratch directory for the differ's full-res diff and downscaled context
-    // diff. Nothing in it may outlive this call except a file registered as an
+    // Scratch dir for the differ's full-res diff and downscaled context diff.
+    // Nothing in it may outlive this call except a file registered as an
     // artifact below (its host path is materialized later) — the finally sweeps
-    // the rest, or a long-lived tool-server running snapshot flows would accrete
-    // argent-flow-diff-* directories forever.
+    // the rest, or a long-lived tool-server running snapshot flows would
+    // accrete argent-flow-diff-* directories forever.
     const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-flow-diff-"));
     let keepInOutputDir: string | undefined;
     try {
@@ -330,12 +327,11 @@ export async function runSnapshot(
         baselinePath,
         currentPath,
         outputDir,
-        // A crop compares EVERY pixel of the element's region — no masking,
-        // wherever the crop sits. Masking a crop's overlap with the screen's
-        // top status-bar band would degenerate into comparing nothing for an
-        // element inside the band (a vacuous pass); a crop overlapping the
-        // band leans on best-effort pinStatusBar until frame resolution
-        // asserts the element clears it.
+        // A crop compares EVERY pixel of the element's region, wherever it
+        // sits. Masking a crop's overlap with the screen's top status-bar band
+        // would degenerate into comparing nothing for an element inside the
+        // band (a vacuous pass); a crop overlapping the band leans on the run's
+        // best-effort pinStatusBar instead.
         topMask: cropFrame === undefined ? "status-bar" : "none",
         // Crop dimensions track the element — size drift must hard-fail below
         // instead of being resampled away like a full-screen scale difference.
@@ -346,8 +342,7 @@ export async function runSnapshot(
       // threshold below would read as a clean pass — but nothing was compared.
       // Under cropOn the differ hard-fails ANY size difference (normalizeSizes:
       // false), so proportional element drift lands here too; full-screen
-      // snapshots keep normalization, and this branch stays unreachable for
-      // them since the key embeds the capture's dimensions.
+      // snapshots keep normalization and only reach this on an aspect change.
       if (result.dimensionMismatch) {
         const { expected, actual } = result.dimensionMismatch;
         return {
@@ -362,7 +357,11 @@ export async function runSnapshot(
               : ""),
           snapshotKey,
           artifacts: {
-            baseline: await store.register(baselinePath, { mimeType: "image/png" }),
+            baseline: await store.register({
+              hostPath: baselinePath,
+              kind: "screenshot",
+              mimeType: "image/png",
+            }),
             current: await currentArtifact(),
           },
         };
@@ -375,14 +374,19 @@ export async function runSnapshot(
       }
 
       const artifacts: SnapshotArtifacts = {
-        baseline: await store.register(baselinePath, { mimeType: "image/png" }),
+        baseline: await store.register({
+          hostPath: baselinePath,
+          kind: "screenshot",
+          mimeType: "image/png",
+        }),
         current: await currentArtifact(),
       };
-      // Also expose the annotated context diff — the image a client renders inline
-      // so the agent can see WHAT differed. (Absent when the diff bailed early,
-      // e.g. on a dimension mismatch.)
+      // The annotated context diff — the image a client renders inline so the
+      // agent can see WHAT differed. Absent when the diff bailed early.
       if (result.contextDiffPath) {
-        artifacts.diff = await store.register(result.contextDiffPath, {
+        artifacts.diff = await store.register({
+          hostPath: result.contextDiffPath,
+          kind: "screenshot-diff-context",
           mimeType: "image/png",
           filename: `${snapshotKey}-diff.png`,
         });

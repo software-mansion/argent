@@ -1,14 +1,7 @@
-// `argent secrets` — inspect the values a `{{secret:<NAME>}}` placeholder can
-// resolve to, without ever printing one.
-//
-// The placeholder mechanism is deliberately opaque from the agent's side: a
-// name that is not defined fails at typing time, deep inside a flow run. This
-// command is the way to check the setup *before* that — it lists the source
-// chain (`@argent/configuration-core`'s `secretSources`) with the names each
-// one contributes, so "is my secrets file being picked up?" is answerable in
-// one line. Values are never read out: printing them here would put the
-// credential in a terminal scrollback and, when an agent runs the command, in
-// its context — the exact leak the placeholder exists to prevent.
+// `argent secrets` — which names a `{{secret:<NAME>}}` placeholder resolves to and
+// from which source, checkable before an undefined name fails mid-flow at typing
+// time. Values are never printed: that would put the credential in terminal
+// scrollback and, when an agent runs the command, in its context.
 
 import pc from "picocolors";
 import { getResolvedToolsUrl } from "@argent/tools-client";
@@ -71,10 +64,9 @@ async function cmdList(argv: string[]): Promise<void> {
   }
 
   console.log(`Secrets available to \`{{secret:<NAME>}}\` on this machine:\n`);
-  // Two files can define the same name; only the earlier one is ever used. Mark
-  // the later copies rather than listing them as if they applied — a name that
-  // silently loses to a file you forgot about is the confusing case this
-  // command exists to answer.
+  // Only the first source defining a name is used; later copies are marked rather
+  // than listed as if they applied — losing silently to a forgotten file is the
+  // case this command exists to answer.
   const claimed = new Set<string>();
   for (const source of sources) {
     console.log(`  ${source.label}`);
@@ -102,9 +94,8 @@ async function cmdList(argv: string[]): Promise<void> {
     pc.dim("Values are never printed. Run `argent secrets --help` to see where to add one.")
   );
 
-  // Resolution happens wherever the tool-server runs. With a linked remote
-  // server that is a different machine, and this listing describes the wrong
-  // one — say so rather than let it read as authoritative.
+  // Resolution happens wherever the tool-server runs, so a link to another machine
+  // makes this listing describe the wrong host.
   const routed = await getResolvedToolsUrl().catch(() => ({ url: null }));
   if (routed.url) {
     console.log(

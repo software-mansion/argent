@@ -8,12 +8,9 @@ export type McpTool = {
 };
 
 /**
- * Maps a tool-server `ToolMeta` entry to the MCP `tools/list` shape, forwarding
- * `alwaysLoad` and `searchHint` as `_meta["anthropic/alwaysLoad"]` /
- * `_meta["anthropic/searchHint"]` so Claude Code can opt tools out of
- * progressive tool loading and rank them via the ToolSearch BM25 index.
- * `_meta` is omitted entirely when neither hint is present, so older clients
- * that don't understand it see byte-identical responses.
+ * Maps a tool-server `ToolMeta` to the MCP `tools/list` shape. `alwaysLoad` opts the
+ * tool out of Claude Code's progressive tool loading; `searchHint` feeds its ToolSearch
+ * BM25 ranker.
  */
 export function toMcpTool(t: ToolMeta): McpTool {
   const meta: Record<string, unknown> = {};

@@ -14,9 +14,8 @@ import type { Scope } from "./init-scope.js";
 
 export type SkillsMethod = "default" | "interactive" | "manual";
 
-// Step 2 — install skills via `npx skills`. Emits the skill_install telemetry
-// event itself (it owns all the inputs). Throws InitCancelled("skills") on a
-// cancelled method prompt.
+// Step 2. Emits the skill_install telemetry event itself (it owns all the
+// inputs). Throws InitCancelled("skills") on a cancelled method prompt.
 export async function runSkillsStep(args: {
   nonInteractive: boolean;
   fromTar: string | null;
@@ -74,7 +73,6 @@ export async function runSkillsStep(args: {
     skillsMethod = choice as SkillsMethod;
   }
 
-  // Prefer the GitHub-pinned source. SKILLS_DIR as a fallback.
   const useGitHubSource = online && !fromTar && version !== "unknown";
   const skillsSource = useGitHubSource ? buildArgentSkillsSource(version) : SKILLS_DIR;
 
@@ -112,8 +110,8 @@ export async function runSkillsStep(args: {
     }
 
     const baseArgs = offlineWithCache ? ["--no-install", ...skillsArgs] : skillsArgs;
-    // `--force` softens the host project's npm engine gate (see withNpmForce /
-    // issue #298); the displayed and manual-fallback commands stay clean.
+    // `--force` softens the host project's npm engine gate (see withNpmForce);
+    // baseArgs stays clean for the displayed and manual-fallback commands.
     const npxArgs = withNpmForce(baseArgs);
 
     p.log.info(`Running: ${pc.dim("npx")} ${pc.cyan(baseArgs.join(" "))}`);

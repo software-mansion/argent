@@ -22,6 +22,12 @@ import {
 import { createDebuggerLogRegistryTool } from "../../src/tools/debugger/debugger-log-registry";
 import type { DebuggerNotConnectedResult } from "../../src/tools/debugger/not-connected";
 import { freePort, startMockMetroCdp } from "./metro-cdp-harness";
+import { scopeTempHome } from "../helpers/temp-home";
+
+// The JS-runtime-debugger / network blueprints build a real LogFileWriter,
+// whose constructor mkdir -p's os.homedir()/.argent/tmp. Keep that out of the
+// developer's real home.
+scopeTempHome("argent-log-registry-nc-home-");
 
 const mockTrack = vi.mocked(track);
 const outcomeCalls = () =>

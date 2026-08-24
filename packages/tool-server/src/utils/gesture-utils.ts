@@ -18,9 +18,8 @@ function lerp(a: number, b: number, t: number): number {
 }
 
 /**
- * Insert `steps` linearly interpolated Move events between each consecutive
- * pair of events. Down/Up types are preserved; interpolated frames are Move.
- * Delay is distributed evenly across the interpolated segment.
+ * Insert `steps` interpolated Move events between each pair of events,
+ * splitting the segment's delay evenly across the frames it becomes.
  */
 export function interpolateEvents(events: TouchEvent[], steps: number): TouchEvent[] {
   if (events.length < 2 || steps < 1) return events;
@@ -62,9 +61,6 @@ export function interpolateEvents(events: TouchEvent[], steps: number): TouchEve
   return result;
 }
 
-/**
- * Send a single touch command over WebSocket.
- */
 export function sendTouchEvent(
   api: SimulatorServerApi,
   type: "Down" | "Move" | "Up",

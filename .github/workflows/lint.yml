@@ -26,6 +26,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # packages/docs is excluded from the root npm workspaces and carries its
+      # own lockfile. The root config lints it too, and the type-aware parser
+      # loads packages/docs/tsconfig.json, which extends @docusaurus/tsconfig
+      # from the docs' own node_modules.
+      - name: Install docs dependencies
+        run: npm ci
+        working-directory: packages/docs
+
       # Type-aware rules need the referenced projects' declarations on disk so
       # cross-package imports resolve to real types instead of `any`.
       - name: Build workspace dependencies

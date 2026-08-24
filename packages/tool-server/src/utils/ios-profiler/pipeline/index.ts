@@ -13,9 +13,8 @@ export interface PipelineOutput {
 
 export interface PipelineOptions {
   /**
-   * iOS-only: keep only CPU samples belonging to this PID. Set by the
-   * all-processes capture strategy (host-wide recording) to isolate the target
-   * app; undefined/null for the device strategy, which is already scoped.
+   * Keep only CPU samples from this PID. Set by the all-processes strategy, whose
+   * capture is host-wide; null for the device strategy, already scoped by `--attach`.
    */
   cpuFilterPid?: number | null;
 }
@@ -24,21 +23,17 @@ export async function runIosProfilerPipeline(
   files: Record<string, string | null>,
   options: PipelineOptions = {}
 ): Promise<PipelineOutput> {
-  // Stage 0: Parse all three XMLs in parallel
   const [cpuSamples, rawHangs, rawLeaks] = await Promise.all([
     parseCpuFile(files.cpu ?? null, options.cpuFilterPid ?? null),
     parseHangsFile(files.hangs ?? null),
     parseLeaksFile(files.leaks ?? null),
   ]);
 
-  // Stage 1: Correlate hangs with CPU samples
   const { uiHangs, hangSampleTimestamps } = correlateHangsWithCpu(rawHangs, cpuSamples);
 
-  // Stage 2: Aggregate
   const cpuHotspots = aggregateCpuHotspots(cpuSamples, hangSampleTimestamps);
   const memoryLeaks = aggregateLeaks(rawLeaks);
 
-  // Combine all bottlenecks
   const bottlenecks: Bottleneck[] = [...cpuHotspots, ...uiHangs, ...memoryLeaks];
 
   return { bottlenecks, cpuSamples, uiHangs, cpuHotspots, memoryLeaks };

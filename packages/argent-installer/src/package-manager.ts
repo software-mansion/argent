@@ -1,9 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-// Package manager type, detection, and the install/uninstall command builders
-// for both install topologies (global PATH binary vs project devDependency).
-
 export type PackageManager = "npm" | "yarn" | "pnpm" | "bun";
 
 export interface ShellCommand {
@@ -29,7 +26,7 @@ function asKnownPm(name: unknown): PackageManager | null {
 }
 
 // corepack's `packageManager` field ("pnpm@9.1.0") is the project's own
-// declaration — the strongest signal there is.
+// declaration — the strongest signal.
 function pmFromPackageManagerField(dir: string): PackageManager | null {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")) as {
@@ -44,19 +41,12 @@ function pmFromPackageManagerField(dir: string): PackageManager | null {
   }
 }
 
-// `devEngines.packageManager` MUST be honored for the fresh-`pnpm init` case:
-// pnpm 10+ writes ONLY devEngines (no packageManager field, no lockfile), and
-// without it detection fell through to npm, whose own devEngines gate then
-// instantly rejected the install (EBADDEVENGINES) as "Local install failed."
-//
-// But it is a weaker signal than corepack's field or a real lockfile:
-//  - An array is an OR-set of ACCEPTABLE managers, not an ordered preference
-//    (npm errors only when every entry fails to validate), so a multi-entry
-//    declaration says nothing about which manager the project actually uses —
-//    only the lockfile does. A single distinct name is the only unambiguous
-//    array shape.
-//  - yarn and bun neither read nor update devEngines, so a declaration can
-//    survive a migration indefinitely while the lockfile tracks reality.
+// Needed for a fresh `pnpm init`: pnpm 10+ writes ONLY devEngines, and falling
+// through to npm made npm's own devEngines gate reject the install
+// (EBADDEVENGINES). Still weaker than corepack's field or a lockfile: an array
+// is an OR-set of ACCEPTABLE managers, not a preference order, so only a single
+// distinct name identifies anything; and yarn and bun never update devEngines,
+// so a declaration outlives a migration while the lockfile tracks reality.
 function pmFromDevEngines(dir: string): PackageManager | null {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")) as {
@@ -83,23 +73,19 @@ function pmFromLockfile(dir: string): PackageManager | null {
   return null;
 }
 
-// pnpm-workspace.yaml is pnpm-exclusive (workspace layout AND, since pnpm 10,
-// plain settings), so it identifies pnpm even before the first install creates
-// a lockfile — but it is the weakest signal: a stray copy can survive a
-// migration to yarn/bun, and unlike devEngines it isn't even an explicit
-// declaration about the package manager.
+// pnpm-workspace.yaml is pnpm-exclusive (workspace layout and, since pnpm 10,
+// plain settings), so it identifies pnpm before any lockfile exists — but it is
+// the weakest signal: a stray copy survives a migration to yarn/bun, and it is
+// not a declaration about the package manager at all.
 function pmFromWorkspaceMarker(dir: string): PackageManager | null {
   return fs.existsSync(path.join(dir, "pnpm-workspace.yaml")) ? "pnpm" : null;
 }
 
-// Detect the package manager the *project* uses: the `packageManager`
-// (corepack) field first, then real lockfiles (what actually records the
-// project's dependency state), then a devEngines declaration, then the
-// pnpm-workspace.yaml marker — walking up ancestors (workspaces keep the
-// single lockfile at the monorepo root) and stopping at the repo boundary
-// (.git). Only then fall back to detectPackageManager(): npm_config_user_agent
-// reflects whoever launched `argent` (often npx), not the host project, and the
-// local-install commands must update the project's own lockfile.
+// Ranked project signals, walking up ancestors (workspaces keep the single
+// lockfile at the monorepo root) and stopping at the repo boundary (.git).
+// detectPackageManager() is the last resort: npm_config_user_agent reflects
+// whoever launched `argent` (often npx), not the host project, whose own
+// lockfile the local-install commands must update.
 export function detectProjectPackageManager(projectRoot: string): PackageManager {
   let dir = path.resolve(projectRoot);
   for (;;) {
@@ -143,10 +129,8 @@ export function globalUninstallCommand(pm: PackageManager, pkg: string): ShellCo
   }
 }
 
-// ── Local (repo-local / committable) install commands ─────────────────────────
-// Local mode adds @swmansion/argent to the project's devDependencies and
-// commits MCP configs that run the project-local copy. Every command that
-// mutates the project's manifest MUST run with `cwd` set to the project root.
+// Every command below mutates the project's manifest, so it MUST run with `cwd`
+// set to the project root.
 
 export function localInstallCommand(pm: PackageManager, pkg: string): ShellCommand {
   switch (pm) {
@@ -161,9 +145,9 @@ export function localInstallCommand(pm: PackageManager, pkg: string): ShellComma
   }
 }
 
-// Materialize the project's DECLARED dependencies without touching any pin —
-// for when the manifest declares argent but node_modules is empty (a fresh
-// clone), where the `add` form would rewrite the committed pin to @latest.
+// For a manifest that already declares argent but has no node_modules (fresh
+// clone): honors the committed pin, which the `add` form would rewrite to
+// @latest.
 export function projectInstallCommand(pm: PackageManager): ShellCommand {
   switch (pm) {
     case "yarn":

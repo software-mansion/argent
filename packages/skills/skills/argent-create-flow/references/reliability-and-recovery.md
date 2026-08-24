@@ -27,7 +27,7 @@ Convert element-seeking swipes to `scroll-to`. Keep a coordinate swipe only when
 Work this gate as soon as capture warns that it kept a raw point — and equally when it silently recorded a role-only selector, which warns about nothing. Keep the source screen available and do these checks:
 
 1. **iOS:** query plausible ids or labels with `native-find-views`. If no term is useful, call `native-full-hierarchy` with narrow fields and `maxDepth: 100`. `describe` and `native-describe-screen` are accessibility projections. They cannot prove that no flow selector exists.
-2. **Other platforms:** use `debugger-component-tree` for React Native, otherwise `describe`. Android has no agent view of the runner tree, so verify candidates in step 3. On Chromium, an element absent from `describe` has no runner selector.
+2. **Other platforms:** use `debugger-component-tree` for React Native; otherwise, use `describe`. Verify Android and Chromium candidates in step 3. Their discovery trees can omit runner elements.
 3. Test each candidate in a scratch fragment with `assert: { visible: <candidate> }` on the valid screen. Inspect every failure before trying a better id, label, app, or container.
 4. If source is available, inspect its `testID`, `accessibilityIdentifier`, or `resource-id`. If none exists, report the missing stable id as the real fix.
 
@@ -43,7 +43,7 @@ The full iOS flow tree exists only for an app launched by Argent with instrument
 
 1. If Metro, Expo, Xcode, an icon, or a prior process launched the app, call `restart-app`. Restore the source screen and retry capture. `launch-app` can only foreground the existing process.
 2. Tap capture does **not** wait for that connection. It makes one tree read and turns any failure straight into the kept-coordinates warning. A recording-time `restart-app` returns before the devtools connection opens, so the first tap after a restart can warn transiently. Re-record that tap once before escalating; only a warning that survives the retry is evidence of a real fault.
-3. If the warning survives, call `native-devtools-status` with the same UDID and bundle id. If `requiresRestart` is true, restart once and check again.
+3. If the warning survives, call `native-devtools-status` with the same UDID and bundle id and follow its `message`, which names the one action that helps and says when to stop. `requiresRestart` covers only the states a fresh process fixes: an `unregistered` or `connecting` app reports it false, because it already launched under the terms a restart would recreate.
 4. If an injectable app remains disconnected, call `stop-all-simulator-servers` once, **scoped to `devices: [<this simulator's UDID>]`**. One tool-server serves every agent on this Argent install, so an unscoped call tears down their devices too. This does not change app or account data. Then restart and check status again.
 5. If it still fails, report an instrumentation blocker. Do not replace selectors with coordinates in a QA flow.
 
@@ -53,20 +53,22 @@ Use the same explicit UDID throughout. Multiple booted simulators are not an inj
 
 This fallback applies only to `com.apple.*` system apps. A connection failure in another app never authorizes it.
 
-Apple system apps cannot load the instrumentation, and nothing in the launch path exempts them. A `launch:` step on iOS always waits for the devtools connection, so for one of these apps it spends that budget, fails, and every later step is skipped.
+Apple system apps are platform binaries with library validation, so the instrumentation cannot be relied on to load into them — it has been seen both loading and not loading, depending on the simulator runtime. Either way it is no basis for a selector.
 
-**Never give such a flow a `launch:` step.** Start it with a raw `tool: restart-app`, which terminates and relaunches without the readiness gate. Accept that the result is a **fragment**: its first non-echo step is not `launch:`, so the runner never classifies it as e2e. The rest of the injection-free form:
+Give the flow a `launch:` step as usual. On iOS the launch waits the full devtools budget out, then passes for one of these bundle ids: starting the app is all that step is for, and a coordinate-driven flow needs nothing more. The flow stays e2e; it just pays roughly sixteen seconds at the launch. Where the impossibility bites is selector resolution, and the first selector step reports it there — terminally, naming the coordinate remedy — rather than as a launch failure. The rest of the injection-free form:
 
 - Raw `tool: await-ui-element` accessibility checks.
 - Point taps or long-presses derived from `describe`, each named by an echo.
-- A point focus tap plus raw keyboard with `delayMs: 500`.
+- A point focus tap plus a raw text-only `keyboard` with `delayMs: 500`, and a second raw `keyboard` with `key: "enter"` to submit.
 - Raw swipes with `settle: true` because `scroll-to` needs the missing flow tree. Momentum-free scrolling keeps later coordinate taps valid.
 
-Every point tap or long-press in such a flow passes **carrying a warning**. The app loads no instrumentation, so every tree read fails and each [selector-less gesture](flow-yaml.md#directives) dispatches unsettled. Nothing here repairs it. Accept the warnings, read each green as "the gesture was sent, not that it landed", and put an explicit `wait:` or a raw `tool: await-ui-element` before a gesture that follows a transition. Raw `tool:` steps never take that settle, so they never warn.
+Every point tap or long-press in such a flow passes **carrying a warning** for as long as the app serves no tree: each [selector-less gesture](flow-yaml.md#directives) dispatches unsettled. Nothing here repairs it. Accept the warnings, read each green as "the gesture was sent, not that it landed", and put an explicit `wait:` or a raw `tool: await-ui-element` before a gesture that follows a transition. Raw `tool:` steps take no settle, so they never carry that warning.
+
+A recorded wait carries a different warning: it adds about one second and reports that the runner tree is unavailable. That warning is expected too. Keep the wait as a raw `tool:` step.
 
 Report that the flow is injection-free and its coordinates are not portable. It cannot satisfy the QA contract. Report the artifact and platform blocker instead.
 
-The same fragment fallback covers a normally injectable app that is broken in the environment: raw `restart-app` in place of `launch:` still makes a self-resetting flow. Either way it is not e2e and cannot complete `argent-qa-flows`, which requires a leading `launch:`. Report the blocker rather than labeling that fallback a completed QA test.
+A normally injectable app that is broken in the environment gets the same coordinate-only treatment, but not the same launch: there the `launch:` step fails, since the gate withholds its verdict only for a bundle id injection may never reach. Start such a flow with a raw `tool: restart-app`, which terminates and relaunches without the readiness gate, and accept that the result is a **fragment** — its first non-echo step is not `launch:`, so the runner never classifies it as e2e, and it cannot complete `argent-qa-flows`, which requires a leading `launch:`. Report the blocker rather than labeling that fallback a completed QA test.
 
 ## Tree source recovery on Android, Chromium, and Vega
 

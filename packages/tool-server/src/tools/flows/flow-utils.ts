@@ -20,21 +20,17 @@ import {
   type TextMatchMode,
 } from "../../utils/ui-tree-match";
 
-// Re-exported so the flow layer (parser, serializer, report stringifiers, the
-// runner's loose-alternative expansion) reads the relation list from the same
-// place the match engine defines it.
+// Re-exported so the flow layer reads the relation list from the same place the
+// match engine defines it.
 export { SELECTOR_RELATIONS };
 import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
 import { MAX_ROTATE_BY_DEG } from "./flow-rotate-geometry";
 
 const FLOWS_DIR_NAME = path.join(".argent", "flows");
 
-// ── Paths ────────────────────────────────────────────────────────────
-
 /**
- * Validate a caller-supplied `project_root`. Every path helper below joins the
- * flows dir under this root, so the two rules it enforces (absolute, no "..")
- * are what keep a recording's files inside the project the agent named.
+ * Validate a caller-supplied `project_root`. Absolute and no ".." are what keep
+ * a recording's files inside the project the agent named.
  */
 export function assertValidProjectRoot(root: string): void {
   if (!path.isAbsolute(root)) {
@@ -50,10 +46,8 @@ export function assertValidProjectRoot(root: string): void {
       }
     );
   }
-  // Reject ".." segments: getFlowsDir()/getFlowPath() join the flows dir under
-  // this root, and path.join collapses "..", so a root like
-  // "/a/../../../etc" would relocate the flows dir (and the validated flow
-  // file) outside the intended project.
+  // path.join collapses "..", so a root like "/a/../../../etc" would relocate
+  // the flows dir (and the validated flow file) outside the intended project.
   if (root.split(/[\\/]+/).includes("..")) {
     throw new FailureError(`project_root must not contain ".." segments (got "${root}").`, {
       error_code: FAILURE_CODES.FLOW_PROJECT_ROOT_INVALID,
@@ -65,10 +59,9 @@ export function assertValidProjectRoot(root: string): void {
 }
 
 /**
- * The flows dir under an explicit root, as pure path math. It validates
- * nothing, so a caller that already rejects a bad root with its own
- * tool-specific message (see flow-add-step) does not also raise a second,
- * differently-worded one from here.
+ * The flows dir under an explicit root, as pure path math. Validates nothing, so
+ * a caller with its own root rejection (see flow-add-step) raises only that
+ * message rather than a second, differently-worded one from here.
  */
 export function flowsDirFor(root: string): string {
   return path.join(root, FLOWS_DIR_NAME);
@@ -97,24 +90,21 @@ export function assertSafeFlowName(name: string): void {
 
 /**
  * The flow file `<project_root>/.argent/flows/<name>.yaml`, as the CALLER
- * spelled it. Pure path math over two validated inputs — this is the path
- * reported back to the agent, not the recording-session key (that is
- * {@link resolveFlowKey}, which asks the filesystem instead).
+ * spelled it — the path reported back to the agent, not the recording-session
+ * key (that is {@link resolveFlowKey}, which asks the filesystem instead).
  *
  * `path.join` folds a trailing slash, `//` and `.` segments but NOT symlinks or
- * case, so two callers can spell one real file two ways here: the ROOT spelled
- * two ways (`/tmp/p` vs `/private/tmp/p` on macOS), the flows dir or the flow
- * file symlinked into a shared vault from two projects, or the NAME cased two
- * ways (`Login` vs `login`) on a case-insensitive volume, which APFS is by
- * default. Keying sessions on this string would mint two sessions — and two
- * independent locks — over one file, so nothing here is a session key.
+ * case, so two callers can spell one real file two ways here: a root spelled
+ * `/tmp/p` vs `/private/tmp/p`, a flows dir or flow file symlinked into a shared
+ * vault, or a name cased two ways on a case-insensitive volume. Keying sessions
+ * on this string would mint two sessions — and two independent locks — over one
+ * file.
  */
 export function getFlowPath(projectRoot: string, name: string): string {
   const flowsDir = getFlowsDir(projectRoot);
   assertSafeFlowName(name);
   const filePath = path.join(flowsDir, `${name}.yaml`);
-  // Defense-in-depth: ensure the resolved path stays inside the flows
-  // directory even if the regex above is ever weakened.
+  // Defense-in-depth, in case FLOW_NAME_PATTERN is ever weakened.
   const rel = path.relative(flowsDir, filePath);
   if (rel.startsWith("..") || path.isAbsolute(rel)) {
     throw new FailureError(`Invalid flow name "${name}": resolves outside the flows directory.`, {
@@ -130,35 +120,24 @@ export function getFlowPath(projectRoot: string, name: string): string {
 /**
  * The flow file's identity as the FILESYSTEM sees it, which is what a recording
  * session and its lock are keyed by. Two callers who spell one real file two
- * ways — a symlink into a shared vault, a symlinked `.argent/flows`, a root
- * spelled `/tmp` vs `/private/tmp`, a name cased two ways on APFS — resolve to
- * one key here, so the collision reads as the restart it actually is instead of
- * minting a second session that silently truncates the first.
+ * ways — a symlink into a shared vault, a root spelled `/tmp` vs
+ * `/private/tmp`, a name cased two ways on APFS — resolve to one key here, so
+ * the collision reads as the restart it actually is instead of minting a second
+ * session that silently truncates the first.
  *
- * This is the same resolution {@link writeFlowFile} performs before its swap,
- * deliberately: the key and the write agree by construction. Where the
- * filesystem declines to answer at all — a flows dir that does not exist yet —
- * both fall back to the same pure-path spelling and two spellings remain two,
- * which is correct, because two files is what the write then produces. Where it
- * declines only because the target is missing — a dangling vault symlink — both
- * follow the link by hand ({@link followDanglingLink}), so the two spellings
- * become one key, which is equally correct: one file is what the write produces
- * there.
+ * The same resolution {@link writeFlowFile} performs before its swap, so the key
+ * and the write agree by construction — fallbacks included: where no flows dir
+ * exists yet both keep the pure-path spelling (and the write does produce two
+ * files), and for a dangling vault symlink both follow the link by hand
+ * ({@link followDanglingLink}), collapsing the two spellings onto the one file
+ * the write produces there.
  *
- * It costs one `realpath` pair per recording tool call, on a path already doing
- * file I/O.
+ * A case-SENSITIVE volume (ext4) keeps `Login` and `login` apart on its own:
+ * `realpath` there simply fails to find the variant spelling.
  *
- * The earlier objection to normalizing — that the correct normalization is the
- * filesystem's and we cannot ask it — held only for a hand-rolled one. Asking
- * the filesystem is exactly what this does, so a case-SENSITIVE volume (ext4)
- * keeps `Login` and `login` apart on its own: `realpath` there simply fails to
- * find the variant spelling.
- *
- * "client" mode needs no special case. The caller's root does not exist on this
+ * "client" mode needs no special case: the caller's root does not exist on this
  * host, so both `realpath` calls fail and the fallback returns
- * {@link getFlowPath} unchanged — the old behavior, and the only one available
- * when the file is on another machine. Two clients that share a flow file
- * across that boundary are beyond this process's reach, as they were before.
+ * {@link getFlowPath} unchanged.
  */
 // `async`, so `getFlowPath`'s validation throws land as a rejection like every
 // other failure here rather than synchronously out of a promise-returning call.
@@ -174,38 +153,33 @@ export async function resolveFlowKey(projectRoot: string, name: string): Promise
 }
 
 /**
- * Canonical-key resolutions currently IN FLIGHT, keyed by the spelled path.
- * Not a cache — the entry is dropped the moment it settles, so a symlink
- * repointed between two tool calls is seen — but a sequencer.
+ * Canonical-key resolutions currently IN FLIGHT, keyed by the spelled path. A
+ * sequencer, not a cache — the entry is dropped the moment it settles, so a
+ * symlink repointed between two tool calls is seen.
  *
- * Resolution is `realpath`, which runs on libuv's threadpool and therefore
- * completes in an order unrelated to the order it was requested in. Every
- * recording tool resolves its key before joining its flow file's lock queue, so
- * without this, which of two tool calls acquires the lock first would be
- * decided by threadpool scheduling rather than by which was issued first — a
- * restart could land behind the append it is supposed to discard. Callers that
- * spell one path the same way share one promise, so their continuations run in
- * subscription order and the queue they join stays FIFO.
+ * `realpath` runs on libuv's threadpool and so completes out of request order,
+ * and every recording tool resolves its key before joining its flow file's lock
+ * queue — so without this, threadpool scheduling would decide which of two tool
+ * calls acquires the lock first, and a restart could land behind the append it
+ * is supposed to discard. Callers spelling one path the same way share one
+ * promise, so the queue they join stays FIFO.
  *
- * Two DIFFERENT spellings of one file resolve independently and so race, as
- * they did before. Nothing depends on their order: mutual exclusion comes from
- * the resolved key, which is the same for both.
+ * Two DIFFERENT spellings of one file resolve independently and so race.
+ * Nothing depends on their order: mutual exclusion comes from the resolved key,
+ * which is the same for both.
  */
 const keyResolutions = new Map<string, Promise<string>>();
 
 /**
  * How the flow file a caller addressed is spelled in its own directory.
  * `listed`: the directory carries that basename byte-for-byte — or its listing
- * could not be read at all, which vouches for nothing and so must refuse
- * nothing (an execute-only parent directory lets stat through while refusing
- * readdir, and the exact-named contract may well be honored there).
- * `case_folded`: no entry carries it, but one differs from it only by case —
- * exactly what a case-insensitive filesystem (APFS, NTFS) opens for a reader
- * that asked for a spelling nothing on disk has, and the whole point of the
- * check. `absent`: nothing matches even case-insensitively, i.e. the file is
- * simply not there. `addressable` says whether the on-disk spelling is one the
- * flow layer's own ladders accept, so a caller can be pointed at it instead of
- * at a rename.
+ * could not be read at all (an execute-only parent lets stat through while
+ * refusing readdir), which vouches for nothing and so must refuse nothing.
+ * `case_folded`: no entry carries it, but one differs only by case — what a
+ * case-insensitive filesystem (APFS, NTFS) opens for a spelling nothing on disk
+ * has. `absent`: nothing matches even case-insensitively. `addressable` says
+ * whether the on-disk spelling is one the flow layer's own ladders accept, so a
+ * caller can be pointed at it instead of at a rename.
  */
 export type OnDiskSpelling =
   | { state: "listed" }
@@ -217,10 +191,7 @@ export type OnDiskSpelling =
  * every route that turns a caller's spelling into a flow identity — replay's
  * `flow_path` and `name` (flow-run.ts) and the recorder's two nested
  * flow-execute targets (flow-add-step.ts) — so they can never drift apart in
- * which spellings they accept. That drift is the bug itself twice over: it let
- * a `name` key a report and `__baselines__/` under a spelling `flow_path`
- * refused two arms earlier, and it let the recorder bake a `run:` name whose
- * flow_path spelling its own neighbouring arm would have refused.
+ * which spellings they accept.
  *
  * readdir, not realpath: realpath rewrites a symlinked flow to its target's
  * name, and a flow deliberately runs — and composes — under the link's own
@@ -241,13 +212,10 @@ export async function classifyOnDiskSpelling(dir: string, base: string): Promise
   return { state: "case_folded", actual, addressable: FLOW_FILE_NAME_PATTERN.test(actual) };
 }
 
-// ── Recording sessions ───────────────────────────────────────────────
-
 /**
  * Where a recording's YAML is persisted:
  * - `"host"`   — this process writes `<project_root>/.argent/flows/<name>.yaml`
- *                directly (the original behavior; correct whenever the caller's
- *                project root is on this machine).
+ *                directly; the caller's project root is on this machine.
  * - `"client"` — the caller's project root is NOT on this machine (remote
  *                tool-server). The flow lives in memory here and every mutating
  *                tool returns a {@link ClientFileDirective} so the *client*
@@ -255,10 +223,39 @@ export async function classifyOnDiskSpelling(dir: string, base: string): Promise
  */
 export type FlowPersistMode = "host" | "client";
 
+/**
+ * One recorded step's warning, plus the anchor saying WHICH step it judged.
+ *
+ * The number it is filed under is a position, and a mid-recording hand edit
+ * moves positions. Comparing the finished flow against the recorder's own view
+ * catches an edit made after the last append; carrying the judged step catches
+ * one that moved a step out from under its number — see `anchoredWarnings` in
+ * flow-finish-recording.ts. An edit the recorder then appended OVER defeats
+ * both, and is settled at the append itself — see {@link dropMovedWarnings}.
+ */
+export interface RecordedStepWarning {
+  /** The warning text `flow-add-step` raised on that step's `message`. */
+  warning: string;
+  /**
+   * WHICH question the warning answers, because the two are not the same news.
+   *
+   * - `conversion` — the cross-tree re-probe ran (or tried to) and this is its
+   *   verdict on converting the step to `await:`/`assert:`. A polish-time
+   *   question; the raw step replays fine either way.
+   * - `wait` — the live wait itself came back `success: false`, so the probe
+   *   was skipped. Nothing here is about conversion: a genuine miss is a step
+   *   FAILURE at replay, and the other causes leave the step unjudged.
+   */
+  kind: "conversion" | "wait";
+  /**
+   * The judged step as `stepAnchor` renders it: its identity, independent of
+   * where it now sits.
+   */
+  step: string;
+}
+
 export interface RecordingSession {
-  /** Flow name, as passed to every recording tool. */
   name: string;
-  /** Caller-supplied project root, as passed to every recording tool. */
   projectRoot: string;
   /**
    * The {@link resolveFlowKey} this session is registered under. Stored rather
@@ -269,13 +266,31 @@ export interface RecordingSession {
   persist: FlowPersistMode;
   /**
    * Absolute path of the flow file as the CALLER knows it. A real host path in
-   * "host" mode; in "client" mode it is only echoed back inside the directive
-   * (it names a file on the client's machine, never touched here).
+   * "host" mode; in "client" mode it names a file on the client's machine and
+   * is only echoed back inside the directive.
    */
   filePath: string;
   /** In-memory flow content — authoritative in "client" mode. */
   flow: FlowFile;
-  /** Order of the last touch, for the LRU eviction backstop. See {@link touch}. */
+  /**
+   * Cross-tree probe verdicts, by 1-based step number.
+   *
+   * The verdict answers a POLISH-time question, and polish begins after
+   * `flow-finish-recording`. The warning is raised on one step's `message`, so
+   * without this it has scrolled out of every artifact by the time it is
+   * actionable. Accumulate it here and let the finish payload carry it.
+   */
+  stepWarnings?: Map<number, RecordedStepWarning>;
+  /**
+   * How many verdicts this recording raised and then DROPPED, because a hand
+   * edit moved the step each one judged (see {@link dropMovedWarnings}).
+   *
+   * Dropping is right, but it is not the same news as never having raised one,
+   * and the finish payload is otherwise identical either way. Counted here
+   * because the verdicts themselves are gone by then.
+   */
+  discardedWarnings?: number;
+  /** LRU order for the eviction backstop. See {@link touch}. */
   lastTouchedSeq: number;
 }
 
@@ -283,44 +298,33 @@ export interface RecordingSession {
  * Live recordings, keyed by {@link resolveFlowKey} — the identity of the
  * artifact being built, as the FILESYSTEM resolves it rather than as a caller
  * spelled it. Two sessions on one key mean two writers on one output file (a
- * genuine collision, reported as a restart); two different keys are two
- * different files, so concurrent agents recording different flows — in one
- * project or across projects, against one device or several — never write into
- * each other's take.
+ * collision, reported as a restart); two different keys are two different
+ * files, so concurrent agents recording different flows never write into each
+ * other's take.
  *
  * The one window the key does not close: two starts BOTH in flight before
  * either has created its file. Neither realpath can see a file that is not
- * there yet, so two spellings of one not-yet-existing file resolve apart, and
- * the two writes then land on one file. It closes itself on the next call —
- * the file exists by then, so both spellings resolve together and the loser
- * finds its key held by the other session, which fails loudly in
+ * there yet, so two spellings of one not-yet-existing file resolve apart and
+ * both writes land on one file. It closes itself on the next call — the file
+ * exists by then, so both spellings resolve together and the loser fails in
  * {@link requireRecordingSession} rather than silently mixing takes.
  *
- * Isolation of the recorded artifact, not of the fact that a recording exists:
- * the not-found path of {@link requireRecordingSession} deliberately names the
- * other live flows in the caller's own project (and counts the rest), so that
- * disclosure is bounded rather than absent. See the comment there for what it
- * discloses and why.
- *
- * One tool-server serves every MCP client, subagent and CLI call using one
- * argent install — `stateFileForBundle` gives each install its own record and
- * autospawn takes a free port, so the singleton is per install bundle, not per
- * machine. Within that scope this map is the only thing standing between two
- * agents and a clobbered flow file. Across it there is nothing: two installs
- * recording the same (project_root, name) hold two of these maps and cannot see
- * each other, so each believes its own session is live while the other
- * truncates and appends. What still holds there is {@link writeFlowFile}'s
- * temp-file swap, which is a filesystem guarantee rather than an in-process
- * one — each write stays whole, but a lost update is not prevented.
+ * The singleton is per install bundle, not per machine: `stateFileForBundle`
+ * gives each install its own record and autospawn takes a free port. Across
+ * that boundary there is nothing — two installs recording the same
+ * (project_root, name) hold two of these maps and cannot see each other, so
+ * each believes its own session is live while the other truncates and appends.
+ * What still holds is {@link writeFlowFile}'s temp-file swap: each write stays
+ * whole, but a lost update is not prevented.
  */
 const recordings = new Map<string, RecordingSession>();
 
 /**
  * Serializes every mutation of ONE flow file: an append, the reset+register a
  * `flow-start-recording` performs, and the read+clear a `flow-finish-recording`
- * performs. Each of those is a read/await/write straddling at least one
- * microtask, and Express dispatches tool calls concurrently, so without this
- * two of them interleave and one silently loses.
+ * performs. Each is a read/await/write straddling at least one microtask, and
+ * Express dispatches tool calls concurrently, so without this two of them
+ * interleave and one silently loses.
  *
  * Keyed by the flow path, NOT by the session object: a restart *replaces* the
  * session, so a lock the session owned could not exclude the very operation
@@ -365,23 +369,18 @@ export async function withFlowFileLock<T>(
  * Leak backstop only. Sessions are small and auto-spawned servers idle out
  * after 30 min, but a long-lived server could accumulate recordings an agent
  * started and never finished. Well past any realistic concurrent-agent count,
- * so evicting should never be something an agent observes — and if it ever is,
- * the next append fails loudly rather than writing into a recording the server
- * has forgotten. Which function reports it depends on the ordering: an append
- * issued after the eviction fails in {@link requireRecordingSession}, since the
- * key is already gone by the time it resolves; only one whose session was
- * resolved BEFORE the eviction and landed after reaches
- * {@link assertSessionStillLive}.
+ * so an eviction should never be something an agent observes — and if it is,
+ * the next append fails loudly ({@link requireRecordingSession}, or
+ * {@link assertSessionStillLive} for one already in flight) rather than writing
+ * into a recording the server has forgotten.
  */
 export const MAX_RECORDINGS = 32;
 
 /**
  * Stamp a session as most-recently-used. A counter rather than `Date.now()`:
- * wall-clock has millisecond resolution, so sessions touched inside one
- * millisecond tie, and the eviction scan's tie-break is map insertion order —
- * which can drop the session that was touched most recently while keeping one
- * that was not touched at all. A counter cannot tie, so "least recently used"
- * means exactly that.
+ * sessions touched inside one millisecond would tie, and the eviction scan's
+ * tie-break is map insertion order — which can drop the session touched most
+ * recently while keeping one never touched at all.
  */
 let touchSeq = 0;
 function touch(): number {
@@ -414,8 +413,7 @@ export interface RecordingSessionInit {
 /**
  * Begin a recording. Returns the session it replaced when one was already live
  * on the same key (a re-record of the same flow, which discards the earlier
- * take), or null — the common case, including starting a second, unrelated
- * recording while others are in progress.
+ * take), or null.
  */
 export async function startRecordingSession(
   init: RecordingSessionInit
@@ -452,20 +450,16 @@ export async function requireRecordingSession(
 ): Promise<RecordingSession> {
   const session = await getRecordingSession(projectRoot, name);
   if (!session) {
-    // Name what was asked for AND what is live, so the agent can self-correct:
-    // with concurrent recordings the usual cause is a typo in `name` or the
-    // wrong `project_root`.
-    //
-    // Only this project's recordings are named. The others are counted, not
-    // listed: a tool-server bound beyond loopback is shared by unrelated
-    // callers (that is what "client" persist mode exists for), and their flow
-    // names and absolute project paths are not this caller's to see. A typo in
-    // your own project — the case worth recovering from — is still spelled out.
+    // Name what is live so the agent can self-correct: with concurrent
+    // recordings the usual cause is a typo in `name` or the wrong
+    // `project_root`. Only this project's recordings are named; the others are
+    // counted, because a tool-server bound beyond loopback is shared by
+    // unrelated callers whose flow names and absolute project paths are not
+    // this caller's to see.
     const active = listActiveRecordings();
-    // Compare roots the way the key does (path.join-normalized), or a caller
-    // that spells its own root with a trailing slash would be told its live
-    // recording is in "another project" — degrading the message in exactly the
-    // wrong-project_root case it exists to diagnose.
+    // Normalize both roots (path.join), or a caller spelling its own root with
+    // a trailing slash is told its live recording is in "another project" —
+    // degrading the message in exactly the case it exists to diagnose.
     const hereDir = getFlowsDir(projectRoot);
     const here = active.filter((r) => getFlowsDir(r.projectRoot) === hereDir);
     const elsewhere = active.length - here.length;
@@ -475,15 +469,11 @@ export async function requireRecordingSession(
       : `none in this project${others}`;
     // Do NOT tell the agent to just call flow-start-recording. This message is
     // reached when the key was never started, but equally when a take was
-    // finished or dropped by the MAX_RECORDINGS backstop — and in those cases
-    // the flow file on disk is fully populated while no session owns it. (A key
-    // SUPERSEDED by a restart is NOT one of them: the superseding session holds
-    // the key, so this call resolves to it and returns success rather than
-    // reaching here — and that restart has already truncated the file, so
-    // "fully populated" would not hold there anyway.) flow-start-recording
+    // finished or dropped by the MAX_RECORDINGS backstop — where the flow file
+    // on disk is fully populated while no session owns it. flow-start-recording
     // truncates unconditionally, so the advice that recovers the never-started
-    // case destroys the others. Same doctrine as {@link assertSessionStillLive},
-    // which faces the identical ambiguity.
+    // case destroys the others. Same doctrine as
+    // {@link assertSessionStillLive}, which faces the identical ambiguity.
     throw new FailureError(
       `No active recording for flow "${name}" in ${projectRoot}. ` +
         `If you have not started it yet, call flow-start-recording — but note it ` +
@@ -499,24 +489,19 @@ export async function requireRecordingSession(
     );
   }
   // The key is the file's identity, so a session found under it may have been
-  // registered under a DIFFERENT spelling of that one file — a symlink into a
-  // shared vault, a symlinked `.argent/flows`, a root spelled `/tmp` vs
-  // `/private/tmp`, a name cased two ways on APFS. Handing it over would risk
-  // silently enrolling this caller in someone else's take: its steps would land
-  // in a file it never addressed, under a prerequisite it never declared, and
-  // its finish would report the other agent's steps as its own. A root spelled
-  // with a trailing slash is not one of these — `getFlowPath` normalizes both
-  // sides before they are compared.
+  // registered under a DIFFERENT spelling of that one file. Handing it over
+  // would risk silently enrolling this caller in someone else's take: its steps
+  // would land in a file it never addressed, under a prerequisite it never
+  // declared, and its finish would report the other agent's steps as its own.
+  // (A root spelled with a trailing slash is not one of these — `getFlowPath`
+  // normalizes both sides before they are compared.)
   //
-  // Which of two situations this is cannot be told apart from here, so the
-  // message must assert neither. It is EITHER the same caller respelling its
-  // own root or name — nothing was truncated, the take is live and intact, and
-  // re-addressing it under the registered spelling resumes it — OR another
-  // caller's restart, which did truncate. Naming the second as fact sent a
-  // caller in the first situation to abandon a healthy recording and re-walk
-  // the whole flow on the device. The advice that recovers both is the same:
-  // use the spelling the session is registered under, which is the one
-  // `flow-start-recording` was given.
+  // Which of two situations this is cannot be told from here, so the message
+  // asserts neither: EITHER the same caller respelling its own root or name —
+  // nothing truncated, the take live and intact — OR another caller's restart,
+  // which did truncate. Naming the second as fact sent a caller in the first
+  // situation to abandon a healthy recording. Both recover the same way: use
+  // the spelling the session is registered under.
   const asked = getFlowPath(projectRoot, name);
   const held = getFlowPath(session.projectRoot, session.name);
   if (asked !== held) {
@@ -544,12 +529,11 @@ export async function requireRecordingSession(
 /**
  * Retire a finished recording, by the key the session actually HOLDS rather
  * than a fresh resolution of its spelling — the same choice
- * {@link appendStepToFlow} makes, and for the same reason. A key that moved
- * under the session (a symlinked flow file whose target went away
- * mid-recording, or a link repointed) re-resolves to something this map does
- * not hold, so the delete missed silently: the finish reported success while
- * the session stayed live, unfinishable, and holding the key against its own
- * restart.
+ * {@link appendStepToFlow} makes. A key that moved under the session (a
+ * symlinked flow file whose target went away mid-recording) re-resolves to
+ * something this map does not hold, so the delete would miss silently: the
+ * finish reports success while the session stays live, unfinishable, and
+ * holding the key against its own restart.
  */
 export function clearRecordingSession(session: RecordingSession): void {
   recordings.delete(session.key);
@@ -563,23 +547,19 @@ export function __resetRecordingsForTesting(): void {
 
 /**
  * How many flow files currently have a lock entry. Test-only: the map's
- * self-cleanup is a leak backstop with no other observable effect, so nothing
- * else can tell a released lock from a retained one.
+ * self-cleanup has no other observable effect, so nothing else can tell a
+ * released lock from a retained one.
  */
 export function __flowFileLockCountForTesting(): number {
   return flowFileLocks.size;
 }
 
-// ── Types ────────────────────────────────────────────────────────────
-
 /**
  * A chromium `launch` target: a filesystem path to the Electron app (bare
- * string) or a path plus extra CLI args. Unlike iOS/Android/Vega (an OS-installed
- * app id relaunched in place), chromium is booted from this path, so it must
- * exist on the tool-server host; a relative path resolves against the ROOT
- * flow file's canonical (symlink-resolved) directory (the baseline anchor —
- * only the root flow's leading launch ever boots; `run:` targets anchor per
- * containing file, which for the root file is that same directory).
+ * string) or a path plus extra CLI args. Unlike iOS/Android/Vega (an
+ * OS-installed app id relaunched in place), chromium is booted from this path,
+ * so it must exist on the tool-server host; a relative path resolves against
+ * the ROOT flow file's canonical (symlink-resolved) directory.
  */
 export type ChromiumLaunch = string | { path: string; args?: string[] };
 
@@ -605,31 +585,27 @@ export type Launch =
 export type ScrollDirection = "up" | "down" | "left" | "right";
 
 /**
- * A selector as a flow step carries it. Extends the shared {@link Selector} with
- * an internal `loose` flag, set when the selector came from bare-string sugar
+ * A selector as a flow step carries it: the shared {@link Selector} plus an
+ * internal `loose` flag, set when the selector came from bare-string sugar
  * (`tap: foo`). A loose selector resolves identifier-first, then falls back to
  * text (label/value), so a hand-written `foo` matches `testID="foo"` as well as
  * visible text. The flag is honored only by the flow runner (`flow-actions.ts`)
- * and is never serialized as a field — the YAML spelling carries it exactly:
- * bare string ⇔ loose, map form ⇔ strict (`selectorToYaml`/`parseSelector` are
- * inverses). It is never forwarded into a tool's input — explicit `{ text }` /
- * `{ id }` selectors stay strict everywhere, including across the
- * serialize/parse round-trip every recorded step performs.
+ * and never serialized as a field — the YAML spelling carries it exactly (bare
+ * string ⇔ loose, map ⇔ strict; `selectorToYaml`/`parseSelector` are inverses)
+ * — and it is never forwarded into a tool's input.
  *
- * The relational slots (`within`/`after`/`next`) re-narrow to FlowSelector so
- * the flag survives at every nesting level: a map selector is itself always
- * strict, but its scope may be a bare string (`within: profile-card`), and
- * that level keeps the loose identifier-first fallback. Only a bare string can
- * be loose and a bare string carries no relation of its own, so a loose level
- * is always a LEAF of the relation tree — the runner's alternative expansion
- * relies on this shape.
+ * The relational slots re-narrow to FlowSelector so the flag survives at every
+ * nesting level: a map selector is itself always strict, but its scope may be a
+ * bare string (`within: profile-card`), and that level keeps the fallback. Only
+ * a bare string can be loose and it carries no relation of its own, so a loose
+ * level is always a LEAF of the relation tree — the runner's alternative
+ * expansion relies on this shape.
  *
- * `any` is the universal selector (CSS `*`): it carries no own constraint, so
- * the parser only accepts it paired with a relation. The match engine needs no
- * field for it — a selector with no own fields already matches every node —
- * so it stays on this flow-side type and is dropped before the engine sees the
- * selector (see `selectorAlternatives`), keeping `await-ui-element`'s schema
- * surface unchanged.
+ * `any` is the universal selector (CSS `*`): no own constraint, so the parser
+ * accepts it only paired with a relation. The match engine needs no field for
+ * it — a selector with no own fields already matches every node — so it stays
+ * on this flow-side type and is dropped before the engine sees the selector
+ * (see `selectorAlternatives`).
  */
 export type FlowSelector = Omit<Selector, "within" | "after" | "next"> & {
   loose?: boolean;
@@ -642,8 +618,8 @@ export type FlowSelector = Omit<Selector, "within" | "after" | "next"> & {
 /**
  * The selector itself plus every selector nested in its relation tree. Used by
  * whole-chain checks (the `when` guard's secret-placeholder scan) so a
- * constraint buried in an `after`/`within` scope is treated exactly like one
- * in the target's own fields.
+ * constraint buried in a scope is treated exactly like one in the target's own
+ * fields.
  */
 function selectorTree(sel: FlowSelector): FlowSelector[] {
   const out: FlowSelector[] = [];
@@ -661,15 +637,15 @@ function selectorTree(sel: FlowSelector): FlowSelector[] {
 /**
  * The platforms a `when: { platform: … }` condition can name — derived from
  * {@link LAUNCH_PLATFORMS} so the parser's runtime check and this type cannot
- * drift (flow-device's `FlowPlatform` is the same union, aliased there).
+ * drift (flow-device's `FlowPlatform` aliases it).
  */
 export type WhenPlatform = (typeof LAUNCH_PLATFORMS)[number];
 
 /**
- * The guard of a `when:` block. Either a UI condition — the await/assert
- * condition-as-key shapes, evaluated at run time with the short assert grace
- * (a skipped block must not add an await-sized dead wait to every clean run) —
- * or `platform`, a static per-run test against the resolved device.
+ * The guard of a `when:` block: either a UI condition — the await/assert
+ * condition-as-key shapes, evaluated with the short assert grace so a skipped
+ * block adds no await-sized dead wait to a clean run — or `platform`, a static
+ * per-run test against the resolved device.
  */
 export type WhenCondition =
   | {
@@ -708,10 +684,9 @@ export type FlowStep =
     }
   /**
    * Screen READINESS: the UI tree has content, and neither it nor the rendered
-   * pixels are still changing. Spelled `await: { idle: true }` — a condition
-   * like any other, but the only one that takes no selector, because stillness
-   * is a property of the whole screen. There is no `assert` form: "has it
-   * stopped moving yet" is inherently a wait.
+   * pixels are still changing. Spelled `await: { idle: true }` — the only
+   * condition that takes no selector, because stillness is a property of the
+   * whole screen. There is no `assert` form: stillness is inherently a wait.
    */
   | { kind: "idle"; timeout?: number; stableFor?: number }
   | { kind: "wait"; ms: number }
@@ -729,28 +704,21 @@ export type FlowFile = {
 /**
  * The literal child steps of a block directive, or undefined for a leaf step.
  *
- * The single predicate for "this step has authored children", read at seven
- * sites. Four expand a block that will NOT execute into skip lines, so a report
- * keeps one line per authored step no matter where the run ended: `execSteps`'
- * three gates — a hard stop, a device-free flow, a cancellation — plus
- * `reportBlockSkipped` recursing into a nested block. (A guard-unmet `when`
- * reaches those same skip lines by another route: `execWhenStep` has the block
- * in hand and passes `step.steps` straight to `reportBlockSkipped`.) The fifth
- * is the upload preflight's walk, where a block it cannot see hides a nested
- * `run:`/`snapshot` from validation. The sixth and seventh,
- * `flowRequiresDevice` and `flowScopesDevice` (flow-device.ts), read children
- * not to skip them but to resolve the flow's device decisions from a block's
- * body — the guard against a later block directive whose header reads nothing
- * off the device, and dead in a run while `when`, whose header already
- * classifies device-requiring, is the only block kind.
+ * The single predicate for "this step has authored children". Four readers
+ * expand a block that will NOT execute into skip lines, so a report keeps one
+ * line per authored step no matter where the run ended: `execSteps`' hard-stop,
+ * device-free and cancellation gates, plus `reportBlockSkipped` recursing into a
+ * nested block. The fifth is the upload preflight's walk, where a block it
+ * cannot see hides a nested `run:`/`snapshot` from validation. The last two,
+ * `flowRequiresDevice` and `flowScopesDevice` (flow-device.ts), read children to
+ * resolve the flow's device decisions from a block's body — dead while `when`
+ * is the only block kind, and the guard against a later one.
  *
- * Six sites asked `kind === "when"` directly before this existed: five for the
- * children, one for the dispatch (now {@link isBlockStep}/`execBlockStep`);
- * `flowRequiresDevice`'s walk arrived after the predicate and never had to. A
- * second block directive would have had to remember all six; a forgotten one
- * drops a whole block from the report or preflight silently. Now both are one
- * case here, the same case the PARSER exempts from the single-key sibling
- * check: the kinds come from {@link BLOCK_DIRECTIVE_KEYS}, not restated.
+ * Those sites used to ask `kind === "when"` directly, so a second block
+ * directive would have had to remember every one of them and a forgotten site
+ * would drop a whole block from the report or preflight silently. Now the kinds
+ * come from {@link BLOCK_DIRECTIVE_KEYS} — the same list the PARSER exempts
+ * from the single-key sibling check.
  */
 export function blockSteps(step: FlowStep): FlowStep[] | undefined {
   return isBlockStep(step) ? (step.steps satisfies FlowStep[]) : undefined;
@@ -758,11 +726,11 @@ export function blockSteps(step: FlowStep): FlowStep[] | undefined {
 
 /**
  * Narrow a step to the kinds {@link BLOCK_DIRECTIVE_KEYS} lists. `Extract` is
- * what makes the list load-bearing: {@link blockSteps}' `.steps` typechecks
- * only while EVERY listed kind's step type carries children. The `satisfies`
- * there pins them to a REQUIRED `steps`; an optional one types as
- * `FlowStep[] | undefined`, which the return type alone would accept while
- * every reader sees a childless leaf.
+ * what makes the list load-bearing: {@link blockSteps}' `.steps` typechecks only
+ * while EVERY listed kind's step type carries children, and the `satisfies`
+ * there pins them to a REQUIRED `steps` — an optional one types as
+ * `FlowStep[] | undefined`, which the return type alone would accept while every
+ * reader sees a childless leaf.
  */
 export function isBlockStep(step: FlowStep): step is BlockStep {
   return isBlockDirectiveKey(step.kind);
@@ -770,9 +738,9 @@ export function isBlockStep(step: FlowStep): step is BlockStep {
 
 /**
  * A flow is end-to-end iff it BEGINS by launching an app — its first step
- * (ignoring `echo` narration) is a `launch`. Such a flow controls its own
- * start state, so it is the natural standalone/suite entry point and must not
- * declare an `executionPrerequisite`. Everything else is a fragment.
+ * (ignoring `echo` narration) is a `launch`. Such a flow controls its own start
+ * state, so it must not declare an `executionPrerequisite`. Everything else is a
+ * fragment.
  */
 export function isE2eFlow(flow: FlowFile): boolean {
   const first = flow.steps.find((s) => s.kind !== "echo");
@@ -781,9 +749,9 @@ export function isE2eFlow(flow: FlowFile): boolean {
 
 /**
  * Resolve the launch app id for a platform, or null when none is declared. For
- * ios/android/vega a specific key wins, else the shared `native` id. For chromium
- * this returns the app *path* (not an id, and never `native`) — chromium booters
- * want {@link chromiumLaunchSpec}, which also carries the CLI args.
+ * ios/android/vega a specific key wins, else the shared `native` id. For
+ * chromium this returns the app *path* (never `native`) — chromium booters want
+ * {@link chromiumLaunchSpec}, which also carries the CLI args.
  */
 export function appIdForPlatform(launch: Launch | undefined, platform: string): string | null {
   if (launch === undefined) return null;
@@ -813,18 +781,17 @@ export function chromiumLaunchSpec(
 }
 
 /**
- * A selector in YAML is sugared: a bare string is shorthand for `{ text: <string> }`
- * (the common case), and the full `{ text?, id?, role? }` map is still accepted
- * for identifier/role locators. The map form spells the internal `identifier`
- * field `id`; `identifier` is accepted on parse as an alias (so existing flow
- * files keep working) but serialization always emits `id`.
+ * A selector in YAML is sugared: a bare string is shorthand for
+ * `{ text: <string> }`, and the full `{ text?, id?, role? }` map is still
+ * accepted for identifier/role locators. The map form spells the internal
+ * `identifier` field `id`; `identifier` is accepted on parse as an alias (so
+ * existing flow files keep working) but serialization always emits `id`.
  *
  * In any selector slot, `text` may also be a regex matcher map —
  * `{ text: { matches: '<pattern>' } }` — matched against each node's own
- * label/value (internal `textMatches`; see the `Selector` type). It follows
- * the same doctrine as the `text` condition's `matches`: unanchored,
- * case-sensitive, validated at parse. In action ranking a pattern that
- * consumes a node's whole label/value counts as an exact match.
+ * label/value (internal `textMatches`): unanchored, case-sensitive, validated
+ * at parse. In action ranking a pattern that consumes a node's whole
+ * label/value counts as an exact match.
  *
  * A map selector may also carry relational scopes, the geometric readings of
  * the CSS combinators (flow trees are flat — see the `Selector` type), each
@@ -839,8 +806,7 @@ export function chromiumLaunchSpec(
  *     follower, e.g. `{ role: Switch, next: { text: "Wi-Fi" } }`.
  *
  * `any: true` is the CSS `*` universal selector — no own constraint, so it is
- * accepted only alongside a relation, and never alongside `text`/`id`/`role`
- * (which it would make redundant).
+ * accepted only alongside a relation, and never alongside `text`/`id`/`role`.
  */
 type YamlSelector =
   | string
@@ -857,21 +823,19 @@ type YamlSelector =
  * A gesture target: an element (selector, possibly a bare string) or a raw
  * normalized point `{ x, y }`. Only the point-acting directives (`tap`,
  * `long-press`) accept the point form — a point can be acted on but not
- * observed, so the selector-only directives (`type`, `await`, `assert`,
- * `scroll-to`) keep taking {@link YamlSelector}.
+ * observed — so the observing directives keep taking {@link YamlSelector}.
  */
 type YamlTarget = YamlSelector | { x: number; y: number };
 
 /**
  * A tap targets an element or a raw point. The options form nests the target
  * under `on` so option keys never mix with target fields:
- * `{ on: <target>, times: 2 }` is a double-tap (`on` carries the usual
- * bare-string-loose / map-strict selector sugar).
+ * `{ on: <target>, times: 2 }` is a double-tap.
  */
 type TapBody = YamlTarget | { on: YamlTarget; times?: number };
 
 /**
- * The condition of an `await`/`assert` step. The condition is the key, not a
+ * The condition of an `await`/`assert` step — the condition is the key, not a
  * separate `condition:` field:
  *   - `{ visible: "Account" }`            ← exists/visible/hidden take a selector
  *   - `{ visible: { text: { matches: '^x: \d+$' } } }`  ← regex text selector
@@ -880,8 +844,8 @@ type TapBody = YamlTarget | { on: YamlTarget; times?: number };
  *   - `{ text: { in: "total", matches: 'Total: \$\d+' } }` ← regex check
  * Only `await` takes an optional `timeout` sibling key (milliseconds):
  *   - `{ visible: "Account", timeout: 10000 }`
- * An `assert` carrying one is rejected at parse — an assert is an immediate
- * check; a check that needs time to become true is a wait, spelled `await`.
+ * An `assert` carrying one is rejected at parse: a check that needs time to
+ * become true is a wait, spelled `await`.
  */
 type YamlWaitCondition =
   | { exists: YamlSelector }
@@ -897,7 +861,7 @@ type YamlTextWaitCondition = Extract<YamlWaitCondition, { text: unknown }>;
  * The one condition that takes no selector. It shares the `await:` key with
  * {@link YamlWaitCondition} but is deliberately NOT part of that union — a step
  * body carries either a selector condition or this one, never a mix — so it is
- * parsed by {@link parseIdleFields} rather than by parseWaitFields.
+ * parsed by {@link parseIdleFields}.
  */
 type YamlIdleCondition = { idle: true; stableFor?: number; timeout?: number };
 
@@ -909,10 +873,10 @@ type YamlScrollBody =
 /**
  * A `when:` guard body: exactly one UI condition key (the await/assert shapes,
  * no `timeout` — evaluation always uses the assert grace) or `{ platform }`.
- * Deriving the UI arm from {@link YamlWaitCondition} keeps the two in lockstep:
- * the guard is parsed by the same parseWaitFields as await/assert, so a
- * condition shape added there is a when-guard shape too. `timeout` stays out
- * by construction — the await step type adds it as a sibling key, not here.
+ * Deriving the UI arm from {@link YamlWaitCondition} keeps the two in lockstep,
+ * since the guard is parsed by the same parseWaitFields as await/assert.
+ * `timeout` stays out by construction — the await step type adds it as a
+ * sibling key, not here.
  */
 type YamlWhenBody = YamlWaitCondition | { platform: WhenPlatform };
 
@@ -938,24 +902,21 @@ type YamlFlowFile = {
   steps: YamlStep[];
 };
 
-// ── Conversions ──────────────────────────────────────────────────────
-
 /**
  * Sugar a selector for YAML output: a LOOSE text-only selector collapses to a
  * bare string (`{ text: "Login", loose: true }` → `"Login"`); everything else —
- * including a strict `{ text }` — keeps the map form. The internal `loose` flag
- * is never emitted as a field; the bare-string spelling carries it, and
- * `parseSelector` is the exact inverse (bare string ⇒ loose, map ⇒ strict).
- * Collapsing a strict text selector too would promote it to loose on re-parse,
- * sending it through the identifier-first fallback it was never verified
- * against — e.g. a recorder-captured `{ text: "Save" }` hijacked by a
- * `testID="save"` elsewhere on screen.
+ * including a strict `{ text }` — keeps the map form. `parseSelector` is the
+ * exact inverse (bare string ⇒ loose, map ⇒ strict). Collapsing a strict text
+ * selector too would promote it to loose on re-parse, sending it through the
+ * identifier-first fallback it was never verified against — e.g. a
+ * recorder-captured `{ text: "Save" }` hijacked by a `testID="save"` elsewhere
+ * on screen.
  */
 export function selectorToYaml(sel: FlowSelector): YamlSelector {
-  // YAML has a single `text` slot: it is either a literal string or a
-  // `{ matches }` map. Emitting one would overwrite/drop the other, changing
-  // the selector's AND semantics. Reject this internal-only combination at
-  // the serialization boundary instead of quietly weakening the selector.
+  // YAML has a single `text` slot — a literal string or a `{ matches }` map —
+  // so emitting one would drop the other and change the selector's AND
+  // semantics. Reject this internal-only combination at the boundary instead of
+  // quietly weakening the selector.
   if (sel.text !== undefined && sel.textMatches !== undefined) {
     throw new Error(
       "Cannot serialize flow selector without losing constraints: both `text` and " +
@@ -965,14 +926,12 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
   }
 
   // Both spellings parse back through selectorSchema's visible-text
-  // constraint. Guard the serialization boundary too — for the strict map
-  // form as much as the bare string: an empty, runtime-invalid, or
+  // constraint, so guard the serialization boundary too: an empty or
   // invisible-only text value (icon-font Private Use Area glyphs, zero-width
-  // characters) would otherwise produce YAML that DISPLAYS as an empty
-  // selector and that selectorToYaml's inverse rejects. Recorders never hit
-  // this (deriveSelector refuses invisible text and falls back to
-  // coordinates); a hand-built selector fails loudly instead of writing a
-  // flow no one can read or replay.
+  // characters) would produce YAML that DISPLAYS as an empty selector and that
+  // this function's inverse rejects. Recorders never hit it (deriveSelector
+  // refuses invisible text and falls back to coordinates); a hand-built
+  // selector fails loudly instead of writing a flow no one can read or replay.
   if (sel.text !== undefined && (typeof sel.text !== "string" || !hasVisibleText(sel.text))) {
     throw new Error(
       "Cannot serialize flow selector: `text` must contain at least one visible character " +
@@ -985,8 +944,7 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
   // this type, so a hand-built selector can violate them — and would serialize
   // to a flow file that `parseFlow` then refuses, which for a recorder means
   // the failure lands on a LATER step (every append re-parses the whole file).
-  // Same boundary, same doctrine as the guards above: fail where the bad
-  // selector was built.
+  // Fail where the bad selector was built.
   const scopeCount = SELECTOR_RELATIONS.filter((relation) => sel[relation] !== undefined).length;
   if (sel.any !== undefined) {
     if (sel.any !== true) {
@@ -1021,9 +979,9 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
     );
   }
 
-  // Bare-string YAML is the only spelling that carries `loose` (the
-  // identifier-first, then text fallback). A map is necessarily strict, so a
-  // loose selector with any additional/alternative field cannot round-trip.
+  // Bare-string YAML is the only spelling that carries `loose`. A map is
+  // necessarily strict, so a loose selector with any additional/alternative
+  // field cannot round-trip.
   if (
     sel.loose &&
     (sel.text === undefined ||
@@ -1056,9 +1014,9 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
   ) {
     return sel.text;
   }
-  // YAML spells the identifier field `id` (parseSelector maps it back), and
-  // the internal `textMatches` field spells `text: { matches }`. A relational
-  // scope recurses — each level keeps its own bare-string/map spelling.
+  // YAML spells the identifier field `id` (parseSelector maps it back), and the
+  // internal `textMatches` field spells `text: { matches }`. A relational scope
+  // recurses — each level keeps its own bare-string/map spelling.
   const { loose: _loose, any, identifier, textMatches, within, after, next, ...rest } = sel;
   const scopes = { within, after, next };
   const out: Exclude<YamlSelector, string> = { ...rest };
@@ -1077,16 +1035,14 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
  * warnings). The internal `loose` flag is dropped.
  */
 export function describeSelector(s: FlowSelector): string {
-  // Split off the non-string members (`loose` flag, `any` marker, relational
-  // scopes) before Object.entries so the remaining values are all strings —
-  // the scopes render separately below, and stringifying their objects here
-  // would be meaningless.
+  // Split off the non-string members before Object.entries so the remaining
+  // values are all strings; the scopes render separately below.
   const { loose: _loose, any, within, after, next, ...rest } = s;
   const scopes = { within, after, next };
   const fields = Object.entries(rest)
     // `identifier` is spelled `id` in flow YAML — print the spelling the flow
-    // file uses so the message reads like the step it refers to. A regex
-    // matcher prints in /slashes/ so it can't be misread as a literal.
+    // file uses. A regex matcher prints in /slashes/ so it can't be misread as
+    // a literal.
     .map(([k, v]) =>
       k === "textMatches" ? `text=/${v}/` : `${k === "identifier" ? "id" : k}="${v}"`
     )
@@ -1095,8 +1051,7 @@ export function describeSelector(s: FlowSelector): string {
   // never renders as an empty string.
   const parts = [any ? "*" : undefined, fields || undefined].filter((p) => p !== undefined);
   // Each scope renders after the fields, parenthesized so a nested scope's own
-  // fields can't be misread as the target's, and labelled with the YAML key so
-  // the message reads like the step it refers to.
+  // fields can't be misread as the target's, and labelled with the YAML key.
   for (const relation of SELECTOR_RELATIONS) {
     const scope = scopes[relation];
     if (scope !== undefined) parts.push(`${relation} (${describeSelector(scope)})`);
@@ -1106,11 +1061,11 @@ export function describeSelector(s: FlowSelector): string {
 
 /**
  * Render a text condition's comparator and expectation for reports. Literal
- * expectations use JSON quoting so embedded quotes, backslashes, and control
+ * expectations use JSON quoting so embedded quotes, backslashes and control
  * characters stay unambiguous; regex patterns use slash delimiters so they
  * cannot be mistaken for literals. Failure prose asks for the infinitive verb
- * form (`wanted to contain/equal/match`), while step targets use the YAML mode
- * names (`contains/equals/matches`).
+ * form (`wanted to contain/equal/match`), step targets for the YAML mode names
+ * (`contains/equals/matches`).
  */
 export function describeTextExpectation(
   expectedText: string | undefined,
@@ -1130,9 +1085,9 @@ export function describeTextExpectation(
 }
 
 /**
- * Preserve the selected text comparator when converting to YAML. Keeping this
- * switch explicit makes a new TextMatchMode a compile error here instead of
- * silently serializing it as `contains`.
+ * Preserve the selected text comparator when converting to YAML. The explicit
+ * switch makes a new TextMatchMode a compile error here instead of silently
+ * serializing it as `contains`.
  */
 function textWaitToYaml(
   selector: YamlSelector,
@@ -1210,8 +1165,7 @@ function waitToYaml(
 
 /**
  * Sugar an `idle` step back under its `await:` key. Optional fields are emitted
- * only when set, so the canonical minimal spelling (`await: { idle: true }`)
- * round-trips unchanged.
+ * only when set, so `await: { idle: true }` round-trips unchanged.
  */
 function idleToYaml(step: Extract<FlowStep, { kind: "idle" }>): YamlStep {
   const body: YamlIdleCondition = { idle: true };
@@ -1244,9 +1198,9 @@ function toYamlStep(step: FlowStep): YamlStep {
       return { when, steps: step.steps.map(toYamlStep) };
     }
     case "tap": {
-      // Canonical minimal spelling: the options form appears only when an
-      // option is present (`times` is never stored as 1 — see parseTapTimes),
-      // so a plain tap always round-trips to the plain selector/point body.
+      // The options form appears only when an option is present (`times` is
+      // never stored as 1 — see parseTapTimes), so a plain tap round-trips to
+      // the plain selector/point body.
       const target = targetToYaml(step);
       return { tap: step.times !== undefined ? { on: target, times: step.times } : target };
     }
@@ -1340,19 +1294,18 @@ function toYamlStep(step: FlowStep): YamlStep {
   }
 }
 
-// Ceiling on how much of the offending entry a diagnostic echoes. The entry
-// is not always a hand-authored flow step: a mistyped `run:` path can select
-// any in-project YAML file (a CI config, a partial flow), and this message
-// travels verbatim into StepReport.reason — which `argent flow run` prints to
-// stdout and flowRunToMcpContent emits into the agent's context — so an
-// unbounded render would ship that file's values (multi-KB payloads, secrets)
-// to both surfaces. 200 chars still shows a genuine flow entry, the common
-// authoring-error case, in full.
+// Ceiling on how much of the offending entry a diagnostic echoes. The entry is
+// not always a hand-authored flow step: a mistyped `run:` path can select any
+// in-project YAML file, and this message travels verbatim into
+// StepReport.reason — which `argent flow run` prints to stdout and
+// flowRunToMcpContent emits into the agent's context — so an unbounded render
+// would ship that file's values (multi-KB payloads, secrets) to both surfaces.
+// 200 chars still shows a genuine flow entry in full.
 const MAX_ENTRY_RENDER_CHARS = 200;
 
 function badEntry(raw: unknown, detail: string): never {
-  // A cyclic YAML alias materializes as a cyclic object — JSON.stringify
-  // would throw and mask the validation message, so fall back to a marker.
+  // A cyclic YAML alias materializes as a cyclic object — JSON.stringify would
+  // throw and mask the validation message.
   let rendered: string;
   try {
     rendered = JSON.stringify(raw);
@@ -1432,8 +1385,7 @@ function describeUnknownKeys(unknown: string[], allowed: readonly string[]): str
  * Reject keys outside `allowed` in a directive body / selector map. Flows are
  * hand-authored YAML with no extensible bodies, so an unrecognized key is a
  * typo — dropping it silently would apply the default instead (`directon: up`
- * scrolling down) and surface later as a misleading runtime failure rather
- * than a parse error.
+ * scrolling down) and surface later as a misleading runtime failure.
  */
 function rejectUnknownKeys(
   raw: unknown,
@@ -1451,7 +1403,7 @@ function rejectUnknownKeys(
 
 // Keys a selector map accepts: the schema fields plus the YAML `id` spelling
 // (`identifier` stays accepted as its parse-only alias), the `any` universal
-// marker, and the relational scopes (each a nested selector slot).
+// marker, and the relational scopes.
 const SELECTOR_KEYS: readonly string[] = [
   "text",
   "id",
@@ -1462,14 +1414,13 @@ const SELECTOR_KEYS: readonly string[] = [
 ];
 
 /**
- * Total number of scopes one selector may carry, counted across its whole
- * relation TREE rather than down a single branch — the selector analog of
- * MAX_BLOCK_DEPTH. A size bound, not a depth bound, because each level can open
- * three branches: capping depth alone still admits 3^depth scopes, and the
- * runner's loose-alternative expansion is exponential in the number of
- * bare-string scopes (`selectorAlternatives`), so a few hundred bytes of YAML
- * could exhaust the heap before a single tree read. Bounding the count bounds
- * the depth too, so this keeps defusing the cyclic YAML alias
+ * Total scopes one selector may carry, counted across its whole relation TREE
+ * rather than down a single branch. A size bound, not a depth bound, because
+ * each level can open three branches: capping depth alone still admits 3^depth
+ * scopes, and the runner's loose-alternative expansion is exponential in the
+ * number of bare-string scopes (`selectorAlternatives`), so a few hundred bytes
+ * of YAML could exhaust the heap before a single tree read. Bounding the count
+ * bounds the depth too, so this also defuses the cyclic YAML alias
  * (`&s { text: x, within: *s }`) the yaml library materializes as a cyclic
  * object. Hand-authored selectors carry one or two scopes.
  */
@@ -1487,24 +1438,22 @@ function parseSelector(
     );
   }
   // Bare-string sugar: a string is shorthand for a text selector, marked
-  // `loose` so the flow runner tries the identifier locator first and falls
-  // back to text — a hand-written `foo` then matches `testID="foo"` too. An
-  // explicit `{ text }` / `{ id }` map is strict (no `loose`).
+  // `loose` so the runner tries the identifier locator first and falls back to
+  // text. An explicit `{ text }` / `{ id }` map is strict.
   if (typeof raw === "string") {
     const r = selectorSchema.safeParse({ text: raw });
     if (!r.success) badEntry(raw, `${where}: ${r.error.issues[0]?.message ?? "invalid selector"}`);
     return { ...r.data, loose: true };
   }
-  // Reject unknown keys here so flow errors can name the YAML selector and
-  // list its accepted spellings (`id` plus the parse-only `identifier` alias).
+  // Reject unknown keys here so flow errors can name the YAML selector and list
+  // its accepted spellings.
   if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
     rejectUnknownKeys(raw, raw as Record<string, unknown>, SELECTOR_KEYS, `${where}: selector`);
   }
   // Split off the relational scopes before field validation — each is a nested
-  // selector slot (recursively parsed, every form accepted), not a field the
-  // shared schema knows. A scope alone selects nothing: it only narrows WHERE
-  // to look, so the selector still needs its own fields — or the explicit
-  // `any: true` universal marker saying "whatever is there".
+  // selector slot, not a field the shared schema knows. A scope alone selects
+  // nothing: it only narrows WHERE to look, so the selector still needs its own
+  // fields, or the explicit `any: true` universal marker.
   const scopes: { [K in SelectorRelation]?: FlowSelector } = {};
   let universal = false;
   let fieldsRaw = raw;
@@ -1512,8 +1461,8 @@ function parseSelector(
     const restRaw = { ...(raw as Record<string, unknown>) };
     const present = SELECTOR_RELATIONS.filter((relation) => relation in restRaw);
     for (const relation of present) {
-      // One shared budget across the whole tree, decremented per scope: sibling
-      // branches spend from it too, so three-way nesting cannot multiply.
+      // One shared budget across the whole tree: sibling branches spend from it
+      // too, so three-way nesting cannot multiply.
       budget.scopes--;
       scopes[relation] = parseSelector(restRaw[relation], `${where}.${relation}`, budget);
       delete restRaw[relation];
@@ -1555,9 +1504,9 @@ function parseSelector(
   }
   const attachScopes = (sel: FlowSelector): FlowSelector => ({ ...sel, ...scopes });
   if (universal) return attachScopes({ any: true });
-  // Map form: `id` is the YAML spelling of the internal `identifier` field —
-  // rewrite it before schema validation. `identifier` still parses as an alias
-  // (existing flow files), but a map carrying both is ambiguous and rejected.
+  // Map form: `id` is the YAML spelling of the internal `identifier` field.
+  // `identifier` still parses as an alias (existing flow files), but a map
+  // carrying both is ambiguous and rejected.
   let normalized = fieldsRaw;
   if (fieldsRaw !== null && typeof fieldsRaw === "object" && "id" in fieldsRaw) {
     const { id, ...rest } = fieldsRaw as { id: unknown } & Record<string, unknown>;
@@ -1567,9 +1516,8 @@ function parseSelector(
     normalized = { ...rest, identifier: id };
   }
   // Regex text matcher: `text: { matches: '<pattern>' }`. Split off before
-  // schema validation (the schema's `text` is a plain string) and validate
-  // the pattern here, deviceless — same guarantee as the `text` condition's
-  // `matches`. The remaining fields (`id`/`role`) AND-combine as usual.
+  // schema validation (the schema's `text` is a plain string) and validated
+  // here, deviceless. The remaining fields (`id`/`role`) AND-combine as usual.
   if (normalized !== null && typeof normalized === "object") {
     const { text, ...rest } = normalized as { text?: unknown } & Record<string, unknown>;
     if (text !== null && typeof text === "object") {
@@ -1594,9 +1542,9 @@ function parseSelector(
       }
       validatePattern(raw, pattern, `${where}: text`);
       // A regex matcher is itself the selector's required text constraint, so
-      // validate only its remaining fields through the strict shared schema.
-      // Using the unrefined field schema keeps matcher-only selectors valid
-      // while giving id/role exactly the same validation as literal selectors.
+      // validate only the remaining fields. The unrefined field schema keeps
+      // matcher-only selectors valid while giving id/role exactly the same
+      // validation as literal selectors.
       const fields = selectorFieldsSchema.safeParse(rest);
       if (!fields.success) {
         badEntry(raw, `${where}: ${fields.error.issues[0]?.message ?? "invalid selector"}`);
@@ -1634,25 +1582,24 @@ type WaitFields = {
  * condition) into its condition + selector + optional expected text. The
  * condition is the key and its value is the selector (`{ visible: "Home" }`,
  * `{ text: { in, contains } }`). The `text` check takes exactly one of
- * `contains` (substring), `equals` (exact text), or `matches` (JS regex,
- * validated here so a bad pattern fails at parse, not mid-run). `await`
- * additionally accepts an optional `timeout` sibling key (milliseconds); an
- * `assert` carrying one is rejected rather than silently ignored.
+ * `contains`, `equals`, or `matches` (JS regex, validated here so a bad pattern
+ * fails at parse, not mid-run). `await` additionally accepts an optional
+ * `timeout` sibling key (milliseconds); an `assert` carrying one is rejected
+ * rather than silently ignored.
  */
 function parseWaitFields(raw: unknown, kind: "await" | "assert" | "when"): WaitFields {
-  // What the author is allowed to write, which is NOT the same as what this
-  // function parses: a body naming `idle` is routed to parseIdleFields before
-  // we get here, so this list is only ever read by an author whose body named
-  // no legal condition, or more than one — and omitting `idle` from it left the
-  // one condition they may have been reaching for out of the answer. Only
-  // `await` gains it; `assert` and `when:` genuinely have no readiness form.
+  // What the author is allowed to write, which is NOT what this function
+  // parses: a body naming `idle` is routed to parseIdleFields before we get
+  // here, so this list is only ever read by an author whose body named no legal
+  // condition, or more than one — and omitting `idle` left the one condition
+  // they may have been reaching for out of the answer. Only `await` gains it;
+  // `assert` and `when:` have no readiness form.
   const legalKeys = kind === "await" ? [...WAIT_CONDITIONS, IDLE_CONDITION] : WAIT_CONDITIONS;
   if (raw === null || typeof raw !== "object") {
     badEntry({ [kind]: raw }, `${kind} needs a condition (${legalKeys.join(", ")})`);
   }
   const b = raw as Record<string, unknown>;
 
-  // The condition is the key; its value is the selector.
   const present = WAIT_CONDITIONS.filter((c) => c in b);
   if (present.length !== 1) {
     badEntry({ [kind]: b }, `${kind} needs exactly one condition key (${legalKeys.join(", ")})`);
@@ -1671,8 +1618,8 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert" | "when"): WaitF
   }
 
   // `await` takes the condition key plus `timeout`; `assert` the condition key
-  // only (an explicit assert timeout was already rejected above with the
-  // pointed message). Anything else — `timeut`, a stray option — is a typo.
+  // only (an explicit assert timeout was already rejected above with a pointed
+  // message). Anything else — `timeut`, a stray option — is a typo.
   rejectUnknownKeys(
     { [kind]: b },
     b,
@@ -1680,9 +1627,6 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert" | "when"): WaitF
     kind
   );
 
-  // `text` locates an element (`in`) and checks its rendered content against
-  // exactly one of `contains` (substring), `equals` (exact text), or
-  // `matches` (regex).
   if (condition === "text") {
     const t = b.text;
     if (t === null || typeof t !== "object") {
@@ -1709,8 +1653,8 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert" | "when"): WaitF
     }
     if (textMatch === "matches") {
       // Fail a bad pattern here, deviceless, not mid-run. The pattern reaches
-      // the runtime verbatim, so RegExp construction there can never throw on
-      // a flow's behalf.
+      // the runtime verbatim, so RegExp construction there can never throw on a
+      // flow's behalf.
       validatePattern({ [kind]: b }, expected, `${kind} text`);
     }
     return {
@@ -1727,8 +1671,8 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert" | "when"): WaitF
 
 /**
  * The one condition key that takes no selector. Its presence in an
- * `await`/`assert` body routes parsing away from {@link parseWaitFields} — see
- * {@link parseIdleFields}.
+ * `await`/`assert` body routes parsing to {@link parseIdleFields} instead of
+ * {@link parseWaitFields}.
  */
 const IDLE_CONDITION = "idle";
 
@@ -1745,16 +1689,14 @@ export const IDLE_DEFAULT_STABLE_FOR_MS = 250;
 export const IDLE_POLL_MS = 200;
 
 /**
- * How many consecutive intervals must read as still before the screen is
- * called settled. Two, not one, because a single agreeing pair of captures is
- * not evidence of stillness: any animation that reverses — a cross-fade, a
- * pulse, a bounce — has a turning point, and two samples straddling it come
- * back identical while the screen is very much moving. Observed on a 3s
- * white/indigo cross-fade, where a default-shaped step passed on roughly one
- * run in three. A second agreeing interval needs a third sample, which the
- * same phase symmetry cannot supply unless the animation's period happens to
- * match the poll — so the aliasing that survives one comparison does not
- * survive two.
+ * How many consecutive intervals must read as still before the screen is called
+ * settled. Two, not one, because a single agreeing pair of captures is not
+ * evidence of stillness: any animation that reverses — a cross-fade, a pulse, a
+ * bounce — has a turning point, and two samples straddling it come back
+ * identical while the screen is very much moving. Observed on a 3s cross-fade,
+ * where a default-shaped step passed on roughly one run in three. A second
+ * agreeing interval needs a third sample, which the same phase symmetry cannot
+ * supply unless the animation's period happens to match the poll.
  */
 export const IDLE_MIN_STILL_INTERVALS = 2;
 
@@ -1765,44 +1707,38 @@ export const IDLE_MIN_STILL_INTERVALS = 2;
 export const IDLE_SETTLE_SPAN_MS = IDLE_MIN_STILL_INTERVALS * IDLE_POLL_MS;
 
 /**
- * The smallest `timeout:` that can contain a settle holding for `stableFor`. A
- * `timeout:` under this cannot produce a clean settle however still the screen
- * is, so the step would report on a screen it never had the chance to judge.
+ * The smallest `timeout:` that can contain a settle holding for `stableFor`.
+ * Below it no screen, however still, can produce a clean settle, so the step
+ * reports on a screen it never had the chance to judge.
  *
  * The hold is measured ACROSS the polls, not after them: the runner starts the
  * hold clock on the first read that carries content and settles on the first
  * round that has both {@link IDLE_MIN_STILL_INTERVALS} agreeing intervals AND
- * `stableFor` of elapsed hold. The two costs therefore overlap, and what the
- * wait must contain is whichever of them is longer — plus one poll, the budget
- * the closing round needs to be allowed to start (see the runner's
- * MIN_ROUND_BUDGET_MS).
+ * `stableFor` of elapsed hold. The two costs overlap, so the wait must contain
+ * whichever is longer — plus one poll, the budget the closing round needs to be
+ * allowed to start (the runner's MIN_ROUND_BUDGET_MS).
  *
- * Adding them instead over-demanded by up to {@link IDLE_SETTLE_SPAN_MS}, and
- * taught a cost model the runner does not implement: `timeout: 1000,
- * stableFor: 800` was rejected as impossible and settles in ~820ms, and the
- * default hold was rejected at `timeout: 600` while settling in ~411ms. The
- * two agree exactly at `stableFor: 0`, which is where the sum was derived.
+ * Adding them instead over-demanded by up to {@link IDLE_SETTLE_SPAN_MS}:
+ * `timeout: 1000, stableFor: 800` was rejected as impossible and settles in
+ * ~820ms. The two agree exactly at `stableFor: 0`, where the sum was derived.
  */
 export function idleMinimumTimeoutMs(stableFor: number): number {
   return Math.max(IDLE_SETTLE_SPAN_MS, stableFor) + IDLE_POLL_MS;
 }
 
 /**
- * Absolute ceiling on the hold, so an obviously wrong unit (seconds, or a
- * pasted timestamp) is rejected as a number rather than silently becoming a
- * gate no run can pass. The relationship that actually matters is with
- * `timeout`, checked separately.
+ * Absolute ceiling on the hold, so an obviously wrong unit (seconds, a pasted
+ * timestamp) is rejected as a number rather than silently becoming a gate no run
+ * can pass. The relationship with `timeout` is checked separately.
  */
 const IDLE_MAX_STABLE_FOR_MS = 600_000;
 
 /**
  * The `timeout` sibling key an `await` may carry, spelled once for both the
- * selector conditions and `idle`.
- *
- * Non-finite values are rejected alongside non-positive ones: YAML `.inf` (or
- * an overflowing literal like 1e400) parses to Infinity — typeof number and
- * > 0 — which would make the runner's poll deadline unreachable and the await
- * unbounded.
+ * selector conditions and `idle`. Non-finite values are rejected alongside
+ * non-positive ones: YAML `.inf` (or an overflowing literal like 1e400) parses
+ * to Infinity — typeof number and > 0 — which would make the runner's poll
+ * deadline unreachable and the await unbounded.
  */
 function parseAwaitTimeout(entry: unknown, value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
@@ -1825,17 +1761,16 @@ function parseBoundedMs(entry: unknown, value: unknown, where: string, max: numb
 /**
  * Parse an `await`/`assert` body carrying the `idle` condition. Returns the
  * finished step, because unlike the selector conditions it has no selector to
- * hand back as fields.
- *
- * `assert` is rejected outright: waiting is the whole point of the check.
+ * hand back as fields. `assert` is rejected outright: waiting is the whole
+ * point of the check.
  */
 function parseIdleFields(raw: Record<string, unknown>, kind: "await" | "assert"): FlowStep {
   const entry = { [kind]: raw };
 
   if (kind !== "await") {
-    // Name the other condition's home too when the body carries one. Reporting
-    // the mixing error first sent the author to a second round trip: splitting
-    // `assert: { idle: true, visible: X }` as instructed yields
+    // Name the other condition's home too when the body carries one: reporting
+    // the mixing error first sent the author to a second round trip, since
+    // splitting `assert: { idle: true, visible: X }` as instructed yields
     // `assert: { idle: true }`, which has no assert form either.
     const mixed = WAIT_CONDITIONS.filter((c) => c in raw);
     badEntry(
@@ -1851,7 +1786,7 @@ function parseIdleFields(raw: Record<string, unknown>, kind: "await" | "assert")
   rejectUnknownKeys(entry, raw, ["idle", "stableFor", "timeout"], kind);
 
   // `idle: true` only. A falsey value would spell "assert the screen is NOT
-  // settled", which no flow wants and the runner cannot answer.
+  // settled", which the runner cannot answer.
   if (raw.idle !== true) {
     badEntry(entry, "idle takes only `true` (`await: { idle: true }`)");
   }
@@ -1863,17 +1798,16 @@ function parseIdleFields(raw: Record<string, unknown>, kind: "await" | "assert")
   }
 
   // A wait that cannot contain the settle it asks for is a gate that never
-  // passes, however still the screen is — and it does not fail quietly: the
-  // step spends its whole timeout and then reports either that the screen
-  // never stopped moving or that it could not be screenshotted, both of them
-  // claims about an app that did nothing. Which one it picks depends on where
-  // the budget ran out, so the same file yields different verdicts run to run.
-  // Caught here, deviceless.
+  // passes, and it does not fail quietly: the step spends its whole timeout and
+  // then reports either that the screen never stopped moving or that it could
+  // not be screenshotted — both claims about an app that did nothing, and which
+  // one it picks depends on where the budget ran out, so the same file yields
+  // different verdicts run to run. Caught here, deviceless.
   //
-  // Checked against the EFFECTIVE hold, not just a written-out one: the
-  // default is what most steps run with, so leaving it out was the way to get
-  // an unsatisfiable step past the parser (`timeout: 100` was accepted while
-  // the identical `timeout: 100, stableFor: 250` was rejected).
+  // Checked against the EFFECTIVE hold, not just a written-out one: leaving
+  // `stableFor` out was otherwise the way to get an unsatisfiable step past the
+  // parser (`timeout: 100` accepted while `timeout: 100, stableFor: 250` was
+  // rejected).
   const timeoutMs = step.timeout ?? IDLE_DEFAULT_TIMEOUT_MS;
   const stableFor = step.stableFor ?? IDLE_DEFAULT_STABLE_FOR_MS;
   const needed = idleMinimumTimeoutMs(stableFor);
@@ -1904,7 +1838,7 @@ function isIdleCondition(raw: unknown, kind: "await" | "assert"): boolean {
   if (!(IDLE_CONDITION in body)) return false;
   // An `assert` body naming idle is wrong however it is spelled, so let
   // parseIdleFields raise the one error that ends the matter — it folds the
-  // mixing advice in rather than making the author earn it on a second run.
+  // mixing advice in.
   if (kind === "assert") return true;
   const selectorConditions = WAIT_CONDITIONS.filter((c) => c in body);
   if (selectorConditions.length > 0) {
@@ -1988,8 +1922,8 @@ function parseLaunch(raw: unknown): Launch {
   );
 }
 
-// The directive key that names each step kind. Order mirrors fromYamlStep's
-// dispatch; used to reject a step carrying zero, several, or misspelled ones.
+// The directive key that names each step kind, used to reject a step carrying
+// zero, several, or misspelled ones.
 const STEP_DIRECTIVE_KEYS: readonly string[] = [
   "echo",
   "launch",
@@ -2012,14 +1946,13 @@ const STEP_DIRECTIVE_KEYS: readonly string[] = [
  * The directive keys that carry a sibling `steps:` list — the single registry
  * of what a block directive is: {@link blockSteps} reads THIS list rather than
  * restating the kinds, so parse time and run time cannot answer differently.
- * Three constraints keep an entry honest. Two judge the keys already listed:
- * `satisfies` rejects a key that is not a real step kind, and blockSteps'
- * `.steps` read rejects a kind with no usable `steps` - `Extract` catches a
- * missing one, its own `satisfies` one that is not a `FlowStep[]`, so a
- * childless directive listed here is a compile error, not a silent runtime
- * `undefined`. Neither can force a key IN, which is what
- * {@link _everyChildBearingKindIsRegistered} does — without it a child-bearing
- * kind added later is simply absent here, and absent is not an error.
+ *
+ * Two constraints judge the keys already listed: `satisfies` rejects a key that
+ * is not a real step kind, and blockSteps' `.steps` read rejects a kind with no
+ * usable `steps` (`Extract` catches a missing one, its own `satisfies` one that
+ * is not a `FlowStep[]`), so a childless directive listed here is a compile
+ * error rather than a silent runtime `undefined`. Neither can force a key IN,
+ * which is what {@link _everyChildBearingKindIsRegistered} does.
  *
  * At parse time these keys are exempt from the single-key sibling check,
  * because their own parser validates their siblings with pointed messages.
@@ -2029,7 +1962,7 @@ export const BLOCK_DIRECTIVE_KEYS = ["when"] as const satisfies readonly FlowSte
 /** The step kinds {@link BLOCK_DIRECTIVE_KEYS} names. */
 type BlockDirectiveKind = (typeof BLOCK_DIRECTIVE_KEYS)[number];
 
-/** The step union those kinds select - what {@link isBlockStep} narrows to. */
+/** The step union those kinds select — what {@link isBlockStep} narrows to. */
 export type BlockStep = Extract<FlowStep, { kind: BlockDirectiveKind }>;
 
 /**
@@ -2037,7 +1970,7 @@ export type BlockStep = Extract<FlowStep, { kind: BlockDirectiveKind }>;
  * optional, `readonly`, any element type. Distributes over the union and asks
  * `keyof` rather than matching structurally, because the obvious
  * `Extract<FlowStep, { steps: FlowStep[] }>` misses a `steps?` or a
- * `readonly FlowStep[]` - anything not both required and assignable to
+ * `readonly FlowStep[]` — anything not both required and assignable to
  * `FlowStep[]` reads as a childless leaf.
  */
 type ChildBearingKind<S extends FlowStep = FlowStep> = S extends unknown
@@ -2051,12 +1984,11 @@ type UnregisteredBlockKind = Exclude<ChildBearingKind, BlockDirectiveKind>;
 
 /**
  * Forces a child-bearing kind INTO the registry — the direction the two
- * constraints on {@link BLOCK_DIRECTIVE_KEYS} cannot cover, since both only
- * judge kinds already listed. An unlisted one parses like any other step and
- * then reads as `undefined` from {@link blockSteps}, so every reader listed
- * there silently misses its children. {@link ChildBearingKind} is what makes
- * this reach every spelling of `steps`, not just the one a structural match
- * names. Spelled as a conditional rather than a bare `never` so the compile
+ * constraints on {@link BLOCK_DIRECTIVE_KEYS} cannot cover. An unlisted one
+ * parses like any other step and then reads as `undefined` from
+ * {@link blockSteps}, so every reader listed there silently misses its
+ * children. {@link ChildBearingKind} is what makes this reach every spelling of
+ * `steps`. Spelled as a conditional rather than a bare `never` so the compile
  * error names the missing kind.
  */
 const _everyChildBearingKindIsRegistered: [UnregisteredBlockKind] extends [never]
@@ -2064,22 +1996,21 @@ const _everyChildBearingKindIsRegistered: [UnregisteredBlockKind] extends [never
   : UnregisteredBlockKind = true;
 
 /**
- * Is this directive key a block directive? The parser and runner's only
- * CLASSIFYING read of {@link BLOCK_DIRECTIVE_KEYS} ({@link assertBlockDepth}
- * reads it to NAME the keys in its message); the widening is the lookup
- * itself — the const tuple's own `includes` accepts only keys already known to
- * be block kinds, which is the question being asked.
+ * The parser and runner's only CLASSIFYING read of
+ * {@link BLOCK_DIRECTIVE_KEYS} ({@link assertBlockDepth} reads it to NAME the
+ * keys in its message). The widening is the lookup itself — the const tuple's
+ * own `includes` accepts only keys already known to be block kinds, which is
+ * the question being asked.
  */
 function isBlockDirectiveKey(key: string): key is BlockDirectiveKind {
   return (BLOCK_DIRECTIVE_KEYS as readonly string[]).includes(key);
 }
 
 /**
- * Parse `times` on a tap body: an integer tap count dispatched as ONE
- * multi-tap gesture (2 = double-tap; the OS may recognize it as such — N
- * *independent* taps are N tap steps). `times: 1` is the default and
- * normalizes to absent, keeping parse/serialize exact inverses. The cap
- * matches the gesture-tap tool's clickCount bound.
+ * Parse `times` on a tap body: an integer tap count dispatched as ONE multi-tap
+ * gesture (2 = double-tap; N *independent* taps are N tap steps). `times: 1` is
+ * the default and normalizes to absent, keeping parse/serialize exact inverses.
+ * The cap matches the gesture-tap tool's clickCount bound.
  */
 function parseTapTimes(raw: unknown, entry: unknown): number | undefined {
   if (raw === undefined) return undefined;
@@ -2091,10 +2022,9 @@ function parseTapTimes(raw: unknown, entry: unknown): number | undefined {
 
 /**
  * Does this map carry any selector key (the `any` marker and the relational
- * scopes included)? Used to tell a selector map apart from the point/option
- * forms in the gesture-body checks below, so a scoped selector mixed with
- * coordinates or options gets the same pointed rejection as any other selector
- * field.
+ * scopes included)? Tells a selector map apart from the point/option forms in
+ * the gesture-body checks below, so a scoped selector mixed with coordinates or
+ * options gets the same pointed rejection as any other selector field.
  */
 function hasSelectorField(obj: Record<string, unknown>): boolean {
   return (
@@ -2110,11 +2040,10 @@ function hasSelectorField(obj: Record<string, unknown>): boolean {
 /**
  * Parse a gesture target (`tap`/`long-press` body or its `on:` value): a
  * selector (bare string = loose, map = strict) or a raw normalized point
- * `{ x, y }`. A map mixing selector fields with x/y is ambiguous (which
- * wins?) — and zod would silently STRIP the coordinates from a selector
- * map — so it is rejected loudly. Only the point-acting directives call
- * this; the observation directives take `parseSelector` directly, since a
- * point can be acted on but not observed.
+ * `{ x, y }`. A map mixing selector fields with x/y is ambiguous — and zod
+ * would silently STRIP the coordinates from a selector map — so it is rejected
+ * loudly. Only the point-acting directives call this; the observing directives
+ * take `parseSelector` directly.
  */
 function parseTarget(
   raw: unknown,
@@ -2148,10 +2077,10 @@ function parseTarget(
 }
 
 /**
- * Parse a `tap` body: a bare target (selector or raw point `{ x, y }`) or
- * the options form `{ on: <target>, times? }`, which nests the target under
- * `on` so an option key can never be mistaken for — or silently stripped
- * from — a target field.
+ * Parse a `tap` body: a bare target (selector or raw point `{ x, y }`) or the
+ * options form `{ on: <target>, times? }`, which nests the target under `on` so
+ * an option key can never be mistaken for — or silently stripped from — a
+ * target field.
  */
 function parseTap(body: unknown, entry: unknown): FlowStep {
   const obj = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
@@ -2186,8 +2115,8 @@ function parseTap(body: unknown, entry: unknown): FlowStep {
 
 /**
  * Parse a `long-press` body: a bare target (selector or raw point `{ x, y }`)
- * or the options form `{ on: <target>, duration?: <ms> }` — the same
- * nested-`on` convention as tap's options form.
+ * or the options form `{ on: <target>, duration?: <ms> }` — the same nested-`on`
+ * convention as tap's options form.
  */
 function parseLongPress(body: unknown, entry: unknown): FlowStep {
   const obj = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
@@ -2230,11 +2159,10 @@ function parseLongPress(body: unknown, entry: unknown): FlowStep {
 }
 
 /**
- * Parse a `pinch` body — options-map only (`{ on?, scale }`): unlike tap, a
- * bare `pinch: "Map"` is ambiguous (in or out?), so there is no bare form.
- * `scale` is validity-checked only (finite, > 0, ≠ 1 — a no-op scale is
- * almost certainly a mistake); there is deliberately no magnitude cap — an
- * extreme scale just decomposes into more chained gestures at run time.
+ * Parse a `pinch` body — options-map only (`{ on?, scale }`): unlike tap, a bare
+ * `pinch: "Map"` is ambiguous (in or out?), so there is no bare form. `scale` is
+ * validity-checked only (finite, > 0, ≠ 1); there is deliberately no magnitude
+ * cap — an extreme scale just decomposes into more chained gestures at run time.
  */
 function parsePinch(body: unknown, entry: unknown): FlowStep {
   if (body === null || typeof body !== "object") {
@@ -2265,12 +2193,12 @@ function parsePinch(body: unknown, entry: unknown): FlowStep {
 }
 
 /**
- * Parse a `rotate` body — options-map only (`{ on?, by }`): like pinch, there
- * is no bare form (`rotate: "Map"` names no angle). `by` is degrees,
- * + clockwise / − counter-clockwise, finite, ≠ 0, and within
- * ±{@link MAX_ROTATE_BY_DEG} — the largest sweep one continuous gesture
- * delivers at the fixed run-time pace. This is the two-finger gesture — not
- * the `rotate` tool, which changes device orientation.
+ * Parse a `rotate` body — options-map only (`{ on?, by }`): like pinch, there is
+ * no bare form (`rotate: "Map"` names no angle). `by` is degrees, + clockwise /
+ * − counter-clockwise, finite, ≠ 0, and within ±{@link MAX_ROTATE_BY_DEG} — the
+ * largest sweep one continuous gesture delivers at the fixed run-time pace.
+ * This is the two-finger gesture, not the `rotate` tool that changes device
+ * orientation.
  */
 function parseRotate(body: unknown, entry: unknown): FlowStep {
   if (body === null || typeof body !== "object") {
@@ -2305,10 +2233,9 @@ function parseRotate(body: unknown, entry: unknown): FlowStep {
 
 /**
  * Parse a `when:` guard — exactly one condition key: a UI condition
- * (exists|visible|hidden|text, the await/assert shapes) or `platform` (a
- * static per-run test). No `timeout` sibling: the guard is always evaluated
- * with the short assert grace, so a skipped block stays cheap on every clean
- * run.
+ * (exists|visible|hidden|text, the await/assert shapes) or `platform` (a static
+ * per-run test). No `timeout` sibling: the guard is always evaluated with the
+ * short assert grace, so a skipped block stays cheap on every clean run.
  */
 function parseWhenCondition(raw: unknown): WhenCondition {
   const conditionKeys = `${WAIT_CONDITIONS.join(", ")}, platform`;
@@ -2318,8 +2245,7 @@ function parseWhenCondition(raw: unknown): WhenCondition {
   const b = raw as Record<string, unknown>;
   // A guard asks what is on the screen NOW, so "has it stopped moving yet" is
   // not a question it can ask. Say that outright, the way the assert form does,
-  // rather than listing the keys the author could have written and leaving them
-  // to infer that the one they did write is not among them.
+  // rather than listing the keys the author could have written instead.
   if (IDLE_CONDITION in b) {
     badEntry(
       { when: raw },
@@ -2354,14 +2280,12 @@ function parseWhenCondition(raw: unknown): WhenCondition {
   // `{{secret:NAME}}` resolves only inside the text-entry tools (a `type:`
   // step), never in condition evaluation, so a guard carrying one tests for
   // literal placeholder text that is never on screen: exists/visible/text
-  // guards are permanently false (the block silently skips every run) and a
-  // `hidden` guard is vacuously true (the block always runs). In an assert
-  // that mistake fails loudly on the first run; here the guard silently
-  // degenerates into a constant — the same silently-wrong class the per-step
-  // `optional:` rejection exists for, so it fails at parse too.
+  // guards are permanently false and a `hidden` guard vacuously true. In an
+  // assert that mistake fails loudly on the first run; here the guard silently
+  // degenerates into a constant, so it fails at parse instead.
   const { selector, expectedText } = cond;
-  // Walk the whole relation tree: a placeholder in a `within`/`after`/`next`
-  // scope degrades the guard exactly as one in the target's own fields would.
+  // Walk the whole relation tree: a placeholder in a scope degrades the guard
+  // exactly as one in the target's own fields would.
   const guardStrings: (string | undefined)[] = [expectedText];
   for (const s of selectorTree(selector)) {
     guardStrings.push(s.text, s.textMatches, s.identifier, s.role);
@@ -2379,27 +2303,23 @@ function parseWhenCondition(raw: unknown): WhenCondition {
 
 /**
  * Nesting cap for block directives — the parse-side analog of flow-run's
- * MAX_RUN_DEPTH. A block directive is the only kind of step whose parse
- * recurses into child steps, and the yaml library happily materializes a cyclic
- * alias (`steps: &s … steps: *s`) as a cyclic object; without a cap that cycle
- * escapes parseFlow as a raw RangeError instead of a structured parse error.
+ * MAX_RUN_DEPTH. A block directive is the only kind of step whose parse recurses
+ * into child steps, and the yaml library happily materializes a cyclic alias
+ * (`steps: &s … steps: *s`) as a cyclic object; without a cap that cycle escapes
+ * parseFlow as a raw RangeError instead of a structured parse error.
  *
- * ONE counter shared by every block directive, deliberately: a per-directive
- * counter would let an alternating chain evade all of them and reopen the hole.
+ * ONE counter shared by every block directive: a per-directive counter would let
+ * an alternating chain evade all of them.
  */
 const MAX_BLOCK_DEPTH = 20;
 
 /**
  * Guard a block directive's recursion depth. Called FIRST in a block's parse —
- * before its own key/shape checks — so an entry that has REACHED the cap
- * reports the depth rather than its second defect: nest `when` to the cap and
- * give the entry AT it an `else:`, a third sibling key, or an unknown condition
- * key, and it reports the depth, not that check's message. (A cyclic alias is
- * NOT that case — the same object repeats at every level, so a shape defect in
- * it fires at depth 0 and a well-formed cycle reaches the cap with or without
- * this call.) That early call buys the error PRECEDENCE only, not the cap
- * itself: {@link parseBlockSteps} asserts again before it recurses, so
- * forgetting the early call costs a directive the precedence and nothing more.
+ * before its own key/shape checks — so an entry that has REACHED the cap reports
+ * the depth rather than its second defect. That early call buys the error
+ * PRECEDENCE only, not the cap itself: {@link parseBlockSteps} asserts again
+ * before it recurses, so forgetting the early call costs a directive the
+ * precedence and nothing more.
  */
 function assertBlockDepth(raw: unknown, depth: number): void {
   if (depth >= MAX_BLOCK_DEPTH) {
@@ -2415,15 +2335,13 @@ function assertBlockDepth(raw: unknown, depth: number): void {
  * Parse a block directive's sibling `steps:` list: non-empty, every entry an
  * object, each parsed one level deeper so the shared depth cap sees the whole
  * chain. `emptyDetail` is the directive's own message for an absent or empty
- * list — the one part worth phrasing per directive, since it is where an author
- * lands when they wrote the guard but not the body.
+ * list — where an author lands when they wrote the guard but not the body.
  *
  * Asserts the depth cap here too, on the one path every block directive must go
  * through to recurse, so no directive can opt out of the cap by forgetting the
  * early {@link assertBlockDepth} call. `depth` is unchanged between the two
- * calls, so for a directive that made the early one this is a no-op. While
- * every registered directive makes that call, no input can make THIS assert the
- * one that fires, so nothing pins it until one skips the early call.
+ * calls, so for a directive that made the early one this is a no-op — and no
+ * input can make THIS assert the one that fires until a directive skips it.
  */
 function parseBlockSteps(
   raw: Record<string, unknown>,
@@ -2441,8 +2359,8 @@ function parseBlockSteps(
 /**
  * Parse a `when` step: `{ when: <condition>, steps: [<step>, …] }` — a guarded
  * block whose steps run only when the condition holds. Deliberately no `else`:
- * a when block exists to restore determinism (dismiss the interstitial, get
- * back on the known path), so paths may only reconverge, never diverge.
+ * a when block exists to restore determinism (dismiss the interstitial, get back
+ * on the known path), so paths may only reconverge, never diverge.
  */
 function parseWhenStep(raw: Record<string, unknown>, depth: number): FlowStep {
   assertBlockDepth(raw, depth);
@@ -2463,10 +2381,9 @@ function parseWhenStep(raw: Record<string, unknown>, depth: number): FlowStep {
 /**
  * The report/display name of a `run:` target — its YAML basename stem. Parse
  * guarantees the stem is a safe flow name, so this is also the fragment's
- * attribution in step reports (mirroring how the CLI derives the top-level
- * flow name from the file it runs) — except when the stem collides with the
- * root flow's name, where the runner substitutes the as-written path minus
- * the extension, or `./<stem>` for a bare spelling (see runDisplayName in
+ * attribution in step reports — except when the stem collides with the root
+ * flow's name, where the runner substitutes the as-written path minus the
+ * extension, or `./<stem>` for a bare spelling (see runDisplayName in
  * flow-run.ts).
  */
 export function runTargetName(target: string): string {
@@ -2474,29 +2391,28 @@ export function runTargetName(target: string): string {
 }
 
 /**
- * Shape-check a `run:` value: it must be a relative, forward-slashed path whose
- * final segment is a flow name, with the `.yaml` extension optional (see
+ * Shape-check a `run:` value: a relative, forward-slashed path whose final
+ * segment is a flow name, with the `.yaml` extension optional (see
  * {@link completeRunExtension}). `..` is deliberately legal — shared fragments
  * may live outside the flows dir, and a fragment reaching sideways to
- * `../shared/login.yaml` is a documented layout. Only the SHAPE is checked
- * here; nothing about WHERE the path lands. At run time execRunStep joins it
- * onto the containing flow file's own directory and resolves the result with
- * kernel semantics (see canonicalFlowPath in flow-run.ts) — deliberately not a
- * lexical collapse, since a `..` after a symlinked component names the parent
- * of the link's target, not of the spelling. There is no path fence at that
- * point: a target runs if the tool server can read it, and fails with that
- * file's own ENOENT if it cannot.
+ * `../shared/login.yaml` is a documented layout. Only the SHAPE is checked here;
+ * nothing about WHERE the path lands. At run time execRunStep joins it onto the
+ * containing flow file's own directory and resolves the result with kernel
+ * semantics (see canonicalFlowPath in flow-run.ts) — deliberately not a lexical
+ * collapse, since a `..` after a symlinked component names the parent of the
+ * link's target, not of the spelling. There is no path fence there: a target
+ * runs if the tool server can read it, and fails with that file's own ENOENT if
+ * it cannot.
  */
 function parseRunTarget(raw: unknown, value: unknown): string {
   // The body arrives uncoerced because YAML renders a valueless `run:` (and
   // `run: ~` / `run: null`) as null, and bare scalars as booleans/numbers.
   // String()-ing those before the checks below would hand completeRunExtension
-  // the plausible names "null"/"true"/"123" — and since a bare name is now
-  // ACCEPTED rather than merely advised against, a directive with no target at
-  // all would silently become a live reference to a `null.yaml` that was never
-  // meant to exist (and, on a filesystem where one happens to sit beside the
-  // flow, would run it). The rejection is what keeps the completion below
-  // applying only to targets an author actually wrote.
+  // the plausible names "null"/"true"/"123" — and since a bare name is
+  // ACCEPTED, a directive with no target at all would silently become a live
+  // reference to a `null.yaml`, and would run one that happened to sit beside
+  // the flow. The rejection keeps the completion below applying only to targets
+  // an author actually wrote.
   if (typeof value !== "string") {
     badEntry(
       raw,
@@ -2520,10 +2436,10 @@ function parseRunTarget(raw: unknown, value: unknown): string {
     if (target.toLowerCase().endsWith(".yaml")) {
       badEntry(raw, "a `run` path must use the lowercase .yaml extension");
     }
-    // Reached only when completion declined the value, so the bare-name form
-    // is quoted too: "must end in .yaml" alone would contradict the documented
-    // rule for an author who deliberately left the extension off and tripped
-    // the charset (`run: my flow`) or a trailing slash (`run: shared/`).
+    // Reached only when completion declined the value, so the bare-name form is
+    // quoted too: "must end in .yaml" alone would contradict the documented rule
+    // for an author who deliberately left the extension off and tripped the
+    // charset (`run: my flow`) or a trailing slash (`run: shared/`).
     badEntry(raw, "a `run` path must end in .yaml, or name a sibling flow (`run: login`)");
   }
   if (!FLOW_FILE_NAME_PATTERN.test(path.posix.basename(target))) {
@@ -2537,27 +2453,25 @@ function parseRunTarget(raw: unknown, value: unknown): string {
 
 /**
  * Complete a `run:` target's optional `.yaml` extension: `run: login` means
- * `login.yaml` beside the containing flow file, exactly as the spelled-out
- * form does. This is the compatibility path for flows written when a `run:`
- * target was a saved-flow NAME looked up in `.argent/flows` — a bare name
- * resolves to the same file it always did, since those flows sit in that one
- * directory and a bare target anchors to their own.
+ * `login.yaml` beside the containing flow file, exactly as the spelled-out form
+ * does. This is the compatibility path for flows written when a `run:` target
+ * was a saved-flow NAME looked up in `.argent/flows` — a bare name resolves to
+ * the same file it always did, since those flows sit in that one directory.
  *
- * Completed HERE rather than at resolution time so exactly one spelling
- * reaches everything downstream: canonicalFlowPath's read, the fragment's
- * on-disk casing check, the report's `target`, and runDisplayName — which
- * slices a fixed `".yaml".length` off the target and would truncate a real
- * path segment given a bare one (see flow-run.ts). Re-serializing a parsed
- * flow therefore writes the completed spelling back, which is the intended
- * one-way migration.
+ * Completed HERE rather than at resolution time so exactly one spelling reaches
+ * everything downstream: canonicalFlowPath's read, the fragment's on-disk casing
+ * check, the report's `target`, and runDisplayName — which slices a fixed
+ * `".yaml".length` off the target and would truncate a real path segment given a
+ * bare one (see flow-run.ts). Re-serializing a parsed flow therefore writes the
+ * completed spelling back, which is the intended one-way migration.
  *
  * The test is the CANDIDATE's basename, not the supplied value's: basename()
  * strips a trailing slash, so testing `${basename(value)}.yaml` would complete
- * `shared/` to the unopenable `shared/.yaml`. Anything else the candidate
- * cannot name — a wrong extension (`login.yml`), a mis-cased one
- * (`Login.YAML`), an empty target — leaves the value untouched for the
- * caller's extension diagnostics, which name the real problem better than a
- * silent completion to `login.yml.yaml` ever could.
+ * `shared/` to the unopenable `shared/.yaml`. Anything else the candidate cannot
+ * name — a wrong extension (`login.yml`), a mis-cased one (`Login.YAML`), an
+ * empty target — leaves the value untouched for the caller's extension
+ * diagnostics, which name the real problem better than a silent completion to
+ * `login.yml.yaml` could.
  */
 function completeRunExtension(value: string): string {
   if (value.endsWith(".yaml")) return value;
@@ -2567,12 +2481,10 @@ function completeRunExtension(value: string): string {
 
 function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
   const entry = raw as Record<string, unknown>;
-  // There is deliberately no per-step `optional:` — it would have to be
-  // re-plumbed into every action directive (and each future gesture
-  // directive), when a `when:` block already expresses it once for all of
-  // them. Rejected, not ignored: Maestro habits will produce it, and a
-  // silently-dropped `optional: true` leaves a step the author believes
-  // can't fail hard-stopping the flow.
+  // There is deliberately no per-step `optional:` — a `when:` block already
+  // expresses it once for every action directive. Rejected, not ignored:
+  // Maestro habits will produce it, and a silently-dropped `optional: true`
+  // leaves a step the author believes can't fail hard-stopping the flow.
   if ("optional" in raw) {
     badEntry(
       raw,
@@ -2581,11 +2493,10 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
   }
   const kinds = STEP_DIRECTIVE_KEYS.filter((k) => k in entry);
   if (kinds.length === 0) {
-    // `idle` is a condition, not a step kind, and it is the one near-miss the
-    // docs actively produce: every other condition is written with a selector
-    // beside it, so `await:` comes along for free, while this one reads like a
-    // directive of its own. Spell the answer rather than reporting that a step
-    // kind nobody wrote is unrecognized.
+    // `idle` is a condition, not a step kind, and the one near-miss the docs
+    // actively produce: every other condition is written with a selector beside
+    // it, so `await:` comes along for free, while this one reads like a
+    // directive of its own.
     if (IDLE_CONDITION in entry) {
       badEntry(raw, `idle is a condition, not a step kind — write it as \`await: { idle: true }\``);
     }
@@ -2601,12 +2512,11 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
     );
   }
   // Only a `tool` step carries sibling keys (`args`, `delayMs`); every other
-  // directive step is a single-key mapping — its options live INSIDE the
-  // value, so a sibling key is a mis-nested or misspelled option. A block
-  // directive also carries siblings (`steps`, and whatever it rejects beside
-  // it), but its own parser validates them with pointed messages - a promise
-  // flow-utils.test.ts pins per registry entry - so the generic check stays
-  // out of its way.
+  // directive step is a single-key mapping — its options live INSIDE the value,
+  // so a sibling key is a mis-nested or misspelled option. A block directive
+  // also carries siblings, but its own parser validates them with pointed
+  // messages (a promise flow-utils.test.ts pins per registry entry), so the
+  // generic check stays out of its way.
   const kind = kinds[0]!;
   if (!isBlockDirectiveKey(kind)) {
     const siblings = kind === "tool" ? ["tool", "args", "delayMs"] : [kind];
@@ -2655,8 +2565,7 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
 
   // `await:` / `assert:` carry two families of condition: the selector ones
   // (visible/hidden/exists/text, matched against the UI tree) and `idle`, which
-  // takes no selector because stillness is a property of the whole screen. The
-  // body's key decides which.
+  // takes no selector. The body's key decides which.
   if ("await" in raw) {
     const body = (raw as { await: unknown }).await;
     if (isIdleCondition(body, "await")) {
@@ -2710,10 +2619,8 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
     }
     // Name the missing `target` rather than letting the selector schema report
     // "expected object, received undefined" about a key the author never wrote.
-    // Newly worth spelling out: `within` is now a SELECTOR key too, so
-    // `scroll-to: { within: … }` reads like a scoped selector and is instead an
-    // options map with no target — and the sibling scopes don't belong here at
-    // all (they scope the target, which carries its own).
+    // `within` is a SELECTOR key too, so `scroll-to: { within: … }` reads like a
+    // scoped selector while being an options map with no target.
     if (b.target === undefined) {
       badEntry(
         raw,
@@ -2754,8 +2661,8 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
     if (!b || typeof b !== "object" || typeof b.name !== "string" || !b.name) {
       badEntry(raw, "snapshot needs a name (bare string or { name })");
     }
-    // The name becomes a baseline filename, so it must be path-safe (no
-    // separators or "..") — same constraint as a flow name.
+    // The name becomes a baseline filename, so it must be path-safe — the same
+    // constraint as a flow name.
     if (!FLOW_NAME_PATTERN.test(b.name)) {
       badEntry(
         raw,
@@ -2765,8 +2672,8 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
     const step: FlowStep = { kind: "snapshot", name: b.name };
     if (b.maxMismatch !== undefined) {
       // The runner compares `mismatchPercentage <= maxMismatch` — a NaN here
-      // (e.g. from "5%") would make every comparison false, failing the
-      // snapshot even on byte-identical frames.
+      // (e.g. from "5%") would make every comparison false, failing the snapshot
+      // even on byte-identical frames.
       const m = Number(b.maxMismatch);
       if (!Number.isFinite(m) || m < 0 || m > 100) {
         badEntry(
@@ -2777,8 +2684,8 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
       step.maxMismatch = m;
     }
     // `cropOn` narrows the comparison to one element's region. Selector-only —
-    // a point has no extent to crop to — so it takes the standard selector slot
-    // (bare-string loose / map strict), not the tap/long-press target form.
+    // a point has no extent to crop to — so it takes the standard selector slot,
+    // not the tap/long-press target form.
     if (b.cropOn !== undefined) {
       step.cropOn = parseSelector(b.cropOn, "snapshot.cropOn");
     }
@@ -2795,8 +2702,6 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
   return badEntry(raw, "unrecognized step kind");
 }
 
-// ── Serialisation ────────────────────────────────────────────────────
-
 /** Serialize a full flow file to YAML, omitting empty/defaulted fields. */
 export function serializeFlow(flow: FlowFile): string {
   const doc: YamlFlowFile = { steps: flow.steps.map(toYamlStep) };
@@ -2804,11 +2709,11 @@ export function serializeFlow(flow: FlowFile): string {
   // blockQuote: false — a block scalar is not round-trip-safe for our free-text
   // fields: whitespace-only lines inside a multi-line value are silently
   // stripped on re-parse (" \n" comes back as "\n"), and a block scalar at the
-  // document tail exposes its raw last line to parseFlow's content.trim(). So
-  // parseFlow(serializeFlow(x)) was not the identity. Disabling blockQuote
-  // emits multi-line values as double-quoted scalars (escape-exact both ways);
-  // single-line values still serialize plain, and legacy files that contain
-  // block scalars still parse.
+  // document tail exposes its raw last line to parseFlow's content.trim(), so
+  // parseFlow(serializeFlow(x)) was not the identity. Disabling it emits
+  // multi-line values as double-quoted scalars (escape-exact both ways);
+  // single-line values still serialize plain, and legacy files containing block
+  // scalars still parse.
   return yamlStringify(doc, { blockQuote: false });
 }
 
@@ -2866,8 +2771,8 @@ export function parseFlow(content: string): FlowFile {
     });
   }
 
-  // Same strictness as step bodies: the file has exactly two top-level keys,
-  // so a misspelled `executionPrerequisite` must not silently become "".
+  // Same strictness as step bodies: the file has exactly two top-level keys, so
+  // a misspelled `executionPrerequisite` must not silently become "".
   const topKeys: readonly string[] = ["executionPrerequisite", "steps"];
   const unknownTop = Object.keys(parsed).filter((k) => !topKeys.includes(k));
   if (unknownTop.length > 0) {
@@ -2896,8 +2801,6 @@ export function parseFlow(content: string): FlowFile {
   return flow;
 }
 
-// ── File helpers ─────────────────────────────────────────────────────
-
 /**
  * Suffix counter for {@link writeFlowFile}'s scratch file. Paired with the pid,
  * this keeps two concurrent writers off each other's temp file: the counter
@@ -2905,9 +2808,7 @@ export function parseFlow(content: string): FlowFile {
  * from a SECOND tool-server — a different install bundle can record the same
  * `(project_root, name)` and compute the same scratch path (see the
  * cross-install note on {@link recordings}). The CLI is not one of the writers:
- * it writes the destination flow file directly and mints no scratch file, and
- * host and client persist modes are mutually exclusive per call, so no CLI is
- * writing this directory while the tool-server is.
+ * it writes the destination flow file directly and mints no scratch file.
  */
 let flowWriteSeq = 0;
 
@@ -2926,17 +2827,14 @@ function writeFailureHint(
 ): string {
   // The directory the swap actually uses — `dirname(realpath(filePath))`, not
   // `dirname(filePath)`. For a flow file that is a symlink into a shared vault
-  // those are different directories, and only the first one can be the cause:
-  // naming the second sent the reader to a `.argent/flows` that is already
-  // writable while the vault, the only unwritable thing in the picture, went
-  // unmentioned. Say so when they differ, since "your flows dir is fine, the
-  // link target is not" is the whole diagnosis there.
+  // those differ, and only the first can be the cause: naming the second sent
+  // the reader to a `.argent/flows` that is already writable while the vault,
+  // the only unwritable thing in the picture, went unmentioned.
   //
-  // Compared against the RESOLVED flows dir, not the spelled one. Every
+  // Compared against the RESOLVED flows dir, not the spelled one: every
   // symlinked ANCESTOR moves the target too — which on macOS is every `/tmp`
-  // and `/var/folders` path — so comparing against the spelling accused a flow
-  // file that is a perfectly ordinary regular file of being a symlink, and
-  // contrasted two names for one directory.
+  // and `/var/folders` path — so comparing against the spelling accused an
+  // ordinary regular file of being a symlink.
   const dir = path.dirname(target);
   const via =
     dir === resolvedDir
@@ -2965,8 +2863,7 @@ function writeFailureHint(
 /**
  * The original error with the internal scratch path rewritten to the flow file,
  * so the cause chain `formatErrorForAgent` renders never names a temp file that
- * was already deleted. Everything else about the errno — code, syscall, the
- * kernel's own wording — is kept.
+ * was already deleted. Everything else about the errno is kept.
  */
 function scrubTempPath(err: unknown, tmpPath: string, filePath: string): Error {
   if (!(err instanceof Error)) return new Error(String(err));
@@ -2977,12 +2874,11 @@ function scrubTempPath(err: unknown, tmpPath: string, filePath: string): Error {
 }
 
 /**
- * A flow file's REAL path. A saved flow may be a symlink into a shared vault —
- * the runner canonicalizes before reading, and `run:` composition anchors on
- * the real file — and rename(2) replaces the path it is handed, so renaming
- * onto the link's own spelling would swap the symlink for a regular file and
- * strand the vault copy with the pre-recording content. A plain write follows
- * the link; resolving first keeps that behavior while keeping the swap atomic.
+ * A flow file's REAL path. A saved flow may be a symlink into a shared vault,
+ * and rename(2) replaces the path it is handed, so renaming onto the link's own
+ * spelling would swap the symlink for a regular file and strand the vault copy
+ * with the pre-recording content. A plain write follows the link; resolving
+ * first keeps that behavior while keeping the swap atomic.
  *
  * The directory is resolved separately so that a flow file which does not exist
  * yet (the first write of a recording, which has no realpath of its own) still
@@ -2992,16 +2888,16 @@ function scrubTempPath(err: unknown, tmpPath: string, filePath: string): Error {
  *
  * A DANGLING link is the case `realpath` cannot express — it fails on the whole
  * path rather than answering with the target — and that failure would put the
- * link's own spelling back in front of `rename`, i.e. exactly the swap this
- * exists to prevent. {@link followDanglingLink} resolves it by hand.
+ * link's own spelling back in front of `rename`. {@link followDanglingLink}
+ * resolves it by hand.
  *
  * Shared with {@link resolveFlowKey}, so the identity a recording is keyed by
  * and the file its steps land in can never disagree.
  *
  * `dir` — the flows directory as the filesystem sees it — is returned alongside,
  * because it is the only thing a caller can compare `target`'s directory against
- * to tell "the flow FILE is a symlink" from "some ancestor of it is". Comparing
- * against the spelled `path.dirname(filePath)` cannot: on macOS every `/tmp` and
+ * to tell "the flow FILE is a symlink" from "some ancestor of it is". The
+ * spelled `path.dirname(filePath)` cannot: on macOS every `/tmp` and
  * `/var/folders` path has a symlinked ancestor.
  */
 async function canonicalFlowTarget(filePath: string): Promise<{ dir: string; target: string }> {
@@ -3030,9 +2926,8 @@ const MAX_DANGLING_LINK_HOPS = 32;
  * given, so the first write of a recording would swap the symlink for a regular
  * file. That is the shared-vault setup's normal starting state: the link is
  * created before the first recording, or its target is removed by a branch
- * switch or a `git clean`. The vault copy is then never created, the project is
- * permanently detached from the vault, and any sibling project linked to the
- * same target is left dangling — with the tool reporting success.
+ * switch or a `git clean`. The vault copy would then never be created and the
+ * project be permanently detached from it, with the tool reporting success.
  *
  * So resolve the link by hand, one hop at a time, canonicalizing each target's
  * DIRECTORY the way {@link canonicalFlowPath} does so the result agrees with
@@ -3046,8 +2941,8 @@ async function followDanglingLink(linkPath: string): Promise<string> {
     const target = await fs.readlink(current).catch(() => null);
     if (target === null) return current;
     const resolved = path.resolve(path.dirname(current), target);
-    // The rest of the chain may well exist — only the last hop has to dangle
-    // for `realpath` to have refused the whole path.
+    // The rest of the chain may well exist — only the last hop has to dangle for
+    // `realpath` to have refused the whole path.
     const real = await fs.realpath(resolved).catch(() => null);
     if (real !== null) return real;
     const targetDir = await fs.realpath(path.dirname(resolved)).catch(() => path.dirname(resolved));
@@ -3072,42 +2967,38 @@ async function isWritable(filePath: string): Promise<boolean> {
  * `flow-read-prerequisite`, `flow-add-step`'s sibling-fragment check — and the
  * `argent` CLI reads these files from another process entirely, where an
  * in-process lock cannot reach. A plain `fs.writeFile` opens with O_TRUNC, so
- * such a reader could land in the window between the truncate and the write and
- * parse a truncated file, or an empty one — and `parseFlow("")` yields
- * `{ steps: [] }` with no error, which replays as a top-level PASS over zero
- * steps.
+ * such a reader could land between the truncate and the write and parse a
+ * truncated or empty file — and `parseFlow("")` yields `{ steps: [] }` with no
+ * error, which replays as a top-level PASS over zero steps.
  *
- * Writing to a temp file beside the target and renaming makes the swap atomic:
- * a reader sees either the whole previous file or the whole new one. Beside the
- * TARGET, note — `canonicalFlowPath`'s result — which for a symlinked flow is
- * the vault the link points into, not `path.dirname(filePath)`; rename(2) is
- * atomic only within one filesystem, and that is the pairing that guarantees it.
+ * Writing to a temp file beside the target and renaming makes the swap atomic.
+ * Beside the TARGET, note — `canonicalFlowPath`'s result, which for a symlinked
+ * flow is the vault the link points into, not `path.dirname(filePath)`;
+ * rename(2) is atomic only within one filesystem, and that pairing is what
+ * guarantees it.
  *
  * The temp name is dotted and `.tmp`-suffixed so a half-written scratch file can
  * never be mistaken for a flow: `getFlowPath` only ever produces `<name>.yaml`,
  * and every site that enumerates a flows directory — `argent flow list`,
  * {@link classifyOnDiskSpelling}, the CLI's recursive suite walk — filters on
- * `.yaml` plus `FLOW_NAME_PATTERN`, so none of them can see one. Keep both
- * halves of that agreement if either side changes.
+ * `.yaml` plus `FLOW_NAME_PATTERN`. Keep both halves of that agreement if either
+ * side changes.
  *
  * It deliberately does NOT embed the flow name. A flow name has no length cap
  * (`FLOW_NAME_PATTERN` constrains the character set only), so `<name>.yaml` can
  * legitimately run to NAME_MAX — and prefixing that with a discriminator would
- * push the scratch name past the limit, turning an append that used to work
- * into ENAMETOOLONG. pid + counter is unique on its own: the counter separates
- * writers inside this process, the pid separates this process from a second
- * tool-server (a different install bundle) that could be writing the same
- * directory.
+ * push the scratch name past the limit, turning an append that used to work into
+ * ENAMETOOLONG. pid + counter is unique on its own (see {@link flowWriteSeq}).
  *
  * The swap costs one thing a write-through would have kept, accepted for the
- * atomicity: it needs write permission on the DIRECTORY rather than on the
- * file, and it replaces the inode, so a hardlink to the flow file does not
- * survive an append. The file's own MODE is not among the costs — see below.
+ * atomicity: it needs write permission on the DIRECTORY rather than on the file,
+ * and it replaces the inode, so a hardlink to the flow file does not survive an
+ * append. The file's own MODE is not among the costs — see below.
  */
 async function writeFlowFile(filePath: string, content: string): Promise<void> {
   const { dir: resolvedDir, target } = await canonicalFlowTarget(filePath);
   // Null when the flow file does not exist yet (the first write of a recording),
-  // which has no mode to preserve and nothing to be refused by.
+  // which has no mode to preserve and nothing to refuse the write.
   const previousMode = await fs.stat(target).then(
     (s) => s.mode & 0o7777,
     () => null
@@ -3116,8 +3007,7 @@ async function writeFlowFile(filePath: string, content: string): Promise<void> {
     // The swap needs permission on the directory, not on the file, so it would
     // replace a `chmod 0444` flow file regardless — turning a plain write's
     // EACCES into a silent success that also relaxed the mode to the umask
-    // default. Refuse instead, so a read-only flow file goes on meaning what it
-    // meant before the write became atomic.
+    // default. Refuse instead.
     throw new FailureError(
       `Failed to write flow file ${filePath} (EACCES) — ${target} is not writable ` +
         `(mode ${previousMode.toString(8).padStart(4, "0")}). An append replaces the file via a ` +
@@ -3151,15 +3041,12 @@ async function writeFlowFile(filePath: string, content: string): Promise<void> {
     // too — nothing else ever sweeps this directory.
     await fs.rm(tmpPath, { force: true }).catch(() => {});
     // Rethrow against the flow file, never the scratch path. The temp name is
-    // an internal detail — pid+counter suffixed, and already removed above — so
-    // surfacing its raw errno (`EACCES: … open '.argent-flow-<pid>-<n>.tmp'`)
-    // would name a file that no longer exists and never mention the flow.
-    //
-    // That applies to the CAUSE as much as to this message:
-    // `formatErrorForAgent` walks the cause chain and appends each new message,
-    // so attaching the raw errno puts the scratch path in front of the agent
-    // anyway — through the one string it actually reads. Scrub the path out of
-    // the cause and keep the rest, which is the part worth having.
+    // an internal detail — already removed above — so surfacing its raw errno
+    // would name a file that no longer exists and never mention the flow. That
+    // applies to the CAUSE as much as to this message: `formatErrorForAgent`
+    // walks the cause chain and appends each new message, so attaching the raw
+    // errno would put the scratch path in front of the agent through the one
+    // string it actually reads.
     const errno = err instanceof Error ? (err as NodeJS.ErrnoException) : undefined;
     const code = typeof errno?.code === "string" ? errno.code : undefined;
     throw new FailureError(
@@ -3207,14 +3094,13 @@ function mkdirFailureHint(code: string | undefined, dir: string): string {
  * Create or reset a flow file with `content`, making the parent directory if
  * needed. Atomic (see {@link writeFlowFile}).
  *
- * Both halves are classified. The tool description promises this "fails if the
- * `.argent/flows/` directory cannot be created OR the flow file cannot be
- * written", and leaving the mkdir outside the wrapping made only the second
- * half keep that promise: a `project_root` naming an existing file, or an
- * unwritable one, surfaced as a bare `ENOTDIR`/`EACCES` under
+ * Both halves are classified, because flow-start-recording's description
+ * promises it "fails if the .argent/flows/ directory cannot be created or the
+ * file cannot be written". Leaving the mkdir outside the wrapping made only the
+ * second half keep that promise: a `project_root` naming an existing or
+ * unwritable file surfaced as a bare `ENOTDIR`/`EACCES` under
  * REGISTRY_TOOL_EXECUTION_FAILED — no remediation hint, and telemetry
- * attributing a flow failure to the registry — while the same permission
- * problem one line later returned FLOW_FILE_WRITE_FAILED with a hint.
+ * attributing a flow failure to the registry.
  */
 export async function writeNewFlowFile(filePath: string, content: string): Promise<void> {
   const dir = path.dirname(filePath);
@@ -3242,25 +3128,23 @@ export async function writeNewFlowFile(filePath: string, content: string): Promi
  * read or parsed.
  *
  * For counting what a truncate is about to destroy, and therefore only ever
- * called in "host" mode. In "client" mode the file lives on the client's
- * machine and this host cannot read it at all, so the in-memory copy is both
- * the take and the only thing countable — the guarantee below does not carry
- * across that boundary. The tool descriptions do not spell that out — they are
- * kept to what the tool does; the agent-facing statement of it lives in
- * `packages/skills/skills/argent-create-flow/references/live-authoring.md`, in
- * the "Starting always truncates the `.yaml`" bullet.
+ * called in "host" mode: in "client" mode the file lives on the client's machine
+ * and this host cannot read it at all, so the in-memory copy is both the take
+ * and the only thing countable — the guarantee below does not carry across that
+ * boundary. The agent-facing statement of it lives in
+ * `packages/skills/skills/argent-create-flow/references/live-authoring.md`.
  *
  * The file — not the session's in-memory `flow` — is the take in "host" mode:
- * {@link appendStep}
- * re-reads it before every append and `flow-finish-recording` reads it back for
- * its summary, so a hand-edit made mid-recording (a documented workflow) is
- * part of the take even though the in-memory copy only catches up on the next
- * append.
+ * {@link appendStep} re-reads it before every append and `flow-finish-recording`
+ * reads it back for its summary, so a hand-edit made mid-recording is part of
+ * the take even though the in-memory copy only catches up on the next append.
+ * Both recording tools tell the agent to edit only AFTER the finish, because
+ * that catching-up renumbers the steps the finish anchors its verdicts to.
  *
- * Undefined rather than 0 on a failure, because the two are not the same
- * answer: a hand-edit can leave YAML that `parseFlow` rejects, and reporting
- * "0 steps discarded" there would understate the loss in exactly the case that
- * caused it. The caller reports no count instead.
+ * Undefined rather than 0 on a failure, because the two are not the same answer:
+ * a hand-edit can leave YAML that `parseFlow` rejects, and "0 steps discarded"
+ * would understate the loss in exactly the case that caused it. The caller
+ * reports no count instead.
  */
 export async function countStepsOnDisk(filePath: string): Promise<number | undefined> {
   try {
@@ -3277,7 +3161,7 @@ export async function appendStep(filePath: string, step: FlowStep): Promise<stri
   flow.steps.push(step);
   // Re-validate with the new step: a leading `launch` recorded into a
   // prerequisite-bearing recording must error here (nothing written), not
-  // produce a file that fails to parse at replay.
+  // produce a file that fails to validate at replay.
   validateFlow(flow);
   const updated = serializeFlow(flow);
   await writeFlowFile(filePath, updated);
@@ -3289,10 +3173,10 @@ export function clientFileDirective(filePath: string, content: string): ClientFi
 }
 
 /**
- * How a mutating flow tool reports persistence: a plain host path in "host"
- * mode (nothing for the client to do), or a {@link ClientFileDirective} the
- * client resolves by writing the YAML into the agent's project. Either way the
- * field reads as the flow file's path once the client has processed the result.
+ * How a mutating flow tool reports persistence: a plain host path in "host" mode
+ * (nothing for the client to do), or a {@link ClientFileDirective} the client
+ * resolves by writing the YAML into the agent's project. Either way the field
+ * reads as the flow file's path once the client has processed the result.
  */
 export type FlowSavedTo = string | ClientFileDirective;
 
@@ -3303,14 +3187,14 @@ export type FlowSavedTo = string | ClientFileDirective;
  * no longer the one registered for its key. Writing anyway is the worst outcome:
  * the step lands in a file that now belongs to a *different* take and the caller
  * is told it succeeded. Re-check identity at write time, inside the flow-file
- * lock, and fail loudly.
+ * lock.
  *
  * The lock makes this exact against the other flow tools, which all mutate
  * `recordings` for a key while holding that key's lock. It is NOT exact against
  * {@link evictIfOverCapacity}, which runs under some OTHER key's lock and can
- * therefore drop this session between the check and the write. That race is
- * benign — the step still lands in the file it was recorded for, and only the
- * NEXT call on the key reports the recording gone.
+ * drop this session between the check and the write. That race is benign — the
+ * step still lands in the file it was recorded for, and only the NEXT call on
+ * the key reports the recording gone.
  */
 function assertSessionStillLive(session: RecordingSession, step: FlowStep): void {
   const current = recordings.get(session.key);
@@ -3322,17 +3206,15 @@ function assertSessionStillLive(session: RecordingSession, step: FlowStep): void
     ? "it was restarted while this step was running, so the step belongs to the discarded take"
     : "it was finished (or dropped by the concurrent-recording cap) while this step was running";
   // Do NOT send the agent to flow-start-recording here. It truncates
-  // unconditionally, and on every branch there is now something to lose: the
-  // live take that just claimed this key (which restarting would both wipe and
-  // steal), or the finished flow sitting on disk. Recording under a fresh name
-  // is the only recovery that destroys nothing.
-  // Branch the same way `why` does. Asserting "this key now belongs to another
-  // take" on the `!current` branch is false by construction — that branch is
-  // selected precisely because the key is empty, and `startRecordingSession`
-  // registers under this key's lock, so a take that had claimed it would have
-  // selected the other branch. Naming a competing agent that does not exist
-  // sends an agent whose own finish (or the eviction named one clause earlier)
-  // ended the recording looking for the wrong cause.
+  // unconditionally, and on every branch there is something to lose: the live
+  // take that just claimed this key, or the finished flow sitting on disk.
+  // Recording under a fresh name is the only recovery that destroys nothing.
+  //
+  // Branch the same way `why` does. "This key now belongs to another take" is
+  // false by construction on the `!current` branch — it is selected precisely
+  // because the key is empty, and `startRecordingSession` registers under this
+  // key's lock — so naming a competing agent that does not exist would send the
+  // reader after the wrong cause.
   const whatIsAtStake = current
     ? `This key now belongs to another take and flow-start-recording truncates, so re-record ` +
       `under a fresh name rather than restarting this one.`
@@ -3357,11 +3239,132 @@ function assertSessionStillLive(session: RecordingSession, step: FlowStep): void
 }
 
 /**
+ * One step rendered for comparison, or `null` where it has no rendering.
+ *
+ * A cyclic YAML alias inside a step's `args` materializes as a cyclic object,
+ * and `JSON.stringify` throws on it. A throw here would fail an append that has
+ * already written the step and already run it on the device, so the retry it
+ * invites would repeat both. The same guard as `renderToolArgs`.
+ */
+function renderStepForCompare(step: FlowStep): string | null {
+  try {
+    return JSON.stringify(step);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Do `n` steps of `now` starting at `nowFrom` match `n` steps of `before`
+ * starting at `beforeFrom`?
+ *
+ * Both sides are {@link parseFlow} output, so absent an edit they parse
+ * byte-identical prefixes and `JSON.stringify` compares them exactly. No
+ * key-order difference can exist between two parses of the same bytes.
+ *
+ * A step with no rendering is NOT the same step: {@link anchorHolds} drops the
+ * verdict rather than report it against a step whose identity is unknown.
+ *
+ * Both offsets are 0 for an unedited file; {@link anchorHolds} moves them to
+ * ask about the alignments an edit inside the prefix would produce. Both sides
+ * arrive pre-rendered, because each alignment would otherwise repeat the same
+ * work.
+ */
+function sameStepRun(
+  now: (string | null)[],
+  before: (string | null)[],
+  n: number,
+  nowFrom: number,
+  beforeFrom: number
+): boolean {
+  if (now.length < nowFrom + n || before.length < beforeFrom + n) return false;
+  for (let i = 0; i < n; i += 1) {
+    const rendered = now[nowFrom + i];
+    if (rendered === null || rendered !== before[beforeFrom + i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Is the step at number `n` still the step the verdict at `n` judged?
+ *
+ * Matching the prefix at the unedited alignment is necessary but not enough. A
+ * length change says a step was removed or added, and a prefix that ALSO
+ * matches the alignment such an edit would leave behind is consistent with the
+ * edit having happened inside it. Two adjacent identical waits hide the shift,
+ * and a verdict is not a function of content: the probe read the live device at
+ * that step's moment, so identical waits can diverge at one position and agree
+ * at another.
+ *
+ * So a resized file keeps a verdict only where the alignments DISAGREE. The
+ * edit can sit anywhere in the prefix, so every position is tried at every size
+ * the length change admits. What stays out of reach is an edit that leaves the
+ * length alone — a reorder of two identical steps has no witness at all.
+ */
+function anchorHolds(now: (string | null)[], before: (string | null)[], n: number): boolean {
+  if (!sameStepRun(now, before, n, 0, 0)) return false;
+  // A deletion slides `before` forward from the splice on; an insertion slides
+  // `now` forward. Ask only about the direction the length change allows.
+  const deleted = before.length - now.length;
+  const inserted = now.length - before.length;
+  for (let at = 0; at < n; at += 1) {
+    // The base check above already compared everything before `at`, so each
+    // hypothesis only accounts for the `n - at` steps the splice moved.
+    for (let size = 1; size <= deleted; size += 1) {
+      if (sameStepRun(now, before, n - at, at, at + size)) return false;
+    }
+    for (let size = 1; size <= inserted; size += 1) {
+      if (sameStepRun(now, before, n - at, at + size, at)) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Drop the verdicts a mid-recording hand edit moved, at the one moment the move
+ * is visible.
+ *
+ * Host mode re-reads the file before every append, so an edit becomes part of
+ * the take and `session.flow` catches up to it. After that the finish has
+ * nothing left to compare, and a verdict can land on a step it never judged
+ * while the step it did judge reads clean.
+ *
+ * The append that ABSORBS the edit still holds both views, so ask here. A
+ * verdict at number `n` survives only where {@link anchorHolds} shows the first
+ * `n` steps are still those steps. Verdicts behind the edit keep theirs.
+ *
+ * Returns how many were dropped, so the finish can report a shortfall rather
+ * than a clean bill of health.
+ */
+function dropMovedWarnings(
+  warnings: Map<number, RecordedStepWarning> | undefined,
+  now: FlowStep[],
+  before: FlowStep[]
+): number {
+  if (!warnings) return 0;
+  // Render both views once. Every verdict asks about the same two lists.
+  const nowRendered = now.map(renderStepForCompare);
+  const beforeRendered = before.map(renderStepForCompare);
+  let dropped = 0;
+  for (const n of [...warnings.keys()]) {
+    if (anchorHolds(nowRendered, beforeRendered, n)) continue;
+    warnings.delete(n);
+    dropped += 1;
+  }
+  return dropped;
+}
+
+/**
  * Append a step to a recording and persist it. In "host" mode the file on disk
- * is re-read first (the original behavior — a manual edit made mid-recording is
- * honored); in "client" mode this process never sees the client's disk, so the
- * in-memory copy is authoritative and the updated YAML travels back in the
- * directive.
+ * is re-read first, so a manual edit made mid-recording is honored; in "client"
+ * mode this process never sees the client's disk, so the in-memory copy is
+ * authoritative and the updated YAML travels back in the directive.
+ *
+ * That re-read is also the only chance anyone gets to NOTICE a hand edit, so
+ * it is checked against the view it replaces — see {@link dropMovedWarnings}.
+ * Client mode needs no such check: this host never sees the client's file.
  */
 export async function appendStepToFlow(
   session: RecordingSession,
@@ -3376,22 +3379,28 @@ export async function appendStepToFlow(
     assertSessionStillLive(session, step);
     session.lastTouchedSeq = touch();
     if (session.persist === "host") {
+      const before = session.flow.steps;
       const flowFile = await appendStep(session.filePath, step);
       session.flow = parseFlow(flowFile);
+      // `appendStep` adds exactly one step, so everything before the last one
+      // is what the file already held — the recorder's previous view, unless a
+      // hand edit landed in between.
+      session.discardedWarnings =
+        (session.discardedWarnings ?? 0) +
+        dropMovedWarnings(session.stepWarnings, session.flow.steps.slice(0, -1), before);
       // Count inside the lock, off the just-refreshed `session.flow`: a caller
-      // reading `session.flow.steps.length` after this returns would be racing
-      // a concurrent same-key append, which can reassign `session.flow` between
+      // reading `session.flow.steps.length` after this returns would be racing a
+      // concurrent same-key append, which can reassign `session.flow` between
       // the release here and that read.
       return { savedTo: session.filePath, stepCount: session.flow.steps.length };
     }
     session.flow.steps.push(step);
     try {
-      // Both of these can reject on a bad step — validateFlow on a cross-field
+      // Both can reject on a bad step — validateFlow on a cross-field
       // violation, serializeFlow on an unrepresentable one (e.g. a tap with
       // un-normalized coordinates). Roll back on either: in client mode this
       // in-memory copy is the ONLY copy, so leaving the rejected step in it
-      // poisons the recording — every later append, and the finish itself,
-      // would re-hit the same error with no way to recover.
+      // would poison every later append and the finish itself.
       validateFlow(session.flow);
       const flowFile = serializeFlow(session.flow);
       return {
@@ -3399,7 +3408,7 @@ export async function appendStepToFlow(
         stepCount: session.flow.steps.length,
       };
     } catch (err) {
-      session.flow.steps.pop(); // keep the in-memory copy consistent: nothing recorded
+      session.flow.steps.pop(); // nothing was recorded
       throw err;
     }
   });

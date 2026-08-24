@@ -89,11 +89,11 @@ export function createReactProfilerStatusTool(
         );
       }
 
-      // Idempotent; safe to re-run.
+      // Idempotent.
       try {
         await cdp.evaluate(REACT_NATIVE_PROFILER_SETUP_SCRIPT);
       } catch {
-        /* non-fatal — READ_STATE_SCRIPT still works without the wrapper */
+        /* best-effort */
       }
 
       let stateJson: string | undefined;

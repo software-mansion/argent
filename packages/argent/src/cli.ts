@@ -1,30 +1,8 @@
 #!/usr/bin/env node
 /**
- * argent CLI — globally-installed entry point.
- *
- * This dispatcher is intentionally minimal: it parses the top-level command,
- * lazy-imports the matching bundle, and forwards arguments. The actual
- * subcommand implementations live in sibling workspace packages and ship as
- * pre-bundled CJS files in dist/ alongside this dispatcher.
- *
- * Usage:
- *   argent mcp                    Start the MCP stdio server (used by editors)
- *   argent init                   Set up argent in a workspace (MCP + skills + rules)
- *   argent install                Alias for init
- *   argent update                 Check for updates, refresh configuration
- *   argent uninstall              Remove argent from a workspace
- *   argent remove                 Alias for uninstall
- *   argent tools                  List tools exposed by the tool-server
- *   argent tools describe <name>  Show one tool's flags
- *   argent run <tool> [flags]     Invoke a tool by name
- *   argent server start [flags]   Spawn a long-lived tool-server (foreground by default)
- *   argent server status|stop|logs   Manage the shared tool-server
- *   argent lens                   Open Argent Lens bound to a fresh coding-agent session (macOS)
- *   argent link [flags]           Route client requests to a remote tool-server
- *   argent unlink                 Remove the persisted remote link
- *   argent enable <flag>          Enable a feature flag (global by default)
- *   argent disable <flag>         Disable a feature flag (global by default)
- *   argent flags                  Show current feature-flag state
+ * argent CLI entry point. Dispatch only: subcommand implementations live in the
+ * sibling workspace packages (@argent/installer, @argent/mcp, @argent/cli) and
+ * are lazy-imported from bundles in dist/.
  */
 
 import * as fs from "node:fs";
@@ -45,8 +23,6 @@ const PACKAGE_NAME = "@swmansion/argent";
 
 function getInstalledVersion(): string | null {
   try {
-    // dist/cli.js lives in the published package's dist/, so two-up is the
-    // package root containing the shipped package.json.
     const pkgPath = path.resolve(import.meta.dirname, "..", "package.json");
     const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as { version?: string };
     return pkg.version ?? null;
@@ -60,11 +36,8 @@ const isMcpServer = command === "mcp";
 
 installFatalHandlers({ isMcpServer });
 
-// One installer row of the command table: the command's one-line summary plus
-// its indented detail lines, both from INSTALLER_COMMAND_META. The summary is
-// shared with the per-command `--help`, so the two can't drift; the details
-// are table-only prose kept in the meta so each command's help text lives in
-// one place.
+// `summary` is shared with the per-command `--help` so the two can't drift;
+// `details` are rendered only in this table.
 function installerHelpEntry(command: InstallerCommand): string {
   const meta = INSTALLER_COMMAND_META[command];
   const details = (meta.details ?? []).map((line) => `\n              ${line}`).join("");
@@ -109,9 +82,8 @@ Package: ${PACKAGE_NAME}
 `);
 }
 
-// Lazy-load each subcommand bundle. Bundles are produced at build time by
-// scripts/bundle-tools.cjs and shipped alongside this dispatcher in dist/.
-// Typed against the workspace packages so calls are still checked.
+// The bundles are produced at build time by scripts/bundle-tools.cjs into dist/;
+// typed against the workspace packages so calls are still checked.
 async function loadInstaller(): Promise<typeof Installer> {
   return (await import("./installer.mjs" as any)) as typeof Installer;
 }
@@ -123,12 +95,11 @@ async function loadCli(): Promise<typeof Cli> {
 }
 
 async function main(): Promise<void> {
-  // Some subcommands never look at their own argv: the installers forward it
-  // to side-effecting functions that ignore `--help` (so `argent uninstall
-  // --help` would run the real, destructive command), and `mcp` is handed no
-  // argv at all, so a help flag there starts the stdio server and blocks
-  // reading JSON-RPC from stdin. Intercept help for that set before
-  // dispatching. Every other subcommand parses `--help` itself.
+  // The installers forward argv to side-effecting functions that ignore
+  // `--help` (so `argent uninstall --help` would run the real, destructive
+  // command), and `mcp` is handed no argv at all, so a help flag there starts
+  // the stdio server and blocks on stdin. Every other subcommand parses
+  // `--help` itself.
   if (installerHelpRequested(command, rest)) {
     // installerHelpRequested only returns true for an InstallerCommand.
     printInstallerHelp(command as Parameters<typeof printInstallerHelp>[0]);

@@ -7,9 +7,9 @@ import { androidImpl } from "./platforms/android";
 import { iosRemoteImpl } from "./platforms/ios-remote";
 import { vegaImpl } from "./platforms/vega";
 
-// Mirror launch-app / restart-app: the leading-letter rule keeps a value like
-// `--user` from masquerading as a flag. Execution uses execFile with an argv
-// array (no shell), so this is a consistency guard, not an injection fix.
+// Mirrors launch-app / restart-app: the restricted head keeps a value like `--user`
+// from masquerading as a flag. Every branch execs via an argv array (no shell), so this
+// is a consistency guard, not an injection fix.
 const BUNDLE_ID_PATTERN = /^[A-Za-z_][A-Za-z0-9._-]*$/;
 
 const zodSchema = z.object({
@@ -59,7 +59,7 @@ Returns { reinstalled, bundleId }. Fails if the app path does not exist or the p
     ReinstallAppServices,
     Params,
     ReinstallAppResult,
-    // No chromium branch — falls back to the ChromiumServices default.
+    // No chromium branch; placeholder so the vega/ios-remote slots line up.
     Record<string, unknown>,
     ReinstallAppServices,
     ReinstallAppServices

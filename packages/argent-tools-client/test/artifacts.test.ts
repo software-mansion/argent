@@ -390,6 +390,7 @@ describe("durableSaveTarget", () => {
   let home: string;
   let originalCwd: string;
   let originalHome: string | undefined;
+  let originalUserProfile: string | undefined;
 
   beforeEach(async () => {
     projectRoot = await mkdtemp(join(tmpdir(), "argent-proj-"));
@@ -397,8 +398,11 @@ describe("durableSaveTarget", () => {
     home = await mkdtemp(join(tmpdir(), "argent-home-"));
     originalCwd = process.cwd();
     originalHome = process.env.HOME;
+    originalUserProfile = process.env.USERPROFILE;
     process.chdir(projectRoot);
+    // os.homedir() reads USERPROFILE on Windows, HOME elsewhere — pin both.
     process.env.HOME = home;
+    process.env.USERPROFILE = home;
     projectRoot = process.cwd(); // resolve /var → /private/var for assertions
   });
 
@@ -406,6 +410,8 @@ describe("durableSaveTarget", () => {
     process.chdir(originalCwd);
     if (originalHome === undefined) delete process.env.HOME;
     else process.env.HOME = originalHome;
+    if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = originalUserProfile;
     await rm(projectRoot, { recursive: true, force: true });
     await rm(home, { recursive: true, force: true });
   });
@@ -575,6 +581,7 @@ describe("materializeArtifacts durable destination", () => {
   let home: string; // redirected HOME for the global-fallback branch
   let originalCwd: string;
   let originalHome: string | undefined;
+  let originalUserProfile: string | undefined;
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "argent-artifacts-"));
@@ -585,8 +592,11 @@ describe("materializeArtifacts durable destination", () => {
     process.env.ARGENT_ARTIFACTS_DIR = root;
     originalCwd = process.cwd();
     originalHome = process.env.HOME;
+    originalUserProfile = process.env.USERPROFILE;
     process.chdir(projectRoot);
+    // os.homedir() reads USERPROFILE on Windows, HOME elsewhere — pin both.
     process.env.HOME = home;
+    process.env.USERPROFILE = home;
     // On macOS the temp dir is under a /var → /private/var symlink; the
     // materializer resolves cwd to the real path, so mirror that for assertions.
     projectRoot = process.cwd();
@@ -597,6 +607,8 @@ describe("materializeArtifacts durable destination", () => {
     delete process.env.ARGENT_ARTIFACTS_DIR;
     if (originalHome === undefined) delete process.env.HOME;
     else process.env.HOME = originalHome;
+    if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = originalUserProfile;
     await rm(root, { recursive: true, force: true });
     await rm(hostDir, { recursive: true, force: true });
     await rm(projectRoot, { recursive: true, force: true });

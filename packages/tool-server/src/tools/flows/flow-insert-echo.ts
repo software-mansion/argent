@@ -20,8 +20,7 @@ export const flowInsertEchoTool: ToolDefinition<
 > = {
   id: "flow-add-echo",
   interaction: {
-    // Name the flow: recordings are concurrent, so several of these lines can
-    // interleave in one log and "the recorded flow" would not identify which.
+    // Name the flow: recordings are concurrent, so an unqualified message is ambiguous.
     startedMsg: ({ params }) => `Adding note to flow ${params.name}`,
     completedMsg: ({ params }) => `Added note to flow ${params.name}`,
     failedMsg: ({ params, failureSignal }) =>

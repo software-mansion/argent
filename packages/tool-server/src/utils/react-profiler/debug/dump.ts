@@ -5,9 +5,6 @@ import type { HermesCpuProfile, DevToolsFiberCommit } from "../types/input";
 
 const DEBUG_DIR_NAME = "argent-profiler-cwd";
 
-/**
- * Returns (and creates if needed) /tmp/argent-profiler-cwd/.
- */
 export async function getDebugDir(): Promise<string> {
   const dir = join(tmpdir(), DEBUG_DIR_NAME);
   await fs.mkdir(dir, { recursive: true });
@@ -19,10 +16,7 @@ const jsonReplacer = (_key: string, value: unknown): unknown => {
   return value;
 };
 
-/**
- * Writes `data` as pretty-printed JSON to `<dir>/<filename>`.
- * Returns the full file path. Non-fatal — returns null on error.
- */
+/** Pretty-printed JSON dump. Non-fatal — returns null on error. */
 export async function writeDump(
   dir: string,
   filename: string,
@@ -38,11 +32,7 @@ export async function writeDump(
   }
 }
 
-/**
- * Writes `data` as compact (no indentation) JSON to `<dir>/<filename>`.
- * Saves ~30% string size vs pretty-printed for large profiling data.
- * Returns the full file path. Non-fatal — returns null on error.
- */
+/** Unindented JSON dump, for large profiling data. Non-fatal — returns null on error. */
 export async function writeDumpCompact(
   dir: string,
   filename: string,
@@ -59,11 +49,8 @@ export async function writeDumpCompact(
 }
 
 /**
- * Read a CPU profile from disk. Validates the shape inline so consumers
- * (analyze, cpu-summary, cpu-query) get a verbose, actionable error instead
- * of a generic `TypeError: Cannot read properties of undefined (reading
- * 'length')` from `buildCpuSampleIndex` when an older or partial dump is
- * loaded via `profiler-load`.
+ * Validates the shape so an old or partial dump fails here with an actionable
+ * error rather than deep inside `buildCpuSampleIndex`.
  */
 export async function readCpuProfile(path: string): Promise<HermesCpuProfile> {
   const json = await fs.readFile(path, "utf8");
@@ -105,15 +92,12 @@ export interface CommitTreeOnDisk {
     port?: number | null;
     appName?: string | null;
     deviceName?: string | null;
-    // Per-commit tuples [commitIndex, droppedFiberCount, droppedActualDurationMs]
-    // for fibers whose display name could not be resolved at stop time (transient/unmounted).
+    // [commitIndex, droppedFiberCount, droppedActualDurationMs] for fibers whose
+    // display name could not be resolved at stop time (transient/unmounted).
     unattributedByCommit?: Array<[number, number, number]> | null;
   };
 }
 
-/**
- * Read a commit tree (with meta) from disk.
- */
 export async function readCommitTree(path: string): Promise<CommitTreeOnDisk> {
   const json = await fs.readFile(path, "utf8");
   return JSON.parse(json) as CommitTreeOnDisk;

@@ -1,0 +1,279 @@
+---
+sidebar_position: 6
+sidebar_label: Flow YAML
+title: Flow YAML reference
+sidebar_custom_props:
+  icon: scroll-text
+---
+
+A flow is a YAML file in `.argent/flows/<name>.yaml`. The agent records the file with the flow tools. You can also write or edit the file by hand. This page lists the file shape, the selectors, the directives and the `argent flow` command. For the concept, see [Record and replay flows](/docs/features/flows).
+
+<Video
+  src="/video/flow-yaml.mp4"
+  width={1600}
+  height={900}
+  caption="Argent replays a flow YAML file step by step on an iOS simulator"
+/>
+
+## File shape
+
+```yaml
+steps:
+  - launch: com.example.app
+  - await: { visible: { id: home-screen } }
+  - await: { idle: true }
+```
+
+The file has two top-level keys:
+
+| Key                     | Required | Description                                                             |
+| ----------------------- | -------- | ----------------------------------------------------------------------- |
+| `steps`                 | yes      | The list of steps. Argent runs the steps in order                       |
+| `executionPrerequisite` | no       | One sentence that names the start state. Only a fragment can declare it |
+
+A flow has one of two shapes:
+
+| Shape           | First non-echo step | Start state                                         |
+| --------------- | ------------------- | --------------------------------------------------- |
+| End-to-end flow | `launch:`           | Argent starts the app from scratch                  |
+| Fragment        | Any other step      | The app is already in the state that the flow needs |
+
+Argent skips leading `echo` steps when it classifies a flow. A flow that opens with an `echo` step and then a `launch:` step is still end-to-end. Put the named start state of an end-to-end flow in a leading `echo` step.
+
+A file does not store a device id. The runner selects the device. A `launch:` restarts the process but does not clear the app data, the account or the backend data.
+
+When a step fails, Argent stops the flow and reports the later steps as skipped.
+
+## Selectors
+
+A selector finds an element on the screen. Write a selector as an explicit map:
+
+```yaml
+{ id: save-button }
+{ text: Save }
+{ role: button }
+{ id: settings-row, text: Notifications }
+{ text: { matches: '^Order #\d+$' } }
+```
+
+| Field  | Match                                                           |
+| ------ | --------------------------------------------------------------- |
+| `id`   | Exact, case-insensitive. The test id or accessibility id        |
+| `text` | Case-insensitive substring, or `{ matches: <regex> }`           |
+| `role` | Case-insensitive substring of the element role                  |
+| `any`  | Any element. Takes only `true`. Pair it with a relational scope |
+
+All fields in a selector must match. An unqualified Android id also matches its qualified resource id. `identifier` is an alias of `id`. Use single quotes for a regex with a backslash. `any: true` is the only selector without its own `id`, `text` or `role`, so it needs a relational scope, for example `{ any: true, after: { text: Danger zone } }`.
+
+A bare string, for example `tap: Save`, is a loose selector. It tries `id` first, then `text`. Prefer the map form.
+
+When several elements match:
+
+| Directive type                                                       | Chosen element                                                                                                                     |
+| -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Action (`tap`, `long-press`, `type`, `scroll-to`, `pinch`, `rotate`) | The most specific visible match: exact text or id, then the smallest frame, then reading order                                     |
+| Condition (`await`, `assert`)                                        | `exists` and `visible` hold when any match qualifies. `hidden` holds when no match qualifies. `text` reads the first visible match |
+
+### Relational scopes
+
+A selector can scope its matches by the frames of other elements:
+
+| Key      | Meaning                                                 |
+| -------- | ------------------------------------------------------- |
+| `within` | The target is inside the frame of the anchor            |
+| `after`  | The target follows the anchor in reading order          |
+| `next`   | The target is the nearest match that follows the anchor |
+
+```yaml
+- tap: { text: Delete, within: { id: profile-card } }
+- assert: { visible: { role: Button, after: { text: Danger zone } } }
+- tap: { role: Switch, next: { text: Wi-Fi } }
+```
+
+`within` uses the visual frame, not the source tree. Reading order is top to bottom, left to right. Scopes nest, with at most six scope keys in one selector. The `await-ui-element` tool does not support scopes.
+
+### Runner tree and discovery tree
+
+The runner resolves a selector against a different tree than the `describe` tool:
+
+| Platform | Runner tree                                   | `describe` tree            |
+| -------- | --------------------------------------------- | -------------------------- |
+| iOS      | Native UIView hierarchy                       | Accessibility tree         |
+| Android  | Full accessibility hierarchy                  | Trimmed interactable nodes |
+| Chromium | DOM nodes with an id, label, value or handler | Full DOM                   |
+| Vega     | Toolkit page source                           | Same source                |
+
+On iOS and Android, an id absent from `describe` can still resolve in a flow. On Chromium, an element absent from `describe` cannot resolve. On iOS, do not copy a `role` from `describe` into a selector: the runner derives the role from the view class, `describe` from the accessibility traits.
+
+## Directives
+
+Each step contains one directive. A failed directive stops the flow.
+
+| Directive    | Shape                                                              | Description                                                                                       |
+| ------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `launch`     | `<app id>` or `{ native, ios, android, vega, chromium }`           | Terminate and start the app, then wait until the app is ready                                     |
+| `tap`        | `<selector>`, `{ on: <selector>, times }` or `{ x, y }`            | Tap an element. `times: 2` double-taps. `x`, `y` are normalized coordinates                       |
+| `long-press` | `<selector>` or `{ on: <selector>, duration }`                     | Press and hold. `duration` in milliseconds                                                        |
+| `type`       | `{ into: <selector>, text, submit }`                               | Focus the element and type. Presses Enter unless `submit: false`                                  |
+| `scroll-to`  | `{ target: <selector>, direction, within }`                        | Scroll until the target is visible. `direction` is `down` (default), `up`, `left` or `right`      |
+| `pinch`      | `{ on: <selector>, scale }`                                        | Pinch around the element, or the screen center when `on` is absent. `scale` > 1 zooms in          |
+| `rotate`     | `{ on: <selector>, by }`                                           | Two-finger rotation in degrees, clockwise positive. This is a gesture, not the device orientation |
+| `await`      | `{ <condition>, timeout }` or `{ idle: true, stableFor, timeout }` | Wait for a condition. Default `timeout` 7500 ms                                                   |
+| `assert`     | `{ <condition> }`                                                  | Check a condition now, with a fixed 1000 ms grace. Rejects `timeout`                              |
+| `wait`       | `<milliseconds>`                                                   | Pause for a fixed time                                                                            |
+| `snapshot`   | `<name>` or `{ name, maxMismatch, cropOn }`                        | Compare a screenshot with a stored baseline. See [Snapshots](#snapshots)                          |
+| `run`        | `<path>`                                                           | Run another flow file inline. See [Composition](#composition)                                     |
+| `when`       | `{ <condition> }` or `{ platform }`, with `steps:`                 | Run the nested steps only when the condition holds. See [Optional steps](#optional-steps)         |
+| `echo`       | `<message>`                                                        | Print a message in the report                                                                     |
+| `tool`       | `<tool name>`, with `args:` and optional `delayMs:`                | Call any Argent tool with the given arguments                                                     |
+
+`tap`, `type` and `long-press` do not scroll. Add `scroll-to` before them when the target can be off-screen.
+
+A `type` step can contain a `{{secret:NAME}}` placeholder. The tool-server fills the value at run time and redacts the value in the report. See [Secrets](/docs/reference/configuration#secrets).
+
+A coordinate `tap`, or a `pinch` or `rotate` without `on`, passes with a warning when the runner cannot read the UI tree. The warning says that Argent sent the gesture, not that the gesture reached the element.
+
+### Launch map
+
+Use the map form for a flow that runs on more than one platform:
+
+```yaml
+- launch: { native: com.acme.app, chromium: ../../app }
+- launch: { ios: com.acme.app, android: com.acme.app.android, chromium: ../../app }
+```
+
+`native` is one id for iOS, Android and Vega. A per-platform key replaces it for that platform. `chromium` accepts a relative or absolute app path, or `{ path, args }`. A launch that has no id for the platform of the run is an error.
+
+An Android app that starts from a non-launcher activity has no `launch:` form. Record `restart-app` with `activity` as a `tool` step and keep the flow as a fragment.
+
+## Conditions
+
+```yaml
+- await: { visible: { id: settings-screen } }
+- await: { hidden: { id: loading-spinner }, timeout: 15000 }
+- assert: { exists: { id: notifications-toggle } }
+- assert: { text: { in: { id: preference-status }, equals: Enabled } }
+- assert: { text: { in: { id: result-count }, matches: '^\d+ results$' } }
+```
+
+| Condition | Holds when                                                       |
+| --------- | ---------------------------------------------------------------- |
+| `exists`  | An element matches the selector                                  |
+| `visible` | A visible element matches the selector                           |
+| `hidden`  | No visible element matches the selector                          |
+| `text`    | The text of the element in `in` satisfies exactly one comparator |
+
+The `text` comparators:
+
+| Comparator | Match                           |
+| ---------- | ------------------------------- |
+| `contains` | Case-insensitive substring      |
+| `equals`   | Case-insensitive full match     |
+| `matches`  | Case-sensitive JavaScript regex |
+
+A negative condition passes before the element appears, for a typo, and on the wrong screen. First prove the screen and the same selector with `visible`. Then perform the action and check `hidden`.
+
+### Prove a navigation
+
+Each screen change needs two checks:
+
+```yaml
+- await: { visible: { id: profile-screen } } # identity
+- await: { idle: true } # readiness
+```
+
+The identity selector must exist only on the destination. `idle` waits until the screen has content and stops changing in the UI tree and in the pixels.
+
+```yaml
+- await: { idle: true, stableFor: 400, timeout: 9000 }
+```
+
+| Option      | Default | Description                         |
+| ----------- | ------- | ----------------------------------- |
+| `stableFor` | 250 ms  | How long the screen must stay still |
+| `timeout`   | 7500 ms | The budget of the whole wait        |
+
+`idle` never fails a run. A screen that does not settle passes with a warning. The warning names the reason: the screen kept moving, a small part kept moving, the wait ended mid-hold, the tree stayed empty, only the tree settled, or too few reads. Read the warning before you accept the step.
+
+One outcome stops the run: the runner cannot read the UI tree at all. Argent marks the step as errored and skips the later steps.
+
+`idle` has no `assert` form and no `when` form.
+
+## Optional steps
+
+```yaml
+- when: { visible: { text: Got it } }
+  steps:
+    - tap: { text: Got it }
+```
+
+The guard accepts one `exists`, `visible`, `hidden` or `text` condition, or `{ platform: ios | android | chromium | vega }`. A UI guard uses the assert grace and rejects `timeout`. There is no `else`. A skipped block reports as skipped. A failure inside an entered block is a real failure. Do not put a required check inside `when:`.
+
+## Composition
+
+```yaml
+- run: ../shared/login.yaml
+```
+
+A `run:` path resolves against the directory of the flow file that contains the step. The `.yaml` suffix is optional.
+
+| Platform     | Behavior                                                                                                                                               |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| iOS, Android | A nested fragment or end-to-end flow runs inline. A nested launch restarts the app                                                                     |
+| Chromium     | Each `launch` step boots one instance. A later launch boots a fresh instance and stops the previous one of that app. `pinch` and `rotate` are rejected |
+| Vega         | Use `tool: tv-remote` and `tool: keyboard`. The touch directives are unsupported                                                                       |
+
+A fragment whose `run:` chain reaches a launch cannot declare `executionPrerequisite`. Parsing accepts the file, the run rejects it.
+
+## Snapshots
+
+```yaml
+- snapshot: checkout-summary
+- snapshot: { name: price-card, cropOn: { id: price-card }, maxMismatch: 0.2 }
+```
+
+A snapshot compares the current screen, or the frame of `cropOn`, with a stored baseline. A missing baseline fails the step. A mismatch above `maxMismatch` percent fails the step. The default `maxMismatch` is 0.5. A `cropOn` element whose size changed fails the step.
+
+Baselines live in `.argent/flows/__baselines__/<flow>/`. Argent keys a baseline by platform and capture geometry, plus the selector for `cropOn`. Run `argent flow run <name> --update-baselines` to write the baselines from a known-good state. Review each baseline before you commit it.
+
+Use a snapshot for layout, color, spacing, typography, clipping and icons. Do not use a snapshot as the only proof of navigation, data or network behavior. Avoid timestamps, live data, ads and animation in the captured region. The runner pins the mobile status bar during a visual run.
+
+## The `argent flow` command
+
+`argent flow run` replays a flow without an agent and exits non-zero on failure. The command always uses a local tool-server.
+
+| Command                       | Description                                          |
+| ----------------------------- | ---------------------------------------------------- |
+| `argent flow run <name>`      | Run `.argent/flows/<name>.yaml`                      |
+| `argent flow run <path>.yaml` | Run any flow file. The path must not contain `..`    |
+| `argent flow run <dir>`       | Run every flow in the directory, one after the other |
+| `argent flow list`            | List the flow files in `.argent/flows`               |
+
+| Option               | Description                                                                                            |
+| -------------------- | ------------------------------------------------------------------------------------------------------ |
+| `--device <id>`      | The device to run on. Argent detects the device when you omit the option                               |
+| `--platform <p>`     | `ios`, `android`, `chromium` or `vega`. Narrows the detection                                          |
+| `--update-baselines` | Write the snapshot baselines instead of comparing them                                                 |
+| `--output <dir>`     | Write the failed baseline, current and diff images to `<dir>/<flow>/`, for a CI artifact upload        |
+| `-r, --recursive`    | With a directory, also run the flows in subdirectories. Dot-directories and `node_modules` are skipped |
+| `--json`             | Print the raw JSON report                                                                              |
+| `--`                 | End of options, for a flow name that starts with `-`                                                   |
+
+```bash
+argent flow run checkout --platform ios
+argent flow run .argent/flows/checkout.yaml --output flow-artifacts --json
+argent flow run ~/shared-flows/checkout.yaml --device <UDID> --update-baselines
+argent flow run .argent/flows --recursive
+```
+
+The file name without `.yaml` names the report and the artifacts. It contains only letters, numbers, `_` and `-`. A directory run prints only the failing steps and a summary. An invalid file fails alone and the batch continues. An infrastructure error stops the batch and counts the remaining flows as skipped.
+
+Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--platform chromium` and omit `--device`. Then the runner boots the declared app path with a reproducible window size.
+
+## Remote runs
+
+The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. `run:` targets and baselines resolve on the file system of the tool-server. When the tool-server runs on a different machine, a `name` run sends only that one file. Argent checks the whole flow before it runs any step, and rejects a `run:` or `snapshot` step at any depth with an error about the missing co-location, not about a missing fragment or baseline. `flow_path` is refused when the agent and the tool-server do not share a file system.
+
+## YAML safety
+
+Quote a string that contains `#`, `:` or quotes. Quote a number, `true` or `false` in a text slot. Use single quotes for a regex with backslashes. Parsing rejects an unknown directive, an invalid selector, an invalid regex, `else`, an unsupported option, and an end-to-end flow that declares `executionPrerequisite`.

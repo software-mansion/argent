@@ -49,12 +49,14 @@ import {
 } from "../../src/blueprints/native-profiler-session";
 import { profilerLoadTool } from "../../src/tools/profiler/query/profiler-load";
 import { nativeProfilerAnalyzeTool } from "../../src/tools/profiler/native-profiler/native-profiler-analyze";
+import { __primeDepCacheForTests, __resetDepCacheForTests } from "../../src/utils/check-deps";
 import {
   writeAndroidNativeProfilerMetadata,
   readAndroidNativeProfilerMetadata,
   androidNativeProfilerMetadataPath,
 } from "../../src/utils/android-profiler/session-metadata";
 import { RECORDING_CAP_MS } from "../../src/utils/profiler-shared/types";
+import { redirectTmpdir } from "../helpers/tmpdir-env";
 
 const runTpQueryMock = runTpQuery as unknown as ReturnType<typeof vi.fn>;
 const MIN = 60_000;
@@ -107,32 +109,34 @@ function staleLine(report: string): string | null {
 
 describe("native-profiler freshness flagging — real analyze/render path", () => {
   let tempDir: string;
-  let originalTmpdir: string | undefined;
+  let restoreTmpdir: () => void;
 
   beforeEach(async () => {
+    // The analyze path's dependency gate resolves a real `adb` off PATH,
+    // $ANDROID_HOME and the default SDK locations, so without priming these
+    // tests pass only on a machine that has the Android SDK installed.
+    __resetDepCacheForTests();
+    __primeDepCacheForTests(["adb"]);
     runTpQueryMock.mockReset();
     routeCleanTrace();
-    // Resolve the isolated dir off the REAL tmpdir before we redirect TMPDIR.
-    originalTmpdir = process.env.TMPDIR;
+    // Resolve the isolated dir off the REAL tmpdir before we redirect it.
     tempDir = await mkdtemp(join(tmpdir(), "argent-freshness-e2e-"));
     // getDebugDir() = join(os.tmpdir(), "argent-profiler-cwd"); profiler-load
-    // resolves it dynamically, so redirect os.tmpdir() via TMPDIR to our
-    // isolated dir. The session_id .pftrace then lives under <TMPDIR>/argent-
-    // profiler-cwd/.
-    process.env.TMPDIR = tempDir;
+    // resolves it dynamically, so redirect os.tmpdir() at our isolated dir. The
+    // session_id .pftrace then lives under <tempDir>/argent-profiler-cwd/.
+    restoreTmpdir = redirectTmpdir(tempDir);
   });
 
   afterEach(async () => {
-    // Restore TMPDIR FIRST so the cleanup rm and any later suite resolve the
-    // real tmpdir again — leaving it pointed at the (about-to-be-deleted) temp
-    // dir breaks every subsequent os.tmpdir() consumer.
-    if (originalTmpdir === undefined) delete process.env.TMPDIR;
-    else process.env.TMPDIR = originalTmpdir;
+    // Restore FIRST so the cleanup rm and any later suite resolve the real
+    // tmpdir again — leaving it pointed at the (about-to-be-deleted) temp dir
+    // breaks every subsequent os.tmpdir() consumer.
+    restoreTmpdir();
     await rm(tempDir, { recursive: true, force: true });
     vi.clearAllMocks();
   });
 
-  // Directory getDebugDir() resolves to once TMPDIR points at tempDir.
+  // Directory getDebugDir() resolves to once the tmpdir points at tempDir.
   function debugDir(): string {
     return join(tempDir, "argent-profiler-cwd");
   }

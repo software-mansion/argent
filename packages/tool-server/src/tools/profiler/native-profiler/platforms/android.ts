@@ -40,8 +40,8 @@ export async function startNativeProfilerAndroid(
     );
   }
 
-  // An explicit app_process is validated up front (Perfetto won't tell us it's
-  // bogus); auto-detection already only returns a real foreground user app.
+  // Perfetto never reports a bogus app_process, so validate an explicit one up
+  // front; auto-detection can only return a real foreground user app.
   const explicit = params.app_process?.trim();
   let appPackage: string;
   if (explicit) {
@@ -58,25 +58,21 @@ export async function startNativeProfilerAndroid(
     .slice(0, 15);
   const hostTracePath = path.join(debugDir, `native-profiler-${timestamp}.pftrace`);
 
-  // Start perfetto BEFORE mutating any session state: a failed start (adb
-  // error, device offline, spawn failure) must be non-destructive. If a prior
-  // capture hit the 10-min cap or exited early, its partial trace is still
-  // recoverable via native-profiler-stop, and its recordingTimedOut/
-  // recordingExitedUnexpectedly/traceFile fields must survive an unrelated
-  // failed start attempt — otherwise the pending recovery is silently burned.
-  // (Same contract as the iOS start path.)
+  // Start perfetto BEFORE mutating session state: a failed start must leave a
+  // prior capture's recovery flags and traceFile intact, or the partial trace
+  // it could still recover via native-profiler-stop is silently burned. (Same
+  // contract as the iOS start path.)
   const { pid, onDeviceTracePath, child } = await startPerfetto({
     serial: params.device_id,
     appPackage,
     timestamp,
   });
 
-  // See the iOS twin: a `stop-all-simulator-servers` that landed while
-  // `startPerfetto` was in flight has already destroyed this session, and
-  // stamping state onto a dead api would report a recording whose owner's stop
-  // answers "call native-profiler-start first". The daemon is this attempt's to
-  // reap — the teardown never saw it, since `capturePid` is only handed over
-  // below.
+  // See the iOS twin: a teardown that landed while `startPerfetto` was in
+  // flight already destroyed this session, so stamping state onto it would
+  // report a recording whose stop answers "call native-profiler-start first".
+  // This attempt must reap the daemon itself — the teardown never saw it, since
+  // `capturePid` is only handed over below.
   if (api.disposed) {
     const { adbShell } = await import("../../../../utils/adb");
     await adbShell(params.device_id, `kill -KILL ${pid}`).catch(() => {});
@@ -95,8 +91,8 @@ export async function startNativeProfilerAndroid(
     );
   }
 
-  // Perfetto is up — this capture now owns the session; stamp its descriptors
-  // and clear any prior capture's recovery flags (superseded on success only).
+  // Perfetto is up, so this capture owns the session: a prior capture's
+  // recovery flags are superseded on success only.
   api.recordingTimedOut = false;
   api.recordingExitedUnexpectedly = false;
   api.lastExitInfo = null;
@@ -108,13 +104,13 @@ export async function startNativeProfilerAndroid(
   api.profilingActive = true;
   api.wallClockStartMs = Date.now();
   // This capture's own stop will succeed, so an earlier teardown breadcrumb
-  // would never be consumed — and would go on to blame a much later, genuine
-  // "no active session" on a teardown that had nothing to do with it.
+  // would never be consumed — and would later blame a genuine "no active
+  // session" on an unrelated teardown.
   takeReapedSession("native-profiler", api.deviceId);
 
   api.recordingTimeout = setTimeout(() => {
-    // Best-effort SIGTERM to the on-device perfetto daemon; stop tool will pull
-    // the partial trace and surface the timeout warning.
+    // Best-effort SIGTERM to the on-device daemon; the stop tool pulls the
+    // partial trace and surfaces the timeout warning.
     void (async () => {
       try {
         const { adbShell } = await import("../../../../utils/adb");
@@ -137,17 +133,24 @@ export async function startNativeProfilerAndroid(
 
 export interface AndroidStopResult {
   traceFile: string;
-  exportedFiles: Record<string, string | null>;
+  exportedFiles: Record<AndroidExportKey, string | null>;
   warning?: string;
 }
+
+/**
+ * The single export an Android stop produces: the pulled `.pftrace` itself.
+ * Keyed like {@link IosExportKey} on iOS so kind-classifying consumers are
+ * compiler-checked — see native-profiler-stop.
+ */
+export type AndroidExportKey = "pftrace";
 
 export async function stopNativeProfilerAndroid(
   api: NativeProfilerSessionApi
 ): Promise<AndroidStopResult> {
   const recoveringPartialTrace = api.recordingTimedOut || api.recordingExitedUnexpectedly;
   if (!api.profilingActive && !recoveringPartialTrace) {
-    // See the iOS twin: a teardown leaves a fresh session behind, which is
-    // indistinguishable from one that never started without this breadcrumb.
+    // See the iOS twin: a teardown leaves a fresh session behind, which without
+    // this breadcrumb is indistinguishable from one that never started.
     const reaped = takeReapedSession("native-profiler", api.deviceId);
     throw new FailureError(
       reaped
@@ -158,8 +161,8 @@ export async function stopNativeProfilerAndroid(
         failure_stage: "android_native_profiler_stop",
         failure_area: "tool_server",
         // Internal session-state, not caller input — matches the react twin
-        // REACT_PROFILER_NO_ACTIVE_SESSION (not_found) so the "no active session"
-        // family carries one consistent kind across React/native/iOS/Android.
+        // REACT_PROFILER_NO_ACTIVE_SESSION so the "no active session" family
+        // carries one consistent kind.
         error_kind: "not_found",
       }
     );
@@ -167,26 +170,19 @@ export async function stopNativeProfilerAndroid(
 
   if (!api.traceFile || !api.androidOnDeviceTracePath || !api.capturePid) {
     if (recoveringPartialTrace) {
-      // Unreachable on Android: `recordingExitedUnexpectedly` is only ever set on
-      // the iOS path, and the Android recording-cap timeout sets `recordingTimedOut`
-      // while leaving the trace handles (traceFile / androidOnDeviceTracePath /
-      // capturePid) intact — so `recoveringPartialTrace` is never true here with the
-      // handles missing. Kept as a defensive guard, but a mid-recording perfetto
-      // crash on Android is not detected/flagged yet, so it stays unclassified
-      // rather than getting a telemetry code that can never fire on this platform.
+      // Unreachable on Android: `recordingExitedUnexpectedly` is only set on the
+      // iOS path, and the recording-cap timeout leaves the trace handles intact.
+      // Defensive only — a mid-recording perfetto crash is not flagged yet, so no
+      // telemetry code that could never fire on this platform.
       throw new Error(
         "Native profiling recording exited unexpectedly and no trace file is available. " +
           "Call native-profiler-start again."
       );
     }
-    // Unreachable in practice: the trace handles (traceFile / androidOnDeviceTracePath
-    // / capturePid) are all set synchronously BEFORE `profilingActive` is flipped true,
-    // and are nulled only AFTER it is flipped false (the recording-cap timeout likewise
-    // leaves them intact) — so `profilingActive === true` always implies every handle is
-    // present, making "active session yet handles missing" impossible. Kept as a
-    // defensive "this should never happen" invariant — a programmer/state error, not a
-    // user-reachable failure mode — so it stays a plain Error without a telemetry code
-    // (a code here could never bucket a real failure on the toolFailed path).
+    // Unreachable in practice: the trace handles are set before `profilingActive`
+    // is flipped true and nulled only after it is flipped false, so an active
+    // session always has them. Defensive invariant for a programmer/state error,
+    // not a user-reachable failure — hence a plain Error with no telemetry code.
     throw new Error(
       "Native profiling session is active but its trace handles are missing — the recording state is inconsistent. " +
         "Call native-profiler-start again."
@@ -208,11 +204,9 @@ export async function stopNativeProfilerAndroid(
       recordingTimedOut: api.recordingTimedOut,
     });
   } finally {
-    // Always return the session to a clean, startable state — even if the
-    // `adb pull` failed (device unplugged mid-stop, on-device file gone, host
-    // disk full). Otherwise a transient stop error leaves profilingActive=true,
-    // which rejects the next start with "a session is already running" and
-    // wedges the user until they happen to re-stop.
+    // Always return the session to a startable state, even when the `adb pull`
+    // failed: otherwise profilingActive stays true and rejects the next start
+    // with "a session is already running" until the user happens to re-stop.
     api.profilingActive = false;
     api.capturePid = null;
     api.captureProcess = null;
@@ -223,7 +217,8 @@ export async function stopNativeProfilerAndroid(
   }
 
   const { hostTracePath, warning } = stopResult;
-  api.exportedFiles = { pftrace: hostTracePath };
+  const exportedFiles: Record<AndroidExportKey, string | null> = { pftrace: hostTracePath };
+  api.exportedFiles = exportedFiles;
   if (api.appProcess) {
     await writeAndroidNativeProfilerMetadata(hostTracePath, {
       platform: "android",
@@ -234,7 +229,7 @@ export async function stopNativeProfilerAndroid(
 
   const result: AndroidStopResult = {
     traceFile: hostTracePath,
-    exportedFiles: api.exportedFiles,
+    exportedFiles,
   };
   if (warning) result.warning = warning;
   return result;
@@ -259,9 +254,8 @@ export async function analyzeNativeProfilerAndroid(
   try {
     pipelineResult = await runAndroidProfilerPipeline(hostTracePath, appPackage);
   } catch (err) {
-    // Bundled WASM engine failed to load: return a prominent banner
-    // (analysis_failed, empty exportErrors so it never renders as a "> Export
-    // warnings" list) pointing at the reinstall / ARGENT_TRACE_PROCESSOR_WASM fix.
+    // Bundled WASM engine failed to load: return a prominent banner instead,
+    // with empty exportErrors so it never renders as an "Export warnings" list.
     if (err instanceof TraceProcessorUnavailableError) {
       api.parsedData = null;
       return {
@@ -291,9 +285,10 @@ export async function analyzeNativeProfilerAndroid(
     payload,
     traceFile: hostTracePath,
     exportErrors: pipelineResult.exportErrors,
-    // wallClockStartMs is the recording's start time (set at start, persisted in
-    // the metadata sidecar, restored by profiler-load). A large gap to "now"
-    // means we're analyzing a trace from an earlier session, not a fresh capture.
+    // Recording start time, persisted in the metadata sidecar and restored by
+    // profiler-load, so a large gap to "now" means an earlier session's trace.
     freshnessNote: formatTraceFreshness(api.wallClockStartMs, Date.now()) ?? undefined,
+    // Explains an absent CPU section when samples exist but carry no stacks.
+    cpuDiagnostic: pipelineResult.cpuDiagnostic,
   });
 }

@@ -1,35 +1,29 @@
 /**
- * Spawn, track, and write into a detached `claude` terminal session — the
- * mechanism behind `argent lens` (CLI-driven Argent Lens). It is a faithful
- * TypeScript port of the macOS applet's AppleScript spawner + process tracker
- * (`~/dev/argent-utils-applet`), with one capability added: writing fresh input
- * INTO an already-running session (the applet only ever spawned + focused).
- *
- * Everything here drives `/usr/bin/osascript` and `/bin/ps` — there is no
- * long-lived handle to the detached terminal and no new dependency. macOS only
- * (the caller guards `process.platform`).
+ * Spawn, track, and write into a detached agent terminal session — the
+ * new-window path of `argent lens`. Drives `/usr/bin/osascript` and `/bin/ps`,
+ * keeping no long-lived handle to the terminal. macOS only (the caller guards
+ * `process.platform`).
  *
  * Why osascript and not a tty write: writing to a tty from another process
  * injects into the terminal's OUTPUT, not the foreground program's stdin
  * (feeding input would need TIOCSTI, which macOS has locked down). The terminal
  * apps' own scripting — iTerm `write text`, Terminal `do script … in <tab>` —
- * delivers the string to the session as if typed, so a running TUI like
- * `claude` receives it as a queued prompt. That is exactly the channel Lens
- * needs to "queue changes to the agent".
+ * delivers the string to the session as if typed, so a running TUI receives it
+ * as a queued prompt.
  */
 
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 
-/** Which terminal app drives the session. iTerm preferred; Terminal is the
- * always-present fallback and the more limited write path. */
+/** iTerm is preferred; Terminal.app is the always-present fallback and the more
+ * limited write path. */
 export type TerminalApp = "iterm" | "terminal";
 
-/** The OS-level handles captured at spawn time — enough to write into the
- * session, probe its liveness, and bring its window forward later. */
+/** OS-level handles captured at spawn time — enough to write into the session
+ * and probe its liveness. */
 export interface TerminalSession {
   app: TerminalApp;
-  /** Terminal window id (string form) — the focus + Terminal.app write target. */
+  /** Terminal window id (string form) — Terminal.app's script target. */
   windowId: string;
   /** iTerm session id (GUID); "" for Terminal.app (no stable session id). */
   sessionId: string;
@@ -37,8 +31,7 @@ export interface TerminalSession {
   tty: string;
 }
 
-/** Common install locations for iTerm; Terminal.app is part of macOS so it is
- * always present and needs no detection. */
+/** Terminal.app ships with macOS, so only iTerm needs detecting. */
 const ITERM_PATHS = ["/Applications/iTerm.app", `${process.env.HOME ?? ""}/Applications/iTerm.app`];
 
 export function isITermInstalled(existsSync: (p: string) => boolean = defaultExists): boolean {
@@ -49,8 +42,7 @@ function defaultExists(p: string): boolean {
   return existsSync(p);
 }
 
-/** Resolve the terminal to actually drive: the preferred one if usable, else
- * Terminal.app (always installed). */
+/** The preferred terminal if usable, else Terminal.app. */
 export function resolveTerminal(
   preferred: TerminalApp = "iterm",
   existsSync: (p: string) => boolean = defaultExists
@@ -69,21 +61,16 @@ export function shellQuote(s: string): string {
   return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
-/** Collapse a multi-line string into a single line — AppleScript string
- * literals can't carry raw newlines, and `write text` (and a PTY composer)
- * would treat an embedded line break as a separate Enter (submitting a partial
- * prompt to the TUI). A TUI composer submits on CR *or* LF, so a lone `\r` with
- * no following `\n` must be collapsed too — otherwise it slips through and
- * submits the prompt early. Runs of CR/LF (with surrounding whitespace) become a
- * single space; interior tabs and single spaces are preserved. */
+/** Collapse a multi-line string into one line: AppleScript literals can't carry
+ * raw newlines, and a composer reads an embedded CR *or* LF as an Enter that
+ * submits a partial prompt. Interior tabs and single spaces survive. */
 export function flattenLine(s: string): string {
   return s.replace(/\s*[\r\n]+\s*/g, " ").trim();
 }
 
 /**
  * AppleScript that opens a NEW terminal window running `shellCommand` and prints
- * `windowId|sessionId|tty` on stdout so the caller can track the session. Port
- * of the applet's `appleScript(for:shellCommand:)`.
+ * `windowId|sessionId|tty` on stdout so the caller can track the session.
  */
 export function buildSpawnScript(app: TerminalApp, shellCommand: string): string {
   const esc = escapeAppleScript(shellCommand);
@@ -117,25 +104,19 @@ export function buildSpawnScript(app: TerminalApp, shellCommand: string): string
 
 /**
  * AppleScript that writes `text` (one line) into an EXISTING tracked session as
- * if typed — the "outputting" mechanism. iTerm targets the session by its GUID;
- * Terminal.app targets the window by id and uses `do script … in <tab>`.
+ * if typed. iTerm targets the session by GUID; Terminal.app the window by id.
  *
  * Three keystroke beats, not one:
  *
- *  1. A leading Esc. `await_user_selection` is hidden in a CLI session so the
- *     agent can't block on a pick, but it may still be mid-turn (thinking, or with
- *     a half-typed composer) when feedback arrives. Esc interrupts the current
- *     turn / clears a half-typed composer so the feedback lands as a clean new
- *     prompt. On an already-idle composer Esc is a harmless no-op. iTerm sends it
- *     raw via `write text … newline no` (ASCII 27, no Enter); Terminal.app has no
- *     newline-suppressing write, so it best-effort types the Esc char.
- *  2. The feedback text. A TUI composer treats a single injected `text + newline`
- *     chunk as composer CONTENT (the newline becomes a literal line break) and
- *     does NOT submit it — so this only fills the box.
- *  3. A SEPARATE, standalone newline a beat later, read as a distinct Enter that
- *     submits the message (which `claude` then queues to the agent). A program
- *     reading the tty directly (a plain shell, `cat`) submits on the first
- *     newline already; the trailing one is a harmless blank line.
+ *  1. A leading Esc. `await_user_selection` is hidden in a CLI session, so the
+ *     agent may still be mid-turn or holding a half-typed composer when feedback
+ *     arrives; Esc clears that so the feedback lands as a clean new prompt, and
+ *     is a no-op on an idle composer. Terminal.app has no newline-suppressing
+ *     write, so there it is only a best-effort Esc char.
+ *  2. The feedback text. A composer reads one injected `text + newline` chunk as
+ *     CONTENT and does not submit it.
+ *  3. A standalone newline a beat later — the distinct Enter that submits. For a
+ *     program reading the tty directly it is a harmless blank line.
  *
  * The `delay`s let the composer register each beat before the next lands.
  */
@@ -181,10 +162,8 @@ export function buildWriteScript(session: TerminalSession, text: string): string
   ].join("\n");
 }
 
-/** AppleScript that returns the visible text of a tracked session — used to
- * detect a first-run prompt (e.g. the agent's "trust this folder?" dialog)
- * before relaying anything. iTerm exposes `text of session`; Terminal.app the
- * `contents of selected tab`. */
+/** AppleScript returning a tracked session's visible text — used to spot a
+ * first-run "trust this folder?" prompt before relaying anything. */
 export function buildReadScript(session: TerminalSession): string {
   if (session.app === "iterm") {
     return [
@@ -210,8 +189,8 @@ export function buildReadScript(session: TerminalSession): string {
   ].join("\n");
 }
 
-/** AppleScript that sends a lone Enter (newline, no text) to a tracked session —
- * used to confirm a first-run menu whose default option is the desired one. */
+/** AppleScript sending a lone Enter to a tracked session — accepts a first-run
+ * menu whose default option is the desired one. */
 export function buildEnterScript(session: TerminalSession): string {
   if (session.app === "iterm") {
     return [
@@ -235,8 +214,8 @@ export function buildEnterScript(session: TerminalSession): string {
   ].join("\n");
 }
 
-/** Split osascript's `wid|sid|tty` line. Empty middle field is expected for
- * Terminal.app. Missing fields degrade to "". */
+/** Split osascript's `wid|sid|tty` line. Terminal.app leaves the middle field
+ * empty; missing fields degrade to "". */
 export function parseCapture(out: string): { windowId: string; sessionId: string; tty: string } {
   const parts = out.trim().split("|");
   return {
@@ -261,7 +240,7 @@ export function parseAliveTtys(psOutput: string): Set<string> {
   return set;
 }
 
-// ── Side-effecting runners ───────────────────────────────────────────────
+// Side-effecting runners
 
 function runOsascript(script: string): string {
   try {
@@ -285,7 +264,7 @@ export function spawnTerminalSession(command: string, app: TerminalApp): Termina
   return { app, windowId, sessionId, tty };
 }
 
-/** Write one line into a tracked session as if typed (queues it to `claude`).
+/** Write one line into a tracked session as if typed, queuing it to the agent.
  * Returns false (instead of throwing) when the session/window is gone. */
 export function writeToSession(session: TerminalSession, text: string): boolean {
   try {
@@ -296,8 +275,8 @@ export function writeToSession(session: TerminalSession, text: string): boolean 
   }
 }
 
-/** Read a tracked session's visible text. Returns null when it can't be read
- * (window gone, scripting unavailable), so callers can fall back. */
+/** Returns null when the text can't be read (window gone, scripting
+ * unavailable), so callers can fall back. */
 export function readSessionText(session: TerminalSession): string | null {
   try {
     return runOsascript(buildReadScript(session));
@@ -326,8 +305,8 @@ export function aliveTtys(): Set<string> {
   }
 }
 
-/** True while the session's tty is still backed by a live process — i.e. its
- * window is open and `claude` (or its shell) is still running. */
+/** True while the session's tty is still backed by a live process — its window
+ * is open and the agent (or its shell) is still running. */
 export function isSessionAlive(session: TerminalSession): boolean {
   if (!session.tty) return false;
   return aliveTtys().has(shortTty(session.tty));

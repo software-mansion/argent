@@ -7,7 +7,6 @@ const path = require("path");
 
 const WORKSPACE_ROOT = path.resolve(__dirname, "../../..");
 
-// esbuild entry points (source) and bundle outputs.
 const TOOLS_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/tool-server/src/index.ts");
 const ARCHIVE_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/archive/src/index.ts");
 const REGISTRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/registry/src/index.ts");
@@ -38,9 +37,8 @@ const MCP_OUT_FILE = path.resolve(__dirname, "../dist/mcp-server.mjs");
 const CLI_OUT_FILE = path.resolve(__dirname, "../dist/cli-cmds.mjs");
 const PREVIEW_WINDOW_OUT_FILE = path.resolve(__dirname, "../dist/preview-window/main.cjs");
 
-// Shared aliases so each bundle resolves workspace deps from source. Resolving
-// from source (rather than each package's compiled dist/) keeps the bundle
-// independent of build order/freshness.
+// Resolve workspace deps from source rather than each package's compiled dist/,
+// so bundles don't depend on build order or freshness.
 const ALIASES = {
   "@argent/archive": ARCHIVE_ENTRY,
   "@argent/registry": REGISTRY_ENTRY,
@@ -54,8 +52,9 @@ const ALIASES = {
   "@argent/telemetry": TELEMETRY_ENTRY,
 };
 
-// Build-time constants for @argent/telemetry. The PostHog project token is a
-// checked-in public write-only key; only version metadata needs esbuild defines.
+// Build-time constants for @argent/telemetry. An unset ARGENT_OTEL_INGEST_TOKEN
+// defines "", which leaves the telemetry client unconstructed and telemetry
+// inert (see packages/telemetry/src/otel.ts).
 const TELEMETRY_CLI_VERSION = (() => {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
@@ -65,24 +64,21 @@ const TELEMETRY_CLI_VERSION = (() => {
   }
 })();
 
+const TELEMETRY_OTEL_INGEST_TOKEN = process.env.ARGENT_OTEL_INGEST_TOKEN ?? "";
+
 const TELEMETRY_DEFINE = {
   ARGENT_CLI_VERSION: JSON.stringify(TELEMETRY_CLI_VERSION),
+  ARGENT_OTEL_INGEST_TOKEN: JSON.stringify(TELEMETRY_OTEL_INGEST_TOKEN),
 };
 
-// esbuild on platform:"node" defaults mainFields to ["main","module"], which
-// picks UMD entries that use runtime `require("./impl/...")`. Those requires
-// can't be statically resolved during bundling and fail at runtime because
-// the impl/ folder isn't shipped next to the bundle. Prefer "module" so we
-// pick ESM entries with static imports that get fully inlined. Affects e.g.
-// jsonc-parser, which ships both UMD (main) and ESM (module).
+// Prefer "module" over esbuild's node default ["main","module"]: UMD entries
+// (e.g. jsonc-parser's) use runtime `require("./impl/...")` that can't be
+// statically resolved, and impl/ isn't shipped next to the bundle.
 const MAIN_FIELDS = ["module", "main"];
 
-// Banner injected into ESM bundles so any inlined CJS dependencies that rely on
-// the CJS context work: `require()`, plus `__dirname`/`__filename` (e.g.
-// @argent/native-devtools-ios resolves the simulator-server binary dir relative
-// to `__dirname`, which is undefined in an ESM module without this shim). The
-// shimmed values point at the bundle's own location, matching how the CJS
-// tool-server bundle resolves them natively.
+// Lets inlined CJS dependencies use `require()`, `__dirname` and `__filename`
+// inside an ESM bundle (e.g. @argent/native-devtools-ios resolves bin/ off
+// `__dirname`). The shimmed values point at the bundle's own location.
 const ESM_REQUIRE_BANNER = {
   js:
     "import { createRequire as __createRequire } from 'node:module'; " +
@@ -93,37 +89,28 @@ const ESM_REQUIRE_BANNER = {
     "const __dirname = __pathDirname(__filename);",
 };
 
-// ── Asset source/destination paths ─────────────────────────────────────────
 // Source layout mirrors what `scripts/download-simulator-server.sh` writes:
-// platform-keyed subdirectories of bin/, each containing one simulator-server
-// binary. ax-service is macOS-only (it spawns inside an iOS Simulator), so it
-// only lives under darwin/.
+// platform-keyed subdirectories of bin/.
 const BIN_SRC_ROOT = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/bin");
 const AX_BIN_SRC = path.resolve(BIN_SRC_ROOT, "darwin/ax-service");
-// The tcp ax-service lives in a platform-NEUTRAL bin/tcp/ (not bin/darwin/tcp/):
-// it is uploaded to the remote macOS orchestrator, so it must resolve from any
-// host platform. Matches tcpBinDir() in native-devtools-ios/src/index.ts.
+// Platform-NEUTRAL bin/tcp/ (not bin/darwin/tcp/): this binary is uploaded to the
+// remote macOS orchestrator, so it must resolve from any host platform. Matches
+// tcpBinDir() in native-devtools-ios/src/index.ts.
 const AX_TCP_BIN_SRC = path.resolve(BIN_SRC_ROOT, "tcp/ax-service");
 const BIN_DIR = path.resolve(__dirname, "../bin");
 const AX_BIN_DEST = path.resolve(BIN_DIR, "darwin/ax-service");
 const AX_TCP_BIN_DEST = path.resolve(BIN_DIR, "tcp/ax-service");
-// tvOS control binaries. Both are macOS-only: tvos-ax-service runs inside an
-// appletvsimulator, tvos-hid-daemon runs on the host. Unix-socket only.
+// tvOS control binaries. Both macOS-only, unix-socket only.
 const TVOS_AX_BIN_SRC = path.resolve(BIN_SRC_ROOT, "darwin/tvos-ax-service");
 const TVOS_HID_BIN_SRC = path.resolve(BIN_SRC_ROOT, "darwin/tvos-hid-daemon");
 const TVOS_AX_BIN_DEST = path.resolve(BIN_DIR, "darwin/tvos-ax-service");
 const TVOS_HID_BIN_DEST = path.resolve(BIN_DIR, "darwin/tvos-hid-daemon");
 // Host platform keys (see hostPlatformKey() in @argent/native-devtools-ios):
 // darwin is a universal binary; Linux ships one single-arch ELF per key;
-// win32 ships a PE `.exe` (named simulator-server.exe, not simulator-server).
+// win32 ships a PE `.exe`.
 const SUPPORTED_HOST_PLATFORMS = ["darwin", "linux", "linux-arm64", "win32"];
-// The simulator-server file name per host key — extensionless everywhere
-// except Windows, where it's a `.exe`.
 const simulatorServerFileName = (platform) =>
   platform === "win32" ? "simulator-server.exe" : "simulator-server";
-// Generated module pinning the Perfetto version that stamps the bundled
-// trace_processor.wasm. esbuild inlines it into every bundle via the
-// @argent/native-devtools-android alias.
 const BUNDLED_META_DEST = path.resolve(
   WORKSPACE_ROOT,
   "packages/native-devtools-android/src/bundled-meta.ts"
@@ -166,11 +153,7 @@ const TRACECFG_SRC = path.resolve(
 );
 const TRACECFG_DEST = path.resolve(__dirname, "../assets/argent.tracecfg.pbtxt");
 
-// ── Asset table ─────────────────────────────────────────────────────────────
-// Declarative copy plan. Each entry is copied (or its absence reported) by
-// copyAsset() below. `required: true` throws on a missing source; otherwise
-// copyAsset warns and skips. The per-asset required/optional decision is the
-// whole point of keeping this table explicit.
+// Declarative copy plan for copyAsset() below.
 //
 //   kind        "file" (copyFileSync) | "dir" (cpSync recursive)
 //   src/dest    absolute source and destination paths
@@ -206,7 +189,7 @@ const ASSETS = [
     copiedLabel: "ax-service binary",
     missLabel: "ax-service binary",
   },
-  // iOS ax-service TCP variant. Best-effort: only present when the TCP transport was built.
+  // iOS ax-service TCP variant; only present when the TCP transport was built.
   {
     kind: "file",
     src: AX_TCP_BIN_SRC,
@@ -216,8 +199,8 @@ const ASSETS = [
     copiedLabel: "ax-service (tcp) binary",
     missLabel: "ax-service (tcp) binary",
   },
-  // tvOS AX reader — spawned inside an appletvsimulator via simctl to read
-  // the focus-engine accessibility tree. macOS-only, unix-socket transport.
+  // tvOS AX reader — `simctl spawn`d inside an appletvsimulator to read the
+  // focus-engine accessibility tree.
   {
     kind: "file",
     src: TVOS_AX_BIN_SRC,
@@ -228,7 +211,7 @@ const ASSETS = [
     missLabel: "tvos-ax-service binary",
   },
   // tvOS HID daemon — runs on the macOS host, injects Siri-remote HID events
-  // into the simulator via SimulatorKit. macOS-only, unix-socket transport.
+  // into the simulator via SimulatorKit.
   {
     kind: "file",
     src: TVOS_HID_BIN_SRC,
@@ -239,12 +222,10 @@ const ASSETS = [
     missLabel: "tvos-hid-daemon binary",
   },
   // Android host-side Perfetto trace processor: the third-party WASM engine
-  // (trace_processor.wasm + emscripten glue + the EngineBase decoder + LICENSE).
-  // wasm-trace-processor.ts resolves these via
-  // `path.join(__dirname, "..", "assets", "trace-processor")` — in the bundled
-  // tool-server.cjs that is `<pkg>/assets/trace-processor/`, i.e. this exact
-  // destination. Not committed; fetched + sha256-verified at pack time by
-  // scripts/download-trace-processor.sh, so this copy is purely local.
+  // (trace_processor.wasm + emscripten glue + engine.mjs decoder + LICENSE).
+  // wasm-trace-processor.ts resolves them at `<pkg>/assets/trace-processor/`,
+  // i.e. this exact destination. Not committed; fetched + sha256-verified by
+  // scripts/download-trace-processor.sh.
   {
     kind: "dir",
     src: TRACE_PROCESSOR_SRC,
@@ -264,9 +245,9 @@ const ASSETS = [
     missLabel: "Native devtools dylibs",
     countExt: ".dylib",
   },
-  // Android helper manifest.json. Required: helperManifest()/bundledHelperApkPath()
-  // read it at runtime, and the version-stamped APK filename is derived from its
-  // versionName (see the dedicated APK block after the copy loop).
+  // Android helper manifest.json: helperManifest()/bundledHelperApkPath() read it
+  // at runtime, and the version-stamped APK filename comes from its versionName
+  // (see the APK block after the copy loop).
   {
     kind: "file",
     src: ANDROID_MANIFEST_SRC,
@@ -276,10 +257,9 @@ const ASSETS = [
     missLabel: "Android manifest",
     hint: "Run: bash scripts/download-native-binaries.sh (fetches from argent-private-releases)",
   },
-  // Preview UI (@argent/ui) next to the bundled tool-server so that tool-server's
-  // /preview/ endpoint can locate it via __dirname lookup. index.html AND its
-  // externalised theme.css must both ship — a partial copy would 404
-  // /preview/theme.css and serve an unstyled UI.
+  // Preview UI (@argent/ui) next to the bundled tool-server, where the /preview/
+  // endpoint finds it via __dirname. The externalised theme.css must ship with
+  // index.html — a partial copy 404s /preview/theme.css and serves an unstyled UI.
   {
     kind: "file",
     src: UI_SRC,
@@ -305,11 +285,8 @@ const ASSETS = [
     copiedLabel: "Argent.tracetemplate",
     missLabel: "Argent.tracetemplate",
   },
-  // argent.tracecfg.pbtxt so the Android profiler capture step can find it at
-  // runtime. capture.ts resolves the path via @argent/native-devtools-android's
-  // `traceConfigPath()`, which does
-  // `path.join(__dirname, "..", "assets", "argent.tracecfg.pbtxt")` — in the
-  // bundled tool-server.cjs that is `<pkg>/assets/argent.tracecfg.pbtxt`,
+  // Android profiler capture reads this via @argent/native-devtools-android's
+  // `traceConfigPath()`, which resolves `<pkg>/assets/argent.tracecfg.pbtxt` —
   // i.e. this exact destination.
   {
     kind: "file",
@@ -320,9 +297,8 @@ const ASSETS = [
     missLabel: "argent.tracecfg.pbtxt",
     hint: "This file is required for Android native profiling.",
   },
-  // Android profiler SQL queries. run-tp.ts resolves QUERY_DIR via
-  // `path.join(__dirname, "..", "assets", "queries")` — in the bundled
-  // tool-server.cjs that is `<pkg>/assets/queries/`, i.e. this exact destination.
+  // Android profiler SQL queries. traceProcessorQueriesDir() resolves
+  // `<pkg>/assets/queries/`, i.e. this exact destination.
   {
     kind: "dir",
     src: QUERIES_SRC,
@@ -333,9 +309,7 @@ const ASSETS = [
     countExt: ".sql",
     hint: "This directory is required for native-profiler-analyze on Android.",
   },
-  // Skills shipped on npm. Mirrors the full directory structure from
-  // packages/skills/skills/ (e.g. metro-debugger/SKILL.md,
-  // metro-debugger/references/source-maps.md, …).
+  // Skills shipped on npm; the full directory structure is mirrored.
   {
     kind: "dir",
     src: SKILLS_SRC,
@@ -372,7 +346,6 @@ const ASSETS = [
 ];
 
 /**
- * Bundle a single entry point with esbuild and log the result.
  * @param {{ entry: string, out: string, format: "cjs" | "esm", label: string, external?: string[] }} opts
  */
 function buildBundle({ entry, out, format, label, external = [] }) {
@@ -386,10 +359,8 @@ function buildBundle({ entry, out, format, label, external = [] }) {
     alias: ALIASES,
     mainFields: MAIN_FIELDS,
     define: TELEMETRY_DEFINE,
-    // ESM bundles need the require() shim (for inlined CJS deps) and must keep
-    // node: builtins external; CJS bundles only externalise what the caller
-    // passes (e.g. `electron`, or tree-sitter's native addons — see the
-    // tools-server call site).
+    // ESM bundles need the require() shim and must keep node: builtins external;
+    // CJS bundles externalise only what the caller passes.
     ...(format === "esm"
       ? { banner: ESM_REQUIRE_BANNER, external: [...new Set(["node:*", ...external])] }
       : external.length > 0
@@ -400,8 +371,7 @@ function buildBundle({ entry, out, format, label, external = [] }) {
 }
 
 /**
- * Resolve the count shown in the success line, or null when the asset isn't
- * counted (`count` takes precedence over `countExt`).
+ * Count shown in the success line, or null when the asset isn't counted.
  * @param {Asset} a
  * @returns {number | null}
  */
@@ -445,11 +415,8 @@ function copyAsset(a) {
 }
 
 /**
- * Read the pinned Perfetto version from argent-private's PERFETTO_VERSION (the
- * same file CI builds the engine against), falling back to the committed
- * constant in bundled-meta.ts when the submodule isn't checked out (dev/source
- * builds). Stamps the bundled trace_processor.wasm so the marker and the engine
- * always agree.
+ * Pinned Perfetto version from argent-private's PERFETTO_VERSION, falling back to
+ * the committed constant in bundled-meta.ts when the submodule isn't checked out.
  */
 function readPerfettoVersion() {
   try {
@@ -469,23 +436,15 @@ function readPerfettoVersion() {
 }
 
 /**
- * Regenerate bundled-meta.ts so it pins the Perfetto version that stamps the
- * bundled trace_processor.wasm. The version comes from argent-private's
- * PERFETTO_VERSION (or the committed fallback). Since the engine is now a single
- * cross-platform WASM artifact, there is no per-platform marker to emit.
+ * Regenerate bundled-meta.ts so it pins the Perfetto version stamping the
+ * bundled trace_processor.wasm.
  */
 function generateBundledMeta() {
   const version = readPerfettoVersion();
-  const content = `// GENERATED at pack time by packages/argent/scripts/bundle-tools.cjs.
-//
-// Committed with a sane fallback value so dev / source builds (and the
-// submodule-less checkout) still compile; the pack step overwrites this file
-// with the Perfetto version pinned in argent-private's PERFETTO_VERSION. esbuild
-// inlines it into every published bundle. The trace-processor engine is now a
-// single cross-platform WASM artifact (no per-platform binary), fetched +
-// sha256-verified at pack time, so this version is purely informational — it
-// stamps the bundled \`trace_processor.wasm\` — and JS<->engine version skew is
-// structurally impossible.
+  const content = `// GENERATED by packages/argent/scripts/bundle-tools.cjs, which overwrites this
+// file from argent-private's PERFETTO_VERSION; the committed value is a fallback
+// so builds without that submodule still compile. Informational only — it stamps
+// the bundled \`trace_processor.wasm\`, nothing resolves against it.
 
 export const PERFETTO_VERSION = "${version}";
 `;
@@ -493,68 +452,54 @@ export const PERFETTO_VERSION = "${version}";
   console.log(`✓ Generated bundled-meta.ts (perfetto=${version})`);
 }
 
-// Generate the bundled marker BEFORE esbuild runs, so the constants get inlined
-// into tool-server.cjs / installer.mjs / etc.
+// Must run before esbuild, so PERFETTO_VERSION is inlined into the bundles.
 generateBundledMeta();
 
 // Purge artifact directories so stale files don't survive across builds. Derived
-// from the table (every dir-kind destination, plus BIN_DIR) so it can't drift.
+// from the table so it can't drift.
 const PURGE_DIRS = [BIN_DIR, ...ASSETS.filter((a) => a.kind === "dir").map((a) => a.dest)];
 for (const dir of PURGE_DIRS) {
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
 }
 
-// Copy the hand-written `argent-simulator-server` dispatcher into bin/.
-// It's the file npm's `bin` field publishes; its job is to pick the right
-// per-platform binary at invocation time. Source lives in scripts/ so it
-// isn't entangled with the gitignored bundle output under bin/.
+// The `argent-simulator-server` dispatcher npm's `bin` field publishes; it picks
+// the right per-platform binary at invocation time. Source lives in scripts/ so
+// it isn't entangled with the gitignored bundle output under bin/.
 const DISPATCHER_SRC = path.resolve(__dirname, "argent-simulator-server.cjs");
 const DISPATCHER_DEST = path.resolve(BIN_DIR, "argent-simulator-server.cjs");
 fs.copyFileSync(DISPATCHER_SRC, DISPATCHER_DEST);
 fs.chmodSync(DISPATCHER_DEST, 0o755);
 
-// The Android manifest lives outside PURGE_DIRS (it's a single file under
-// assets/), so remove it explicitly so a stale manifest can't fool
-// helperManifest() into pointing at an APK that's no longer present.
-// The APK itself goes into BIN_DIR which is already fully purged above.
+// The Android manifest is a single file under assets/, outside PURGE_DIRS, so
+// remove it explicitly: a stale manifest would fool helperManifest() into
+// pointing at an APK that's no longer present.
 fs.rmSync(ANDROID_MANIFEST_DEST, { force: true });
 
-// Ensure dist/ exists
 fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
 
-// Bundle the tools server (CJS — the dispatcher loads it via require()).
+// tree-sitter / tree-sitter-typescript are native addons (.node) esbuild cannot
+// inline; external so the bundle `require()`s them at runtime from the published
+// package's own dependencies.
 //
-// tree-sitter / tree-sitter-typescript are native addons (.node) that esbuild
-// cannot inline; keep them external so the bundle `require()`s them at runtime
-// from the published package's own dependencies (see package.json).
-//
-// `electron` MUST stay external too. It is a runtime dependency of
-// @swmansion/argent (npm installs it into node_modules/electron). If esbuild
-// inlines electron's index.js into this bundle, electron's binary-path lookup
-// runs with __dirname = <install>/dist (no path.txt there) and throws
-// "Electron failed to install correctly" at eval time. That throw is swallowed
-// by preview-window.ts's try/catch, so the variant-selection window silently
-// never opens. Keeping it external means the runtime `require("electron")` in
-// preview-window.ts resolves against the real node_modules/electron with an
-// intact __dirname. (The preview-window bundle below externalises it too.)
+// `electron` MUST stay external. Inlined, electron's binary-path lookup runs
+// with __dirname = <install>/dist (no path.txt there) and throws "Electron
+// failed to install correctly" at eval time. External keeps the runtime
+// `require("electron")` in preview-window.ts resolving against the installed
+// node_modules/electron with an intact __dirname.
 //
 // `@fails-components/webtransport` and its http3-quiche transport ship native
-// addons (quiche, prebuilt .node binaries) that can't be inlined either. They
-// are declared in @swmansion/argent's dependencies so npm installs them
-// alongside the package; keep them external so the bundle resolves them from
+// addons (quiche, prebuilt .node binaries) that can't be inlined either; they
+// are declared on @swmansion/argent, so external resolves them from
 // node_modules/ at runtime.
 //
 // `dtrace-provider` MUST stay external. It is an OPTIONAL dependency of bunyan
-// (the tool-server event-log logger). bunyan loads it defensively as
-// `require('dtrace-provider' + '')` wrapped in try/catch — the `+ ''` is a
-// deliberate trick to hide the module from bundlers, and a failed require just
-// disables the (unused) DTrace USDT probes. esbuild constant-folds that string
-// back to a literal, defeating the trick, and then chokes on dtrace-provider's
-// own dynamic native binding require (`require('./src/build/'+build+'/…')`).
-// Keeping it external restores bunyan's intent: the published package never
-// declares dtrace-provider, so the runtime require misses and bunyan's
-// try/catch nulls it out — no DTrace probes, no functional impact.
+// (the tool-server event-log logger), which hides it from bundlers with
+// `require('dtrace-provider' + '')` in a try/catch — a failed require just
+// disables the unused DTrace USDT probes. esbuild constant-folds that string
+// back to a literal and then chokes on dtrace-provider's own dynamic native
+// binding require. External restores bunyan's intent: the published package
+// never declares it, so the require misses and bunyan nulls it out.
 buildBundle({
   entry: TOOLS_ENTRY,
   out: OUT_FILE,
@@ -573,33 +518,28 @@ buildBundle({
 // The remaining bundles are ESM so that:
 //   - installer: import.meta.dirname works at runtime (the dispatcher
 //     lazy-imports it, so its workspace dep needn't resolve in the published pkg);
-//   - MCP server: the @modelcontextprotocol/sdk ESM export paths resolve;
-//   - CLI commands: the tools/run/server subcommands share the same toolchain.
+//   - MCP server: the @modelcontextprotocol/sdk ESM export paths resolve.
 const ESM_BUNDLES = [
   { entry: INSTALLER_ENTRY, out: INSTALLER_OUT_FILE, label: "installer" },
   { entry: MCP_ENTRY, out: MCP_OUT_FILE, label: "MCP server" },
   // node-pty is a native addon `argent lens` loads at runtime (the agent PTY
-  // proxy). esbuild can't inline a .node, so keep it external — the CLI bundle
-  // `require()`s it from the published package's optional dependency. Absent
-  // install → loadNodePty() returns null → lens falls back to a new window.
+  // proxy); esbuild can't inline a .node. Absent install → loadNodePty() returns
+  // null → lens falls back to a new terminal window.
   { entry: CLI_ENTRY, out: CLI_OUT_FILE, label: "CLI commands", external: ["node-pty"] },
 ];
 for (const b of ESM_BUNDLES) {
   buildBundle({ ...b, format: "esm" });
 }
 
-// Copy all declared assets.
 for (const a of ASSETS) {
   copyAsset(a);
 }
 
-// Bundle the Electron preview-window main entrypoint. CJS, with `electron`
-// externalised — the dependency is declared on @swmansion/argent so npm
-// installs it alongside, and the spawn helper in tool-server's
-// preview-window.ts resolves the executable via `require("electron")`.
-// The bundled main.cjs lives next to the tool-server bundle so the same
-// helper can find it via `path.join(__dirname, "preview-window", "main.cjs")`
-// without needing @argent/preview-window to be a published sibling pkg.
+// `electron` stays external here too — tool-server's preview-window.ts resolves
+// the executable via `require("electron")`. The bundled main.cjs lands next to
+// the tool-server bundle so that same helper finds it at
+// `path.join(__dirname, "preview-window", "main.cjs")`, without needing
+// @argent/preview-window to be a published sibling pkg.
 fs.mkdirSync(path.dirname(PREVIEW_WINDOW_OUT_FILE), { recursive: true });
 buildBundle({
   entry: PREVIEW_WINDOW_ENTRY,
@@ -609,10 +549,9 @@ buildBundle({
   external: ["electron", "node:*"],
 });
 
-// Copy simulator-server for every supported host platform that's present in
-// the staging area. Require the darwin binary only when bundling ON darwin
-// (the publish pipeline) — a Linux contributor running `npm run pack` locally
-// can't produce the macOS binary, so don't block them on its absence.
+// Require the darwin binary only when bundling ON darwin (the publish pipeline):
+// a Linux contributor running `npm run pack` can't produce the macOS binary, so
+// don't block them on its absence.
 for (const platform of SUPPORTED_HOST_PLATFORMS) {
   const binaryFile = simulatorServerFileName(platform);
   const src = path.join(BIN_SRC_ROOT, platform, binaryFile);
@@ -623,12 +562,10 @@ for (const platform of SUPPORTED_HOST_PLATFORMS) {
     fs.copyFileSync(src, dest);
     fs.chmodSync(dest, 0o755);
     console.log(`✓ Copied simulator-server (${platform}) → ${path.relative(process.cwd(), dest)}`);
-    // Ship the screen-sharing agent resources (jar + per-ABI .so) that the
-    // `android_device` controller pushes to a connected phone. They sit at
-    // <platform>/resources/android/ next to the binary (the simulator-server
-    // resolves them relative to its working directory, which the spawn sets to
-    // its own platform dir). download-simulator-server.sh extracts them there;
-    // optional because physical-device support degrades gracefully without them.
+    // Screen-sharing agent resources (jar + per-ABI .so) the `android_device`
+    // controller pushes to a connected phone. simulator-server resolves them
+    // relative to its working directory, which the spawn sets to its own
+    // platform dir. Optional: physical-device support degrades without them.
     const resourcesSrc = path.join(BIN_SRC_ROOT, platform, "resources");
     if (fs.existsSync(resourcesSrc)) {
       const resourcesDest = path.join(destDir, "resources");
@@ -647,12 +584,10 @@ for (const platform of SUPPORTED_HOST_PLATFORMS) {
   }
 }
 
-// Copy the Android helper APK into bin/ (the only Android native artifact left —
-// the trace processor now ships as WASM under assets/trace-processor/). Runs
-// after the copy loop, so dropping into the already-purged-and-repopulated
-// BIN_DIR is safe. Its filename is version-stamped from manifest.json's
-// versionName (see bundledHelperApkPath()); the APK is required at runtime, so a
-// missing one throws.
+// The Android helper APK is the only Android native artifact left (the trace
+// processor ships as WASM under assets/trace-processor/). Its filename is
+// version-stamped from manifest.json's versionName (see bundledHelperApkPath());
+// it is required at runtime, so a missing one throws.
 const manifest = JSON.parse(fs.readFileSync(ANDROID_MANIFEST_SRC, "utf8"));
 const apkName = `argent-android-devtools-${manifest.versionName}.apk`;
 const apkSrc = path.join(ANDROID_APK_SRC_DIR, apkName);

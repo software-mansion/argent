@@ -37,6 +37,17 @@ vi.mock("../src/utils/adb", async (importOriginal) => ({
   isAndroidTv: vi.fn(async () => false),
 }));
 
+// Stub the host-window wobble (iOS only) so these tests neither read the
+// developer's real flags.json nor script a window; its own behaviour lives in
+// window-shake.test.ts. Hoisted so every prepare call hands back the same
+// shaker and begin/settle can be asserted per test.
+const { mockShaker } = vi.hoisted(() => ({
+  mockShaker: { begin: vi.fn(), settle: vi.fn(async () => {}) },
+}));
+vi.mock("../src/utils/window-shake", () => ({
+  prepareHostWindowShake: vi.fn(async () => mockShaker),
+}));
+
 // `dispatchByPlatform` preflights each branch's `requires`; CI has neither
 // xcrun nor adb, so treat both as present.
 vi.mock("../src/utils/check-deps", async (importOriginal) => ({
@@ -54,6 +65,7 @@ import { isAndroidTv, runAdb } from "../src/utils/adb";
 import { isRemoteTvOsSimulator, simctlSpawn } from "../src/utils/sim-remote";
 import { isTvOsSimulator } from "../src/utils/ios-devices";
 import { UnsupportedOperationError } from "../src/utils/capability";
+import { prepareHostWindowShake } from "../src/utils/window-shake";
 
 const iosUdid = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
 const androidEmulator = "emulator-5554";
@@ -63,6 +75,9 @@ beforeEach(() => {
   vi.mocked(execFile).mockClear();
   vi.mocked(runAdb).mockClear();
   vi.mocked(simctlSpawn).mockClear();
+  vi.mocked(prepareHostWindowShake).mockClear();
+  mockShaker.begin.mockClear();
+  mockShaker.settle.mockClear();
 });
 
 describe("shake tool — iOS", () => {
@@ -86,6 +101,34 @@ describe("shake tool — iOS", () => {
       count: 3,
     });
     expect(execFile).toHaveBeenCalledTimes(3);
+  });
+
+  it("prepares one wobble for the tool call and begins it once per gesture", async () => {
+    await shakeTool.execute(services, { udid: iosUdid, count: 2 });
+    // Carries the device identity so the animation title-matches this
+    // simulator's own window.
+    expect(prepareHostWindowShake).toHaveBeenCalledTimes(1);
+    expect(prepareHostWindowShake).toHaveBeenCalledWith({
+      kind: "ios",
+      udid: iosUdid,
+      name: undefined,
+    });
+    expect(mockShaker.begin).toHaveBeenCalledTimes(2);
+    // Settled after the loop so no osascript outlives a successful call.
+    expect(mockShaker.settle).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails a bad gesture immediately, without waiting out the wobble", async () => {
+    // A genuine gesture failure must surface at once; the abandoned wobble
+    // cleans up after itself.
+    vi.mocked(execFile).mockImplementationOnce(((
+      _file: string,
+      _args: string[],
+      _opts: unknown,
+      cb: (e: Error | null) => void
+    ) => cb(new Error("Invalid device state: Shutdown"))) as never);
+    await expect(shakeTool.execute(services, { udid: iosUdid })).rejects.toThrow(/Failed to shake/);
+    expect(mockShaker.settle).not.toHaveBeenCalled();
   });
 });
 

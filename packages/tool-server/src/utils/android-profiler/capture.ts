@@ -9,17 +9,13 @@ const ON_DEVICE_TRACE_DIR = "/data/misc/perfetto-traces";
 const START_TIMEOUT_MS = 15_000;
 const STOP_POLL_INTERVAL_MS = 200;
 const STOP_TOTAL_TIMEOUT_MS = 30_000;
-// Short per-call timeout for the stop-path liveness probes and kill signals.
-// The default adb timeout is 30 s; on a dead/unplugged device the stop does
-// several `adb shell` round-trips back-to-back, so the default makes a single
-// stop block well over a minute before failing. A tight timeout (matching the
-// device-enrichment probes in adb.ts) lets a dead device fail fast instead.
+// The stop path makes several `adb shell` round-trips back-to-back, so adb's
+// 30 s default would make one stop on a dead device block for minutes. Matches
+// ENRICH_TIMEOUT_MS in adb.ts.
 const STOP_PROBE_TIMEOUT_MS = 5_000;
 
-// Perfetto can emit many warning lines, and its stdout/stderr may carry device
-// paths, so cap what we interpolate into a failure message to a short tail —
-// enough to diagnose (the PID is expected on the last stdout line) without
-// dumping the whole buffer.
+// Perfetto can emit many warning lines, so failure messages carry only a tail —
+// which is where the PID and the fatal error land.
 function clip(s: string, max = 300): string {
   const t = s.trim();
   if (!t) return "<empty>";
@@ -27,9 +23,8 @@ function clip(s: string, max = 300): string {
 }
 
 /**
- * Fill the TARGET_*_PLACEHOLDER tokens in the bundled tracecfg with the app
- * package — the process cmdline is the package unless the manifest sets
- * `android:process=...`.
+ * Fill the TARGET_*_PLACEHOLDER tokens in the bundled tracecfg. The package
+ * also serves as the cmdline, unless the manifest sets `android:process=...`.
  */
 export async function buildTraceConfig(
   appPackage: string,
@@ -51,19 +46,18 @@ export interface StartPerfettoOptions {
 export interface StartPerfettoResult {
   pid: number;
   onDeviceTracePath: string;
-  /** The host-side `adb shell` ChildProcess. Exits when stdin is closed after --background-wait returns. */
+  /** The host-side `adb shell`; it exits while the on-device daemon keeps running. */
   child: ChildProcess;
 }
 
 /**
  * Start a perfetto recording on the target device.
  *
- * Two live-tested constraints drive the shape here: SELinux denies `shell:s0`
- * writes to /data/misc/perfetto-traces/, so the config is piped to perfetto on
- * stdin (`--txt -c -`) rather than pushed as a file; and `--background-wait`
- * prints the daemon PID on stdout once data sources start, so we take the last
- * non-empty stdout line (warnings may precede it).
- * rationale: utils/android-profiler/ANDROID_PROFILER_REFERENCE.md "2. Capture"
+ * SELinux denies `shell:s0` writes to /data/misc/perfetto-traces/, so the
+ * config is piped on stdin (`--txt -c -`) rather than pushed as a file;
+ * `--background-wait` then prints the daemon PID on stdout once the data
+ * sources are running.
+ * @see ANDROID_PROFILER_REFERENCE.md "2. Capture"
  */
 export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPerfettoResult> {
   const adbPath = await resolveAndroidBinary("adb");
@@ -84,8 +78,6 @@ export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPe
   const cfgText = await buildTraceConfig(opts.appPackage);
   const onDeviceTracePath = `${ON_DEVICE_TRACE_DIR}/argent-${opts.timestamp}.pftrace`;
 
-  // Config on stdin, PID on stdout (see JSDoc). The host adb shell exits when
-  // stdin closes; the on-device daemon keeps running.
   const args = [
     "-s",
     opts.serial,
@@ -148,11 +140,8 @@ export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPe
       resolve(value);
     }
 
-    // An exec failure (binary vanished after the resolve check, EACCES) makes
-    // the child emit 'error', and writing to a broken stdin emits 'error' on
-    // the stream. An 'error' event with no listener THROWS as an uncaught
-    // exception that can take down the whole server — so reject the start
-    // promise instead.
+    // An unlistened 'error' event throws as an uncaught exception that can take
+    // down the whole server, so route both streams' failures into the promise.
     child.on("error", (err) =>
       fail(
         new FailureError(
@@ -184,17 +173,15 @@ export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPe
       )
     );
 
-    // `final` is true only from the exit handler: once the process has ended,
-    // stdout is complete, so a trailing PID with no newline is safe to parse.
+    // `final` comes only from the exit handler, where stdout is complete and a
+    // PID with no trailing newline is safe to parse.
     const tryResolve = (final = false) => {
       const trimmed = stdout.trim();
       if (!trimmed) return;
-      // While streaming, only parse once the buffer ends in a newline — i.e.
-      // the last line is complete. A chunk split mid-number (`…\n123`) would
-      // otherwise resolve a truncated PID, leaving the real daemon orphaned and
-      // unstoppable.
+      // A chunk split mid-number would otherwise resolve a truncated PID,
+      // leaving the real daemon orphaned and unstoppable.
       if (!final && !stdout.endsWith("\n")) return;
-      // Take the LAST non-empty line — perfetto may print warnings before the PID.
+      // Perfetto may print warnings before the PID.
       const lastLine = trimmed
         .split("\n")
         .map((l) => l.trim())
@@ -209,9 +196,8 @@ export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPe
     child.stdout.on("data", () => tryResolve());
     child.once("exit", (code, signal) => {
       if (settled) return;
-      // A signal kill leaves code=null, so report whichever is present.
+      // A signal kill leaves code=null.
       const reason = signal ? `signal ${signal}` : `code ${code ?? "?"}`;
-      // If perfetto exited before printing the PID, surface stderr.
       if (stdout.trim() === "") {
         fail(
           new FailureError(
@@ -227,10 +213,9 @@ export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPe
         );
         return;
       }
-      // Stream is final — parse the last line even without a trailing newline.
       tryResolve(true);
-      // The process is gone; if no valid PID was found, fail now rather than
-      // hanging until the start timeout fires.
+      // A no-op once tryResolve settled; otherwise fail now instead of hanging
+      // until the start timeout fires.
       fail(
         new FailureError(
           `perfetto exited (${reason}) without a valid PID on its last stdout line. ` +
@@ -246,8 +231,8 @@ export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPe
       );
     });
 
-    // Pipe the config via stdin and close — perfetto reads to EOF. Inside the
-    // executor so a synchronous throw rejects the promise rather than escaping.
+    // Inside the executor so a synchronous throw rejects the promise rather
+    // than escaping.
     try {
       child.stdin.write(cfgText);
       child.stdin.end();
@@ -294,8 +279,6 @@ export interface StopPerfettoResult {
  * partial-trace warning (mirrors the iOS recordingExitedUnexpectedly path).
  */
 export async function stopPerfetto(opts: StopPerfettoOptions): Promise<StopPerfettoResult> {
-  // First-poll check: if the daemon is already gone, skip the SIGTERM and pull
-  // whatever's on disk.
   let aliveBeforeSignal: boolean;
   try {
     const out = await adbShell(opts.serial, `[ -d /proc/${opts.pid} ] && echo alive || echo gone`, {
@@ -303,7 +286,7 @@ export async function stopPerfetto(opts: StopPerfettoOptions): Promise<StopPerfe
     });
     aliveBeforeSignal = out.trim() === "alive";
   } catch {
-    // probe failed; assume alive so we still try SIGTERM
+    // probe failed — try SIGTERM anyway
     aliveBeforeSignal = true;
   }
 
@@ -316,7 +299,7 @@ export async function stopPerfetto(opts: StopPerfettoOptions): Promise<StopPerfe
           timeoutMs: STOP_PROBE_TIMEOUT_MS,
         });
       } catch {
-        // ignored — the next poll loop will surface the state
+        // the poll loop below surfaces the state
       }
     }
     const deadline = Date.now() + STOP_TOTAL_TIMEOUT_MS;

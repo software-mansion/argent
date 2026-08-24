@@ -33,9 +33,8 @@ import {
 } from "../../../utils/react-profiler/devtools-bootstrap";
 
 /**
- * Verbose explanations the operator sees when the runtime is not profileable.
- * Centralised so every tool that detects "this app cannot be profiled" emits
- * the same diagnosis instead of bespoke one-liners.
+ * Shared with react-profiler-renders and react-profiler-fiber-tree so all
+ * three emit the same diagnosis.
  */
 export const NO_DEVTOOLS_HOOK_ERROR =
   "React DevTools hook (__REACT_DEVTOOLS_GLOBAL_HOOK__) is not present in this app's JavaScript runtime. " +
@@ -46,12 +45,9 @@ export const NO_DEVTOOLS_HOOK_ERROR =
   "Once the app is running with DevTools attached, call react-profiler-start again.";
 
 /**
- * Returned when the DevTools hook IS present but no React renderer has
- * registered against it. Distinct from NO_DEVTOOLS_HOOK_ERROR because the
- * remediation differs: rebuilding in dev mode does nothing here — the user
- * needs the renderer to attach (wait for first commit, or let
- * react-profiler-start bootstrap the DevTools backend on bridgeless RN
- * dev builds that lack an external DevTools client).
+ * Distinct from NO_DEVTOOLS_HOOK_ERROR because the remediation differs:
+ * rebuilding in dev mode does not help — the renderer has to attach (first
+ * commit, or the DevTools backend bootstrap react-profiler-start performs).
  */
 export const NO_RENDERERS_ATTACHED_ERROR =
   "React DevTools hook is present but no React renderer has registered yet. " +
@@ -118,14 +114,11 @@ After starting, ask the user to perform the interaction to profile, then call re
 Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture } on success, or the already_running payload described above.
 Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot be established.`,
     zodSchema,
-    // RN-only: bootstraps the React DevTools backend and uses Hermes'
-    // Profiler.start. A CDP-direct CPU profile for Chromium is tracked as a
-    // follow-up; the React commit recording has no Chromium analog.
     capability: RN_ONLY_TOOL_CAPABILITY,
     services: () => ({}),
     async execute(_services, params) {
-      // Canonicalize a forwarded logicalDeviceId to the connect id so the
-      // profiler session and its debugger dependency reuse the open connection.
+      // Collapse a forwarded logicalDeviceId onto the connect id so this
+      // session and its debugger dependency reuse the open connection.
       const deviceId = canonicalDeviceId(params.device_id);
       const jsdUrn = `${JS_RUNTIME_DEBUGGER_NAMESPACE}:${params.port}:${deviceId}`;
       const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}:${deviceId}`;
@@ -184,10 +177,10 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
 
       const cdp = api.cdp;
 
-      // Inject the native-profiler instrumentation (idempotent).
+      // Idempotent — safe to re-inject on every start.
       await cdp.evaluate(REACT_NATIVE_PROFILER_SETUP_SCRIPT);
 
-      // Snapshot backend state so we can decide whether to start, take over, or refuse.
+      // Decides whether to start, take over, or refuse.
       let stateJson = (await cdp.evaluate(READ_STATE_SCRIPT)) as string | undefined;
       if (!stateJson) {
         throw new FailureError(
@@ -211,13 +204,10 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         });
       }
 
-      // If the hook is present but no rendererInterface is registered, the
-      // React DevTools backend hasn't called `attach()` yet — typically because
-      // no external DevTools client (Fusebox React tab, `npx react-devtools`)
-      // is connected in a bridgeless RN dev build. Try to bootstrap it
-      // ourselves via react-devtools-core; fall back to an actionable error
-      // identifying the specific failure mode (production build, rdt-core
-      // version too old, etc.).
+      // No rendererInterface means the DevTools backend never called
+      // `attach()` — typically a bridgeless RN dev build with no external
+      // DevTools client (Fusebox React tab, `npx react-devtools`) connected.
+      // Bootstrap it ourselves via react-devtools-core before giving up.
       if (!("rendererInterfaceFound" in state) || !state.rendererInterfaceFound) {
         const bootstrapJson = (await cdp.evaluate(BOOTSTRAP_DEVTOOLS_BACKEND_SCRIPT)) as
           | string
@@ -244,11 +234,9 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
           });
         }
 
-        // Re-run the setup script: it walks `hook.rendererInterfaces` and
-        // installs the `__argent_startWrapped__` wrappers. The previous setup
-        // call (before bootstrap) saw an empty map and did nothing, so the
-        // freshly-attached interfaces are unwrapped — `buildStartScript`'s
-        // post-start check on `__argent_isProfiling__` would fail without this.
+        // The pre-bootstrap setup call saw an empty `hook.rendererInterfaces`,
+        // so the freshly-attached interfaces still lack the wrappers that set
+        // `__argent_isProfiling__`, which `buildStartScript` verifies.
         await cdp.evaluate(REACT_NATIVE_PROFILER_SETUP_SCRIPT);
 
         stateJson = (await cdp.evaluate(READ_STATE_SCRIPT)) as string | undefined;
@@ -282,7 +270,6 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         }
       }
 
-      // If a session is already active, classify it and decide.
       if (state.isRunning) {
         const owner: ProfilerSessionOwner | null = state.owner;
         const staleness = classifyStaleness({
@@ -303,11 +290,9 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
           };
         }
 
-        // Reclaim path: stop the prior session so we can start cleanly.
         await cdp.evaluate(STOP_FOR_TAKEOVER_SCRIPT).catch(ignore);
       }
 
-      // Defensive: if Hermes thinks it's already sampling CPU, stop before re-starting.
       if (api.profilingActive) {
         await cdp.send("Profiler.stop").catch(ignore);
         api.profilingActive = false;
@@ -316,8 +301,8 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       const sessionId = crypto.randomUUID();
       const ownerPayload: ProfilerSessionOwner = {
         sessionId,
-        // startedAtEpochMs/lastHeartbeatEpochMs set inside the script using
-        // the wrapper-captured value to eliminate clock skew.
+        // Set inside the start script from the wrapper-captured clock, to
+        // eliminate skew.
         startedAtEpochMs: 0,
         lastHeartbeatEpochMs: 0,
       };
@@ -346,7 +331,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       };
 
       if (!startResult.ok) {
-        // Roll back CPU sampler so we don't leak state.
+        // Roll back the CPU sampler.
         await cdp.send("Profiler.stop").catch(ignore);
         throw new FailureError(
           `React profiler failed to start (${startResult.reason ?? "unknown"}${

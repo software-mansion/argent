@@ -65,6 +65,17 @@ vi.mock("../src/utils/android-binary", () => ({
   __resetAndroidBinaryCacheForTesting: () => {},
 }));
 
+// boot-device resolves the `sound` argument's default from the `boot-sound`
+// flag via isFlagEnabled, which reads real flags.json files on disk. Pin it to
+// false so a developer's enabled flag can't flip the emulator args these tests
+// assert on. (boot-device-sound.test.ts covers the flag-driven behavior.)
+vi.mock("@argent/configuration-core", async () => {
+  const actual = await vi.importActual<typeof import("@argent/configuration-core")>(
+    "@argent/configuration-core"
+  );
+  return { ...actual, isFlagEnabled: () => false };
+});
+
 import {
   __resetInFlightBootsForTesting,
   createBootDeviceTool,
@@ -151,7 +162,7 @@ function mockHappyBootChain(newSerial = "emulator-5554") {
 
 describe("boot-device Android — hot-boot with cold-boot fallback", () => {
   it.each(PLATFORMS)(
-    "picks the hot-boot spawn args + `-gpu %s` on %s when default_boot probes Loadable",
+    "on %s picks the hot-boot spawn args + `-gpu %s` when default_boot probes Loadable",
     async (platform, expectedGpu) => {
       setPlatform(platform);
       hasSnapshotMock.mockResolvedValue(true);
@@ -182,6 +193,9 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
       // `swiftshader` for universal compatibility (sidesteps the host GL
       // stack, which silently fails on Optimus / dual-GPU / Wayland-with-
       // NVIDIA setups); every other host uses `auto`. See `selectGpuMode`.
+      // These are the no-override defaults, so they only hold with
+      // `ARGENT_EMULATOR_GPU_MODE` unset — `test/setup/clear-argent-env.ts`
+      // strips it from the runner's environment for the whole suite.
       const gpuIdx = hotArgs.indexOf("-gpu");
       expect(gpuIdx).toBeGreaterThanOrEqual(0);
       expect(hotArgs[gpuIdx + 1]).toBe(expectedGpu);
@@ -189,7 +203,7 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
   );
 
   it.each(PLATFORMS)(
-    "hands `-gpu %s` to both probe and hot-boot spawn on %s",
+    "on %s hands `-gpu %s` to both probe and hot-boot spawn",
     async (platform, expectedGpu) => {
       // Sibling test of the assertion above, focused on parity: the probe
       // argv and the spawn argv must agree on every renderer-affecting flag,
@@ -328,7 +342,7 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
   });
 
   it.each(PLATFORMS)(
-    "ignores empty/whitespace ARGENT_EMULATOR_GPU_MODE, falls through to `%s` default on %s",
+    "on %s ignores empty/whitespace ARGENT_EMULATOR_GPU_MODE, falls through to the `%s` default",
     async (platform, expectedGpu) => {
       // `export FOO=` foot-gun: fall through to platform default, don't crash.
       setPlatform(platform);
@@ -372,7 +386,7 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
   });
 
   it.each(PLATFORMS)(
-    "skips hot-boot and cold-boots with `-gpu %s` on %s when no snapshot exists",
+    "on %s skips hot-boot and cold-boots with `-gpu %s` when no snapshot exists",
     async (platform, expectedGpu) => {
       setPlatform(platform);
       hasSnapshotMock.mockResolvedValue(false);

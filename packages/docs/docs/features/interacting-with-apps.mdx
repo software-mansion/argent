@@ -1,0 +1,85 @@
+---
+sidebar_position: 1
+sidebar_label: Interacting with apps
+title: Interacting with apps
+sidebar_custom_props:
+  icon: mouse-pointer-click
+---
+
+Argent gives the agent control of the device. The agent taps, swipes, pinches and types on mobile targets. The agent presses the remote on TV targets. The agent clicks, scrolls and drags on desktop and web targets. The agent uses your app in the same way as a user.
+
+<Video
+  src="/video/interact.mp4"
+  width={1256}
+  height={900}
+  caption="The agent describes the screen, taps a photo, then pinches to zoom in on one person"
+/>
+
+## One tool set for all platforms
+
+The agent uses the same tools on iOS, Android, TV and Chromium. Argent reads the device id and sends each action to the correct platform. Coordinates are fractions of the screen, from `0.0` to `1.0`. Thus the same instruction works on screens of different sizes.
+
+## Discovery before interaction
+
+The agent does not read coordinates from a screenshot. Before each tap, the agent reads the elements on the screen with their roles, labels and positions. The source depends on the app:
+
+- the accessibility tree on iOS, Android and TV,
+- the React component tree in React Native apps,
+- the DOM in Chromium and Electron apps.
+
+After a screen change, the agent reads the screen again. Most actions return a screenshot, so the agent sees the result without an extra call.
+
+## Launching apps
+
+The agent opens an app by its bundle id or package name. The agent does not tap an icon on the Home screen. Thus each run starts from a known state. The agent also opens deep links by URL, restarts an app, and reinstalls an app with clean data.
+
+## Gestures and text
+
+The agent taps, swipes, pinches, rotates content, and sends custom touch sequences for long press or drag and drop. On Chromium, the agent scrolls with the mouse wheel and drags with the mouse. The agent taps a text field first, then types text and special keys such as enter or escape. When a user would use paste, the agent puts the text on the device clipboard and pastes it in one step.
+
+To type a credential, the agent uses a secret placeholder. Argent fills the value from your environment. The value does not enter the context of the agent.
+
+## Permissions
+
+The agent grants, denies or resets a runtime permission such as location, camera or contacts. The agent does not navigate the Settings app. Then the agent launches the app again and sees the permission prompt. Thus a first-run permission flow is repeatable.
+
+<Video
+  src="/video/permissions.mp4"
+  width={1386}
+  height={900}
+  caption="The agent resets the location permission, then relaunches the app to trigger the prompt again"
+/>
+
+## Device state and hardware
+
+The agent also controls the device around the app. The agent rotates the device between portrait and landscape. The agent presses hardware buttons such as home, back and volume. On TV targets, the agent presses the remote. The agent shakes the device to start the handler that your app binds to a shake, for example a feedback sheet or the developer menu.
+
+<Video
+  src="/video/shake.mp4"
+  width={1536}
+  height={900}
+  caption="The agent reads what shake is wired to in the code, then shakes the simulator to test it"
+/>
+
+## Waiting and sequences
+
+The agent does not take screenshots in a loop. The agent waits for a condition on the UI, such as "this element is visible" or "the screen stopped changing".
+
+If the agent knows several actions before the start, and there is nothing to examine between them, the agent runs them as one sequence. One call replaces several round trips.
+
+## Example instructions
+
+- "Open the app and go to the settings screen."
+- "Scroll the list to the end. Tell me the last item."
+- "Type `hello` in the search field. Press enter."
+- "Reset the camera permission and open the camera screen again."
+- "Rotate the device to landscape and make a screenshot."
+
+## Limits
+
+- TV targets are focus-driven. The agent does not use touch gestures on them.
+- Swipe is for touch targets. On Chromium, the agent scrolls and drags with the mouse.
+- Shake and paste work on simulators and emulators only.
+- On Chromium, each action goes to the active tab.
+
+The [tools reference](/docs/reference/tools) contains all tools, including the ones in the **Interacting** and **Devices and apps** groups.

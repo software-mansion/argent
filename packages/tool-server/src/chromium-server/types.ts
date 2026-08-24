@@ -1,8 +1,7 @@
 /**
- * Shared types for the Chromium server abstraction layer. Mirrors the
- * sim-server's domain model (Touch / Button / Rotate / Wheel) so callers can be
- * written against a single conceptual surface regardless of platform — the
- * adapter layer translates them into CDP wire payloads.
+ * Shared types for the Chromium server abstraction layer. Mirrors sim-server's
+ * domain model so callers stay platform-agnostic; the adapters translate them
+ * into CDP wire payloads.
  */
 
 import type { TypedEventEmitter } from "@argent/registry";
@@ -13,10 +12,6 @@ import type { NetworkManager } from "./network";
 export type TouchType = "Down" | "Up" | "Move";
 export type KeyDirection = "Down" | "Up";
 
-/** Sim-server's hardware buttons. iOS/Android map to OS-level events; on
- * Chromium most are inert — only ones that correspond to keyboard chords (Home,
- * Back via browser-history, AppSwitch ≈ Cmd-Tab) are best-effort implemented.
- */
 export type ButtonType =
   | "Home"
   | "Back"
@@ -28,32 +23,30 @@ export type ButtonType =
 
 export type Rotation = "Portrait" | "PortraitUpsideDown" | "LandscapeLeft" | "LandscapeRight";
 
-/** Sim-server-style normalized point: `x` and `y` in 0.0–1.0, fractions of the
- * device screen / page viewport. Pixel conversion happens inside each adapter. */
+/** Normalized point: `x`/`y` in 0.0–1.0 of the viewport. Adapters convert to pixels. */
 export interface Point {
   x: number;
   y: number;
 }
 
-/** Downscaler choice. Mirrors sim-server's wire enum so callers don't need to
- * relearn names. `lanczos3` is the highest-quality option, `nearest` the
- * cheapest. All variants degrade to a no-op if the optional `sharp` dep isn't
- * installed (see screenshot.ts). */
+/** Mirrors sim-server's wire enum. `lanczos3` is the highest-quality option,
+ * `nearest` the cheapest; all are a no-op without the optional `sharp` dep
+ * (see screenshot.ts). */
 export type DownscalerType = "lanczos3" | "box" | "bilinear" | "nearest";
 
 export interface ScreenshotOpts {
-  /** Optional rotation applied AFTER capture (CSS pixels). */
+  /** Applied after capture. */
   rotation?: Rotation;
-  /** Scale factor in (0, 1]. <1 downscales the PNG before writing to disk. */
+  /** Scale factor in (0, 1]; downscales the PNG before it is written to disk. */
   scale?: number;
-  /** Algorithm used when `scale < 1`. Ignored otherwise. */
+  /** Algorithm used when `scale < 1`. */
   downscaler?: DownscalerType;
-  /** Output filename stem (without extension). When omitted, a timestamp is used. */
+  /** Filename suffix; defaults to a timestamp. */
   id?: string;
 }
 
 export interface MediaReady {
-  /** file:// URL that resolves to `path`. Tools surface this to agents. */
+  /** file:// form of `path`. */
   url: string;
   /** Absolute path on the tool-server host. */
   path: string;
@@ -62,30 +55,27 @@ export interface MediaReady {
 export interface ViewportSize {
   width: number;
   height: number;
-  /** Renderer-reported DPR; used to convert CDP screencast frame px → viewport px. */
+  /** Renderer-reported `window.devicePixelRatio`. */
   devicePixelRatio: number;
 }
 
 export interface ScreencastOpts {
-  /** "jpeg" is what every consumer expects; PNG is supported by CDP but
-   * inflates frame size 5–10× and saturates the WebSocket. */
+  /** Defaults to "jpeg"; PNG frames are far larger over the WebSocket. */
   format?: "jpeg" | "png";
   /** JPEG quality, 0–100. Ignored for PNG. */
   quality?: number;
-  /** Optional max frame width; CDP scales the image proportionally. */
+  /** Max frame width; CDP scales the image proportionally. */
   maxWidth?: number;
-  /** Optional max frame height. */
   maxHeight?: number;
-  /** Send one frame per N rendered frames. Default 1. */
+  /** One frame per N rendered frames; default 1. */
   everyNthFrame?: number;
 }
 
 export interface ScreencastFrame {
-  /** Sequential frame id, used for the screencast ack. */
+  /** Echoed back in `Page.screencastFrameAck`. */
   sessionId: number;
   /** Base64-encoded image bytes. */
   data: string;
-  /** Metadata reported by CDP — viewport offset, scale, timestamp. */
   metadata: {
     offsetTop: number;
     pageScaleFactor: number;
@@ -98,24 +88,23 @@ export interface ScreencastFrame {
 }
 
 export interface ScreencastSession {
-  /** Disposes the screencast — stops CDP screencast emission and removes listeners. */
+  /** Drops this caller's refcount; CDP emission stops with the last one. Safe to call twice. */
   stop(): Promise<void>;
 }
 
 export interface FpsReport {
-  /** Frames received in the last interval. */
+  /** Frames received in the last window. */
   fps: number;
-  /** Window size in ms. */
   windowMs: number;
 }
 
 export type ServerEvents = {
-  /** Each emitted screencast frame is forwarded here so multiple consumers
-   * (MJPEG endpoint + internal listeners) share one CDP screencast session. */
+  /** Fan-out so the MJPEG relay, the WS bridge and internal listeners share one
+   * CDP screencast session. */
   frame: (frame: ScreencastFrame) => void;
-  /** Periodic FPS report when reporting is enabled. */
+  /** Emitted while FPS reporting is enabled. */
   fpsReport: (report: FpsReport) => void;
-  /** Terminated by CDP disconnect; consumers should drop their refs. */
+  /** Emitted on CDP disconnect; consumers should drop their refs. */
   terminated: (error?: Error) => void;
 };
 
@@ -124,61 +113,52 @@ export type ServerEvents = {
  * device id; tools and HTTP routers consume it.
  */
 export interface ChromiumServer {
-  /** CDP port the Chromium process is exposing (extracted from device.id). */
+  /** CDP port, parsed out of the `chromium-cdp-<port>` device id. */
   readonly port: number;
-  /** Underlying CDP client connected to the primary page target. */
+  /** Connected to the primary page target. */
   readonly cdp: CDPClient;
-  /** ws:// URL to the page target — handy for diagnostics. */
   readonly pageWebSocketUrl: string;
-  /** Cached viewport from the most recent connect / refresh. */
+  /** Cached; does not hit the renderer. */
   getViewport(): ViewportSize;
-  /** Re-read viewport from the renderer. Call after window resize / nav. */
+  /** Re-read from the renderer, e.g. after a window resize. */
   refreshViewport(): Promise<ViewportSize>;
-  /** Capture + (optionally) rotate + downscale + persist a PNG. */
+  /** Capture, optionally rotate / downscale, persist a PNG. */
   captureScreenshot(opts?: ScreenshotOpts): Promise<MediaReady>;
-  /** Copy the most recent or freshly-captured frame to the OS clipboard as an image. */
+  /** Fresh capture, written through the renderer's Clipboard API. */
   copyScreenshotToClipboard(opts?: { rotation?: Rotation }): Promise<void>;
-  /** Touch event. `point` is normalized 0–1. `secondPoint` is for multi-touch. */
+  /** Points are normalized 0–1; `secondPoint` makes it multi-touch. */
   sendTouch(touchType: TouchType, point: Point, secondPoint?: Point | null): Promise<void>;
-  /** Press / release a single key (USB HID code or browser-style key). */
   sendKey(
     direction: KeyDirection,
     key: { code?: number; key?: string; text?: string; codeName?: string }
   ): Promise<void>;
-  /** Hardware button. Best-effort on Chromium; throws "not supported" for
-   * buttons with no browser equivalent. */
+  /** Only `Back` has a Chromium equivalent; every other button throws. */
   sendButton(button: ButtonType, direction: KeyDirection): Promise<void>;
-  /** Rotate the viewport. Uses Emulation.setDeviceMetricsOverride. */
+  /** Via Emulation.setDeviceMetricsOverride. */
   sendRotate(direction: Rotation): Promise<void>;
-  /** Wheel scroll at a point. dx/dy are CSS pixels. */
+  /** `dx`/`dy` are CSS pixels, unlike the normalized `point`. */
   sendWheel(point: Point, dx: number, dy: number): Promise<void>;
-  /** Subscribe to OS clipboard → page bridge. No-op stub for now. */
+  /** Records the intent only; no native bridge exists yet. */
   setClipboardSync(enabled: boolean): Promise<void>;
-  /** Programmatically set the renderer's clipboard text via DOM APIs. */
+  /** Writes through the renderer's Clipboard API. */
   setClipboardText(text: string): Promise<void>;
-  /** Start a CDP screencast. Frames are forwarded to `events.on("frame", ...)`
-   * and to any consumer subscribed via `onFrame`. Multiple callers share one
-   * CDP session via internal refcounting. */
+  /** Frames arrive on the `frame` event; callers share one refcounted CDP session. */
   startScreencast(opts?: ScreencastOpts): Promise<ScreencastSession>;
-  /** Returns the most recently received screencast frame, if any. */
   getLastFrame(): ScreencastFrame | null;
-  /** Navigate the renderer. */
   navigate(url: string): Promise<void>;
   reload(): Promise<void>;
   goBack(): Promise<void>;
   goForward(): Promise<void>;
-  /** Enable / disable periodic `fpsReport` emissions on `events`. */
+  /** Toggles periodic `fpsReport` emissions. */
   setFpsReporting(enabled: boolean): void;
-  /** Evaluate JS in the renderer's main world. */
+  /** In the renderer's main world. */
   evaluate(expression: string, options?: { returnByValue?: boolean }): Promise<unknown>;
-  /** Multi-tab / window management. The active tab is the one `cdp` (and every
-   * page-scoped tool) is connected to; switching re-points `cdp` in place. */
+  /** The active tab is the one `cdp` (and every page-scoped tool) is connected
+   * to; switching re-points `cdp` in place. */
   readonly tabs: TabsManager;
-  /** Network request recording (capped ring buffer) + Fetch-based routing +
-   * HAR export, scoped to the active page. */
+  /** Passive CDP request recording for the active page, capped ring buffer. */
   readonly network: NetworkManager;
-  /** Event bus mirroring sim-server's broadcast channel. */
   readonly events: TypedEventEmitter<ServerEvents>;
-  /** Tear down — closes CDP, stops screencast, removes listeners. */
+  /** Stops the screencast and disconnects CDP. */
   dispose(): Promise<void>;
 }

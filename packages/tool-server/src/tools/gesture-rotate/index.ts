@@ -100,13 +100,12 @@ Size the orbit with radius, or with radiusX and radiusY together (the pair overr
     const api = services.simulatorServer as SimulatorServerApi;
     const duration = params.durationMs ?? 300;
     const steps = Math.max(1, Math.round(duration / 16));
-    // The refine guarantees radius exists whenever the per-axis pair is absent.
+    // Refines guarantee radius is set whenever the per-axis pair is absent.
     const radiusX = params.radiusX ?? params.radius!;
     const radiusY = params.radiusY ?? params.radius!;
 
     let timestampMs = 0;
-    // Last dispatched finger positions, so an abort can lift from where the
-    // fingers actually are.
+    // Last dispatched positions, so an abort lifts from where the fingers are.
     let lastX1 = 0;
     let lastY1 = 0;
     let lastX2 = 0;
@@ -114,8 +113,8 @@ Size the orbit with radius, or with radiusX and radiusY together (the pair overr
 
     for (let i = 0; i <= steps; i++) {
       if (ctx?.signal?.aborted) {
-        // Once Down has been dispatched, the synthetic fingers are on the glass —
-        // send a terminal Up so a cancelled run doesn't leave them held down.
+        // Fingers are on the glass from i=0 on; lift them so a cancelled run
+        // doesn't leave them held down.
         if (i > 0) sendTouchEvent(api, "Up", lastX1, lastY1, lastX2, lastY2);
         const err = new Error(
           `gesture-rotate aborted — cancelled mid-gesture after ${i} of ${steps + 1} frames`

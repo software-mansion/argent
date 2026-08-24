@@ -31,10 +31,8 @@ type AndroidDevice = {
   serial: string;
   state: string;
   isEmulator: boolean;
-  // "emulator" for a local AVD, "device" for a physical phone (USB or wireless
-  // adb). The two are driven by different simulator-server controllers, so the
-  // kind is surfaced here for parity with iOS terminology and so consumers can
-  // tell a connected phone apart from an emulator at a glance.
+  // Mirrors the emulator/phone split that selects the simulator-server
+  // controller — see `isAndroidEmulatorSerial` in utils/device-info.ts.
   kind: "emulator" | "device";
   model: string | null;
   avdName: string | null;
@@ -65,8 +63,8 @@ function sortAndroid(a: AndroidDevice, b: AndroidDevice): number {
   return aEmu - bEmu;
 }
 
-// Float booted/ready devices to the top of the merged list regardless of
-// platform — without this, all iOS entries are emitted before any Android.
+// Floats booted/ready devices to the top across platforms; the merged array is
+// otherwise ordered iOS-first.
 function readinessRank(
   d: IosDevice | IosRemoteDevice | AndroidDevice | ChromiumDevice | VegaDevice
 ): number {
@@ -77,9 +75,8 @@ function readinessRank(
 }
 
 /**
- * List remote iOS simulators via `sim-remote`. Returns [] (silently) if
- * sim-remote isn't installed or the user isn't logged in — list-devices
- * already treats CLI absence as "platform unavailable" rather than failing.
+ * Remote iOS simulators via `sim-remote`. Returns [] when the CLI is missing or
+ * logged out — list-devices reports an unavailable platform as absent, not as an error.
  */
 async function listRemoteIosSimulators(): Promise<IosRemoteDevice[]> {
   try {
@@ -110,14 +107,12 @@ function sortIosRemote(a: IosRemoteDevice, b: IosRemoteDevice): number {
 }
 
 // A running VVD also shows on adb as `emulator-<consolePort>` (or `127.0.0.1:<port+1>`
-// after `adb connect`). Drop the adb row(s) whose console port matches a running VVD
-// (from the process table); a real emulator / physical device sits elsewhere and stays.
+// after `adb connect`); match those rows by console port against the process table.
 async function resolveVvdShadowAdbSerials<T extends { serial: string }>(
   androidDevices: readonly T[],
   vega: readonly VegaDevice[]
 ): Promise<Set<string>> {
-  // Nothing to dedup unless a VVD is actually running — skip the `ps` spawn on the
-  // common (no-Vega) path; list-devices is alwaysLoad and called often.
+  // Skip the `ps` spawn on the common no-Vega path; list-devices is alwaysLoad.
   if (!vega.some((d) => d.kind === "vvd" && d.state === "running")) return new Set();
   const vvdPorts = await listRunningVvdConsolePorts();
   if (vvdPorts.size === 0) return new Set();
@@ -129,43 +124,20 @@ async function resolveVvdShadowAdbSerials<T extends { serial: string }>(
   return shadows;
 }
 
-// Hard backstop so no single discovery branch can stall this `alwaysLoad` tool,
-// which runs at session start and frequently after. The per-call subprocess
-// timeouts (and the no-stacking fix in listVegaDevices) already bound each
-// branch; this is defence-in-depth against an *unforeseen* stall — an OS-level
-// spawn hang, a future serial call added with no timeout — so the worst case is a
-// partial list with a logged note, never a 40s "hang". Mirrors the existing
-// `.catch(() => [])` degradation, just for slowness rather than errors.
+// Last-resort backstop so no single discovery branch can stall this `alwaysLoad`
+// tool. Every branch is already bounded by its own subprocess timeouts; this only
+// catches an unforeseen stall (an OS-level spawn hang, a future call added with no
+// timeout), degrading to a partial list the way `.catch(() => [])` degrades on error.
 //
-// Critically this must sit ABOVE every branch's full per-call worst case, or it
-// stops being a last-resort backstop and starts truncating branches that would
-// have completed — dropping a real device from the list. Summing each branch's
-// own bounded subprocess calls (an invariant test in list-devices-deadline.test.ts
-// guards these so a future timeout bump can't silently breach the deadline):
-//   - Vega (the long pole): a non-timeout `device list` failure or an empty list
-//     that triggers the `device info` recovery runs, serially, the 6s list timeout
-//     + TWO 5s `ps` probes (the recovery gate in listVegaDevices plus the
-//     `-d emulator-<port>` selector probe inside runVegaDevice) + the 4s `device
-//     info` timeout = ~20s worst case. (A *timed-out* list skips the recovery
-//     entirely — see listVegaDevices — so the wedged-VVD case is just ~6s.)
-//   - Android: one bounded `adb devices` call (6s) + ~5s concurrent getprop
-//     enrichment = ~11s.
-//   - iOS / AVD-list / Chromium self-bound by their own subprocess/socket timeouts
-//     (iOS `simctl` ~10s, AVD-list ~5s, Chromium <1s) — all comfortably under 25s.
-// The Vega binary resolution (`resolveVegaBinary`) runs first but is memoized and
-// returns the instant `vega` is found, so it adds ~0 in practice; only a pathological
-// cold-session `command -v` shell-fork hang would add up to ~4s on top of the 20s,
-// still inside the deadline. 25s clears the ~20s Vega long pole with margin, so a
-// branch merely hitting its own (foreseen) per-call timeouts always completes rather
-// than being cut off; only a genuinely unforeseen hang reaches the backstop. Still
-// well below the ~40s stall this whole fix targets. The two Vega `ps` reads are local
-// process-table reads (never a device round-trip), so this 20s figure is a
-// pathological host-load ceiling, not the realistic wedged-device cost (~6s).
+// It must sit ABOVE every branch's full worst case, or it stops being a last resort
+// and truncates branches that would have completed, dropping real devices. The long
+// pole is Vega at ~20s (6s `device list` + two serial 5s `ps` probes + 4s `device
+// info` on the recovery path); Android is ~11s; iOS / AVD-list / Chromium are far
+// below. list-devices-deadline.test.ts asserts the margin from the same exported
+// constants, so a future timeout bump fails loudly instead of silently breaching it.
 //
-// Note: this is a *deadline*, not cancellation — on timeout it resolves the
-// fallback while the underlying branch keeps running to completion in the
-// background. That's fine here because the per-call subprocess timeouts bound the
-// branch, so it settles shortly after rather than leaking work indefinitely.
+// This is a deadline, not cancellation: on timeout the fallback resolves while the
+// branch keeps running, settling shortly after once its own timeouts fire.
 export const BRANCH_DEADLINE_MS = 25_000;
 
 export async function withDeadline<T>(p: Promise<T>, fallback: T, label: string): Promise<T> {
@@ -215,23 +187,17 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
   zodSchema,
   services: () => ({}),
   async execute(_services, _params) {
-    // Every branch gets the same hard deadline so no single one can stall this
-    // `alwaysLoad` tool. The Android/Vega branches are the ones that actually shell
-    // out to potentially-wedged devices; iOS / AVD-list / Chromium already self-bound
-    // with their own short subprocess/socket timeouts, but wrapping them too makes the
-    // "no branch can hang the fan-out" guarantee universal at near-zero cost (the
-    // timer is cleared on the fast happy path). The deadline only substitutes a
-    // fallback on *slowness*; a rejection still propagates exactly as before — so the
+    // Wrapping even the already-self-bounded iOS / AVD-list / Chromium branches makes
+    // the "no branch can hang the fan-out" guarantee universal. The deadline only
+    // substitutes a fallback on *slowness*; a rejection still propagates, so the
     // `.catch(() => [])` wrappers (and the lack of one on iOS/AVDs) are unchanged.
     const [ios, iosRemote, android, avds, chromium, vega] = await Promise.all([
       withDeadline(listIosSimulators(), [], "ios"),
       withDeadline(listRemoteIosSimulators(), [], "ios-remote"),
       withDeadline(
-        // Opt into runtimeKind enrichment (list-devices surfaces TV vs mobile to
-        // the agent, so the extra feature probe per device is warranted here — the
-        // boot-loop poller deliberately omits it), and pass the tight `adb devices`
-        // bound (NOT boot-device's 30s default) so the Android branch self-bounds
-        // under BRANCH_DEADLINE_MS — see ADB_DEVICES_TIMEOUT_MS.
+        // list-devices is the one caller that surfaces TV vs mobile, so it pays for
+        // runtimeKind's extra per-device probe. The explicit `adb devices` bound
+        // (not runAdb's 30s default) keeps this branch under BRANCH_DEADLINE_MS.
         listAndroidDevices({ runtimeKind: true, devicesTimeoutMs: ADB_DEVICES_TIMEOUT_MS }).catch(
           () => []
         ),

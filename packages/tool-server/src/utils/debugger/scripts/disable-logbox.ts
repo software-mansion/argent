@@ -1,20 +1,10 @@
 /**
- * IIFE that scans the Metro module registry for the LogBox module
- * and calls `ignoreAllLogs(true)` to suppress the yellow/red overlay,
- * then clears any already-queued LogBox entries (e.g. SegmentFetcher).
+ * Suppresses the LogBox overlay and clears already-queued entries.
  *
- * Uses `__r.getModules()` (available in DEV) to iterate only
- * already-initialized modules, avoiding forced evaluation of unloaded
- * modules. This prevents Metro's `guardedLoadModule` from reporting
- * errors to LogBox when a module's top-level code throws (e.g.
- * `TurboModuleRegistry.getEnforcing('SegmentFetcher')` in Expo builds).
- *
- * Falls back to the ErrorUtils-suppression approach when `getModules`
- * is unavailable: temporarily nulls `global.ErrorUtils` so that any
- * errors thrown during `__r(i)` scanning are caught by our try-catch
- * instead of being routed to LogBox via `ErrorUtils.reportFatalError`.
- *
- * Safe to call at any time — exits early when __r is unavailable.
+ * Scans only initialized modules via `__r.getModules()`: evaluating an unloaded
+ * module would let Metro report a top-level throw to LogBox. The `__r(i)`
+ * fallback cannot avoid that, so it nulls `global.ErrorUtils` to keep those
+ * errors out of LogBox.
  */
 export const DISABLE_LOGBOX_SCRIPT = `(function() {
   if (typeof __r !== 'function') return;
