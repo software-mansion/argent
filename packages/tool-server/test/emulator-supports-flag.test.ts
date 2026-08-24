@@ -42,7 +42,7 @@ vi.mock("../src/utils/android-binary", () => ({
   __resetAndroidBinaryCacheForTesting: () => {},
 }));
 
-import { emulatorSupportsFlag } from "../src/utils/adb";
+import { checkSnapshotLoadable, emulatorSupportsFlag, listAvds } from "../src/utils/adb";
 
 beforeEach(() => {
   execFileMock.mockReset();
@@ -164,5 +164,28 @@ describe("emulatorSupportsFlag — failed `-help` probes are not memoized", () =
       expect.stringContaining('assuming "-warn-flag" unsupported for this boot')
     );
     stderrSpy.mockRestore();
+  });
+});
+
+// Same SIGKILL wiring as the -help probe above, pinned for the other two
+// emulator spawns so a dropped killSignal cannot silently reintroduce the
+// never-settling hang on the snapshot-probe or AVD-listing paths.
+describe("emulator probe spawns are SIGKILL-protected", () => {
+  it("listAvds kills a hung `-list-avds` with SIGKILL", async () => {
+    execFileMock.mockImplementation(() => ({ stdout: "Pixel_7_API_34\n", stderr: "" }));
+
+    await listAvds();
+
+    expect(execFileOpts[0]?.killSignal).toBe("SIGKILL");
+    expect(execFileOpts[0]?.timeout).toBe(5_000);
+  });
+
+  it("checkSnapshotLoadable kills a hung probe with SIGKILL", async () => {
+    execFileMock.mockImplementation(() => ({ stdout: "Loadable\n", stderr: "" }));
+
+    const result = await checkSnapshotLoadable("Pixel_7_API_34");
+
+    expect(result.loadable).toBe(true);
+    expect(execFileOpts[0]?.killSignal).toBe("SIGKILL");
   });
 });
