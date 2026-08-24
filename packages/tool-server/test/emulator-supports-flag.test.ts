@@ -97,6 +97,29 @@ describe("emulatorSupportsFlag — failed `-help` probes are not memoized", () =
     expect(execFileMock).toHaveBeenCalledTimes(2);
   });
 
+  it("does not memoize a timeout that captured only part of the listing", async () => {
+    execFileMock.mockImplementationOnce(() => {
+      const err = new Error("command timed out after 10s") as Error & {
+        stdout?: string;
+        stderr?: string;
+        killed?: boolean;
+      };
+      err.killed = true;
+      // Partial capture that happens not to contain the probed flag: a
+      // memoized verdict from it could miss a flag further down the listing.
+      err.stdout = "usage: emulator [options]\n -no-metrics\n";
+      return err;
+    });
+    execFileMock.mockImplementationOnce(() => ({
+      stdout: " -partial-timeout-flag never\n",
+      stderr: "",
+    }));
+
+    expect(await emulatorSupportsFlag("-partial-timeout-flag")).toBe(false);
+    expect(await emulatorSupportsFlag("-partial-timeout-flag")).toBe(true);
+    expect(execFileMock).toHaveBeenCalledTimes(2);
+  });
+
   it("still memoizes a real verdict read from a non-zero exit's captured listing", async () => {
     execFileMock.mockImplementation(() => {
       const err = new Error("exit 1") as Error & { stdout?: string; stderr?: string };

@@ -73,10 +73,11 @@ const emulatorFlagSupportCache = new Map<string, boolean>();
  * on this before adding such a flag to the launch args.
  *
  * Best-effort: returns false if the binary cannot be resolved or `-help` cannot
- * be run, and never throws. A `-help` run that captures no listing counts as a
- * failed probe rather than a verdict (whatever the exit code), so it is reported
- * to stderr and not memoized — the next call retries instead of inheriting the
- * false for the process lifetime.
+ * be run, and never throws. A `-help` run that captures no complete listing —
+ * empty output, or a killed run with only a partial capture — counts as a
+ * failed probe rather than a verdict, so it is reported to stderr and not
+ * memoized; the next call retries instead of inheriting the verdict for the
+ * process lifetime.
  */
 export async function emulatorSupportsFlag(
   flag: string,
@@ -104,16 +105,18 @@ export async function emulatorSupportsFlag(
   } catch (err) {
     // `emulator -help` exits non-zero on some builds; the listing is still
     // attached to the error. Inspect whatever was captured before giving up.
-    const e = err as { stdout?: string; stderr?: string };
-    output = (e.stdout ?? "") + (e.stderr ?? "");
+    const e = err as { stdout?: string; stderr?: string; killed?: boolean };
+    // A killed run (timeout) may have captured only part of the listing; the
+    // flag could sit in the untransmitted remainder, so that is no verdict.
+    output = e.killed ? "" : (e.stdout ?? "") + (e.stderr ?? "");
     failure = err instanceof Error ? err.message : String(err);
   }
   if (output === "") {
-    // The probe learned nothing (timeout under load, transient spawn failure,
-    // silent exit), so leave the verdict uncached: the next boot retries
-    // instead of pinning a permanent false.
+    // The probe learned nothing complete (timeout under load, transient spawn
+    // failure, silent exit), so leave the verdict uncached: the next boot
+    // retries instead of pinning a permanent verdict.
     process.stderr.write(
-      `[argent] \`${emulatorPath} -help\` produced no output ` +
+      `[argent] \`${emulatorPath} -help\` produced no complete listing ` +
         (failure ? `(${failure})` : "but exited successfully") +
         `; assuming "${flag}" unsupported for this boot and retrying on the next one\n`
     );
