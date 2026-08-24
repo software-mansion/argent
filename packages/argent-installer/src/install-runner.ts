@@ -22,8 +22,8 @@ import {
 } from "./utils.js";
 import { runShellCommand, runTrustingDisk, ShellCommandError } from "./shell.js";
 import { PACKAGE_NAME } from "./constants.js";
-import { reportSkillRefresh } from "./skills.js";
-import type { InstallMode } from "./install-record.js";
+import { reportSkillRefresh, skillScopesForTargets } from "./skills.js";
+import { resolveInstallMode, type InstallMode } from "./install-record.js";
 import {
   InitTelemetry,
   INSTALL_GLOBAL_PACKAGE_FAILED,
@@ -370,10 +370,16 @@ async function runGlobal(opts: {
           version = getGloballyInstalledVersion() ?? getInstalledVersion() ?? version;
           await tel.trackPackageAction("init_triggered_update", updateStartedAt, true);
 
-          // Re-sync and prune argent skills in every scope that tracks them —
-          // the only point in init that surfaces orphans from the old version
-          // before Step 2's single-scope `skills add`.
-          reportSkillRefresh(resolveProjectRoot(process.cwd()), "installer_skills_refresh");
+          // Re-sync and prune argent skills in the scopes this bump owns — the
+          // only point in init that surfaces orphans from the old version before
+          // Step 2's single-scope `skills add`. Only the global install moved
+          // here, so the project's lock follows only when it tracks that binary.
+          const skillRoot = resolveProjectRoot(process.cwd());
+          reportSkillRefresh({
+            projectRoot: skillRoot,
+            scopes: skillScopesForTargets(["global"], resolveInstallMode(skillRoot)),
+            stage: "installer_skills_refresh",
+          });
         } catch (err) {
           updateSpinner.stop(pc.red("Update failed."));
           p.log.error(`${err}`);

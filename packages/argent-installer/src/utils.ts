@@ -145,6 +145,47 @@ export function listArgentSkillsInLock(lockPath: string): string[] {
   }
 }
 
+/**
+ * The newest argent version any argent-owned skill in this lock was installed
+ * from, or null when the lock records none (an older lock shape, a local
+ * source, or no argent skills at all).
+ *
+ * Used to tell whether the running package is new enough to judge which skills
+ * are obsolete in a given store — pruning against an older bundled set deletes
+ * skills the store's real owner still ships.
+ */
+export function lockedArgentSkillVersion(lockPath: string): string | null {
+  try {
+    const lock = JSON.parse(fs.readFileSync(lockPath, "utf8")) as {
+      skills?: Record<string, { ref?: unknown }>;
+    };
+    const refs: string[] = [];
+    for (const [name, entry] of Object.entries(lock.skills ?? {})) {
+      if (!name.startsWith(ARGENT_SKILL_PREFIX)) continue;
+      const ref = entry?.ref;
+      if (typeof ref === "string" && /^v?\d+\.\d+\.\d+/.test(ref)) refs.push(ref.replace(/^v/, ""));
+    }
+    if (refs.length === 0) return null;
+    return refs.sort(compareVersions).at(-1) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Numeric-segment comparison of two `x.y.z` versions. Prerelease tags are ignored. */
+export function compareVersions(a: string, b: string): number {
+  const parse = (v: string) =>
+    v
+      .split("-")[0]!
+      .split(".")
+      .map((n) => Number.parseInt(n, 10) || 0);
+  const [x, y] = [parse(a), parse(b)];
+  for (let i = 0; i < 3; i++) {
+    if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) - (y[i] ?? 0);
+  }
+  return 0;
+}
+
 const PROJECT_ROOT_MARKERS = [
   ".mcp.json",
   ".claude",

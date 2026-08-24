@@ -3,13 +3,16 @@ import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { track } from "@argent/telemetry";
 import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
+import type { InstallMode } from "./utils.js";
 import {
   buildArgentSkillsSource,
   getGlobalSkillLockPath,
   getInstalledVersion,
   getProjectSkillLockPath,
+  compareVersions,
   listArgentSkillsInLock,
   listBundledSkills,
+  lockedArgentSkillVersion,
   withNpmForce,
   SKILLS_DIR,
 } from "./utils.js";
@@ -42,7 +45,12 @@ interface ScopeSpec {
   removeArgs: string[];
 }
 
-function getScopeSpecs(projectRoot: string): ScopeSpec[] {
+function getScopeSpecs(projectRoot: string, scopes: readonly SkillScope[]): ScopeSpec[] {
+  const wanted = new Set(scopes);
+  return allScopeSpecs(projectRoot).filter((spec) => wanted.has(spec.scope));
+}
+
+function allScopeSpecs(projectRoot: string): ScopeSpec[] {
   return [
     {
       scope: "project",
@@ -59,11 +67,61 @@ function getScopeSpecs(projectRoot: string): ScopeSpec[] {
   ];
 }
 
-// Re-syncs bundled argent skills into every scope that already tracks at
-// least one argent-owned skill, and prunes any argent-prefixed entry that is
-// no longer part of the bundled set. Safe to call from any command — a scope
-// with nothing tracked is skipped, so this never creates a
+/**
+ * Which skill stores a command may rewrite, given the installs it updated.
+ *
+ * A store is owned by exactly one install: the global lock always belongs to the
+ * binary on PATH, and a project's lock belongs to whichever install serves that
+ * project. Only the install that moved may rewrite the store that tracks it —
+ * otherwise a project-scoped update re-pins the machine-wide skills every other
+ * project uses.
+ *
+ * Note the project scope is not "the local install's scope": a non-interactive
+ * global install also writes a project lock, and that lock tracks the global
+ * binary. `installMode` is what distinguishes them.
+ */
+export function skillScopesForTargets(
+  targets: readonly InstallMode[],
+  installMode: InstallMode
+): SkillScope[] {
+  const scopes = new Set<SkillScope>();
+  if (targets.includes("local")) scopes.add("project");
+  if (targets.includes("global")) {
+    scopes.add("global");
+    // A global bump moves the binary this project runs, so its lock follows.
+    if (installMode === "global") scopes.add("project");
+  }
+  return (["project", "global"] as const).filter((scope) => scopes.has(scope));
+}
+
+/**
+ * Whether this package may decide which of a store's argent skills are obsolete.
+ *
+ * The obsolete set is the difference against THIS package's bundled skills, so a
+ * package older than the one that filled the store would classify everything
+ * added since as orphaned and delete it. Judging is allowed only when the store
+ * was last written by a version no newer than ours; an unreadable or unversioned
+ * lock means we cannot tell, so we do not prune.
+ */
+function mayPruneScope(lockPath: string): boolean {
+  const lockedVersion = lockedArgentSkillVersion(lockPath);
+  if (lockedVersion === null) return false;
+  const running = getInstalledVersion();
+  if (!running) return false;
+  return compareVersions(running, lockedVersion) >= 0;
+}
+
+// Re-syncs bundled argent skills into the caller's chosen scopes, and prunes
+// argent-prefixed entries that are no longer part of the bundled set.
+//
+// Two filters apply, and both matter. The caller names the scopes, because only
+// the install that moved may rewrite the store that tracks it. A named scope is
+// then skipped if it tracks no argent skill, so this never creates a
 // `skills-lock.json` in an unrelated working directory.
+//
+// Pruning has a third condition — see `mayPruneScope`. Sync is idempotent and
+// additive, so re-syncing a store from a slightly different version is
+// recoverable; a prune deletes, and is not.
 //
 // Sync prefers the GitHub-pinned source (`<repo>/packages/skills/skills#v<ver>`)
 // so the lockfile entry stays portable across machines. If the
@@ -75,7 +133,11 @@ function getScopeSpecs(projectRoot: string): ScopeSpec[] {
 // previous-version lock written from SKILLS_DIR would never refresh. `skills
 // add` rewrites the entry from the source we pass, which is exactly the
 // behavior we want after `npm i -g @swmansion/argent@new`.
-export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
+export function refreshArgentSkills(opts: {
+  projectRoot: string;
+  scopes: readonly SkillScope[];
+}): SkillScopeResult[] {
+  const { projectRoot, scopes } = opts;
   const bundled = new Set(listBundledSkills());
   // An empty bundled set means THIS package's skills dir is unreadable — a
   // pruned pnpm store dir mid-update, a broken install — never "argent ships
@@ -92,7 +154,7 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
     cwd: string;
   };
 
-  for (const spec of getScopeSpecs(projectRoot)) {
+  for (const spec of getScopeSpecs(projectRoot, scopes)) {
     const tracked = listArgentSkillsInLock(spec.lockPath);
     if (tracked.length === 0) continue;
 
@@ -123,7 +185,7 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
       }
     }
 
-    if (orphaned.length > 0) {
+    if (orphaned.length > 0 && mayPruneScope(spec.lockPath)) {
       try {
         execFileSync("npx", withNpmForce([...spec.removeArgs, ...orphaned]), execOpts);
         result.pruned = orphaned;
@@ -183,11 +245,26 @@ export function summarizeSkillRefreshForTelemetry(
 // the failure_stage naming the flow.
 export type SkillRefreshStage = "installer_skills_refresh" | "installer_update_skills_refresh";
 
-export function reportSkillRefresh(projectRoot: string, stage: SkillRefreshStage): void {
-  const results = refreshArgentSkills(projectRoot);
+export function reportSkillRefresh(opts: {
+  projectRoot: string;
+  scopes: readonly SkillScope[];
+  stage: SkillRefreshStage;
+}): void {
+  const { projectRoot, scopes, stage } = opts;
+  const results = refreshArgentSkills({ projectRoot, scopes });
   const summary = formatSkillRefreshSummary(results);
   if (summary) {
     p.note(summary, "Skills Updated");
+  }
+  // A store this command did not update stays on its old version. Say so once,
+  // rather than letting it quietly drift.
+  if (!scopes.includes("global") && listArgentSkillsInLock(getGlobalSkillLockPath()).length > 0) {
+    p.log.info(
+      pc.dim(
+        "Left the machine-wide skills alone — they track the global install. " +
+          "Run `argent update --global` to refresh them."
+      )
+    );
   }
   const telemetrySummary = summarizeSkillRefreshForTelemetry(results);
   if (telemetrySummary.scope_count > 0) {
