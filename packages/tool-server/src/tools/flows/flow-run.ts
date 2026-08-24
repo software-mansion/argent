@@ -2360,8 +2360,11 @@ async function execLeafStep(
         // A relaunch is also the repair a proven tree outage asks for by name -
         // the same clear `runLaunch` makes for the directive spelling.
         if (state.treeOutage) state.treeOutage.proven = undefined;
-      } else if (state.treeTarget) {
+      } else if (state.treeTarget?.pinned) {
         state.treeTarget = { ...state.treeTarget, pinned: false };
+        // A verdict proven against the pinned branch's gates says nothing
+        // about the auto-resolve path the demote switches reads onto.
+        if (state.treeOutage) state.treeOutage.proven = undefined;
       }
       // A nested orchestrator runs its tools outside this run's holder -
       // `flow-execute` on an ExecState of its own, `run-sequence` on none - so

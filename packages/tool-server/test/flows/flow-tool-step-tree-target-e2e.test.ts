@@ -24,6 +24,7 @@ import { serializeFlow } from "../../src/tools/flows/flow-utils";
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
 const APP = "com.example.app";
+const OTHER = "com.example.other";
 const POISONER = "com.apple.mobilecal";
 let tmpDir: string;
 
@@ -80,6 +81,28 @@ function nativeApi(hierarchyReads: string[]): NativeDevtoolsApi {
   } as unknown as NativeDevtoolsApi;
 }
 
+/** The launched app answering getState from the background, beside a healthy foreground sibling. */
+function backgroundedAppApi(hierarchyReads: string[]): NativeDevtoolsApi {
+  return {
+    listConnectedBundleIds: () => [APP, OTHER],
+    isConnected: (id: string) => id === APP || id === OTHER,
+    getAppState: async (id: string) =>
+      id === APP
+        ? {
+            ...appState(id),
+            applicationState: "background",
+            foregroundActiveSceneCount: 0,
+            backgroundSceneCount: 1,
+            isFrontmostCandidate: false,
+          }
+        : appState(id),
+    queryViewHierarchy: async (id: string) => {
+      hierarchyReads.push(id);
+      return { windows: [readyWindow()] };
+    },
+  } as unknown as NativeDevtoolsApi;
+}
+
 type ToolCall = { id: string; args: Record<string, unknown> };
 
 // resolveService is the only faked seam; the tool surface just has to answer
@@ -108,14 +131,15 @@ function asRun(r: FlowRunResult | { notice: string }): FlowRunResult {
   return r;
 }
 
-/** Run an already-written flow on the poisoned device. */
+/** Run an already-written flow, on the poisoned device unless handed another api. */
 async function runFlow(
   name: string,
   hierarchyReads: string[],
-  toolCalls: ToolCall[] = []
+  toolCalls: ToolCall[] = [],
+  api: NativeDevtoolsApi = nativeApi(hierarchyReads)
 ): Promise<FlowRunResult> {
   return asRun(
-    await createRunFlowTool(mockRegistry(nativeApi(hierarchyReads), toolCalls)).execute(
+    await createRunFlowTool(mockRegistry(api, toolCalls)).execute(
       {},
       { name, project_root: tmpDir, device: DEVICE }
     )
@@ -170,6 +194,45 @@ describe("a tool step's tree target against a wedged sibling (end-to-end)", () =
     // One read per assert: the second one is the read the regression lost.
     expect(hierarchyReads).toEqual([APP, APP]);
   });
+
+  it("retires an outage verdict proven while pinned when a tool step demotes the pin", async () => {
+    // The launched app answers getState from the background with no foreground
+    // scene, so every pinned read dies on the foreground guard and the first
+    // tap's settle mints the outage memo. The demoted read never runs that
+    // guard - auto-resolve answers and picks the healthy sibling - so a memo
+    // that outlived the demote would have every later gesture skip its settle
+    // and re-report a diagnosis about a path the run no longer reads.
+    const hierarchyReads: string[] = [];
+    await writeFlow("outage-outlives-demote", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: APP },
+        { kind: "tap", x: 0.5, y: 0.5 },
+        { kind: "tool", name: "screenshot", args: {} },
+        { kind: "tap", x: 0.5, y: 0.5 },
+      ],
+    });
+    const result = await runFlow(
+      "outage-outlives-demote",
+      hierarchyReads,
+      [],
+      backgroundedAppApi(hierarchyReads)
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "launch:pass",
+      "tap:pass",
+      "tool:pass",
+      "tap:pass",
+    ]);
+    // The memo was minted against the foreground guard: the first tap went
+    // out warned with its diagnosis, and no read reached the hierarchy.
+    expect(result.steps[1].warning).toMatch(/no foreground presence/);
+    // The tap after the demote pays for a settle of its own - two reads
+    // converging on the sibling, where the stale verdict would have left zero.
+    expect(hierarchyReads).toEqual([OTHER, OTHER]);
+    expect(result.steps[3].warning).toBeUndefined();
+  }, 20_000);
 
   it("drops the target across a foreground-changing tool step - the read fails instead", async () => {
     // `launch-app` can put another app on screen, so the launched app is not
