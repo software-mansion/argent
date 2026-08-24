@@ -3,7 +3,11 @@ import type { Registry, ToolDependency } from "@argent/registry";
 import type { DescribeTreeData } from "../../contract";
 import { adbExecOutBinary, isAndroidTv } from "../../../../utils/adb";
 import { resolveDevice } from "../../../../utils/device-info";
-import { getAndroidScreenSize } from "../../../../utils/android-screen";
+import {
+  getAndroidScreenSize,
+  orientScreenSize,
+  parseDumpRotation,
+} from "../../../../utils/android-screen";
 import { parseUiAutomatorDump } from "./uiautomator-parser";
 import {
   androidDevtoolsRef,
@@ -113,6 +117,12 @@ export async function describeAndroid(
       }
     );
   }
-  const tree = parseUiAutomatorDump(raw, size.width, size.height);
+  // `wm size` is not rotation-aware, but the dump says which rotation it was
+  // taken at. Orienting the divisor here is what keeps a rotated device's frames
+  // in the same upright space the android-devtools path already produces — and
+  // stops the right-hand half of a landscape screen being pruned away as
+  // off-screen (#609).
+  const oriented = orientScreenSize(size, parseDumpRotation(raw));
+  const tree = parseUiAutomatorDump(raw, oriented.width, oriented.height);
   return { tree, source: "uiautomator", hint };
 }

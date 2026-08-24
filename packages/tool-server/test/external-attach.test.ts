@@ -12,7 +12,11 @@ import {
   __resetProviderWarningsForTesting,
   makeExternalId,
 } from "../src/utils/external-devices";
-import { httpScreenshot, sendCommand } from "../src/utils/simulator-client";
+import {
+  httpScreenshot,
+  sendCommand,
+  setSimulatorClipboardText,
+} from "../src/utils/simulator-client";
 import { resolveDevice } from "../src/utils/device-info";
 
 /**
@@ -264,13 +268,19 @@ describe("attaching to a provider's simulator-server", () => {
     expect(simulatorServer.httpPaths).toEqual(["/api/screenshot"]);
   });
 
-  it("refuses paste rather than silently dropping it", async () => {
+  /**
+   * The paste tool fills the device clipboard over `/api/clipboard/text`, an
+   * endpoint argent's own build does not guarantee, so it is refused before the
+   * request is made rather than sent to a provider's server.
+   */
+  it("refuses paste rather than calling an endpoint it does not own", async () => {
     const simulatorServer = await startSimulatorServer();
     const device = attachTo(simulatorServer);
     const instance = await simulatorServerBlueprint.factory({}, device, { device });
-    expect(() => sendCommand(instance.api, { cmd: "paste", text: "hello" })).toThrow(
+    await expect(setSimulatorClipboardText(instance.api, "hello")).rejects.toThrow(
       /Pasting text is not available/
     );
+    expect(simulatorServer.httpPaths).toHaveLength(0);
     expect(simulatorServer.wsCommands).toHaveLength(0);
   });
 

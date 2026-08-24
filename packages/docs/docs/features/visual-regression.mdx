@@ -1,0 +1,60 @@
+---
+sidebar_position: 6
+sidebar_label: Visual regression
+title: Visual regression
+sidebar_custom_props:
+  icon: images
+---
+
+Argent compares two screenshots of the app. The agent reads the result of the comparison. The agent tells you which areas of the screen changed, which text changed, and whether the change is the one that you asked for.
+
+Use the comparison after a change to the layout, the spacing, the colors, the typography, the icons or the images. Also use it when a change can cause clipping, overflow or a different text rendering in a different part of the screen.
+
+## How a comparison works
+
+1. The agent brings the app to a known state and captures a baseline screenshot.
+2. You make the change, or the agent makes the interaction.
+3. The agent captures the screen again and compares the two screenshots.
+4. The agent reads the summary. The agent opens the diff image if the summary is not sufficient.
+5. The agent reports the result to you. The agent also reports a change that you did not ask for.
+
+The agent can compare two saved screenshots, or one saved screenshot and a live capture of the device. The agent can also capture both sides live, before and after an interaction.
+
+## What the comparison reports
+
+Argent does more than count different pixels. The summary contains three parts.
+
+| Part           | Content                                                                                            |
+| -------------- | -------------------------------------------------------------------------------------------------- |
+| Overall status | Unchanged or changed, and the percentage of pixels that are different                              |
+| Changed areas  | The position and size of each area that changed, and the direction of the color change in the area |
+| Text changes   | Text that appeared, disappeared, moved, or changed its content, its font, its size or its color    |
+
+Argent reads the text of both screenshots with OCR. Thus the agent knows that the label "Save" became "Saved", or that a heading moved down by the height of one line. Argent also compares the shape and the stroke of the glyphs. Thus the agent sees a font change even when the words are the same.
+
+Argent writes a diff image. The image marks the pixels that became brighter, the pixels that became darker, and the outline of each changed area. The agent shows you this image when you ask for it.
+
+Argent removes the status bar from the comparison. Thus the clock and the battery indicator do not make the comparison fail.
+
+## Baselines in flows
+
+A [flow](/docs/features/flows) can contain a snapshot step. The step fails when no baseline exists yet. Run the flow with `--update-baselines` to adopt the current screen as the baseline. Each later run compares the screen to the stored baseline, and the step fails when the difference is above a tolerance. A snapshot step can also compare one element only instead of the full screen.
+
+Thus you can keep visual checks in the repository and run them in CI.
+
+## Example instructions
+
+- "Capture a baseline of the settings screen. Then apply my change and compare."
+- "Compare the home screen before and after the tap on the filter button."
+- "I changed the font of the headings. Make sure that nothing else on the screen changed."
+- "Add a snapshot step to the checkout flow for the summary screen."
+
+## Limits
+
+- The comparison needs two stable screens. Animation, a live clock, an advertisement or random data makes the comparison noisy. Stop the animation or wait for a stable state first.
+- The comparison does not replace a check of the accessibility tree, the logs or the network record. The agent uses these sources together with the comparison.
+- The two screenshots must come from the same device class and the same orientation. When the resolution differs, Argent scales one screenshot down, and small differences can come from the scaling.
+- The agent does not use the comparison to find the position of an element for a tap. The agent uses the screen description for that.
+- The comparison works on an iOS simulator or device, or an Android emulator or device. It does not work on Chromium, Apple TV or Vega apps.
+
+Argent does this with the `screenshot` and `screenshot-diff` tools. The [tools reference](/docs/reference/tools) contains all tools.

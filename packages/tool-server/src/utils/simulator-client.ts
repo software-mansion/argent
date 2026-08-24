@@ -21,7 +21,10 @@ import * as os from "node:os";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
-const DEFAULT_SCREENSHOT_SCALE = 0.3;
+// Context cost is pixel area, so this constant is the whole lever. 0.25 is the
+// lowest scale where Opus 5 and Haiku 4.5 both still read every label, count and
+// selected-tab underline; below it they misread adjacent rows as each other.
+const DEFAULT_SCREENSHOT_SCALE = 0.25;
 
 // A simulator-server captures screenshots from its live frame stream, so the
 // first frame must have arrived before a capture can succeed. Right after the
@@ -94,24 +97,6 @@ export function sendCommand(api: SimulatorServerApi, cmd: Record<string, unknown
     return;
   }
 
-  /**
-   * `paste` is stdin-only in the simulator-server, not a WebSocket command, so
-   * an attached server would silently drop it. Refuse loudly instead.
-   */
-  if (api.external && cmd.cmd === "paste") {
-    throw new FailureError(
-      "Pasting text is not available on a device supplied by an external provider: " +
-        "the simulator-server accepts `paste` only on its standard input, which an " +
-        "attached client has no access to. Use `keyboard` to type the text instead.",
-      {
-        error_code: FAILURE_CODES.EXTERNAL_DEVICE_PASTE_UNSUPPORTED,
-        error_kind: "unsupported",
-        failure_area: "tool_server",
-        failure_stage: "external_device_paste_unsupported",
-      }
-    );
-  }
-
   const ws = getOrCreateWs(api);
   const payload = JSON.stringify({ id: String(++cmdId), ...cmd });
   if (ws.readyState === WebSocket.OPEN) {
@@ -174,6 +159,83 @@ async function pointerPost(
 }
 
 /**
+ * Put `text` on the DEVICE clipboard through simulator-server's
+ * `POST /api/clipboard/text`. On iOS the server fills a private NSPasteboard and
+ * pushes it into the simulator synchronously; on an Android emulator it goes
+ * through the emulator's gRPC `setClipboard`. The host clipboard is untouched
+ * either way. Resolves once the device pasteboard holds the text, so a paste
+ * keystroke sent afterwards cannot race the fill.
+ *
+ * The endpoint exists only in a simulator-server built with the `clipboard`
+ * feature. An older binary answers the route with a bare 404, which is
+ * reported as "unsupported" rather than as a network fault.
+ */
+export async function setSimulatorClipboardText(
+  api: SimulatorServerApi,
+  text: string,
+  signal?: AbortSignal
+): Promise<void> {
+  /**
+   * `/api/clipboard/text` is not one of the endpoints argent's own build
+   * guarantees, so it is off-limits on a server argent did not spawn. Said
+   * plainly here rather than as a generic allowlist refusal, since the agent's
+   * way out is a different tool.
+   */
+  if (api.external) {
+    throw new FailureError(
+      "Pasting text is not available on a device supplied by an external provider: " +
+        "argent only uses the endpoints its own simulator-server build serves, and the " +
+        "clipboard is not one of them. Use `keyboard` to type the text instead.",
+      {
+        error_code: FAILURE_CODES.EXTERNAL_DEVICE_PASTE_UNSUPPORTED,
+        error_kind: "unsupported",
+        failure_area: "tool_server",
+        failure_stage: "external_device_paste_unsupported",
+      }
+    );
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(`${api.apiUrl}/api/clipboard/text`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+      signal,
+    });
+  } catch (err) {
+    throw toSimulatorNetworkError("Paste", err, api.apiUrl);
+  }
+  if (res.status === 404) {
+    throw new FailureError(
+      "Paste failed: this simulator-server build has no clipboard endpoint. " +
+        "Update argent so its bundled simulator-server includes clipboard support, " +
+        "or type the text with the keyboard tool instead.",
+      {
+        error_code: FAILURE_CODES.PASTE_CLIPBOARD_UNSUPPORTED,
+        failure_stage: "simulator_clipboard_endpoint_missing",
+        failure_area: "tool_server",
+        error_kind: "unsupported",
+      }
+    );
+  }
+  // The route answers HTTP 200 for both outcomes and reports a failure in-band
+  // (`{ error }`), like the other simulator-server POST routes.
+  const body = (await res.json().catch(() => null)) as { status?: string; error?: string } | null;
+  if (!res.ok || body?.status !== "ok") {
+    throw new FailureError(
+      `Paste failed: could not set the device clipboard (${body?.error ?? `HTTP ${res.status}`}).`,
+      {
+        error_code: FAILURE_CODES.PASTE_CLIPBOARD_SET_FAILED,
+        failure_stage: "simulator_clipboard_set",
+        failure_area: "tool_server",
+        error_kind: "unknown",
+      }
+    );
+  }
+}
+
+/**
  * POST to a simulator-server endpoint, handling network errors and non-JSON
  * responses uniformly.  Callers handle domain-specific response validation.
  */
@@ -229,7 +291,7 @@ export function getScreenshotScale(): number {
     const n = parseFloat(v);
     if (!Number.isNaN(n) && n > 0 && n <= 1) return n;
   }
-  return DEFAULT_SCREENSHOT_SCALE; // default: halve the resolution
+  return DEFAULT_SCREENSHOT_SCALE;
 }
 
 /**
@@ -355,13 +417,6 @@ function routeViaTransport(
     case "rotate":
       transport.rotate(cmd.direction as RotationName);
       return;
-    case "paste": {
-      // paste() may be async on remote (pbcopy + Cmd+V); fire and forget
-      // here to preserve sendCommand's sync shape. Errors land in the host
-      // process's unhandledRejection logger — same as a websocket send fail.
-      void Promise.resolve(transport.paste(cmd.text as string));
-      return;
-    }
     case "key":
       transport.pressKey(cmd.direction as KeyActionName, cmd.code as number);
       return;

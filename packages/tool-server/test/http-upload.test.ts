@@ -9,6 +9,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
 import type { Registry } from "@argent/registry";
+import { redirectTmpdir } from "./helpers/tmpdir-env";
 
 vi.mock("../src/utils/update-checker", () => ({
   getUpdateState: vi.fn(() => ({ updateInstallable: false, currentVersion: "1.0.0" })),
@@ -151,12 +152,18 @@ describe("POST /upload", () => {
   });
 
   it("discards the partial file when the client disconnects mid-upload", async () => {
+    // The upload path is join(os.tmpdir(), `argent-upload-${id}.tar.gz`).
+    // Scope the tmpdir to this test so the leak check sees only this run's
+    // partials: against the machine-wide tmpdir a concurrent run's in-flight
+    // upload never disappears, and the poll below turns into a timeout rather
+    // than a one-line failure.
+    const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "argent-upload-scan-"));
+    const restoreTmpdir = redirectTmpdir(scratch);
+
     const uploadFiles = async (): Promise<Set<string>> => {
-      const entries = await fs.readdir(os.tmpdir());
+      const entries = await fs.readdir(scratch);
       return new Set(entries.filter((e) => e.startsWith("argent-upload-")));
     };
-    const before = await uploadFiles();
-
     const server = handle.app.listen(0);
     try {
       const { port } = server.address() as { port: number };
@@ -177,12 +184,12 @@ describe("POST /upload", () => {
 
       // Cleanup is async — poll briefly for the partial file to disappear.
       await vi.waitFor(async () => {
-        const after = await uploadFiles();
-        const leaked = [...after].filter((f) => !before.has(f));
-        expect(leaked).toEqual([]);
+        expect([...(await uploadFiles())]).toEqual([]);
       });
     } finally {
       server.close();
+      restoreTmpdir();
+      await fs.rm(scratch, { recursive: true, force: true });
     }
   });
 });

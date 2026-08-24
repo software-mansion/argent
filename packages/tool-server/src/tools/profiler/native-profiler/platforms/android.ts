@@ -295,5 +295,7 @@ export async function analyzeNativeProfilerAndroid(
     // the metadata sidecar, restored by profiler-load). A large gap to "now"
     // means we're analyzing a trace from an earlier session, not a fresh capture.
     freshnessNote: formatTraceFreshness(api.wallClockStartMs, Date.now()) ?? undefined,
+    // Explains an absent CPU section when samples exist but carry no stacks.
+    cpuDiagnostic: pipelineResult.cpuDiagnostic,
   });
 }

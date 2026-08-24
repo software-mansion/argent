@@ -153,11 +153,13 @@ export interface DirectiveOutcome {
    * The condition could not be evaluated — unknown, not false: the window
    * never produced a trustworthy read (every fetch threw or returned a
    * blind/degraded tree), or a `hidden` check ended on a blind or failed
-   * read after the element had matched. Read by the `when:` guard probe,
-   * which must error rather than silently skip a block a broken tree source
-   * can't vouch for; a plain `assert` reports it as an ordinary failure. An
-   * `idle` step is the exception — it has no condition to fall back on, so the
-   * runner scores its indeterminate outcome `error` rather than `fail`.
+   * read after the element had matched.
+   *
+   * Every reader turns it into "unknown" its own way. The `when:` guard probe
+   * errors rather than skip a block a broken tree source cannot vouch for. A
+   * plain `assert` reports an ordinary failure. An `idle` step scores `error`
+   * rather than `fail`. The recorder's cross-tree re-probe keeps the step and
+   * warns that the conversion is UNKNOWN, not known-bad.
    */
   indeterminate?: boolean;
   /**
@@ -351,11 +353,16 @@ const DEFAULT_ASSERT_TIMEOUT_MS = 1000;
 const CONDITION_DARK_TAIL_TOLERANCE_MS = POLL_INTERVAL_MS * 2;
 
 /**
- * Evaluate a `when:` block's UI guard — the same engine as `assert`, on the
- * same assert grace window: a skipped block must not add an await-sized dead
- * wait to every clean run. `ok` is "condition met"; `indeterminate`
- * distinguishes an unreadable tree (the caller errors — unknown is not false)
- * from a plainly unmet condition (the caller skips).
+ * Evaluate a UI condition on the assert grace window — the same engine as
+ * `assert`, and deliberately not an await-sized wait. `ok` is "condition met";
+ * `indeterminate` separates an unreadable tree, which is unknown rather than
+ * false, from a plainly unmet condition.
+ *
+ * Named for its first caller, the `when:` block guard, where the grace window
+ * is the whole point: a skipped block must not add a dead wait to every clean
+ * run, and the two outcomes map onto error (unknown) versus skip (unmet). The
+ * recorder's cross-tree re-probe is the second caller; it wants the same grace
+ * window, because that is the window an `assert:` conversion would get.
  */
 export function probeWhenCondition(
   env: ActionEnv,

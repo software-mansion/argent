@@ -255,6 +255,37 @@ export async function classifyOnDiskSpelling(dir: string, base: string): Promise
  */
 export type FlowPersistMode = "host" | "client";
 
+/**
+ * One recorded step's warning, plus the anchor saying WHICH step it judged.
+ *
+ * The number it is filed under is a position, and a mid-recording hand edit
+ * moves positions. Comparing the finished flow against the recorder's own view
+ * catches an edit made after the last append; carrying the judged step catches
+ * one that moved a step out from under its number — see `anchoredWarnings` in
+ * flow-finish-recording.ts. An edit the recorder then appended OVER defeats
+ * both, and is settled at the append itself — see {@link dropMovedWarnings}.
+ */
+export interface RecordedStepWarning {
+  /** The warning text `flow-add-step` raised on that step's `message`. */
+  warning: string;
+  /**
+   * WHICH question the warning answers, because the two are not the same news.
+   *
+   * - `conversion` — the cross-tree re-probe ran (or tried to) and this is its
+   *   verdict on converting the step to `await:`/`assert:`. A polish-time
+   *   question; the raw step replays fine either way.
+   * - `wait` — the live wait itself came back `success: false`, so the probe
+   *   was skipped. Nothing here is about conversion: a genuine miss is a step
+   *   FAILURE at replay, and the other causes leave the step unjudged.
+   */
+  kind: "conversion" | "wait";
+  /**
+   * The judged step as `stepAnchor` renders it: its identity, independent of
+   * where it now sits.
+   */
+  step: string;
+}
+
 export interface RecordingSession {
   /** Flow name, as passed to every recording tool. */
   name: string;
@@ -275,6 +306,24 @@ export interface RecordingSession {
   filePath: string;
   /** In-memory flow content — authoritative in "client" mode. */
   flow: FlowFile;
+  /**
+   * Cross-tree probe verdicts, by 1-based step number.
+   *
+   * The verdict answers a POLISH-time question, and polish begins after
+   * `flow-finish-recording`. The warning is raised on one step's `message`, so
+   * without this it has scrolled out of every artifact by the time it is
+   * actionable. Accumulate it here and let the finish payload carry it.
+   */
+  stepWarnings?: Map<number, RecordedStepWarning>;
+  /**
+   * How many verdicts this recording raised and then DROPPED, because a hand
+   * edit moved the step each one judged (see {@link dropMovedWarnings}).
+   *
+   * Dropping is right, but it is not the same news as never having raised one,
+   * and the finish payload is otherwise identical either way. Counted here
+   * because the verdicts themselves are gone by then.
+   */
+  discardedWarnings?: number;
   /** Order of the last touch, for the LRU eviction backstop. See {@link touch}. */
   lastTouchedSeq: number;
 }
@@ -3251,11 +3300,12 @@ export async function writeNewFlowFile(filePath: string, content: string): Promi
  * the "Starting always truncates the `.yaml`" bullet.
  *
  * The file — not the session's in-memory `flow` — is the take in "host" mode:
- * {@link appendStep}
- * re-reads it before every append and `flow-finish-recording` reads it back for
- * its summary, so a hand-edit made mid-recording (a documented workflow) is
- * part of the take even though the in-memory copy only catches up on the next
- * append.
+ * {@link appendStep} re-reads it before every append and
+ * `flow-finish-recording` reads it back for its summary. So a hand edit made
+ * mid-recording is part of the take, even though the in-memory copy only
+ * catches up on the next append. Both recording tools tell the agent to edit
+ * only AFTER the finish, because that catching-up renumbers the steps the
+ * finish anchors its verdicts to.
  *
  * Undefined rather than 0 on a failure, because the two are not the same
  * answer: a hand-edit can leave YAML that `parseFlow` rejects, and reporting
@@ -3357,11 +3407,133 @@ function assertSessionStillLive(session: RecordingSession, step: FlowStep): void
 }
 
 /**
+ * One step rendered for comparison, or `null` where it has no rendering.
+ *
+ * A cyclic YAML alias inside a step's `args` materializes as a cyclic object,
+ * and `JSON.stringify` throws on it. A throw here would fail an append that has
+ * already written the step and already run it on the device, so the retry it
+ * invites would repeat both. The same guard as `renderToolArgs`.
+ */
+function renderStepForCompare(step: FlowStep): string | null {
+  try {
+    return JSON.stringify(step);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Do `n` steps of `now` starting at `nowFrom` match `n` steps of `before`
+ * starting at `beforeFrom`?
+ *
+ * Both sides are {@link parseFlow} output, so absent an edit they parse
+ * byte-identical prefixes and `JSON.stringify` compares them exactly. No
+ * key-order difference can exist between two parses of the same bytes.
+ *
+ * A step with no rendering is NOT the same step: {@link anchorHolds} drops the
+ * verdict rather than report it against a step whose identity is unknown.
+ *
+ * Both offsets are 0 for an unedited file; {@link anchorHolds} moves them to
+ * ask about the alignments an edit inside the prefix would produce. Both sides
+ * arrive pre-rendered, because each alignment would otherwise repeat the same
+ * work.
+ */
+function sameStepRun(
+  now: (string | null)[],
+  before: (string | null)[],
+  n: number,
+  nowFrom: number,
+  beforeFrom: number
+): boolean {
+  if (now.length < nowFrom + n || before.length < beforeFrom + n) return false;
+  for (let i = 0; i < n; i += 1) {
+    const rendered = now[nowFrom + i];
+    if (rendered === null || rendered !== before[beforeFrom + i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Is the step at number `n` still the step the verdict at `n` judged?
+ *
+ * Matching the prefix at the unedited alignment is necessary but not enough. A
+ * length change says a step was removed or added, and a prefix that ALSO
+ * matches the alignment such an edit would leave behind is consistent with the
+ * edit having happened inside it. Two adjacent identical waits hide the shift,
+ * and a verdict is not a function of content: the probe read the live device at
+ * that step's moment, so identical waits can diverge at one position and agree
+ * at another.
+ *
+ * So a resized file keeps a verdict only where the alignments DISAGREE. The
+ * edit can sit anywhere in the prefix, so every position is tried at every size
+ * the length change admits. What stays out of reach is an edit that leaves the
+ * length alone — a reorder of two identical steps has no witness at all.
+ */
+function anchorHolds(now: (string | null)[], before: (string | null)[], n: number): boolean {
+  if (!sameStepRun(now, before, n, 0, 0)) return false;
+  // A deletion slides `before` forward from the splice on; an insertion slides
+  // `now` forward. Ask only about the direction the length change allows.
+  const deleted = before.length - now.length;
+  const inserted = now.length - before.length;
+  for (let at = 0; at < n; at += 1) {
+    // The base check above already compared everything before `at`, so each
+    // hypothesis only accounts for the `n - at` steps the splice moved.
+    for (let size = 1; size <= deleted; size += 1) {
+      if (sameStepRun(now, before, n - at, at, at + size)) return false;
+    }
+    for (let size = 1; size <= inserted; size += 1) {
+      if (sameStepRun(now, before, n - at, at + size, at)) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Drop the verdicts a mid-recording hand edit moved, at the one moment the move
+ * is visible.
+ *
+ * Host mode re-reads the file before every append, so an edit becomes part of
+ * the take and `session.flow` catches up to it. After that the finish has
+ * nothing left to compare, and a verdict can land on a step it never judged
+ * while the step it did judge reads clean.
+ *
+ * The append that ABSORBS the edit still holds both views, so ask here. A
+ * verdict at number `n` survives only where {@link anchorHolds} shows the first
+ * `n` steps are still those steps. Verdicts behind the edit keep theirs.
+ *
+ * Returns how many were dropped, so the finish can report a shortfall rather
+ * than a clean bill of health.
+ */
+function dropMovedWarnings(
+  warnings: Map<number, RecordedStepWarning> | undefined,
+  now: FlowStep[],
+  before: FlowStep[]
+): number {
+  if (!warnings) return 0;
+  // Render both views once. Every verdict asks about the same two lists.
+  const nowRendered = now.map(renderStepForCompare);
+  const beforeRendered = before.map(renderStepForCompare);
+  let dropped = 0;
+  for (const n of [...warnings.keys()]) {
+    if (anchorHolds(nowRendered, beforeRendered, n)) continue;
+    warnings.delete(n);
+    dropped += 1;
+  }
+  return dropped;
+}
+
+/**
  * Append a step to a recording and persist it. In "host" mode the file on disk
  * is re-read first (the original behavior — a manual edit made mid-recording is
  * honored); in "client" mode this process never sees the client's disk, so the
  * in-memory copy is authoritative and the updated YAML travels back in the
  * directive.
+ *
+ * That re-read is also the only chance anyone gets to NOTICE a hand edit, so
+ * it is checked against the view it replaces — see {@link dropMovedWarnings}.
+ * Client mode needs no such check: this host never sees the client's file.
  */
 export async function appendStepToFlow(
   session: RecordingSession,
@@ -3376,8 +3548,15 @@ export async function appendStepToFlow(
     assertSessionStillLive(session, step);
     session.lastTouchedSeq = touch();
     if (session.persist === "host") {
+      const before = session.flow.steps;
       const flowFile = await appendStep(session.filePath, step);
       session.flow = parseFlow(flowFile);
+      // `appendStep` adds exactly one step, so everything before the last one
+      // is what the file already held — the recorder's previous view, unless a
+      // hand edit landed in between.
+      session.discardedWarnings =
+        (session.discardedWarnings ?? 0) +
+        dropMovedWarnings(session.stepWarnings, session.flow.steps.slice(0, -1), before);
       // Count inside the lock, off the just-refreshed `session.flow`: a caller
       // reading `session.flow.steps.length` after this returns would be racing
       // a concurrent same-key append, which can reassign `session.flow` between

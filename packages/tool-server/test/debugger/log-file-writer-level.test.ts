@@ -1,5 +1,8 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { LogFileWriter } from "../../src/utils/debugger/log-file-writer";
+import { scopeTempHome } from "../helpers/temp-home";
+
+scopeTempHome("argent-log-level-home-");
 
 /**
  * Regression for level truncation: CDP emits console levels longer than 5 chars

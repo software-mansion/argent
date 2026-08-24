@@ -112,6 +112,7 @@ describe("parseRunArgs", () => {
       updateBaselines: false,
       recursive: false,
       json: false,
+      jsonStream: false,
     });
   });
 
@@ -132,8 +133,10 @@ describe("parseRunArgs", () => {
       updateBaselines: true,
       recursive: false,
       json: false,
+      jsonStream: false,
     });
     expect(parseRunArgs(["--json", "checkout.yaml"]).json).toBe(true);
+    expect(parseRunArgs(["--json-stream", "checkout.yaml"]).jsonStream).toBe(true);
   });
 
   it("accepts -r and --recursive in any position", () => {
@@ -180,6 +183,7 @@ describe("parseRunArgs", () => {
       updateBaselines: false,
       recursive: false,
       json: false,
+      jsonStream: false,
     });
   });
 
@@ -191,6 +195,7 @@ describe("parseRunArgs", () => {
       updateBaselines: false,
       recursive: false,
       json: false,
+      jsonStream: false,
     });
   });
 
@@ -201,10 +206,19 @@ describe("parseRunArgs", () => {
     expect(out.json).toBe(true);
   });
 
+  it("rejects combining --json and --json-stream", () => {
+    expect(() => parseRunArgs(["checkout.yaml", "--json", "--json-stream"])).toThrow(
+      "--json and --json-stream cannot be combined"
+    );
+  });
+
   it("throws when a boolean flag is given an inline value", () => {
     expect(() => parseRunArgs(["checkout.yaml", "--json=true"])).toThrow(FlagParseException);
     expect(() => parseRunArgs(["checkout.yaml", "--json=true"])).toThrow(
       "--json does not take a value"
+    );
+    expect(() => parseRunArgs(["checkout.yaml", "--json-stream=true"])).toThrow(
+      "--json-stream does not take a value"
     );
     expect(() => parseRunArgs(["checkout.yaml", "--update-baselines=1"])).toThrow(
       "--update-baselines does not take a value"
@@ -238,6 +252,7 @@ describe("parseRunArgs", () => {
       updateBaselines: false,
       recursive: false,
       json: false,
+      jsonStream: false,
     });
     // The marker relaxes flag parsing, not the one-positional rule.
     expect(() => parseRunArgs(["--", "a", "b"])).toThrow(
@@ -1203,6 +1218,137 @@ describe("argent flow run", () => {
     expect(JSON.parse(logs.join("\n"))).toEqual(report());
   });
 
+  it("prints each progress step followed by one final result with --json-stream", async () => {
+    let finish!: () => void;
+    const finalGate = new Promise<void>((resolve) => (finish = resolve));
+    const step = { index: 0, kind: "tap", status: "pass" };
+    const finalReport = report({ steps: [step] });
+    toolsClientMock.callTool.mockImplementation(
+      async (
+        _name: string,
+        _payload: unknown,
+        options?: { onProgress?: (event: unknown) => void }
+      ) => {
+        options?.onProgress?.(step);
+        await finalGate;
+        return { data: finalReport };
+      }
+    );
+
+    const running = flow(["run", checkoutPath, "--json-stream"], opts);
+    await vi.waitFor(() => {
+      expect(logs).toHaveLength(1);
+      expect(JSON.parse(logs[0]!)).toEqual({ event: "progress", data: step });
+    });
+    finish();
+    await expect(running).rejects.toThrow("process.exit:0");
+
+    const records = logs.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(records).toEqual([
+      { event: "progress", data: step },
+      { event: "result", data: finalReport },
+    ]);
+    expect(errs).toEqual([]);
+  });
+
+  it("prints one final result and exits 1 for a failed report with --json-stream", async () => {
+    const failedReport = report({
+      ok: false,
+      passed: 0,
+      failed: 1,
+      steps: [{ index: 0, kind: "assert", status: "fail", reason: "not visible" }],
+    });
+    toolsClientMock.callTool.mockResolvedValue({ data: failedReport });
+
+    await expect(flow(["run", checkoutPath, "--json-stream"], opts)).rejects.toThrow(
+      "process.exit:1"
+    );
+
+    expect(logs.map((line) => JSON.parse(line))).toEqual([{ event: "result", data: failedReport }]);
+  });
+
+  it("prints a structured error on stdout and diagnostics on stderr with --json-stream", async () => {
+    toolsClientMock.callTool.mockRejectedValue(
+      new ToolInvocationError("invalid flow", {
+        errorCode: "FLOW_FILE_INVALID",
+        errorKind: "validation",
+      })
+    );
+
+    await expect(flow(["run", checkoutPath, "--json-stream"], opts)).rejects.toThrow(
+      "process.exit:1"
+    );
+
+    expect(logs.map((line) => JSON.parse(line))).toEqual([
+      {
+        event: "error",
+        error: "invalid flow",
+        error_code: "FLOW_FILE_INVALID",
+        error_kind: "validation",
+      },
+    ]);
+    expect(errs).toEqual(["invalid flow"]);
+  });
+
+  it("rejects --json with --json-stream without writing human text to stdout", async () => {
+    await expect(flow(["run", checkoutPath, "--json", "--json-stream"], opts)).rejects.toThrow(
+      "process.exit:2"
+    );
+
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    expect(logs.map((line) => JSON.parse(line))).toEqual([
+      { event: "error", error: "--json and --json-stream cannot be combined" },
+    ]);
+    expect(errs.join("\n")).toContain("--json and --json-stream cannot be combined");
+    expect(errs.join("\n")).toContain("Usage: argent flow");
+  });
+
+  it("keeps help off stdout after --json-stream selects machine mode", async () => {
+    await flow(["run", checkoutPath, "--json-stream", "--help"], opts);
+
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    expect(logs).toEqual([]);
+    expect(errs.join("\n")).toContain("Usage: argent flow");
+    expect(errs.join("\n")).toContain("--json-stream");
+  });
+
+  it("emits a structured error for a pre-flight refusal in streaming mode", async () => {
+    const missing = path.join(path.dirname(checkoutPath), "missing.yaml");
+    await expect(flow(["run", missing, "--json-stream"], opts)).rejects.toThrow("process.exit:2");
+
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    expect(logs.map((line) => JSON.parse(line))).toEqual([
+      { event: "error", error: expect.stringContaining(`Flow file not found: ${missing}`) },
+    ]);
+  });
+
+  it("emits a structured error and exits 2 when artifact export fails in streaming mode", async () => {
+    toolsClientMock.callTool.mockResolvedValue({ data: report() });
+    toolsClientMock.baseUrl.mockRejectedValueOnce(new Error("tool server unreachable"));
+
+    await expect(
+      flow(["run", checkoutPath, "--json-stream", "--output", path.join(tempRoot, "out")], opts)
+    ).rejects.toThrow("process.exit:2");
+
+    expect(logs.map((line) => JSON.parse(line))).toEqual([
+      { event: "error", error: "tool server unreachable" },
+    ]);
+    expect(errs).toEqual(["tool server unreachable"]);
+  });
+
+  it("emits a structured error for a primitive non-report in streaming mode", async () => {
+    toolsClientMock.callTool.mockResolvedValue({ data: "not-a-report" });
+
+    await expect(flow(["run", checkoutPath, "--json-stream"], opts)).rejects.toThrow(
+      "process.exit:2"
+    );
+
+    expect(logs.map((line) => JSON.parse(line))).toEqual([
+      { event: "error", error: '"checkout" did not produce a run report.' },
+    ]);
+    expect(errs.join("\n")).toContain('"checkout" did not produce a run report.');
+  });
+
   it("renders failed-snapshot handles as server paths without fetching when --output is absent", async () => {
     toolsClientMock.callTool.mockResolvedValue({
       data: report({
@@ -1384,6 +1530,7 @@ describe("argent flow run", () => {
     expect(logs.join("\n")).toContain(
       "ARGENT_TOOLS_URL and `argent link` routing are not supported"
     );
+    expect(logs.join("\n")).toContain("--json-stream");
     expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
@@ -1481,6 +1628,21 @@ describe("argent flow run <dir>", () => {
     // Passing steps stay silent in batch mode.
     expect(out).not.toMatch(/✓ {2}1 tap/);
     expect(out).toContain("PASS — 2 flows: 2 passed, 0 failed, 0 skipped");
+  });
+
+  it("rejects directory runs with --json-stream", async () => {
+    await expect(flow(["run", flowsDir, "--json-stream"], opts)).rejects.toThrow("process.exit:2");
+
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    expect(logs.map((line) => JSON.parse(line))).toEqual([
+      {
+        event: "error",
+        error: "--json-stream supports a single flow; directory runs are not supported.",
+      },
+    ]);
+    expect(errs.join("\n")).toContain(
+      "--json-stream supports a single flow; directory runs are not supported"
+    );
   });
 
   it("forwards run flags to every flow in the batch", async () => {

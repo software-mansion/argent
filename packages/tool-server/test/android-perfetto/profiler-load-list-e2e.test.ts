@@ -7,10 +7,10 @@ import * as path from "path";
 // True end-to-end test for `profiler-load { mode: "list" }`.
 //
 // Unlike profiler-load-list.test.ts (which vi.mocks getDebugDir), this exercises
-// the REAL getDebugDir(): it returns `join(os.tmpdir(), "argent-profiler-cwd")`,
-// and os.tmpdir() reads process.env.TMPDIR dynamically at call time. So we point
-// TMPDIR at an isolated scratch dir per test and let the real code resolve the
-// real on-disk path. Nothing in listSessions (the logic under test) is mocked.
+// the REAL getDebugDir(): it returns `join(os.tmpdir(), "argent-profiler-cwd")`.
+// So we point the tmpdir at an isolated scratch dir per test and let the real
+// code resolve the real on-disk path. Nothing in listSessions (the logic under
+// test) is mocked.
 //
 // The `mode: "list"` execute path calls `listSessions(await getDebugDir())` and
 // never touches `services`, so we drive it as execute({}, { mode: "list", ... }).
@@ -29,11 +29,12 @@ import * as path from "path";
 
 let scratch: string;
 let debugDir: string;
-let savedTmpdir: string | undefined;
+let restoreTmpdir: () => void;
 
 // Imported once; it reads getDebugDir() lazily inside execute, so per-test
-// TMPDIR changes are honoured without re-importing.
+// tmpdir changes are honoured without re-importing.
 import { profilerLoadTool } from "../../src/tools/profiler/query/profiler-load";
+import { redirectTmpdir } from "../helpers/tmpdir-env";
 
 async function runList(): Promise<string> {
   return (await profilerLoadTool.execute(
@@ -110,18 +111,16 @@ function countOccurrences(haystack: string, needle: string): number {
 
 describe("profiler-load list — E2E against real on-disk fixtures (no mocks)", () => {
   beforeEach(async () => {
-    savedTmpdir = process.env.TMPDIR;
     scratch = await fs.mkdtemp(path.join(os.tmpdir(), "argent-load-e2e-"));
-    process.env.TMPDIR = scratch;
-    // Sanity: the real getDebugDir resolves under our scratch TMPDIR.
+    restoreTmpdir = redirectTmpdir(scratch);
+    // Sanity: the real getDebugDir resolves under our scratch tmpdir.
     debugDir = path.join(os.tmpdir(), "argent-profiler-cwd");
     expect(debugDir.startsWith(scratch)).toBe(true);
     await fs.mkdir(debugDir, { recursive: true });
   });
 
   afterEach(async () => {
-    if (savedTmpdir === undefined) delete process.env.TMPDIR;
-    else process.env.TMPDIR = savedTmpdir;
+    restoreTmpdir();
     await fs.rm(scratch, { recursive: true, force: true });
   });
 

@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { FILE_INPUT_MARKER, type FileInputSpec } from "@argent/registry";
 import { resolveFileInputs, FileInputError } from "../src/file-inputs";
+import { redirectTmpdir } from "./helpers/tmpdir-env";
 
 let tmpDir: string;
 
@@ -177,27 +178,39 @@ describe("resolveFileInputs", () => {
       { target: "b", path: "${b}", kind: "file" },
     ];
 
+    // resolveFileInputs materializes into mkdtemp(join(os.tmpdir(),
+    // "argent-file-input-")). Scope the tmpdir to this test so the listing
+    // below covers only dirs this run created — the machine-wide tmpdir also
+    // holds the in-flight dirs of any concurrent run, which would read as an
+    // uncleaned leak.
+    const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "argent-file-input-scan-"));
+    const restoreTmpdir = redirectTmpdir(scratch);
+
     const listInputTempDirs = async () => {
-      const entries = await fs.readdir(os.tmpdir());
+      const entries = await fs.readdir(scratch);
       return entries.filter((e) => e.startsWith("argent-file-input-"));
     };
-    const before = await listInputTempDirs();
 
-    await expect(
-      resolveFileInputs(
-        { fileInputs: specs },
-        {
-          a: wire({
-            path: "/client/a.png",
-            size: content.length,
-            content: content.toString("base64"),
-          }),
-          b: wire({ path: path.join(tmpDir, "ghost.png") }),
-        }
-      )
-    ).rejects.toThrow(FileInputError);
+    try {
+      await expect(
+        resolveFileInputs(
+          { fileInputs: specs },
+          {
+            a: wire({
+              path: "/client/a.png",
+              size: content.length,
+              content: content.toString("base64"),
+            }),
+            b: wire({ path: path.join(tmpDir, "ghost.png") }),
+          }
+        )
+      ).rejects.toThrow(FileInputError);
 
-    expect(await listInputTempDirs()).toEqual(before);
+      expect(await listInputTempDirs()).toEqual([]);
+    } finally {
+      restoreTmpdir();
+      await fs.rm(scratch, { recursive: true, force: true });
+    }
   });
 
   it("rejects a missing file with no uploaded content", async () => {

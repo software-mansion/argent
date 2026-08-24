@@ -56,27 +56,28 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 
 ## 4. Choosing the Right Tool
 
-| Action            | Tool                | Notes                                                            |
-| ----------------- | ------------------- | ---------------------------------------------------------------- |
-| Multiple actions  | `run-sequence`      | Batch steps in one call (no intermediate screenshots)            |
-| Open an app       | `launch-app`        | **Always — never tap home-screen icons**                         |
-| Restart an app    | `restart-app`       | Terminate and relaunch by bundle ID                              |
-| Open URL/scheme   | `open-url`          | Web pages, deep links, URL schemes                               |
-| Single tap        | `gesture-tap`       | Buttons, links, checkboxes                                       |
-| Scroll/swipe      | `gesture-swipe`     | Straight-line scroll or swipe                                    |
-| Scroll (Chromium) | `gesture-scroll`    | Wheel-based; deltas are window fractions, positive deltaY = down |
-| Drag (Chromium)   | `gesture-drag`      | Sliders, drag-and-drop, text selection                           |
-| Long press        | `gesture-custom`    | Context menus, drag start                                        |
-| Drag & drop       | `gesture-custom`    | Complex drag interactions                                        |
-| Pinch/zoom        | `gesture-pinch`     | Two-finger pinch with auto-interpolation                         |
-| Rotation          | `gesture-rotate`    | Two-finger rotation with auto-interpolation                      |
-| Custom gesture    | `gesture-custom`    | Arbitrary touch sequences, optional interpolation                |
-| Hardware key      | `button`            | Home, back, power, volume, appSwitch, actionButton               |
-| Type text         | `keyboard`          | Every platform. Text or one named key per call, never both       |
-| Rotate device     | `rotate`            | Orientation changes                                              |
-| Shake device      | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu   |
-| Wait for UI       | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text    |
-| Wait for idle     | `await-screen-idle` | Block until a non-empty screen tree stops changing               |
+| Action            | Tool                | Notes                                                             |
+| ----------------- | ------------------- | ----------------------------------------------------------------- |
+| Multiple actions  | `run-sequence`      | Batch steps in one call (no intermediate screenshots)             |
+| Open an app       | `launch-app`        | **Always — never tap home-screen icons**                          |
+| Restart an app    | `restart-app`       | Terminate and relaunch by bundle ID                               |
+| Open URL/scheme   | `open-url`          | Web pages, deep links, URL schemes                                |
+| Single tap        | `gesture-tap`       | Buttons, links, checkboxes                                        |
+| Scroll/swipe      | `gesture-swipe`     | Straight-line scroll or swipe                                     |
+| Scroll (Chromium) | `gesture-scroll`    | Wheel-based; deltas are window fractions, positive deltaY = down  |
+| Drag (Chromium)   | `gesture-drag`      | Sliders, drag-and-drop, text selection                            |
+| Long press        | `gesture-custom`    | Context menus, drag start                                         |
+| Drag & drop       | `gesture-custom`    | Complex drag interactions                                         |
+| Pinch/zoom        | `gesture-pinch`     | Two-finger pinch with auto-interpolation                          |
+| Rotation          | `gesture-rotate`    | Two-finger rotation with auto-interpolation                       |
+| Custom gesture    | `gesture-custom`    | Arbitrary touch sequences, optional interpolation                 |
+| Hardware key      | `button`            | Home, back, power, volume, appSwitch, actionButton                |
+| Type text         | `keyboard`          | Every platform. Text or one named key per call, never both        |
+| Paste text        | `paste`             | Only where a user would paste (OTP code, long link). Sim/emu only |
+| Rotate device     | `rotate`            | Orientation changes                                               |
+| Shake device      | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu    |
+| Wait for UI       | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text     |
+| Wait for idle     | `await-screen-idle` | Block until a non-empty screen tree stops changing                |
 
 ## 5. Finding Tap Targets
 
@@ -197,6 +198,18 @@ Rules:
 - Nothing outside those sources is reachable; never ask the user to paste a secret value into the conversation. Ask them to put it in a secrets file instead — a file edit applies to the next call, while an exported env var only reaches a tool-server started afterwards.
 - The project sources are found by walking up from the tool-server's working directory. If a project file is not being picked up, the failure's source list shows the paths actually consulted; `~/.argent/secrets.env` needs no project and always applies.
 
+### paste — Paste text into the focused field
+
+```json
+{ "udid": "<UDID>", "text": "482913" }
+```
+
+Puts `text` on the **device** clipboard (the host clipboard is untouched) and triggers the platform's paste shortcut. iOS simulator and Android emulator only; a TV target, a physical device, Chromium and Vega are rejected.
+
+`paste` is **not** a faster `keyboard`. `keyboard` types the way a user types and stays the default for every text entry — a search query, a login, a form field. Reach for `paste` only where a real user would paste: a 2FA / OTP code copied from another app, a long link or token, or to test how the app handles pasted input. It also carries what `keyboard` can't type on a given platform (multi-line text, non-ASCII on Android), but that alone is not a reason to paste — ask whether the user would.
+
+Tap the field first so it has focus; pasting with no focused field is a silent no-op, as with `keyboard`. `text` accepts the same `{{secret:<NAME>}}` placeholders as `keyboard`, with the same auto-screenshot skip.
+
 ### rotate — Change orientation
 
 ```json
@@ -220,7 +233,7 @@ Instead of polling `screenshot`/`describe` in a loop, use `await-ui-element` to 
 - `hidden` passes when the selector matches nothing. If `note` says it never matched, treat the check as failed and fix the selector. On iOS, a degraded empty tree does not report `hidden` success; the note gives the recovery hint.
 - Optional `timeoutMs` (default 5000) and `pollIntervalMs` (default 400).
 
-Returns `{ success, elapsed }`; on a timeout `success` is `false` and a `note` explains what was seen.
+Returns `{ success, elapsed, note?, cause? }`. On failure, `note` describes the result. `cause` is `unmet`, `unreadable`, or `cancelled`. Only `unmet` means the tree was readable and the condition was false.
 
 ### await-screen-idle — Block until the screen stops changing
 
@@ -297,7 +310,7 @@ Use the sequencing when:
 
 ### Allowed tools inside `run-sequence`
 
-`gesture-tap`, `gesture-swipe`, `gesture-scroll`, `gesture-drag`, `gesture-custom`, `gesture-pinch`, `gesture-rotate`, `button`, `keyboard`, `rotate`, `await-ui-element`
+`gesture-tap`, `gesture-swipe`, `gesture-scroll`, `gesture-drag`, `gesture-custom`, `gesture-pinch`, `gesture-rotate`, `button`, `keyboard`, `paste`, `rotate`, `shake`, `tv-remote`, `await-ui-element`
 
 The `udid` is shared — do **not** include it in each step's `args`. Optional `delayMs` per step (default 100ms).
 
