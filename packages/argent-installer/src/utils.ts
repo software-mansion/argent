@@ -42,8 +42,9 @@ export {
   readLocalPackageVersionUncached,
   getLocalArgentBinRelPath,
   probeLocalInstall,
+  probeGlobalPackageRemoval,
 } from "./topology.js";
-export type { LocalInstallProbe } from "./topology.js";
+export type { LocalInstallProbe, GlobalRemovalProbe, RemovalWritability } from "./topology.js";
 export {
   getInstallRecordPath,
   readInstallRecord,
