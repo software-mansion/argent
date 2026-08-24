@@ -27,6 +27,11 @@ const TEST_REGISTRY: readonly FlagDefinition[] = [
     description: "On by default; disable persists off.",
     defaultEnabled: true,
   },
+  {
+    name: "mac-only-flag",
+    description: "Only exists on macOS.",
+    platforms: ["darwin"],
+  },
 ];
 
 // All tests redirect global+project storage into tmp dirs by mutating
@@ -312,6 +317,7 @@ describe("flags (list) CLI", () => {
     expect(a).toEqual({
       name: "a",
       description: "Listing flag A.",
+      platforms: null,
       enabled: false,
       scope: "project",
     });
@@ -389,5 +395,76 @@ describe("deprecating a flag (removed from FLAG_REGISTRY)", () => {
       enabled: true,
       scope: "global",
     });
+  });
+});
+
+describe("a flag whose feature does not exist on this platform", () => {
+  it("stores the flag but says it changes nothing here", () => {
+    const out = captureConsole(() => enable(["mac-only-flag"], TEST_REGISTRY, "linux"));
+
+    // Still stored: the flag may well be authored here for a teammate or a CI
+    // host that does support it.
+    expect(readFlags("global")).toEqual({ "mac-only-flag": true });
+    expect(out.stdout).toContain('Enabled flag "mac-only-flag" (global)');
+    expect(out.stderr).toContain("macOS-only");
+    expect(out.stderr).toContain("no effect on Linux");
+  });
+
+  it("says nothing on a platform that does support it", () => {
+    const out = captureConsole(() => enable(["mac-only-flag"], TEST_REGISTRY, "darwin"));
+
+    expect(out.stderr).toBe("");
+    expect(readFlags("global")).toEqual({ "mac-only-flag": true });
+  });
+
+  it("can still be authored at project scope from an unsupported host", () => {
+    const out = captureConsole(() =>
+      enable(["mac-only-flag", "--scope", "project"], TEST_REGISTRY, "linux")
+    );
+
+    expect(out.stderr).toContain("macOS-only");
+    expect(readFlags("project")).toEqual({ "mac-only-flag": true });
+    expect(readFlags("global")).toEqual({});
+  });
+
+  it("says nothing extra for a flag that works everywhere", () => {
+    const out = captureConsole(() => enable(["my-feature-flag"], TEST_REGISTRY, "linux"));
+
+    expect(out.stderr).toBe("");
+  });
+
+  it("says nothing on disable, which cannot raise a false expectation", () => {
+    captureConsole(() => enable(["mac-only-flag"], TEST_REGISTRY, "linux"));
+    const out = captureConsole(() => disable(["mac-only-flag"], TEST_REGISTRY, "linux"));
+
+    expect(out.stderr).toBe("");
+    expect(readFlags("global")).toEqual({});
+  });
+
+  it("marks the constraint in the listing, on supported and unsupported hosts alike", () => {
+    const onLinux = captureConsole(() => flagsCmd([], TEST_REGISTRY, "linux"));
+    expect(onLinux.stdout).toContain("[macOS only — unavailable on Linux]");
+
+    // Kept on macOS too: it warns a mac user this will not work for their CI.
+    const onMac = captureConsole(() => flagsCmd([], TEST_REGISTRY, "darwin"));
+    expect(onMac.stdout).toContain("[macOS only]");
+    expect(onMac.stdout).not.toContain("unavailable");
+  });
+
+  it("reports the platforms it needs, not whether this host happens to match", () => {
+    // A boolean would be wrong the moment the output is read on another host.
+    const out = captureConsole(() => flagsCmd(["--json"], TEST_REGISTRY, "linux"));
+    const parsed = JSON.parse(out.stdout);
+
+    const macOnly = parsed.flags.find((f: { name: string }) => f.name === "mac-only-flag");
+    expect(macOnly.platforms).toEqual(["darwin"]);
+    const everywhere = parsed.flags.find((f: { name: string }) => f.name === "my-feature-flag");
+    expect(everywhere.platforms).toBeNull();
+  });
+
+  it("carries the constraint into the help text", () => {
+    const out = captureConsole(() => enable(["--help"], TEST_REGISTRY, "linux"));
+
+    expect(out.stdout).toContain("[macOS only — unavailable on Linux] Only exists on macOS.");
   });
 });
