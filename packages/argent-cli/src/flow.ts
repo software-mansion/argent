@@ -13,11 +13,121 @@ import {
   type ToolsClient,
   type ToolsServerPaths,
 } from "@argent/tools-client";
+import { isCi } from "@argent/telemetry";
 import { FlagParseException } from "./flag-parser.js";
+import {
+  artifactPath,
+  buildJUnitDocument,
+  candidateRows,
+  formatDuration,
+  INDETERMINATE_HINT,
+  nodeRow,
+  normalizeFailure,
+  parseReporterSpec,
+  secretArtifactWarning,
+  stepLabel,
+  wireText,
+  type JUnitRun,
+  type NormalizedFailure,
+} from "./flow-report.js";
 
 export interface FlowCommandOptions {
   paths: ToolsServerPaths;
 }
+
+/**
+ * Narrow local copy of the tool-server's `FlowStepFailure` wire shape —
+ * deliberately duplicated, not imported. No shared package spans the CLI and
+ * the tool-server (`StepReport` is already declared three times for exactly
+ * this reason), and a cross-package import would couple the CLI's release to
+ * the producer's. Only the fields this renderer prints appear here, and every
+ * one of them is optional beyond `code`/`message`: the object arrives from a
+ * possibly-remote `argent link` server, so it is validated and clamped by
+ * `normalizeFailure` before a single character of it is printed.
+ */
+export interface FlowStepFailure {
+  code: string;
+  message: string;
+  category?: string;
+  determinacy?: "determinate" | "indeterminate";
+  hint?: string;
+  step?: {
+    index?: number;
+    ordinal?: number;
+    kind?: string;
+    flow?: string;
+    target?: string;
+    depth?: number;
+    /**
+     * Not yet emitted by the tool-server (YAML node ranges are a later phase);
+     * declared so a server that starts sending them renders `@ file:line`
+     * without a CLI change. Until then the block derives the path from the
+     * flow name.
+     */
+    source?: { file?: string; line?: number };
+  };
+  selector?: { described?: string };
+  expected?: Record<string, unknown>;
+  actual?: {
+    matchCount?: number;
+    visibleMatchCount?: number;
+    element?: FlowFailureNode;
+    text?: string;
+    ownText?: string;
+    mismatchPercentage?: number;
+  };
+  screen?: FlowFailureScreen;
+  candidates?: FlowFailureCandidate[];
+  candidateCount?: number;
+  /** ArtifactHandle on the wire; a string once `resolveArtifactDisplayPaths` has run. */
+  screenshot?: unknown;
+  tree?: unknown;
+  timing?: {
+    startedAt?: number;
+    durationMs?: number;
+    budgetMs?: number;
+    attempts?: number;
+    /** Reads the runner was willing to trust. Absent from a pre-`reads` server. */
+    trustedAttempts?: number;
+    lastTrustedReadAt?: number;
+    darkTailMs?: number;
+  };
+  cause?: { code?: string; message?: string };
+  data?: Record<string, unknown>;
+}
+
+/** Flat projection of one on-screen element. No children — the tree is an artifact. */
+export interface FlowFailureNode {
+  role?: string;
+  frame?: { x: number; y: number; width: number; height: number };
+  label?: string;
+  identifier?: string;
+  value?: string;
+  text?: string;
+  flags?: string;
+}
+
+export interface FlowFailureCandidate {
+  node?: FlowFailureNode;
+  score?: number;
+  basis?: string;
+  selectorYaml?: string;
+  note?: string;
+}
+
+export type FlowFailureScreen =
+  | {
+      state: "available";
+      source?: string;
+      capturedAt?: "at-failure" | "after-failure";
+      ageMs?: number;
+      elementCount?: number;
+      elements?: FlowFailureNode[];
+      truncated?: true;
+      /** Device size in points. Absent from a server that does not report it. */
+      size?: { width: number; height: number };
+    }
+  | { state: "unavailable"; reason?: string; detail?: string; hint?: string };
 
 export interface StepReport {
   index: number;
@@ -56,6 +166,19 @@ export interface StepReport {
    * download failed.
    */
   artifacts?: Record<string, unknown>;
+  /**
+   * Structured diagnostics for a step that did not pass. Present on at most
+   * one step per run (the runner hard-stops at the first non-passing leaf) and
+   * absent entirely from a pre-diagnostics tool-server, so every renderer is
+   * gated on presence and falls back to today's reason-only output.
+   */
+  failure?: FlowStepFailure;
+  /**
+   * Wall-clock duration of the step. Omitted on skips and by a pre-timing
+   * tool-server — which is why the step line only grows a ` (1.2s)` suffix
+   * when it is present, keeping an old server's output byte-identical.
+   */
+  durationMs?: number;
 }
 
 export interface FlowReport {
@@ -63,11 +186,22 @@ export interface FlowReport {
   device: string;
   executionPrerequisite?: string;
   ok: boolean;
+  /**
+   * The run was cancelled mid-flight. The runner has always set this
+   * (`FlowRunResult.aborted`) precisely so a FAIL whose step statuses are all
+   * pass/skip is self-explanatory — without it the summary prints FAIL with no
+   * failing step and no explanation. Absent on completed runs.
+   */
+  aborted?: boolean;
   passed: number;
   failed: number;
   skipped: number;
   errored: number;
   steps: StepReport[];
+  /** `Date.now()` when the first step began — the JUnit `timestamp` source. */
+  startedAt?: number;
+  /** Whole-run wall clock, for the JUnit suite `time`. */
+  durationMs?: number;
 }
 
 const STATUS_GLYPH: Record<StepReport["status"], string> = {
@@ -140,13 +274,18 @@ Options (run):
   --device <id>          Device id to run against (auto-detected when omitted)
   --platform <p>         ios | android | chromium | vega — narrow auto-detection
   --update-baselines     Write/refresh screenshot baselines instead of diffing
-  --output <dir>         Also write failed snapshot images (baseline/current/diff)
+  --output <dir>         Also write failure evidence (screenshot, element dump)
+                         and failed snapshot images (baseline/current/diff)
                          under <dir>/<flow>/ — a stable path for CI artifact
                          upload; a directory run keys nested flows as
                          <dir>/<subdir>/<flow>/. A different flow file with the
                          same filename sharing <dir> exports to <flow>-<pathhash>/
                          instead (with a warning), so no flow's evidence is
                          overwritten
+  --reporter <spec>      Extra report output, repeatable: \`default\` (the terminal
+                         output, always on) or \`junit:<path>\` to write JUnit XML —
+                         one <testsuite> per flow, so a directory run writes every
+                         flow it ran into the single file named here
   -r, --recursive        With a directory path, also run flows in subdirectories
   --json                 Print the raw JSON report
   --json-stream          Print progress and the final report as NDJSON (single flow only)
@@ -159,6 +298,7 @@ Examples:
   argent flow run .argent/flows/checkout.yaml --output flow-artifacts --json
   argent flow run ~/shared-flows/checkout.yaml --device <UDID> --update-baselines
   argent flow run .argent/flows --recursive
+  argent flow run checkout --output flow-artifacts --reporter junit:flow-artifacts/junit.xml
 `);
 }
 
@@ -177,12 +317,19 @@ export function parseRunArgs(argv: string[]): {
   recursive: boolean;
   json: boolean;
   jsonStream: boolean;
+  /**
+   * Raw `--reporter` specs, in the order given. Always present (never
+   * optional) so the parsed shape is the same object every time, whether or
+   * not the flag was passed.
+   */
+  reporter: string[];
 } {
   const out = {
     updateBaselines: false,
     recursive: false,
     json: false,
     jsonStream: false,
+    reporter: [],
   } as ReturnType<typeof parseRunArgs>;
   // Positionals are collected through one helper so the end-of-options marker
   // below cannot drift from the ordinary path in what it accepts.
@@ -262,6 +409,14 @@ export function parseRunArgs(argv: string[]): {
     } else if (flag === "--device") out.device = takeValue("--device");
     else if (flag === "--platform") out.platform = takeValue("--platform");
     else if (flag === "--output") out.output = takeValue("--output");
+    else if (flag === "--reporter") {
+      const spec = takeValue("--reporter");
+      // Validate at parse time, not at write time: a bad spec must exit 2
+      // before the run starts. Discovering it after a 40-second flow — with
+      // the report file the operator asked for missing — is the worse failure.
+      parseReporterSpec(spec);
+      out.reporter.push(spec);
+    }
     // Any other flag-shaped token is an error — a typo like --platfrom must
     // not silently fall back to device auto-detection. --help/-h never reach
     // this parser: flow() intercepts them before calling parseRunArgs.
@@ -292,13 +447,27 @@ export function renderEchoLine(s: StepReport): string | undefined {
   return `  ${indent}› ${s.message}`;
 }
 
-export function renderStepLine(s: StepReport, n: number, topFlow: string): string {
+/**
+ * One step line. `opts.omitReason` drops the ` — <reason>` suffix, for the
+ * failure block's context window: the reason is already the block's headline,
+ * and repeating it four lines lower buries the window's actual job (showing
+ * what ran just before).
+ *
+ * The ` (1.2s)` timing appears only when `durationMs` is present, so a
+ * pre-timing tool-server renders byte-identically to before.
+ */
+export function renderStepLine(
+  s: StepReport,
+  n: number,
+  topFlow: string,
+  opts: { omitReason?: boolean } = {}
+): string {
   const where = s.flow && s.flow !== topFlow ? ` [${s.flow}]` : "";
-  const what = s.tool ?? s.target;
-  const label = what ? `${s.kind} ${what}` : s.kind;
-  const reason = s.reason ? ` — ${s.reason}` : "";
+  const label = stepLabel(s);
+  const timing = s.durationMs === undefined ? "" : ` ${formatDuration(s.durationMs)}`;
+  const reason = s.reason && !opts.omitReason ? ` — ${s.reason}` : "";
   const glyph = s.status === "pass" && s.warning ? "⚠" : STATUS_GLYPH[s.status];
-  return `  ${glyph} ${String(n).padStart(2)} ${stepIndent(s.depth)}${label}${where}${reason}`;
+  return `  ${glyph} ${String(n).padStart(2)} ${stepIndent(s.depth)}${label}${where}${timing}${reason}`;
 }
 
 /**
@@ -327,7 +496,10 @@ export function renderSummary(report: FlowReport, opts: { withDevice?: boolean }
   const nothingCounted =
     report.ok && report.passed + report.failed + report.errored + report.skipped === 0;
   const note = nothingCounted ? " (no test steps)" : "";
-  return `${report.ok ? "PASS" : "FAIL"}${where} — ${report.passed} passed, ${report.failed} failed, ${report.errored} errored, ${report.skipped} skipped${warningsNote}${note}`;
+  // A cancelled run can fail with every step pass/skip — say so, or the
+  // verdict contradicts the counters it is printed next to.
+  const cancelled = report.aborted ? " (run cancelled)" : "";
+  return `${report.ok ? "PASS" : "FAIL"}${cancelled}${where} — ${report.passed} passed, ${report.failed} failed, ${report.errored} errored, ${report.skipped} skipped${warningsNote}${note}`;
 }
 
 /**
@@ -348,6 +520,179 @@ export function renderArtifactLines(report: FlowReport): string[] {
     for (const [k, v] of entries) lines.push(`       ${k}: ${v}`);
   }
   return lines;
+}
+
+/** Indent of a slot line inside a failure block. */
+const FAILURE_SLOT_INDENT = "     ";
+
+/**
+ * How many preceding numbered steps the context window shows. Two is enough to
+ * answer "what state was the app in" without turning the block into a second
+ * copy of the step list.
+ */
+const FAILURE_CONTEXT_STEPS = 2;
+
+/**
+ * The failing step plus the two numbered steps before it, with the `echo`
+ * narration that introduces them. Lines come from `renderStepLine` /
+ * `renderEchoLine` — the same renderers the step list uses, with the reason
+ * suffix dropped — so the window can never drift from the list it quotes.
+ */
+function failureContextLines(
+  steps: StepReport[],
+  ordinals: Map<number, number>,
+  failingIndex: number,
+  failingOrdinal: number,
+  topFlow: string
+): string[] {
+  const first = Math.max(1, failingOrdinal - FAILURE_CONTEXT_STEPS);
+  let start = failingIndex;
+  let ordinal = failingOrdinal;
+  for (let i = failingIndex - 1; i >= 0; i--) {
+    // Narration belongs to the step it introduces, so an echo immediately
+    // above an included step comes along; one above an excluded step is never
+    // reached, because the numbered step below it breaks the loop first.
+    if (steps[i]!.kind === "echo") {
+      start = i;
+      continue;
+    }
+    if (ordinal - 1 < first) break;
+    ordinal -= 1;
+    start = i;
+  }
+  const lines: string[] = [];
+  for (let i = start; i <= failingIndex; i++) {
+    const s = steps[i]!;
+    if (s.kind === "echo") {
+      const line = renderEchoLine(s);
+      if (line) lines.push(line);
+      continue;
+    }
+    lines.push(renderStepLine(s, ordinals.get(i) ?? 0, topFlow, { omitReason: true }));
+  }
+  return lines;
+}
+
+function renderFailureBlock(
+  report: FlowReport,
+  steps: StepReport[],
+  ordinals: Map<number, number>,
+  index: number,
+  f: NormalizedFailure
+): string[] {
+  const s = steps[index]!;
+  const ordinal = ordinals.get(index) ?? 0;
+  const lines: string[] = [
+    `  ${ordinal}) ${stepLabel(s)}${f.sourceFile ? `  @ ${f.sourceFile}` : ""}`,
+  ];
+  const slot = (text: string): void => void lines.push(`${FAILURE_SLOT_INDENT}${text}`);
+
+  slot(f.message ? `${f.code}: ${f.message}` : f.code);
+
+  const context = failureContextLines(steps, ordinals, index, ordinal, report.flow);
+  if (context.length > 0) {
+    slot("context:");
+    for (const line of context) lines.push(`${FAILURE_SLOT_INDENT}${line}`);
+  }
+
+  if (f.expected) slot(`expected: ${f.expected}`);
+  if (f.actual) slot(`actual: ${f.actual}`);
+  if (f.match) slot(`match: ${nodeRow(f.match)}`);
+  if (f.candidates.length > 0) {
+    slot("candidates:");
+    for (const row of candidateRows(f.candidates, { withCenter: true })) slot(`  ${row}`);
+  }
+  if (f.screen) slot(`screen: ${f.screen}`);
+  // The launch / tree-source shapes have no screen and no tree to show — the
+  // evidence itself is what failed — so the device identity takes their slot.
+  if (f.device) slot(`device: ${f.device}`);
+  if (f.reads) slot(`reads: ${f.reads}`);
+  // One hint, never two. Every indeterminate producer already sets a hint that
+  // says "this is not a failed assertion" in words specific to WHICH tier
+  // failed, so the generic line is a fallback for a producer that sent none —
+  // printing both put two near-identical sentences back to back on exactly the
+  // failure shape that most needs to read clearly.
+  if (f.hint) slot(`hint: ${f.hint}`);
+  else if (f.determinacy === "indeterminate") slot(`hint: ${INDETERMINATE_HINT}`);
+  for (const [role, value] of Object.entries(s.artifacts ?? {})) {
+    const p = artifactPath(value);
+    // The KEY is wire data too — clamping only the value beside it left a
+    // server free to put escape sequences in the label.
+    const label = wireText(role, 64);
+    if (p && label) slot(`${label}: ${p}`);
+  }
+  // A snapshot failure's `current` IS the screenshot at the moment of failure —
+  // a second capture would show a different screen than the one that was
+  // diffed — so the three roles above stand in for the `screenshot:` line.
+  // That stands in for a PATH only: an omission note is prose about a capture
+  // that was never taken, and a snapshot step swallowed it entirely, so the one
+  // shape where the screen still leaves the machine said nothing about it.
+  const isSnapshotShot = artifactPath(s.artifacts?.current) !== undefined;
+  if (f.screenshot && (f.screenshotOmitted !== undefined || !isSnapshotShot)) {
+    slot(`screenshot: ${f.screenshot}`);
+  } else if (!f.screenshot && f.environmental) {
+    // Say it explicitly rather than silently omitting the line: on a launch
+    // failure the missing screenshot IS information.
+    slot("screenshot: (unavailable — the device did not return an image)");
+  }
+  const secretWarning = secretArtifactWarning(s, f);
+  if (secretWarning) slot(secretWarning);
+  if (f.tree) slot(`tree: ${f.tree}`);
+  return lines;
+}
+
+/**
+ * The failure blocks, rendered AFTER the step list and BEFORE the summary so
+ * the verdict stays the last line an operator (or a CI log tail) sees.
+ *
+ * Returns nothing when no step carries a `failure`: `ok: false` does not imply
+ * a failing step — a cancelled run fails the verdict with every step pass/skip
+ * — and a pre-diagnostics tool-server sends no failure objects at all.
+ *
+ * The block is a slot system, not a template. `code: message` is mandatory;
+ * every other line appears only if that failure has something to put in it,
+ * which is what lets one renderer serve a missing selector, a text mismatch, a
+ * snapshot diff, a failed launch and an unreadable screen.
+ */
+export function renderFailures(report: FlowReport, flowFile?: string): string[] {
+  const steps = Array.isArray(report.steps) ? report.steps : [];
+  const ordinals = new Map<number, number>();
+  let n = 0;
+  for (let i = 0; i < steps.length; i++) {
+    if (steps[i]!.kind === "echo") continue;
+    ordinals.set(i, ++n);
+  }
+  const blocks: string[][] = [];
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i]!;
+    if (!s.failure || !ordinals.has(i)) continue;
+    // The resolved path names the ROOT flow's file, so it applies only to a
+    // step of that flow. A nested fragment's step keeps the derived guess —
+    // naming checkout.yaml for a step marked [login] is worse than a
+    // convention path.
+    const stepFlow = s.flow ?? report.flow;
+    const f = normalizeFailure(s.failure, {
+      flow: stepFlow,
+      device: report.device,
+      ...(stepFlow === report.flow ? { flowFile } : {}),
+    });
+    if (!f) continue;
+    blocks.push(renderFailureBlock(report, steps, ordinals, i, f));
+  }
+  if (blocks.length === 0) return [];
+  const lines = ["", "Failures:"];
+  for (const block of blocks) lines.push("", ...block);
+  return lines;
+}
+
+/** True when a run's failure is "argent could not see the screen", not "the check failed". */
+function hasIndeterminateFailure(report: FlowReport): boolean {
+  return (Array.isArray(report.steps) ? report.steps : []).some(
+    (s) =>
+      s.failure !== undefined &&
+      normalizeFailure(s.failure, { flow: s.flow ?? report.flow, device: report.device })
+        ?.determinacy === "indeterminate"
+  );
 }
 
 /**
@@ -642,11 +987,21 @@ async function claimExportDirName(
 }
 
 /**
- * Copy each failed snapshot's artifacts into a durable, globbable location —
- * `<outputDir>/<flow>/<key>-<role>.png`, where `<flow>` is the YAML filename
- * stem (derived from the CLI-resolved `flowPath`, never from the wire
- * report) and `<key>` is the snapshot's baseline key (`name__platform-WxH`),
- * so a run that hits several flows/snapshots can't clobber itself. Stems are
+ * Copy a run's durable evidence into a stable, globbable location under
+ * `--output`:
+ *
+ * - each failed snapshot's roles as `<outputDir>/<flow>/<key>-<role>.png`,
+ *   where `<flow>` is the YAML filename stem (derived from the CLI-resolved
+ *   `flowPath`, never from the wire report) and `<key>` is the snapshot's
+ *   baseline key (`name__platform-WxH`), so a run that hits several
+ *   flows/snapshots can't clobber itself;
+ * - the failing step's screenshot and element dump as
+ *   `<outputDir>/<flow>/step-NN-screen.png` / `step-NN-tree.txt`, where `NN`
+ *   is the step's display ordinal. That stem is CLI-generated rather than wire
+ *   data, and deliberately distinct from the snapshot names so anyone globbing
+ *   the existing ones is unaffected.
+ *
+ * Stems are
  * unique only per directory, not globally, so when a different flow file
  * already owns `<flow>/` (see EXPORT_SOURCE_MARKER) this run lands in the
  * deterministic `<flow>-<pathhash>/` instead — one suite's CI evidence must
@@ -665,18 +1020,19 @@ async function claimExportDirName(
  * exactly as before any of this ownership machinery existed — one file's runs
  * are indistinguishable to a separate process, and the directory's marker names
  * them truthfully either way. This is the only place the CLI needs artifact
- * bytes, so materialization happens here, scoped to each failed snapshot's
- * artifacts — a co-located tool-server resolves them in place, a remote one
- * downloads just these files. Rewrites each copied role's path in the report
- * so the renderers and `--json` print the durable location instead of a temp
- * path. Failure-only: a clean pass carries no artifacts, and a seeded
- * baseline is already durable under `__baselines__/`. Best-effort per file —
- * a copy error warns on stderr and leaves the source path in place; artifact
- * export must never change a run's verdict. Server-supplied names that fail
- * `SAFE_ARTIFACT_NAME` are skipped the same way — before any
- * materialization, so nothing is downloaded for a step that won't be written.
+ * bytes, so materialization happens here, scoped to the specific artifacts
+ * being copied — a co-located tool-server resolves them in place, a remote one
+ * downloads just these files, and a run without `--output` fetches nothing at
+ * all. Each copied handle's path is rewritten in the report so the renderers
+ * and `--json` print the durable location instead of a temp path.
+ * Failure-only: a clean pass carries no artifacts, and a seeded baseline is
+ * already durable under `__baselines__/`. Best-effort per file — a copy error
+ * warns on stderr and leaves the source path in place; artifact export must
+ * never change a run's verdict. Server-supplied names that fail
+ * `SAFE_ARTIFACT_NAME` are skipped the same way — before any materialization,
+ * so nothing is downloaded for a step that won't be written.
  */
-export async function exportFailureArtifacts(
+export async function exportRunArtifacts(
   report: FlowReport,
   outputDir: string,
   flowPath: string,
@@ -702,49 +1058,125 @@ export async function exportFailureArtifacts(
   // race-free as claiming early: the atomicity is O_EXCL's, not the ordering's,
   // and the marker still precedes the first byte.
   let dir: string | null = null;
-  for (const s of report.steps) {
-    if (s.kind !== "snapshot" || s.status !== "fail" || !s.artifacts) continue;
-    // Key first: a legacy tool-server sends plain path strings, and
-    // keyFromBaselinePath needs that original baseline path, not a rewrite.
-    // The pattern check also hardens the fallback, whose basename can still
-    // be ".." for a path ending in "/..".
-    const key = s.snapshotKey ?? keyFromBaselinePath(s.artifacts);
-    if (!key || !SAFE_ARTIFACT_NAME.test(key)) continue;
-    // Materialize only this snapshot's artifacts (local read or remote
-    // download) — never the whole report.
-    const { result } = await materializeArtifacts(s.artifacts, ctx);
-    s.artifacts = result as Record<string, unknown>;
-    for (const [role, value] of Object.entries(s.artifacts)) {
-      if (typeof value !== "string") continue; // null = failed materialization
-      if (dir === null) {
-        const dirName = await claimExportDirName(outputDir, flowPath, stem);
-        if (dirName === null) return; // warned already; sources stay in place, verdict unchanged
-        // Claimed: the directory exists and holds this flow's marker. Nothing
-        // below re-creates it — if it is deleted mid-run the copies fail and
-        // warn, rather than resurrecting it unmarked for the next run to
-        // redirect away from.
-        dir = path.join(outputDir, dirName);
+  // Set when the claim was attempted and refused. claimExportDirName has
+  // already warned by then, so every later copy in this run gives up silently
+  // rather than re-warning once per artifact — and, as before, the sources
+  // stay in place and the verdict is untouched.
+  let claimRefused = false;
+
+  /**
+   * Copy one materialized source path to `<dir>/<name>`, returning the
+   * destination on success. Claims the export directory on the first byte
+   * actually about to land (see `dir` above). The `path.relative` check runs
+   * on EVERY destination, including the CLI-generated ones: it is the backstop
+   * that keeps the copy inside `--output` even if a name pattern above is ever
+   * weakened.
+   */
+  const copyInto = async (source: unknown, name: string): Promise<string | undefined> => {
+    if (typeof source !== "string") return undefined; // null = failed materialization
+    if (claimRefused) return undefined;
+    if (dir === null) {
+      const dirName = await claimExportDirName(outputDir, flowPath, stem);
+      if (dirName === null) {
+        claimRefused = true;
+        return undefined;
       }
-      const dest = path.join(dir, `${key}-${role}.png`);
-      // Same resolved-path check as the server's getFlowPath: even if the key
-      // and stem patterns are ever weakened, the copy stays inside --output. Also
-      // covers `role`, the remaining server-supplied piece of the destination.
-      // It judges the real destination, so it can only run once `dir` is known,
-      // i.e. after the claim: a `role` hostile enough to escape is the single
-      // way a claim can still precede zero bytes — a broken or malicious
-      // tool-server, never an ordinary run.
-      const rel = path.relative(outputDir, dest);
-      if (rel.startsWith("..") || path.isAbsolute(rel)) continue;
-      try {
-        await fsp.copyFile(value, dest);
-        s.artifacts[role] = dest;
-      } catch (err) {
-        console.error(
-          `warning: could not write ${dest}: ${err instanceof Error ? err.message : String(err)}`
-        );
+      // Claimed: the directory exists and holds this flow's marker. Nothing
+      // below re-creates it — if it is deleted mid-run the copies fail and
+      // warn, rather than resurrecting it unmarked for the next run to
+      // redirect away from.
+      dir = path.join(outputDir, dirName);
+    }
+    const dest = path.join(dir, name);
+    // Same resolved-path check as the server's getFlowPath: even if the key
+    // and stem patterns are ever weakened, the copy stays inside --output. Also
+    // covers `role`, the remaining server-supplied piece of the destination.
+    // It judges the real destination, so it can only run once `dir` is known,
+    // i.e. after the claim: a `role` hostile enough to escape is the single
+    // way a claim can still precede zero bytes — a broken or malicious
+    // tool-server, never an ordinary run.
+    const rel = path.relative(outputDir, dest);
+    if (rel.startsWith("..") || path.isAbsolute(rel)) return undefined;
+    try {
+      await fsp.copyFile(source, dest);
+      return dest;
+    } catch (err) {
+      console.error(
+        `warning: could not write ${dest}: ${err instanceof Error ? err.message : String(err)}`
+      );
+      return undefined;
+    }
+  };
+
+  let ordinal = 0;
+  for (const s of report.steps) {
+    if (s.kind !== "echo") ordinal++;
+    // Read BEFORE the snapshot branch below rewrites `s.artifacts`: on a
+    // snapshot failure the producer deliberately reuses the `current` handle as
+    // `failure.screenshot` (a second capture would show a different screen than
+    // the one diffed), so the two name ONE image and must not be exported as
+    // two md5-identical files.
+    const reusesSnapshotImage = sameArtifact(s.artifacts?.current, s.failure?.screenshot);
+    if (s.kind === "snapshot" && s.status === "fail" && s.artifacts) {
+      // Key first: a legacy tool-server sends plain path strings, and
+      // keyFromBaselinePath needs that original baseline path, not a rewrite.
+      // The pattern check also hardens the fallback, whose basename can still
+      // be ".." for a path ending in "/..".
+      const key = s.snapshotKey ?? keyFromBaselinePath(s.artifacts);
+      if (key && SAFE_ARTIFACT_NAME.test(key)) {
+        // Materialize only this snapshot's artifacts (local read or remote
+        // download) — never the whole report.
+        const { result } = await materializeArtifacts(s.artifacts, ctx);
+        s.artifacts = result as Record<string, unknown>;
+        for (const [role, value] of Object.entries(s.artifacts)) {
+          const dest = await copyInto(value, `${key}-${role}.png`);
+          if (dest) s.artifacts[role] = dest;
+        }
       }
     }
+    const failure = s.failure;
+    if (!failure || (failure.screenshot === undefined && failure.tree === undefined)) continue;
+    // Named `stepStem` rather than `stem`: that name is already the flow
+    // filename stem this export is keyed by, and shadowing it here would read
+    // as the same value.
+    const stepStem = `step-${String(ordinal).padStart(2, "0")}`;
+    // Scoped to just these two handles, for the same reason as above — and the
+    // screenshot is dropped from the request entirely when the snapshot branch
+    // has already exported the same image, so a remote run does not download
+    // the same bytes twice either.
+    const { result } = await materializeArtifacts(
+      {
+        ...(reusesSnapshotImage ? {} : { screenshot: failure.screenshot }),
+        tree: failure.tree,
+      },
+      ctx
+    );
+    const evidence = result as { screenshot?: unknown; tree?: unknown };
+    if (reusesSnapshotImage) {
+      // Point at the copy the snapshot branch just made, under its own key.
+      failure.screenshot = s.artifacts?.current;
+    } else {
+      const screenshot = await copyInto(evidence.screenshot, `${stepStem}-screen.png`);
+      failure.screenshot = screenshot ?? evidence.screenshot;
+    }
+    const tree = await copyInto(evidence.tree, `${stepStem}-tree.txt`);
+    failure.tree = tree ?? evidence.tree;
   }
+}
+
+/**
+ * Whether two wire artifact values name the SAME stored artifact. Compared by
+ * id rather than by reference: the report arrives as parsed JSON, so the
+ * producer's one handle has become two structurally-equal objects by the time
+ * it gets here. A legacy tool-server sends plain path strings, which compare
+ * directly.
+ */
+function sameArtifact(a: unknown, b: unknown): boolean {
+  if (a === undefined || b === undefined) return false;
+  if (typeof a === "string" || typeof b === "string") return a === b;
+  if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
+  const id = (a as Record<string, unknown>).id;
+  return typeof id === "string" && id === (b as Record<string, unknown>).id;
 }
 
 /**
@@ -771,9 +1203,20 @@ function keyFromBaselinePath(artifacts: Record<string, unknown>): string | null 
  */
 export function resolveArtifactDisplayPaths(report: FlowReport): void {
   for (const s of report.steps) {
-    if (!s.artifacts || typeof s.artifacts !== "object") continue;
-    for (const [role, value] of Object.entries(s.artifacts)) {
-      if (isArtifactHandle(value)) s.artifacts[role] = value.hostPath ?? value.filename;
+    if (s.artifacts && typeof s.artifacts === "object") {
+      for (const [role, value] of Object.entries(s.artifacts)) {
+        if (isArtifactHandle(value)) s.artifacts[role] = value.hostPath ?? value.filename;
+      }
+    }
+    // The failure block's screenshot/tree are handles too, and the same
+    // economy applies: the CLI prints their paths, never their bytes.
+    if (s.failure) {
+      if (isArtifactHandle(s.failure.screenshot)) {
+        s.failure.screenshot = s.failure.screenshot.hostPath ?? s.failure.screenshot.filename;
+      }
+      if (isArtifactHandle(s.failure.tree)) {
+        s.failure.tree = s.failure.tree.hostPath ?? s.failure.tree.filename;
+      }
     }
   }
 }
@@ -804,7 +1247,7 @@ export function exitAfterFlush(
   ).then(() => process.exit(code));
 }
 
-export function renderReport(report: FlowReport): string {
+export function renderReport(report: FlowReport, flowFile?: string): string {
   const lines: string[] = [];
   lines.push(`Flow "${report.flow}"${report.device ? ` on ${report.device}` : ""}`);
   // Remind the operator what the flow assumes was already set up.
@@ -830,6 +1273,8 @@ export function renderReport(report: FlowReport): string {
       }
     }
   }
+  // After the step list, before the summary — the verdict stays the last line.
+  lines.push(...renderFailures(report, flowFile));
   lines.push(`\n${renderSummary(report)}`);
   return lines.join("\n");
 }
@@ -1083,10 +1528,11 @@ function writeJsonStreamError(err: unknown): void {
 }
 
 /**
- * Durable diff output: copy failed-snapshot images out of the tool-server's
- * cache before any renderer prints paths, so every output mode shows the
- * durable location. The only artifact bytes the CLI ever fetches; baseUrl is
- * resolved lazily so a run without --output makes no extra round-trip.
+ * Durable evidence output: copy the failing step's screenshot and element dump
+ * and any failed-snapshot images out of the tool-server's cache before any
+ * renderer prints paths, so every output mode shows the durable location. The
+ * only artifact bytes the CLI ever fetches; baseUrl is resolved lazily so a run
+ * without --output makes no extra round-trip.
  * Whatever handles remain (all of them without --output; passing snapshots
  * and unexported roles with it) print as server-side paths.
  */
@@ -1098,9 +1544,28 @@ async function exportAndResolveArtifacts(
 ): Promise<void> {
   if (outputDir) {
     const { url, token } = await baseUrl();
-    await exportFailureArtifacts(report, outputDir, flowPath, { toolsUrl: url, authToken: token });
+    await exportRunArtifacts(report, outputDir, flowPath, { toolsUrl: url, authToken: token });
   }
   resolveArtifactDisplayPaths(report);
+}
+
+/**
+ * A stand-in report for a flow the tool-server REJECTED before running it, so
+ * it still gets a `<testsuite>`. No steps plus `ok: false` is exactly the shape
+ * `junitSuite`'s `incomplete` branch exists for, which turns it into one
+ * `<error>` carrying the rejection reason.
+ */
+function rejectedFlowReport(relPath: string): FlowReport {
+  return {
+    flow: path.basename(relPath, ".yaml"),
+    device: "",
+    ok: false,
+    passed: 0,
+    failed: 0,
+    skipped: 0,
+    errored: 0,
+    steps: [],
+  };
 }
 
 /** One flow's outcome in a directory run — also the --json aggregate entry. */
@@ -1186,7 +1651,7 @@ async function runFlowDirectory(
       continue;
     }
     // Key exports by the flow's subdirectory so recursive same-stem flows
-    // cannot clobber each other (exportFailureArtifacts keys by stem only).
+    // cannot clobber each other (exportRunArtifacts keys by stem only).
     await exportAndResolveArtifacts(
       report,
       outputBase ? path.join(outputBase, path.dirname(rel)) : undefined,
@@ -1196,6 +1661,12 @@ async function runFlowDirectory(
     results.push({ path: rel, status: report.ok ? "pass" : "fail", report });
     if (!args.json) {
       for (const line of renderFailedSteps(report)) console.log(line);
+      // The failure block, on the invocation CI actually runs. Batch output is
+      // deliberately terse, but the block is not step noise — it is the code,
+      // the candidates, the screen and the paths to the evidence
+      // `exportAndResolveArtifacts` has ALREADY written, which the one-line
+      // reason above says nothing about.
+      for (const line of renderFailures(report, path.join(dir, rel))) console.log(line);
       console.log(`  ${renderSummary(report, { withDevice: true })}`);
     }
   }
@@ -1211,7 +1682,81 @@ async function runFlowDirectory(
   } else {
     console.log(`\n${renderBatchSummary(counts)}`);
   }
+
+  // EVERY flow the batch touched becomes a `<testsuite>`, with or without a
+  // report. A flow the tool-server rejected before it ran (bad YAML, an
+  // unknown step key) produces none — and filtering those out left the file
+  // saying `failures="0"` for a run that exited 1, which is the one thing a
+  // CI artifact must never do. An empty suite trips `junitSuite`'s own
+  // `incomplete` branch, so it reports as an error carrying the real reason.
+  //
+  // Flows the batch SKIPPED after a hard stop are reportless too, and they used
+  // to be filtered out with them: the terminal summary counted them as skipped
+  // while the XML omitted them entirely and kept `skipped="0"`. They are
+  // neither failures nor errors, and JUnit has `<skipped/>` for exactly this,
+  // so they get a suite carrying that instead.
+  const reported = results.map((r) => ({
+    report: r.report ?? rejectedFlowReport(r.path),
+    meta: {
+      platform: args.platform,
+      // The flow's real path, keyed the way the batch addressed it — a
+      // recursive run has several flows and `argent.flowFile` is what tells
+      // a CI reader which one a suite belongs to.
+      flowFile: path.join(dir, r.path),
+      ...(r.status === "skip" && r.report === undefined
+        ? { notRunMessage: "not run — the batch stopped at an earlier flow" }
+        : {}),
+      ...(r.report === undefined && r.error !== undefined ? { incompleteMessage: r.error } : {}),
+    },
+  }));
+  await writeReporterFiles(reported, args.reporter);
+
+  const indeterminate = reported.some((r) => hasIndeterminateFailure(r.report));
+  if (indeterminate) console.error(`note: ${INDETERMINATE_HINT}`);
+  if (counts.failed > 0 && !args.output && isCi()) {
+    console.error(
+      "note: re-run with --output <dir> to keep the failure screenshot, element dump and snapshot diffs as CI artifacts"
+    );
+  }
   return exitAfterFlush(counts.failed === 0 ? 0 : 1);
+}
+
+/**
+ * Write every `--reporter junit:<path>` file. A write failure warns on stderr
+ * and does NOT change the verdict: argent already holds that artifact export
+ * never changes a run's result, and failing a build on argent's own I/O turns
+ * the reporter into a source of CI flake — the exact thing it exists to
+ * eliminate. The path is taken literally as given; `--output` never
+ * reinterprets it.
+ */
+async function writeReporterFiles(
+  // Every flow the invocation ran: one on the single-flow path, N on a
+  // directory run, each its own `<testsuite>` in the one file the operator
+  // asked for.
+  runs: JUnitRun[],
+  specs: string[]
+): Promise<void> {
+  if (runs.length === 0) return;
+  for (const spec of specs) {
+    // Already validated in parseRunArgs; a throw here would mean the two
+    // disagree, and the run has completed either way.
+    let parsed;
+    try {
+      parsed = parseReporterSpec(spec);
+    } catch {
+      continue;
+    }
+    if (parsed.format !== "junit") continue;
+    const dest = path.resolve(parsed.path);
+    try {
+      await fsp.mkdir(path.dirname(dest), { recursive: true });
+      await fsp.writeFile(dest, buildJUnitDocument(runs), "utf8");
+    } catch (err) {
+      console.error(
+        `warning: could not write report ${dest}: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
 }
 
 export async function flow(argv: string[], options: FlowCommandOptions): Promise<void> {
@@ -1538,6 +2083,31 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     if (s.warning) console.log(renderUnderStepLine(s, liveIndex, `⚠ ${s.warning}`));
   };
 
+  /**
+   * Write the reporter files for a run that produced no report at all — a flow
+   * the tool-server REJECTED (bad YAML, an unknown step key), a transport
+   * error, or a non-report result.
+   *
+   * Returning through `exitAfterFlush` without this left CI worse off than a
+   * wrong file: the publisher picks up whichever `junit.xml` sits at that path,
+   * which is the PREVIOUS run's, so a red build reports the last green one's
+   * results. The directory path already synthesises a suite for exactly this
+   * (`rejectedFlowReport`, whose comment calls a `failures="0"` file for a run
+   * that exited 1 "the one thing a CI artifact must never do"); the two paths
+   * simply disagreed.
+   */
+  const reportRejection = async (message: string): Promise<void> => {
+    await writeReporterFiles(
+      [
+        {
+          report: rejectedFlowReport(flowPath),
+          meta: { platform: args.platform, flowFile: flowPath, incompleteMessage: message },
+        },
+      ],
+      args.reporter
+    );
+  };
+
   let report: FlowReport;
   try {
     const resp = await callTool(
@@ -1553,11 +2123,15 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     // --output copies are fetched, below.
     report = resp.data as FlowReport;
   } catch (err) {
-    return fail(err instanceof Error ? err.message : String(err), 1, err);
+    const message = err instanceof Error ? err.message : String(err);
+    await reportRejection(message);
+    return fail(message, 1, err);
   }
 
   if (!report || typeof report !== "object" || !("steps" in report)) {
-    return fail(`"${flowName}" did not produce a run report.`, 2);
+    const message = `"${flowName}" did not produce a run report.`;
+    await reportRejection(message);
+    return fail(message, 2);
   }
 
   try {
@@ -1578,12 +2152,39 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     console.log(JSON.stringify(report, null, 2));
   } else if (liveSteps > 0) {
     // Steps already printed live — emit only what the final report knows:
-    // the prerequisite note, materialized artifact paths, and the summary.
+    // the prerequisite note, materialized artifact paths, the failure blocks,
+    // and the summary.
     if (report.executionPrerequisite) console.log(`  assumes: ${report.executionPrerequisite}`);
     for (const line of renderArtifactLines(report)) console.log(line);
+    for (const line of renderFailures(report, flowPath)) console.log(line);
     console.log(`\n${renderSummary(report, { withDevice: true })}`);
   } else {
-    console.log(renderReport(report));
+    console.log(renderReport(report, flowPath));
+  }
+
+  await writeReporterFiles(
+    // `--platform` is the only run metadata the report itself doesn't carry
+    // (the runner reports the resolved device, not the platform it narrowed to);
+    // `flowFile` is the path this invocation actually resolved, which the wire
+    // report's `flow` NAME cannot be turned back into.
+    [{ report, meta: { platform: args.platform, flowFile: flowPath } }],
+    args.reporter
+  );
+
+  // After the summary, on stderr: an indeterminate failure is the one case
+  // where the verdict alone misleads. The status is still `fail` (a distinct
+  // glyph would desync the counters, the exit code and the block), so the
+  // distinction has to be said in words.
+  if (hasIndeterminateFailure(report)) {
+    console.error(`note: ${INDETERMINATE_HINT}`);
+  }
+  // One line, only where it pays: in CI the device is gone by the time anyone
+  // reads the log, and --output is the only way the evidence survives. Never
+  // written automatically — that would put files in the user's repo.
+  if (!report.ok && !args.output && isCi()) {
+    console.error(
+      "note: re-run with --output <dir> to keep the failure screenshot, element dump and snapshot diffs as CI artifacts"
+    );
   }
 
   return exitAfterFlush(report.ok ? 0 : 1);

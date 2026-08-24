@@ -40,6 +40,8 @@ const h = vi.hoisted(() => ({
     | { x: number; y: number; width: number; height: number },
   /** When set, the waitForFrame mock rejects with this (a tree-source outage). */
   cropFrameError: null as null | Error,
+  /** The tree the waitForFrame mock publishes to its sink; null leaves it unread. */
+  cropSinkTree: null as null | Record<string, unknown>,
   dimensionMismatch: null as null | {
     expected: { width: number; height: number };
     actual: { width: number; height: number };
@@ -47,13 +49,24 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock("../../src/tools/flows/flow-actions", async (importOriginal) => ({
-  // The real offscreenHint: cropOn failures must surface the directives'
-  // standard not-found reason, so the tests assert against the real text.
-  offscreenHint: (await importOriginal<typeof import("../../src/tools/flows/flow-actions")>())
-    .offscreenHint,
+  // The real offscreenHint, evidence builder, sink factory and timeout
+  // constant: cropOn failures must surface the directives' standard
+  // not-found reason AND their standard classified evidence, so the tests
+  // assert against the real implementations.
+  ...(await importOriginal<typeof import("../../src/tools/flows/flow-actions")>()),
   settleTree: vi.fn(async () => ({})),
   invokeOnDevice: vi.fn(async () => ({ image: { hostPath: h.shotPath } })),
-  waitForFrame: vi.fn(async () => {
+  // Writes to the sink, as the real `waitForFrame` does: the cropOn-miss
+  // evidence (its code, its counts, its element list) is DERIVED from what
+  // lands there, so a mock that ignored the third argument proved nothing
+  // about the payload the report actually carries.
+  waitForFrame: vi.fn(async (_env: unknown, _sel: unknown, sink?: { attempts: number }) => {
+    if (sink) {
+      sink.attempts++;
+      if (h.cropSinkTree !== null) {
+        Object.assign(sink, { tree: h.cropSinkTree, source: "native-devtools", readAt: 1 });
+      }
+    }
     if (h.cropFrameError) throw h.cropFrameError;
     return h.cropFrame;
   }),
@@ -165,6 +178,7 @@ beforeEach(async () => {
   h.diffNormalizeSizes = undefined;
   h.cropFrame = undefined;
   h.cropFrameError = null;
+  h.cropSinkTree = null;
   h.dimensionMismatch = null;
   await writeFakePng(h.shotPath);
 });
@@ -248,6 +262,15 @@ describe("runSnapshot baselines", () => {
     expect(r.reason).toContain("nothing was compared");
     expect(r.artifacts?.baseline).toMatchObject({ __argentArtifact: true });
     expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
+    // The classified payload, not just the prose: `dimensions` is what a
+    // renderer prints and what a repair loop branches on.
+    expect(r.evidence).toMatchObject({
+      code: "snapshot-dimension-mismatch",
+      expected: { kind: "snapshot", maxMismatch: 0.5 },
+      observation: {
+        dimensions: { expected: { width: 844, height: 390 }, actual: { width: 390, height: 844 } },
+      },
+    });
   });
 
   it("fails an over-threshold diff and exposes the context diff as an artifact", async () => {
@@ -268,6 +291,13 @@ describe("runSnapshot baselines", () => {
       __argentArtifact: true,
       hostPath: h.contextDiffPath,
       filename: "home__ios-390x844-diff.png",
+    });
+    // The measured mismatch reaches the payload, not only the prose — it is
+    // what `actual:` renders and what tells an author how far off they are.
+    expect(r.evidence).toMatchObject({
+      code: "snapshot-diff",
+      expected: { kind: "snapshot", snapshotKey: "home__ios-390x844", maxMismatch: 0.5 },
+      observation: { mismatchPercentage: 3.1 },
     });
   });
 
@@ -441,7 +471,16 @@ describe("runSnapshot cropOn", () => {
     const r = await runSnapshot(env, opts({ updateBaselines: true, cropOn }));
 
     expect(r.status).toBe("pass");
-    expect(vi.mocked(waitForFrame)).toHaveBeenCalledWith(env, cropOn);
+    // The third argument is the evidence sink the failure report reads from.
+    // `expect.anything()` matched any object at all, including the wrong one —
+    // assert the SHAPE `createTreeReadSink` produces, and that it was written.
+    expect(vi.mocked(waitForFrame)).toHaveBeenCalledWith(
+      env,
+      cropOn,
+      expect.objectContaining({ attempts: expect.any(Number) })
+    );
+    const sink = vi.mocked(waitForFrame).mock.calls[0]![2] as { attempts: number };
+    expect(sink.attempts).toBeGreaterThan(0);
     // waitForFrame settles internally — the plain settle must not run too.
     expect(vi.mocked(settleTree)).not.toHaveBeenCalled();
     // Key: the FULL capture's dimensions (device-class identity) plus the
@@ -551,6 +590,60 @@ describe("runSnapshot cropOn", () => {
     expect(r.reason).toContain('no visible element matched selector text="Header"');
     expect(r.reason).toContain("scroll-to");
     expect(vi.mocked(invokeOnDevice)).not.toHaveBeenCalled();
+    // With no readable tree behind it, a cropOn miss is an ENVIRONMENT failure:
+    // the selector was never actually looked for, so "not found" would send the
+    // author editing a selector nobody evaluated.
+    expect(r.evidence).toMatchObject({ code: "tree-source-unavailable", selector: cropOn });
+  });
+
+  it("classifies a cropOn miss against a READABLE tree as a selector failure", async () => {
+    // A cropOn miss is a SELECTOR failure, not a snapshot one — it earns the
+    // directives' own code and their candidates, derived from the tree the
+    // sink published.
+    h.cropFrame = undefined;
+    h.cropSinkTree = {
+      role: "AXWindow",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        {
+          role: "AXStaticText",
+          label: "Heading",
+          frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
+          children: [],
+        },
+      ],
+    };
+
+    const r = await runSnapshot(env, opts({ cropOn }));
+
+    expect(r.status).toBe("fail");
+    expect(r.evidence).toMatchObject({ code: "selector-not-found", selector: cropOn });
+    expect(r.evidence?.matches).toEqual([]);
+  });
+
+  it("splits a cropOn miss into not-visible when the element has no frame", async () => {
+    // The same not-found/not-visible split every directive gets, driven from
+    // the tree the sink actually carries.
+    h.cropFrame = undefined;
+    h.cropSinkTree = {
+      role: "AXWindow",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        {
+          role: "AXStaticText",
+          label: "Header",
+          frame: { x: 0.1, y: 0.1, width: 0, height: 0 },
+          children: [],
+        },
+      ],
+    };
+
+    const r = await runSnapshot(env, opts({ cropOn }));
+
+    expect(r.status).toBe("fail");
+    expect(r.evidence).toMatchObject({ code: "selector-not-visible", selector: cropOn });
+    expect(r.evidence?.hint).toContain("zero area");
+    expect(r.evidence?.matches).toHaveLength(1);
   });
 
   it("skips without capturing when the run is aborted while resolving cropOn", async () => {
@@ -606,6 +699,13 @@ describe("runSnapshot cropOn", () => {
         e.startsWith("argent-flow-crop-")
       );
       expect(leftoverCropDirs).toEqual([]);
+      // The selector DID resolve — that is how the crop got a frame — so the
+      // payload names it, and the assembler suppresses candidates on the code.
+      expect(r.evidence).toMatchObject({
+        code: "snapshot-crop-empty",
+        selector: cropOn,
+        expected: { kind: "snapshot", snapshotKey: cropKey },
+      });
     } finally {
       restoreTmpdir();
       await fs.rm(scratch, { recursive: true, force: true });

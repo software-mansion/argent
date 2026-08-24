@@ -1433,9 +1433,12 @@ function validatePattern(raw: unknown, pattern: string, where: string): void {
 }
 
 // Optimal-string-alignment distance: Levenshtein plus adjacent transposition
-// (`roel` → `role` counts 1, not 2 — the dominant typo class). Inputs are
-// option keys, so the simple row-based table is fine.
-function editDistance(a: string, b: string): number {
+// (`roel` → `role` counts 1, not 2 — the dominant typo class). Exported for
+// the failure report's candidate ranking, whose near-miss scoring wants the
+// same notion of "one typo away" the unknown-key hint uses — a second
+// implementation would let the two drift. The table is O(n·m), so callers on
+// device-supplied text (not option keys) must bound their inputs first.
+export function editDistance(a: string, b: string): number {
   let prevPrev = new Array<number>(b.length + 1);
   let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
   let curr = new Array<number>(b.length + 1);

@@ -108,7 +108,7 @@ Steps:
 - If tap misses target: re-run discovery tool (`describe` / `debugger-component-tree`), retry once with new coordinates.
 - If a permission dialog or modal is visible: re-run `describe` first. Stay in screenshot-driven navigation only when the overlay is not exposed reliably, then switch back to `describe` / `debugger-component-tree` as soon as it is dismissed.
 - If tap fails twice at same coordinates: stop, re-discover, report if element not found.
-- If a **saved flow** fails during `flow-execute` replay (as opposed to live test steps above): follow `argent-create-flow`'s [Diagnose a replay failure](../argent-create-flow/references/reliability-and-recovery.md#diagnose-a-replay-failure) — classify the failure, inspect the actual screen, repair the smallest justified unit, then replay the full flow.
+- If a **saved flow** fails during `flow-execute` replay (as opposed to live test steps above): follow `argent-create-flow`'s [Diagnose a replay failure](../argent-create-flow/references/reliability-and-recovery.md#diagnose-a-replay-failure) — classify the failure from the run's `Failures:` block, repair the smallest justified unit, then replay the full flow. The block already carries the screen that failed; do not re-inspect the device for it.
 
 ## Tips
 

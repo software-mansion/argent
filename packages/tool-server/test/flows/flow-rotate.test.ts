@@ -289,6 +289,10 @@ describe("rotate: execution", () => {
     expect(result.steps[0]).toMatchObject({ kind: "rotate", status: "fail" });
     expect(result.steps[0].reason).toMatch(/no on-screen orbit radius/);
     expect(result.steps[0].reason).not.toMatch(/small|tiny/i);
+    // This is the one fixture in the repo that drives
+    // `gesture-geometry-unsatisfiable` — the taxonomy suite's list points here
+    // rather than claiming the code cannot be driven.
+    expect(result.steps[0].failure?.code).toBe("gesture-geometry-unsatisfiable");
     expect(result.calls).toHaveLength(0);
   });
 

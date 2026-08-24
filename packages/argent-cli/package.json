@@ -21,6 +21,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.0.1",
+    "fast-xml-parser": "^5.9.3",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"
   }

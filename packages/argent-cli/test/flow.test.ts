@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { XMLValidator } from "fast-xml-parser";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -113,6 +114,7 @@ describe("parseRunArgs", () => {
       recursive: false,
       json: false,
       jsonStream: false,
+      reporter: [],
     });
   });
 
@@ -134,6 +136,7 @@ describe("parseRunArgs", () => {
       recursive: false,
       json: false,
       jsonStream: false,
+      reporter: [],
     });
     expect(parseRunArgs(["--json", "checkout.yaml"]).json).toBe(true);
     expect(parseRunArgs(["--json-stream", "checkout.yaml"]).jsonStream).toBe(true);
@@ -184,6 +187,7 @@ describe("parseRunArgs", () => {
       recursive: false,
       json: false,
       jsonStream: false,
+      reporter: [],
     });
   });
 
@@ -196,6 +200,7 @@ describe("parseRunArgs", () => {
       recursive: false,
       json: false,
       jsonStream: false,
+      reporter: [],
     });
   });
 
@@ -236,6 +241,20 @@ describe("parseRunArgs", () => {
     expect(() => parseRunArgs(["checkout.yaml", "--platfrom=ios"])).toThrow(/unknown flag/);
   });
 
+  it("collects --reporter specs in order, and validates each one at parse time", () => {
+    expect(
+      parseRunArgs(["checkout", "--reporter", "default", "--reporter=junit:out.xml"]).reporter
+    ).toEqual(["default", "junit:out.xml"]);
+    // A bad spec must fail before the run starts: discovering it after a
+    // 40-second flow, with the report file missing, is the worse failure.
+    expect(() => parseRunArgs(["checkout", "--reporter", "junit"])).toThrow(FlagParseException);
+    expect(() => parseRunArgs(["checkout", "--reporter=junit:"])).toThrow(
+      "--reporter junit requires a path"
+    );
+    expect(() => parseRunArgs(["checkout", "--reporter=tap:x"])).toThrow(/unknown format/);
+    expect(() => parseRunArgs(["checkout", "--reporter"])).toThrow("--reporter requires a value");
+  });
+
   it("rejects extra positional arguments", () => {
     expect(() => parseRunArgs(["checkout.yaml", "extra.yaml"])).toThrow(
       "flow run accepts one flow name, YAML file path, or directory path"
@@ -253,6 +272,7 @@ describe("parseRunArgs", () => {
       recursive: false,
       json: false,
       jsonStream: false,
+      reporter: [],
     });
     // The marker relaxes flag parsing, not the one-positional rule.
     expect(() => parseRunArgs(["--", "a", "b"])).toThrow(
@@ -1515,6 +1535,188 @@ describe("argent flow run", () => {
     expect(errs.join("\n")).toContain('"checkout" did not produce a run report');
   });
 
+  it("still writes the reporter file when the single flow is rejected", async () => {
+    // The rejection returns through `exitAfterFlush` BEFORE the only
+    // `writeReporterFiles` call, so the process exited 1 having written
+    // nothing — and in CI the publisher then picks up whichever junit.xml sits
+    // at that path, which is the previous run's. A red build reported the last
+    // green build's results. The directory path already synthesises a suite
+    // for exactly this; the two paths disagreed.
+    const dir = await fsp.mkdtemp(path.join(tmpdir(), "flow-reject-junit-"));
+    try {
+      const dest = path.join(dir, "junit.xml");
+      await fsp.writeFile(dest, "STALE-FROM-PREVIOUS-RUN", "utf8");
+      toolsClientMock.callTool.mockRejectedValue(
+        new Error('checkout.yaml: unknown step kind "tapp"')
+      );
+
+      await expect(
+        flow(["run", checkoutPath, "--reporter", `junit:${dest}`], opts)
+      ).rejects.toThrow("process.exit:1");
+
+      const xml = await fsp.readFile(dest, "utf8");
+      expect(xml).not.toContain("STALE-FROM-PREVIOUS-RUN");
+      expect(xml).toContain('<testsuite name="checkout"');
+      expect(xml).toContain('errors="1"');
+      // The real rejection reason, not "the run failed with no failing step".
+      expect(xml).toContain("unknown step kind");
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("still writes the reporter file when the result is not a run report", async () => {
+    const dir = await fsp.mkdtemp(path.join(tmpdir(), "flow-noreport-junit-"));
+    try {
+      const dest = path.join(dir, "junit.xml");
+      toolsClientMock.callTool.mockResolvedValue({ data: { flow: "checkout", notice: "nope" } });
+
+      await expect(
+        flow(["run", checkoutPath, "--reporter", `junit:${dest}`], opts)
+      ).rejects.toThrow("process.exit:2");
+
+      expect(await fsp.readFile(dest, "utf8")).toContain("did not produce a run report");
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("renders the live-tail branch a streaming tool-server actually takes", async () => {
+    // `callTool` never invoked `onProgress` anywhere in this file, so `liveSteps`
+    // was always 0 and the buffered renderer owned every assertion — the branch
+    // a modern streaming server takes was unreached. Drive it: emit the steps
+    // live, then hand back the final report.
+    const finalReport = report({
+      ok: false,
+      passed: 1,
+      failed: 1,
+      steps: [
+        { index: 0, kind: "launch", status: "pass", durationMs: 3100 },
+        {
+          index: 1,
+          kind: "assert",
+          status: "fail",
+          target: "visible id=cta",
+          reason: 'no element matched selector id="cta"',
+          failure: {
+            code: "selector-not-found",
+            determinacy: "indeterminate",
+            message: 'no element matched selector id="cta"',
+            screen: { state: "unavailable", reason: "never-readable" },
+            candidates: [],
+            candidateCount: 0,
+          },
+        },
+      ],
+    });
+    toolsClientMock.callTool.mockImplementation(
+      async (_name: string, _payload: unknown, opts?: { onProgress?: (e: unknown) => void }) => {
+        for (const step of finalReport.steps as StepFixture[]) opts?.onProgress?.(step);
+        return { data: finalReport };
+      }
+    );
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
+
+    const out = logs.join("\n");
+    // The live header (no device) rather than `renderReport`'s (with one) —
+    // proof the branch under test is the one that ran.
+    expect(out).toContain('Flow "checkout"');
+    expect(out).not.toContain('Flow "checkout" on UDID-1');
+    expect(out).toContain("  ✓  1 launch");
+    expect(out).toContain("  ✗  2 assert visible id=cta");
+    // The three things this branch is responsible for emitting itself.
+    expect(out).toContain("Failures:");
+    expect(out).toContain("     selector-not-found: no element matched selector");
+    expect(out).toContain("FAIL");
+    // ...and the stderr note that only an indeterminate failure earns.
+    expect(errs.join("\n")).toContain("not a failed assertion");
+  });
+
+  it("writes JUnit XML at the literal --reporter path and keeps the failing verdict", async () => {
+    const dir = await fsp.mkdtemp(path.join(tmpdir(), "flow-reporter-"));
+    try {
+      const dest = path.join(dir, "nested", "junit.xml");
+      toolsClientMock.callTool.mockResolvedValue({
+        data: report({
+          ok: false,
+          passed: 1,
+          failed: 1,
+          durationMs: 8900,
+          steps: [
+            { index: 0, kind: "launch", status: "pass", durationMs: 3100 },
+            {
+              index: 1,
+              kind: "tap",
+              status: "fail",
+              target: '"Checkout"',
+              durationMs: 5002,
+              reason: 'no visible element matched selector text="Checkout"',
+              failure: {
+                code: "selector-not-found",
+                message: 'no visible element matched selector text="Checkout"',
+                selector: { described: 'text="Checkout"' },
+                screen: { state: "available", elementCount: 47, elements: [] },
+                candidates: [],
+                candidateCount: 0,
+              },
+            },
+          ],
+        }),
+      });
+
+      await expect(
+        flow(["run", checkoutPath, "--reporter", `junit:${dest}`], opts)
+      ).rejects.toThrow("process.exit:1");
+
+      const xml = await fsp.readFile(dest, "utf8");
+      expect(xml).toContain('<testsuite name="checkout" tests="2" failures="1"');
+      expect(xml).toContain('<testcase classname="checkout" name="02 tap &quot;Checkout&quot;"');
+      expect(xml).toContain('<failure type="selector-not-found"');
+      // The failure block reaches the terminal too, above the verdict.
+      const out = logs.join("\n");
+      expect(out).toContain("     selector-not-found: no visible element matched selector");
+      // Presence FIRST, then order. `indexOf(a) < indexOf(b)` is satisfied by
+      // `a` being absent entirely (-1 < N), so on its own it did not test what
+      // it read as testing.
+      const blockAt = out.indexOf("\nFailures:");
+      const verdictAt = out.indexOf("FAIL —");
+      expect(blockAt).toBeGreaterThanOrEqual(0);
+      expect(verdictAt).toBeGreaterThanOrEqual(0);
+      expect(blockAt).toBeLessThan(verdictAt);
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("exits 2 without calling the tool when a --reporter spec is unusable", async () => {
+    await expect(flow(["run", "checkout", "--reporter", "junit"], opts)).rejects.toThrow(
+      "process.exit:2"
+    );
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    expect(errs.join("\n")).toContain("--reporter junit requires a path");
+  });
+
+  it("warns but does not change the verdict when the report file cannot be written", async () => {
+    const dir = await fsp.mkdtemp(path.join(tmpdir(), "flow-reporter-"));
+    try {
+      // A directory where the file should go: the write fails, the run does not.
+      // Failing a build on argent's own I/O would turn the reporter into a
+      // source of CI flake.
+      const dest = path.join(dir, "junit.xml");
+      await fsp.mkdir(dest);
+
+      await expect(flow(["run", checkoutPath, `--reporter=junit:${dest}`], opts)).rejects.toThrow(
+        "process.exit:0"
+      );
+
+      expect(errs.join("\n")).toContain("warning: could not write report");
+      expect(logs.join("\n")).toContain("PASS — 1 passed");
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("exits 2 on an unknown subcommand", async () => {
     await expect(flow(["frobnicate"], opts)).rejects.toThrow("process.exit:2");
     expect(errs.join("\n")).toContain('Unknown flow subcommand "frobnicate"');
@@ -1645,6 +1847,104 @@ describe("argent flow run <dir>", () => {
     );
   });
 
+  it("writes ONE JUnit file holding a testsuite per flow, and the failure blocks", async () => {
+    // The gap this pins: `--reporter` parsed and validated on a directory run,
+    // then wrote nothing and said nothing — while `argent flow run
+    // .argent/flows -r --reporter junit:…` is the canonical CI invocation and
+    // per-suite attribution is the whole point of the reporter.
+    const dir = await fsp.mkdtemp(path.join(tmpdir(), "flow-batch-reporter-"));
+    try {
+      const dest = path.join(dir, "junit.xml");
+      toolsClientMock.callTool
+        .mockResolvedValueOnce({ data: report({ flow: "a-login" }) })
+        .mockResolvedValueOnce({
+          data: report({
+            flow: "b-checkout",
+            ok: false,
+            passed: 0,
+            failed: 1,
+            steps: [
+              {
+                index: 0,
+                kind: "assert",
+                status: "fail",
+                target: "visible id=cta",
+                reason: 'no element matched selector id="cta"',
+                failure: {
+                  code: "selector-not-found",
+                  message: 'no element matched selector id="cta"',
+                  selector: { described: 'id="cta"' },
+                  screen: { state: "available", elementCount: 12, elements: [] },
+                  candidates: [],
+                  candidateCount: 0,
+                },
+              },
+            ],
+          }),
+        });
+
+      await expect(flow(["run", flowsDir, "--reporter", `junit:${dest}`], opts)).rejects.toThrow(
+        "process.exit:1"
+      );
+
+      const xml = await fsp.readFile(dest, "utf8");
+      // One document, one suite per flow, counters summed across them.
+      expect(xml).toContain('<testsuites name="argent flow" tests="2" failures="1" errors="0"');
+      expect(xml).toContain('<testsuite name="a-login" tests="1" failures="0"');
+      expect(xml).toContain('<testsuite name="b-checkout" tests="1" failures="1"');
+      expect(xml).toContain('<failure type="selector-not-found"');
+      // Each suite names the flow file it actually ran, so a reader can tell
+      // which of the two a failure belongs to.
+      expect(xml).toContain(
+        `<property name="argent.flowFile" value="${path.join(flowsDir, "b-checkout.yaml")}"/>`
+      );
+      // ...and the terminal gets the block, not just the one-line reason.
+      expect(logs.join("\n")).toContain("     selector-not-found: no element matched selector");
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("gives a REJECTED flow its own errored suite instead of reporting green", async () => {
+    // A flow the tool-server rejects before it runs (bad YAML, unknown step
+    // key) produces no report. Filtering those out left the file claiming
+    // `failures="0" errors="0"` for a run that printed FAIL and exited 1 —
+    // the one thing a CI artifact must never do.
+    const dir = await fsp.mkdtemp(path.join(tmpdir(), "flow-batch-rejected-"));
+    try {
+      const dest = path.join(dir, "junit.xml");
+      toolsClientMock.callTool
+        .mockResolvedValueOnce({ data: report({ flow: "a-login" }) })
+        .mockRejectedValueOnce(
+          new ToolInvocationError('b-checkout.yaml: unknown step kind "tapp"', {
+            errorKind: "validation",
+          })
+        );
+
+      await expect(flow(["run", flowsDir, "--reporter", `junit:${dest}`], opts)).rejects.toThrow(
+        "process.exit:1"
+      );
+
+      const xml = await fsp.readFile(dest, "utf8");
+      // Parsed, not just grepped: a fragment `toContain` finds is satisfied
+      // wherever it sits, which is how an element in a position no schema
+      // allows survived this suite.
+      expect(XMLValidator.validate(xml)).toBe(true);
+      expect(xml).not.toMatch(/<\/properties>\s*<error/);
+      // The document's counters agree with the exit code — two testcases, the
+      // passing flow's one step and the rejected flow's synthetic `run`.
+      expect(xml).toContain('<testsuites name="argent flow" tests="2" failures="0" errors="1"');
+      expect(xml).toContain('<testsuite name="b-checkout"');
+      // The rejection is a testcase, not a bare suite-level element: an
+      // `<error>` directly under `<testsuite>` is legal in no JUnit schema.
+      expect(xml).toContain('<testcase classname="b-checkout" name="run">');
+      // ...and the suite says WHY, rather than "the run failed with no failing step".
+      expect(xml).toContain("unknown step kind");
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("forwards run flags to every flow in the batch", async () => {
     await expect(
       flow(["run", flowsDir, "--device", "SIM-1", "--platform", "ios", "--update-baselines"], opts)
@@ -1695,6 +1995,33 @@ describe("argent flow run <dir>", () => {
     expect(out).toContain(`[3/3] ${path.join("sub", "c-search.yaml")}`);
     expect(out).toContain("· not run (batch stopped)");
     expect(out).toContain("FAIL — 3 flows: 1 passed, 1 failed, 1 skipped");
+  });
+
+  it("keeps the flows a stopped batch skipped in the JUnit document", async () => {
+    // The terminal summary counts them; the XML used to omit them entirely and
+    // keep `skipped="0"`, so the two surfaces disagreed about the same run.
+    // They are neither failures nor errors — JUnit has `<skipped/>` for this.
+    const dir = await fsp.mkdtemp(path.join(tmpdir(), "flow-batch-skipped-"));
+    try {
+      const dest = path.join(dir, "junit.xml");
+      toolsClientMock.callTool
+        .mockResolvedValueOnce({ data: report({ flow: "a-login" }) })
+        .mockRejectedValueOnce(new Error("tool-server unreachable"));
+
+      await expect(
+        flow(["run", flowsDir, "-r", "--reporter", `junit:${dest}`], opts)
+      ).rejects.toThrow("process.exit:1");
+
+      const xml = await fsp.readFile(dest, "utf8");
+      expect(xml).toContain('<testsuite name="c-search"');
+      expect(xml).toContain("not run — the batch stopped at an earlier flow");
+      // The document's counter agrees with the terminal's "1 skipped".
+      expect(xml).toMatch(/<testsuites [^>]*skipped="1"/);
+      // A skipped flow is not an errored one.
+      expect(xml).toMatch(/<testsuites [^>]*errors="1"/);
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("continues past a flow the tool-server rejects as invalid", async () => {

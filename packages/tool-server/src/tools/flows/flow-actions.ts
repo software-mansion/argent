@@ -56,6 +56,7 @@ import {
   type FlowStep,
   type ScrollDirection,
 } from "./flow-utils";
+import { markTreeSourceError, type DirectiveEvidence, type FlowFailureCode } from "./flow-failure";
 
 /** Everything a directive needs to act on the run's device. */
 export interface ActionEnv {
@@ -167,6 +168,36 @@ export interface DirectiveOutcome {
    * the step report so the author is told what the green actually bought.
    */
   warning?: string;
+  /**
+   * What the directive saw while failing — the classified cause plus the tree,
+   * matches and read statistics the loops above used to discard. Consumed and
+   * stripped by the failure assembler; never part of the wire report.
+   */
+  evidence?: DirectiveEvidence;
+}
+
+/**
+ * A mutable slot a caller hands to a read loop to keep what the loop otherwise
+ * discards. Additive by construction: passing no sink leaves every loop's
+ * control flow, return values and throw behaviour byte-identical, which is what
+ * lets the evidence plumbing land without touching the abort/tier semantics.
+ */
+interface TreeReadSink {
+  /** The most recent successfully read tree. */
+  tree?: DescribeNode;
+  source?: DescribeSource;
+  /** Screen size {@link tree}'s frames were normalized against, when the source reports it. */
+  screen?: { width: number; height: number };
+  /** `Date.now()` of the read {@link tree} came from. */
+  readAt?: number;
+  /** The most recent read error, verbatim (cleared by a later successful read). */
+  error?: string;
+  /** Reads attempted, successful or not. */
+  attempts: number;
+}
+
+export function createTreeReadSink(): TreeReadSink {
+  return { attempts: 0 };
 }
 
 /**
@@ -213,7 +244,8 @@ export function invokeOnDevice(
   );
 }
 
-const DEFAULT_ACTION_TIMEOUT_MS = 7500;
+/** Auto-wait budget for a selector-resolving directive. Exported so a failure report can state it. */
+export const DEFAULT_ACTION_TIMEOUT_MS = 7500;
 const POLL_INTERVAL_MS = 300;
 
 // `type` focus handshake: the focus tap resolves as soon as its Up event is
@@ -476,6 +508,67 @@ function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
 }
 
 /**
+ * The strict passes a flow selector resolves through — exported so the failure
+ * report can tell an operator what the runner ACTUALLY looked for (a
+ * bare-string `tap: foo` searched for `id=foo` and then for `text="foo"`), and
+ * so candidate ranking scores against the same passes resolution attempted
+ * rather than a second interpretation of the selector.
+ */
+export function flowSelectorAlternatives(sel: FlowSelector): Selector[] {
+  return selectorAlternatives(sel);
+}
+
+/** Match a flow selector against a tree with the same loose fallback resolution uses. */
+export function flowMatchAll(tree: DescribeNode, sel: FlowSelector): DescribeNode[] {
+  return flowFindAll(tree, sel);
+}
+
+/**
+ * Evidence for a selector that never resolved to a visible frame.
+ *
+ * The code comes from the OBSERVATION, not the call site: a selector that
+ * matched nodes whose frames are all zero-area is a visibility problem
+ * (`selector-not-visible`) needing a different fix from one that matched
+ * nothing (`selector-not-found`). Both read the same last tree the loop saw,
+ * so the count the report states and the elements it lists cannot disagree.
+ */
+export function selectorMissEvidence(
+  selector: FlowSelector,
+  sink: TreeReadSink,
+  budgetMs: number
+): DirectiveEvidence {
+  const evidence: DirectiveEvidence = {
+    selector,
+    budgetMs,
+    attempts: sink.attempts,
+    ...(sink.tree !== undefined
+      ? { tree: sink.tree, source: sink.source, screenSize: sink.screen, readAt: sink.readAt }
+      : {}),
+    ...(sink.error !== undefined ? { treeError: sink.error } : {}),
+  };
+  if (sink.tree === undefined) {
+    // No readable tree at all: an environment failure, not a missing element.
+    // Reporting "not found" here would send the operator editing a selector
+    // that was never actually looked for.
+    evidence.code = "tree-source-unavailable";
+    return evidence;
+  }
+  const matches = flowFindAll(sink.tree, selector);
+  const invisibleOnly = matches.length > 0 && !matches.some(isVisible);
+  // Counts and the element list are derived from `matches` by the assembler —
+  // one source of truth, so the code, the numbers and the listed elements
+  // cannot describe different reads.
+  evidence.matches = matches;
+  evidence.code = invisibleOnly ? "selector-not-visible" : "selector-not-found";
+  if (invisibleOnly) {
+    evidence.hint =
+      "the element is in the tree but its frame has zero area — it may be behind an overlay, " +
+      "collapsed, or not laid out yet";
+  }
+  return evidence;
+}
+
+/**
  * Re-read the describe tree until two consecutive reads are identical — the UI
  * has settled (a scroll's fling has stopped, an animation finished). Returns the
  * stable tree, the last tree read on timeout (best effort), or undefined if the
@@ -525,8 +618,9 @@ function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
  */
 export async function settleTree(
   env: ActionEnv,
-  opts: { skipProvenOutage?: boolean } = {}
+  opts: { skipProvenOutage?: boolean; sink?: TreeReadSink } = {}
 ): Promise<DescribeNode | undefined> {
+  const { sink } = opts;
   const deadline = Date.now() + SETTLE_TIMEOUT_MS;
   let prevFp: string | undefined;
   let prevTree: DescribeNode | undefined;
@@ -538,6 +632,7 @@ export async function settleTree(
     // first pass: the memo is written by the throw below, which leaves the loop.
     const proven = provenTreeOutage(env);
     if (opts.skipProvenOutage && proven) throw proven;
+    if (sink) sink.attempts++;
     // The signal bounds the wait; nothing else does. A budget of what is left of
     // the window would fail the slow cold start #778 raised
     // `ViewHierarchy.getFullHierarchy` to a 15s RPC tier to ride out, so the
@@ -546,9 +641,17 @@ export async function settleTree(
     let tree: DescribeNode | undefined;
     if (read.type === "value") {
       tree = read.value.tree;
+      if (sink) {
+        sink.tree = read.value.tree;
+        sink.source = read.value.source;
+        sink.screen = read.value.screen;
+        sink.readAt = Date.now();
+        sink.error = undefined;
+      }
     } else if (read.type === "error") {
       // transient describe failure mid-navigation — retry until the deadline
       lastError = read.cause;
+      if (sink) sink.error = lastError.message;
     }
     reads += 1;
     // The abort can land while the read above is in flight (e.g. the HTTP
@@ -571,7 +674,9 @@ export async function settleTree(
       if (reads < SETTLE_MIN_READS) continue;
       if (prevTree === undefined && lastError !== undefined) {
         if (env.treeOutage) env.treeOutage.proven = { deviceId: env.device.id, error: lastError };
-        throw lastError;
+        // Marked so a downstream catch can tell "the device was unreadable"
+        // from "the step is wrong" without pattern-matching error messages.
+        throw markTreeSourceError(lastError);
       }
       return prevTree;
     }
@@ -591,12 +696,13 @@ export async function settleTree(
  */
 export async function waitForFrame(
   env: ActionEnv,
-  selector: FlowSelector
+  selector: FlowSelector,
+  sink?: TreeReadSink
 ): Promise<DescribeFrame | "aborted" | undefined> {
   const deadline = Date.now() + DEFAULT_ACTION_TIMEOUT_MS;
   for (;;) {
     if (env.signal?.aborted) return "aborted";
-    const tree = await settleTree(env);
+    const tree = await settleTree(env, { sink });
     if (tree) {
       const frame = flowSelectorToFrame(tree, selector);
       if (frame) return frame;
@@ -702,6 +808,8 @@ interface ScrollResolve {
   reason?: string;
   /** The run was cancelled mid-scroll. */
   aborted?: boolean;
+  /** What the scroll saw while failing — see {@link DirectiveEvidence}. */
+  evidence?: DirectiveEvidence;
 }
 
 /**
@@ -790,11 +898,78 @@ async function scrollToVisible(
   direction: ScrollDirection,
   within: FlowSelector | undefined
 ): Promise<ScrollResolve> {
+  const sink = createTreeReadSink();
+  // Shared by every failure return below, so what the report claims the scroll
+  // searched and what it actually scrolled cannot drift.
+  const scrollEvidence = (code: FlowFailureCode): DirectiveEvidence => ({
+    code,
+    selector: target,
+    attempts: sink.attempts,
+    expected: {
+      kind: "scroll",
+      direction,
+      maxIterations: MAX_SCROLL_ITERATIONS,
+      ...(within ? { within: describeSelector(within) } : {}),
+    },
+    ...(sink.tree !== undefined
+      ? { tree: sink.tree, source: sink.source, screenSize: sink.screen, readAt: sink.readAt }
+      : {}),
+    ...(sink.error !== undefined ? { treeError: sink.error } : {}),
+    ...(sink.tree !== undefined ? { matches: flowFindAll(sink.tree, target) } : {}),
+  });
+
+  /**
+   * A scroll that ran out of ITERATIONS. The container was still producing new
+   * content on the last round, so nothing here can say whether more scrolling
+   * would have revealed the target — `scroll-target-not-found` is the only
+   * honest code, whatever the current matches look like.
+   */
+  const scrollExhaustedIterations = (): ScrollResolve => ({
+    reason: `${describeSelector(target)} not found after ${MAX_SCROLL_ITERATIONS} scroll attempts`,
+    evidence: scrollEvidence("scroll-target-not-found"),
+  });
+
+  /**
+   * A scroll that reached its END without the target. Here the code comes from
+   * the OBSERVATION, exactly as {@link selectorMissEvidence} derives it: the
+   * container has nothing left to reveal, so a target whose every match has a
+   * zero-area frame is a VISIBILITY problem, and no amount of scrolling fixes
+   * one — reporting `scroll-target-not-found` sent the operator hunting for an
+   * element that was on the tree all along.
+   *
+   * The REASON is rewritten with the code. `failure.message` is pinned
+   * byte-identical to `reason`, so leaving the end-of-scroll prose beside a
+   * visibility code would ship the contradiction to every renderer — the same
+   * defect the `waitForCondition` verdict was just fixed for.
+   */
+  const scrollReachedEnd = (): ScrollResolve => {
+    const evidence = scrollEvidence("scroll-target-not-found");
+    const matches = evidence.matches ?? [];
+    if (matches.length === 0 || matches.some(isVisible)) {
+      return {
+        reason: `reached the end of the scroll without finding ${describeSelector(target)}`,
+        evidence,
+      };
+    }
+    return {
+      reason:
+        `${describeSelector(target)} is in the tree but its frame has zero area, so scrolling ` +
+        `cannot reveal it`,
+      evidence: {
+        ...evidence,
+        code: "selector-not-visible",
+        hint:
+          "the element is in the tree but its frame has zero area, so scrolling cannot reveal it — " +
+          "it may be behind an overlay, collapsed, or not laid out yet",
+      },
+    };
+  };
+
   let prevFp: string | undefined;
   for (let i = 0; i < MAX_SCROLL_ITERATIONS; i++) {
     if (env.signal?.aborted) return { aborted: true };
 
-    const tree = await settleTree(env);
+    const tree = await settleTree(env, { sink });
     if (!tree) return { aborted: true }; // settleTree only returns undefined on abort
 
     // Anchor the gesture inside the container (so the right nested scroller
@@ -802,7 +977,16 @@ async function scrollToVisible(
     // clip window the axis check measures the target against.
     const region = within ? flowSelectorToFrame(tree, within) : FULL_SCREEN;
     if (!region) {
-      return { reason: `scroll container ${describeSelector(within!)} is not visible` };
+      return {
+        reason: `scroll container ${describeSelector(within!)} is not visible`,
+        // The failing selector is the CONTAINER here, not the target — a
+        // report naming the target would send the operator to the wrong step.
+        evidence: {
+          ...scrollEvidence("scroll-container-not-visible"),
+          selector: within!,
+          ...(sink.tree !== undefined ? { matches: flowFindAll(sink.tree, within!) } : {}),
+        },
+      };
     }
 
     const frame = flowSelectorToFrame(tree, target);
@@ -829,17 +1013,13 @@ async function scrollToVisible(
     if (prevFp !== undefined && fp === prevFp) {
       // End of the scroll — accept the target wherever it landed (best effort).
       if (frame) return { frame };
-      return {
-        reason: `reached the end of the scroll without finding ${describeSelector(target)}`,
-      };
+      return scrollReachedEnd();
     }
     prevFp = fp;
 
     await scrollIncrement(env, direction, region);
   }
-  return {
-    reason: `${describeSelector(target)} not found after ${MAX_SCROLL_ITERATIONS} scroll attempts`,
-  };
+  return scrollExhaustedIterations();
 }
 
 // `tap`/`type` auto-wait but deliberately do NOT auto-scroll: an implicit
@@ -847,8 +1027,36 @@ async function scrollToVisible(
 // whole page, mutate scroll state even when the step fails, and stretch a
 // failure to the scroll search's worst case. Off-screen targets take an
 // explicit `scroll-to` step — the failure reason points there.
-export function offscreenHint(sel: FlowSelector): string {
+function offscreenHint(sel: FlowSelector): string {
   return `no visible element matched selector ${describeSelector(sel)} — if it is off-screen, add a scroll-to step before this one`;
+}
+
+/**
+ * The reason AND the evidence for a `waitForFrame` miss, derived together so
+ * they cannot contradict each other.
+ *
+ * They did: the reason came from {@link offscreenHint} unconditionally, telling
+ * the operator to "add a scroll-to step", while the evidence beside it
+ * classified `selector-not-visible` and its hint said the frame has zero area —
+ * which a scroll cannot change. Both printed adjacently, so the block advised
+ * the one thing it had just explained could not work. `scrollReachedEnd`
+ * already rewrites its own prose for exactly this split; this is the same
+ * rewrite for the miss path.
+ */
+export function selectorMiss(
+  sel: FlowSelector,
+  sink: TreeReadSink,
+  timeoutMs: number
+): { reason: string; evidence: DirectiveEvidence } {
+  const evidence = selectorMissEvidence(sel, sink, timeoutMs);
+  return {
+    reason:
+      evidence.code === "selector-not-visible"
+        ? `${describeSelector(sel)} is in the tree but its frame has zero area, so scrolling ` +
+          `cannot reveal it`
+        : offscreenHint(sel),
+    evidence,
+  };
 }
 
 /**
@@ -872,6 +1080,7 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
     return {
       ok: false,
       reason: `${step.kind} is a touch directive and Vega is remote-driven — move focus with \`tool: tv-remote\` steps (and type via \`tool: keyboard\`) instead`,
+      evidence: { code: "directive-unsupported" },
     };
   }
   // Chromium: not "no backend" — CDP can dispatch two-finger touch, but a
@@ -884,6 +1093,7 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
         step.kind === "pinch"
           ? "pinch is unsupported on chromium — desktop apps have no uniform pinch-zoom mapping (they zoom via ctrl+wheel or their own controls); drive the app's zoom UI with tap/keyboard instead"
           : "rotate is unsupported on chromium — desktop apps have no rotate-gesture idiom; drive the app's rotate controls with tap/keyboard instead",
+      evidence: { code: "directive-unsupported" },
     };
   }
   switch (step.kind) {
@@ -902,7 +1112,11 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
     case "scroll-to": {
       const r = await scrollToVisible(env, step.target, step.direction, step.within);
       if (r.aborted) return ABORTED_OUTCOME;
-      return { ok: Boolean(r.frame), reason: r.reason };
+      return {
+        ok: Boolean(r.frame),
+        reason: r.reason,
+        ...(r.evidence ? { evidence: r.evidence } : {}),
+      };
     }
     case "pinch":
       return runPinch(env, step);
@@ -1020,10 +1234,16 @@ async function resolveTargetPoint(
   target: { selector?: FlowSelector; x?: number; y?: number }
 ): Promise<{ point: { x: number; y: number }; warning?: string } | { fail: DirectiveOutcome }> {
   if (target.selector) {
-    const frame = await waitForFrame(env, target.selector);
+    const sink = createTreeReadSink();
+    const frame = await waitForFrame(env, target.selector, sink);
     if (frame === "aborted") return { fail: ABORTED_OUTCOME };
     if (!frame) {
-      return { fail: { ok: false, reason: offscreenHint(target.selector) } };
+      return {
+        fail: {
+          ok: false,
+          ...selectorMiss(target.selector, sink, DEFAULT_ACTION_TIMEOUT_MS),
+        },
+      };
     }
     return { point: getDescribeTapPoint(frame) };
   }
@@ -1032,7 +1252,13 @@ async function resolveTargetPoint(
     if (settle.aborted) return { fail: ABORTED_OUTCOME };
     return { point: { x: target.x, y: target.y }, ...warned(settle) };
   }
-  return { fail: { ok: false, reason: "gesture needs a selector or x/y coordinates" } };
+  return {
+    fail: {
+      ok: false,
+      reason: "gesture needs a selector or x/y coordinates",
+      evidence: { code: "target-missing" },
+    },
+  };
 }
 
 /**
@@ -1117,9 +1343,15 @@ async function runPinch(
   let frame: DescribeFrame | undefined;
   let settle: GestureSettle = {};
   if (step.selector) {
-    const resolved = await waitForFrame(env, step.selector);
+    const sink = createTreeReadSink();
+    const resolved = await waitForFrame(env, step.selector, sink);
     if (resolved === "aborted") return ABORTED_OUTCOME;
-    if (!resolved) return { ok: false, reason: offscreenHint(step.selector) };
+    if (!resolved) {
+      return {
+        ok: false,
+        ...selectorMiss(step.selector, sink, DEFAULT_ACTION_TIMEOUT_MS),
+      };
+    }
     frame = resolved;
     center = getDescribeTapPoint(resolved);
   } else {
@@ -1142,6 +1374,7 @@ async function runPinch(
     return {
       ok: false,
       reason: `pinch found no on-screen finger travel around (${center.x}, ${center.y})`,
+      evidence: { code: "gesture-geometry-unsatisfiable" },
     };
   }
 
@@ -1223,9 +1456,15 @@ async function runRotate(
   let frame: DescribeFrame | undefined;
   let settle: GestureSettle = {};
   if (step.selector) {
-    const resolved = await waitForFrame(env, step.selector);
+    const sink = createTreeReadSink();
+    const resolved = await waitForFrame(env, step.selector, sink);
     if (resolved === "aborted") return ABORTED_OUTCOME;
-    if (!resolved) return { ok: false, reason: offscreenHint(step.selector) };
+    if (!resolved) {
+      return {
+        ok: false,
+        ...selectorMiss(step.selector, sink, DEFAULT_ACTION_TIMEOUT_MS),
+      };
+    }
     frame = resolved;
     center = getDescribeTapPoint(resolved);
   } else {
@@ -1264,6 +1503,7 @@ async function runRotate(
     return {
       ok: false,
       reason: `rotate found no on-screen orbit radius around (${center.x}, ${center.y})`,
+      evidence: { code: "gesture-geometry-unsatisfiable" },
     };
   }
 
@@ -1300,10 +1540,14 @@ async function runType(
   env: ActionEnv,
   step: { into: FlowSelector; text: string; submit?: boolean }
 ): Promise<DirectiveOutcome> {
-  const frame = await waitForFrame(env, step.into);
+  const sink = createTreeReadSink();
+  const frame = await waitForFrame(env, step.into, sink);
   if (frame === "aborted") return ABORTED_OUTCOME;
   if (!frame) {
-    return { ok: false, reason: offscreenHint(step.into) };
+    return {
+      ok: false,
+      ...selectorMiss(step.into, sink, DEFAULT_ACTION_TIMEOUT_MS),
+    };
   }
   await invokeOnDevice(env, "gesture-tap", getDescribeTapPoint(frame));
   // Keys are injected at the HID level and go to whatever holds focus, so the
@@ -1366,9 +1610,28 @@ async function waitForCondition(
 ): Promise<DirectiveOutcome> {
   const deadline = Date.now() + timeoutMs;
 
-  let lastMatches: ReturnType<typeof findAll> = [];
   let fetchError: string | undefined;
   let everMatched = false;
+  // Evidence locals — hoisted out of the try purely so the post-loop verdict
+  // can narrate from them. The TRUSTED tree is kept separately from the last
+  // tree read: a blind (empty + degraded) read is not evidence of what was on
+  // screen, and reporting it would tell the operator the app was blank when
+  // argent simply could not see it.
+  let lastTrustedTree: DescribeNode | undefined;
+  let lastTrustedSource: DescribeSource | undefined;
+  let lastTrustedScreen: { width: number; height: number } | undefined;
+  // Matches from the same TRUSTED read as `lastTrustedTree`, and the ONLY match
+  // set that leaves this loop. A read that merely SUCCEEDED is not evidence: a
+  // blind (empty + degraded) read matches nothing, so narrating from it told an
+  // operator "0 elements matched" for a `hidden` failure whose diagnosis is "the
+  // element WAS there and we could not confirm it left", and classified a text
+  // mismatch as `selector-not-found` whenever the blind read landed inside the
+  // dark-tail tolerance. Every post-loop verdict — the code and the prose alike
+  // — is built from this, so the tree, the counts, the quoted text and the cause
+  // always describe one same read.
+  let lastTrustedMatches: ReturnType<typeof findAll> = [];
+  let trustedAttempts = 0;
+  let attempts = 0;
   // Date.now() of the most recent TRUSTED read — undefined until one lands.
   // Post-loop it anchors the dark-tail measurement: how long the window's
   // final stretch went without a trustworthy look at the screen.
@@ -1382,24 +1645,32 @@ async function waitForCondition(
   for (;;) {
     if (env.signal?.aborted) return ABORTED_OUTCOME;
     try {
+      attempts++;
       const data = await readFlowTree(env);
-      lastMatches = flowFindAll(data.tree, step.selector);
+      const matches = flowFindAll(data.tree, step.selector);
       fetchError = undefined;
-      everMatched ||= lastMatches.length > 0;
+      everMatched ||= matches.length > 0;
       const blind =
         data.tree.children.length === 0 && Boolean(data.hint || data.should_restart || everMatched);
-      if (!blind) lastTrustedReadAt = Date.now();
+      // One definition of the trust rule: the evidence tree is captured in the
+      // same branch that stamps `lastTrustedReadAt`, so the two can never
+      // describe different reads.
+      if (!blind) {
+        lastTrustedReadAt = Date.now();
+        lastTrustedTree = data.tree;
+        lastTrustedSource = data.source;
+        lastTrustedScreen = data.screen;
+        lastTrustedMatches = matches;
+        trustedAttempts++;
+      }
       lastReadTrusted = !blind;
-      if (
-        !blind &&
-        evaluateCondition(step.condition, step.expectedText, lastMatches, step.textMatch)
-      ) {
+      if (!blind && evaluateCondition(step.condition, step.expectedText, matches, step.textMatch)) {
         return { ok: true };
       }
     } catch (err) {
       fetchError = err instanceof Error ? err.message : String(err);
-      // A throw is as blind as an empty tree — `lastMatches` still holds the
-      // previous successful read, which must not pass for current evidence.
+      // A throw is as blind as an empty tree: it produced no matches at all, so
+      // it can neither satisfy the condition nor become the trusted evidence.
       lastReadTrusted = false;
     }
     if (Date.now() >= deadline) {
@@ -1438,6 +1709,37 @@ async function waitForCondition(
   //    fetch error on the trailing poll must not flip a clean skip into a
   //    hard error. The determinate verdict stands, with the failed final read
   //    appended so the error is not silently dropped from the report.
+  // Shared by every failure return below so the classified cause and the prose
+  // are built from one set of observations.
+  const conditionEvidence = (
+    code: FlowFailureCode,
+    extra: Partial<DirectiveEvidence> = {}
+  ): DirectiveEvidence => ({
+    code,
+    selector: step.selector,
+    attempts,
+    trustedAttempts,
+    budgetMs: timeoutMs,
+    expected: {
+      kind: "condition",
+      condition: step.condition,
+      ...(step.expectedText !== undefined ? { text: step.expectedText } : {}),
+      ...(step.textMatch !== undefined ? { textMatch: step.textMatch } : {}),
+      timeoutMs,
+    },
+    ...(lastTrustedReadAt !== undefined ? { lastTrustedReadAt } : {}),
+    ...(lastTrustedTree !== undefined
+      ? {
+          tree: lastTrustedTree,
+          source: lastTrustedSource,
+          screenSize: lastTrustedScreen,
+          readAt: lastTrustedReadAt,
+        }
+      : {}),
+    ...(fetchError !== undefined ? { treeError: fetchError } : {}),
+    ...extra,
+  });
+
   if (lastTrustedReadAt === undefined) {
     return {
       ok: false,
@@ -1445,6 +1747,12 @@ async function waitForCondition(
       reason: fetchError
         ? `could not read the UI tree: ${fetchError}`
         : "could not evaluate the condition — every read of the UI tree was empty or degraded",
+      evidence: conditionEvidence("condition-never-readable", {
+        hint:
+          "argent never got a trustworthy look at the screen, so this is not a failed " +
+          "assertion — check the tree source (devtools connection / app state) and re-run " +
+          "rather than editing the flow",
+      }),
     };
   }
   if (!lastReadTrusted) {
@@ -1462,6 +1770,12 @@ async function waitForCondition(
         reason: fetchError
           ? `could not confirm the element is hidden — it was visible earlier, but the last UI read failed: ${fetchError}`
           : "could not confirm the element is hidden — it was visible earlier, but the last UI reads were empty",
+        evidence: conditionEvidence("condition-hidden-unconfirmable", {
+          matches: lastTrustedMatches,
+          hint:
+            "gone-ness could not be confirmed — this is not a failed assertion; re-run rather " +
+            "than editing the flow",
+        }),
       };
     }
     const darkTailMs = Date.now() - lastTrustedReadAt;
@@ -1472,6 +1786,14 @@ async function waitForCondition(
         reason: fetchError
           ? `could not evaluate the condition — the UI tree was unreadable for the final ${darkTailMs}ms of the window: ${fetchError}`
           : `could not evaluate the condition — the UI tree reads were empty or degraded for the final ${darkTailMs}ms of the window`,
+        evidence: conditionEvidence("condition-dark-tail", {
+          darkTailMs,
+          matches: lastTrustedMatches,
+          hint:
+            "the screen went unreadable before the deadline, so the verdict describes a screen " +
+            "nobody saw at the end — this is not a failed assertion; re-run rather than editing " +
+            "the flow",
+        }),
       };
     }
   }
@@ -1481,11 +1803,26 @@ async function waitForCondition(
     !lastReadTrusted && fetchError
       ? ` (the final poll could not read the UI tree: ${fetchError})`
       : "";
+  // From the last TRUSTED read, never from `lastMatches`. On a trusted final
+  // read the two are the same object, so this only bites tier 3 — where a
+  // blind read inside the dark-tail tolerance leaves `lastMatches` empty while
+  // the element is still sitting in `lastTrustedMatches`. Verdicting off the
+  // blind read named the wrong cause: `selector-not-found` ("fix your
+  // selector") for a text mismatch, in an object whose own `actual` reported
+  // the element, its frame and its text one field away. `code` and `category`
+  // are what a CI dashboard groups by and what a repair loop branches on, so
+  // they cannot be built from a read the evidence beside them rejects.
+  const verdict = assertVerdict(
+    step.condition,
+    step.selector,
+    step.expectedText,
+    step.textMatch,
+    lastTrustedMatches
+  );
   return {
     ok: false,
-    reason:
-      assertReason(step.condition, step.selector, step.expectedText, step.textMatch, lastMatches) +
-      blipNote,
+    reason: verdict.reason + blipNote,
+    evidence: conditionEvidence(verdict.code, { matches: lastTrustedMatches }),
   };
 }
 
@@ -1928,6 +2265,14 @@ async function waitForIdle(
       `could not read the UI tree while waiting for the screen to settle — check the app is ` +
       `still in the foreground (a backgrounded app reads the same as an uninstrumented one). ` +
       `Underlying error: ${underlying}`,
+    // Classified as an environment failure, which is what makes the report
+    // suppress its screen slot rather than chase a post-hoc read of the very
+    // source that just failed.
+    evidence: {
+      code: "tree-source-unavailable",
+      treeError: underlying,
+      hint: "argent could not observe the screen for this step — re-run; do not edit the flow",
+    },
   });
 
   // The other flavour: the source answered, and said it could not see the app.
@@ -1942,6 +2287,10 @@ async function waitForIdle(
       `screen was never observed — this is the reader reporting it could not see the app, not ` +
       `the app rendering nothing` +
       (blindHint === undefined ? "" : `. ${blindHint}`),
+    evidence: {
+      code: "tree-source-unavailable",
+      ...(blindHint === undefined ? {} : { hint: blindHint }),
+    },
   });
 
   if (readsSucceeded === 0) {
@@ -1954,6 +2303,7 @@ async function waitForIdle(
         `the tree source never answered within the step's ${timeoutMs}ms — raise this step's ` +
         `\`timeout:\` if it is merely slow (a tree read on a busy screen can take seconds), or ` +
         `repair it if it has stopped answering altogether`,
+      evidence: { code: "tree-source-unavailable" },
     };
   }
   // Reads worked, then stopped: a backgrounded app, a dropped instrumentation
@@ -1995,6 +2345,10 @@ async function waitForIdle(
         `${HUNG_TREE_READ_MS}ms never came back, so the screen could not be observed for the ` +
         `rest of the wait — check the app is still in the foreground and responding (a wedged ` +
         `app reads the same as a backgrounded one)`,
+      // A post-hoc read here would hit the same wedged source and hang for as
+      // long as it pleases, so the classification is what keeps the diagnostics
+      // off it entirely.
+      evidence: { code: "tree-source-unavailable" },
     };
   }
   // A tolerated blip is not a silently dropped error: whichever warning below
@@ -2115,30 +2469,45 @@ async function waitForIdle(
   };
 }
 
-function assertReason(
+/**
+ * The determinate verdict for a condition that never held: the operator-facing
+ * prose AND its classified code, produced by ONE switch. Deriving them together
+ * is what keeps them from disagreeing about which branch was taken — a report
+ * whose code says `selector-not-found` while its message quotes the element's
+ * text would send the reader in the wrong direction.
+ */
+function assertVerdict(
   condition: WaitCondition,
   selector: FlowSelector,
   expectedText: string | undefined,
   textMatch: TextMatchMode | undefined,
   matches: ReturnType<typeof findAll>
-): string {
+): { reason: string; code: FlowFailureCode } {
   const sel = describeSelector(selector);
   switch (condition) {
     case "exists":
-      return `no element matched selector ${sel}`;
+      return { reason: `no element matched selector ${sel}`, code: "selector-not-found" };
     case "visible":
       return matches.length > 0
-        ? `element(s) matched ${sel} but none was visible (zero-area frame)`
-        : `no element matched selector ${sel}`;
+        ? {
+            reason: `element(s) matched ${sel} but none was visible (zero-area frame)`,
+            code: "selector-not-visible",
+          }
+        : { reason: `no element matched selector ${sel}`, code: "selector-not-found" };
     case "hidden":
       // Reached only when the final read was trusted (waitForCondition
       // returns indeterminate when it was blind or threw), and a trusted read
       // without a visible match satisfies `hidden` inside the poll loop — so
       // `matches` holds what that read saw: the element, still on screen.
-      return `an element matching ${sel} was still visible`;
+      return {
+        reason: `an element matching ${sel} was still visible`,
+        code: "assert-hidden-unmet",
+      };
     case "text": {
       const first = firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches);
-      if (!first) return `no element matched selector ${sel}`;
+      if (!first) {
+        return { reason: `no element matched selector ${sel}`, code: "selector-not-found" };
+      }
       const wanted = describeTextExpectation(expectedText, textMatch, "infinitive");
       // The check accepts the element's own label/value as well as its hoisted
       // subtree text (see evaluateCondition), so when they differ quote both —
@@ -2146,9 +2515,14 @@ function assertReason(
       const shown = assertText(first);
       const own = nodeText(first);
       const ownNote = own && own !== shown ? ` (own text "${own}")` : "";
-      return `element matched ${sel} but its text was "${shown}"${ownNote} (wanted to ${wanted})`;
+      return {
+        reason: `element matched ${sel} but its text was "${shown}"${ownNote} (wanted to ${wanted})`,
+        // A regex that did not fire and a literal that differed are different
+        // authoring mistakes, so they get different codes.
+        code: textMatch === "matches" ? "text-no-match" : "text-mismatch",
+      };
     }
     default:
-      return `assertion failed for selector ${sel}`;
+      return { reason: `assertion failed for selector ${sel}`, code: "unclassified" };
   }
 }

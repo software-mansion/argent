@@ -78,7 +78,13 @@ function formatAttr(name: string, value: string | undefined): string {
   return ` ${name}="${escapeForLine(value)}"`;
 }
 
-function formatFlags(n: DescribeNode): string {
+/**
+ * The interactivity flags a node carries, in the order describe renders them.
+ * Exported because the flow failure report projects the same vocabulary onto
+ * the wire — two lists would let a `describe` dump and a failure block
+ * disagree about what an element is.
+ */
+export function describeNodeFlags(n: DescribeNode): string[] {
   const flags: string[] = [];
   if (n.clickable) flags.push("clickable");
   if (n.longClickable) flags.push("long-clickable");
@@ -91,9 +97,20 @@ function formatFlags(n: DescribeNode): string {
   if (typeof n.scrollHidden === "number" && n.scrollHidden > 0) {
     flags.push(`scrollHidden=${n.scrollHidden}`);
   }
+  return flags;
+}
+
+function formatFlags(n: DescribeNode): string {
+  const flags = describeNodeFlags(n);
   return flags.length === 0 ? "" : ` [${flags.join(",")}]`;
 }
 
+/**
+ * Does this node carry enough of its own identity to be worth a line?
+ *
+ * Half the test only — see {@link shouldEmit}, which is what `describe`
+ * actually gates on and what the failure report must therefore use too.
+ */
 function hasContent(n: DescribeNode): boolean {
   return Boolean(
     n.label ||
@@ -107,13 +124,30 @@ function hasContent(n: DescribeNode): boolean {
   );
 }
 
-// A node is worth its own line when EITHER it carries its own metadata
-// (`hasContent`) OR its role tells us it's a thing the user can act on. The
-// role check is what keeps unlabeled `AXImage`s and icon-only `AXButton`s on
-// screen — without it, anything missing `accessibilityLabel` on iOS would
-// silently vanish from describe (the bug the user originally flagged).
-function shouldEmit(n: DescribeNode, contentRoles: ReadonlySet<string>): boolean {
+/**
+ * A node is worth its own line when EITHER it carries its own metadata
+ * (`hasContent`) OR its role tells us it's a thing the user can act on. The
+ * role check is what keeps unlabeled `AXImage`s and icon-only `AXButton`s on
+ * screen — without it, anything missing `accessibilityLabel` on iOS would
+ * silently vanish from describe (the bug the user originally flagged).
+ *
+ * Exported so the failure report's element list is the same subset a
+ * `describe` would have shown — an operator comparing the two must not see
+ * different screens. `hasContent` alone is NOT that subset: it drops exactly
+ * the icon-only controls the role term exists for, which is the common case on
+ * iOS, so the report undercounted every screen carrying one.
+ */
+export function shouldEmit(n: DescribeNode, contentRoles: ReadonlySet<string>): boolean {
   return hasContent(n) || contentRoles.has(n.role);
+}
+
+/**
+ * The role set {@link shouldEmit} takes for a given tree source. Vega's
+ * lowercase toolkit roles count as content only for its own source; on every
+ * other source the shared set applies unchanged.
+ */
+export function contentRolesFor(source: DescribeSource | undefined): ReadonlySet<string> {
+  return source === "vega-automation" ? VEGA_CONTENT_ROLES : CONTENT_ROLES;
 }
 
 function formatLine(n: DescribeNode, indent: number): string {
@@ -216,7 +250,7 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
 
   // Vega's lowercase toolkit roles count as content only for its own source; on
   // every other source the shared CONTENT_ROLES applies unchanged.
-  const contentRoles = isVega ? VEGA_CONTENT_ROLES : CONTENT_ROLES;
+  const contentRoles = contentRolesFor(opts.source);
   const body = mode === "flat" ? renderFlat(root, contentRoles) : renderNested(root, contentRoles);
   return [...header, ...body].join("\n").replace(/\n+$/, "\n");
 }

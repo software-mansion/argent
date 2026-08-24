@@ -1260,6 +1260,55 @@ describe("when: run cancellation", () => {
     expect(result.aborted).toBe(true);
   });
 
+  it("attributes the guard's wall clock to the marker, met or unmet", async () => {
+    // `when:` is documented primarily for optional interstitials, and an unmet
+    // UI guard spends the whole assert grace probing. The marker carried no
+    // `durationMs`, so that time was missing from the step list, from `--json`
+    // and from JUnit (`time="0.000"`) while the run total still counted it —
+    // most of a guarded suite's runtime hidden from the feature whose stated
+    // point is showing where time goes.
+    currentTree = () =>
+      screen([n({ label: "Got it", frame: { x: 0.4, y: 0.8, width: 0.2, height: 0.1 } })]);
+    await writeFlow("timed-guards", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "when",
+          condition: {
+            kind: "ui",
+            condition: "visible",
+            selector: { text: "Got it", loose: true },
+          },
+          steps: [{ kind: "echo", message: "met" }],
+        },
+        {
+          kind: "when",
+          condition: {
+            kind: "ui",
+            condition: "visible",
+            selector: { text: "Absent", loose: true },
+          },
+          steps: [{ kind: "echo", message: "unmet" }],
+        },
+      ],
+    });
+
+    const result = await run("timed-guards");
+
+    const markers = result.steps.filter((s) => s.kind === "when");
+    expect(markers).toHaveLength(2);
+    const [met, unmet] = markers;
+    expect(met!.status).toBe("pass");
+    expect(met!.durationMs).toBeGreaterThanOrEqual(0);
+    expect(unmet!.status).toBe("skip");
+    // The unmet guard is the one that actually spends the grace window, so its
+    // marker must not read as "took no time".
+    expect(unmet!.durationMs).toBeGreaterThan(0);
+    // A step inside a block that never ran genuinely has no duration to report.
+    const inner = result.steps.find((s) => s.kind === "echo" && s.message === "unmet");
+    expect(inner!.durationMs).toBeUndefined();
+  }, 20_000);
+
   it("leaves the aborted field unset on a clean green run", async () => {
     // Control for the cancellation cases: summarize spreads the flag in only
     // when the signal tripped (`...(aborted ? { aborted: true } : {})`), so a

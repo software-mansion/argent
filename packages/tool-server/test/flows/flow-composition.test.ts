@@ -163,6 +163,11 @@ describe("flow composition (run:)", () => {
     // The expanded steps are attributed to the fragment.
     expect(result.steps[1].flow).toBe("login");
     expect(result.steps[3].flow).toBe("main");
+    // The marker is TIMED — its own cost: canonicalizing the target, the case
+    // check, the read and the parse. Untimed, it reported `time="0.000"` in
+    // JUnit, which reads as "measured at zero" rather than "never measured".
+    expect(result.steps[0].durationMs).toBeGreaterThanOrEqual(0);
+    expect(typeof result.steps[0].durationMs).toBe("number");
     expect(result.ok).toBe(true);
   });
 

@@ -192,7 +192,7 @@ A `run:` target is a YAML path resolved against the directory of the flow file c
 
 ## Snapshots and standalone runs
 
-`argent flow run <name> [--device <id>] [--platform ios|android|chromium|vega] [--update-baselines] [--output <dir>] [--json]` runs without an LLM and exits non-zero on failure.
+`argent flow run <name|path|dir> [--device <id>] [--platform ios|android|chromium|vega] [--update-baselines] [--output <dir>] [--reporter <spec>] [-r|--recursive] [--json]` runs without an LLM and exits non-zero on failure. Point it at a directory to run every flow in it; `-r/--recursive` includes subdirectories.
 
 A screenshot is human evidence. A `snapshot:` is executable visual verification. A missing baseline or excessive mismatch fails. A `cropOn` size change also fails. Use snapshots for color, layout, size, spacing, typography, clipping, overflow, images, icons, or stable component appearance. Use full screen for global changes and `cropOn` for one component.
 
@@ -200,7 +200,9 @@ Do not use a snapshot as the only proof of navigation, persistence, data, access
 
 Baselines live under `.argent/flows/__baselines__/<flow>/` and are keyed by platform and full-capture geometry; `cropOn` also contributes its selector. Seed from a known-good state with `--update-baselines`. Inspect every baseline and require user review. Do not commit it yourself. Baseline creation or update is not a test pass. Never update a baseline only to make a diff pass. The default `maxMismatch` is 0.5 percent.
 
-Pin `--platform` and `--device` for iOS, Android, or Vega. For Chromium the device class is the window's own pixel size, which the app sets and no launch argument changes: pass `--platform chromium` and omit `--device` so the runner boots the declared app path instead of attaching to a running window of another size. A window sized from host or session state produces a key CI cannot reproduce, and the step fails for a missing baseline. The runner pins mobile status bars during visual runs. `--output <dir>` writes failed baseline, current, and diff images under `<dir>/<flow>/` for CI artifact upload.
+Pin `--platform` and `--device` for iOS, Android, or Vega. For Chromium the device class is the window's own pixel size, which the app sets and no launch argument changes: pass `--platform chromium` and omit `--device` so the runner boots the declared app path instead of attaching to a running window of another size. A window sized from host or session state produces a key CI cannot reproduce, and the step fails for a missing baseline. The runner pins mobile status bars during visual runs. `--output <dir>` writes the failing step's evidence under `<dir>/<flow>/` for CI artifact upload: a failed snapshot's baseline, current, and diff images, plus `step-NN-screen.png` (the screen at the moment of failure) and `step-NN-tree.txt` (its full element dump). A directory run keys nested flows as `<dir>/<subdir>/<flow>/`.
+
+`--reporter junit:<path>` additionally writes a JUnit XML file: one `<testsuite>` per flow, one `<testcase>` per step, and the failure block's slots in the `<failure>` body — so a CI checks UI attributes the failure to the step that produced it. A directory run writes every flow it ran into that one file. Repeat the flag for several outputs; `--reporter default` names the terminal output, which is always on.
 
 ## YAML safety
 
