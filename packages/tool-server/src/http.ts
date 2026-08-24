@@ -31,6 +31,7 @@ import {
 } from "./utils/screen-recording-reminder";
 import { createPreviewRouter } from "./preview";
 import { makeArtifactListRoute, makeArtifactRoute } from "./artifacts";
+import { makeRemotePreferencesSyncRoute } from "./remote-preferences";
 import { FileInputError, resolveFileInputs, type UploadEntry } from "./file-inputs";
 import {
   assertSupported,
@@ -499,6 +500,14 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   // Hidden (not MCP-exposed) preview UI + stream discovery endpoints.
   // MCP only consumes /tools and /tools/:name, so this subtree is invisible to agents.
   app.use("/preview", createPreviewRouter(registry));
+
+  // Administrative client→server preference sync. This route sits behind the
+  // Host and Bearer-token gates above and is intentionally absent from /tools,
+  // so agents cannot discover or invoke it as an MCP capability.
+  app.put(
+    "/preferences/sync",
+    makeRemotePreferencesSyncRoute({ onActivity: () => idleTimer.touch() })
+  );
 
   // Artifact retrieval: streams files produced by tools (screenshots, profiler
   // exports) over the remote-aware HTTP boundary so the MCP client can fetch
