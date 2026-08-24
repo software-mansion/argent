@@ -76,17 +76,58 @@ export interface GeneratedPosition {
   column0Based: number;
 }
 
+/**
+ * A position in an original source file, resolved from a generated (bundle) position.
+ *
+ * `ignoreListed` reports whether the owning map's ignore list marks this source as
+ * third-party/runtime code. `ignoreListAvailable` distinguishes "the map declares no
+ * ignore list at all" from "the map declares one and this source is not on it" —
+ * callers pick a different policy for the two, so it must not be inferred from
+ * `ignoreListed === false`.
+ */
+export interface OriginalLocation {
+  source: string;
+  line1Based: number;
+  column0Based: number;
+  name: string | null;
+  ignoreListed: boolean;
+  ignoreListAvailable: boolean;
+}
+
+export interface GeneratedFrame {
+  scriptId?: string;
+  scriptUrl?: string;
+  /** CDP `Runtime.CallFrame.lineNumber` — 0-based. */
+  line0Based: number;
+  /** CDP `Runtime.CallFrame.columnNumber` — 0-based. */
+  column0Based: number;
+}
+
 interface RegisteredMap {
   scriptUrl: string;
   scriptId: string;
   consumer: SourceMapConsumer;
   sources: string[];
+  /**
+   * Sources the map's ignore list marks as third-party, as resolved source strings
+   * (the same form `originalPositionFor` returns). Empty when `hasIgnoreList` is false.
+   */
+  ignoreListedSources: Set<string>;
+  hasIgnoreList: boolean;
 }
+
+// Parsing a map's mappings is lazy in source-map-js, but once paid it retains both the
+// generated and original mapping arrays — on a large Metro bundle that is ~90 MB per map.
+// Registrations accumulate across Fast Refresh reloads and lazy chunk loads, so keep only
+// the most recent few; evicted maps are dropped so their consumers can be collected.
+// Lookups miss for evicted scripts, which degrades to the caller's unmapped fallback.
+const MAX_REGISTERED_MAPS = 4;
 
 export class SourceMapsRegistry {
   private maps: RegisteredMap[] = [];
   private pendingRegistrations: Promise<void>[] = [];
-  private projectRoot: string;
+  /** Empty on runtimes that report no project root (legacy Metro, Vega). */
+  readonly projectRoot: string;
 
   constructor(projectRoot: string) {
     this.projectRoot = projectRoot;
@@ -151,6 +192,83 @@ export class SourceMapsRegistry {
       }
     }
 
+    return null;
+  }
+
+  /** True once at least one source map has been registered. O(1) guard for hot paths. */
+  hasMaps(): boolean {
+    return this.maps.length > 0;
+  }
+
+  /**
+   * Resolve a generated (bundle) position back to its original source position.
+   *
+   * The inverse direction of `toGeneratedPosition`. Returns null when no registered map
+   * owns the frame's script, or when the map has no mapping for that position — callers
+   * must treat null as "unknown" and fall back, never as "line 0".
+   */
+  toOriginalPosition(frame: GeneratedFrame): OriginalLocation | null {
+    const map = this.selectMap(frame.scriptId, frame.scriptUrl);
+    if (!map) return null;
+
+    try {
+      // CDP lines are 0-based; source-map generated lines are 1-based.
+      const line = frame.line0Based + 1;
+      let pos = map.consumer.originalPositionFor({
+        line,
+        column: frame.column0Based,
+      });
+      if (pos.source === null || pos.line === null) {
+        // The default (greatest-lower-bound) search finds nothing when the reported
+        // column precedes the first mapping on that line — which is the common case for
+        // indented bundle output. Retry upwards before giving up; the consumer still
+        // refuses to cross onto a different generated line, so this cannot silently
+        // attribute to a neighbouring statement.
+        pos = map.consumer.originalPositionFor({
+          line,
+          column: frame.column0Based,
+          bias: SourceMapConsumer.LEAST_UPPER_BOUND,
+        });
+      }
+      if (pos.source === null || pos.line === null) return null;
+
+      return {
+        source: pos.source,
+        line1Based: pos.line,
+        column0Based: pos.column ?? 0,
+        name: pos.name ?? null,
+        ignoreListed: map.ignoreListedSources.has(pos.source),
+        ignoreListAvailable: map.hasIgnoreList,
+      };
+    } catch {
+      // Runs on the CDP event path — never throw into the caller's event handler.
+      return null;
+    }
+  }
+
+  /**
+   * Pick the registered map that owns a frame's script.
+   *
+   * Newest-first so a bundle re-registered after a reload wins over its predecessor.
+   * Returns null rather than guessing: attributing a frame against some *other* script's
+   * map yields a real-looking file and line that is simply wrong, which is worse than
+   * reporting nothing.
+   */
+  private selectMap(scriptId?: string, scriptUrl?: string): RegisteredMap | null {
+    for (let i = this.maps.length - 1; i >= 0; i--) {
+      if (scriptId && this.maps[i].scriptId === scriptId) return this.maps[i];
+    }
+    if (!scriptUrl) return null;
+    for (let i = this.maps.length - 1; i >= 0; i--) {
+      if (this.maps[i].scriptUrl === scriptUrl) return this.maps[i];
+    }
+    // Covers bundlers that version a script via its query string. Metro is not one of
+    // them — it appends its parameters to the path, so its URLs match exactly above.
+    const bare = stripUrlQuery(scriptUrl);
+    if (!bare) return null;
+    for (let i = this.maps.length - 1; i >= 0; i--) {
+      if (stripUrlQuery(this.maps[i].scriptUrl) === bare) return this.maps[i];
+    }
     return null;
   }
 
@@ -231,9 +349,80 @@ export class SourceMapsRegistry {
           ? rawSources.slice()
           : [];
 
-      this.maps.push({ scriptUrl, scriptId, consumer, sources });
+      const { ignoreListedSources, hasIgnoreList } = buildIgnoreList(rawData, sources);
+
+      this.maps.push({
+        scriptUrl,
+        scriptId,
+        consumer,
+        sources,
+        ignoreListedSources,
+        hasIgnoreList,
+      });
+      if (this.maps.length > MAX_REGISTERED_MAPS) {
+        this.maps.splice(0, this.maps.length - MAX_REGISTERED_MAPS);
+      }
     } catch {
       // Failed to fetch or parse source map — silently skip
     }
   }
+}
+
+/** Same URL with the query string and fragment removed, or null if it does not parse. */
+function stripUrlQuery(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve a source map's ignore list (the standard `x_google_ignoreList`, or the
+ * `ignoreList` spelling the spec settled on) into the set of source strings it marks as
+ * third-party — the same strings `originalPositionFor` returns, so membership is a plain
+ * lookup.
+ *
+ * `sources` may contain duplicates, and normalisation can collapse two raw entries onto
+ * one string. When that happens an ignore-listed index and a non-ignore-listed index can
+ * share a name; subtracting the non-ignore-listed strings makes that case fail *open*
+ * (the frame stays attributable) rather than silently hiding real app code.
+ *
+ * Never throws: source maps are fetched from the app's own runtime and are untrusted input.
+ */
+function buildIgnoreList(
+  rawData: unknown,
+  sources: string[]
+): { ignoreListedSources: Set<string>; hasIgnoreList: boolean } {
+  const empty = { ignoreListedSources: new Set<string>(), hasIgnoreList: false };
+  const raw = rawData as Record<string, unknown> | null | undefined;
+  if (!raw || typeof raw !== "object") return empty;
+
+  // Sectioned (indexed) maps carry their sources per section, so indices into a flat
+  // `sources` array are meaningless. Treat them as declaring no ignore list.
+  if (Array.isArray(raw.sections)) return empty;
+
+  const list = Array.isArray(raw.x_google_ignoreList)
+    ? raw.x_google_ignoreList
+    : Array.isArray(raw.ignoreList)
+      ? raw.ignoreList
+      : null;
+  if (!list) return empty;
+
+  const ignored = new Set<string>();
+  const kept = new Set<string>();
+  const ignoredIndices = new Set<number>();
+  for (const entry of list) {
+    if (typeof entry !== "number" || !Number.isInteger(entry)) continue;
+    if (entry < 0 || entry >= sources.length) continue;
+    ignoredIndices.add(entry);
+    ignored.add(sources[entry]);
+  }
+  for (let i = 0; i < sources.length; i++) {
+    if (!ignoredIndices.has(i)) kept.add(sources[i]);
+  }
+  for (const name of kept) ignored.delete(name);
+
+  return { ignoreListedSources: ignored, hasIgnoreList: true };
 }
