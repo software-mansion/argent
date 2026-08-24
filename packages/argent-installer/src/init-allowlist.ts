@@ -16,18 +16,37 @@ export async function configureAllowlist(args: {
   effectiveRoot: string;
   scope: "local" | "global";
   nonInteractive: boolean;
+  /** --no-allowlist: skip writing editor auto-approve lists */
+  noAllowlist?: boolean;
 }): Promise<AllowlistResult> {
-  const { adapters, effectiveRoot, scope, nonInteractive } = args;
+  const { adapters, effectiveRoot, scope, nonInteractive, noAllowlist } = args;
   const adaptersWithAllowlist = adapters.filter((a) => a.addAllowlist);
   const adaptersWithoutAllowlist = adapters.filter((a) => !a.addAllowlist);
 
   let enabled = false;
 
+  if (noAllowlist) {
+    p.log.info(
+      pc.dim(
+        "Skipped editor auto-approve allowlists (--no-allowlist). " +
+          "Use Cursor/editor Run Everything if you want tools unprompted."
+      )
+    );
+    return { enabled: false, lines: [] };
+  }
+
   if (adaptersWithAllowlist.length > 0) {
+    const hasCursor = adaptersWithAllowlist.some((a) => a.name === "Cursor");
     p.log.info(
       `By default, editors ask for confirmation before running each MCP tool.\n` +
         `  Adding Argent to the auto-approve allowlist lets tools run without\n` +
-        `  repeated prompts. This is ${pc.cyan("recommended")} for a smooth experience.`
+        `  repeated prompts. This is ${pc.cyan("recommended")} for a smooth experience.` +
+        (hasCursor
+          ? `\n\n  ${pc.yellow("Cursor note:")} writing ~/.cursor/permissions.json with only\n` +
+            `  ${pc.cyan("argent:*")} enables MCP allowlist mode — other MCP servers will still\n` +
+            `  prompt. If you use Cursor "allow all" / Run Everything, choose ${pc.cyan("No")}\n` +
+            `  (or pass ${pc.cyan("--no-allowlist")}).`
+          : "")
     );
 
     if (nonInteractive) {

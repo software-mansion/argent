@@ -93,7 +93,14 @@ export interface McpConfigAdapter {
   // pair that the client resolves ahead of (or gates) the entry written at
   // `writtenScope`. Only clients with hidden scopes implement this.
   findShadowingConfigs?(root: string, writtenScope: "local" | "global"): ShadowingConfigFinding[];
-  addAllowlist?(root: string, scope: "local" | "global"): void;
+  // `createIfMissing` defaults to true (init / explicit opt-in). `update`
+  // passes false so a user who deleted or cleared the allowlist (e.g. Cursor
+  // "allow all" / Run Everything) is not forced back into a partial allowlist.
+  addAllowlist?(
+    root: string,
+    scope: "local" | "global",
+    options?: { createIfMissing?: boolean }
+  ): void;
   removeAllowlist?(root: string, scope: "local" | "global"): void;
 }
 
@@ -723,11 +730,27 @@ const cursorAdapter: McpConfigAdapter = {
   // only { mcpAllowlist }, dropping every foreign rule and comment. Newly matters
   // because `hasArgentEntry` now reads mcp.json with readJsonc, so `update`
   // detects a commented config as configured and calls this.
-  addAllowlist(): void {
+  //
+  // Cursor gotcha: a permissions.json whose mcpAllowlist is only `argent:*`
+  // puts MCP tools into allowlist mode. Other MCP servers (Expo, PostHog, …)
+  // then prompt on every call, which fights users who set Cursor to
+  // "allow all" / Run Everything. `update` therefore passes
+  // `{ createIfMissing: false }` so deleting the file (or clearing argent from
+  // the list) is treated as a durable opt-out.
+  addAllowlist(
+    _root?: string,
+    _scope?: "local" | "global",
+    options?: { createIfMissing?: boolean }
+  ): void {
+    const createIfMissing = options?.createIfMissing !== false;
     const permPath = path.join(homedir(), ".cursor", "permissions.json");
+    if (!createIfMissing && !fs.existsSync(permPath)) return;
     const config = readJsonc(permPath);
     const list = Array.isArray(config.mcpAllowlist) ? (config.mcpAllowlist as string[]) : [];
     if (list.includes(CURSOR_ALLOWLIST_PATTERN)) return;
+    // Refresh path: if argent was never on (or was removed from) the list, do
+    // not re-add it. Init keeps the default createIfMissing:true.
+    if (!createIfMissing) return;
     editJsoncFile(permPath, ["mcpAllowlist"], [...list, CURSOR_ALLOWLIST_PATTERN]);
   },
 
