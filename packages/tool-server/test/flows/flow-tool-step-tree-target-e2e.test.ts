@@ -393,11 +393,13 @@ describe("a tool step's tree target against a wedged sibling (end-to-end)", () =
   }, 20_000);
 
   it("drops the target across a foreground-changing tool step - the read fails instead", async () => {
-    // `launch-app` can put another app on screen, so the launched app is not
-    // even a hint: the read auto-resolves, the fan-out times out on the
-    // sibling, and the assert reports it. This is what keeps the two
-    // confidence levels distinct - demote here and the runner would arbitrate
-    // toward an app it can no longer vouch for.
+    // `launch-app` can put another app on screen, so the pinned target is
+    // dropped and re-set from the tool's own args: com.example.other, unpinned.
+    // The read auto-resolves, the fan-out times out on the sibling, and the
+    // arbiter declines the restored hint - that id never connected here - so
+    // the timeout surfaces and the assert reports it. Keep the ORIGINAL app as
+    // the hint instead and the runner would arbitrate toward an app it can no
+    // longer vouch for, false-passing the assert.
     const hierarchyReads: string[] = [];
     const result = await runToolStepFlow(
       "foreground-changing-tool",

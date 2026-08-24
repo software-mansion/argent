@@ -12,7 +12,8 @@ import type { PixelFrame } from "../../src/tools/flows/flow-pixels";
 // background system process sinks. A raw `tool:` step demotes that pin to an
 // unpinned hint (still the timeout arbiter for the fan-out, see
 // flow-ios-tree.ts) - or drops it outright, when the tool can change the
-// foreground app. The mock sits at the iOS tree SOURCE
+// foreground app (`launch-app` and `restart-app` then re-set it from their own
+// args, unpinned). The mock sits at the iOS tree SOURCE
 // (queryFullHierarchyTree), not at fetchFlowTree, so the real fetchFlowTree
 // dispatches every read and dropping the target on its ios branch is
 // observable here; treeTargets records the target each read actually reached

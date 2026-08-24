@@ -62,7 +62,10 @@ import {
  * for it (see `queryFullHierarchyTree` for what each level buys).
  */
 export interface FlowTreeTarget {
-  /** App id of the run's most recent successful `launch` step. */
+  /**
+   * App id of the run's most recent successful `launch` step - or, after a
+   * `tool:` `launch-app`/`restart-app` step, of the app that step started.
+   */
   bundleId: string;
   /**
    * Whether the runner still vouches that `bundleId` is what is on screen. A
@@ -103,13 +106,16 @@ export interface ActionEnv {
   device: DeviceInfo;
   signal?: AbortSignal;
   /**
-   * The app the run's most recent successful `launch` step started, and
-   * whether the runner still vouches for it being on screen. Demoted to an
-   * unpinned hint by a raw `tool:` step (its effect on the foreground is opaque
-   * to the runner), dropped outright by a `tool:` step that can change the
-   * foreground app and by a launch attempt until it succeeds. Chromium launches
-   * hand off before the assignment, so chromium runs never set it. Only iOS
-   * tree reads consume it (see `fetchFlowTree`).
+   * The app the run's most recent successful `launch` step started - or, after
+   * a `tool:` `launch-app`/`restart-app` step, the app that step's own args
+   * named - and whether the runner still vouches for it being on screen.
+   * Demoted to an unpinned hint by a raw `tool:` step (its effect on the
+   * foreground is opaque to the runner), dropped outright by a `tool:` step
+   * that can change the foreground app and by a launch attempt until it
+   * succeeds; `launch-app` and `restart-app` then re-set it from their own
+   * `bundleId`, unpinned (see `FOREGROUND_CHANGING_TOOLS` in flow-run).
+   * Chromium launches hand off before the assignment, so chromium runs never
+   * set it. Only iOS tree reads consume it (see `fetchFlowTree`).
    */
   treeTarget?: FlowTreeTarget;
   /**
