@@ -122,14 +122,16 @@ export interface ActionEnv {
    * Run-scoped memo of a tree source that answered nothing: written by a
    * {@link settleTree} that failed every read attempt, cleared by any directive
    * read that comes back — they all go through {@link readFlowTree} — by a
-   * relaunch (`launch:` or one of flow-run's `FOREGROUND_CHANGING_TOOLS`), and
-   * by a nested orchestrator step, which can do either out of this holder's
-   * sight. One holder per run, built in flow-run's ExecState and shared by
-   * every `deviceEnv`. A `tool:` step's read clears nothing: it goes through
-   * `invokeSubTool` and never reaches {@link readFlowTree}. Nor is the clear
-   * ordered against the step running — `idle` stops waiting on its read at the
-   * round budget, so that read can land later and retire a verdict minted after
-   * it was issued.
+   * relaunch (`launch:` or one of flow-run's `FOREGROUND_CHANGING_TOOLS`), by a
+   * raw `tool:` step that demotes a pinned {@link ActionEnv.treeTarget} (the
+   * verdict was proven against the pinned branch's gates, which the demoted
+   * read no longer runs), and by a nested orchestrator step, which can do
+   * either out of this holder's sight. One holder per run, built in flow-run's
+   * ExecState and shared by every `deviceEnv`. A `tool:` step's own read clears
+   * nothing: it goes through `invokeSubTool` and never reaches
+   * {@link readFlowTree}. Nor is the clear ordered against the step running —
+   * `idle` stops waiting on its read at the round budget, so that read can land
+   * later and retire a verdict minted after it was issued.
    *
    * Only {@link settleForGesture} READS it, and only to skip a settle already
    * shown to be unaffordable; the gesture then warns its step report that it
