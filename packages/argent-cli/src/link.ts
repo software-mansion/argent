@@ -8,7 +8,8 @@ import {
   parseLinkTarget,
   type LinkConfig,
 } from "@argent/tools-client";
-import { parsePort, StartFlagError } from "./server.js";
+import { parsePort, parseOrStartFlagError, StartFlagError } from "./server.js";
+import { parseCommandArgs, type OptionSpecs } from "./command-args.js";
 
 interface LinkFlags {
   host: string | null;
@@ -51,97 +52,70 @@ function validateConnectPort(raw: string): number {
   return port;
 }
 
+const LINK_OPTIONS = {
+  "help": { kind: "boolean", alias: "h" },
+  "yes": { kind: "boolean", alias: "y" },
+  "no-verify": { kind: "boolean" },
+  "host": { kind: "value" },
+  "port": { kind: "value", alias: "p" },
+  "token": { kind: "value" },
+} as const satisfies OptionSpecs;
+
 export function parseLinkFlags(argv: string[]): LinkFlags {
+  const { positionals, options } = parseOrStartFlagError(() =>
+    parseCommandArgs(argv, LINK_OPTIONS)
+  );
   const flags: LinkFlags = {
     host: null,
     port: null,
     token: null,
     url: null,
-    yes: false,
-    noVerify: false,
-    help: false,
+    yes: options.yes === true,
+    noVerify: options["no-verify"] === true,
+    help: options.help === true,
   };
 
-  for (let i = 0; i < argv.length; i++) {
-    const tok = argv[i]!;
-    const takeValue = (name: string): string => {
-      const v = argv[i + 1];
-      if (v === undefined) throw new StartFlagError(`${name} requires a value`);
-      i += 1;
-      return v;
-    };
-    if (tok === "--help" || tok === "-h") {
-      flags.help = true;
-      continue;
-    }
-    if (tok === "--yes" || tok === "-y") {
-      flags.yes = true;
-      continue;
-    }
-    if (tok === "--no-verify") {
-      flags.noVerify = true;
-      continue;
-    }
-    if (tok === "--host") {
-      flags.host = validateHost(takeValue("--host"));
-      continue;
-    }
-    if (tok.startsWith("--host=")) {
-      flags.host = validateHost(tok.slice("--host=".length));
-      continue;
-    }
-    if (tok === "--port" || tok === "-p") {
-      flags.port = validateConnectPort(takeValue("--port"));
-      continue;
-    }
-    if (tok.startsWith("--port=")) {
-      flags.port = validateConnectPort(tok.slice("--port=".length));
-      continue;
-    }
-    if (tok === "--token") {
-      flags.token = takeValue("--token");
-      continue;
-    }
-    if (tok.startsWith("--token=")) {
-      flags.token = tok.slice("--token=".length);
-      continue;
-    }
-    // parseLinkTarget throws on a malformed argent:// or http(s):// target and
-    // returns null for anything it doesn't recognize.
-    if (!tok.startsWith("-")) {
-      const parsed = parseLinkTarget(tok);
-      if (!parsed) {
-        throw new StartFlagError(
-          `Unrecognized argument "${tok}". Expected an argent://… pairing string, ` +
-            `an http(s):// URL, or flags (see --help).`
-        );
-      }
-      flags.host = validateHost(parsed.host);
-      flags.port = validateConnectPort(String(parsed.port));
-      flags.url = parsed.url;
-      if (parsed.token) flags.token = parsed.token;
-      continue;
-    }
-    throw new StartFlagError(`Unknown flag: ${tok}`);
+  // The one optional positional is a pairing string / URL. parseLinkTarget
+  // throws on a malformed argent:// or http(s):// target and returns null for
+  // anything it doesn't recognize.
+  if (positionals.length > 1) {
+    throw new StartFlagError(`Unexpected argument "${positionals[1]}"`);
   }
+  const target = positionals[0];
+  if (target !== undefined) {
+    const parsed = parseLinkTarget(target);
+    if (!parsed) {
+      throw new StartFlagError(
+        `Unrecognized argument "${target}". Expected an argent://… pairing string, ` +
+          `an http(s):// URL, or flags (see --help).`
+      );
+    }
+    flags.host = validateHost(parsed.host);
+    flags.port = validateConnectPort(String(parsed.port));
+    flags.url = parsed.url;
+    if (parsed.token) flags.token = parsed.token;
+  }
+  // Explicit flags refine the target.
+  if (options.host !== undefined) flags.host = validateHost(options.host as string);
+  if (options.port !== undefined) flags.port = validateConnectPort(options.port as string);
+  if (options.token !== undefined) flags.token = options.token as string;
 
   return flags;
 }
 
+const UNLINK_OPTIONS = {
+  help: { kind: "boolean", alias: "h" },
+  yes: { kind: "boolean", alias: "y" },
+} as const satisfies OptionSpecs;
+
 export function parseUnlinkFlags(argv: string[]): UnlinkFlags {
-  const flags: UnlinkFlags = { yes: false, help: false };
-  for (const tok of argv) {
-    if (tok === "--help" || tok === "-h") {
-      flags.help = true;
-      continue;
-    }
-    if (tok === "--yes" || tok === "-y") {
-      flags.yes = true;
-      continue;
-    }
-    throw new StartFlagError(`Unknown flag: ${tok}`);
+  const { positionals, options } = parseOrStartFlagError(() =>
+    parseCommandArgs(argv, UNLINK_OPTIONS)
+  );
+  if (positionals.length > 0) {
+    throw new StartFlagError(`Unexpected argument "${positionals[0]}"`);
   }
-  return flags;
+  return { yes: options.yes === true, help: options.help === true };
 }
 
 export function printLinkHelp(): void {

@@ -1,3 +1,4 @@
+import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { homedir, networkInterfaces } from "node:os";
@@ -114,69 +115,43 @@ export interface StartFlags {
 
 export class StartFlagError extends Error {}
 
-export function parseStartFlags(argv: string[]): StartFlags {
-  const flags: StartFlags = {
-    port: null,
-    host: "127.0.0.1",
-    idleTimeoutMinutes: 0,
-    detach: false,
-    force: false,
-    noAuth: false,
-    help: false,
-  };
+const START_OPTIONS = {
+  "help": { kind: "boolean", alias: "h" },
+  "detach": { kind: "boolean", alias: "d" },
+  "force": { kind: "boolean" },
+  "no-auth": { kind: "boolean" },
+  "port": { kind: "value", alias: "p" },
+  "host": { kind: "value" },
+  "idle-timeout": { kind: "value" },
+} as const satisfies OptionSpecs;
 
-  for (let i = 0; i < argv.length; i++) {
-    const tok = argv[i]!;
-    const takeValue = (name: string): string => {
-      const v = argv[i + 1];
-      if (v === undefined) throw new StartFlagError(`${name} requires a value`);
-      i += 1;
-      return v;
-    };
-    if (tok === "--help" || tok === "-h") {
-      flags.help = true;
-      continue;
-    }
-    if (tok === "--detach" || tok === "-d") {
-      flags.detach = true;
-      continue;
-    }
-    if (tok === "--force") {
-      flags.force = true;
-      continue;
-    }
-    if (tok === "--no-auth") {
-      flags.noAuth = true;
-      continue;
-    }
-    if (tok === "--port" || tok === "-p") {
-      flags.port = parsePort(takeValue("--port"));
-      continue;
-    }
-    if (tok.startsWith("--port=")) {
-      flags.port = parsePort(tok.slice("--port=".length));
-      continue;
-    }
-    if (tok === "--host") {
-      flags.host = takeValue("--host");
-      continue;
-    }
-    if (tok.startsWith("--host=")) {
-      flags.host = tok.slice("--host=".length);
-      continue;
-    }
-    if (tok === "--idle-timeout") {
-      flags.idleTimeoutMinutes = parseIdle(takeValue("--idle-timeout"));
-      continue;
-    }
-    if (tok.startsWith("--idle-timeout=")) {
-      flags.idleTimeoutMinutes = parseIdle(tok.slice("--idle-timeout=".length));
-      continue;
-    }
-    throw new StartFlagError(`Unknown flag: ${tok}`);
+/** Run a parser and surface bad input as this command's error class. */
+export function parseOrStartFlagError<T>(parse: () => T): T {
+  try {
+    return parse();
+  } catch (err) {
+    if (err instanceof UsageError) throw new StartFlagError(err.message);
+    throw err;
   }
+}
 
-  return flags;
+export function parseStartFlags(argv: string[]): StartFlags {
+  const { positionals, options } = parseOrStartFlagError(() =>
+    parseCommandArgs(argv, START_OPTIONS)
+  );
+  if (positionals.length > 0) {
+    throw new StartFlagError(`Unexpected argument "${positionals[0]}"`);
+  }
+  return {
+    port: options.port === undefined ? null : parsePort(options.port as string),
+    host: (options.host as string | undefined) ?? "127.0.0.1",
+    idleTimeoutMinutes:
+      options["idle-timeout"] === undefined ? 0 : parseIdle(options["idle-timeout"] as string),
+    detach: options.detach === true,
+    force: options.force === true,
+    noAuth: options["no-auth"] === true,
+    help: options.help === true,
+  };
 }
 
 // Digits only: `Number` alone would accept "", signs, decimals, hex and `1e3`.
