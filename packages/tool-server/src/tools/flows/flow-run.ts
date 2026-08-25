@@ -1041,9 +1041,12 @@ export function createRunFlowTool(
       failedMsg: ({ params, failureSignal }) =>
         `Failed to run flow ${displayFlowName(params)}: ${failureSignal.error_code}`,
     },
-    description: `Run a saved flow — a YAML script of UI steps — end to end against a booted device, passing
-exactly one of name (under project_root) or flow_path, and returning a per-step report in which the first
-failure stops the run and a step that passes carrying a \`warning\` was sent, not verified.`,
+    description: `Run a saved flow — a YAML script of UI steps — end to end against a booted device. Use when
+asked to replay a recorded path, re-run a QA regression, or check that a known journey still passes; for a
+one-off interaction use the gesture tools instead, and to author a flow use flow-start-recording. Pass
+exactly one of name (under project_root) or flow_path.
+Returns a per-step report: the first failure stops the run and the rest report as skipped; a flow with an unacknowledged executionPrerequisite returns a
+notice instead of running; and a step that passes carrying a \`warning\` was sent, not verified.`,
     longRunning: true,
     zodSchema,
     fileInputs,
