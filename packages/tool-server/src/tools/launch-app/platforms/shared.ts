@@ -11,7 +11,7 @@ export function buildIosLaunchHandler(backend: SimctlBackend) {
     const blocked = await precheckNativeDevtools(services.nativeDevtools, params.udid);
     if (blocked) return blocked;
     try {
-      await backend.launch(params.udid, params.bundleId);
+      await backend.launch(params.udid, params.bundleId, params.launchArgs);
     } catch (err) {
       throw new FailureError(
         `Failed to launch iOS app ${params.bundleId} on ${params.udid}.`,

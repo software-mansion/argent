@@ -6,13 +6,16 @@ import { simctlLaunch, simctlTerminate } from "./sim-remote";
 const execFileAsync = promisify(execFile);
 
 export interface SimctlBackend {
-  launch(udid: string, bundleId: string): Promise<void>;
+  launch(udid: string, bundleId: string, args?: string[]): Promise<void>;
   terminate(udid: string, bundleId: string): Promise<void>;
 }
 
 export const localSimctl: SimctlBackend = {
-  async launch(udid, bundleId) {
-    await execFileAsync("xcrun", await simctlArgsForUdid(udid, ["launch", udid, bundleId]));
+  async launch(udid, bundleId, args = []) {
+    await execFileAsync(
+      "xcrun",
+      await simctlArgsForUdid(udid, ["launch", udid, bundleId, ...args])
+    );
   },
   async terminate(udid, bundleId) {
     await execFileAsync("xcrun", await simctlArgsForUdid(udid, ["terminate", udid, bundleId]));

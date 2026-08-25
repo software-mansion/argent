@@ -36,7 +36,12 @@ export function makeIosImpl(
       try {
         await execFileAsync(
           "xcrun",
-          await simctlArgsForUdid(params.udid, ["launch", params.udid, params.bundleId])
+          await simctlArgsForUdid(params.udid, [
+            "launch",
+            params.udid,
+            params.bundleId,
+            ...(params.launchArgs ?? []),
+          ])
         );
       } catch (err) {
         throw new FailureError(

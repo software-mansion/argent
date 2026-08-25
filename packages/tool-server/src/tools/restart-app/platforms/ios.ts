@@ -40,7 +40,10 @@ export function makeIosImpl(
         // App may not be running
       }
       try {
-        await execFileAsync("xcrun", await simctlArgsForUdid(udid, ["launch", udid, bundleId]));
+        await execFileAsync(
+          "xcrun",
+          await simctlArgsForUdid(udid, ["launch", udid, bundleId, ...(params.launchArgs ?? [])])
+        );
       } catch (err) {
         throw new FailureError(
           `Failed to restart iOS app ${bundleId} on ${udid}.`,
