@@ -1,5 +1,6 @@
 import pc from "picocolors";
 import type { FlagScope } from "@argent/configuration-core";
+import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
 import {
   init as telemetryInit,
   isEnabled as telemetryIsEnabled,
@@ -9,14 +10,26 @@ import {
   status as telemetryStatus,
 } from "@argent/telemetry";
 
+const SCOPES: readonly FlagScope[] = ["global", "project"];
+
+const TELEMETRY_OPTIONS = {
+  scope: { kind: "value", choices: SCOPES },
+} as const satisfies OptionSpecs;
+
 // Telemetry is opt-out: on by default.
 export async function telemetry(args: string[]): Promise<void> {
   const sub = args[0];
-  let scope: FlagScope;
+  let scope: FlagScope = "global";
   try {
-    scope = parseScope(args.slice(1));
+    const { positionals, options } = parseCommandArgs(args.slice(1), TELEMETRY_OPTIONS);
+    if (positionals.length > 0) {
+      throw new UsageError(`Unexpected argument "${positionals[0]}".`);
+    }
+    if (options.scope !== undefined) scope = options.scope as FlagScope;
   } catch (err) {
-    console.error(`Error: ${(err as Error).message}`);
+    if (!(err instanceof UsageError)) throw err;
+    console.error(`Error: ${err.message}`);
+    printUsage();
     process.exit(2);
   }
   telemetryInit("cli");
@@ -58,24 +71,6 @@ The default scope is global (~/.argent/config.json). \`--scope project\` writes
 <project-root>/.argent/config.json instead — commit it and telemetry stays off
 for everyone who clones the repository. \`false\` in either scope wins.
 `);
-}
-
-// `--scope <s>` / `--scope=<s>`; anything else is rejected so a typo cannot
-// silently land in the wrong document.
-function parseScope(rest: string[]): FlagScope {
-  let scope: FlagScope = "global";
-  for (let i = 0; i < rest.length; i++) {
-    const arg = rest[i]!;
-    let value: string | undefined;
-    if (arg === "--scope") value = rest[++i];
-    else if (arg.startsWith("--scope=")) value = arg.slice("--scope=".length);
-    else throw new Error(`unknown argument "${arg}".`);
-    if (value !== "global" && value !== "project") {
-      throw new Error(`--scope must be "global" or "project" (got "${value ?? ""}").`);
-    }
-    scope = value;
-  }
-  return scope;
 }
 
 function scopeLabel(scope: FlagScope): string {
